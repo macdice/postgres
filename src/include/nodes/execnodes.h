@@ -430,6 +430,7 @@ typedef struct ExecRowMark
 	Index		rowmarkId;		/* unique identifier for resjunk columns */
 	RowMarkType markType;		/* see enum in nodes/plannodes.h */
 	bool		noWait;			/* NOWAIT option */
+	bool		skipLocked;		/* SKIP LOCKED DATA option */
 	ItemPointerData curCtid;	/* ctid of currently locked tuple, if any */
 } ExecRowMark;
 

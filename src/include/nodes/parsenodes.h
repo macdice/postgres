@@ -604,6 +604,7 @@ typedef struct LockingClause
 	List	   *lockedRels;		/* FOR [KEY] UPDATE/SHARE relations */
 	LockClauseStrength strength;
 	bool		noWait;			/* NOWAIT option */
+	bool		skipLocked;		/* SKIP LOCKED DATA option */
 } LockingClause;
 
 /*
@@ -930,6 +931,7 @@ typedef struct RowMarkClause
 	Index		rti;			/* range table index of target relation */
 	LockClauseStrength strength;
 	bool		noWait;			/* NOWAIT option */
+	bool		skipLocked;		/* SKIP LOCKED DATA option */
 	bool		pushedDown;		/* pushed down from higher query level? */
 } RowMarkClause;
 

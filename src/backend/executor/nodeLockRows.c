@@ -73,6 +73,7 @@ lnext:
 		Buffer		buffer;
 		HeapUpdateFailureData hufd;
 		LockTupleMode lockmode;
+		LockWaitPolicy wait_policy;
 		HTSU_Result test;
 		HeapTuple	copyTuple;
 
@@ -131,13 +132,24 @@ lnext:
 				break;
 		}
 
+        if (erm->noWait)
+            wait_policy = LockWaitError;
+        else if (erm->skipLocked)
+            wait_policy = LockWaitSkip;
+        else
+            wait_policy = LockWaitBlock;
+
 		test = heap_lock_tuple(erm->relation, &tuple,
 							   estate->es_output_cid,
-							   lockmode, erm->noWait, true,
+							   lockmode, wait_policy, true,
 							   &buffer, &hufd);
 		ReleaseBuffer(buffer);
 		switch (test)
 		{
+            case HeapTupleWouldBlock:
+                /* couldn't lock tuple in SKIP LOCKED DATA mode */
+                goto lnext;
+
 			case HeapTupleSelfUpdated:
 
 				/*

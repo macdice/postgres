@@ -836,6 +836,7 @@ typedef struct PlanRowMark
 	Index		rowmarkId;		/* unique identifier for resjunk columns */
 	RowMarkType markType;		/* see enum above */
 	bool		noWait;			/* NOWAIT option */
+	bool		skipLocked;		/* SKIP LOCKED DATA option */
 	bool		isParent;		/* true if this is a "dummy" parent entry */
 } PlanRowMark;
 

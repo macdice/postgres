@@ -119,6 +119,9 @@ typedef struct PrivTarget
 #define CAS_NOT_VALID				0x10
 #define CAS_NO_INHERIT				0x20
 
+#define WAIT_MODE_DEFAULT 0
+#define WAIT_MODE_NOWAIT 1
+#define WAIT_MODE_SKIP 2
 
 #define parser_yyerror(msg)  scanner_yyerror(msg, yyscanner)
 #define parser_errposition(pos)  scanner_errposition(pos, yyscanner)
@@ -271,6 +274,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <boolean>	opt_force opt_or_replace
 				opt_grant_grant_option opt_grant_admin_option
 				opt_nowait opt_if_exists opt_with_data
+%type <ival>	opt_nowait_or_skip
 
 %type <list>	OptRoleList AlterOptRoleList
 %type <defelt>	CreateOptRoleElem AlterOptRoleElem
@@ -557,7 +561,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P LC_COLLATE_P LC_CTYPE_P
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
-	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P
+	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED
 
 	MAPPING MATCH MATERIALIZED MAXVALUE MINUTE_P MINVALUE MODE MONTH_P MOVE
 
@@ -581,7 +585,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETOF SHARE
-	SHOW SIMILAR SIMPLE SMALLINT SNAPSHOT SOME STABLE STANDALONE_P START
+	SHOW SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME STABLE STANDALONE_P START
 	STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P SUBSTRING
 	SYMMETRIC SYSID SYSTEM_P
 
@@ -8916,6 +8920,12 @@ opt_nowait:	NOWAIT							{ $$ = TRUE; }
 			| /*EMPTY*/						{ $$ = FALSE; }
 		;
 
+opt_nowait_or_skip:	
+			NOWAIT							{ $$ = WAIT_MODE_NOWAIT; }
+			| SKIP LOCKED DATA_P   			{ $$ = WAIT_MODE_SKIP; }
+			| /*EMPTY*/						{ $$ = WAIT_MODE_DEFAULT; }
+		;
+
 
 /*****************************************************************************
  *
@@ -9518,12 +9528,13 @@ for_locking_items:
 		;
 
 for_locking_item:
-			for_locking_strength locked_rels_list opt_nowait
+			for_locking_strength locked_rels_list opt_nowait_or_skip
 				{
 					LockingClause *n = makeNode(LockingClause);
 					n->lockedRels = $2;
 					n->strength = $1;
-					n->noWait = $3;
+					n->noWait = ($3 == WAIT_MODE_NOWAIT);
+					n->skipLocked = ($3 == WAIT_MODE_SKIP);
 					$$ = (Node *) n;
 				}
 		;
@@ -12572,6 +12583,7 @@ unreserved_keyword:
 			| LOCAL
 			| LOCATION
 			| LOCK_P
+			| LOCKED
 			| MAPPING
 			| MATCH
 			| MATERIALIZED
@@ -12654,6 +12666,7 @@ unreserved_keyword:
 			| SHARE
 			| SHOW
 			| SIMPLE
+			| SKIP
 			| SNAPSHOT
 			| STABLE
 			| STANDALONE_P

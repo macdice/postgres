@@ -841,6 +841,7 @@ _outPlanRowMark(StringInfo str, const PlanRowMark *node)
 	WRITE_UINT_FIELD(rowmarkId);
 	WRITE_ENUM_FIELD(markType, RowMarkType);
 	WRITE_BOOL_FIELD(noWait);
+	WRITE_BOOL_FIELD(skipLocked);
 	WRITE_BOOL_FIELD(isParent);
 }
 
@@ -2120,6 +2121,7 @@ _outLockingClause(StringInfo str, const LockingClause *node)
 	WRITE_NODE_FIELD(lockedRels);
 	WRITE_ENUM_FIELD(strength, LockClauseStrength);
 	WRITE_BOOL_FIELD(noWait);
+	WRITE_BOOL_FIELD(skipLocked);
 }
 
 static void
@@ -2309,6 +2311,7 @@ _outRowMarkClause(StringInfo str, const RowMarkClause *node)
 	WRITE_UINT_FIELD(rti);
 	WRITE_ENUM_FIELD(strength, LockClauseStrength);
 	WRITE_BOOL_FIELD(noWait);
+	WRITE_BOOL_FIELD(skipLocked);
 	WRITE_BOOL_FIELD(pushedDown);
 }
 

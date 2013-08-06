@@ -1240,7 +1240,7 @@ FETCH { FIRST | NEXT } [ <replaceable class="parameter">count</replaceable> ] { 
     The locking clause has the general form
 
 <synopsis>
-FOR <replaceable>lock_strength</> [ OF <replaceable class="parameter">table_name</replaceable> [, ...] ] [ NOWAIT ]
+FOR <replaceable>lock_strength</> [ OF <replaceable class="parameter">table_name</replaceable> [, ...] ] [ { NOWAIT | SKIP LOCKED DATA } ]
 </synopsis>
 
     where <replaceable>lock_strength</> can be one of
@@ -1316,9 +1316,9 @@ KEY SHARE
 
    <para>
     To prevent the operation from waiting for other transactions to commit,
-    use the <literal>NOWAIT</> option.  With <literal>NOWAIT</>, the statement
+    use either the <literal>NOWAIT</> or <literal>SKIP LOCKED DATA</literal> option.  With <literal>NOWAIT</>, the statement
     reports an error, rather than waiting, if a selected row
-    cannot be locked immediately.  Note that <literal>NOWAIT</> applies only
+    cannot be locked immediately.  With <literal>SKIP LOCKED DATA</literal>, any selected rows that cannot be immediately locked are skipped.  Skipping locked rows provides an inconsistent view of the data, so this is not suitable for general purpose work, but can be used to avoid lock contention with multiple consumers accessing a queue-like table.  Note that <literal>NOWAIT</> and <literal>SKIP LOCKED DATA</literal> apply only
     to the row-level lock(s) &mdash; the required <literal>ROW SHARE</literal>
     table-level lock is still taken in the ordinary way (see
     <xref linkend="mvcc">).  You can use
@@ -1350,7 +1350,8 @@ KEY SHARE
     then it is processed as if it was only specified by the strongest one.
     Similarly, a table is processed
     as <literal>NOWAIT</> if that is specified in any of the clauses
-    affecting it.
+    affecting it.  Otherwise, it is processed as <literal>SKIP LOCKED 
+    DATA</literal> if that is specified in any of the clauses affecting it.
    </para>
 
    <para>
@@ -1851,7 +1852,8 @@ SELECT distributors.* WHERE distributors.name = 'Westward';
     query as well as in sub-<command>SELECT</>s, but this is an extension.
     The <literal>FOR NO KEY UPDATE</>, <literal>FOR SHARE</> and
     <literal>FOR KEY SHARE</> variants,
-    as well as the <literal>NOWAIT</> option,
+    as well as the <literal>NOWAIT</> and <literal>SKIP LOCKED DATA</literal>
+    options,
     do not appear in the standard.
    </para>
   </refsect2>

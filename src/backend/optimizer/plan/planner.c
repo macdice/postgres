@@ -2178,6 +2178,7 @@ preprocess_rowmarks(PlannerInfo *root)
 				break;
 		}
 		newrc->noWait = rc->noWait;
+		newrc->skipLocked = rc->skipLocked;
 		newrc->isParent = false;
 
 		prowmarks = lappend(prowmarks, newrc);
@@ -2206,6 +2207,7 @@ preprocess_rowmarks(PlannerInfo *root)
 		else
 			newrc->markType = ROW_MARK_COPY;
 		newrc->noWait = false;	/* doesn't matter */
+		newrc->skipLocked = false;
 		newrc->isParent = false;
 
 		prowmarks = lappend(prowmarks, newrc);

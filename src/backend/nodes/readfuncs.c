@@ -319,6 +319,7 @@ _readRowMarkClause(void)
 	READ_UINT_FIELD(rti);
 	READ_ENUM_FIELD(strength, LockClauseStrength);
 	READ_BOOL_FIELD(noWait);
+	READ_BOOL_FIELD(skipLocked);
 	READ_BOOL_FIELD(pushedDown);
 
 	READ_DONE();
