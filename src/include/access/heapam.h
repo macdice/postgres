@@ -22,6 +22,12 @@
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
+typedef enum
+{
+	LockWaitBlock,
+	LockWaitError,
+	LockWaitSkip
+} LockWaitPolicy;
 
 /* "options" flag bits for heap_insert */
 #define HEAP_INSERT_SKIP_WAL	0x0001
@@ -144,7 +150,7 @@ extern HTSU_Result heap_update(Relation relation, ItemPointer otid,
 			CommandId cid, Snapshot crosscheck, bool wait,
 			HeapUpdateFailureData *hufd, LockTupleMode *lockmode);
 extern HTSU_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
-				CommandId cid, LockTupleMode mode, bool nowait,
+				CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
 				bool follow_update,
 				Buffer *buffer, HeapUpdateFailureData *hufd);
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
