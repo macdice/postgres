@@ -4517,7 +4517,11 @@ l3:
 				{
 					if (!ConditionalXactLockTableWait(xwait))
 					    /* TODO clean up? */
+<<<<<<< HEAD
 					    return HeapTupleWouldBlock;
+=======
+                        return HeapTupleWouldBlock;
+>>>>>>> First pass of SKIP LOCKED DATA patch revival
 				}
 
 				/* if there are updates, follow the update chain */
