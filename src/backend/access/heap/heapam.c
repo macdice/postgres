@@ -4442,14 +4442,14 @@ l3:
 				}
 				else if (wait_policy == LockWaitBlock)
 				{
-					MultiXactIdWait((MultiXactId) xwait, status, NULL, infomask,
+					MultiXactIdWait((MultiXactId) xwait, status, infomask,
 									relation, &tuple->t_data->t_ctid,
 									XLTW_Lock, NULL);
 				}
 				else /* wait_policy == LockWaitSkip */
 				{
 					if (!ConditionalMultiXactIdWait((MultiXactId) xwait,
-													status, NULL, infomask,
+													status, infomask,
 									relation, &tuple->t_data->t_ctid,
 									XLTW_Lock, NULL))
                         /* TODO -- clean up? */
