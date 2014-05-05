@@ -279,7 +279,7 @@ init_ps_display(const char *username, const char *dbname,
 	else
 	{
 		snprintf(ps_buffer, ps_buffer_size,
-				 PROGRAM_NAME_PREFIX "[%s] %s %s %s ",
+				 PROGRAM_NAME_PREFIX "%s %s %s %s ",
 				 cluster_name, username, dbname, host_info);
 	}
 
