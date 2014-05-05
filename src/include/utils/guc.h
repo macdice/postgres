@@ -223,7 +223,7 @@ extern int	temp_file_limit;
 
 extern int	num_temp_buffers;
 
-extern char *cluster_name;
+extern const char *cluster_name;
 extern char *data_directory;
 extern char *ConfigFileName;
 extern char *HbaFileName;
