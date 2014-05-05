@@ -2345,6 +2345,12 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 				else
 					appendStringInfo(buf, "%lx.%x", (long) (MyStartTime), MyProcPid);
 				break;
+			case 'C':
+				if (padding != 0)
+					appendStringInfo(buf, "%*s", padding, cluster_name);
+				else
+					appendStringInfoString(buf, cluster_name);
+				break;
 			case 'p':
 				if (padding != 0)
 					appendStringInfo(buf, "%*d", padding, MyProcPid);
