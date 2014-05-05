@@ -4232,7 +4232,7 @@ local0.*    /var/log/postgresql
             <row>
              <entry><literal>%C</literal></entry>
              <entry>Cluster name</entry>
-             <entry>yes</entry>
+             <entry>no</entry>
             </row>
             <row>
              <entry><literal>%a</literal></entry>
