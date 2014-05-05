@@ -681,6 +681,24 @@ include 'filename'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-cluster-name" xreflabel="cluster_name">
+      <term><varname>cluster_name</varname> (<type>string</type>)</term>
+      <indexterm>
+       <primary><varname>cluster_name</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Sets the cluster name that appears in the process title for all
+        processes in this cluster.  No name is shown if this parameter is set
+        to the empty string <literal>''</> (which is the default).  The
+        process title is typically viewed by the <command>ps</> command, or in
+        Windows by using the <application>Process Explorer</>.  The cluster
+        name can also be included in the <varname>log_line_prefix</varname>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-tcp-keepalives-idle" xreflabel="tcp_keepalives_idle">
       <term><varname>tcp_keepalives_idle</varname> (<type>integer</type>)</term>
       <indexterm>
@@ -4211,6 +4229,11 @@ local0.*    /var/log/postgresql
              </row>
             </thead>
            <tbody>
+            <row>
+             <entry><literal>%C</literal></entry>
+             <entry>Cluster name</entry>
+             <entry>yes</entry>
+            </row>
             <row>
              <entry><literal>%a</literal></entry>
              <entry>Application name</entry>

@@ -74,6 +74,8 @@
 					# (change requires restart)
 #bonjour_name = ''			# defaults to the computer name
 					# (change requires restart)
+#cluster_name = ''			# defaults to the computer name
+					# (change requires restart)
 
 # - Security and Authentication -
 
@@ -410,6 +412,7 @@
 #log_error_verbosity = default		# terse, default, or verbose messages
 #log_hostname = off
 #log_line_prefix = ''			# special values:
+					#   %C = cluster name
 					#   %a = application name
 					#   %u = user name
 					#   %d = database name
