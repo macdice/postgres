@@ -449,7 +449,7 @@ int			temp_file_limit = -1;
 
 int			num_temp_buffers = 1024;
 
-const char   *cluster_name = "";
+const char *cluster_name = "";
 char	   *data_directory;
 char	   *ConfigFileName;
 char	   *HbaFileName;
