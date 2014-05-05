@@ -449,7 +449,7 @@ int			temp_file_limit = -1;
 
 int			num_temp_buffers = 1024;
 
-char	   *cluster_name;
+const char   *cluster_name = "";
 char	   *data_directory;
 char	   *ConfigFileName;
 char	   *HbaFileName;
@@ -3092,7 +3092,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"cluster_name", PGC_POSTMASTER, CUSTOM_OPTIONS,
+		{"cluster_name", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the name of the cluster that appears in 'ps' output."),
 			NULL,
 			GUC_IS_NAME
