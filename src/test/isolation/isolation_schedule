@@ -1,3 +1,4 @@
+test: skip-locked-data
 test: simple-write-skew
 test: receipt-report
 test: temporal-range-integrity
