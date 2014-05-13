@@ -9197,7 +9197,7 @@ opt_nowait:	NOWAIT							{ $$ = TRUE; }
 
 opt_nowait_or_skip:	
 			NOWAIT							{ $$ = WAIT_MODE_NOWAIT; }
-			| SKIP LOCKED DATA_P   			{ $$ = WAIT_MODE_SKIP; }
+			| SKIP LOCKED DATA_P			{ $$ = WAIT_MODE_SKIP; }
 			| /*EMPTY*/						{ $$ = WAIT_MODE_DEFAULT; }
 		;
 
