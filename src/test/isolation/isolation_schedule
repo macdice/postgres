@@ -1,4 +1,3 @@
-test: skip-locked-data
 test: simple-write-skew
 test: receipt-report
 test: temporal-range-integrity
@@ -26,3 +25,4 @@ test: propagate-lock-delete
 test: drop-index-concurrently-1
 test: alter-table-1
 test: timeouts
+test: skip-locked-data

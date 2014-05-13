@@ -2525,12 +2525,12 @@ applyLockingClause(Query *qry, Index rtindex,
 		 * And of course pushedDown becomes false if any clause is explicit.
 		 */
 		rc->strength = Max(rc->strength, strength);
-        if (noWait) { /* TODO combine into one enum! */
-            rc->noWait = true;
-            rc->skipLocked = false;
-        } else if (skipLocked && !rc->skipLocked) {
-            rc->skipLocked = true;
-        }
+		if (noWait) { /* TODO combine into one enum! */
+			rc->noWait = true;
+			rc->skipLocked = false;
+		} else if (skipLocked && !rc->skipLocked) {
+			rc->skipLocked = true;
+		}
 		rc->pushedDown &= pushedDown;
 		return;
 	}
