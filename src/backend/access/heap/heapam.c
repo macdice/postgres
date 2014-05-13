@@ -4096,6 +4096,7 @@ get_mxact_status_for_lock(LockTupleMode mode, bool is_update)
  *	HeapTupleMayBeUpdated: lock was successfully acquired
  *	HeapTupleSelfUpdated: lock failed because tuple updated by self
  *	HeapTupleUpdated: lock failed because tuple updated by other xact
+ *	HeapTupleWouldBlock: lock couldn't be acquired and wait_policy is skip
  *
  * In the failure cases, the routine fills *hufd with the tuple's t_ctid,
  * t_xmax (resolving a possible MultiXact, if necessary), and t_cmax
