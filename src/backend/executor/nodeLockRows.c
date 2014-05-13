@@ -132,12 +132,12 @@ lnext:
 				break;
 		}
 
-        if (erm->noWait)
-            wait_policy = LockWaitError;
-        else if (erm->skipLocked)
-            wait_policy = LockWaitSkip;
-        else
-            wait_policy = LockWaitBlock;
+		if (erm->noWait)
+			wait_policy = LockWaitError;
+		else if (erm->skipLocked)
+			wait_policy = LockWaitSkip;
+		else
+			wait_policy = LockWaitBlock;
 
 		test = heap_lock_tuple(erm->relation, &tuple,
 							   estate->es_output_cid,

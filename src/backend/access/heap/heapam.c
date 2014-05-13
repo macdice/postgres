@@ -4223,10 +4223,10 @@ l3:
 						   RelationGetRelationName(relation))));
 			}
 			else /* wait_policy == LockWaitSkip */
-            {
+			{
 				if (!ConditionalLockTupleTuplock(relation, tid, mode))
-                    /* TODO -- clean up? */
-                    return HeapTupleWouldBlock;
+					/* TODO -- work out what needs to be released here */
+					return HeapTupleWouldBlock;
             }
 			have_tuple_lock = true;
 		}
@@ -4517,11 +4517,7 @@ l3:
 				{
 					if (!ConditionalXactLockTableWait(xwait))
 					    /* TODO clean up? */
-<<<<<<< HEAD
 					    return HeapTupleWouldBlock;
-=======
-                        return HeapTupleWouldBlock;
->>>>>>> First pass of SKIP LOCKED DATA patch revival
 				}
 
 				/* if there are updates, follow the update chain */
