@@ -146,9 +146,9 @@ lnext:
 		ReleaseBuffer(buffer);
 		switch (test)
 		{
-            case HeapTupleWouldBlock:
-                /* couldn't lock tuple in SKIP LOCKED DATA mode */
-                goto lnext;
+			case HeapTupleWouldBlock:
+				/* couldn't lock tuple in SKIP LOCKED DATA mode */
+				goto lnext;
 
 			case HeapTupleSelfUpdated:
 
