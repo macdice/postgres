@@ -26,3 +26,4 @@ test: drop-index-concurrently-1
 test: alter-table-1
 test: timeouts
 test: skip-locked-data
+test: nowait
