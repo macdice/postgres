@@ -62,7 +62,7 @@ static void rewriteValuesRTE(RangeTblEntry *rte, Relation target_relation,
 static void rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 					Relation target_relation);
 static void markQueryForLocking(Query *qry, Node *jtnode,
-				  LockClauseStrength strength, bool noWait, bool skipLocked, bool pushedDown);
+				  LockClauseStrength strength, LockClauseWaitPolicy waitPolicy, bool pushedDown);
 static List *matchLocks(CmdType event, RuleLock *rulelocks,
 		   int varno, Query *parsetree);
 static Query *fireRIRrules(Query *parsetree, List *activeRIRs,
@@ -1481,7 +1481,7 @@ ApplyRetrieveRule(Query *parsetree,
 	 */
 	if (rc != NULL)
 		markQueryForLocking(rule_action, (Node *) rule_action->jointree,
-							rc->strength, rc->noWait, rc->skipLocked, true);
+							rc->strength, rc->waitPolicy, true);
 
 	return parsetree;
 }
@@ -1499,7 +1499,7 @@ ApplyRetrieveRule(Query *parsetree,
  */
 static void
 markQueryForLocking(Query *qry, Node *jtnode,
-					LockClauseStrength strength, bool noWait, bool skipLocked, bool pushedDown)
+					LockClauseStrength strength, LockClauseWaitPolicy waitPolicy, bool pushedDown)
 {
 	if (jtnode == NULL)
 		return;
@@ -1510,15 +1510,15 @@ markQueryForLocking(Query *qry, Node *jtnode,
 
 		if (rte->rtekind == RTE_RELATION)
 		{
-			applyLockingClause(qry, rti, strength, noWait, skipLocked, pushedDown);
+			applyLockingClause(qry, rti, strength, waitPolicy, pushedDown);
 			rte->requiredPerms |= ACL_SELECT_FOR_UPDATE;
 		}
 		else if (rte->rtekind == RTE_SUBQUERY)
 		{
-			applyLockingClause(qry, rti, strength, noWait, skipLocked, pushedDown);
+			applyLockingClause(qry, rti, strength, waitPolicy, pushedDown);
 			/* FOR UPDATE/SHARE of subquery is propagated to subquery's rels */
 			markQueryForLocking(rte->subquery, (Node *) rte->subquery->jointree,
-								strength, noWait, skipLocked, true);
+								strength, waitPolicy, true);
 		}
 		/* other RTE types are unaffected by FOR UPDATE */
 	}
@@ -1528,14 +1528,14 @@ markQueryForLocking(Query *qry, Node *jtnode,
 		ListCell   *l;
 
 		foreach(l, f->fromlist)
-			markQueryForLocking(qry, lfirst(l), strength, noWait, skipLocked, pushedDown);
+			markQueryForLocking(qry, lfirst(l), strength, waitPolicy, pushedDown);
 	}
 	else if (IsA(jtnode, JoinExpr))
 	{
 		JoinExpr   *j = (JoinExpr *) jtnode;
 
-		markQueryForLocking(qry, j->larg, strength, noWait, skipLocked, pushedDown);
-		markQueryForLocking(qry, j->rarg, strength, noWait, skipLocked, pushedDown);
+		markQueryForLocking(qry, j->larg, strength, waitPolicy, pushedDown);
+		markQueryForLocking(qry, j->rarg, strength, waitPolicy, pushedDown);
 	}
 	else
 		elog(ERROR, "unrecognized node type: %d",

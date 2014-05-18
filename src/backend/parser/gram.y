@@ -119,10 +119,6 @@ typedef struct PrivTarget
 #define CAS_NOT_VALID				0x10
 #define CAS_NO_INHERIT				0x20
 
-#define WAIT_MODE_DEFAULT 0
-#define WAIT_MODE_NOWAIT 1
-#define WAIT_MODE_SKIP 2
-
 #define parser_yyerror(msg)  scanner_yyerror(msg, yyscanner)
 #define parser_errposition(pos)  scanner_errposition(pos, yyscanner)
 
@@ -9197,9 +9193,9 @@ opt_data:	DATA_P						   	{}
 		;
 
 opt_nowait_or_skip:	
-			NOWAIT							{ $$ = WAIT_MODE_NOWAIT; }
-			| SKIP LOCKED opt_data			{ $$ = WAIT_MODE_SKIP; }
-			| /*EMPTY*/						{ $$ = WAIT_MODE_DEFAULT; }
+			NOWAIT							{ $$ = LCWP_NOWAIT; }
+			| SKIP LOCKED opt_data			{ $$ = LCWP_SKIP; }
+			| /*EMPTY*/						{ $$ = LCWP_WAIT; }
 		;
 
 
@@ -9809,8 +9805,7 @@ for_locking_item:
 					LockingClause *n = makeNode(LockingClause);
 					n->lockedRels = $2;
 					n->strength = $1;
-					n->noWait = ($3 == WAIT_MODE_NOWAIT);
-					n->skipLocked = ($3 == WAIT_MODE_SKIP);
+					n->waitPolicy = $3;
 					$$ = (Node *) n;
 				}
 		;

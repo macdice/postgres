@@ -4228,7 +4228,7 @@ l3:
 				if (!ConditionalLockTupleTuplock(relation, tid, mode))
 					/* TODO -- work out what needs to be released here */
 					return HeapTupleWouldBlock;
-            }
+			}
 			have_tuple_lock = true;
 		}
 

@@ -2358,8 +2358,7 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 	allrels = makeNode(LockingClause);
 	allrels->lockedRels = NIL;	/* indicates all rels */
 	allrels->strength = lc->strength;
-	allrels->noWait = lc->noWait;
-	allrels->skipLocked = lc->skipLocked;
+	allrels->waitPolicy = lc->waitPolicy;
 
 	if (lockedRels == NIL)
 	{
@@ -2374,12 +2373,12 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 			{
 				case RTE_RELATION:
 					applyLockingClause(qry, i,
-									   lc->strength, lc->noWait, lc->skipLocked, pushedDown);
+									   lc->strength, lc->waitPolicy, pushedDown);
 					rte->requiredPerms |= ACL_SELECT_FOR_UPDATE;
 					break;
 				case RTE_SUBQUERY:
 					applyLockingClause(qry, i,
-									   lc->strength, lc->noWait, lc->skipLocked, pushedDown);
+									   lc->strength, lc->waitPolicy, pushedDown);
 
 					/*
 					 * FOR UPDATE/SHARE of subquery is propagated to all of
@@ -2426,13 +2425,13 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 					{
 						case RTE_RELATION:
 							applyLockingClause(qry, i,
-											   lc->strength, lc->noWait, lc->skipLocked,
+											   lc->strength, lc->waitPolicy,
 											   pushedDown);
 							rte->requiredPerms |= ACL_SELECT_FOR_UPDATE;
 							break;
 						case RTE_SUBQUERY:
 							applyLockingClause(qry, i,
-											   lc->strength, lc->noWait, lc->skipLocked,
+											   lc->strength, lc->waitPolicy,
 											   pushedDown);
 							/* see comment above */
 							transformLockingClause(pstate, rte->subquery,
@@ -2500,7 +2499,7 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
  */
 void
 applyLockingClause(Query *qry, Index rtindex,
-				   LockClauseStrength strength, bool noWait, bool skipLocked, bool pushedDown)
+				   LockClauseStrength strength, LockClauseWaitPolicy waitPolicy, bool pushedDown)
 {
 	RowMarkClause *rc;
 
@@ -2525,12 +2524,7 @@ applyLockingClause(Query *qry, Index rtindex,
 		 * And of course pushedDown becomes false if any clause is explicit.
 		 */
 		rc->strength = Max(rc->strength, strength);
-		if (noWait) { /* TODO combine into one enum! */
-			rc->noWait = true;
-			rc->skipLocked = false;
-		} else if (skipLocked && !rc->skipLocked) {
-			rc->skipLocked = true;
-		}
+		rc->waitPolicy = Max(rc->waitPolicy, waitPolicy);
 		rc->pushedDown &= pushedDown;
 		return;
 	}
@@ -2539,8 +2533,6 @@ applyLockingClause(Query *qry, Index rtindex,
 	rc = makeNode(RowMarkClause);
 	rc->rti = rtindex;
 	rc->strength = strength;
-	rc->noWait = noWait;
-	rc->skipLocked = skipLocked;
-	rc->pushedDown = pushedDown;
+	rc->waitPolicy = waitPolicy;
 	qry->rowMarks = lappend(qry->rowMarks, rc);
 }

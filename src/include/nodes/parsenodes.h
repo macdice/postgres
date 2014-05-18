@@ -611,13 +611,22 @@ typedef enum LockClauseStrength
 	LCS_FORUPDATE
 } LockClauseStrength;
 
+typedef enum LockClauseWaitPolicy
+{
+	/* order is important (see applyLockingClause which takes the greatest
+	   value when several wait policies have been specified), and values must
+	   match RowWaitPolicy from plannodes.h */
+	LCWP_WAIT = 0,
+	LCWP_SKIP = 1,
+	LCWP_NOWAIT = 2
+} LockClauseWaitPolicy;
+
 typedef struct LockingClause
 {
 	NodeTag		type;
 	List	   *lockedRels;		/* FOR [KEY] UPDATE/SHARE relations */
 	LockClauseStrength strength;
-	bool		noWait;			/* NOWAIT option */
-	bool		skipLocked;		/* SKIP LOCKED DATA option */
+	LockClauseWaitPolicy	waitPolicy;	/* NOWAIT and SKIP LOCKED DATA */
 } LockingClause;
 
 /*
@@ -962,8 +971,7 @@ typedef struct RowMarkClause
 	NodeTag		type;
 	Index		rti;			/* range table index of target relation */
 	LockClauseStrength strength;
-	bool		noWait;			/* NOWAIT option */
-	bool		skipLocked;		/* SKIP LOCKED DATA option */
+	LockClauseWaitPolicy waitPolicy;
 	bool		pushedDown;		/* pushed down from higher query level? */
 } RowMarkClause;
 

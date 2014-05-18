@@ -788,6 +788,14 @@ typedef enum RowMarkType
 	ROW_MARK_COPY				/* physically copy the row value */
 } RowMarkType;
 
+typedef enum RowWaitPolicy
+{
+	/* see also LockClauseWaitPolicy in parsenodes.h */
+	RWP_WAIT = 0,
+	RWP_SKIP = 1,
+	RWP_NOWAIT = 2
+} RowWaitPolicy;
+
 #define RowMarkRequiresRowShareLock(marktype)  ((marktype) <= ROW_MARK_KEYSHARE)
 
 /*
@@ -831,8 +839,7 @@ typedef struct PlanRowMark
 	Index		prti;			/* range table index of parent relation */
 	Index		rowmarkId;		/* unique identifier for resjunk columns */
 	RowMarkType markType;		/* see enum above */
-	bool		noWait;			/* NOWAIT option */
-	bool		skipLocked;		/* SKIP LOCKED DATA option */
+	RowWaitPolicy waitPolicy;   /* NOWAIT and SKIP LOCKED DATA options */
 	bool		isParent;		/* true if this is a "dummy" parent entry */
 } PlanRowMark;
 
