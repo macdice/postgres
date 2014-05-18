@@ -830,8 +830,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		erm->prti = rc->prti;
 		erm->rowmarkId = rc->rowmarkId;
 		erm->markType = rc->markType;
-		erm->noWait = rc->noWait;
-		erm->skipLocked = rc->skipLocked;
+		erm->waitPolicy = rc->waitPolicy; /* LockClauseWaitPolicy -> RowWaitPolicy */
 		ItemPointerSetInvalid(&(erm->curCtid));
 		estate->es_rowMarks = lappend(estate->es_rowMarks, erm);
 	}
