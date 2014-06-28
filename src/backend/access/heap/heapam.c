@@ -4453,7 +4453,7 @@ l3:
 													status, infomask, relation,
 													&tuple->t_data->t_ctid,
 													XLTW_Lock, NULL))
-						/* TODO -- clean up? */
+						/* TODO -- work out what needs to be released here */
 						return HeapTupleWouldBlock;
 				}
 
@@ -4517,8 +4517,8 @@ l3:
 				else /* wait_policy == LockWaitSkip */
 				{
 					if (!ConditionalXactLockTableWait(xwait))
-					    /* TODO clean up? */
-					    return HeapTupleWouldBlock;
+						/* TODO -- work out what needs to be released here */
+						return HeapTupleWouldBlock;
 				}
 
 				/* if there are updates, follow the update chain */
