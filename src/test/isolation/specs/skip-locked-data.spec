@@ -15,12 +15,12 @@ teardown
 
 session "s1"
 setup		{ BEGIN; }
-step "s1a"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED DATA LIMIT 1; }
-step "s1b"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED DATA LIMIT 1; }
+step "s1a"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
+step "s1b"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
 step "s1c"	{ COMMIT; }
 
 session "s2"
 setup		{ BEGIN; }
-step "s2a"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED DATA LIMIT 1; }
-step "s2b"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED DATA LIMIT 1; }
+step "s2a"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
+step "s2b"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
 step "s2c"	{ COMMIT; }

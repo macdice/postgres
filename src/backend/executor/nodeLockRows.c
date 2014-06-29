@@ -147,7 +147,7 @@ lnext:
 		switch (test)
 		{
 			case HeapTupleWouldBlock:
-				/* couldn't lock tuple in SKIP LOCKED DATA mode */
+				/* couldn't lock tuple in SKIP LOCKED mode */
 				goto lnext;
 
 			case HeapTupleSelfUpdated:

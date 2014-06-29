@@ -9191,13 +9191,9 @@ opt_nowait:	NOWAIT							{ $$ = TRUE; }
 			| /*EMPTY*/						{ $$ = FALSE; }
 		;
 
-opt_data:	DATA_P						   	{}
-			| /*EMPTY*/						{}
-		;
-
 opt_nowait_or_skip:	
 			NOWAIT							{ $$ = LCWP_NOWAIT; }
-			| SKIP LOCKED opt_data			{ $$ = LCWP_SKIP; }
+			| SKIP LOCKED					{ $$ = LCWP_SKIP; }
 			| /*EMPTY*/						{ $$ = LCWP_WAIT; }
 		;
 

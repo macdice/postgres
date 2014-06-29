@@ -4440,7 +4440,7 @@ get_select_query_def(Query *query, deparse_context *context,
 			if (rc->waitPolicy == LCWP_NOWAIT)
 				appendStringInfoString(buf, " NOWAIT");
 			else if (rc->waitPolicy == LCWP_SKIP)
-				appendStringInfoString(buf, " SKIP LOCKED DATA");
+				appendStringInfoString(buf, " SKIP LOCKED");
 		}
 	}
 
