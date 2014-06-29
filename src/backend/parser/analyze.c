@@ -2534,5 +2534,6 @@ applyLockingClause(Query *qry, Index rtindex,
 	rc->rti = rtindex;
 	rc->strength = strength;
 	rc->waitPolicy = waitPolicy;
+	rc->pushedDown = pushedDown;
 	qry->rowMarks = lappend(qry->rowMarks, rc);
 }
