@@ -891,7 +891,7 @@ fi
 AC_CHECK_LIB(m, main)
 AC_SEARCH_LIBS(setproctitle, util)
 AC_SEARCH_LIBS(dlopen, dl)
-AC_SEARCH_LIBS(socket, [socket wsock32])
+AC_SEARCH_LIBS(socket, [socket ws2_32])
 AC_SEARCH_LIBS(shl_load, dld)
 # We only use libld in port/dynloader/aix.c
 case $host_os in
@@ -954,6 +954,7 @@ if test "$with_openssl" = yes ; then
      AC_SEARCH_LIBS(CRYPTO_new_ex_data, eay32 crypto, [], [AC_MSG_ERROR([library 'eay32' or 'crypto' is required for OpenSSL])])
      AC_SEARCH_LIBS(SSL_library_init, ssleay32 ssl, [], [AC_MSG_ERROR([library 'ssleay32' or 'ssl' is required for OpenSSL])])
   fi
+  AC_CHECK_FUNCS([SSL_get_current_compression])
 fi
 
 if test "$with_pam" = yes ; then
@@ -1096,10 +1097,39 @@ if test "$with_libxslt" = yes ; then
   AC_CHECK_HEADER(libxslt/xslt.h, [], [AC_MSG_ERROR([header file <libxslt/xslt.h> is required for XSLT support])])
 fi
 
+# PGAC_LDAP_SAFE
+# --------------
+# PostgreSQL sometimes loads libldap_r and plain libldap into the same
+# process.  Check for OpenLDAP versions known not to tolerate doing so; assume
+# non-OpenLDAP implementations are safe.  The dblink test suite exercises the
+# hazardous interaction directly.
+
+AC_DEFUN([PGAC_LDAP_SAFE],
+[AC_CACHE_CHECK([for compatible LDAP implementation], [pgac_cv_ldap_safe],
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+[#include <ldap.h>
+#if !defined(LDAP_VENDOR_VERSION) || \
+     (defined(LDAP_API_FEATURE_X_OPENLDAP) && \
+      LDAP_VENDOR_VERSION >= 20424 && LDAP_VENDOR_VERSION <= 20431)
+choke me
+#endif], [])],
+[pgac_cv_ldap_safe=yes],
+[pgac_cv_ldap_safe=no])])
+
+if test "$pgac_cv_ldap_safe" != yes; then
+  AC_MSG_WARN([
+*** With OpenLDAP versions 2.4.24 through 2.4.31, inclusive, each backend
+*** process that loads libpq (via WAL receiver, dblink, or postgres_fdw) and
+*** also uses LDAP will crash on exit.])
+fi])
+
+
+
 if test "$with_ldap" = yes ; then
   if test "$PORTNAME" != "win32"; then
      AC_CHECK_HEADERS(ldap.h, [],
                       [AC_MSG_ERROR([header file <ldap.h> is required for LDAP])])
+     PGAC_LDAP_SAFE
   else
      AC_CHECK_HEADERS(winldap.h, [],
                       [AC_MSG_ERROR([header file <winldap.h> is required for LDAP])],
@@ -1501,15 +1531,6 @@ ACX_PTHREAD	# set thread flags
 # are not supported.  For example, on Solaris -D_POSIX_PTHREAD_SEMANTICS
 # enables 5-arg getpwuid_r, among other things.
 PTHREAD_CFLAGS="$PTHREAD_CFLAGS -D_REENTRANT -D_THREAD_SAFE -D_POSIX_PTHREAD_SEMANTICS"
-
-
-# At this point, we don't want to muck with the compiler name for threading.
-# Let's see who fails, perhaps AIX.  2004-04-23
-if test "$PTHREAD_CC" != "$CC"; then
-AC_MSG_ERROR([
-PostgreSQL does not support platforms that require a special compiler
-for thread safety;  use --disable-thread-safety to disable thread safety.])
-fi
 
 # Check for *_r functions
 _CFLAGS="$CFLAGS"

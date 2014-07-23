@@ -111,6 +111,13 @@ typedef struct PrivTarget
 	List	   *objs;
 } PrivTarget;
 
+/* Private struct for the result of import_qualification production */
+typedef struct ImportQual
+{
+	ImportForeignSchemaType type;
+	List	   *table_names;
+} ImportQual;
+
 /* ConstraintAttributeSpec yields an integer bitmask of these flags: */
 #define CAS_NOT_DEFERRABLE			0x01
 #define CAS_DEFERRABLE				0x02
@@ -211,6 +218,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ResTarget			*target;
 	struct PrivTarget	*privtarget;
 	AccessPriv			*accesspriv;
+	struct ImportQual	*importqual;
 	InsertStmt			*istmt;
 	VariableSetStmt		*vsetstmt;
 }
@@ -237,8 +245,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DropAssertStmt DropTrigStmt DropRuleStmt DropCastStmt DropRoleStmt
 		DropUserStmt DropdbStmt DropTableSpaceStmt DropFdwStmt
 		DropForeignServerStmt DropUserMappingStmt ExplainStmt FetchStmt
-		GrantStmt GrantRoleStmt IndexStmt InsertStmt ListenStmt LoadStmt
-		LockStmt NotifyStmt ExplainableStmt PreparableStmt
+		GrantStmt GrantRoleStmt ImportForeignSchemaStmt IndexStmt InsertStmt
+		ListenStmt LoadStmt LockStmt NotifyStmt ExplainableStmt PreparableStmt
 		CreateFunctionStmt AlterFunctionStmt ReindexStmt RemoveAggrStmt
 		RemoveFuncStmt RemoveOperStmt RenameStmt RevokeStmt RevokeRoleStmt
 		RuleActionStmt RuleActionStmtOrEmpty RuleStmt
@@ -263,10 +271,10 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <dbehavior>	opt_drop_behavior
 
-%type <list>	createdb_opt_list alterdb_opt_list copy_opt_list
+%type <list>	createdb_opt_list createdb_opt_items copy_opt_list
 				transaction_mode_list
 				create_extension_opt_list alter_extension_opt_list
-%type <defelt>	createdb_opt_item alterdb_opt_item copy_opt_item
+%type <defelt>	createdb_opt_item copy_opt_item
 				transaction_mode_item
 				create_extension_opt_item alter_extension_opt_item
 
@@ -322,6 +330,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	defacl_privilege_target
 %type <defelt>	DefACLOption
 %type <list>	DefACLOptionList
+%type <ival>	import_qualification_type
+%type <importqual> import_qualification
 
 %type <list>	stmtblock stmtmulti
 				OptTableElementList TableElementList OptInherit definition
@@ -462,6 +472,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	var_list
 %type <str>		ColId ColLabel var_name type_function_name param_name
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
+%type <str>		createdb_opt_name
 %type <node>	var_value zone_value
 
 %type <keyword> unreserved_keyword type_func_name_keyword
@@ -555,7 +566,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
-	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IN_P
+	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P
 	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
@@ -564,7 +575,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	KEY
 
-	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P LC_COLLATE_P LC_CTYPE_P
+	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED
 
@@ -801,6 +812,7 @@ stmt :
 			| FetchStmt
 			| GrantStmt
 			| GrantRoleStmt
+			| ImportForeignSchemaStmt
 			| IndexStmt
 			| InsertStmt
 			| ListenStmt
@@ -4269,6 +4281,52 @@ AlterForeignTableStmt:
 					n->missing_ok = true;
 					$$ = (Node *)n;
 				}
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *				IMPORT FOREIGN SCHEMA remote_schema
+ *				[ { LIMIT TO | EXCEPT } ( table_list ) ]
+ *				FROM SERVER server_name INTO local_schema [ OPTIONS (...) ]
+ *
+ ****************************************************************************/
+
+ImportForeignSchemaStmt:
+		IMPORT_P FOREIGN SCHEMA name import_qualification
+		  FROM SERVER name INTO name create_generic_options
+			{
+				ImportForeignSchemaStmt *n = makeNode(ImportForeignSchemaStmt);
+				n->server_name = $8;
+				n->remote_schema = $4;
+				n->local_schema = $10;
+				n->list_type = $5->type;
+				n->table_list = $5->table_names;
+				n->options = $11;
+				$$ = (Node *) n;
+			}
+		;
+
+import_qualification_type:
+		LIMIT TO 				{ $$ = FDW_IMPORT_SCHEMA_LIMIT_TO; }
+		| EXCEPT 				{ $$ = FDW_IMPORT_SCHEMA_EXCEPT; }
+		;
+
+import_qualification:
+		import_qualification_type '(' relation_expr_list ')'
+			{
+				ImportQual *n = (ImportQual *) palloc(sizeof(ImportQual));
+				n->type = $1;
+				n->table_names = $3;
+				$$ = n;
+			}
+		| /*EMPTY*/
+			{
+				ImportQual *n = (ImportQual *) palloc(sizeof(ImportQual));
+				n->type = FDW_IMPORT_SCHEMA_ALL;
+				n->table_names = NIL;
+				$$ = n;
+			}
 		;
 
 /*****************************************************************************
@@ -8320,75 +8378,49 @@ CreatedbStmt:
 		;
 
 createdb_opt_list:
-			createdb_opt_list createdb_opt_item		{ $$ = lappend($1, $2); }
+			createdb_opt_items						{ $$ = $1; }
 			| /* EMPTY */							{ $$ = NIL; }
 		;
 
+createdb_opt_items:
+			createdb_opt_item						{ $$ = list_make1($1); }
+			| createdb_opt_items createdb_opt_item	{ $$ = lappend($1, $2); }
+		;
+
 createdb_opt_item:
-			TABLESPACE opt_equal name
+			createdb_opt_name opt_equal SignedIconst
 				{
-					$$ = makeDefElem("tablespace", (Node *)makeString($3));
+					$$ = makeDefElem($1, (Node *)makeInteger($3));
 				}
-			| TABLESPACE opt_equal DEFAULT
+			| createdb_opt_name opt_equal opt_boolean_or_string
 				{
-					$$ = makeDefElem("tablespace", NULL);
+					$$ = makeDefElem($1, (Node *)makeString($3));
 				}
-			| LOCATION opt_equal Sconst
+			| createdb_opt_name opt_equal DEFAULT
 				{
-					$$ = makeDefElem("location", (Node *)makeString($3));
+					$$ = makeDefElem($1, NULL);
 				}
-			| LOCATION opt_equal DEFAULT
-				{
-					$$ = makeDefElem("location", NULL);
-				}
-			| TEMPLATE opt_equal name
-				{
-					$$ = makeDefElem("template", (Node *)makeString($3));
-				}
-			| TEMPLATE opt_equal DEFAULT
-				{
-					$$ = makeDefElem("template", NULL);
-				}
-			| ENCODING opt_equal Sconst
-				{
-					$$ = makeDefElem("encoding", (Node *)makeString($3));
-				}
-			| ENCODING opt_equal Iconst
-				{
-					$$ = makeDefElem("encoding", (Node *)makeInteger($3));
-				}
-			| ENCODING opt_equal DEFAULT
-				{
-					$$ = makeDefElem("encoding", NULL);
-				}
-			| LC_COLLATE_P opt_equal Sconst
-				{
-					$$ = makeDefElem("lc_collate", (Node *)makeString($3));
-				}
-			| LC_COLLATE_P opt_equal DEFAULT
-				{
-					$$ = makeDefElem("lc_collate", NULL);
-				}
-			| LC_CTYPE_P opt_equal Sconst
-				{
-					$$ = makeDefElem("lc_ctype", (Node *)makeString($3));
-				}
-			| LC_CTYPE_P opt_equal DEFAULT
-				{
-					$$ = makeDefElem("lc_ctype", NULL);
-				}
-			| CONNECTION LIMIT opt_equal SignedIconst
-				{
-					$$ = makeDefElem("connectionlimit", (Node *)makeInteger($4));
-				}
-			| OWNER opt_equal name
-				{
-					$$ = makeDefElem("owner", (Node *)makeString($3));
-				}
-			| OWNER opt_equal DEFAULT
-				{
-					$$ = makeDefElem("owner", NULL);
-				}
+		;
+
+/*
+ * Ideally we'd use ColId here, but that causes shift/reduce conflicts against
+ * the ALTER DATABASE SET/RESET syntaxes.  Instead call out specific keywords
+ * we need, and allow IDENT so that database option names don't have to be
+ * parser keywords unless they are already keywords for other reasons.
+ *
+ * XXX this coding technique is fragile since if someone makes a formerly
+ * non-keyword option name into a keyword and forgets to add it here, the
+ * option will silently break.  Best defense is to provide a regression test
+ * exercising every such option, at least at the syntax level.
+ */
+createdb_opt_name:
+			IDENT							{ $$ = $1; }
+			| CONNECTION LIMIT				{ $$ = pstrdup("connection_limit"); }
+			| ENCODING						{ $$ = pstrdup($1); }
+			| LOCATION						{ $$ = pstrdup($1); }
+			| OWNER							{ $$ = pstrdup($1); }
+			| TABLESPACE					{ $$ = pstrdup($1); }
+			| TEMPLATE						{ $$ = pstrdup($1); }
 		;
 
 /*
@@ -8407,11 +8439,18 @@ opt_equal:	'='										{}
  *****************************************************************************/
 
 AlterDatabaseStmt:
-			ALTER DATABASE database_name opt_with alterdb_opt_list
+			ALTER DATABASE database_name WITH createdb_opt_list
 				 {
 					AlterDatabaseStmt *n = makeNode(AlterDatabaseStmt);
 					n->dbname = $3;
 					n->options = $5;
+					$$ = (Node *)n;
+				 }
+			| ALTER DATABASE database_name createdb_opt_list
+				 {
+					AlterDatabaseStmt *n = makeNode(AlterDatabaseStmt);
+					n->dbname = $3;
+					n->options = $4;
 					$$ = (Node *)n;
 				 }
 			| ALTER DATABASE database_name SET TABLESPACE name
@@ -8431,19 +8470,6 @@ AlterDatabaseSetStmt:
 					n->dbname = $3;
 					n->setstmt = $4;
 					$$ = (Node *)n;
-				}
-		;
-
-
-alterdb_opt_list:
-			alterdb_opt_list alterdb_opt_item		{ $$ = lappend($1, $2); }
-			| /* EMPTY */							{ $$ = NIL; }
-		;
-
-alterdb_opt_item:
-			CONNECTION LIMIT opt_equal SignedIconst
-				{
-					$$ = makeDefElem("connectionlimit", (Node *)makeInteger($4));
 				}
 		;
 
@@ -12946,6 +12972,7 @@ unreserved_keyword:
 			| IMMEDIATE
 			| IMMUTABLE
 			| IMPLICIT_P
+			| IMPORT_P
 			| INCLUDING
 			| INCREMENT
 			| INDEX
@@ -12964,8 +12991,6 @@ unreserved_keyword:
 			| LANGUAGE
 			| LARGE_P
 			| LAST_P
-			| LC_COLLATE_P
-			| LC_CTYPE_P
 			| LEAKPROOF
 			| LEVEL
 			| LISTEN

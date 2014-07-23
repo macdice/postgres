@@ -995,6 +995,9 @@ SendQuery(const char *query)
 		results = NULL;			/* PQclear(NULL) does nothing */
 	}
 
+	if (!OK && pset.echo == PSQL_ECHO_ERRORS)
+		psql_error("STATEMENT:  %s\n", query);
+
 	/* If we made a temporary savepoint, possibly release/rollback */
 	if (on_error_rollback_savepoint)
 	{
@@ -1520,6 +1523,23 @@ command_no_begin(const char *query)
 			if (wordlen == 12 && pg_strncasecmp(query, "concurrently", 12) == 0)
 				return true;
 		}
+
+		return false;
+	}
+
+	if (wordlen == 5 && pg_strncasecmp(query, "alter", 5) == 0)
+	{
+		query += wordlen;
+
+		query = skip_white_space(query);
+
+		wordlen = 0;
+		while (isalpha((unsigned char) query[wordlen]))
+			wordlen += PQmblen(&query[wordlen], pset.encoding);
+
+		/* ALTER SYSTEM isn't allowed in xacts */
+		if (wordlen == 6 && pg_strncasecmp(query, "system", 6) == 0)
+			return true;
 
 		return false;
 	}

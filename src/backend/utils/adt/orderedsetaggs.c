@@ -47,10 +47,6 @@ typedef struct OSAPerQueryState
 	Aggref	   *aggref;
 	/* Memory context containing this struct and other per-query data: */
 	MemoryContext qcontext;
-	/* Memory context containing per-group data: */
-	MemoryContext gcontext;
-	/* Agg plan node's output econtext: */
-	ExprContext *peraggecontext;
 
 	/* These fields are used only when accumulating tuples: */
 
@@ -88,6 +84,8 @@ typedef struct OSAPerGroupState
 {
 	/* Link to the per-query state for this aggregate: */
 	OSAPerQueryState *qstate;
+	/* Memory context containing per-group data: */
+	MemoryContext gcontext;
 	/* Sort object we're accumulating data in: */
 	Tuplesortstate *sortstate;
 	/* Number of normal rows inserted into sortstate: */
@@ -105,7 +103,16 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 {
 	OSAPerGroupState *osastate;
 	OSAPerQueryState *qstate;
+	MemoryContext gcontext;
 	MemoryContext oldcontext;
+
+	/*
+	 * Check we're called as aggregate (and not a window function), and get
+	 * the Agg node's group-lifespan context (which might change from group to
+	 * group, so we shouldn't cache it in the per-query state).
+	 */
+	if (AggCheckCallContext(fcinfo, &gcontext) != AGG_CONTEXT_AGGREGATE)
+		elog(ERROR, "ordered-set aggregate called in non-aggregate context");
 
 	/*
 	 * We keep a link to the per-query state in fn_extra; if it's not there,
@@ -116,27 +123,15 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 	{
 		Aggref	   *aggref;
 		MemoryContext qcontext;
-		MemoryContext gcontext;
-		ExprContext *peraggecontext;
 		List	   *sortlist;
 		int			numSortCols;
 
-		/*
-		 * Check we're called as aggregate (and not a window function), and
-		 * get the Agg node's group-lifespan context
-		 */
-		if (AggCheckCallContext(fcinfo, &gcontext) != AGG_CONTEXT_AGGREGATE)
-			elog(ERROR, "ordered-set aggregate called in non-aggregate context");
-		/* Need the Aggref as well */
+		/* Get the Aggref so we can examine aggregate's arguments */
 		aggref = AggGetAggref(fcinfo);
 		if (!aggref)
 			elog(ERROR, "ordered-set aggregate called in non-aggregate context");
 		if (!AGGKIND_IS_ORDERED_SET(aggref->aggkind))
 			elog(ERROR, "ordered-set aggregate support function called for non-ordered-set aggregate");
-		/* Also get output exprcontext so we can register shutdown callback */
-		peraggecontext = AggGetPerAggEContext(fcinfo);
-		if (!peraggecontext)
-			elog(ERROR, "ordered-set aggregate called in non-aggregate context");
 
 		/*
 		 * Prepare per-query structures in the fn_mcxt, which we assume is the
@@ -149,8 +144,6 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 		qstate = (OSAPerQueryState *) palloc0(sizeof(OSAPerQueryState));
 		qstate->aggref = aggref;
 		qstate->qcontext = qcontext;
-		qstate->gcontext = gcontext;
-		qstate->peraggecontext = peraggecontext;
 
 		/* Extract the sort information */
 		sortlist = aggref->aggorder;
@@ -267,10 +260,11 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 	}
 
 	/* Now build the stuff we need in group-lifespan context */
-	oldcontext = MemoryContextSwitchTo(qstate->gcontext);
+	oldcontext = MemoryContextSwitchTo(gcontext);
 
 	osastate = (OSAPerGroupState *) palloc(sizeof(OSAPerGroupState));
 	osastate->qstate = qstate;
+	osastate->gcontext = gcontext;
 
 	/* Initialize tuplesort object */
 	if (use_tuples)
@@ -290,10 +284,10 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 
 	osastate->number_of_rows = 0;
 
-	/* Now register a shutdown callback to clean things up */
-	RegisterExprContextCallback(qstate->peraggecontext,
-								ordered_set_shutdown,
-								PointerGetDatum(osastate));
+	/* Now register a shutdown callback to clean things up at end of group */
+	AggRegisterCallback(fcinfo,
+						ordered_set_shutdown,
+						PointerGetDatum(osastate));
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -1310,7 +1304,7 @@ hypothetical_dense_rank_final(PG_FUNCTION_ARGS)
 	sortColIdx = osastate->qstate->sortColIdx;
 
 	/* Get short-term context we can use for execTuplesMatch */
-	tmpcontext = AggGetPerTupleEContext(fcinfo)->ecxt_per_tuple_memory;
+	tmpcontext = AggGetTempMemoryContext(fcinfo);
 
 	/* insert the hypothetical row into the sort */
 	slot = osastate->qstate->tupslot;

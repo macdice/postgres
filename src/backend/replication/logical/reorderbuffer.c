@@ -1383,7 +1383,14 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 						{
 							ReorderBufferToastReplace(rb, txn, relation, change);
 							rb->apply_change(rb, txn, relation, change);
-							ReorderBufferToastReset(rb, txn);
+
+							/*
+							 * Only clear reassembled toast chunks if we're
+							 * sure they're not required anymore. The creator
+							 * of the tuple tells us.
+							 */
+							if (change->data.tp.clear_toast_afterwards)
+								ReorderBufferToastReset(rb, txn);
 						}
 						/* we're not interested in toast deletions */
 						else if (change->action == REORDER_BUFFER_CHANGE_INSERT)
@@ -2788,7 +2795,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 	int			readBytes;
 	LogicalRewriteMappingData map;
 
-	sprintf(path, "pg_llog/mappings/%s", fname);
+	sprintf(path, "pg_logical/mappings/%s", fname);
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY, 0);
 	if (fd < 0)
 		ereport(ERROR,
@@ -2908,8 +2915,8 @@ UpdateLogicalMappings(HTAB *tuplecid_data, Oid relid, Snapshot snapshot)
 	size_t		off;
 	Oid			dboid = IsSharedRelation(relid) ? InvalidOid : MyDatabaseId;
 
-	mapping_dir = AllocateDir("pg_llog/mappings");
-	while ((mapping_de = ReadDir(mapping_dir, "pg_llog/mappings")) != NULL)
+	mapping_dir = AllocateDir("pg_logical/mappings");
+	while ((mapping_de = ReadDir(mapping_dir, "pg_logical/mappings")) != NULL)
 	{
 		Oid			f_dboid;
 		Oid			f_relid;

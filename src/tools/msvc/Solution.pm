@@ -162,11 +162,13 @@ sub GenerateFiles
 		  || confess "Could not open pg_config.h.win32\n";
 		open(O, ">src\\include\\pg_config.h")
 		  || confess "Could not write to pg_config.h\n";
+		my $extraver = $self->{options}->{extraver};
+		$extraver = '' unless defined $extraver;
 		while (<I>)
 		{
-			s{PG_VERSION "[^"]+"}{PG_VERSION "$self->{strver}"};
+			s{PG_VERSION "[^"]+"}{PG_VERSION "$self->{strver}$extraver"};
 			s{PG_VERSION_NUM \d+}{PG_VERSION_NUM $self->{numver}};
-s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY(z)\n#define PG_VERSION_STR "PostgreSQL $self->{strver}, compiled by Visual C++ build " __STRINGIFY2(_MSC_VER) ", $bits-bit"};
+			s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY(z)\n#define PG_VERSION_STR "PostgreSQL $self->{strver}$extraver, compiled by Visual C++ build " __STRINGIFY2(_MSC_VER) ", $bits-bit"};
 			print O;
 		}
 		print O "#define PG_MAJORVERSION \"$self->{majorver}\"\n";
@@ -420,7 +422,7 @@ EOF
 	}
 
 	my $mf = Project::read_file('src\backend\catalog\Makefile');
-	$mf =~ s{\\s*[\r\n]+}{}mg;
+	$mf =~ s{\\\r?\n}{}g;
 	$mf =~ /^POSTGRES_BKI_SRCS\s*:?=[^,]+,(.*)\)$/gm
 	  || croak "Could not find POSTGRES_BKI_SRCS in Makefile\n";
 	my @allbki = split /\s+/, $1;
@@ -625,14 +627,15 @@ sub GetFakeConfigure
 	$cfg .= ' --enable-nls' if ($self->{options}->{nls});
 	$cfg .= ' --with-ldap'  if ($self->{options}->{ldap});
 	$cfg .= ' --without-zlib' unless ($self->{options}->{zlib});
-	$cfg .= ' --with-openssl'   if ($self->{options}->{ssl});
-	$cfg .= ' --with-ossp-uuid' if ($self->{options}->{uuid});
-	$cfg .= ' --with-libxml'    if ($self->{options}->{xml});
-	$cfg .= ' --with-libxslt'   if ($self->{options}->{xslt});
-	$cfg .= ' --with-gssapi'    if ($self->{options}->{gss});
-	$cfg .= ' --with-tcl'       if ($self->{options}->{tcl});
-	$cfg .= ' --with-perl'      if ($self->{options}->{perl});
-	$cfg .= ' --with-python'    if ($self->{options}->{python});
+	$cfg .= ' --with-extra-version' if ($self->{options}->{extraver});
+	$cfg .= ' --with-openssl'       if ($self->{options}->{ssl});
+	$cfg .= ' --with-ossp-uuid'     if ($self->{options}->{uuid});
+	$cfg .= ' --with-libxml'        if ($self->{options}->{xml});
+	$cfg .= ' --with-libxslt'       if ($self->{options}->{xslt});
+	$cfg .= ' --with-gssapi'        if ($self->{options}->{gss});
+	$cfg .= ' --with-tcl'           if ($self->{options}->{tcl});
+	$cfg .= ' --with-perl'          if ($self->{options}->{perl});
+	$cfg .= ' --with-python'        if ($self->{options}->{python});
 
 	return $cfg;
 }

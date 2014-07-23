@@ -136,7 +136,7 @@ PGconn *PQconnectdbParams(const char * const *keywords,
       </para>
 
       <para>
-       If  any  parameter is NULL or an emptry string, the corresponding
+       If  any  parameter is <symbol>NULL</symbol> or an emptry string, the corresponding
        environment variable (see <xref linkend="libpq-envars">) is checked.
        If the  environment  variable is not set either, then the indicated
        built-in defaults are used.
@@ -6878,7 +6878,7 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
        <primary><envar>PGLOCALEDIR</envar></primary>
       </indexterm>
       <envar>PGLOCALEDIR</envar> sets the directory containing the
-      <literal>locale</> files for message internationalization.
+      <literal>locale</> files for message localization.
      </para>
     </listitem>
    </itemizedlist>
@@ -7200,7 +7200,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
   </para>
 
   <para>
-   Note that the client's <filename>~/.postgresql/root.crt</> lists the top-level CAs 
+   Note that the client's <filename>~/.postgresql/root.crt</> lists the top-level CAs
    that are considered trusted for signing server certificates.  In principle it need
    not list the CA that signed the client's certificate, though in most cases
    that CA would also be trusted for server certificates.

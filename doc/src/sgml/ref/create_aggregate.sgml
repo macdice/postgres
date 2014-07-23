@@ -207,7 +207,7 @@ CREATE AGGREGATE <replaceable class="PARAMETER">name</replaceable> (
    arguments that are evaluated only once per aggregation rather than once
    per input row.  Hypothetical-set aggregates are a subclass of ordered-set
    aggregates in which some of the direct arguments are required to match,
-   in number and datatypes, the aggregated argument columns.  This allows
+   in number and data types, the aggregated argument columns.  This allows
    the values of those direct arguments to be added to the collection of
    aggregate-input rows as an additional <quote>hypothetical</> row.
   </para>
@@ -447,7 +447,7 @@ SELECT col FROM tab ORDER BY col USING sortop LIMIT 1;
     <listitem>
      <para>
       The approximate average size (in bytes) of the aggregate's state
-      value, when using moving-aggregate mode.  This works the same as 
+      value, when using moving-aggregate mode.  This works the same as
       <replaceable>state_data_size</>.
      </para>
     </listitem>

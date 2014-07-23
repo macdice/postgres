@@ -1347,7 +1347,7 @@ datum_to_json(Datum val, bool is_null, StringInfo result,
 		 tcategory == JSONTYPE_CAST))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-		  errmsg("key value must be scalar, not array, composite or json")));
+		  errmsg("key value must be scalar, not array, composite, or json")));
 
 	switch (tcategory)
 	{
@@ -2184,10 +2184,6 @@ json_object(PG_FUNCTION_ARGS)
 					 errmsg("null value not allowed for object key")));
 
 		v = TextDatumGetCString(in_datums[i * 2]);
-		if (v[0] == '\0')
-			ereport(ERROR,
-					(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
-					 errmsg("empty value not allowed for object key")));
 		if (i > 0)
 			appendStringInfoString(&result, ", ");
 		escape_json(&result, v);
@@ -2272,10 +2268,6 @@ json_object_two_arg(PG_FUNCTION_ARGS)
 					 errmsg("null value not allowed for object key")));
 
 		v = TextDatumGetCString(key_datums[i]);
-		if (v[0] == '\0')
-			ereport(ERROR,
-					(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
-					 errmsg("empty value not allowed for object key")));
 		if (i > 0)
 			appendStringInfoString(&result, ", ");
 		escape_json(&result, v);
@@ -2353,8 +2345,11 @@ escape_json(StringInfo buf, const char *str)
 				 * only unicode escape that should be present is \u0000,
 				 * all the other unicode escapes will have been resolved.
 				 */
-				if (p[1] == 'u' && isxdigit(p[2]) && isxdigit(p[3])
-					&& isxdigit(p[4]) && isxdigit(p[5]))
+				if (p[1] == 'u' &&
+					isxdigit((unsigned char) p[2]) &&
+					isxdigit((unsigned char) p[3]) &&
+					isxdigit((unsigned char) p[4]) &&
+					isxdigit((unsigned char) p[5]))
 					appendStringInfoCharMacro(buf, *p);
 				else
 					appendStringInfoString(buf, "\\\\");

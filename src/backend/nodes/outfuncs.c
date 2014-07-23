@@ -2012,6 +2012,19 @@ _outCreateForeignTableStmt(StringInfo str, const CreateForeignTableStmt *node)
 }
 
 static void
+_outImportForeignSchemaStmt(StringInfo str, const ImportForeignSchemaStmt *node)
+{
+	WRITE_NODE_TYPE("IMPORTFOREIGNSCHEMASTMT");
+
+	WRITE_STRING_FIELD(server_name);
+	WRITE_STRING_FIELD(remote_schema);
+	WRITE_STRING_FIELD(local_schema);
+	WRITE_ENUM_FIELD(list_type, ImportForeignSchemaType);
+	WRITE_NODE_FIELD(table_list);
+	WRITE_NODE_FIELD(options);
+}
+
+static void
 _outIndexStmt(StringInfo str, const IndexStmt *node)
 {
 	WRITE_NODE_TYPE("INDEXSTMT");
@@ -2492,8 +2505,14 @@ _outValue(StringInfo str, const Value *value)
 			appendStringInfoString(str, value->val.str);
 			break;
 		case T_String:
+
+			/*
+			 * We use _outToken to provide escaping of the string's content,
+			 * but we don't want it to do anything with an empty string.
+			 */
 			appendStringInfoChar(str, '"');
-			_outToken(str, value->val.str);
+			if (value->val.str[0] != '\0')
+				_outToken(str, value->val.str);
 			appendStringInfoChar(str, '"');
 			break;
 		case T_BitString:
@@ -3118,6 +3137,9 @@ _outNode(StringInfo str, const void *obj)
 				break;
 			case T_CreateForeignTableStmt:
 				_outCreateForeignTableStmt(str, obj);
+				break;
+			case T_ImportForeignSchemaStmt:
+				_outImportForeignSchemaStmt(str, obj);
 				break;
 			case T_IndexStmt:
 				_outIndexStmt(str, obj);

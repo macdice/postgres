@@ -6,6 +6,7 @@ use warnings;
 use Exporter 'import';
 our @EXPORT = qw(
   tempdir
+  tempdir_short
   start_test_server
   restart_test_server
   psql
@@ -38,6 +39,12 @@ BEGIN
 	  }
 }
 
+# Set to untranslated messages, to be able to compare program output
+# with expected strings.
+delete $ENV{LANGUAGE};
+delete $ENV{LC_ALL};
+$ENV{LC_MESSAGES} = 'C';
+
 delete $ENV{PGCONNECT_TIMEOUT};
 delete $ENV{PGDATA};
 delete $ENV{PGDATABASE};
@@ -62,7 +69,14 @@ $ENV{PGPORT} = int($ENV{PGPORT}) % 65536;
 
 sub tempdir
 {
-	return File::Temp::tempdir('testXXXX', DIR => cwd(), CLEANUP => 1);
+	return File::Temp::tempdir('tmp_testXXXX', DIR => $ENV{TESTDIR} || cwd(), CLEANUP => 1);
+}
+
+sub tempdir_short
+{
+	# Use a separate temp dir outside the build tree for the
+	# Unix-domain socket, to avoid file name length issues.
+	return File::Temp::tempdir(CLEANUP => 1);
 }
 
 my ($test_server_datadir, $test_server_logfile);
@@ -72,10 +86,12 @@ sub start_test_server
 	my ($tempdir) = @_;
 	my $ret;
 
+	my $tempdir_short = tempdir_short;
+
 	system "initdb -D $tempdir/pgdata -A trust -N >/dev/null";
 	$ret = system 'pg_ctl', '-D', "$tempdir/pgdata", '-s', '-w', '-l',
 	  "$tempdir/logfile", '-o',
-	  "--fsync=off -k $tempdir --listen-addresses='' --log-statement=all",
+	  "--fsync=off -k $tempdir_short --listen-addresses='' --log-statement=all",
 	  'start';
 
 	if ($ret != 0)
@@ -84,7 +100,7 @@ sub start_test_server
 		BAIL_OUT("pg_ctl failed");
 	}
 
-	$ENV{PGHOST}         = $tempdir;
+	$ENV{PGHOST}         = $tempdir_short;
 	$test_server_datadir = "$tempdir/pgdata";
 	$test_server_logfile = "$tempdir/logfile";
 }
