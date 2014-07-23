@@ -126,6 +126,7 @@ typedef struct ImportQual
 #define CAS_NOT_VALID				0x10
 #define CAS_NO_INHERIT				0x20
 
+
 #define parser_yyerror(msg)  scanner_yyerror(msg, yyscanner)
 #define parser_errposition(pos)  scanner_errposition(pos, yyscanner)
 

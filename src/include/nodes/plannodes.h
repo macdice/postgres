@@ -839,7 +839,7 @@ typedef struct PlanRowMark
 	Index		prti;			/* range table index of parent relation */
 	Index		rowmarkId;		/* unique identifier for resjunk columns */
 	RowMarkType markType;		/* see enum above */
-	RowWaitPolicy waitPolicy;   /* NOWAIT and SKIP LOCKED DATA options */
+	RowWaitPolicy waitPolicy;   /* NOWAIT and SKIP LOCKED options */
 	bool		isParent;		/* true if this is a "dummy" parent entry */
 } PlanRowMark;
 

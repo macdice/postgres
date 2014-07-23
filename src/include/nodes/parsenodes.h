@@ -618,7 +618,7 @@ typedef struct DefElem
  */
 typedef enum LockClauseStrength
 {
-	/* order is important -- see applyLockingClause */
+	/* Order is important -- see applyLockingClause. */
 	LCS_FORKEYSHARE,
 	LCS_FORSHARE,
 	LCS_FORNOKEYUPDATE,
@@ -627,9 +627,11 @@ typedef enum LockClauseStrength
 
 typedef enum LockClauseWaitPolicy
 {
-	/* order is important (see applyLockingClause which takes the greatest
-	   value when several wait policies have been specified), and values must
-	   match RowWaitPolicy from plannodes.h */
+	/* 
+	 * Note: order is important (see applyLockingClause which takes the
+	 * greatest value when several wait policies have been specified), and
+	 * values must match RowWaitPolicy from plannodes.h.
+	 */
 	LCWP_WAIT = 0,
 	LCWP_SKIP = 1,
 	LCWP_NOWAIT = 2
@@ -640,7 +642,7 @@ typedef struct LockingClause
 	NodeTag		type;
 	List	   *lockedRels;		/* FOR [KEY] UPDATE/SHARE relations */
 	LockClauseStrength strength;
-	LockClauseWaitPolicy	waitPolicy;	/* NOWAIT and SKIP LOCKED DATA */
+	LockClauseWaitPolicy	waitPolicy;	/* NOWAIT and SKIP LOCKED */
 } LockingClause;
 
 /*
