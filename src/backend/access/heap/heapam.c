@@ -4234,7 +4234,6 @@ l3:
 			else /* wait_policy == LockWaitSkip */
 			{
 				if (!ConditionalLockTupleTuplock(relation, tid, mode))
-					/* TODO -- work out what needs to be released here */
 					return HeapTupleWouldBlock;
 			}
 			have_tuple_lock = true;
@@ -4461,8 +4460,11 @@ l3:
 													status, infomask, relation,
 													&tuple->t_data->t_ctid,
 													XLTW_Lock, NULL))
-						/* TODO -- work out what needs to be released here */
+					{
+						if (have_tuple_lock)
+							UnlockTupleTuplock(relation, tid, mode);
 						return HeapTupleWouldBlock;
+					}
 				}
 
 				/* if there are updates, follow the update chain */
@@ -4525,8 +4527,11 @@ l3:
 				else /* wait_policy == LockWaitSkip */
 				{
 					if (!ConditionalXactLockTableWait(xwait))
-						/* TODO -- work out what needs to be released here */
+					{
+						if (have_tuple_lock)
+							UnlockTupleTuplock(relation, tid, mode);
 						return HeapTupleWouldBlock;
+					}
 				}
 
 				/* if there are updates, follow the update chain */
