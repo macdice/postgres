@@ -788,6 +788,8 @@ typedef enum RowMarkType
 	ROW_MARK_COPY				/* physically copy the row value */
 } RowMarkType;
 
+#define RowMarkRequiresRowShareLock(marktype)  ((marktype) <= ROW_MARK_KEYSHARE)
+
 typedef enum RowWaitPolicy
 {
 	/* see also LockClauseWaitPolicy in parsenodes.h */
@@ -795,8 +797,6 @@ typedef enum RowWaitPolicy
 	RWP_SKIP = 1,
 	RWP_NOWAIT = 2
 } RowWaitPolicy;
-
-#define RowMarkRequiresRowShareLock(marktype)  ((marktype) <= ROW_MARK_KEYSHARE)
 
 /*
  * PlanRowMark -
