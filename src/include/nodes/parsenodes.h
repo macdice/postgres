@@ -618,7 +618,7 @@ typedef struct DefElem
  */
 typedef enum LockClauseStrength
 {
-	/* Order is important -- see applyLockingClause. */
+	/* order is important -- see applyLockingClause */
 	LCS_FORKEYSHARE,
 	LCS_FORSHARE,
 	LCS_FORNOKEYUPDATE,
