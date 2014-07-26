@@ -23,6 +23,7 @@
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
+
 /* "options" flag bits for heap_insert */
 #define HEAP_INSERT_SKIP_WAL	0x0001
 #define HEAP_INSERT_SKIP_FSM	0x0002
