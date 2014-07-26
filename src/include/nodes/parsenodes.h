@@ -630,7 +630,8 @@ typedef enum LockClauseWaitPolicy
 	/* 
 	 * Note: order is important (see applyLockingClause which takes the
 	 * greatest value when several wait policies have been specified), and
-	 * values must match RowWaitPolicy from plannodes.h.
+	 * values must match RowWaitPolicy from plannodes.h and LockWaitPolicy
+	 * from heapam.h.
 	 */
 	LCWP_WAIT = 0,
 	LCWP_SKIP = 1,

@@ -24,9 +24,9 @@
 
 typedef enum
 {
-	LockWaitBlock,
-	LockWaitError,
-	LockWaitSkip
+	LockWaitBlock = 0,
+	LockWaitSkip = 1,
+	LockWaitError = 2
 } LockWaitPolicy;
 
 /* "options" flag bits for heap_insert */
