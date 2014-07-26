@@ -2,7 +2,7 @@
  *
  * lockwaitpolicy.h
  *	  Header file for the enum LockWaitPolicy enum, which is needed in
- *    several modules (parser, planner, executor, heap manager).
+ *	  several modules (parser, planner, executor, heap manager).
  *
  * Copyright (c) 2014, PostgreSQL Global Development Group
  *
