@@ -2257,7 +2257,7 @@ preprocess_rowmarks(PlannerInfo *root)
 			newrc->markType = ROW_MARK_REFERENCE;
 		else
 			newrc->markType = ROW_MARK_COPY;
-		newrc->waitPolicy = RWP_WAIT;	/* doesn't matter */
+		newrc->waitPolicy = LockWaitBlock;	/* doesn't matter */
 		newrc->isParent = false;
 
 		prowmarks = lappend(prowmarks, newrc);

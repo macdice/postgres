@@ -23,6 +23,7 @@
 #include "nodes/bitmapset.h"
 #include "nodes/primnodes.h"
 #include "nodes/value.h"
+#include "utils/lockwaitpolicy.h"
 
 /* Possible sources of a Query */
 typedef enum QuerySource
@@ -625,25 +626,12 @@ typedef enum LockClauseStrength
 	LCS_FORUPDATE
 } LockClauseStrength;
 
-typedef enum LockClauseWaitPolicy
-{
-	/* 
-	 * Note: order is important (see applyLockingClause which takes the
-	 * greatest value when several wait policies have been specified), and
-	 * values must match RowWaitPolicy from plannodes.h and LockWaitPolicy
-	 * from heapam.h.
-	 */
-	LCWP_WAIT = 0,
-	LCWP_SKIP = 1,
-	LCWP_NOWAIT = 2
-} LockClauseWaitPolicy;
-
 typedef struct LockingClause
 {
 	NodeTag		type;
 	List	   *lockedRels;		/* FOR [KEY] UPDATE/SHARE relations */
 	LockClauseStrength strength;
-	LockClauseWaitPolicy	waitPolicy;	/* NOWAIT and SKIP LOCKED */
+	LockWaitPolicy	waitPolicy;	/* NOWAIT and SKIP LOCKED */
 } LockingClause;
 
 /*
@@ -988,7 +976,7 @@ typedef struct RowMarkClause
 	NodeTag		type;
 	Index		rti;			/* range table index of target relation */
 	LockClauseStrength strength;
-	LockClauseWaitPolicy waitPolicy;
+	LockWaitPolicy waitPolicy;
 	bool		pushedDown;		/* pushed down from higher query level? */
 } RowMarkClause;
 

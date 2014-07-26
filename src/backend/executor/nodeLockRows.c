@@ -132,13 +132,7 @@ lnext:
 				break;
 		}
 
-		StaticAssertExpr((int) LockWaitBlock == (int) RWP_WAIT,
-						 "LockWaitPolicy/RowWaitPolicy mismatch");
-		StaticAssertExpr((int) LockWaitSkip == (int) RWP_SKIP,
-						 "LockWaitPolicy/RowWaitPolicy mismatch");
-		StaticAssertExpr((int) LockWaitError == (int) RWP_NOWAIT,
-						 "LockWaitPolicy/RowWaitPolicy mismatch");
-		wait_policy = erm->waitPolicy; /* RowWaitPolicy -> LockWaitPolicy */
+		wait_policy = erm->waitPolicy;
 
 		test = heap_lock_tuple(erm->relation, &tuple,
 							   estate->es_output_cid,

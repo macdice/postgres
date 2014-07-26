@@ -429,7 +429,7 @@ typedef struct ExecRowMark
 	Index		prti;			/* parent range table index, if child */
 	Index		rowmarkId;		/* unique identifier for resjunk columns */
 	RowMarkType markType;		/* see enum in nodes/plannodes.h */
-	RowWaitPolicy waitPolicy;	/* see enum in nodes/plannodes.h */
+	LockWaitPolicy waitPolicy;	/* NOWAIT and SKIP LOCKED */
 	ItemPointerData curCtid;	/* ctid of currently locked tuple, if any */
 } ExecRowMark;
 

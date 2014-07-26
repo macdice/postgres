@@ -19,15 +19,9 @@
 #include "nodes/primnodes.h"
 #include "storage/bufpage.h"
 #include "storage/lock.h"
+#include "utils/lockwaitpolicy.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
-
-typedef enum
-{
-	LockWaitBlock = 0,
-	LockWaitSkip = 1,
-	LockWaitError = 2
-} LockWaitPolicy;
 
 /* "options" flag bits for heap_insert */
 #define HEAP_INSERT_SKIP_WAL	0x0001

@@ -9219,9 +9219,9 @@ opt_nowait:	NOWAIT							{ $$ = TRUE; }
 		;
 
 opt_nowait_or_skip:	
-			NOWAIT							{ $$ = LCWP_NOWAIT; }
-			| SKIP LOCKED					{ $$ = LCWP_SKIP; }
-			| /*EMPTY*/						{ $$ = LCWP_WAIT; }
+			NOWAIT							{ $$ = LockWaitError; }
+			| SKIP LOCKED					{ $$ = LockWaitSkip; }
+			| /*EMPTY*/						{ $$ = LockWaitBlock; }
 		;
 
 

@@ -62,7 +62,7 @@ static void rewriteValuesRTE(RangeTblEntry *rte, Relation target_relation,
 static void rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 					Relation target_relation);
 static void markQueryForLocking(Query *qry, Node *jtnode,
-				  LockClauseStrength strength, LockClauseWaitPolicy waitPolicy, bool pushedDown);
+				  LockClauseStrength strength, LockWaitPolicy waitPolicy, bool pushedDown);
 static List *matchLocks(CmdType event, RuleLock *rulelocks,
 		   int varno, Query *parsetree);
 static Query *fireRIRrules(Query *parsetree, List *activeRIRs,
@@ -1499,7 +1499,7 @@ ApplyRetrieveRule(Query *parsetree,
  */
 static void
 markQueryForLocking(Query *qry, Node *jtnode,
-					LockClauseStrength strength, LockClauseWaitPolicy waitPolicy, bool pushedDown)
+					LockClauseStrength strength, LockWaitPolicy waitPolicy, bool pushedDown)
 {
 	if (jtnode == NULL)
 		return;

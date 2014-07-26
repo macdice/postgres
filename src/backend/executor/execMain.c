@@ -830,13 +830,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		erm->prti = rc->prti;
 		erm->rowmarkId = rc->rowmarkId;
 		erm->markType = rc->markType;
-		StaticAssertExpr((int) LCWP_WAIT == (int) RWP_WAIT,
-						 "LockClauseWaitPolicy/RowWaitPolicy mismatch");
-		StaticAssertExpr((int) LCWP_SKIP == (int) RWP_SKIP,
-						 "LockClauseWaitPolicy/RowWaitPolicy mismatch");
-		StaticAssertExpr((int) LCWP_NOWAIT == (int) RWP_NOWAIT,
-						 "LockClauseWaitPolicy/RowWaitPolicy mismatch");
-		erm->waitPolicy = rc->waitPolicy; /* LockClauseWaitPolicy -> RowWaitPolicy */
+		erm->waitPolicy = rc->waitPolicy;
 		ItemPointerSetInvalid(&(erm->curCtid));
 		estate->es_rowMarks = lappend(estate->es_rowMarks, erm);
 	}

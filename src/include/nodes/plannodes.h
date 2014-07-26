@@ -17,6 +17,7 @@
 #include "access/sdir.h"
 #include "nodes/bitmapset.h"
 #include "nodes/primnodes.h"
+#include "utils/lockwaitpolicy.h"
 
 
 /* ----------------------------------------------------------------
@@ -790,14 +791,6 @@ typedef enum RowMarkType
 
 #define RowMarkRequiresRowShareLock(marktype)  ((marktype) <= ROW_MARK_KEYSHARE)
 
-typedef enum RowWaitPolicy
-{
-	/* see also LockClauseWaitPolicy in parsenodes.h */
-	RWP_WAIT = 0,
-	RWP_SKIP = 1,
-	RWP_NOWAIT = 2
-} RowWaitPolicy;
-
 /*
  * PlanRowMark -
  *	   plan-time representation of FOR [KEY] UPDATE/SHARE clauses
@@ -839,7 +832,7 @@ typedef struct PlanRowMark
 	Index		prti;			/* range table index of parent relation */
 	Index		rowmarkId;		/* unique identifier for resjunk columns */
 	RowMarkType markType;		/* see enum above */
-	RowWaitPolicy waitPolicy;   /* NOWAIT and SKIP LOCKED options */
+	LockWaitPolicy waitPolicy;  /* NOWAIT and SKIP LOCKED options */
 	bool		isParent;		/* true if this is a "dummy" parent entry */
 } PlanRowMark;
 

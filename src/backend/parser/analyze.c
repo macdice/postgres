@@ -2499,7 +2499,7 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
  */
 void
 applyLockingClause(Query *qry, Index rtindex,
-				   LockClauseStrength strength, LockClauseWaitPolicy waitPolicy, bool pushedDown)
+				   LockClauseStrength strength, LockWaitPolicy waitPolicy, bool pushedDown)
 {
 	RowMarkClause *rc;
 
@@ -2525,8 +2525,8 @@ applyLockingClause(Query *qry, Index rtindex,
 		 * And of course pushedDown becomes false if any clause is explicit.
 		 */
 		rc->strength = Max(rc->strength, strength);
-		StaticAssertExpr(LCWP_NOWAIT > LCWP_SKIP, "LockClauseWaitPolicy order");
-		StaticAssertExpr(LCWP_SKIP > LCWP_WAIT, "LockClauseWaitPolicy order");
+		StaticAssertExpr(LockWaitError > LockWaitSkip, "LockWaitPolicy order");
+		StaticAssertExpr(LockWaitSkip > LockWaitBlock, "LockWaitPolicy order");
 		rc->waitPolicy = Max(rc->waitPolicy, waitPolicy);
 		rc->pushedDown &= pushedDown;
 		return;
