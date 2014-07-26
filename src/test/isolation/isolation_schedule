@@ -25,5 +25,5 @@ test: propagate-lock-delete
 test: drop-index-concurrently-1
 test: alter-table-1
 test: timeouts
-test: skip-locked-data
+test: skip-locked
 test: nowait
