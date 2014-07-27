@@ -15,7 +15,7 @@
 
 /*
  * Policy for what to do when a row lock cannot be obtained immediately.
- * Order is important: see the code in the function applyLockingClause.
+ * Order is important -- see applyLockingClause.
  */
 typedef enum
 {
