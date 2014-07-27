@@ -4461,8 +4461,7 @@ l3:
 													&tuple->t_data->t_ctid,
 													XLTW_Lock, NULL))
 					{
-						if (have_tuple_lock)
-							UnlockTupleTuplock(relation, tid, mode);
+						UnlockTupleTuplock(relation, tid, mode);
 						return HeapTupleWouldBlock;
 					}
 				}
@@ -4528,8 +4527,7 @@ l3:
 				{
 					if (!ConditionalXactLockTableWait(xwait))
 					{
-						if (have_tuple_lock)
-							UnlockTupleTuplock(relation, tid, mode);
+						UnlockTupleTuplock(relation, tid, mode);
 						return HeapTupleWouldBlock;
 					}
 				}
