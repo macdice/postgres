@@ -15,15 +15,16 @@
 
 /*
  * Policy for what to do when a row lock cannot be obtained immediately.
+ * Order is important: see the code in the function applyLockingClause.
  */
 typedef enum
 {
 	/* Wait for the lock to become available */
-	LockWaitBlock,
+	LockWaitBlock = 1,
 	/* SELECT FOR UPDATE SKIP LOCKED, skipping rows that can't be locked */
-	LockWaitSkip,
+	LockWaitSkip = 2,
 	/* SELECT FOR UPDATE NOWAIT, abandoning the transaction */
-	LockWaitError
+	LockWaitError = 3
 } LockWaitPolicy;
 
 #endif   /* LOCKWAITPOLICY_H */
