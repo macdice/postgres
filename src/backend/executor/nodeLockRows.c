@@ -73,7 +73,6 @@ lnext:
 		Buffer		buffer;
 		HeapUpdateFailureData hufd;
 		LockTupleMode lockmode;
-		LockWaitPolicy wait_policy;
 		HTSU_Result test;
 		HeapTuple	copyTuple;
 
@@ -132,11 +131,9 @@ lnext:
 				break;
 		}
 
-		wait_policy = erm->waitPolicy;
-
 		test = heap_lock_tuple(erm->relation, &tuple,
 							   estate->es_output_cid,
-							   lockmode, wait_policy, true,
+							   lockmode, erm->waitPolicy, true,
 							   &buffer, &hufd);
 		ReleaseBuffer(buffer);
 		switch (test)
