@@ -1,3 +1,5 @@
+# Test SKIP LOCKED when regular row locks can't be acquired.
+
 setup
 {
   CREATE TABLE queue (
