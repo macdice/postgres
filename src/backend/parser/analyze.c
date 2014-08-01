@@ -2526,8 +2526,6 @@ applyLockingClause(Query *qry, Index rtindex,
 		 * And of course pushedDown becomes false if any clause is explicit.
 		 */
 		rc->strength = Max(rc->strength, strength);
-		StaticAssertStmt(LockWaitError > LockWaitSkip, "LockWaitPolicy order");
-		StaticAssertStmt(LockWaitSkip > LockWaitBlock, "LockWaitPolicy order");
 		rc->waitPolicy = Max(rc->waitPolicy, waitPolicy);
 		rc->pushedDown &= pushedDown;
 		return;

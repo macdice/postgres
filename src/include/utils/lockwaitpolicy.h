@@ -15,7 +15,11 @@
 
 /*
  * Policy for what to do when a row lock cannot be obtained immediately.
- * Order is important -- see applyLockingClause.
+ *
+ * The enum values defined here control how the parser treats multiple FOR
+ * UPDATE/SHARE clauses that affect the same table.  If multiple locking
+ * clauses are defined then the one with the highest numerical value takes
+ * precedence -- see applyLockingClause.
  */
 typedef enum
 {

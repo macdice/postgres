@@ -30,5 +30,7 @@ setup		{ BEGIN; }
 step "s3a"	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
 step "s3b"	{ COMMIT; }
 
-# s3 skips to second record due to tuple lock held by s2
+# s3 skips to the second record because it can't obtain the tuple lock
+# (s2 holds the tuple lock because it is next in line to obtain the
+# row lock, and s1 holds the row lock)
 permutation "s1a" "s2a" "s3a" "s1b" "s2b" "s3b"

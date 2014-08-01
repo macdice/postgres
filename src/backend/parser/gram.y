@@ -9218,7 +9218,7 @@ opt_nowait:	NOWAIT							{ $$ = TRUE; }
 			| /*EMPTY*/						{ $$ = FALSE; }
 		;
 
-opt_nowait_or_skip:	
+opt_nowait_or_skip:
 			NOWAIT							{ $$ = LockWaitError; }
 			| SKIP LOCKED					{ $$ = LockWaitSkip; }
 			| /*EMPTY*/						{ $$ = LockWaitBlock; }
