@@ -2372,13 +2372,13 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 			switch (rte->rtekind)
 			{
 				case RTE_RELATION:
-					applyLockingClause(qry, i,
-									   lc->strength, lc->waitPolicy, pushedDown);
+					applyLockingClause(qry, i, lc->strength, lc->waitPolicy,
+									   pushedDown);
 					rte->requiredPerms |= ACL_SELECT_FOR_UPDATE;
 					break;
 				case RTE_SUBQUERY:
-					applyLockingClause(qry, i,
-									   lc->strength, lc->waitPolicy, pushedDown);
+					applyLockingClause(qry, i, lc->strength, lc->waitPolicy,
+									   pushedDown);
 
 					/*
 					 * FOR UPDATE/SHARE of subquery is propagated to all of
@@ -2424,15 +2424,13 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 					switch (rte->rtekind)
 					{
 						case RTE_RELATION:
-							applyLockingClause(qry, i,
-											   lc->strength, lc->waitPolicy,
-											   pushedDown);
+							applyLockingClause(qry, i, lc->strength,
+											   lc->waitPolicy, pushedDown);
 							rte->requiredPerms |= ACL_SELECT_FOR_UPDATE;
 							break;
 						case RTE_SUBQUERY:
-							applyLockingClause(qry, i,
-											   lc->strength, lc->waitPolicy,
-											   pushedDown);
+							applyLockingClause(qry, i, lc->strength,
+											   lc->waitPolicy, pushedDown);
 							/* see comment above */
 							transformLockingClause(pstate, rte->subquery,
 												   allrels, true);
