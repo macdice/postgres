@@ -30,7 +30,7 @@
 #include <sys/types.h>			/* for umask() */
 #include <sys/stat.h>			/* for stat() */
 #endif
-#ifdef USE_SSL
+#ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #endif
 
@@ -1791,7 +1791,7 @@ connection_warnings(bool in_startup)
 static void
 printSSLInfo(void)
 {
-#ifdef USE_SSL
+#ifdef USE_OPENSSL
 	int			sslbits = -1;
 	SSL		   *ssl;
 
@@ -2509,7 +2509,7 @@ printPsetInfo(const char *param, struct printQueryOpt *popt)
 		if (popt->topt.default_footer)
 			printf(_("Default footer (%s) is on.\n"), param);
 		else
-			printf(_("Default footer (%s) is off."), param);
+			printf(_("Default footer (%s) is off.\n"), param);
 	}
 
 	/* show format */
