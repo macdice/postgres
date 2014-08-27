@@ -28,6 +28,8 @@ test: timeouts
 test: nowait
 test: nowait-2
 test: nowait-3
+test: nowait-4
 test: skip-locked
 test: skip-locked-2
 test: skip-locked-3
+test: skip-locked-4

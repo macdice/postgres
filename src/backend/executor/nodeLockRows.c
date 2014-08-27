@@ -175,11 +175,11 @@ lnext:
 
 				/* updated, so fetch and lock the updated version */
 				copyTuple = EvalPlanQualFetch(estate, erm->relation, lockmode,
-											  &hufd.ctid, hufd.xmax);
+											  erm->waitPolicy, &hufd.ctid, hufd.xmax);
 
 				if (copyTuple == NULL)
 				{
-					/* Tuple was deleted, so don't return it */
+					/* Tuple was deleted or skipped (in SKIP LOCKED), so don't return it */
 					goto lnext;
 				}
 				/* remember the actually locked tuple's TID */
