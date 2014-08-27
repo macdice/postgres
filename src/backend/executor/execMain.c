@@ -1999,6 +1999,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 								(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 								 errmsg("could not obtain lock on row in relation \"%s\"",
 										RelationGetRelationName(relation))));
+						break;
 				}
 			}
 
