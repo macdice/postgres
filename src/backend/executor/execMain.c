@@ -1863,7 +1863,7 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
 	/*
 	 * Get and lock the updated version of the row; if fail, return NULL.
 	 */
-	copyTuple = EvalPlanQualFetch(estate, relation, LockWaitBlock, lockmode,
+	copyTuple = EvalPlanQualFetch(estate, relation, lockmode, LockWaitBlock,
 								  tid, priorXmax);
 
 	if (copyTuple == NULL)
@@ -1991,16 +1991,20 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 						XactLockTableWait(SnapshotDirty.xmax,
 										  relation, &tuple.t_data->t_ctid,
 										  XLTW_FetchUpdated);
-						continue;		/* loop back to repeat heap_fetch */
+						break;
 					case LockWaitSkip:
-						return NULL;
+						if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
+							return NULL; /* skipping instead of waiting */
+						break;
 					case LockWaitError:
-						ereport(ERROR,
-								(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
-								 errmsg("could not obtain lock on row in relation \"%s\"",
-										RelationGetRelationName(relation))));
+						if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
+							ereport(ERROR,
+									(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
+									 errmsg("could not obtain lock on row in relation \"%s\"",
+											RelationGetRelationName(relation))));
 						break;
 				}
+				continue;		/* loop back to repeat heap_fetch */
 			}
 
 			/*
