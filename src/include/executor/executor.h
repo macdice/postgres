@@ -16,7 +16,7 @@
 
 #include "executor/execdesc.h"
 #include "nodes/parsenodes.h"
-
+#include "utils/lockwaitpolicy.h"
 
 /*
  * The "eflags" argument to ExecutorStart and the various ExecInitNode
