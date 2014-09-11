@@ -4090,7 +4090,7 @@ get_mxact_status_for_lock(LockTupleMode mode, bool is_update)
  *	cid: current command ID (used for visibility test, and stored into
  *		tuple's cmax if lock is successful)
  *	mode: indicates if shared or exclusive tuple lock is desired
- *	wait_policy: whether to block, ereport or skip if lock not available
+ *	wait_policy: what to do if tuple lock is not available
  *	follow_updates: if true, follow the update chain to also lock descendant
  *		tuples.
  *

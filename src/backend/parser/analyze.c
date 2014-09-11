@@ -2515,11 +2515,12 @@ applyLockingClause(Query *qry, Index rtindex,
 		 * a shared and exclusive lock at the same time; it'll end up being
 		 * exclusive anyway.)
 		 *
-		 * We also consider that NOWAIT wins if it is specified multiple ways,
-		 * otherwise SKIP LOCKED wins. This is a bit more debatable but
-		 * raising an error doesn't seem helpful.  (Consider for instance
-		 * SELECT FOR UPDATE NOWAIT from a view that internally contains a
-		 * plain FOR UPDATE spec.)
+		 * Similarly, if the same RTE is specified with more than one lock wait
+		 * policy, consider that NOWAIT wins over SKIP LOCKED, which in turn
+		 * wins over waiting for the lock (the default).  This is a bit more
+		 * debatable but raising an error doesn't seem helpful.  (Consider for
+		 * instance SELECT FOR UPDATE NOWAIT from a view that internally
+		 * contains a plain FOR UPDATE spec.)
 		 *
 		 * And of course pushedDown becomes false if any clause is explicit.
 		 */

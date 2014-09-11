@@ -179,7 +179,10 @@ lnext:
 
 				if (copyTuple == NULL)
 				{
-					/* Tuple was deleted or skipped (in SKIP LOCKED), so don't return it */
+					/*
+					 * Tuple was deleted; or it's locked and we're under SKIP
+					 * LOCKED policy, so don't return it
+					 */
 					goto lnext;
 				}
 				/* remember the actually locked tuple's TID */

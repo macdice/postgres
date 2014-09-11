@@ -1928,6 +1928,9 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
  *
  * Returns a palloc'd copy of the newest tuple version, or NULL if we find
  * that there is no newest version (ie, the row was deleted not updated).
+ * We also return NULL if the tuple is locked and the wait policy is to skip
+ * such tuples.
+ *
  * If successful, we have locked the newest tuple version, so caller does not
  * need to worry about it changing anymore.
  *
@@ -1994,7 +1997,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 						break;
 					case LockWaitSkip:
 						if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
-							return NULL; /* skipping instead of waiting */
+							return NULL; /* skip instead of waiting */
 						break;
 					case LockWaitError:
 						if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
@@ -2074,6 +2077,10 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 						continue;
 					}
 					/* tuple was deleted, so give up */
+					return NULL;
+
+				case HeapTupleWouldBlock:
+					ReleaseBuffer(buffer);
 					return NULL;
 
 				default:
