@@ -1088,20 +1088,8 @@ exec_command(const char *cmd,
 		char	   *fname = psql_scan_slash_option(scan_state,
 												   OT_NORMAL, NULL, true);
 
-#if defined(WIN32) && !defined(__CYGWIN__)
-
-		/*
-		 * XXX This does not work for all terminal environments or for output
-		 * containing non-ASCII characters; see comments in simple_prompt().
-		 */
-#define DEVTTY	"con"
-#else
-#define DEVTTY	"/dev/tty"
-#endif
-
 		expand_tilde(&fname);
-		/* This scrolls off the screen when using /dev/tty */
-		success = saveHistory(fname ? fname : DEVTTY, -1, false, false);
+		success = printHistory(fname, pset.popt.topt.pager);
 		if (success && !pset.quiet && fname)
 			printf(_("Wrote history to file \"%s\".\n"), fname);
 		if (!fname)
@@ -1503,7 +1491,19 @@ exec_command(const char *cmd,
 
 	/* \? -- slash command help */
 	else if (strcmp(cmd, "?") == 0)
-		slashUsage(pset.popt.topt.pager);
+	{
+		char	   *opt0 = psql_scan_slash_option(scan_state,
+													OT_NORMAL, NULL, false);
+
+		if (!opt0 || strcmp(opt0, "commands") == 0)
+			slashUsage(pset.popt.topt.pager);
+		else if (strcmp(opt0, "options") == 0)
+			usage(pset.popt.topt.pager);
+		else if (strcmp(opt0, "variables") == 0)
+			helpVariables(pset.popt.topt.pager);
+		else
+			slashUsage(pset.popt.topt.pager);
+	}
 
 #if 0
 
@@ -2687,7 +2687,7 @@ do_watch(PQExpBuffer query_buf, long sleep)
 
 	for (;;)
 	{
-		PGresult   *res;
+		int	res;
 		time_t		timer;
 		long		i;
 
@@ -2700,65 +2700,22 @@ do_watch(PQExpBuffer query_buf, long sleep)
 				 sleep, asctime(localtime(&timer)));
 		myopt.title = title;
 
-		/*
-		 * Run the query.  We use PSQLexec, which is kind of cheating, but
-		 * SendQuery doesn't let us suppress autocommit behavior.
-		 */
-		res = PSQLexec(query_buf->data, false);
-
-		/* PSQLexec handles failure results and returns NULL */
-		if (res == NULL)
-			break;
+		/* Run the query and print out the results */
+		res = PSQLexecWatch(query_buf->data, &myopt);
 
 		/*
-		 * If SIGINT is sent while the query is processing, PSQLexec will
-		 * consume the interrupt.  The user's intention, though, is to cancel
-		 * the entire watch process, so detect a sent cancellation request and
-		 * exit in this case.
+		 * PSQLexecWatch handles the case where we can no longer
+		 * repeat the query, and returns 0 or -1.
 		 */
-		if (cancel_pressed)
-		{
-			PQclear(res);
+		if (res == 0)
 			break;
-		}
-
-		switch (PQresultStatus(res))
-		{
-			case PGRES_TUPLES_OK:
-				printQuery(res, &myopt, pset.queryFout, pset.logfile);
-				break;
-
-			case PGRES_COMMAND_OK:
-				fprintf(pset.queryFout, "%s\n%s\n\n", title, PQcmdStatus(res));
-				break;
-
-			case PGRES_EMPTY_QUERY:
-				psql_error(_("\\watch cannot be used with an empty query\n"));
-				PQclear(res);
-				return false;
-
-			case PGRES_COPY_OUT:
-			case PGRES_COPY_IN:
-			case PGRES_COPY_BOTH:
-				psql_error(_("\\watch cannot be used with COPY\n"));
-				PQclear(res);
-				return false;
-
-			default:
-				/* other cases should have been handled by PSQLexec */
-				psql_error(_("unexpected result status for \\watch\n"));
-				PQclear(res);
-				return false;
-		}
-
-		PQclear(res);
-
-		fflush(pset.queryFout);
+		if (res == -1)
+			return false;
 
 		/*
 		 * Set up cancellation of 'watch' via SIGINT.  We redo this each time
-		 * through the loop since it's conceivable something inside PSQLexec
-		 * could change sigint_interrupt_jmp.
+		 * through the loop since it's conceivable something inside
+		 * PSQLexecWatch could change sigint_interrupt_jmp.
 		 */
 		if (sigsetjmp(sigint_interrupt_jmp, 1) != 0)
 			break;

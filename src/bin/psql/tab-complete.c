@@ -545,7 +545,8 @@ static const SchemaQuery Query_for_list_of_matviews = {
 "SELECT name FROM "\
 " (SELECT pg_catalog.lower(name) AS name FROM pg_catalog.pg_settings "\
 "  WHERE context != 'internal') ss "\
-" WHERE substring(name,1,%d)='%s'"
+" WHERE substring(name,1,%d)='%s'"\
+" UNION ALL SELECT 'all' ss"
 
 #define Query_for_list_of_set_vars \
 "SELECT name FROM "\
@@ -952,6 +953,13 @@ psql_completion(const char *text, int start, int end)
 
 /* ALTER */
 
+	/* ALTER TABLE */
+	else if (pg_strcasecmp(prev2_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev_wd, "TABLE") == 0)
+	{
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables,
+								   "UNION SELECT 'ALL IN TABLESPACE'");
+	}
 	/*
 	 * complete with what you can alter (TABLE, GROUP, USER, ...) unless we're
 	 * in ALTER TABLE sth ALTER
@@ -963,11 +971,30 @@ psql_completion(const char *text, int start, int end)
 		{"AGGREGATE", "COLLATION", "CONVERSION", "DATABASE", "DEFAULT PRIVILEGES", "DOMAIN",
 			"EVENT TRIGGER", "EXTENSION", "FOREIGN DATA WRAPPER", "FOREIGN TABLE", "FUNCTION",
 			"GROUP", "INDEX", "LANGUAGE", "LARGE OBJECT", "MATERIALIZED VIEW", "OPERATOR",
-			"ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE", "SYSTEM SET", "TABLE",
+			"ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE", "SYSTEM", "TABLE",
 			"TABLESPACE", "TEXT SEARCH", "TRIGGER", "TYPE",
 		"USER", "USER MAPPING FOR", "VIEW", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTER);
+	}
+	/* ALTER TABLE,INDEX,MATERIALIZED VIEW xxx ALL IN TABLESPACE xxx */
+	else if (pg_strcasecmp(prev4_wd, "ALL") == 0 &&
+			 pg_strcasecmp(prev3_wd, "IN") == 0 &&
+			 pg_strcasecmp(prev2_wd, "TABLESPACE") == 0)
+	{
+		static const char *const list_ALTERALLINTSPC[] =
+			{"SET TABLESPACE", "OWNED BY", NULL};
+
+		COMPLETE_WITH_LIST(list_ALTERALLINTSPC);
+	}
+	/* ALTER TABLE,INDEX,MATERIALIZED VIEW xxx ALL IN TABLESPACE xxx OWNED BY */
+	else if (pg_strcasecmp(prev6_wd, "ALL") == 0 &&
+			 pg_strcasecmp(prev5_wd, "IN") == 0 &&
+			 pg_strcasecmp(prev4_wd, "TABLESPACE") == 0 &&
+			 pg_strcasecmp(prev2_wd, "OWNED") == 0 &&
+			 pg_strcasecmp(prev4_wd, "BY") == 0)
+	{
+		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
 	}
 	/* ALTER AGGREGATE,FUNCTION <name> */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
@@ -1105,6 +1132,13 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_LIST(list_ALTER_FOREIGN_TABLE);
 	}
 
+	/* ALTER INDEX */
+	else if (pg_strcasecmp(prev2_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev_wd, "INDEX") == 0)
+	{
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_indexes,
+								   "UNION SELECT 'ALL IN TABLESPACE'");
+	}
 	/* ALTER INDEX <name> */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
 			 pg_strcasecmp(prev2_wd, "INDEX") == 0)
@@ -1168,7 +1202,8 @@ psql_completion(const char *text, int start, int end)
 			 pg_strcasecmp(prev2_wd, "MATERIALIZED") == 0 &&
 			 pg_strcasecmp(prev_wd, "VIEW") == 0)
 	{
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews,
+								   "UNION SELECT 'ALL IN TABLESPACE'");
 	}
 
 	/* ALTER USER,ROLE <name> */
@@ -1328,10 +1363,20 @@ psql_completion(const char *text, int start, int end)
 
 		COMPLETE_WITH_LIST(list_ALTER_SERVER);
 	}
-	/* ALTER SYSTEM SET <name> */
+	/* ALTER SYSTEM SET, RESET, RESET ALL */
+	else if (pg_strcasecmp(prev2_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev_wd, "SYSTEM") == 0)
+	{
+		static const char *const list_ALTERSYSTEM[] =
+		{"SET", "RESET", NULL};
+
+		COMPLETE_WITH_LIST(list_ALTERSYSTEM);
+	}
+	/* ALTER SYSTEM SET|RESET <name> */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
 			 pg_strcasecmp(prev2_wd, "SYSTEM") == 0 &&
-			 pg_strcasecmp(prev_wd, "SET") == 0)
+			 (pg_strcasecmp(prev_wd, "SET") == 0 ||
+			 pg_strcasecmp(prev_wd, "RESET") == 0))
 		COMPLETE_WITH_QUERY(Query_for_list_of_alter_system_set_vars);
 	/* ALTER VIEW <name> */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
@@ -1683,6 +1728,9 @@ psql_completion(const char *text, int start, int end)
 			"autovacuum_freeze_max_age",
 			"autovacuum_freeze_min_age",
 			"autovacuum_freeze_table_age",
+			"autovacuum_multixact_freeze_max_age",
+			"autovacuum_multixact_freeze_min_age",
+			"autovacuum_multixact_freeze_table_age",
 			"autovacuum_vacuum_cost_delay",
 			"autovacuum_vacuum_cost_limit",
 			"autovacuum_vacuum_scale_factor",
@@ -1692,10 +1740,14 @@ psql_completion(const char *text, int start, int end)
 			"toast.autovacuum_freeze_max_age",
 			"toast.autovacuum_freeze_min_age",
 			"toast.autovacuum_freeze_table_age",
+			"toast.autovacuum_multixact_freeze_max_age",
+			"toast.autovacuum_multixact_freeze_min_age",
+			"toast.autovacuum_multixact_freeze_table_age",
 			"toast.autovacuum_vacuum_cost_delay",
 			"toast.autovacuum_vacuum_cost_limit",
 			"toast.autovacuum_vacuum_scale_factor",
 			"toast.autovacuum_vacuum_threshold",
+			"user_catalog_table",
 			NULL
 		};
 
@@ -1731,12 +1783,12 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_CONST("IDENTITY");
 	}
 
-	/* ALTER TABLESPACE <foo> with RENAME TO, OWNER TO, SET, RESET, MOVE */
+	/* ALTER TABLESPACE <foo> with RENAME TO, OWNER TO, SET, RESET */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
 			 pg_strcasecmp(prev2_wd, "TABLESPACE") == 0)
 	{
 		static const char *const list_ALTERTSPC[] =
-		{"RENAME TO", "OWNER TO", "SET", "RESET", "MOVE", NULL};
+		{"RENAME TO", "OWNER TO", "SET", "RESET", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTERTSPC);
 	}
@@ -1757,27 +1809,6 @@ psql_completion(const char *text, int start, int end)
 		{"seq_page_cost", "random_page_cost", NULL};
 
 		COMPLETE_WITH_LIST(list_TABLESPACEOPTIONS);
-	}
-	/* ALTER TABLESPACE <foo> MOVE ALL|TABLES|INDEXES|MATERIALIZED VIEWS */
-	else if (pg_strcasecmp(prev4_wd, "ALTER") == 0 &&
-			 pg_strcasecmp(prev3_wd, "TABLESPACE") == 0 &&
-			 pg_strcasecmp(prev_wd, "MOVE") == 0)
-	{
-		static const char *const list_TABLESPACEMOVETARGETS[] =
-		{"ALL", "TABLES", "INDEXES", "MATERIALIZED VIEWS", NULL};
-
-		COMPLETE_WITH_LIST(list_TABLESPACEMOVETARGETS);
-	}
-	else if ((pg_strcasecmp(prev4_wd, "TABLESPACE") == 0 &&
-			  pg_strcasecmp(prev2_wd, "MOVE") == 0) ||
-			 (pg_strcasecmp(prev5_wd, "TABLESPACE") == 0 &&
-			  pg_strcasecmp(prev3_wd, "MOVE") == 0 &&
-			  pg_strcasecmp(prev2_wd, "MATERIALIZED") == 0))
-	{
-		static const char *const list_TABLESPACEMOVEOPTIONS[] =
-		{"OWNED BY", "TO", NULL};
-
-		COMPLETE_WITH_LIST(list_TABLESPACEMOVEOPTIONS);
 	}
 
 	/* ALTER TEXT SEARCH */
@@ -2780,9 +2811,8 @@ psql_completion(const char *text, int start, int end)
 	 * but we may as well tab-complete both: perhaps some users prefer one
 	 * variant or the other.
 	 */
-	else if ((pg_strcasecmp(prev3_wd, "FETCH") == 0 ||
-			  pg_strcasecmp(prev3_wd, "MOVE") == 0) &&
-			 pg_strcasecmp(prev_wd, "TO") != 0)
+	else if (pg_strcasecmp(prev3_wd, "FETCH") == 0 ||
+			 pg_strcasecmp(prev3_wd, "MOVE") == 0)
 	{
 		static const char *const list_FROMIN[] =
 		{"FROM", "IN", NULL};
@@ -3513,6 +3543,13 @@ psql_completion(const char *text, int start, int end)
 
 /* Backslash commands */
 /* TODO:  \dc \dd \dl */
+	else if (strcmp(prev_wd, "\\?") == 0)
+	{
+		static const char *const my_list[] =
+		{"commands", "options", "variables", NULL};
+
+		COMPLETE_WITH_LIST_CS(my_list);
+	}
 	else if (strcmp(prev_wd, "\\connect") == 0 || strcmp(prev_wd, "\\c") == 0)
 		COMPLETE_WITH_QUERY(Query_for_list_of_databases);
 

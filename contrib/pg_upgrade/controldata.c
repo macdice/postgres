@@ -54,6 +54,7 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 	bool		got_ident = false;
 	bool		got_index = false;
 	bool		got_toast = false;
+	bool		got_large_object = false;
 	bool		got_date_is_int = false;
 	bool		got_float8_pass_by_value = false;
 	bool		got_data_checksum_version = false;
@@ -209,16 +210,20 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		}
 		else if ((p = strstr(bufin, "Latest checkpoint's NextXID:")) != NULL)
 		{
-			char	   *op = strchr(p, '/');
+			p = strchr(p, ':');
 
-			if (op == NULL)
-				op = strchr(p, ':');
-
-			if (op == NULL || strlen(op) <= 1)
+			if (p == NULL || strlen(p) <= 1)
 				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
 
-			op++;				/* removing ':' char */
-			cluster->controldata.chkpnt_nxtxid = str2uint(op);
+			p++;				/* removing ':' char */
+			cluster->controldata.chkpnt_nxtepoch = str2uint(p);
+
+			p = strchr(p, '/');
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			p++;				/* removing '/' char */
+			cluster->controldata.chkpnt_nxtxid = str2uint(p);
 			got_xid = true;
 		}
 		else if ((p = strstr(bufin, "Latest checkpoint's NextOID:")) != NULL)
@@ -353,6 +358,17 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 			cluster->controldata.toast = str2uint(p);
 			got_toast = true;
 		}
+		else if ((p = strstr(bufin, "Size of a large-object chunk:")) != NULL)
+		{
+			p = strchr(p, ':');
+
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			p++;				/* removing ':' char */
+			cluster->controldata.large_object = str2uint(p);
+			got_large_object = true;
+		}
 		else if ((p = strstr(bufin, "Date/time type storage:")) != NULL)
 		{
 			p = strchr(p, ':');
@@ -471,6 +487,8 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		!got_tli ||
 		!got_align || !got_blocksz || !got_largesz || !got_walsz ||
 		!got_walseg || !got_ident || !got_index || !got_toast ||
+		(!got_large_object &&
+		 cluster->controldata.ctrl_ver >= LARGE_OBJECT_SIZE_PG_CONTROL_VER) ||
 		!got_date_is_int || !got_float8_pass_by_value || !got_data_checksum_version)
 	{
 		pg_log(PG_REPORT,
@@ -523,6 +541,10 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		if (!got_toast)
 			pg_log(PG_REPORT, "  maximum TOAST chunk size\n");
 
+		if (!got_large_object &&
+			cluster->controldata.ctrl_ver >= LARGE_OBJECT_SIZE_PG_CONTROL_VER)
+			pg_log(PG_REPORT, "  large-object chunk size\n");
+
 		if (!got_date_is_int)
 			pg_log(PG_REPORT, "  dates/times are integers?\n");
 
@@ -571,6 +593,11 @@ check_control_data(ControlData *oldctrl,
 
 	if (oldctrl->toast == 0 || oldctrl->toast != newctrl->toast)
 		pg_fatal("old and new pg_controldata maximum TOAST chunk sizes are invalid or do not match\n");
+
+	/* large_object added in 9.5, so it might not exist in the old cluster */
+	if (oldctrl->large_object != 0 &&
+		oldctrl->large_object != newctrl->large_object)
+		pg_fatal("old and new pg_controldata large-object chunk sizes are invalid or do not match\n");
 
 	if (oldctrl->date_is_int != newctrl->date_is_int)
 		pg_fatal("old and new pg_controldata date/time storage types do not match\n");
