@@ -391,6 +391,9 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 						break;
 					}
 
+/* TODO:TM */
+PredicateLockRelation(rel, &SnapshotDirty);
+CheckForSerializableConflictIn(rel, NULL, buf);
 					/*
 					 * This is a definite conflict.  Break the tuple down into
 					 * datums and report the error.  But first, make sure we
