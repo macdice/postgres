@@ -391,9 +391,21 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 						break;
 					}
 
-/* TODO:TM */
-PredicateLockRelation(rel, &SnapshotDirty);
-CheckForSerializableConflictIn(rel, NULL, buf);
+					/*
+					 * We are going to error out due to a unique constraint
+					 * violation, but before we do that, check if an SSI
+					 * conflict has occurred.  This way SSI transactions can
+					 * get a more useful error code if they observed that the
+					 * value was absent, and then tried to write the value,
+					 * but another transaction wrote the value in between.
+					 *
+					 * TODO: We don't have access to the current transaction's
+					 * snapshot from here!  Using any special snapshot such
+					 * as SnapshotSelf disables all SSI checking paths.
+					 */
+					//PredicateLockPage(rel, BufferGetBlockNumber(buf), <snapshot>);
+					//CheckForSerializableConflictOut(<visible>, rel, NULL, buf, <snapshot>);
+
 					/*
 					 * This is a definite conflict.  Break the tuple down into
 					 * datums and report the error.  But first, make sure we
