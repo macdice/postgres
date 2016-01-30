@@ -386,7 +386,8 @@ ExecInsertIndexTuples(TupleTableSlot *slot,
 						 isnull,	/* null flags */
 						 tupleid,		/* tid of heap tuple */
 						 heapRelation,	/* heap relation */
-						 checkUnique);	/* type of uniqueness check to do */
+						 checkUnique,	/* type of uniqueness check to do */
+						 estate->es_snapshot);
 
 		/*
 		 * If the index has an associated exclusion constraint, check that.

@@ -52,7 +52,8 @@ static TransactionId _bt_check_unique(Relation rel, IndexTuple itup,
 				 Relation heapRel, Buffer buf, OffsetNumber offset,
 				 ScanKey itup_scankey,
 				 IndexUniqueCheck checkUnique, bool *is_unique,
-				 uint32 *speculativeToken);
+				 uint32 *speculativeToken,
+				 Snapshot snapshot);
 static void _bt_findinsertloc(Relation rel,
 				  Buffer *bufptr,
 				  OffsetNumber *offsetptr,
@@ -105,7 +106,8 @@ static void _bt_vacuum_one_page(Relation rel, Buffer buffer, Relation heapRel);
  */
 bool
 _bt_doinsert(Relation rel, IndexTuple itup,
-			 IndexUniqueCheck checkUnique, Relation heapRel)
+			 IndexUniqueCheck checkUnique, Relation heapRel,
+			 Snapshot snapshot)
 {
 	bool		is_unique = false;
 	int			natts = rel->rd_rel->relnatts;
@@ -165,7 +167,8 @@ top:
 
 		offset = _bt_binsrch(rel, buf, natts, itup_scankey, false);
 		xwait = _bt_check_unique(rel, itup, heapRel, buf, offset, itup_scankey,
-								 checkUnique, &is_unique, &speculativeToken);
+								 checkUnique, &is_unique, &speculativeToken,
+								 snapshot);
 
 		if (TransactionIdIsValid(xwait))
 		{
@@ -239,7 +242,8 @@ static TransactionId
 _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 				 Buffer buf, OffsetNumber offset, ScanKey itup_scankey,
 				 IndexUniqueCheck checkUnique, bool *is_unique,
-				 uint32 *speculativeToken)
+				 uint32 *speculativeToken,
+				 Snapshot snapshot)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			natts = rel->rd_rel->relnatts;
@@ -392,19 +396,45 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 					}
 
 					/*
-					 * We are going to error out due to a unique constraint
-					 * violation, but before we do that, check if an SSI
+					 * We are going to ereport.  It may be a unique constraint
+					 * violation, but before we report that, check if an SSI
 					 * conflict has occurred.  This way SSI transactions can
-					 * get a more useful error code if they observed that the
-					 * value was absent, and then tried to write the value,
+					 * get a serialization failure if they observed that the
+					 * value was absent and then tried to write the value,
 					 * but another transaction wrote the value in between.
-					 *
-					 * TODO: We don't have access to the current transaction's
-					 * snapshot from here!  Using any special snapshot such
-					 * as SnapshotSelf disables all SSI checking paths.
 					 */
-					//PredicateLockPage(rel, BufferGetBlockNumber(buf), <snapshot>);
-					//CheckForSerializableConflictOut(<visible>, rel, NULL, buf, <snapshot>);
+					if (snapshot != NULL)
+					{
+						/*
+						 * TODO: It sucks that we read the heap tuple again
+						 * here, but it doesn't seem like a good idea to
+						 * interfere with the non-error path above, right (?)
+						 */
+						Buffer heapBuf;
+						HeapTupleData heapTuple;
+						bool found;
+						bool visible;
+
+						heapBuf = ReadBuffer(heapRel, ItemPointerGetBlockNumber(&htid));
+						LockBuffer(heapBuf, BUFFER_LOCK_SHARE);
+						/*
+						 * TODO: We need the tuple even if it's not visible to
+						 * our snapshot, so first load it with SnapshotSelf.  But
+						 * what should we do if the tuple is not found -- could
+						 * that even happen?  Would require vacuuming which I
+						 * guess can't happen while we have this index page
+						 * pinned, so maybe just Assert(found)?
+						 */
+						found = heap_hot_search_buffer(&htid, heapRel, heapBuf, SnapshotSelf,
+										&heapTuple, NULL, true);
+						visible = found && HeapTupleSatisfiesMVCC(&heapTuple, snapshot, heapBuf);
+						/* Predicate lock on the index page. */
+						PredicateLockPage(rel, BufferGetBlockNumber(buf), snapshot);
+						/* Check for conflict on the heap tuple.  TODO: Right? */
+						CheckForSerializableConflictOut(visible, heapRel, &heapTuple, heapBuf, snapshot);
+						LockBuffer(heapBuf, BUFFER_LOCK_UNLOCK);
+						ReleaseBuffer(heapBuf);
+					}
 
 					/*
 					 * This is a definite conflict.  Break the tuple down into

@@ -3139,7 +3139,8 @@ validate_index_heapscan(Relation heapRelation,
 						 &rootTuple,
 						 heapRelation,
 						 indexInfo->ii_Unique ?
-						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO);
+						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
+						 NULL);
 
 			state->tups_inserted += 1;
 		}

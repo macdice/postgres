@@ -184,7 +184,8 @@ extern IndexBuildResult *spgbuild(Relation heap, Relation index,
 extern void spgbuildempty(Relation index);
 extern bool spginsert(Relation index, Datum *values, bool *isnull,
 		  ItemPointer ht_ctid, Relation heapRel,
-		  IndexUniqueCheck checkUnique);
+		  IndexUniqueCheck checkUnique,
+		  Snapshot snapshot);
 
 /* spgscan.c */
 extern IndexScanDesc spgbeginscan(Relation rel, int keysz, int orderbysz);

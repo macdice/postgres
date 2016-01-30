@@ -191,7 +191,8 @@ index_insert(Relation indexRelation,
 			 bool *isnull,
 			 ItemPointer heap_t_ctid,
 			 Relation heapRelation,
-			 IndexUniqueCheck checkUnique)
+			 IndexUniqueCheck checkUnique,
+			 Snapshot snapshot)
 {
 	RELATION_CHECKS;
 	CHECK_REL_PROCEDURE(aminsert);
@@ -203,7 +204,8 @@ index_insert(Relation indexRelation,
 
 	return indexRelation->rd_amroutine->aminsert(indexRelation, values, isnull,
 												 heap_t_ctid, heapRelation,
-												 checkUnique);
+												 checkUnique,
+												 snapshot);
 }
 
 /*

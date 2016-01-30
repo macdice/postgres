@@ -266,7 +266,8 @@ btbuildempty(Relation index)
 bool
 btinsert(Relation rel, Datum *values, bool *isnull,
 		 ItemPointer ht_ctid, Relation heapRel,
-		 IndexUniqueCheck checkUnique)
+		 IndexUniqueCheck checkUnique,
+		 Snapshot snapshot)
 {
 	bool		result;
 	IndexTuple	itup;
@@ -275,7 +276,7 @@ btinsert(Relation rel, Datum *values, bool *isnull,
 	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
 	itup->t_tid = *ht_ctid;
 
-	result = _bt_doinsert(rel, itup, checkUnique, heapRel);
+	result = _bt_doinsert(rel, itup, checkUnique, heapRel, snapshot);
 
 	pfree(itup);
 

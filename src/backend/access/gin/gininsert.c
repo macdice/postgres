@@ -486,7 +486,8 @@ ginHeapTupleInsert(GinState *ginstate, OffsetNumber attnum,
 bool
 gininsert(Relation index, Datum *values, bool *isnull,
 		  ItemPointer ht_ctid, Relation heapRel,
-		  IndexUniqueCheck checkUnique)
+		  IndexUniqueCheck checkUnique,
+		  Snapshot snapshot)
 {
 	GinState	ginstate;
 	MemoryContext oldCtx;

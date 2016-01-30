@@ -129,7 +129,8 @@ extern bool index_insert(Relation indexRelation,
 			 Datum *values, bool *isnull,
 			 ItemPointer heap_t_ctid,
 			 Relation heapRelation,
-			 IndexUniqueCheck checkUnique);
+			 IndexUniqueCheck checkUnique,
+			 Snapshot snapshot);
 
 extern IndexScanDesc index_beginscan(Relation heapRelation,
 				Relation indexRelation,

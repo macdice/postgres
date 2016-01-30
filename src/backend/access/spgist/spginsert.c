@@ -205,7 +205,8 @@ spgbuildempty(Relation index)
 bool
 spginsert(Relation index, Datum *values, bool *isnull,
 		  ItemPointer ht_ctid, Relation heapRel,
-		  IndexUniqueCheck checkUnique)
+		  IndexUniqueCheck checkUnique,
+		  Snapshot snapshot)
 {
 	SpGistState spgstate;
 	MemoryContext oldCtx;

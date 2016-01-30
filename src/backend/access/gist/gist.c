@@ -141,7 +141,8 @@ gistbuildempty(Relation index)
 bool
 gistinsert(Relation r, Datum *values, bool *isnull,
 		   ItemPointer ht_ctid, Relation heapRel,
-		   IndexUniqueCheck checkUnique)
+		   IndexUniqueCheck checkUnique,
+		   Snapshot snapshot)
 {
 	IndexTuple	itup;
 	GISTSTATE  *giststate;

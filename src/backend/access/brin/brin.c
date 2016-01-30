@@ -126,7 +126,8 @@ brinhandler(PG_FUNCTION_ARGS)
 bool
 brininsert(Relation idxRel, Datum *values, bool *nulls,
 		   ItemPointer heaptid, Relation heapRel,
-		   IndexUniqueCheck checkUnique)
+		   IndexUniqueCheck checkUnique,
+		   Snapshot snapshot)
 {
 	BlockNumber pagesPerRange;
 	BrinDesc   *bdesc = NULL;

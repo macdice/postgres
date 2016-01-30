@@ -660,7 +660,8 @@ extern IndexBuildResult *btbuild(Relation heap, Relation index,
 extern void btbuildempty(Relation index);
 extern bool btinsert(Relation rel, Datum *values, bool *isnull,
 		 ItemPointer ht_ctid, Relation heapRel,
-		 IndexUniqueCheck checkUnique);
+		 IndexUniqueCheck checkUnique,
+		 Snapshot snapshot);
 extern IndexScanDesc btbeginscan(Relation rel, int nkeys, int norderbys);
 extern bool btgettuple(IndexScanDesc scan, ScanDirection dir);
 extern int64 btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
@@ -681,7 +682,8 @@ extern bool btcanreturn(Relation index, int attno);
  * prototypes for functions in nbtinsert.c
  */
 extern bool _bt_doinsert(Relation rel, IndexTuple itup,
-			 IndexUniqueCheck checkUnique, Relation heapRel);
+			 IndexUniqueCheck checkUnique, Relation heapRel,
+			 Snapshot snapshot);
 extern Buffer _bt_getstackbuf(Relation rel, BTStack stack, int access);
 extern void _bt_finish_split(Relation rel, Buffer bbuf, BTStack stack);
 
