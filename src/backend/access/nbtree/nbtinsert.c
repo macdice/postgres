@@ -400,8 +400,8 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 					 * violation, but before we report that, check if an SSI
 					 * conflict has occurred.  This way SSI transactions can
 					 * get a serialization failure if they observed that the
-					 * value was absent and then tried to write the value,
-					 * but another transaction wrote the value in between.
+					 * value was absent and then tried to write the value, but
+					 * another transaction wrote the value in between.
 					 */
 					if (snapshot != NULL)
 					{
@@ -419,14 +419,14 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 						LockBuffer(heapBuf, BUFFER_LOCK_SHARE);
 						/*
 						 * TODO: We need the tuple even if it's not visible to
-						 * our snapshot, so first load it with SnapshotSelf.  But
-						 * what should we do if the tuple is not found -- could
-						 * that even happen?  Would require vacuuming which I
-						 * guess can't happen while we have this index page
-						 * pinned, so maybe just Assert(found)?
+						 * our snapshot, so first load it with SnapshotSelf.
+						 * But what should we do if the tuple is not found --
+						 * could that even happen?  Would require vacuuming
+						 * which I guess can't happen while we have this index
+						 * page pinned, so maybe just Assert(found)?
 						 */
 						found = heap_hot_search_buffer(&htid, heapRel, heapBuf, SnapshotSelf,
-										&heapTuple, NULL, true);
+													   &heapTuple, NULL, true);
 						visible = found && HeapTupleSatisfiesMVCC(&heapTuple, snapshot, heapBuf);
 						/* Predicate lock on the index page. */
 						PredicateLockPage(rel, BufferGetBlockNumber(buf), snapshot);
