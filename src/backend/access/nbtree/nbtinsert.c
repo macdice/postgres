@@ -192,7 +192,7 @@ top:
 	}
 
 	/*
-	 * By determining that there is no duplicate tuple, we have effectively
+	 * By determining that there is no duplicate key, we have effectively
 	 * read this index.  We predicate-lock the index page so we can detect
 	 * conflicting read-write sequences.
 	 */
