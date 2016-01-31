@@ -228,7 +228,7 @@ top:
 
 /*
  * Check if a heap tuple is still live, or committed dead.  If the tuple is
- * live and snapshot is not NULL, also check for a serialization conflicts.
+ * live and snapshot is not NULL, also check for serialization conflicts.
  */
 static bool
 check_unique_tuple_still_live(Relation irel, Buffer ibuf, Relation heapRel,
