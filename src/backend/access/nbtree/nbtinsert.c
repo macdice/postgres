@@ -220,6 +220,44 @@ top:
 }
 
 /*
+ * Check if a heap tuple is still live, or committed dead.  If the tuple is
+ * live and snapshot is not NULL, also check for a serialization conflict out.
+ */
+static bool
+check_unique_tuple_still_live(Relation heapRel, ItemPointer htid, Snapshot snapshot)
+{
+	Buffer heapBuf;
+	HeapTupleData heapTuple;
+	bool visible;
+	bool found;
+
+	heapBuf = ReadBuffer(heapRel,
+						 ItemPointerGetBlockNumber(htid));
+	LockBuffer(heapBuf, BUFFER_LOCK_SHARE);
+	found = heap_hot_search_buffer(htid, heapRel, heapBuf,
+								   SnapshotSelf, &heapTuple,
+								   NULL, true);
+	if (found && snapshot != NULL)
+	{
+		/*
+		 * The caller will ereport a unique constraint violation when we
+		 * return.  Before we do that, give SSI a chance to detect a
+		 * serialization failure.
+		 */
+		visible = HeapTupleSatisfiesMVCC(&heapTuple,
+										 snapshot,
+										 heapBuf);
+		CheckForSerializableConflictOut(visible, heapRel,
+										&heapTuple,
+										heapBuf, snapshot);
+	}
+	LockBuffer(heapBuf, BUFFER_LOCK_UNLOCK);
+	ReleaseBuffer(heapBuf);
+
+	return found;
+}
+
+/*
  *	_bt_check_unique() -- Check for violation of unique index constraint
  *
  * offset points to the first possible item that could conflict. It can
@@ -382,7 +420,7 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (heap_hot_search(&htid, heapRel, SnapshotSelf, NULL))
+					if (check_unique_tuple_still_live(heapRel, &htid, snapshot))
 					{
 						/* Normal case --- it's still live */
 					}
@@ -393,47 +431,6 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 						 * continue searching
 						 */
 						break;
-					}
-
-					/*
-					 * We are going to ereport.  It may be a unique constraint
-					 * violation, but before we report that, check if an SSI
-					 * conflict has occurred.  This way SSI transactions can
-					 * get a serialization failure if they observed that the
-					 * value was absent and then tried to write the value, but
-					 * another transaction wrote the value in between.
-					 */
-					if (snapshot != NULL)
-					{
-						/*
-						 * TODO: It sucks that we read the heap tuple again
-						 * here, but it doesn't seem like a good idea to
-						 * interfere with the non-error path above, right (?)
-						 */
-						Buffer heapBuf;
-						HeapTupleData heapTuple;
-						bool found;
-						bool visible;
-
-						heapBuf = ReadBuffer(heapRel, ItemPointerGetBlockNumber(&htid));
-						LockBuffer(heapBuf, BUFFER_LOCK_SHARE);
-						/*
-						 * TODO: We need the tuple even if it's not visible to
-						 * our snapshot, so first load it with SnapshotSelf.
-						 * But what should we do if the tuple is not found --
-						 * could that even happen?  Would require vacuuming
-						 * which I guess can't happen while we have this index
-						 * page pinned, so maybe just Assert(found)?
-						 */
-						found = heap_hot_search_buffer(&htid, heapRel, heapBuf, SnapshotSelf,
-													   &heapTuple, NULL, true);
-						visible = found && HeapTupleSatisfiesMVCC(&heapTuple, snapshot, heapBuf);
-						/* Predicate lock on the index page. */
-						PredicateLockPage(rel, BufferGetBlockNumber(buf), snapshot);
-						/* Check for conflict on the heap tuple.  TODO: Right? */
-						CheckForSerializableConflictOut(visible, heapRel, &heapTuple, heapBuf, snapshot);
-						LockBuffer(heapBuf, BUFFER_LOCK_UNLOCK);
-						ReleaseBuffer(heapBuf);
 					}
 
 					/*
