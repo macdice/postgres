@@ -191,6 +191,13 @@ top:
 		}
 	}
 
+	/*
+	 * By determining that there is no duplicate tuple, we have effectively
+	 * read this index.  We predicate-lock the index page so we can detect
+	 * conflicting read-write sequences.
+	 */
+	PredicateLockPage(rel, buf, snapshot);
+
 	if (checkUnique != UNIQUE_CHECK_EXISTING)
 	{
 		/*
@@ -221,10 +228,11 @@ top:
 
 /*
  * Check if a heap tuple is still live, or committed dead.  If the tuple is
- * live and snapshot is not NULL, also check for a serialization conflict out.
+ * live and snapshot is not NULL, also check for a serialization conflicts.
  */
 static bool
-check_unique_tuple_still_live(Relation heapRel, ItemPointer htid, Snapshot snapshot)
+check_unique_tuple_still_live(Relation irel, Buffer ibuf, Relation heapRel,
+							  ItemPointer htid, Snapshot snapshot)
 {
 	Buffer heapBuf;
 	HeapTupleData heapTuple;
@@ -244,6 +252,7 @@ check_unique_tuple_still_live(Relation heapRel, ItemPointer htid, Snapshot snaps
 		 * return.  Before we do that, give SSI a chance to detect a
 		 * serialization failure.
 		 */
+		CheckForSerializableConflictIn(irel, NULL, ibuf);
 		visible = HeapTupleSatisfiesMVCC(&heapTuple,
 										 snapshot,
 										 heapBuf);
@@ -420,7 +429,8 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (check_unique_tuple_still_live(heapRel, &htid, snapshot))
+					if (check_unique_tuple_still_live(rel, buf, heapRel, &htid,
+													  snapshot))
 					{
 						/* Normal case --- it's still live */
 					}
