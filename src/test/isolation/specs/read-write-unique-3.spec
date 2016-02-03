@@ -16,6 +16,7 @@ setup
 
 teardown
 {
+  DROP FUNCTION insert_unique(integer, text);
   DROP TABLE test;
 }
 
