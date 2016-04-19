@@ -563,7 +563,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 /* ordinary key words in alphabetical order */
 %token <keyword> ABORT_P ABSOLUTE_P ACCESS ACTION ADD_P ADMIN AFTER
-	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
+	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANTI ANY ARRAY AS ASC
 	ASSERTION ASSIGNMENT ASYMMETRIC AT ATTRIBUTE AUTHORIZATION
 
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
@@ -626,7 +626,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROW ROWS RULE
 
-	SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
+	SAVEPOINT SCHEMA SCROLL SEARCH SECOND_P SECURITY SELECT SEMI SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P START
 	STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P SUBSTRING
@@ -722,7 +722,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  * They wouldn't be given a precedence at all, were it not that we need
  * left-associativity among the JOIN rules themselves.
  */
-%left		JOIN CROSS LEFT FULL RIGHT INNER_P NATURAL
+%left		JOIN CROSS LEFT FULL RIGHT INNER_P NATURAL SEMI ANTI
 /* kluge to keep xml_whitespace_option from causing shift/reduce conflicts */
 %right		PRESERVE STRIP_P
 
@@ -10843,6 +10843,8 @@ join_type:	FULL join_outer							{ $$ = JOIN_FULL; }
 			| LEFT join_outer						{ $$ = JOIN_LEFT; }
 			| RIGHT join_outer						{ $$ = JOIN_RIGHT; }
 			| INNER_P								{ $$ = JOIN_INNER; }
+			| ANTI								{ $$ = JOIN_ANTI; }
+			| SEMI								{ $$ = JOIN_SEMI; }
 		;
 
 /* OUTER is just noise... */
@@ -14063,7 +14065,8 @@ col_name_keyword:
  * - thomas 2000-11-28
  */
 type_func_name_keyword:
-			  AUTHORIZATION
+			  ANTI
+			| AUTHORIZATION
 			| BINARY
 			| COLLATION
 			| CONCURRENTLY
@@ -14083,6 +14086,7 @@ type_func_name_keyword:
 			| OUTER_P
 			| OVERLAPS
 			| RIGHT
+			| SEMI
 			| SIMILAR
 			| TABLESAMPLE
 			| VERBOSE

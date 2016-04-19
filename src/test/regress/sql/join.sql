@@ -193,6 +193,15 @@ SELECT '' AS "xxx", *
 SELECT '' AS "xxx", *
   FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (i = 1);
 
+-- Explicit semi- and anti-joins
+
+SELECT *
+  FROM J1_TBL SEMI JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+
+SELECT *
+  FROM J1_TBL ANTI JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
 
 --
 -- More complicated constructs
@@ -1696,3 +1705,4 @@ update xx1 set x2 = f1 from xx1, lateral (select * from int4_tbl where f1 = x1) 
 delete from xx1 using (select * from int4_tbl where f1 = x1) ss;
 delete from xx1 using (select * from int4_tbl where f1 = xx1.x1) ss;
 delete from xx1 using lateral (select * from int4_tbl where f1 = x1) ss;
+

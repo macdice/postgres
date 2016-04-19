@@ -1350,6 +1350,8 @@ buildMergedJoinVar(ParseState *pstate, JoinType jointype,
 			else
 				res_node = l_node;
 			break;
+		case JOIN_ANTI:
+		case JOIN_SEMI:
 		case JOIN_LEFT:
 			/* Always use left var */
 			res_node = l_node;

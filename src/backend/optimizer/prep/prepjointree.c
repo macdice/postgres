@@ -259,9 +259,6 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		 * JoinExprs must go into the nullable side of the outer join. The
 		 * point of the available_rels machinations is to ensure that we only
 		 * pull up quals for which that's okay.
-		 *
-		 * We don't expect to see any pre-existing JOIN_SEMI or JOIN_ANTI
-		 * nodes here.
 		 */
 		switch (j->jointype)
 		{
@@ -286,6 +283,10 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 														 &j->larg,
 														 leftrelids,
 														 NULL, NULL);
+				break;
+			case JOIN_ANTI:
+			case JOIN_SEMI:
+				/* TODO: not sure what to do here yet */
 				break;
 			default:
 				elog(ERROR, "unrecognized join type: %d",

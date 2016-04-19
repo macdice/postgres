@@ -1845,6 +1845,32 @@ SELECT '' AS "xxx", *
      | 1 | 4 | one | -1
 (1 row)
 
+-- Explicit semi- and anti-joins
+SELECT *
+  FROM J1_TBL SEMI JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ i | j |   t   | k  
+---+---+-------+----
+ 0 |   | zero  |   
+ 1 | 4 | one   | -1
+ 2 | 3 | two   |  2
+ 3 | 2 | three | -3
+ 5 | 0 | five  | -5
+(5 rows)
+
+SELECT *
+  FROM J1_TBL ANTI JOIN J2_TBL USING (i)
+  ORDER BY i, k, t;
+ i | j |   t   | k 
+---+---+-------+---
+ 4 | 1 | four  |  
+ 6 | 6 | six   |  
+ 7 | 7 | seven |  
+ 8 | 8 | eight |  
+   |   | null  |  
+   | 0 | zero  |  
+(6 rows)
+
 --
 -- More complicated constructs
 --
