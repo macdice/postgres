@@ -137,6 +137,7 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XACT_XINFO_HAS_INVALS			(1U << 3)
 #define XACT_XINFO_HAS_TWOPHASE			(1U << 4)
 #define XACT_XINFO_HAS_ORIGIN			(1U << 5)
+#define XACT_XINFO_HAS_SSIDATA			(1U << 6)
 
 /*
  * Also stored in xinfo, these indicating a variety of additional actions that
@@ -232,6 +233,12 @@ typedef struct xl_xact_origin
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
 } xl_xact_origin;
+
+typedef struct xl_xact_ssidata
+{
+	uint64		csn;
+	bool		safe_snapshot;	/* is a snapshot taken now safe, or unknown? */
+} xl_xact_ssidata;
 
 typedef struct xl_xact_commit
 {

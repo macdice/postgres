@@ -70,4 +70,7 @@ extern void PredicateLockTwoPhaseFinish(TransactionId xid, bool isCommit);
 extern void predicatelock_twophase_recover(TransactionId xid, uint16 info,
 							   void *recdata, uint32 len);
 
+extern int GetWritableSxactCount(void);
+extern uint64 GetSerializableCsn(void);
+
 #endif   /* PREDICATE_H */

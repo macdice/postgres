@@ -426,6 +426,7 @@ static void OldSerXidSetActiveSerXmin(TransactionId xid);
 static uint32 predicatelock_hash(const void *key, Size keysize);
 static void SummarizeOldestCommittedSxact(void);
 static Snapshot GetSafeSnapshot(Snapshot snapshot);
+static Snapshot GetSafeSnapshotOnStandby(Snapshot snapshot);
 static Snapshot GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 									  TransactionId sourcexid);
 static bool PredicateLockExists(const PREDICATELOCKTARGETTAG *targettag);
@@ -1549,6 +1550,41 @@ GetSafeSnapshot(Snapshot origSnapshot)
 }
 
 /*
+ * GetSafeSnapshotOnStandby
+ *		Similar to GetSafeSnapshot, except relying on safety checks done on
+ *		the master server and transmitted to standbys via the WAL.
+ */
+static Snapshot
+GetSafeSnapshotOnStandby(Snapshot origSnapshot)
+{
+	Snapshot snapshot;
+
+	while (true)
+	{
+		snapshot = GetSerializableTransactionSnapshotInt(origSnapshot,
+													   InvalidTransactionId);
+
+		/*
+		 * Check if this snapshot is trivially serializable, because the most
+		 * recent serializable transaction to commit had no concurrent
+		 * serializable transactions, according to the primary.
+		 */
+		//if (!snapshot->serializable_on_standby)
+		//	return snapshot;
+
+		/*
+		 * Otherwise we don't know if it's serializable or not.  We'll wait
+		 * for the master to decide and tell us, when concurrent transactions
+		 * end.
+		 */
+		LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+		MySerializableXact->flags |= SXACT_FLAG_DEFERRABLE_WAITING;
+	}
+
+	Assert(SxactIsROSafe(MySerializableXact));
+}
+
+/*
  * Acquire a snapshot that can be used for the current transaction.
  *
  * Make sure we have a SERIALIZABLEXACT reference in MySerializableXact.
@@ -1583,7 +1619,12 @@ GetSerializableTransactionSnapshot(Snapshot snapshot)
 	 * thereby avoid all SSI overhead once it's running.
 	 */
 	if (XactReadOnly && XactDeferrable)
-		return GetSafeSnapshot(snapshot);
+	{
+		if (RecoveryInProgress())
+			return GetSafeSnapshotOnStandby(snapshot);
+		else
+			return GetSafeSnapshot(snapshot);
+	}
 
 	return GetSerializableTransactionSnapshotInt(snapshot,
 												 InvalidTransactionId);
@@ -4965,4 +5006,26 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
 
 		CreatePredicateLock(&lockRecord->target, targettaghash, sxact);
 	}
+}
+
+/*
+ * Get an instantaneous snapshot of the number of concurrent r/w serializable
+ * transactions.
+ */
+int
+GetWritableSxactCount(void)
+{
+	int result;
+
+	LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+	result = PredXact->WritableSxactCount;
+	LWLockRelease(SerializableXactHashLock);
+
+	return result;
+}
+
+uint64
+GetSerializableCsn(void)
+{
+	return MySerializableXact->prepareSeqNo;
 }

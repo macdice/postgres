@@ -5114,6 +5114,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	xl_xact_invals xl_invals;
 	xl_xact_twophase xl_twophase;
 	xl_xact_origin xl_origin;
+	xl_xact_ssidata xl_ssidata;
 
 	uint8		info;
 
@@ -5185,6 +5186,13 @@ XactLogCommitRecord(TimestampTz commit_time,
 
 		xl_origin.origin_lsn = replorigin_session_origin_lsn;
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
+	}
+
+	if (IsolationIsSerializable())
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_SSIDATA;
+		xl_ssidata.csn = GetSerializableCsn();
+		xl_ssidata.safe_snapshot = GetWritableSxactCount() == 0;
 	}
 
 	if (xl_xinfo.xinfo != 0)
