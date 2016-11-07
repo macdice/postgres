@@ -2209,9 +2209,43 @@ psql_completion(const char *text, int start, int end)
 	/* complete CREATE TRIGGER ... INSTEAD OF event ON with a list of views */
 	else if (TailMatches7("CREATE", "TRIGGER", MatchAny, "INSTEAD", "OF", MatchAny, "ON"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views, NULL);
+	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches2("ON", MatchAny))
+		COMPLETE_WITH_LIST7("NOT DEFERRABLE", "DEFERRABLE", "INITIALLY",
+							"REFERENCING", "FOR", "WHEN (", "EXECUTE PROCEDURE");
+	else if (HeadMatches2("CREATE", "TRIGGER") &&
+			 (TailMatches1("DEFERRABLE") || TailMatches2("INITIALLY", "IMMEDIATE|DEFERRED")))
+		COMPLETE_WITH_LIST4("REFERENCING", "FOR", "WHEN (", "EXECUTE PROCEDURE");
+	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches1("REFERENCING"))
+		COMPLETE_WITH_LIST2("OLD TABLE", "NEW TABLE");
+	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches2("OLD|NEW", "TABLE"))
+		COMPLETE_WITH_CONST("AS");
+	else if (HeadMatches2("CREATE", "TRIGGER") &&
+			 (TailMatches5("REFERENCING", "OLD", "TABLE", "AS", MatchAny) ||
+			  TailMatches4("REFERENCING", "OLD", "TABLE", MatchAny)))
+		COMPLETE_WITH_LIST4("NEW TABLE", "FOR", "WHEN (", "EXECUTE PROCEDURE");
+	else if (HeadMatches2("CREATE", "TRIGGER") &&
+			 (TailMatches5("REFERENCING", "NEW", "TABLE", "AS", MatchAny) ||
+			  TailMatches4("REFERENCING", "NEW", "TABLE", MatchAny)))
+		COMPLETE_WITH_LIST4("OLD TABLE", "FOR", "WHEN (", "EXECUTE PROCEDURE");
+	else if (HeadMatches2("CREATE", "TRIGGER") &&
+			 (TailMatches9("REFERENCING", "OLD|NEW", "TABLE", "AS", MatchAny, "OLD|NEW", "TABLE", "AS", MatchAny) ||
+			  TailMatches8("REFERENCING", "OLD|NEW", "TABLE", MatchAny, "OLD|NEW", "TABLE", "AS", MatchAny) ||
+			  TailMatches8("REFERENCING", "OLD|NEW", "TABLE", "AS", MatchAny, "OLD|NEW", "TABLE", MatchAny) ||
+			  TailMatches7("REFERENCING", "OLD|NEW", "TABLE", MatchAny, "OLD|NEW", "TABLE", MatchAny)))
+		COMPLETE_WITH_LIST3("FOR", "WHEN (", "EXECUTE PROCEDURE");
+	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches1("FOR"))
+		COMPLETE_WITH_LIST3("EACH", "ROW", "STATEMENT");
+	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches2("FOR", "EACH"))
+		COMPLETE_WITH_LIST2("ROW", "STATEMENT");
+	else if (HeadMatches2("CREATE", "TRIGGER") &&
+			 (TailMatches3("FOR", "EACH", "ROW|STATEMENT") ||
+			  TailMatches2("FOR", "ROW|STATEMENT")))
+		COMPLETE_WITH_LIST2("WHEN (", "EXECUTE PROCEDURE");
 	/* complete CREATE TRIGGER ... EXECUTE with PROCEDURE */
 	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches1("EXECUTE"))
 		COMPLETE_WITH_CONST("PROCEDURE");
+	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches2("EXECUTE", "PROCEDURE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
 
 /* CREATE ROLE,USER,GROUP <name> */
 	else if (Matches3("CREATE", "ROLE|GROUP|USER", MatchAny) &&
@@ -2661,6 +2695,17 @@ psql_completion(const char *text, int start, int end)
 							"SHARE UPDATE EXCLUSIVE MODE", "SHARE MODE",
 							"SHARE ROW EXCLUSIVE MODE",
 							"EXCLUSIVE MODE", "ACCESS EXCLUSIVE MODE");
+
+	/* Complete LOCK [TABLE] <table> IN ACCESS|ROW with rest of lock mode */
+	else if (Matches4("LOCK", MatchAny, "IN", "ACCESS|ROW") ||
+			 Matches5("LOCK", "TABLE", MatchAny, "IN", "ACCESS|ROW"))
+		COMPLETE_WITH_LIST2("EXCLUSIVE MODE", "SHARE MODE");
+
+	/* Complete LOCK [TABLE] <table> IN SHARE with rest of lock mode */
+	else if (Matches4("LOCK", MatchAny, "IN", "SHARE") ||
+			 Matches5("LOCK", "TABLE", MatchAny, "IN", "SHARE"))
+		COMPLETE_WITH_LIST3("MODE", "ROW EXCLUSIVE MODE",
+							"UPDATE EXCLUSIVE MODE");
 
 /* NOTIFY --- can be inside EXPLAIN, RULE, etc */
 	else if (TailMatches1("NOTIFY"))
