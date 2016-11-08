@@ -5191,7 +5191,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	if (IsolationIsSerializable())
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_SNAPSHOT_SAFETY;
-		GetHypotheticalSnapshotSafety(&xl_snapshot_safety.csn,
+		GetHypotheticalSnapshotSafety(&xl_snapshot_safety.token,
 									  &xl_snapshot_safety.safety);
 	}
 
@@ -5413,8 +5413,8 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 							  xid, parsed->nsubxacts, parsed->subxacts, lsn);
 
 		/* Coordinate atomic update of snapshot safety and ProcArray. */
-		if (parsed->snapshot_safety_csn != 0)
-			BeginHypotheticalSnapshotReplay(parsed->snapshot_safety_csn,
+		if (parsed->snapshot_token != 0)
+			BeginHypotheticalSnapshotReplay(parsed->snapshot_token,
 											parsed->snapshot_safety);
 
 		/*
@@ -5423,7 +5423,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		ExpireTreeKnownAssignedTransactionIds(
 						  xid, parsed->nsubxacts, parsed->subxacts, max_xid);
 
-		if (parsed->snapshot_safety_csn != 0)
+		if (parsed->snapshot_token != 0)
 			CompleteHypotheticalSnapshotReplay();
 
 		/*
@@ -5596,11 +5596,11 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 }
 
 XLogRecPtr
-XactLogSnapshotSafetyRecord(uint64 csn, SnapshotSafety safety)
+XactLogSnapshotSafetyRecord(uint64 token, SnapshotSafety safety)
 {
 	xl_xact_snapshot_safety snapshot_safety;
 
-	snapshot_safety.csn = csn;
+	snapshot_safety.token = token;
 	snapshot_safety.safety = safety;
 
 	XLogBeginInsert();
@@ -5613,13 +5613,13 @@ xact_redo_snapshot_safety(xl_xact_snapshot_safety *snapshot_safety)
 {
 	/*
 	 * Any earlier COMMIT record must have carried a snapshot safety message
-	 * the same CSN as this record, and had safety == SNAPSHOT_SAFETY_UNKNOWN.
-	 * This new independent snapshot safety message reports that the safety is
-	 * now known.  We will wake any backend that is waiting to learn if the
-	 * snapshot is safe.
+	 * the same token as this record, and had safety ==
+	 * SNAPSHOT_SAFETY_UNKNOWN.  This new independent snapshot safety message
+	 * reports that the safety is now known.  We will wake any backend that is
+	 * waiting to learn if the snapshot is safe.
 	 */
 	if (standbyState >= STANDBY_INITIALIZED)
-		NotifyHypotheticalSnapshotSafety(snapshot_safety->csn,
+		NotifyHypotheticalSnapshotSafety(snapshot_safety->token,
 										 snapshot_safety->safety);
 }
 

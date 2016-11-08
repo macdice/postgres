@@ -1210,7 +1210,7 @@ InitPredicateLocks(void)
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
 		PredXact->OldCommittedSxact->pid = 0;
 		SHMQueueInit(&PredXact->snapshotSafetyWaitList);
-		PredXact->LastReplayedHypotheticalSnapshotCsn = 0;
+		PredXact->LastReplayedHypotheticalSnapshotToken = 0;
 		PredXact->LastReplayedHypotheticalSnapshotSafety = 0;
 	}
 	/* This never changes, so let's keep a local copy. */
@@ -1620,7 +1620,7 @@ GetSafeSnapshot(Snapshot origSnapshot)
  * snapshot taken after that point in the transaction stream.
  */
 void
-NotifyHypotheticalSnapshotSafety(uint64 csn, SnapshotSafety safety)
+NotifyHypotheticalSnapshotSafety(uint64 token, SnapshotSafety safety)
 {
 	PGPROC	   *proc;
 	PGPROC	   *next;
@@ -1632,9 +1632,9 @@ NotifyHypotheticalSnapshotSafety(uint64 csn, SnapshotSafety safety)
 	/*
 	 * Walk the list of processes that are waiting in GetSafeSnapshot on a
 	 * standby, and find any that are waiting to learn the safety of a
-	 * snapshot taken at a point in time when this CSN was the most recently
-	 * replayed SSI transaction.  If we find any of those, tell them the final
-	 * status for and wake them up.
+	 * snapshot taken at a point in time when this token appeared onthe most
+	 * recently replayed SSI transaction.  If we find any of those, tell them
+	 * the final status for and wake them up.
 	 */
 	proc = (PGPROC *) SHMQueueNext(&PredXact->snapshotSafetyWaitList,
 								   &PredXact->snapshotSafetyWaitList,
@@ -1644,7 +1644,7 @@ NotifyHypotheticalSnapshotSafety(uint64 csn, SnapshotSafety safety)
 		next = (PGPROC *) SHMQueueNext(&PredXact->snapshotSafetyWaitList,
 									   &proc->safetyLinks,
 									   offsetof(PGPROC, safetyLinks));
-		if (proc->waitCSN == csn)
+		if (proc->waitSnapshotToken == token)
 		{
 			SHMQueueDelete(&proc->safetyLinks);
 			proc->snapshotSafety = safety;
@@ -1654,10 +1654,10 @@ NotifyHypotheticalSnapshotSafety(uint64 csn, SnapshotSafety safety)
 	}
 
 	/*
-	 * If this happens to be the most recently replayed CSN then remember this
-	 * safety value.
+	 * If this happens to be the most recently replayed snapshot token then
+	 * remember this safety value.
 	 */
-	if (PredXact->LastReplayedHypotheticalSnapshotCsn == csn)
+	if (PredXact->LastReplayedHypotheticalSnapshotToken == token)
 		PredXact->LastReplayedHypotheticalSnapshotSafety = safety;
 	LWLockRelease(SerializableXactHashLock);
 }
@@ -1818,7 +1818,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 			 * MyProc->snapshotSafety to be set to a final value.
 			 */
 			MyProc->snapshotSafety = SNAPSHOT_SAFETY_UNKNOWN;
-			MyProc->waitCSN = PredXact->LastReplayedHypotheticalSnapshotCsn;
+			MyProc->waitSnapshotToken = PredXact->LastReplayedHypotheticalSnapshotToken;
 			if (SHMQueueIsDetached(&MyProc->safetyLinks))
 				SHMQueueInsertBefore(&PredXact->snapshotSafetyWaitList,
 									 &MyProc->safetyLinks);
@@ -5211,9 +5211,9 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
  * PreCommit_CheckForSerializationFailure in a committing SSI transaction.
  */
 void
-GetHypotheticalSnapshotSafety(uint64 *csn, SnapshotSafety *safety)
+GetHypotheticalSnapshotSafety(uint64 *token, SnapshotSafety *safety)
 {
-	*csn = MySerializableXact->prepareSeqNo;
+	*token = MySerializableXact->prepareSeqNo;
 	*safety = MySerializableXact->hypotheticalSnapshotSafety;
 }
 
@@ -5229,10 +5229,10 @@ GetHypotheticalSnapshotSafety(uint64 *csn, SnapshotSafety *safety)
  * it has safety information.
  */
 void
-BeginHypotheticalSnapshotReplay(uint64 csn, SnapshotSafety safety)
+BeginHypotheticalSnapshotReplay(uint64 token, SnapshotSafety safety)
 {
 	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
-	PredXact->LastReplayedHypotheticalSnapshotCsn = csn;
+	PredXact->LastReplayedHypotheticalSnapshotToken = token;
 	PredXact->LastReplayedHypotheticalSnapshotSafety = safety;
 }
 

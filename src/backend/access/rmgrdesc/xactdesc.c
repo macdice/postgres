@@ -122,7 +122,7 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 		xl_xact_snapshot_safety *xl_snapshot_safety =
 			(xl_xact_snapshot_safety *) data;
 
-		parsed->snapshot_safety_csn = xl_snapshot_safety->csn;
+		parsed->snapshot_token = xl_snapshot_safety->token;
 		parsed->snapshot_safety = xl_snapshot_safety->safety;
 
 		data += sizeof(xl_xact_snapshot_safety);

@@ -134,7 +134,7 @@ struct PGPROC
 	SHM_QUEUE	syncRepLinks;	/* list link if process is in syncrep queue */
 
 	/* Info to allow standbys to wait for a safe SERIALIZABLE snapshot */
-	uint64		waitCSN;		/* wait for safety of snapshot taken here */
+	uint64		waitSnapshotToken;
 	int			snapshotSafety;	/* space for result */
 	SHM_QUEUE	safetyLinks;	/* list link for GetSafeSnapshot */
 

@@ -395,7 +395,7 @@ InitProcess(void)
 	SHMQueueElemInit(&(MyProc->syncRepLinks));
 
 	/* Initialize fields for SERIALIZABLE on standbys */
-	MyProc->waitCSN = 0;
+	MyProc->waitSnapshotToken = 0;
 	MyProc->snapshotSafety = SNAPSHOT_SAFETY_UNKNOWN;
 	SHMQueueElemInit(&(MyProc->safetyLinks));
 

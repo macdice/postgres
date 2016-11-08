@@ -71,9 +71,9 @@ extern void predicatelock_twophase_recover(TransactionId xid, uint16 info,
 							   void *recdata, uint32 len);
 
 /* hypothetical snapshot safety support, allowing SERIALIZABLE on standbys */
-extern void GetHypotheticalSnapshotSafety(uint64 *csn, SnapshotSafety *safety);
-extern void NotifyHypotheticalSnapshotSafety(uint64 csn, SnapshotSafety safety);
-extern void BeginHypotheticalSnapshotReplay(uint64 csn, SnapshotSafety safety);
+extern void GetHypotheticalSnapshotSafety(uint64 *token, SnapshotSafety *safety);
+extern void NotifyHypotheticalSnapshotSafety(uint64 token, SnapshotSafety safety);
+extern void BeginHypotheticalSnapshotReplay(uint64 token, SnapshotSafety safety);
 extern void CompleteHypotheticalSnapshotReplay(void);
 
 #endif   /* PREDICATE_H */

@@ -182,7 +182,7 @@ typedef struct PredXactListData
 
 	/* Tracking of snapshot safety on standby servers. */
 	SHM_QUEUE	snapshotSafetyWaitList;
-	SerCommitSeqNo LastReplayedHypotheticalSnapshotCsn;
+	uint64 LastReplayedHypotheticalSnapshotToken;
 	SnapshotSafety LastReplayedHypotheticalSnapshotSafety;
 
 	PredXactListElement element;
