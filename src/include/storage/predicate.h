@@ -14,6 +14,7 @@
 #ifndef PREDICATE_H
 #define PREDICATE_H
 
+#include "access/xact.h" /* for SnapshotSafe; where else to put that? */
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
@@ -26,7 +27,6 @@ extern int	max_predicate_locks_per_xact;
 
 /* Number of SLRU buffers to use for predicate locking */
 #define NUM_OLDSERXID_BUFFERS	16
-
 
 /*
  * function prototypes
@@ -70,7 +70,10 @@ extern void PredicateLockTwoPhaseFinish(TransactionId xid, bool isCommit);
 extern void predicatelock_twophase_recover(TransactionId xid, uint16 info,
 							   void *recdata, uint32 len);
 
-extern int GetWritableSxactCount(void);
-extern uint64 GetSerializableCsn(void);
+/* hypothetical snapshot safety support, allowing SERIALIZABLE on standbys */
+extern void GetHypotheticalSnapshotSafety(uint64 *csn, SnapshotSafety *safety);
+extern void NotifyHypotheticalSnapshotSafety(uint64 csn, SnapshotSafety safety);
+extern void BeginHypotheticalSnapshotReplay(uint64 csn, SnapshotSafety safety);
+extern void CompleteHypotheticalSnapshotReplay(void);
 
 #endif   /* PREDICATE_H */

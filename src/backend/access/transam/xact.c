@@ -5114,7 +5114,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	xl_xact_invals xl_invals;
 	xl_xact_twophase xl_twophase;
 	xl_xact_origin xl_origin;
-	xl_xact_ssidata xl_ssidata;
+	xl_xact_snapshot_safety xl_snapshot_safety;
 
 	uint8		info;
 
@@ -5190,9 +5190,9 @@ XactLogCommitRecord(TimestampTz commit_time,
 
 	if (IsolationIsSerializable())
 	{
-		xl_xinfo.xinfo |= XACT_XINFO_HAS_SSIDATA;
-		xl_ssidata.csn = GetSerializableCsn();
-		xl_ssidata.safe_snapshot = GetWritableSxactCount() == 0;
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_SNAPSHOT_SAFETY;
+		GetHypotheticalSnapshotSafety(&xl_snapshot_safety.csn,
+									  &xl_snapshot_safety.safety);
 	}
 
 	if (xl_xinfo.xinfo != 0)
@@ -5238,6 +5238,10 @@ XactLogCommitRecord(TimestampTz commit_time,
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_ORIGIN)
 		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_SNAPSHOT_SAFETY)
+		XLogRegisterData((char *) (&xl_snapshot_safety),
+						 sizeof(xl_xact_snapshot_safety));
 
 	/* we allow filtering by xacts */
 	XLogIncludeOrigin();
@@ -5408,11 +5412,19 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		TransactionIdAsyncCommitTree(
 							  xid, parsed->nsubxacts, parsed->subxacts, lsn);
 
+		/* Coordinate atomic update of snapshot safety and ProcArray. */
+		if (parsed->snapshot_safety_csn != 0)
+			BeginHypotheticalSnapshotReplay(parsed->snapshot_safety_csn,
+											parsed->snapshot_safety);
+
 		/*
 		 * We must mark clog before we update the ProcArray.
 		 */
 		ExpireTreeKnownAssignedTransactionIds(
 						  xid, parsed->nsubxacts, parsed->subxacts, max_xid);
+
+		if (parsed->snapshot_safety_csn != 0)
+			CompleteHypotheticalSnapshotReplay();
 
 		/*
 		 * Send any cache invalidations attached to the commit. We must
@@ -5583,6 +5595,34 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 	}
 }
 
+XLogRecPtr
+XactLogSnapshotSafetyRecord(uint64 csn, SnapshotSafety safety)
+{
+	xl_xact_snapshot_safety snapshot_safety;
+
+	snapshot_safety.csn = csn;
+	snapshot_safety.safety = safety;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &snapshot_safety, sizeof(snapshot_safety));
+	return XLogInsert(RM_XACT_ID, XLOG_XACT_SNAPSHOT_SAFETY);
+}
+
+static void
+xact_redo_snapshot_safety(xl_xact_snapshot_safety *snapshot_safety)
+{
+	/*
+	 * Any earlier COMMIT record must have carried a snapshot safety message
+	 * the same CSN as this record, and had safety == SNAPSHOT_SAFETY_UNKNOWN.
+	 * This new independent snapshot safety message reports that the safety is
+	 * now known.  We will wake any backend that is waiting to learn if the
+	 * snapshot is safe.
+	 */
+	if (standbyState >= STANDBY_INITIALIZED)
+		NotifyHypotheticalSnapshotSafety(snapshot_safety->csn,
+										 snapshot_safety->safety);
+}
+
 void
 xact_redo(XLogReaderState *record)
 {
@@ -5646,6 +5686,13 @@ xact_redo(XLogReaderState *record)
 		if (standbyState >= STANDBY_INITIALIZED)
 			ProcArrayApplyXidAssignment(xlrec->xtop,
 										xlrec->nsubxacts, xlrec->xsub);
+	}
+	else if (info == XLOG_XACT_SNAPSHOT_SAFETY)
+	{
+		xl_xact_snapshot_safety *xlrec =
+			(xl_xact_snapshot_safety *) XLogRecGetData(record);
+
+		xact_redo_snapshot_safety(xlrec);
 	}
 	else
 		elog(PANIC, "xact_redo: unknown op code %u", info);

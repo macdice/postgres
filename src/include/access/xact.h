@@ -74,6 +74,13 @@ extern int	synchronous_commit;
 /* Kluge for 2PC support */
 extern bool MyXactAccessedTempRel;
 
+typedef enum SnapshotSafety
+{
+	SNAPSHOT_SAFE,
+	SNAPSHOT_UNSAFE,
+	SNAPSHOT_SAFETY_UNKNOWN
+} SnapshotSafety;
+
 /*
  *	start- and end-of-transaction callbacks for dynamically loaded modules
  */
@@ -118,7 +125,7 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XLOG_XACT_COMMIT_PREPARED	0x30
 #define XLOG_XACT_ABORT_PREPARED	0x40
 #define XLOG_XACT_ASSIGNMENT		0x50
-/* free opcode 0x60 */
+#define XLOG_XACT_SNAPSHOT_SAFETY   0x60
 /* free opcode 0x70 */
 
 /* mask for filtering opcodes out of xl_info */
@@ -137,7 +144,7 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XACT_XINFO_HAS_INVALS			(1U << 3)
 #define XACT_XINFO_HAS_TWOPHASE			(1U << 4)
 #define XACT_XINFO_HAS_ORIGIN			(1U << 5)
-#define XACT_XINFO_HAS_SSIDATA			(1U << 6)
+#define XACT_XINFO_HAS_SNAPSHOT_SAFETY	(1U << 6)
 
 /*
  * Also stored in xinfo, these indicating a variety of additional actions that
@@ -233,11 +240,11 @@ typedef struct xl_xact_origin
 	TimestampTz origin_timestamp;
 } xl_xact_origin;
 
-typedef struct xl_xact_ssidata
+typedef struct xl_xact_snapshot_safety
 {
 	uint64		csn;
-	bool		safe_snapshot;	/* is a snapshot taken now safe, or unknown? */
-} xl_xact_ssidata;
+	SnapshotSafety safety;
+} xl_xact_snapshot_safety;
 
 typedef struct xl_xact_commit
 {
@@ -250,6 +257,7 @@ typedef struct xl_xact_commit
 	/* xl_xact_invals follows if XINFO_HAS_INVALS */
 	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
 	/* xl_xact_origin follows if XINFO_HAS_ORIGIN, stored unaligned! */
+	/* xl_xact_snapshot_safety follows if XINFO_HAS_SNAPSHOT_SAFETY */
 } xl_xact_commit;
 #define MinSizeOfXactCommit (offsetof(xl_xact_commit, xact_time) + sizeof(TimestampTz))
 
@@ -293,6 +301,9 @@ typedef struct xl_xact_parsed_commit
 
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
+
+	uint64		snapshot_safety_csn;
+	SnapshotSafety snapshot_safety;
 } xl_xact_parsed_commit;
 
 typedef struct xl_xact_parsed_abort
@@ -377,6 +388,9 @@ extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 				   int nsubxacts, TransactionId *subxacts,
 				   int nrels, RelFileNode *rels,
 				   TransactionId twophase_xid);
+
+extern XLogRecPtr XactLogSnapshotSafetyRecord(uint64, SnapshotSafety safety);
+
 extern void xact_redo(XLogReaderState *record);
 
 /* xactdesc.c */

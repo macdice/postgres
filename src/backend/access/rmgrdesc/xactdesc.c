@@ -116,6 +116,17 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 
 		data += sizeof(xl_xact_origin);
 	}
+
+	if (parsed->xinfo & XACT_XINFO_HAS_SNAPSHOT_SAFETY)
+	{
+		xl_xact_snapshot_safety *xl_snapshot_safety =
+			(xl_xact_snapshot_safety *) data;
+
+		parsed->snapshot_safety_csn = xl_snapshot_safety->csn;
+		parsed->snapshot_safety = xl_snapshot_safety->safety;
+
+		data += sizeof(xl_xact_snapshot_safety);
+	}
 }
 
 void
