@@ -5598,14 +5598,19 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 XLogRecPtr
 XactLogSnapshotSafetyRecord(uint64 token, SnapshotSafety safety)
 {
+	XLogRecPtr result;
 	xl_xact_snapshot_safety snapshot_safety;
 
 	snapshot_safety.token = token;
 	snapshot_safety.safety = safety;
 
+	START_CRIT_SECTION();
 	XLogBeginInsert();
 	XLogRegisterData((char *) &snapshot_safety, sizeof(snapshot_safety));
-	return XLogInsert(RM_XACT_ID, XLOG_XACT_SNAPSHOT_SAFETY);
+	result = XLogInsert(RM_XACT_ID, XLOG_XACT_SNAPSHOT_SAFETY);
+	END_CRIT_SECTION();
+
+	return result;
 }
 
 static void
