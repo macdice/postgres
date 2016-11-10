@@ -1834,13 +1834,14 @@ StartTransaction(void)
 	{
 		s->startedInRecovery = true;
 		XactReadOnly = true;
+		XactDeferrable = true;
 	}
 	else
 	{
 		s->startedInRecovery = false;
 		XactReadOnly = DefaultXactReadOnly;
+		XactDeferrable = DefaultXactDeferrable;
 	}
-	XactDeferrable = DefaultXactDeferrable;
 	XactIsoLevel = DefaultXactIsoLevel;
 	forceSyncCommit = false;
 	MyXactAccessedTempRel = false;
