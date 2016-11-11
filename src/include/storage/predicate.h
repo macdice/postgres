@@ -14,7 +14,6 @@
 #ifndef PREDICATE_H
 #define PREDICATE_H
 
-#include "access/xact.h" /* for SnapshotSafe; where else to put that? */
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
