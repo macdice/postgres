@@ -1210,8 +1210,8 @@ InitPredicateLocks(void)
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
 		PredXact->OldCommittedSxact->pid = 0;
 		SHMQueueInit(&PredXact->snapshotSafetyWaitList);
-		PredXact->LastReplayedHypotheticalSnapshotToken = 0;
-		PredXact->LastReplayedHypotheticalSnapshotSafety = 0;
+		PredXact->NewestSnapshotToken = 0;
+		PredXact->NewestSnapshotSafety = 0;
 	}
 	/* This never changes, so let's keep a local copy. */
 	OldCommittedSxact = PredXact->OldCommittedSxact;
@@ -1624,7 +1624,7 @@ GetSafeSnapshot(Snapshot origSnapshot)
  * snapshot taken after that point in the transaction stream.
  */
 void
-NotifyHypotheticalSnapshotSafety(uint64 token, SnapshotSafety safety)
+NotifyHypotheticalSnapshotSafety(SnapshotToken token, SnapshotSafety safety)
 {
 	PGPROC	   *proc;
 	PGPROC	   *next;
@@ -1661,8 +1661,8 @@ NotifyHypotheticalSnapshotSafety(uint64 token, SnapshotSafety safety)
 	 * If this happens to be the most recently replayed snapshot token then
 	 * remember this safety value.
 	 */
-	if (PredXact->LastReplayedHypotheticalSnapshotToken == token)
-		PredXact->LastReplayedHypotheticalSnapshotSafety = safety;
+	if (PredXact->NewestSnapshotToken == token)
+		PredXact->NewestSnapshotSafety = safety;
 	LWLockRelease(SerializableXactHashLock);
 }
 
@@ -1813,7 +1813,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	 */
 	if (snapshot_safety != NULL)
 	{
-		*snapshot_safety = PredXact->LastReplayedHypotheticalSnapshotSafety;
+		*snapshot_safety = PredXact->NewestSnapshotSafety;
 		if (*snapshot_safety == SNAPSHOT_SAFETY_UNKNOWN)
 		{
 			/*
@@ -1823,7 +1823,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 			 * MyProc->snapshotSafety to be set to a final value.
 			 */
 			MyProc->snapshotSafety = SNAPSHOT_SAFETY_UNKNOWN;
-			MyProc->waitSnapshotToken = PredXact->LastReplayedHypotheticalSnapshotToken;
+			MyProc->waitSnapshotToken = PredXact->NewestSnapshotToken;
 			if (SHMQueueIsDetached(&MyProc->safetyLinks))
 				SHMQueueInsertBefore(&PredXact->snapshotSafetyWaitList,
 									 &MyProc->safetyLinks);
@@ -4887,7 +4887,7 @@ PreCommit_CheckForSerializationFailure(void)
 		 * read-only snapshot taken immediately after this one commits is
 		 * safe.
 		 */
-		MySerializableXact->hypotheticalSnapshotSafety = SNAPSHOT_SAFE;
+		MySerializableXact->snapshotSafetyAfterThisCommit = SNAPSHOT_SAFE;
 	}
 	else
 	{
@@ -4904,7 +4904,8 @@ PreCommit_CheckForSerializationFailure(void)
 		if (sxact == NULL)
 		{
 			/* Out of space.  Don't allow SERIALIZABLE on standbys. */
-			MySerializableXact->hypotheticalSnapshotSafety = SNAPSHOT_UNSAFE;
+			MySerializableXact->snapshotSafetyAfterThisCommit =
+				SNAPSHOT_UNSAFE;
 		}
 		else
 		{
@@ -4942,7 +4943,7 @@ PreCommit_CheckForSerializationFailure(void)
 			 * The status will be reported in a later WAL record once it has
 			 * been determined.
 			 */
-			MySerializableXact->hypotheticalSnapshotSafety =
+			MySerializableXact->snapshotSafetyAfterThisCommit =
 				SNAPSHOT_SAFETY_UNKNOWN;
 		}
 	}
@@ -5217,33 +5218,44 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
  * PreCommit_CheckForSerializationFailure in a committing SSI transaction.
  */
 void
-GetHypotheticalSnapshotSafety(uint64 *token, SnapshotSafety *safety)
+GetSnapshotSafetyAfterThisCommit(SnapshotToken *token, SnapshotSafety *safety)
 {
 	*token = MySerializableXact->prepareSeqNo;
-	*safety = MySerializableXact->hypotheticalSnapshotSafety;
+	*safety = MySerializableXact->snapshotSafetyAfterThisCommit;
 }
 
 /*
- * If a commit record contains SSI snapshot safety information then we need to
- * update that atomically with ProcArray from the point of view of anyone
- * taking a serializable snapshot.  We achive that by holding
- * SerializableXactHashLock, mirroring the way
- * GetSerializableTransactionSnapshotInt does that when acquiring a snapshot.
- * The recovery process should wrap its call to
- * ExpireTreeKnownAssignedTransactionIds in calls to
- * BeginHypotheticalSnapshotReplay and CompleteHypotheticalSnapshotReplay when
- * it has safety information.
+ * Used when checkpointing the latest snapshot safety information.
  */
 void
-BeginHypotheticalSnapshotReplay(uint64 token, SnapshotSafety safety)
+GetNewestSnapshotSafety(SnapshotToken *token, SnapshotSafety *safety)
 {
 	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
-	PredXact->LastReplayedHypotheticalSnapshotToken = token;
-	PredXact->LastReplayedHypotheticalSnapshotSafety = safety;
+	*token = PredXact->NewestSnapshotToken;
+	*safety = PredXact->NewestSnapshotSafety;
+	LWLockRelease(SerializableXactHashLock);
 }
 
 void
-CompleteHypotheticalSnapshotReplay(void)
+BeginSnapshotSafetyReplay(void)
+{
+	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+}
+
+/*
+ * Used in recovery when replaying commit records.  In hot standby, these
+ * values must be set atomically with ProcArray updates, by wrapping both
+ * in BeginSnapshotSafetyReplay/CompleteSnapshotSafetyReplay.
+ */
+void
+SetNewestSnapshotSafety(SnapshotToken token, SnapshotSafety safety)
+{
+	PredXact->NewestSnapshotToken = token;
+	PredXact->NewestSnapshotSafety = safety;
+}
+
+void
+CompleteSnapshotSafetyReplay(void)
 {
 	LWLockRelease(SerializableXactHashLock);
 }

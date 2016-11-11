@@ -74,13 +74,6 @@ extern int	synchronous_commit;
 /* Kluge for 2PC support */
 extern bool MyXactAccessedTempRel;
 
-typedef enum SnapshotSafety
-{
-	SNAPSHOT_SAFE,
-	SNAPSHOT_UNSAFE,
-	SNAPSHOT_SAFETY_UNKNOWN
-} SnapshotSafety;
-
 /*
  *	start- and end-of-transaction callbacks for dynamically loaded modules
  */

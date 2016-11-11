@@ -101,7 +101,7 @@ typedef struct SERIALIZABLEXACT
 	 * for committing transactions: would a hypothetical read-only snapshot
 	 * taken immediately after this transaction commits be safe?
 	 */
-	SnapshotSafety hypotheticalSnapshotSafety;
+	SnapshotSafety snapshotSafetyAfterThisCommit;
 
 	TransactionId topXid;		/* top level xid for the transaction, if one
 								 * exists; else invalid */
@@ -182,8 +182,8 @@ typedef struct PredXactListData
 
 	/* Tracking of snapshot safety on standby servers. */
 	SHM_QUEUE	snapshotSafetyWaitList;
-	uint64 LastReplayedHypotheticalSnapshotToken; /* TODO: -> CheckPoint? */
-	SnapshotSafety LastReplayedHypotheticalSnapshotSafety;
+	SnapshotToken NewestSnapshotToken;
+	SnapshotSafety NewestSnapshotSafety;
 
 	PredXactListElement element;
 }	PredXactListData;

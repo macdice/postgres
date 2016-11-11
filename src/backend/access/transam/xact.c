@@ -5192,8 +5192,8 @@ XactLogCommitRecord(TimestampTz commit_time,
 	if (IsolationIsSerializable())
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_SNAPSHOT_SAFETY;
-		GetHypotheticalSnapshotSafety(&xl_snapshot_safety.token,
-									  &xl_snapshot_safety.safety);
+		GetSnapshotSafetyAfterThisCommit(&xl_snapshot_safety.token,
+										 &xl_snapshot_safety.safety);
 	}
 
 	if (xl_xinfo.xinfo != 0)
@@ -5415,8 +5415,11 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 
 		/* Coordinate atomic update of snapshot safety and ProcArray. */
 		if (parsed->snapshot_token != 0)
-			BeginHypotheticalSnapshotReplay(parsed->snapshot_token,
-											parsed->snapshot_safety);
+		{
+			BeginSnapshotSafetyReplay();
+			SetNewestSnapshotSafety(parsed->snapshot_token,
+									parsed->snapshot_safety);
+		}
 
 		/*
 		 * We must mark clog before we update the ProcArray.
@@ -5425,7 +5428,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 						  xid, parsed->nsubxacts, parsed->subxacts, max_xid);
 
 		if (parsed->snapshot_token != 0)
-			CompleteHypotheticalSnapshotReplay();
+			CompleteSnapshotSafetyReplay();
 
 		/*
 		 * Send any cache invalidations attached to the commit. We must
