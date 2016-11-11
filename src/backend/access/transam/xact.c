@@ -5600,7 +5600,7 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 }
 
 XLogRecPtr
-XactLogSnapshotSafetyRecord(uint64 token, SnapshotSafety safety)
+XactLogSnapshotSafetyRecord(SnapshotToken token, SnapshotSafety safety)
 {
 	XLogRecPtr result;
 	xl_xact_snapshot_safety snapshot_safety;

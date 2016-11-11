@@ -235,7 +235,7 @@ typedef struct xl_xact_origin
 
 typedef struct xl_xact_snapshot_safety
 {
-	uint64		token;
+	SnapshotToken token;
 	SnapshotSafety safety;
 } xl_xact_snapshot_safety;
 
@@ -295,7 +295,7 @@ typedef struct xl_xact_parsed_commit
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
 
-	uint64		snapshot_token;
+	SnapshotToken snapshot_token;
 	SnapshotSafety snapshot_safety;
 } xl_xact_parsed_commit;
 
@@ -382,7 +382,8 @@ extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 				   int nrels, RelFileNode *rels,
 				   TransactionId twophase_xid);
 
-extern XLogRecPtr XactLogSnapshotSafetyRecord(uint64, SnapshotSafety safety);
+extern XLogRecPtr XactLogSnapshotSafetyRecord(SnapshotToken token,
+					SnapshotSafety safety);
 
 extern void xact_redo(XLogReaderState *record);
 
