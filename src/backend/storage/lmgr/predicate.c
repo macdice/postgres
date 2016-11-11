@@ -4947,6 +4947,14 @@ PreCommit_CheckForSerializationFailure(void)
 				SNAPSHOT_SAFETY_UNKNOWN;
 		}
 	}
+	/*
+	 * Update the snapshot information in shared memory so it can be
+	 * checkpointed.
+	 */
+	/* TODO: Only do this if we are going to generage log! */
+	PredXact->NewestSnapshotToken = MySerializableXact->prepareSeqNo;
+	PredXact->NewestSnapshotSafety =
+		MySerializableXact->snapshotSafetyAfterThisCommit;
 
 	LWLockRelease(SerializableXactHashLock);
 }
