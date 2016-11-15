@@ -74,7 +74,6 @@ extern void GetSnapshotSafetyAfterThisCommit(SnapshotToken *token, SnapshotSafet
 extern void NotifyHypotheticalSnapshotSafety(SnapshotToken token, SnapshotSafety safety);
 extern void BeginSnapshotSafetyReplay(void);
 extern void SetNewestSnapshotSafety(SnapshotToken token, SnapshotSafety safety);
-extern void GetNewestSnapshotSafety(SnapshotToken *token, SnapshotSafety *safety);
 extern void CompleteSnapshotSafetyReplay(void);
 
 #endif   /* PREDICATE_H */

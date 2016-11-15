@@ -1211,7 +1211,7 @@ InitPredicateLocks(void)
 		PredXact->OldCommittedSxact->pid = 0;
 		SHMQueueInit(&PredXact->snapshotSafetyWaitList);
 		PredXact->NewestSnapshotToken = 0;
-		PredXact->NewestSnapshotSafety = 0;
+		PredXact->NewestSnapshotSafety = SNAPSHOT_SAFE;
 	}
 	/* This never changes, so let's keep a local copy. */
 	OldCommittedSxact = PredXact->OldCommittedSxact;
@@ -5232,18 +5232,6 @@ GetSnapshotSafetyAfterThisCommit(SnapshotToken *token, SnapshotSafety *safety)
 	*safety = MySerializableXact->snapshotSafetyAfterThisCommit;
 }
 
-/*
- * Used when checkpointing the latest snapshot safety information.
- */
-void
-GetNewestSnapshotSafety(SnapshotToken *token, SnapshotSafety *safety)
-{
-	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
-	*token = PredXact->NewestSnapshotToken;
-	*safety = PredXact->NewestSnapshotSafety;
-	LWLockRelease(SerializableXactHashLock);
-}
-
 void
 BeginSnapshotSafetyReplay(void)
 {
@@ -5251,8 +5239,9 @@ BeginSnapshotSafetyReplay(void)
 }
 
 /*
- * Used in recovery when replaying commit records.  In hot standby, these
- * values must be set atomically with ProcArray updates, by wrapping both
+ * Used in recovery when replaying commit records.  On a hot standby, these
+ * values must be set atomically with ProcArray updates, mirroring the code
+ * in GetSerializableTransactionSnapshotInt.  This is done by wrapping both
  * in BeginSnapshotSafetyReplay/CompleteSnapshotSafetyReplay.
  */
 void

@@ -51,9 +51,6 @@ typedef struct CheckPoint
 	TransactionId newestCommitTsXid;	/* newest Xid with valid commit
 										 * timestamp */
 
-	SnapshotToken newestSnapshotToken;
-	SnapshotSafety newestSnapshotSafety;
-
 	/*
 	 * Oldest XID still running. This is only needed to initialize hot standby
 	 * mode from an online checkpoint, so we only bother calculating this for
