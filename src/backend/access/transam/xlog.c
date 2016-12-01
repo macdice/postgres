@@ -41,6 +41,7 @@
 #include "commands/tablespace.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/atomics.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/walwriter.h"
 #include "postmaster/startup.h"
@@ -51,7 +52,6 @@
 #include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
-#include "storage/barrier.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -2759,7 +2759,7 @@ XLogFlush(XLogRecPtr record)
  * This routine is invoked periodically by the background walwriter process.
  *
  * Returns TRUE if there was any work to do, even if we skipped flushing due
- * to wal_writer_delay/wal_flush_after.
+ * to wal_writer_delay/wal_writer_flush_after.
  */
 bool
 XLogBackgroundFlush(void)
