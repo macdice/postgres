@@ -21,6 +21,7 @@ struct Session
 {
 	char	   *name;
 	char	   *setupsql;
+	int			connection;
 	char	   *teardownsql;
 	Step	  **steps;
 	int			nsteps;
