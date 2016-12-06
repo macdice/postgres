@@ -52,7 +52,7 @@ teardown		{ return(TEARDOWN); }
 {comment}		{ /* ignore */ }
 {space}			{ /* ignore */ }
 
-{integer}		{ return atoi(yytext); }
+{integer}		{ return(atoi(yytext)); }
 
  /* Quoted strings: "foo" */
 \"				{
