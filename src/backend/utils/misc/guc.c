@@ -2665,6 +2665,16 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_parallel_workers", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Sets the maximum number of parallel workers than can be active at one time."),
+			NULL
+		},
+		&max_parallel_workers,
+		8, 0, 1024,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"autovacuum_work_mem", PGC_SIGHUP, RESOURCES_MEM,
 			gettext_noop("Sets the maximum memory to be used by each autovacuum worker process."),
 			NULL,

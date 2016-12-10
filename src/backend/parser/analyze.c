@@ -633,10 +633,11 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 		 * RTE.
 		 */
 		List	   *exprsLists = NIL;
-		List	   *collations = NIL;
+		List	   *coltypes = NIL;
+		List	   *coltypmods = NIL;
+		List	   *colcollations = NIL;
 		int			sublist_length = -1;
 		bool		lateral = false;
-		int			i;
 
 		Assert(selectStmt->intoClause == NULL);
 
@@ -703,11 +704,20 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 		}
 
 		/*
-		 * Although we don't really need collation info, let's just make sure
-		 * we provide a correctly-sized list in the VALUES RTE.
+		 * Construct column type/typmod/collation lists for the VALUES RTE.
+		 * Every expression in each column has been coerced to the type/typmod
+		 * of the corresponding target column or subfield, so it's sufficient
+		 * to look at the exprType/exprTypmod of the first row.  We don't care
+		 * about the collation labeling, so just fill in InvalidOid for that.
 		 */
-		for (i = 0; i < sublist_length; i++)
-			collations = lappend_oid(collations, InvalidOid);
+		foreach(lc, (List *) linitial(exprsLists))
+		{
+			Node	   *val = (Node *) lfirst(lc);
+
+			coltypes = lappend_oid(coltypes, exprType(val));
+			coltypmods = lappend_int(coltypmods, exprTypmod(val));
+			colcollations = lappend_oid(colcollations, InvalidOid);
+		}
 
 		/*
 		 * Ordinarily there can't be any current-level Vars in the expression
@@ -722,7 +732,8 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 		/*
 		 * Generate the VALUES RTE
 		 */
-		rte = addRangeTableEntryForValues(pstate, exprsLists, collations,
+		rte = addRangeTableEntryForValues(pstate, exprsLists,
+										  coltypes, coltypmods, colcollations,
 										  NULL, lateral, true);
 		rtr = makeNode(RangeTblRef);
 		/* assume new rte is at end */
@@ -806,8 +817,16 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	/* Process ON CONFLICT, if any. */
 	if (stmt->onConflictClause)
+	{
+		/* Bail out if target relation is partitioned table */
+		if (pstate->p_target_rangetblentry->relkind == RELKIND_PARTITIONED_TABLE)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("ON CONFLICT clause is not supported with partitioned tables")));
+
 		qry->onConflict = transformOnConflictClause(pstate,
 													stmt->onConflictClause);
+	}
 
 	/*
 	 * If we have a RETURNING clause, we need to add the target relation to
@@ -996,11 +1015,10 @@ transformOnConflictClause(ParseState *pstate,
 		exclRelIndex = list_length(pstate->p_rtable);
 
 		/*
-		 * Build a targetlist for the EXCLUDED pseudo relation. Have to be
-		 * careful to use resnos that correspond to attnos of the underlying
-		 * relation.
+		 * Build a targetlist representing the columns of the EXCLUDED pseudo
+		 * relation.  Have to be careful to use resnos that correspond to
+		 * attnos of the underlying relation.
 		 */
-		Assert(pstate->p_next_resno == 1);
 		for (attno = 0; attno < targetrel->rd_rel->relnatts; attno++)
 		{
 			Form_pg_attribute attr = targetrel->rd_att->attrs[attno];
@@ -1021,14 +1039,11 @@ transformOnConflictClause(ParseState *pstate,
 							  attr->atttypid, attr->atttypmod,
 							  attr->attcollation,
 							  0);
-				var->location = -1;
-
-				name = NameStr(attr->attname);
+				name = pstrdup(NameStr(attr->attname));
 			}
 
-			Assert(pstate->p_next_resno == attno + 1);
 			te = makeTargetEntry((Expr *) var,
-								 pstate->p_next_resno++,
+								 attno + 1,
 								 name,
 								 false);
 
@@ -1037,15 +1052,16 @@ transformOnConflictClause(ParseState *pstate,
 		}
 
 		/*
-		 * Additionally add a whole row tlist entry for EXCLUDED. That's
-		 * really only needed for ruleutils' benefit, which expects to find
-		 * corresponding entries in child tlists. Alternatively we could do
-		 * this only when required, but that doesn't seem worth the trouble.
+		 * Add a whole-row-Var entry to support references to "EXCLUDED.*".
+		 * Like the other entries in exclRelTlist, its resno must match the
+		 * Var's varattno, else the wrong things happen while resolving
+		 * references in setrefs.c.  This is against normal conventions for
+		 * targetlists, but it's okay since we don't use this as a real tlist.
 		 */
 		var = makeVar(exclRelIndex, InvalidAttrNumber,
-					  RelationGetRelid(targetrel),
+					  targetrel->rd_rel->reltype,
 					  -1, InvalidOid, 0);
-		te = makeTargetEntry((Expr *) var, 0, NULL, true);
+		te = makeTargetEntry((Expr *) var, InvalidAttrNumber, NULL, true);
 		exclRelTlist = lappend(exclRelTlist, te);
 
 		/*
@@ -1269,7 +1285,9 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 {
 	Query	   *qry = makeNode(Query);
 	List	   *exprsLists;
-	List	   *collations;
+	List	   *coltypes = NIL;
+	List	   *coltypmods = NIL;
+	List	   *colcollations = NIL;
 	List	  **colexprs = NULL;
 	int			sublist_length = -1;
 	bool		lateral = false;
@@ -1355,8 +1373,8 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 
 	/*
 	 * Now resolve the common types of the columns, and coerce everything to
-	 * those types.  Then identify the common collation, if any, of each
-	 * column.
+	 * those types.  Then identify the common typmod and common collation, if
+	 * any, of each column.
 	 *
 	 * We must do collation processing now because (1) assign_query_collations
 	 * doesn't process rangetable entries, and (2) we need to label the VALUES
@@ -1367,11 +1385,12 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	 *
 	 * Note we modify the per-column expression lists in-place.
 	 */
-	collations = NIL;
 	for (i = 0; i < sublist_length; i++)
 	{
 		Oid			coltype;
+		int32		coltypmod = -1;
 		Oid			colcoll;
+		bool		first = true;
 
 		coltype = select_common_type(pstate, colexprs[i], "VALUES", NULL);
 
@@ -1381,11 +1400,24 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 
 			col = coerce_to_common_type(pstate, col, coltype, "VALUES");
 			lfirst(lc) = (void *) col;
+			if (first)
+			{
+				coltypmod = exprTypmod(col);
+				first = false;
+			}
+			else
+			{
+				/* As soon as we see a non-matching typmod, fall back to -1 */
+				if (coltypmod >= 0 && coltypmod != exprTypmod(col))
+					coltypmod = -1;
+			}
 		}
 
 		colcoll = select_common_collation(pstate, colexprs[i], true);
 
-		collations = lappend_oid(collations, colcoll);
+		coltypes = lappend_oid(coltypes, coltype);
+		coltypmods = lappend_int(coltypmods, coltypmod);
+		colcollations = lappend_oid(colcollations, colcoll);
 	}
 
 	/*
@@ -1427,7 +1459,8 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	/*
 	 * Generate the VALUES RTE
 	 */
-	rte = addRangeTableEntryForValues(pstate, exprsLists, collations,
+	rte = addRangeTableEntryForValues(pstate, exprsLists,
+									  coltypes, coltypmods, colcollations,
 									  NULL, lateral, true);
 	addRTEtoQuery(pstate, rte, true, true, true);
 

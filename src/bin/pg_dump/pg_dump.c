@@ -1239,9 +1239,10 @@ expand_table_name_patterns(Archive *fout,
 						  "SELECT c.oid"
 						  "\nFROM pg_catalog.pg_class c"
 		"\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
-					 "\nWHERE c.relkind in ('%c', '%c', '%c', '%c', '%c')\n",
+					 "\nWHERE c.relkind in ('%c', '%c', '%c', '%c', '%c', '%c')\n",
 						  RELKIND_RELATION, RELKIND_SEQUENCE, RELKIND_VIEW,
-						  RELKIND_MATVIEW, RELKIND_FOREIGN_TABLE);
+						  RELKIND_MATVIEW, RELKIND_FOREIGN_TABLE,
+						  RELKIND_PARTITIONED_TABLE);
 		processSQLNamePattern(GetConnection(fout), query, cell->val, true,
 							  false, "n.nspname", "c.relname", NULL,
 							  "pg_catalog.pg_table_is_visible(c.oid)");
@@ -2097,6 +2098,9 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo, bool oids)
 		return;
 	/* Skip FOREIGN TABLEs (no data to dump) */
 	if (tbinfo->relkind == RELKIND_FOREIGN_TABLE)
+		return;
+	/* Skip partitioned tables (data in partitions) */
+	if (tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
 		return;
 
 	/* Don't dump data in unlogged tables, if so requested */
@@ -3037,6 +3041,7 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 	int			i_tableoid;
 	int			i_polname;
 	int			i_polcmd;
+	int			i_polpermissive;
 	int			i_polroles;
 	int			i_polqual;
 	int			i_polwithcheck;
@@ -3082,7 +3087,8 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 			polinfo->dobj.name = pg_strdup(tbinfo->dobj.name);
 			polinfo->poltable = tbinfo;
 			polinfo->polname = NULL;
-			polinfo->polcmd = NULL;
+			polinfo->polcmd = '\0';
+			polinfo->polpermissive = 0;
 			polinfo->polroles = NULL;
 			polinfo->polqual = NULL;
 			polinfo->polwithcheck = NULL;
@@ -3101,15 +3107,26 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 		resetPQExpBuffer(query);
 
 		/* Get the policies for the table. */
-		appendPQExpBuffer(query,
-						  "SELECT oid, tableoid, pol.polname, pol.polcmd, "
-						  "CASE WHEN pol.polroles = '{0}' THEN 'PUBLIC' ELSE "
-						  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(rolname) from pg_catalog.pg_roles WHERE oid = ANY(pol.polroles)), ', ') END AS polroles, "
-			 "pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS polqual, "
-						  "pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS polwithcheck "
-						  "FROM pg_catalog.pg_policy pol "
-						  "WHERE polrelid = '%u'",
-						  tbinfo->dobj.catId.oid);
+		if (fout->remoteVersion >= 100000)
+			appendPQExpBuffer(query,
+							  "SELECT oid, tableoid, pol.polname, pol.polcmd, pol.polpermissive, "
+							  "CASE WHEN pol.polroles = '{0}' THEN NULL ELSE "
+							  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(rolname) from pg_catalog.pg_roles WHERE oid = ANY(pol.polroles)), ', ') END AS polroles, "
+				 "pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS polqual, "
+							  "pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS polwithcheck "
+							  "FROM pg_catalog.pg_policy pol "
+							  "WHERE polrelid = '%u'",
+							  tbinfo->dobj.catId.oid);
+		else
+			appendPQExpBuffer(query,
+							  "SELECT oid, tableoid, pol.polname, pol.polcmd, 't' as polpermissive, "
+							  "CASE WHEN pol.polroles = '{0}' THEN NULL ELSE "
+							  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(rolname) from pg_catalog.pg_roles WHERE oid = ANY(pol.polroles)), ', ') END AS polroles, "
+				 "pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS polqual, "
+							  "pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS polwithcheck "
+							  "FROM pg_catalog.pg_policy pol "
+							  "WHERE polrelid = '%u'",
+							  tbinfo->dobj.catId.oid);
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
 		ntups = PQntuples(res);
@@ -3129,6 +3146,7 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 		i_tableoid = PQfnumber(res, "tableoid");
 		i_polname = PQfnumber(res, "polname");
 		i_polcmd = PQfnumber(res, "polcmd");
+		i_polpermissive = PQfnumber(res, "polpermissive");
 		i_polroles = PQfnumber(res, "polroles");
 		i_polqual = PQfnumber(res, "polqual");
 		i_polwithcheck = PQfnumber(res, "polwithcheck");
@@ -3147,8 +3165,13 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 			polinfo[j].polname = pg_strdup(PQgetvalue(res, j, i_polname));
 			polinfo[j].dobj.name = pg_strdup(polinfo[j].polname);
 
-			polinfo[j].polcmd = pg_strdup(PQgetvalue(res, j, i_polcmd));
-			polinfo[j].polroles = pg_strdup(PQgetvalue(res, j, i_polroles));
+			polinfo[j].polcmd = *(PQgetvalue(res, j, i_polcmd));
+			polinfo[j].polpermissive = *(PQgetvalue(res, j, i_polpermissive)) == 't';
+
+			if (PQgetisnull(res, j, i_polroles))
+				polinfo[j].polroles = NULL;
+			else
+				polinfo[j].polroles = pg_strdup(PQgetvalue(res, j, i_polroles));
 
 			if (PQgetisnull(res, j, i_polqual))
 				polinfo[j].polqual = NULL;
@@ -3210,19 +3233,19 @@ dumpPolicy(Archive *fout, PolicyInfo *polinfo)
 		return;
 	}
 
-	if (strcmp(polinfo->polcmd, "*") == 0)
-		cmd = "ALL";
-	else if (strcmp(polinfo->polcmd, "r") == 0)
-		cmd = "SELECT";
-	else if (strcmp(polinfo->polcmd, "a") == 0)
-		cmd = "INSERT";
-	else if (strcmp(polinfo->polcmd, "w") == 0)
-		cmd = "UPDATE";
-	else if (strcmp(polinfo->polcmd, "d") == 0)
-		cmd = "DELETE";
+	if (polinfo->polcmd == '*')
+		cmd = "";
+	else if (polinfo->polcmd == 'r')
+		cmd = " FOR SELECT";
+	else if (polinfo->polcmd == 'a')
+		cmd = " FOR INSERT";
+	else if (polinfo->polcmd == 'w')
+		cmd = " FOR UPDATE";
+	else if (polinfo->polcmd == 'd')
+		cmd = " FOR DELETE";
 	else
 	{
-		write_msg(NULL, "unexpected policy command type: \"%s\"\n",
+		write_msg(NULL, "unexpected policy command type: %c\n",
 				  polinfo->polcmd);
 		exit_nicely(1);
 	}
@@ -3231,7 +3254,9 @@ dumpPolicy(Archive *fout, PolicyInfo *polinfo)
 	delqry = createPQExpBuffer();
 
 	appendPQExpBuffer(query, "CREATE POLICY %s", fmtId(polinfo->polname));
-	appendPQExpBuffer(query, " ON %s FOR %s", fmtId(tbinfo->dobj.name), cmd);
+
+	appendPQExpBuffer(query, " ON %s%s%s", fmtId(tbinfo->dobj.name),
+					  !polinfo->polpermissive ? " AS RESTRICTIVE" : "", cmd);
 
 	if (polinfo->polroles != NULL)
 		appendPQExpBuffer(query, " TO %s", polinfo->polroles);
@@ -4972,7 +4997,7 @@ getTables(Archive *fout, int *numTables)
 						  "(c.oid = pip.objoid "
 						  "AND pip.classoid = 'pg_class'::regclass "
 						  "AND pip.objsubid = 0) "
-				   "WHERE c.relkind in ('%c', '%c', '%c', '%c', '%c', '%c') "
+				   "WHERE c.relkind in ('%c', '%c', '%c', '%c', '%c', '%c', '%c') "
 						  "ORDER BY c.oid",
 						  acl_subquery->data,
 						  racl_subquery->data,
@@ -4986,7 +5011,8 @@ getTables(Archive *fout, int *numTables)
 						  RELKIND_SEQUENCE,
 						  RELKIND_RELATION, RELKIND_SEQUENCE,
 						  RELKIND_VIEW, RELKIND_COMPOSITE_TYPE,
-						  RELKIND_MATVIEW, RELKIND_FOREIGN_TABLE);
+						  RELKIND_MATVIEW, RELKIND_FOREIGN_TABLE,
+						  RELKIND_PARTITIONED_TABLE);
 
 		destroyPQExpBuffer(acl_subquery);
 		destroyPQExpBuffer(racl_subquery);
@@ -5514,7 +5540,9 @@ getTables(Archive *fout, int *numTables)
 		 * We only need to lock the table for certain components; see
 		 * pg_dump.h
 		 */
-		if (tblinfo[i].dobj.dump && tblinfo[i].relkind == RELKIND_RELATION &&
+		if (tblinfo[i].dobj.dump &&
+			(tblinfo[i].relkind == RELKIND_RELATION ||
+			 tblinfo->relkind == RELKIND_PARTITIONED_TABLE) &&
 			(tblinfo[i].dobj.dump & DUMP_COMPONENTS_REQUIRING_LOCK))
 		{
 			resetPQExpBuffer(query);
@@ -5614,9 +5642,16 @@ getInherits(Archive *fout, int *numInherits)
 	/* Make sure we are in proper schema */
 	selectSourceSchema(fout, "pg_catalog");
 
-	/* find all the inheritance information */
-
-	appendPQExpBufferStr(query, "SELECT inhrelid, inhparent FROM pg_inherits");
+	/*
+	 * Find all the inheritance information, excluding implicit inheritance
+	 * via partitioning.  We handle that case using getPartitions(), because
+	 * we want more information about partitions than just the parent-child
+	 * relationship.
+	 */
+	appendPQExpBufferStr(query,
+						 "SELECT inhrelid, inhparent "
+						 "FROM pg_inherits "
+						 "WHERE inhparent NOT IN (SELECT oid FROM pg_class WHERE relkind = 'P')");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -5640,6 +5675,70 @@ getInherits(Archive *fout, int *numInherits)
 	destroyPQExpBuffer(query);
 
 	return inhinfo;
+}
+
+/*
+ * getPartitions
+ *	  read all the partition inheritance and partition bound information
+ * from the system catalogs return them in the PartInfo* structure
+ *
+ * numPartitions is set to the number of pairs read in
+ */
+PartInfo *
+getPartitions(Archive *fout, int *numPartitions)
+{
+	PGresult   *res;
+	int			ntups;
+	int			i;
+	PQExpBuffer query = createPQExpBuffer();
+	PartInfo    *partinfo;
+
+	int			i_partrelid;
+	int			i_partparent;
+	int			i_partbound;
+
+	/* Before version 10, there are no partitions  */
+	if (fout->remoteVersion < 100000)
+	{
+		*numPartitions = 0;
+		return NULL;
+	}
+
+	/* Make sure we are in proper schema */
+	selectSourceSchema(fout, "pg_catalog");
+
+	/* find the inheritance and boundary information about partitions */
+
+	appendPQExpBufferStr(query,
+						 "SELECT inhrelid as partrelid, inhparent AS partparent,"
+						 "		 pg_get_expr(relpartbound, inhrelid) AS partbound"
+						 " FROM pg_class c, pg_inherits"
+						 " WHERE c.oid = inhrelid AND c.relispartition");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	*numPartitions = ntups;
+
+	partinfo = (PartInfo *) pg_malloc(ntups * sizeof(PartInfo));
+
+	i_partrelid = PQfnumber(res, "partrelid");
+	i_partparent = PQfnumber(res, "partparent");
+	i_partbound = PQfnumber(res, "partbound");
+
+	for (i = 0; i < ntups; i++)
+	{
+		partinfo[i].partrelid = atooid(PQgetvalue(res, i, i_partrelid));
+		partinfo[i].partparent = atooid(PQgetvalue(res, i, i_partparent));
+		partinfo[i].partdef = pg_strdup(PQgetvalue(res, i, i_partbound));
+	}
+
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+
+	return partinfo;
 }
 
 /*
@@ -6910,6 +7009,45 @@ getTransforms(Archive *fout, int *numTransforms)
 	destroyPQExpBuffer(query);
 
 	return transforminfo;
+}
+
+/*
+ * getTablePartitionKeyInfo -
+ *	  for each interesting partitioned table, read information about its
+ *	  partition key
+ *
+ *	modifies tblinfo
+ */
+void
+getTablePartitionKeyInfo(Archive *fout, TableInfo *tblinfo, int numTables)
+{
+	PQExpBuffer q = createPQExpBuffer();
+	int			i;
+	PGresult   *res;
+
+	/* No partitioned tables before 10 */
+	if (fout->remoteVersion < 100000)
+		return;
+
+	for (i = 0; i < numTables; i++)
+	{
+		TableInfo  *tbinfo = &(tblinfo[i]);
+
+		/* Only partitioned tables have partition key */
+		if (tbinfo->relkind != RELKIND_PARTITIONED_TABLE)
+			continue;
+
+		/* Don't bother computing anything for non-target tables, either */
+		if (!tbinfo->dobj.dump)
+			continue;
+
+		resetPQExpBuffer(q);
+		appendPQExpBuffer(q, "SELECT pg_catalog.pg_get_partkeydef('%u'::pg_catalog.oid)",
+							 tbinfo->dobj.catId.oid);
+		res = ExecuteSqlQuery(fout, q->data, PGRES_TUPLES_OK);
+		Assert(PQntuples(res) == 1);
+		tbinfo->partkeydef = pg_strdup(PQgetvalue(res, 0, 0));
+	}
 }
 
 /*
@@ -14180,6 +14318,17 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		if (tbinfo->reloftype && !dopt->binary_upgrade)
 			appendPQExpBuffer(q, " OF %s", tbinfo->reloftype);
 
+		if (tbinfo->partitionOf && !dopt->binary_upgrade)
+		{
+			TableInfo  *parentRel = tbinfo->partitionOf;
+
+			appendPQExpBuffer(q, " PARTITION OF ");
+			if (parentRel->dobj.namespace != tbinfo->dobj.namespace)
+				appendPQExpBuffer(q, "%s.",
+								fmtId(parentRel->dobj.namespace->dobj.name));
+			appendPQExpBufferStr(q, fmtId(parentRel->dobj.name));
+		}
+
 		if (tbinfo->relkind != RELKIND_MATVIEW)
 		{
 			/* Dump the attributes */
@@ -14208,8 +14357,11 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 											   (!tbinfo->inhNotNull[j] ||
 												dopt->binary_upgrade));
 
-					/* Skip column if fully defined by reloftype */
-					if (tbinfo->reloftype &&
+					/*
+					 * Skip column if fully defined by reloftype or the
+					 * partition parent.
+					 */
+					if ((tbinfo->reloftype || tbinfo->partitionOf) &&
 						!has_default && !has_notnull && !dopt->binary_upgrade)
 						continue;
 
@@ -14238,7 +14390,8 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 					}
 
 					/* Attribute type */
-					if (tbinfo->reloftype && !dopt->binary_upgrade)
+					if ((tbinfo->reloftype || tbinfo->partitionOf) &&
+						!dopt->binary_upgrade)
 					{
 						appendPQExpBufferStr(q, " WITH OPTIONS");
 					}
@@ -14296,13 +14449,20 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 
 			if (actual_atts)
 				appendPQExpBufferStr(q, "\n)");
-			else if (!(tbinfo->reloftype && !dopt->binary_upgrade))
+			else if (!((tbinfo->reloftype || tbinfo->partitionOf) &&
+						!dopt->binary_upgrade))
 			{
 				/*
 				 * We must have a parenthesized attribute list, even though
-				 * empty, when not using the OF TYPE syntax.
+				 * empty, when not using the OF TYPE or PARTITION OF syntax.
 				 */
 				appendPQExpBufferStr(q, " (\n)");
+			}
+
+			if (tbinfo->partitiondef && !dopt->binary_upgrade)
+			{
+				appendPQExpBufferStr(q, "\n");
+				appendPQExpBufferStr(q, tbinfo->partitiondef);
 			}
 
 			if (numParents > 0 && !dopt->binary_upgrade)
@@ -14321,6 +14481,9 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 				}
 				appendPQExpBufferChar(q, ')');
 			}
+
+			if (tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
+				appendPQExpBuffer(q, "\nPARTITION BY %s", tbinfo->partkeydef);
 
 			if (tbinfo->relkind == RELKIND_FOREIGN_TABLE)
 				appendPQExpBuffer(q, "\nSERVER %s", fmtId(srvname));
@@ -14382,7 +14545,8 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		 */
 		if (dopt->binary_upgrade &&
 			(tbinfo->relkind == RELKIND_RELATION ||
-			 tbinfo->relkind == RELKIND_FOREIGN_TABLE))
+			 tbinfo->relkind == RELKIND_FOREIGN_TABLE ||
+			 tbinfo->relkind == RELKIND_PARTITIONED_TABLE))
 		{
 			for (j = 0; j < tbinfo->numatts; j++)
 			{
@@ -14400,7 +14564,8 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 					appendStringLiteralAH(q, fmtId(tbinfo->dobj.name), fout);
 					appendPQExpBufferStr(q, "::pg_catalog.regclass;\n");
 
-					if (tbinfo->relkind == RELKIND_RELATION)
+					if (tbinfo->relkind == RELKIND_RELATION ||
+						tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
 						appendPQExpBuffer(q, "ALTER TABLE ONLY %s ",
 										  fmtId(tbinfo->dobj.name));
 					else
@@ -14467,6 +14632,16 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 				appendPQExpBuffer(q, "ALTER TABLE ONLY %s OF %s;\n",
 								  fmtId(tbinfo->dobj.name),
 								  tbinfo->reloftype);
+			}
+
+			if (tbinfo->partitionOf)
+			{
+				appendPQExpBufferStr(q, "\n-- For binary upgrade, set up partitions this way.\n");
+				appendPQExpBuffer(q, "ALTER TABLE ONLY %s ",
+								  fmtId(tbinfo->partitionOf->dobj.name));
+				appendPQExpBuffer(q, "ATTACH PARTITION %s %s;\n",
+								  fmtId(tbinfo->dobj.name),
+								  tbinfo->partitiondef);
 			}
 
 			appendPQExpBufferStr(q, "\n-- For binary upgrade, set heap's relfrozenxid and relminmxid\n");
@@ -14617,6 +14792,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 	 * dump properties we only have ALTER TABLE syntax for
 	 */
 	if ((tbinfo->relkind == RELKIND_RELATION ||
+		 tbinfo->relkind == RELKIND_PARTITIONED_TABLE ||
 		 tbinfo->relkind == RELKIND_MATVIEW) &&
 		tbinfo->relreplident != REPLICA_IDENTITY_DEFAULT)
 	{
