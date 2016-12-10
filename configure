@@ -14989,9 +14989,9 @@ $as_echo "#define USE_SYSV_SEMAPHORES 1" >>confdefs.h
       SEMA_IMPLEMENTATION="src/backend/port/sysv_sema.c"
       sematype="System V"
     fi
+  fi
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: $sematype" >&5
 $as_echo "$sematype" >&6; }
-  fi
 else
 
 $as_echo "#define USE_WIN32_SEMAPHORES 1" >>confdefs.h
@@ -15076,8 +15076,8 @@ $as_echo "/dev/urandom" >&6; }
     as_fn_error $? "
 no source of strong random numbers was found
 PostgreSQL can use OpenSSL or /dev/urandom as a source of random numbers,
-for authentication protocols. You can use --disable-strong-random to use of a built-in
-pseudo random number generator, but that may be insecure." "$LINENO" 5
+for authentication protocols. You can use --disable-strong-random to use a
+built-in pseudo random number generator, but that may be insecure." "$LINENO" 5
   fi
 
 $as_echo "#define HAVE_STRONG_RANDOM 1" >>confdefs.h

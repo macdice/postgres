@@ -699,6 +699,79 @@ typedef struct XmlSerialize
 	int			location;		/* token location, or -1 if unknown */
 } XmlSerialize;
 
+/* Partitioning related definitions */
+
+/*
+ * PartitionElem - a column in the partition key
+ */
+typedef struct PartitionElem
+{
+	NodeTag		type;
+	char	   *name;		/* name of column to partition on, or NULL */
+	Node	   *expr;		/* expression to partition on, or NULL */
+	List	   *collation;	/* name of collation; NIL = default */
+	List	   *opclass;	/* name of desired opclass; NIL = default */
+	int			location;	/* token location, or -1 if unknown */
+} PartitionElem;
+
+/*
+ * PartitionSpec - partition key specification
+ */
+typedef struct PartitionSpec
+{
+	NodeTag		type;
+	char	   *strategy;	/* partitioning strategy ('list' or 'range') */
+	List	   *partParams; /* List of PartitionElems */
+	int			location;	/* token location, or -1 if unknown */
+} PartitionSpec;
+
+#define PARTITION_STRATEGY_LIST		'l'
+#define PARTITION_STRATEGY_RANGE	'r'
+
+/*
+ * PartitionBoundSpec - a partition bound specification
+ */
+typedef struct PartitionBoundSpec
+{
+	NodeTag		type;
+
+	char		strategy;
+
+	/* List partition values */
+	List	   *listdatums;
+
+	/*
+	 * Range partition lower and upper bounds; each member of the lists
+	 * is a PartitionRangeDatum (see below).
+	 */
+	List	   *lowerdatums;
+	List	   *upperdatums;
+
+	int			location;
+} PartitionBoundSpec;
+
+/*
+ * PartitionRangeDatum
+ */
+typedef struct PartitionRangeDatum
+{
+	NodeTag		type;
+
+	bool		infinite;
+	Node	   *value;
+
+	int			location;
+} PartitionRangeDatum;
+
+/*
+ * PartitionCmd -  ALTER TABLE partition commands
+ */
+typedef struct PartitionCmd
+{
+	NodeTag		type;
+	RangeVar   *name;
+	Node	   *bound;
+} PartitionCmd;
 
 /****************************************************************************
  *	Nodes for a Query tree
@@ -854,7 +927,6 @@ typedef struct RangeTblEntry
 	 * Fields valid for a values RTE (else NIL):
 	 */
 	List	   *values_lists;	/* list of expression lists */
-	List	   *values_collations;		/* OID list of column collation OIDs */
 
 	/*
 	 * Fields valid for a CTE RTE (else NULL/zero):
@@ -862,9 +934,17 @@ typedef struct RangeTblEntry
 	char	   *ctename;		/* name of the WITH list item */
 	Index		ctelevelsup;	/* number of query levels up */
 	bool		self_reference; /* is this a recursive self-reference? */
-	List	   *ctecoltypes;	/* OID list of column type OIDs */
-	List	   *ctecoltypmods;	/* integer list of column typmods */
-	List	   *ctecolcollations;		/* OID list of column collation OIDs */
+
+	/*
+	 * Fields valid for values and CTE RTEs (else NIL):
+	 *
+	 * We need these for CTE RTEs so that the types of self-referential
+	 * columns are well-defined.  For VALUES RTEs, storing these explicitly
+	 * saves having to re-determine the info by scanning the values_lists.
+	 */
+	List	   *coltypes;		/* OID list of column type OIDs */
+	List	   *coltypmods;		/* integer list of column typmods */
+	List	   *colcollations;	/* OID list of column collation OIDs */
 
 	/*
 	 * Fields valid in all RTEs:
@@ -1549,7 +1629,9 @@ typedef enum AlterTableType
 	AT_DisableRowSecurity,		/* DISABLE ROW SECURITY */
 	AT_ForceRowSecurity,		/* FORCE ROW SECURITY */
 	AT_NoForceRowSecurity,		/* NO FORCE ROW SECURITY */
-	AT_GenericOptions			/* OPTIONS (...) */
+	AT_GenericOptions,			/* OPTIONS (...) */
+	AT_AttachPartition,			/* ATTACH PARTITION */
+	AT_DetachPartition			/* DETACH PARTITION */
 } AlterTableType;
 
 typedef struct ReplicaIdentityStmt
@@ -1775,6 +1857,8 @@ typedef struct CreateStmt
 	List	   *tableElts;		/* column definitions (list of ColumnDef) */
 	List	   *inhRelations;	/* relations to inherit from (list of
 								 * inhRelation) */
+	Node	   *partbound;		/* FOR VALUES clause */
+	PartitionSpec *partspec;	/* PARTITION BY clause */
 	TypeName   *ofTypename;		/* OF typename */
 	List	   *constraints;	/* constraints (list of Constraint nodes) */
 	List	   *options;		/* options from WITH clause */
