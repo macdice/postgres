@@ -1887,6 +1887,10 @@ heap_drop_with_catalog(Oid relid)
 
 	if (parent)
 	{
+		/*
+		 * Invalidate the parent's relcache so that the partition is no longer
+		 * included in its partition descriptor.
+		 */
 		CacheInvalidateRelcache(parent);
 		heap_close(parent, NoLock);		/* keep the lock */
 	}
@@ -3226,9 +3230,12 @@ RemovePartitionKeyByRelId(Oid relid)
  * StorePartitionBound
  *		Update pg_class tuple of rel to store the partition bound and set
  *		relispartition to true
+ *
+ * Also, invalidate the parent's relcache, so that the next rebuild will load
+ * the new partition's info into its partition descriptor.
  */
 void
-StorePartitionBound(Relation rel, Node *bound)
+StorePartitionBound(Relation rel, Relation parent, Node *bound)
 {
 	Relation	classRel;
 	HeapTuple	tuple,
@@ -3269,4 +3276,6 @@ StorePartitionBound(Relation rel, Node *bound)
 	CatalogUpdateIndexes(classRel, newtuple);
 	heap_freetuple(newtuple);
 	heap_close(classRel, RowExclusiveLock);
+
+	CacheInvalidateRelcache(parent);
 }

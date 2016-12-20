@@ -266,6 +266,8 @@ WalSndErrorCleanup(void)
 	if (MyReplicationSlot != NULL)
 		ReplicationSlotRelease();
 
+	ReplicationSlotCleanup();
+
 	replication_active = false;
 	if (walsender_ready_to_stop)
 		proc_exit(0);
@@ -796,18 +798,22 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 
 	if (cmd->kind == REPLICATION_KIND_PHYSICAL)
 	{
-		ReplicationSlotCreate(cmd->slotname, false, RS_PERSISTENT);
+		ReplicationSlotCreate(cmd->slotname, false,
+							  cmd->temporary ? RS_TEMPORARY : RS_PERSISTENT);
 	}
 	else
 	{
 		CheckLogicalDecodingRequirements();
 
 		/*
-		 * Initially create the slot as ephemeral - that allows us to nicely
-		 * handle errors during initialization because it'll get dropped if
-		 * this transaction fails. We'll make it persistent at the end.
+		 * Initially create persistent slot as ephemeral - that allows us to
+		 * nicely handle errors during initialization because it'll get
+		 * dropped if this transaction fails. We'll make it persistent at the
+		 * end. Temporary slots can be created as temporary from beginning as
+		 * they get dropped on error as well.
 		 */
-		ReplicationSlotCreate(cmd->slotname, true, RS_EPHEMERAL);
+		ReplicationSlotCreate(cmd->slotname, true,
+							  cmd->temporary ? RS_TEMPORARY : RS_EPHEMERAL);
 	}
 
 	initStringInfo(&output_message);
@@ -841,15 +847,18 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 		/* don't need the decoding context anymore */
 		FreeDecodingContext(ctx);
 
-		ReplicationSlotPersist();
+		if (!cmd->temporary)
+			ReplicationSlotPersist();
 	}
 	else if (cmd->kind == REPLICATION_KIND_PHYSICAL && cmd->reserve_wal)
 	{
 		ReplicationSlotReserveWal();
 
-		/* Write this slot to disk */
 		ReplicationSlotMarkDirty();
-		ReplicationSlotSave();
+
+		/* Write this slot to disk if it's permanent one. */
+		if (!cmd->temporary)
+			ReplicationSlotSave();
 	}
 
 	snprintf(xpos, sizeof(xpos), "%X/%X",
@@ -933,9 +942,6 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 
 	pq_endmessage(&buf);
 
-	/*
-	 * release active status again, START_REPLICATION will reacquire it
-	 */
 	ReplicationSlotRelease();
 }
 
@@ -2862,12 +2868,20 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 
 			/*
 			 * More easily understood version of standby state. This is purely
-			 * informational, not different from priority.
+			 * informational.
+			 *
+			 * In quorum-based sync replication, the role of each standby
+			 * listed in synchronous_standby_names can be changing very
+			 * frequently. Any standbys considered as "sync" at one moment can
+			 * be switched to "potential" ones at the next moment. So, it's
+			 * basically useless to report "sync" or "potential" as their sync
+			 * states. We report just "quorum" for them.
 			 */
 			if (priority == 0)
 				values[7] = CStringGetTextDatum("async");
 			else if (list_member_int(sync_standbys, i))
-				values[7] = CStringGetTextDatum("sync");
+				values[7] = SyncRepConfig->syncrep_method == SYNC_REP_PRIORITY ?
+					CStringGetTextDatum("sync") : CStringGetTextDatum("quorum");
 			else
 				values[7] = CStringGetTextDatum("potential");
 		}

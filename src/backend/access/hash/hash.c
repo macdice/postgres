@@ -523,7 +523,8 @@ hashbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	orig_maxbucket = metap->hashm_maxbucket;
 	orig_ntuples = metap->hashm_ntuples;
 	memcpy(&local_metapage, metap, sizeof(local_metapage));
-	_hash_relbuf(rel, metabuf);
+	/* release the lock, but keep pin */
+	_hash_chgbufaccess(rel, metabuf, HASH_READ, HASH_NOLOCK);
 
 	/* Scan the buckets that we know exist */
 	cur_bucket = 0;
@@ -563,7 +564,22 @@ loop_top:
 		 */
 		if (!H_BUCKET_BEING_SPLIT(bucket_opaque) &&
 			H_NEEDS_SPLIT_CLEANUP(bucket_opaque))
+		{
 			split_cleanup = true;
+
+			/*
+			 * This bucket might have been split since we last held a lock on
+			 * the metapage.  If so, hashm_maxbucket, hashm_highmask and
+			 * hashm_lowmask might be old enough to cause us to fail to remove
+			 * tuples left behind by the most recent split.  To prevent that,
+			 * now that the primary page of the target bucket has been locked
+			 * (and thus can't be further split), update our cached metapage
+			 * data.
+			 */
+			_hash_chgbufaccess(rel, metabuf, HASH_NOLOCK, HASH_READ);
+			memcpy(&local_metapage, metap, sizeof(local_metapage));
+			_hash_chgbufaccess(rel, metabuf, HASH_READ, HASH_NOLOCK);
+		}
 
 		bucket_buf = buf;
 
@@ -581,7 +597,7 @@ loop_top:
 	}
 
 	/* Write-lock metapage and check for split since we started */
-	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_WRITE, LH_META_PAGE);
+	_hash_chgbufaccess(rel, metabuf, HASH_NOLOCK, HASH_WRITE);
 	metap = HashPageGetMeta(BufferGetPage(metabuf));
 
 	if (cur_maxbucket != metap->hashm_maxbucket)
@@ -589,7 +605,7 @@ loop_top:
 		/* There's been a split, so process the additional bucket(s) */
 		cur_maxbucket = metap->hashm_maxbucket;
 		memcpy(&local_metapage, metap, sizeof(local_metapage));
-		_hash_relbuf(rel, metabuf);
+		_hash_chgbufaccess(rel, metabuf, HASH_READ, HASH_NOLOCK);
 		goto loop_top;
 	}
 
@@ -619,7 +635,8 @@ loop_top:
 		num_index_tuples = metap->hashm_ntuples;
 	}
 
-	_hash_wrtbuf(rel, metabuf);
+	MarkBufferDirty(metabuf);
+	_hash_relbuf(rel, metabuf);
 
 	/* return statistics */
 	if (stats == NULL)
@@ -708,7 +725,6 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		OffsetNumber deletable[MaxOffsetNumber];
 		int			ndeletable = 0;
 		bool		retain_pin = false;
-		bool		curr_page_dirty = false;
 
 		vacuum_delay_point();
 
@@ -789,7 +805,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		{
 			PageIndexMultiDelete(page, deletable, ndeletable);
 			bucket_dirty = true;
-			curr_page_dirty = true;
+			MarkBufferDirty(buf);
 		}
 
 		/* bail out if there are no more pages to scan. */
@@ -804,15 +820,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		 * release the lock on previous page after acquiring the lock on next
 		 * page
 		 */
-		if (curr_page_dirty)
-		{
-			if (retain_pin)
-				_hash_chgbufaccess(rel, buf, HASH_WRITE, HASH_NOLOCK);
-			else
-				_hash_wrtbuf(rel, buf);
-			curr_page_dirty = false;
-		}
-		else if (retain_pin)
+		if (retain_pin)
 			_hash_chgbufaccess(rel, buf, HASH_READ, HASH_NOLOCK);
 		else
 			_hash_relbuf(rel, buf);
@@ -846,6 +854,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		bucket_opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 
 		bucket_opaque->hasho_flag &= ~LH_BUCKET_NEEDS_SPLIT_CLEANUP;
+		MarkBufferDirty(bucket_buf);
 	}
 
 	/*
@@ -857,7 +866,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		_hash_squeezebucket(rel, cur_bucket, bucket_blkno, bucket_buf,
 							bstrategy);
 	else
-		_hash_chgbufaccess(rel, bucket_buf, HASH_WRITE, HASH_NOLOCK);
+		_hash_chgbufaccess(rel, bucket_buf, HASH_READ, HASH_NOLOCK);
 }
 
 void
