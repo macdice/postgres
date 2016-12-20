@@ -28,6 +28,7 @@ TestSpec		parseresult;			/* result of parsing is left here */
 	Session	   *session;
 	Step	   *step;
 	Permutation *permutation;
+	int			integer;
 	struct
 	{
 		void  **elements;
@@ -35,6 +36,7 @@ TestSpec		parseresult;			/* result of parsing is left here */
 	}			ptr_list;
 }
 
+%type <integer> connection opt_connection
 %type <ptr_list> setup_list
 %type <str>  opt_setup opt_teardown
 %type <str> setup
@@ -44,8 +46,9 @@ TestSpec		parseresult;			/* result of parsing is left here */
 %type <step> step
 %type <permutation> permutation
 
+%token <integer> connection_number
 %token <str> sqlblock string_literal
-%token PERMUTATION SESSION SETUP STEP TEARDOWN TEST
+%token CONNECTION PERMUTATION SESSION SETUP STEP TEARDOWN TEST
 
 %%
 
@@ -80,6 +83,15 @@ setup_list:
 			}
 		;
 
+opt_connection:
+			/* EMPTY */			{ $$ = 0; }
+			| connection		{ $$ = $1; }
+		;
+
+connection:
+			CONNECTION connection_number	{ $$ = $2; }
+		;
+
 opt_setup:
 			/* EMPTY */			{ $$ = NULL; }
 			| setup				{ $$ = $1; }
@@ -111,14 +123,15 @@ session_list:
 		;
 
 session:
-			SESSION string_literal opt_setup step_list opt_teardown
+			SESSION string_literal opt_connection opt_setup step_list opt_teardown
 			{
 				$$ = pg_malloc(sizeof(Session));
 				$$->name = $2;
-				$$->setupsql = $3;
-				$$->steps = (Step **) $4.elements;
-				$$->nsteps = $4.nelements;
-				$$->teardownsql = $5;
+				$$->connection = $3;
+				$$->setupsql = $4;
+				$$->steps = (Step **) $5.elements;
+				$$->nsteps = $5.nelements;
+				$$->teardownsql = $6;
 			}
 		;
 

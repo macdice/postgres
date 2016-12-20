@@ -32,6 +32,8 @@ static void addlitchar(char c);
 %x sql
 %x qstr
 
+digit			[0-9]
+integer			{digit}+
 non_newline		[^\n\r]
 space			[ \t\r\f]
 
@@ -39,6 +41,7 @@ comment			("#"{non_newline}*)
 
 %%
 
+connection		{ return(CONNECTION); }
 permutation		{ return(PERMUTATION); }
 session			{ return(SESSION); }
 setup			{ return(SETUP); }
@@ -48,6 +51,8 @@ teardown		{ return(TEARDOWN); }
 [\n]			{ yyline++; }
 {comment}		{ /* ignore */ }
 {space}			{ /* ignore */ }
+
+{integer}		{ return(atoi(yytext)); }
 
  /* Quoted strings: "foo" */
 \"				{
