@@ -133,11 +133,6 @@ MultiExecHash(HashState *node)
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
 		ExecHashIncreaseNumBuckets(hashtable);
 
-	/* Account for the buckets in spaceUsed (reported in EXPLAIN ANALYZE) */
-	hashtable->spaceUsed += hashtable->nbuckets * sizeof(HashJoinTuple);
-	if (hashtable->spaceUsed > hashtable->spacePeak)
-		hashtable->spacePeak = hashtable->spaceUsed;
-
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
 		InstrStopNode(node->ps.instrument, hashtable->totalTuples);
@@ -377,6 +372,10 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 	hashtable->buckets = (HashJoinTuple *)
 		palloc0(nbuckets * sizeof(HashJoinTuple));
 
+	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
+	if (hashtable->spaceUsed > hashtable->spacePeak)
+		hashtable->spacePeak = hashtable->spaceUsed;
+
 	/*
 	 * Set up for skew optimization, if possible and there's a need for more
 	 * than one batch.  (In a one-batch join, there's no point in it.)
@@ -421,15 +420,29 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	if (ntuples <= 0.0)
 		ntuples = 1000.0;
 
-	/*
-	 * Estimate tupsize based on footprint of tuple in hashtable... note this
-	 * does not allow for any palloc overhead.  The manipulations of spaceUsed
-	 * don't count palloc overhead either.
-	 */
+	/* Estimate tupsize based on footprint of tuple in hashtable. */
 	tupsize = HJTUPLE_OVERHEAD +
 		MAXALIGN(SizeofMinimalTupleHeader) +
 		MAXALIGN(tupwidth);
-	inner_rel_bytes = ntuples * tupsize;
+
+	/* Estimate total size including chunk overhead */
+	if (tupsize > HASH_CHUNK_THRESHOLD)
+	{
+		/* Large tuples have a chunk each */
+		inner_rel_bytes = ntuples * (tupsize + HASH_CHUNK_HEADER_SIZE);
+	}
+	else
+	{
+		int64 tuples;
+		int tuples_per_chunk;
+		int chunks;
+
+		/* Small tuples get packed into fixed sized chunks */
+		tuples_per_chunk = (HASH_CHUNK_SIZE - HASH_CHUNK_HEADER_SIZE) / tupsize;
+		tuples = (int64) ntuples;
+		chunks = tuples / tuples_per_chunk + (tuples % tuples_per_chunk != 0);
+		inner_rel_bytes = HASH_CHUNK_SIZE * chunks;
+	}
 
 	/*
 	 * Target in-memory hashtable size is work_mem kilobytes.
@@ -714,7 +727,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 									  hashTuple->hashvalue,
 									  &hashtable->innerBatchFile[batchno]);
 
-				hashtable->spaceUsed -= hashTupleSize;
 				nfreed++;
 			}
 
@@ -723,6 +735,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 		}
 
 		/* we're done with this chunk - free it and proceed to the next one */
+		hashtable->spaceUsed -= oldchunks->maxlen + HASH_CHUNK_HEADER_SIZE;
 		pfree(oldchunks);
 		oldchunks = nextchunk;
 	}
@@ -768,6 +781,12 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 	printf("Hashjoin %p: increasing nbuckets %d => %d\n",
 		   hashtable, hashtable->nbuckets, hashtable->nbuckets_optimal);
 #endif
+
+	/* account for the increase in space that will be used by buckets */
+	hashtable->spaceUsed += sizeof(HashJoinTuple) *
+		(hashtable->nbuckets_optimal - hashtable->nbuckets);
+	if (hashtable->spaceUsed > hashtable->spacePeak)
+		hashtable->spacePeak = hashtable->spaceUsed;
 
 	hashtable->nbuckets = hashtable->nbuckets_optimal;
 	hashtable->log2_nbuckets = hashtable->log2_nbuckets_optimal;
@@ -886,13 +905,8 @@ ExecHashTableInsert(HashJoinTable hashtable,
 			}
 		}
 
-		/* Account for space used, and back off if we've used too much */
-		hashtable->spaceUsed += hashTupleSize;
-		if (hashtable->spaceUsed > hashtable->spacePeak)
-			hashtable->spacePeak = hashtable->spaceUsed;
-		if (hashtable->spaceUsed +
-			hashtable->nbuckets_optimal * sizeof(HashJoinTuple)
-			> hashtable->spaceAllowed)
+		/* Back off if we've used too much space */
+		if (hashtable->spaceUsed > hashtable->spaceAllowed)
 			ExecHashIncreaseNumBatches(hashtable);
 	}
 	else
@@ -1223,7 +1237,7 @@ ExecHashTableReset(HashJoinTable hashtable)
 	hashtable->buckets = (HashJoinTuple *)
 		palloc0(nbuckets * sizeof(HashJoinTuple));
 
-	hashtable->spaceUsed = 0;
+	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -1678,6 +1692,11 @@ dense_alloc(HashJoinTable hashtable, Size size)
 		newChunk->used += size;
 		newChunk->ntuples += 1;
 
+		/* count this single-tuple chunk as space used */
+		hashtable->spaceUsed += HASH_CHUNK_HEADER_SIZE + size;
+		if (hashtable->spaceUsed > hashtable->spacePeak)
+			hashtable->spacePeak = hashtable->spaceUsed;
+
 		return newChunk->data;
 	}
 
@@ -1690,14 +1709,19 @@ dense_alloc(HashJoinTable hashtable, Size size)
 	{
 		/* allocate new chunk and put it at the beginning of the list */
 		newChunk = (HashMemoryChunk) MemoryContextAlloc(hashtable->batchCxt,
-					  offsetof(HashMemoryChunkData, data) + HASH_CHUNK_SIZE);
+					  HASH_CHUNK_SIZE);
 
-		newChunk->maxlen = HASH_CHUNK_SIZE;
+		newChunk->maxlen = HASH_CHUNK_SIZE - HASH_CHUNK_HEADER_SIZE;
 		newChunk->used = size;
 		newChunk->ntuples = 1;
 
 		newChunk->next = hashtable->chunks;
 		hashtable->chunks = newChunk;
+
+		/* count this whole mostly-empty chunk as space used */
+		hashtable->spaceUsed += HASH_CHUNK_SIZE;
+		if (hashtable->spaceUsed > hashtable->spacePeak)
+			hashtable->spacePeak = hashtable->spaceUsed;
 
 		return newChunk->data;
 	}

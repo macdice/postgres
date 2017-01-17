@@ -121,6 +121,7 @@ typedef struct HashMemoryChunkData
 typedef struct HashMemoryChunkData *HashMemoryChunk;
 
 #define HASH_CHUNK_SIZE			(32 * 1024L)
+#define HASH_CHUNK_HEADER_SIZE	(offsetof(HashMemoryChunkData, data))
 #define HASH_CHUNK_THRESHOLD	(HASH_CHUNK_SIZE / 4)
 
 typedef struct HashJoinTableData
