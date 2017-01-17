@@ -48,7 +48,8 @@ static void ExecHashSkewTableInsert(HashJoinTable hashtable,
 						int bucketNumber);
 static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
-static void *dense_alloc(HashJoinTable hashtable, Size size);
+static void *dense_alloc(HashJoinTable hashtable, Size size,
+						 bool respect_work_mem);
 
 /* ----------------------------------------------------------------
  *		ExecHash
@@ -613,10 +614,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	long		nfreed;
 	HashMemoryChunk oldchunks;
 
-	/* do nothing if we've decided to shut off growth */
-	if (!hashtable->growEnabled)
-		return;
-
 	/* safety check to avoid overflow */
 	if (oldnbatch > Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2)))
 		return;
@@ -712,7 +709,8 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
 
-				copyTuple = (HashJoinTuple) dense_alloc(hashtable, hashTupleSize);
+				copyTuple = (HashJoinTuple)
+					dense_alloc(hashtable, hashTupleSize, true);
 				memcpy(copyTuple, hashTuple, hashTupleSize);
 
 				/* and add it back to the appropriate bucket */
@@ -871,7 +869,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 
 		/* Create the HashJoinTuple */
 		hashTupleSize = HJTUPLE_OVERHEAD + tuple->t_len;
-		hashTuple = (HashJoinTuple) dense_alloc(hashtable, hashTupleSize);
+		hashTuple = (HashJoinTuple) dense_alloc(hashtable, hashTupleSize, true);
 
 		hashTuple->hashvalue = hashvalue;
 		memcpy(HJTUPLE_MINTUPLE(hashTuple), tuple, tuple->t_len);
@@ -904,10 +902,6 @@ ExecHashTableInsert(HashJoinTable hashtable,
 				hashtable->log2_nbuckets_optimal += 1;
 			}
 		}
-
-		/* Back off if we've used too much space */
-		if (hashtable->spaceUsed > hashtable->spaceAllowed)
-			ExecHashIncreaseNumBatches(hashtable);
 	}
 	else
 	{
@@ -1532,7 +1526,8 @@ ExecHashSkewTableInsert(HashJoinTable hashtable,
 		ExecHashRemoveNextSkewBucket(hashtable);
 
 	/* Check we are not over the total spaceAllowed, either */
-	if (hashtable->spaceUsed > hashtable->spaceAllowed)
+	if (hashtable->spaceUsed > hashtable->spaceAllowed &&
+		hashtable->growEnabled)
 		ExecHashIncreaseNumBatches(hashtable);
 }
 
@@ -1591,7 +1586,8 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 			 * We must copy the tuple into the dense storage, else it will not
 			 * be found by, eg, ExecHashIncreaseNumBatches.
 			 */
-			copyTuple = (HashJoinTuple) dense_alloc(hashtable, tupleSize);
+			copyTuple = (HashJoinTuple)
+				dense_alloc(hashtable, tupleSize, false);
 			memcpy(copyTuple, hashTuple, tupleSize);
 			pfree(hashTuple);
 
@@ -1650,10 +1646,12 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 }
 
 /*
- * Allocate 'size' bytes from the currently active HashMemoryChunk
+ * Allocate 'size' bytes from the currently active HashMemoryChunk.  If
+ * 'respect_work_mem' is true, this may cause the number of batches to be
+ * increased in an attempt to shrink the hash table.
  */
 static void *
-dense_alloc(HashJoinTable hashtable, Size size)
+dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 {
 	HashMemoryChunk newChunk;
 	char	   *ptr;
@@ -1667,6 +1665,15 @@ dense_alloc(HashJoinTable hashtable, Size size)
 	 */
 	if (size > HASH_CHUNK_THRESHOLD)
 	{
+		if (respect_work_mem &&
+			hashtable->growEnabled &&
+			hashtable->spaceUsed + HASH_CHUNK_HEADER_SIZE + size >
+			hashtable->spaceAllowed)
+		{
+			/* work_mem would be exceeded: try to shrink hash table */
+			ExecHashIncreaseNumBatches(hashtable);
+		}
+
 		/* allocate new chunk and put it at the beginning of the list */
 		newChunk = (HashMemoryChunk) MemoryContextAlloc(hashtable->batchCxt,
 								 offsetof(HashMemoryChunkData, data) + size);
@@ -1707,6 +1714,14 @@ dense_alloc(HashJoinTable hashtable, Size size)
 	if ((hashtable->chunks == NULL) ||
 		(hashtable->chunks->maxlen - hashtable->chunks->used) < size)
 	{
+		if (respect_work_mem &&
+			hashtable->growEnabled &&
+			hashtable->spaceUsed + HASH_CHUNK_SIZE > hashtable->spaceAllowed)
+		{
+			/* work_mem would be exceeded: try to shrink hash table */
+			ExecHashIncreaseNumBatches(hashtable);
+		}
+
 		/* allocate new chunk and put it at the beginning of the list */
 		newChunk = (HashMemoryChunk) MemoryContextAlloc(hashtable->batchCxt,
 					  HASH_CHUNK_SIZE);
