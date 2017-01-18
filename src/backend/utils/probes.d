@@ -40,6 +40,11 @@ provider postgresql {
 	probe lock__wait__start(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
 	probe lock__wait__done(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
 
+	probe barrier__wait__start(int);
+	probe barrier__wait__done(int, int);
+	probe barrier__attach();
+	probe barrier__detach();
+
 	probe query__parse__start(const char *);
 	probe query__parse__done(const char *);
 	probe query__rewrite__start(const char *);
