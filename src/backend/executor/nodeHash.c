@@ -1316,7 +1316,8 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 		{
 			tuple = (HashJoinTuple) (chunk->data + index);
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
-			index += MAXALIGN(HJTUPLE_OVERHEAD + HJTUPLE_MINTUPLE(tuple));
+			index += MAXALIGN(HJTUPLE_OVERHEAD +
+							  HJTUPLE_MINTUPLE(tuple)->t_len);
 		}
 		chunk = chunk->next;
 	}
