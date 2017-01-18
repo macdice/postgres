@@ -1128,12 +1128,15 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 	/*----------
 	 * During this scan we use the HashJoinState fields as follows:
 	 *
-	 * hj_CurBucketNo: next regular bucket to scan
+	 * hj_HashTable->unmatched_chunks: the queue of chunks to scan
+	 * hj_HashTable->current_chunk: chunk being scanned currently
+	 * hj_HashTable->current_chunk_index: position within chunk
 	 * hj_CurSkewBucketNo: next skew bucket (an index into skewBucketNums)
-	 * hj_CurTuple: last tuple returned, or NULL to start next bucket
+	 * hj_CurTuple: last skew tuple returned, or NULL to start next bucket
 	 *----------
 	 */
-	hjstate->hj_CurBucketNo = 0;
+	hjstate->hj_HashTable->unmatched_chunks = hjstate->hj_HashTable->chunks;
+	hjstate->hj_HashTable->current_chunk = NULL;
 	hjstate->hj_CurSkewBucketNo = 0;
 	hjstate->hj_CurTuple = NULL;
 }
@@ -1150,8 +1153,65 @@ bool
 ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 {
 	HashJoinTable hashtable = hjstate->hj_HashTable;
-	HashJoinTuple hashTuple = hjstate->hj_CurTuple;
+	HashJoinTuple hashTuple;
+	MinimalTuple tuple;
 
+	/*
+	 * First, process the queue of chunks holding tuples that are in regular
+	 * (non-skew) buckets.
+	 */
+	for (;;)
+	{
+		/* Do we need a new chunk to scan? */
+		if (hashtable->current_chunk == NULL)
+		{
+			/* Have we run out of chunks to scan? */
+			if (hashtable->unmatched_chunks == NULL)
+				break;
+
+			/* Pop the next chunk from the front of the queue. */
+			hashtable->current_chunk = hashtable->unmatched_chunks;
+			hashtable->unmatched_chunks = hashtable->current_chunk->next;
+			hashtable->current_chunk_index = 0;
+		}
+
+		/* Have we reached the end of this chunk yet? */
+		if (hashtable->current_chunk_index >= hashtable->current_chunk->used)
+		{
+			/* Go around again to get the next chunk from the queue. */
+			hashtable->current_chunk = NULL;
+			continue;
+		}
+
+		/* Take the next tuple from this chunk. */
+		hashTuple = (HashJoinTuple)
+			(hashtable->current_chunk->data + hashtable->current_chunk_index);
+		tuple = HJTUPLE_MINTUPLE(hashTuple);
+		hashtable->current_chunk_index +=
+			MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
+
+		/* Is it unmatched? */
+		if (!HeapTupleHeaderHasMatch(tuple))
+		{
+			TupleTableSlot *inntuple;
+
+			/* insert hashtable's tuple into exec slot */
+			inntuple = ExecStoreMinimalTuple(tuple,
+											 hjstate->hj_HashTupleSlot,
+											 false); /* do not pfree */
+			econtext->ecxt_innertuple = inntuple;
+
+			/* reset context each time (see below for explanation) */
+			ResetExprContext(econtext);
+			return true;
+		}
+	}
+
+	/*
+	 * Next, scan all skew buckets, since those tuples are not stored in
+	 * chunks.
+	 */
+	hashTuple = hjstate->hj_CurTuple;
 	for (;;)
 	{
 		/*
@@ -1161,11 +1221,6 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 		 */
 		if (hashTuple != NULL)
 			hashTuple = hashTuple->next;
-		else if (hjstate->hj_CurBucketNo < hashtable->nbuckets)
-		{
-			hashTuple = hashtable->buckets[hjstate->hj_CurBucketNo];
-			hjstate->hj_CurBucketNo++;
-		}
 		else if (hjstate->hj_CurSkewBucketNo < hashtable->nSkewBuckets)
 		{
 			int			j = hashtable->skewBucketNums[hjstate->hj_CurSkewBucketNo];
@@ -1246,14 +1301,24 @@ ExecHashTableReset(HashJoinTable hashtable)
 void
 ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 {
+	HashMemoryChunk chunk;
 	HashJoinTuple tuple;
 	int			i;
 
 	/* Reset all flags in the main table ... */
-	for (i = 0; i < hashtable->nbuckets; i++)
+	chunk = hashtable->chunks;
+	while (chunk != NULL)
 	{
-		for (tuple = hashtable->buckets[i]; tuple != NULL; tuple = tuple->next)
+		Size index = 0;
+
+		/* Clear the flag for all tuples in this chunk. */
+		while (index < chunk->used)
+		{
+			tuple = (HashJoinTuple) (chunk->data + index);
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
+			index += MAXALIGN(HJTUPLE_OVERHEAD + HJTUPLE_MINTUPLE(tuple));
+		}
+		chunk = chunk->next;
 	}
 
 	/* ... and the same for the skew buckets, if any */

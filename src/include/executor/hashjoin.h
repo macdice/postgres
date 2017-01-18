@@ -187,6 +187,11 @@ typedef struct HashJoinTableData
 
 	/* used for dense allocation of tuples (into linked chunks) */
 	HashMemoryChunk chunks;		/* one list for the whole batch */
+
+	/* used for scanning for unmatched tuples */
+	HashMemoryChunk unmatched_chunks;
+	HashMemoryChunk current_chunk;
+	Size		current_chunk_index;
 }	HashJoinTableData;
 
 #endif   /* HASHJOIN_H */
