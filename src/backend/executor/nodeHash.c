@@ -435,6 +435,8 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	hashtable->spaceAllowedSkew =
 		hashtable->spaceAllowed * SKEW_WORK_MEM_PERCENT / 100;
 	hashtable->chunks = NULL;
+	hashtable->unmatched_chunks = NULL;
+	hashtable->chunks_to_reinsert = NULL;
 	hashtable->current_chunk = NULL;
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->shared = state->shared_table_data;
@@ -1012,7 +1014,6 @@ ExecHashUpdate(HashJoinTable hashtable)
 static void
 ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 {
-
 	/* do nothing if not an increase (it's called increase for a reason) */
 	if (hashtable->nbuckets >= hashtable->nbuckets_optimal)
 		return;
@@ -1063,6 +1064,7 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 		hashtable->buckets = (HashJoinBucketHead *)
 			repalloc(hashtable->buckets,
 					 hashtable->nbuckets * sizeof(HashJoinBucketHead));
+		hashtable->chunks_to_reinsert = hashtable->chunks;
 	}
 	memset(hashtable->buckets, 0,
 		   hashtable->nbuckets * sizeof(HashJoinBucketHead));
@@ -1084,7 +1086,7 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 	if (HashJoinTableIsShared(hashtable))
 		chunk = pop_chunk_queue(hashtable, &chunk_shared);
 	else
-		chunk = hashtable->chunks;
+		chunk = hashtable->chunks_to_reinsert;
 
 	while (chunk != NULL)
 	{

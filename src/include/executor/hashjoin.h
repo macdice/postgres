@@ -235,6 +235,7 @@ typedef struct HashJoinTableData
 
 	/* used for scanning for unmatched tuples */
 	HashMemoryChunk unmatched_chunks;
+	HashMemoryChunk chunks_to_reinsert;
 
 	HashMemoryChunk current_chunk;
 	Size		current_chunk_index;
