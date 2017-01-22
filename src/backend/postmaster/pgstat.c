@@ -3398,8 +3398,8 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_HASH_CREATING:
 			event_name = "Hash/Creating";
 			break;
-		case WAIT_EVENT_HASH_HASHING:
-			event_name = "Hash/Hashing";
+		case WAIT_EVENT_HASH_BUILDING:
+			event_name = "Hash/Building";
 			break;
 		case WAIT_EVENT_HASH_RESIZING:
 			event_name = "Hash/Resizing";

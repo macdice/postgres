@@ -253,7 +253,7 @@ typedef struct HashJoinTableData
 /* The phases of a parallel hash join. */
 #define PHJ_PHASE_BEGINNING				0
 #define PHJ_PHASE_CREATING				1
-#define PHJ_PHASE_HASHING				2
+#define PHJ_PHASE_BUILDING				2
 #define PHJ_PHASE_RESIZING				3
 #define PHJ_PHASE_REINSERTING			4
 #define PHJ_PHASE_PROBING				5

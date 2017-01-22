@@ -68,6 +68,7 @@ static void *dense_alloc(HashJoinTable hashtable, Size size,
 						 bool respect_work_mem);
 static void *dense_alloc_shared(HashJoinTable hashtable, Size size,
 								dsa_pointer *shared);
+static void finish_loading(HashJoinTable hashtable);
 
 /* ----------------------------------------------------------------
  *		ExecHash
@@ -126,19 +127,19 @@ MultiExecHash(HashState *node)
 			/* ExecHashTableCreate already handled this phase. */
 			Assert(false);
 		case PHJ_PHASE_CREATING:
-			/* Wait for serial phase, and then either hash or wait. */
+			/* Wait for serial phase, and then either build or wait. */
 			if (BarrierWait(barrier, WAIT_EVENT_HASH_CREATING))
-				goto hash;
+				goto build;
 			else if (node->ps.plan->parallel_aware)
-				goto hash;
+				goto build;
 			else
-				goto post_hash;
-		case PHJ_PHASE_HASHING:
-			/* Hashing is already underway.  Can we join in? */
+				goto post_build;
+		case PHJ_PHASE_BUILDING:
+			/* Building is already underway.  Can we join in? */
 			if (node->ps.plan->parallel_aware)
-				goto hash;
+				goto build;
 			else
-				goto post_hash;
+				goto post_build;
 		case PHJ_PHASE_RESIZING:
 			/* Can't help with serial phase. */
 			goto post_resize;
@@ -151,11 +152,11 @@ MultiExecHash(HashState *node)
 		}
 	}
 
- hash:
+ build:
 	if (HashJoinTableIsShared(hashtable))
 	{
-		/* Make sure our local state is up-to-date so we can hash. */
-		Assert(BarrierPhase(barrier) == PHJ_PHASE_HASHING);
+		/* Make sure our local state is up-to-date so we can build. */
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_BUILDING);
 		ExecHashUpdate(hashtable);
 	}
 
@@ -197,20 +198,21 @@ MultiExecHash(HashState *node)
 			hashtable->totalTuples += 1;
 		}
 	}
+	finish_loading(hashtable);
 
- post_hash:
+ post_build:
 	if (HashJoinTableIsShared(hashtable))
 	{
 		bool elected_to_resize;
 
 		/*
-		 * Wait for all backends to finish hashing.  If only one worker is
-		 * running the hashing phase because of a non-partial inner plan, the
+		 * Wait for all backends to finish building.  If only one worker is
+		 * running the building phase because of a non-partial inner plan, the
 		 * other workers will pile up here waiting.  If multiple worker are
-		 * hashing, they should finish close to each other in time.
+		 * building, they should finish close to each other in time.
 		 */
-		Assert(BarrierPhase(barrier) == PHJ_PHASE_HASHING);
-		elected_to_resize = BarrierWait(barrier, WAIT_EVENT_HASH_HASHING);
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_BUILDING);
+		elected_to_resize = BarrierWait(barrier, WAIT_EVENT_HASH_BUILDING);
 		/*
 		 * Resizing is a serial phase.  All but one should skip ahead to
 		 * rebucketing, but all workers should update their copy of the shared
@@ -248,11 +250,11 @@ MultiExecHash(HashState *node)
 	if (HashJoinTableIsShared(hashtable))
 	{
 		/*
-		 * All hashing work has finished.  The other workers may be probing or
+		 * Building has finished.  The other workers may be probing or
 		 * processing unmatched tuples for the initial batch, or dealing with
 		 * later batches.  The next synchronization point is in ExecHashJoin's
 		 * HJ_BUILD_HASHTABLE case, which will figure that out and synchronize
-		 * its local state machine with the parallel processing group's phase.
+		 * its local state machine with the group phase.
 		 */
 		Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
 		ExecHashUpdate(hashtable);
@@ -513,6 +515,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 		 * ExecHashTableDestroy.
 		 */
 		barrier = &hashtable->shared->barrier;
+		BarrierAttach(barrier);
 
 		/*
 		 * So far we have no idea whether there are any other participants, and
@@ -2271,9 +2274,8 @@ dense_alloc_shared(HashJoinTable hashtable,
  * is necessary because dense_alloc_shared only updates the shared counter
  * when a new chunk is allocated, leaving the final chunk unaccounted for.
  */
-/*
 static void
-finish_shared_count(HashJoinTable hashtable)
+finish_loading(HashJoinTable hashtable)
 {
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -2285,7 +2287,6 @@ finish_shared_count(HashJoinTable hashtable)
 		}
 	}
 }
-*/
 
 /*
  * Insert a tuple at the front of a given bucket identified by number.  For
