@@ -57,10 +57,10 @@ static HashMemoryChunk pop_chunk_queue(HashJoinTable table,
 static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
 										  HashJoinTuple tuple);
 
-static void insert_tuple_into_bucket(HashJoinTable table, int bucket_no,
+static void insert_tuple_into_bucket(HashJoinTable table, int bucketno,
 									 HashJoinTuple tuple,
 									 dsa_pointer tuple_pointer);
-static HashJoinTuple first_tuple_in_bucket(HashJoinTable table, int bucket_no);
+static HashJoinTuple first_tuple_in_bucket(HashJoinTable table, int bucketno);
 static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
 										  HashJoinTuple tuple);
 
@@ -703,8 +703,8 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	 * Note that both nbuckets and nbatch must be powers of 2 to make
 	 * ExecHashGetBucketAndBatch fast.
 	 */
-	max_pointers = (work_mem * 1024L) / sizeof(HashJoinTuple);
-	max_pointers = Min(max_pointers, MaxAllocSize / sizeof(HashJoinTuple));
+	max_pointers = (work_mem * 1024L) / sizeof(HashJoinBucketHead);
+	max_pointers = Min(max_pointers, MaxAllocSize / sizeof(HashJoinBucketHead));
 	/* If max_pointers isn't a power of 2, must round it down to one */
 	mppow2 = 1L << my_log2(max_pointers);
 	if (max_pointers != mppow2)
@@ -2292,7 +2292,7 @@ finish_shared_count(HashJoinTable hashtable)
  * InvalidDsaPointer.
  */
 static void
-insert_tuple_into_bucket(HashJoinTable table, int bucket_no,
+insert_tuple_into_bucket(HashJoinTable table, int bucketno,
 						 HashJoinTuple tuple, dsa_pointer tuple_shared)
 {
 	if (HashJoinTableIsShared(table))
@@ -2301,8 +2301,8 @@ insert_tuple_into_bucket(HashJoinTable table, int bucket_no,
 		for (;;)
 		{
 			tuple->next.shared =
-				dsa_pointer_atomic_read(&table->buckets[bucket_no].shared);
-			if (dsa_pointer_atomic_compare_exchange(&table->buckets[bucket_no].shared,
+				dsa_pointer_atomic_read(&table->buckets[bucketno].shared);
+			if (dsa_pointer_atomic_compare_exchange(&table->buckets[bucketno].shared,
 													&tuple->next.shared,
 													tuple_shared))
 				break;
@@ -2310,8 +2310,8 @@ insert_tuple_into_bucket(HashJoinTable table, int bucket_no,
 	}
 	else
 	{
-		tuple->next.unshared = table->buckets[bucket_no].unshared;
-		table->buckets[bucket_no].unshared = tuple;
+		tuple->next.unshared = table->buckets[bucketno].unshared;
+		table->buckets[bucketno].unshared = tuple;
 	}
 }
 
@@ -2319,16 +2319,16 @@ insert_tuple_into_bucket(HashJoinTable table, int bucket_no,
  * Get the first tuple in a given bucket identified by number.
  */
 static HashJoinTuple
-first_tuple_in_bucket(HashJoinTable table, int bucket_no)
+first_tuple_in_bucket(HashJoinTable table, int bucketno)
 {
 	if (HashJoinTableIsShared(table))
 	{
 		dsa_pointer p =
-			dsa_pointer_atomic_read(&table->buckets[bucket_no].shared);
+			dsa_pointer_atomic_read(&table->buckets[bucketno].shared);
 		return (HashJoinTuple) dsa_get_address(table->area, p);
 	}
 	else
-		return table->buckets[bucket_no].unshared;
+		return table->buckets[bucketno].unshared;
 }
 
 /*
