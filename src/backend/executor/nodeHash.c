@@ -2346,8 +2346,8 @@ next_tuple_in_bucket(HashJoinTable table, HashJoinTuple tuple)
 
 /*
  * Take the next available chunk from the queue of chunks being worked on in
- * parallel.  Return NULL if there are none left.  Otherwise returns a pointer
- * to the chunk, and sets *shared to the DSA pointer to the chunk.
+ * parallel.  Return NULL if there are none left.  Otherwise return a pointer
+ * to the chunk, and set *shared to the DSA pointer to the chunk.
  */
 static HashMemoryChunk
 pop_chunk_queue_unlocked(HashJoinTable hashtable, dsa_pointer *shared)
