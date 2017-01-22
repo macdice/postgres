@@ -27,6 +27,7 @@
 #include "executor/executor.h"
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
+#include "executor/nodeHashjoin.h"
 #include "executor/nodeSeqscan.h"
 #include "executor/tqueue.h"
 #include "nodes/nodeFuncs.h"
@@ -205,6 +206,10 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 				ExecCustomScanEstimate((CustomScanState *) planstate,
 									   e->pcxt);
 				break;
+			case T_HashJoinState:
+				ExecHashJoinEstimate((HashJoinState *) planstate,
+									 e->pcxt);
+				break;
 			default:
 				break;
 		}
@@ -257,6 +262,9 @@ ExecParallelInitializeDSM(PlanState *planstate,
 				ExecCustomScanInitializeDSM((CustomScanState *) planstate,
 											d->pcxt);
 				break;
+			case T_HashJoinState:
+				ExecHashJoinInitializeDSM((HashJoinState *) planstate,
+										  d->pcxt);
 			default:
 				break;
 		}
@@ -732,6 +740,10 @@ ExecParallelInitializeWorker(PlanState *planstate, shm_toc *toc)
 			case T_CustomScanState:
 				ExecCustomScanInitializeWorker((CustomScanState *) planstate,
 											   toc);
+				break;
+			case T_HashJoinState:
+				ExecHashJoinInitializeWorker((HashJoinState *) planstate,
+											 toc);
 				break;
 			default:
 				break;

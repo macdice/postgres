@@ -104,6 +104,7 @@
 double		seq_page_cost = DEFAULT_SEQ_PAGE_COST;
 double		random_page_cost = DEFAULT_RANDOM_PAGE_COST;
 double		cpu_tuple_cost = DEFAULT_CPU_TUPLE_COST;
+double		cpu_shared_tuple_cost = DEFAULT_CPU_SHARED_TUPLE_COST;
 double		cpu_index_tuple_cost = DEFAULT_CPU_INDEX_TUPLE_COST;
 double		cpu_operator_cost = DEFAULT_CPU_OPERATOR_COST;
 double		parallel_tuple_cost = DEFAULT_PARALLEL_TUPLE_COST;
@@ -2683,16 +2684,19 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 					  List *hashclauses,
 					  Path *outer_path, Path *inner_path,
 					  SpecialJoinInfo *sjinfo,
-					  SemiAntiJoinFactors *semifactors)
+					  SemiAntiJoinFactors *semifactors,
+					  HashPathTableType table_type)
 {
 	Cost		startup_cost = 0;
 	Cost		run_cost = 0;
 	double		outer_path_rows = outer_path->rows;
 	double		inner_path_rows = inner_path->rows;
+	double		inner_path_rows_total = inner_path_rows;
 	int			num_hashclauses = list_length(hashclauses);
 	int			numbuckets;
 	int			numbatches;
 	int			num_skew_mcvs;
+	size_t		space_allowed;		/* not used */
 
 	/* cost of source data */
 	startup_cost += outer_path->startup_cost;
@@ -2714,7 +2718,44 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	run_cost += cpu_operator_cost * num_hashclauses * outer_path_rows;
 
 	/*
+	 * If this is a shared hash table, there is a extra charge for inserting
+	 * each tuple into the shared hash table to cover memory synchronization
+	 * overhead, compared to a private hash table.  There is no extra charge
+	 * for probing the hash table for outer path row, on the basis that
+	 * read-only access to a shared hash table shouldn't be any more
+	 * expensive.
+	 *
+	 * cpu_shared_tuple_cost acts a tie-breaker controlling whether we prefer
+	 * HASHPATH_TABLE_PRIVATE or HASHPATH_TABLE_SHARED_SERIAL plans when the
+	 * hash table fits in work_mem, since the cost is otherwise the same.  If
+	 * it is positive, then we'll prefer private hash tables, even though that
+	 * means that we'll be running N copies of the inner plan.  Running N
+	 * copies of the copies of the inner plan in parallel is not considered
+	 * more expensive than running 1 copy of the inner plan while N-1
+	 * participants do nothing, despite doing less work in total.
+	 */
+	if (table_type != HASHPATH_TABLE_PRIVATE)
+		startup_cost += cpu_shared_tuple_cost * inner_path_rows;
+
+	/*
+	 * If this is a parallel shared hash table, then the value we have for
+	 * inner_rows refers only to the rows returned by each participant.  For
+	 * shared hash table size estimation, we need the total number, so we need
+	 * to undo the division.
+	 */
+	if (table_type == HASHPATH_TABLE_SHARED_PARALLEL)
+		inner_path_rows_total *= get_parallel_divisor(inner_path);
+
+	/*
 	 * Get hash table size that executor would use for inner relation.
+	 *
+	 * Shared hash tables are allowed to use the work_mem of all participants
+	 * combined to make up for the fact that there is only one copy shared by
+	 * all.  That's because they would be allowed to use the same amount of
+	 * memory building multiple copies.  HASH_TABLE_SHARED_SERIAL is therefore
+	 * likely to beat HASH_TABLE_PRIVATE when we expect to exceed work_mem,
+	 * because at that point we may be able to avoid switching to a
+	 * multi-batch join.
 	 *
 	 * XXX for the moment, always assume that skew optimization will be
 	 * performed.  As long as SKEW_WORK_MEM_PERCENT is small, it's not worth
@@ -2726,6 +2767,9 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	ExecChooseHashTableSize(inner_path_rows,
 							inner_path->pathtarget->width,
 							true,		/* useskew */
+							table_type != HASHPATH_TABLE_PRIVATE, /* shared */
+							outer_path->parallel_workers,
+							&space_allowed,
 							&numbuckets,
 							&numbatches,
 							&num_skew_mcvs);
@@ -2741,7 +2785,7 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	{
 		double		outerpages = page_size(outer_path_rows,
 										   outer_path->pathtarget->width);
-		double		innerpages = page_size(inner_path_rows,
+		double		innerpages = page_size(inner_path_rows_total,
 										   inner_path->pathtarget->width);
 
 		startup_cost += seq_page_cost * innerpages;

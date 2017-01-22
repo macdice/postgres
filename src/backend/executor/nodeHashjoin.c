@@ -147,6 +147,14 @@ ExecHashJoin(HashJoinState *node)
 					/* no chance to not build the hash table */
 					node->hj_FirstOuterTupleSlot = NULL;
 				}
+				else if (hashNode->shared_table_data != NULL)
+				{
+					/*
+					 * The empty-outer optimization is not implemented for
+					 * shared hash tables yet.
+					 */
+					node->hj_FirstOuterTupleSlot = NULL;
+				}
 				else if (HJ_FILL_OUTER(node) ||
 						 (outerNode->plan->startup_cost < hashNode->ps.plan->total_cost &&
 						  !node->hj_OuterNotEmpty))
@@ -166,7 +174,7 @@ ExecHashJoin(HashJoinState *node)
 				/*
 				 * create the hash table
 				 */
-				hashtable = ExecHashTableCreate((Hash *) hashNode->ps.plan,
+				hashtable = ExecHashTableCreate(hashNode,
 												node->hj_HashOperators,
 												HJ_FILL_INNER(node));
 				node->hj_HashTable = hashtable;
@@ -631,6 +639,18 @@ ExecEndHashJoin(HashJoinState *node)
 	ExecEndNode(innerPlanState(node));
 }
 
+void
+ExecShutdownHashJoin(HashJoinState *node)
+{
+	/*
+	 * TODO: Figure out how to handle this.  For now, just clear the shared
+	 * hash table so that ExecEndHashJoin won't blow up when it's called after
+	 * the dsa_area has been detached.
+	 */
+	if (node->hj_HashTable)
+		node->hj_HashTable->shared = NULL;
+}
+
 /*
  * ExecHashJoinOuterGetTuple
  *
@@ -1010,4 +1030,80 @@ ExecReScanHashJoin(HashJoinState *node)
 	 */
 	if (node->js.ps.lefttree->chgParam == NULL)
 		ExecReScan(node->js.ps.lefttree);
+}
+
+void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
+{
+	size_t size;
+
+	size = sizeof(SharedHashJoinTableData);
+	shm_toc_estimate_chunk(&pcxt->estimator, size);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+}
+
+void
+ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
+{
+	HashState *hashNode;
+	SharedHashJoinTable shared;
+	size_t size;
+	int planned_participants;
+
+	/*
+	 * Disable shared hash table mode if we failed to create a real DSM
+	 * segment, because that means that we don't have a DSA area to work
+	 * with.
+	 */
+	if (pcxt->seg == NULL)
+		return;
+
+	/*
+	 * Set up the state needed to coordinate access to the shared hash table,
+	 * using the plan node ID as the toc key.
+	 */
+	planned_participants = pcxt->nworkers + 1;	/* possible workers + leader */
+	size = sizeof(SharedHashJoinTableData);
+	shared = shm_toc_allocate(pcxt->toc, size);
+	BarrierInit(&shared->barrier, 0);
+	shared->nbuckets = 0;
+	shared->planned_participants = planned_participants;
+	shared->buckets = InvalidDsaPointer;
+	shared->chunks = InvalidDsaPointer;
+	shared->chunk_work_queue = InvalidDsaPointer;
+	shared->size = 0;
+	shared->ntuples = 0;
+	shm_toc_insert(pcxt->toc, state->js.ps.plan->plan_node_id, shared);
+
+	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
+
+	/*
+	 * Pass the SharedHashJoinTable to the hash node.  If the Gather node
+	 * running in the leader backend decides to execute the hash join, it
+	 * hasn't called ExecHashJoinInitializeWorker so it doesn't have
+	 * state->shared_table_data set up.  So we must do it here.
+	 */
+	hashNode = (HashState *) innerPlanState(state);
+	hashNode->shared_table_data = shared;
+}
+
+void
+ExecHashJoinInitializeWorker(HashJoinState *state, shm_toc *toc)
+{
+	HashState  *hashNode;
+
+	state->hj_sharedHashJoinTable =
+		shm_toc_lookup(toc, state->js.ps.plan->plan_node_id);
+
+	/*
+	 * Inject SharedHashJoinTable into the hash node.  It could instead have
+	 * its own ExecHashInitializeWorker function, but we only want to set its
+	 * 'parallel_aware' flag if we want to tell it to actually build the hash
+	 * table in parallel.  Since its parallel_aware flag also controls whether
+	 * its 'InitializeWorker' function gets called, and it also needs access
+	 * to this object for serial shared hash mode, we'll pass it on here
+	 * instead of depending on that.
+	 */
+	hashNode = (HashState *) innerPlanState(state);
+	hashNode->shared_table_data = state->hj_sharedHashJoinTable;
+	Assert(hashNode->shared_table_data != NULL);
 }

@@ -3938,6 +3938,23 @@ create_hashjoin_plan(PlannerInfo *root,
 	copy_plan_costsize(&hash_plan->plan, inner_plan);
 	hash_plan->plan.startup_cost = hash_plan->plan.total_cost;
 
+	/*
+	 * Set the table as sharable if appropriate, with parallel or serial
+	 * building.
+	 */
+	switch (best_path->table_type)
+	{
+	case HASHPATH_TABLE_SHARED_PARALLEL:
+		hash_plan->shared_table = true;
+		hash_plan->plan.parallel_aware = true;
+		break;
+	case HASHPATH_TABLE_SHARED_SERIAL:
+		hash_plan->shared_table = true;
+		break;
+	case HASHPATH_TABLE_PRIVATE:
+		break;
+	}
+
 	join_plan = make_hashjoin(tlist,
 							  joinclauses,
 							  otherclauses,

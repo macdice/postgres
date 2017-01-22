@@ -791,6 +791,7 @@ typedef struct Hash
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */
 	Oid			skewColType;	/* datatype of the outer key column */
 	int32		skewColTypmod;	/* typmod of the outer key column */
+	bool		shared_table;	/* table shared by multiple participants? */
 	/* all other info is in the parent HashJoin node */
 } Hash;
 

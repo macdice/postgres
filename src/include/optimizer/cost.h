@@ -24,6 +24,7 @@
 #define DEFAULT_SEQ_PAGE_COST  1.0
 #define DEFAULT_RANDOM_PAGE_COST  4.0
 #define DEFAULT_CPU_TUPLE_COST	0.01
+#define DEFAULT_CPU_SHARED_TUPLE_COST 0.001
 #define DEFAULT_CPU_INDEX_TUPLE_COST 0.005
 #define DEFAULT_CPU_OPERATOR_COST  0.0025
 #define DEFAULT_PARALLEL_TUPLE_COST 0.1
@@ -48,6 +49,7 @@ typedef enum
 extern PGDLLIMPORT double seq_page_cost;
 extern PGDLLIMPORT double random_page_cost;
 extern PGDLLIMPORT double cpu_tuple_cost;
+extern PGDLLIMPORT double cpu_shared_tuple_cost;
 extern PGDLLIMPORT double cpu_index_tuple_cost;
 extern PGDLLIMPORT double cpu_operator_cost;
 extern PGDLLIMPORT double parallel_tuple_cost;
@@ -144,7 +146,8 @@ extern void initial_cost_hashjoin(PlannerInfo *root,
 					  List *hashclauses,
 					  Path *outer_path, Path *inner_path,
 					  SpecialJoinInfo *sjinfo,
-					  SemiAntiJoinFactors *semifactors);
+					  SemiAntiJoinFactors *semifactors,
+					  HashPathTableType table_type);
 extern void final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 					JoinCostWorkspace *workspace,
 					SpecialJoinInfo *sjinfo,

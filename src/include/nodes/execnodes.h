@@ -21,6 +21,7 @@
 #include "lib/pairingheap.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
+#include "utils/dsa.h"
 #include "utils/hsearch.h"
 #include "utils/reltrigger.h"
 #include "utils/sortsupport.h"
@@ -1755,6 +1756,7 @@ typedef struct MergeJoinState
 /* these structs are defined in executor/hashjoin.h: */
 typedef struct HashJoinTupleData *HashJoinTuple;
 typedef struct HashJoinTableData *HashJoinTable;
+typedef struct SharedHashJoinTableData *SharedHashJoinTable;
 
 typedef struct HashJoinState
 {
@@ -1776,6 +1778,7 @@ typedef struct HashJoinState
 	int			hj_JoinState;
 	bool		hj_MatchedOuter;
 	bool		hj_OuterNotEmpty;
+	SharedHashJoinTable hj_sharedHashJoinTable;
 } HashJoinState;
 
 
@@ -2006,6 +2009,8 @@ typedef struct HashState
 	HashJoinTable hashtable;	/* hash table for the hashjoin */
 	List	   *hashkeys;		/* list of ExprState nodes */
 	/* hashkeys is same as parent's hj_InnerHashKeys */
+
+	SharedHashJoinTable shared_table_data;
 } HashState;
 
 /* ----------------

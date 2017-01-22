@@ -1047,7 +1047,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			pname = sname = "Limit";
 			break;
 		case T_Hash:
-			pname = sname = "Hash";
+			if (((Hash *) plan)->shared_table)
+				pname = sname = "Shared Hash";
+			else
+				pname = sname = "Hash";
 			break;
 		default:
 			pname = sname = "???";

@@ -14,13 +14,19 @@
 #ifndef NODEHASHJOIN_H
 #define NODEHASHJOIN_H
 
+#include "access/parallel.h"
 #include "nodes/execnodes.h"
 #include "storage/buffile.h"
+#include "storage/shm_toc.h"
 
 extern HashJoinState *ExecInitHashJoin(HashJoin *node, EState *estate, int eflags);
 extern TupleTableSlot *ExecHashJoin(HashJoinState *node);
 extern void ExecEndHashJoin(HashJoinState *node);
 extern void ExecReScanHashJoin(HashJoinState *node);
+extern void ExecShutdownHashJoin(HashJoinState *node);
+extern void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt);
+extern void ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt);
+extern void ExecHashJoinInitializeWorker(HashJoinState *state, shm_toc *toc);
 
 extern void ExecHashJoinSaveTuple(MinimalTuple tuple, uint32 hashvalue,
 					  BufFile **fileptr);

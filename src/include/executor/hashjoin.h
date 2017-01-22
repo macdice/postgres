@@ -16,6 +16,9 @@
 
 #include "nodes/execnodes.h"
 #include "storage/buffile.h"
+#include "storage/barrier.h"
+#include "storage/lwlock.h"
+#include "utils/dsa.h"
 
 /* ----------------------------------------------------------------
  *				hash-join hash table structures
@@ -63,7 +66,12 @@
 
 typedef struct HashJoinTupleData
 {
-	struct HashJoinTupleData *next;		/* link to next tuple in same bucket */
+	/* link to next tuple in same bucket */
+	union
+	{
+		dsa_pointer shared;
+		struct HashJoinTupleData *unshared;
+	} next;
 	uint32		hashvalue;		/* tuple's hash code */
 	/* Tuple data, in MinimalTuple format, follows on a MAXALIGN boundary */
 }	HashJoinTupleData;
@@ -103,8 +111,9 @@ typedef struct HashSkewBucket
 #define SKEW_MIN_OUTER_FRACTION  0.01
 
 /*
- * To reduce palloc overhead, the HashJoinTuples for the current batch are
- * packed in 32kB buffers instead of pallocing each tuple individually.
+ * To reduce palloc/dsa_allocate overhead, the HashJoinTuples for the current
+ * batch are packed in 32kB buffers instead of pallocing each tuple
+ * individually.
  */
 typedef struct HashMemoryChunkData
 {
@@ -112,8 +121,12 @@ typedef struct HashMemoryChunkData
 	size_t		maxlen;			/* size of the buffer holding the tuples */
 	size_t		used;			/* number of buffer bytes already used */
 
-	struct HashMemoryChunkData *next;	/* pointer to the next chunk (linked
-										 * list) */
+	/* pointer to the next chunk (linked list) */
+	union
+	{
+		dsa_pointer shared;
+		struct HashMemoryChunkData *unshared;
+	} next;
 
 	char		data[FLEXIBLE_ARRAY_MEMBER];	/* buffer allocated at the end */
 }	HashMemoryChunkData;
@@ -123,6 +136,38 @@ typedef struct HashMemoryChunkData *HashMemoryChunk;
 #define HASH_CHUNK_SIZE			(32 * 1024L)
 #define HASH_CHUNK_HEADER_SIZE	(offsetof(HashMemoryChunkData, data))
 #define HASH_CHUNK_THRESHOLD	(HASH_CHUNK_SIZE / 4)
+
+/*
+ * State for a shared hash join table.  Each backend participating in a hash
+ * join with a shared hash table also has a HashJoinTableData object in
+ * backend-private memory, which points to this shared state in the DSM
+ * segment.
+ */
+typedef struct SharedHashJoinTableData
+{
+	Barrier barrier;				/* synchronization for the hash join */
+	dsa_pointer buckets;			/* shared hash table buckets */
+	int nbuckets;
+	int planned_participants;		/* number of planned workers + leader */
+
+	LWLock chunk_lock;				/* protects the following members */
+	dsa_pointer chunks;				/* chunks loaded for the current batch */
+	dsa_pointer chunk_work_queue;	/* next chunk for shared processing */
+	Size size;						/* size of buckets + chunks */
+	Size ntuples;
+} SharedHashJoinTableData;
+
+/*
+ * The head of the linked list of tuples in each bucket.  For shared hash
+ * tables, it allows for tuples to be inserted into the bucket with an atomic
+ * operation.  For unshared hash tables, it's a plain old pointer to the first
+ * tuple.
+ */
+typedef union HashJoinBucketHead
+{
+	dsa_pointer_atomic shared;
+	HashJoinTuple unshared;
+} HashJoinBucketHead;
 
 typedef struct HashJoinTableData
 {
@@ -135,7 +180,7 @@ typedef struct HashJoinTableData
 	int			log2_nbuckets_optimal;	/* log2(nbuckets_optimal) */
 
 	/* buckets[i] is head of list of tuples in i'th in-memory bucket */
-	struct HashJoinTupleData **buckets;
+	HashJoinBucketHead *buckets;
 	/* buckets array is per-batch storage, as are all the tuples */
 
 	bool		keepNulls;		/* true to store unmatchable NULL tuples */
@@ -190,8 +235,27 @@ typedef struct HashJoinTableData
 
 	/* used for scanning for unmatched tuples */
 	HashMemoryChunk unmatched_chunks;
+
 	HashMemoryChunk current_chunk;
 	Size		current_chunk_index;
+
+	/* State for coordinating shared hash tables. */
+	dsa_area *area;
+	SharedHashJoinTableData *shared;	/* the shared state */
+	dsa_pointer current_chunk_shared;	/* DSA pointer to 'current_chunk' */
+
 }	HashJoinTableData;
+
+/* Check if a HashJoinTable is shared by parallel workers. */
+#define HashJoinTableIsShared(table) ((table)->shared != NULL)
+
+/* The phases of a parallel hash join. */
+#define PHJ_PHASE_BEGINNING				0
+#define PHJ_PHASE_CREATING				1
+#define PHJ_PHASE_HASHING				2
+#define PHJ_PHASE_RESIZING				3
+#define PHJ_PHASE_REINSERTING			4
+#define PHJ_PHASE_PROBING				5
+#define PHJ_PHASE_UNMATCHED				6
 
 #endif   /* HASHJOIN_H */
