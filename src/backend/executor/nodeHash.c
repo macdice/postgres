@@ -1343,8 +1343,13 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 	HashMemoryChunk chunk;
 	HashJoinTuple tuple;
 	int			i;
+#ifdef TRACE_POSTGRESQL_HASH_RESET_MATCH_DONE
+	int tuples_processed = 0;
+	int chunks_processed = 0;
+#endif
 
 	/* Reset all flags in the main table ... */
+	TRACE_POSTGRESQL_HASH_RESET_MATCH_START();
 	chunk = hashtable->chunks;
 	while (chunk != NULL)
 	{
@@ -1357,8 +1362,14 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
 			index += MAXALIGN(HJTUPLE_OVERHEAD +
 							  HJTUPLE_MINTUPLE(tuple)->t_len);
+#ifdef TRACE_POSTGRESQL_HASH_RESET_MATCH_DONE
+			++tuples_processed;
+#endif
 		}
 		chunk = chunk->next;
+#ifdef TRACE_POSTGRESQL_HASH_RESET_MATCH_DONE
+		++chunks_processed;
+#endif
 	}
 
 	/* ... and the same for the skew buckets, if any */
@@ -1370,6 +1381,7 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 		for (tuple = skewBucket->tuples; tuple != NULL; tuple = tuple->next)
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
 	}
+	TRACE_POSTGRESQL_HASH_RESET_MATCH_DONE(tuples_processed, chunks_processed);
 }
 
 
