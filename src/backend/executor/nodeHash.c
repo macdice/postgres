@@ -614,7 +614,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 		 * ExecHashTableDestroy.
 		 */
 		barrier = &hashtable->shared->barrier;
-		BarrierAttach(barrier);
+		hashtable->attached_at_phase = BarrierAttach(barrier);
 
 		/*
 		 * So far we have no idea whether there are any other participants, and
@@ -1041,8 +1041,88 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	oldchunks = hashtable->chunks;
 	hashtable->chunks = NULL;
 
-	/* so, let's scan through the old chunks, and all tuples in each chunk */
+	/* TODO ^^^ */
+}
+
+/*
+ * Process the queue of chunks whose tuples need to be redistributed into the
+ * correct batches until it is empty.  Hopefully this will shrink the hash
+ * table, keeping about half of the tuples in memory and sending the rest to a
+ * future batch.
+ */
+static void
+ExecHashShrink(HashJoinTable hashtable)
+{
+	Size size_before_shrink = 0;
+	Size tuples_in_memory = 0;
+	Size tuples_written_out = 0;
+	dsa_pointer chunk_shared;
+	HashMemoryChunk chunk;
+	bool elected_to_decide = false;
+
 	TRACE_POSTGRESQL_HASH_SHRINK_START();
+
+	if (HashJoinTableIsShared(hashtable))
+	{
+		/*
+		 * Since a newly launched participant could arrive while shrinking is
+		 * already underway, we need to be able to jump to the correct place
+		 * in this function.
+		 */
+		switch (BarrierPhase(&hashtable->shared->shrink_barrier))
+		{
+		case PHJ_SHRINK_PHASE_BEGINNING: /* likely case */
+			break;
+		case PHJ_SHRINK_PHASE_CLEARING:
+			goto clearing;
+		case PHJ_SHRINK_PHASE_WORKING:
+			goto working;
+		case PHJ_SHRINK_PHASE_DECIDING:
+			goto deciding;
+		}
+
+		/*
+		 * We wait until all participants have reached this point.  We need to
+		 * do that because we can't clear the hash table if any partipicant is
+		 * still inserting tuples into it, and we can't modify chunks that any
+		 * participant is still writing into.
+		 */
+		if (BarrierWait(&hashtable->shared->shrink_barrier,
+						WAIT_EVENT_HASH_SHRINKING1))
+		{
+			/* TODO: could also resize hash table here! */
+
+			/* Serial phase: one participant clears the hash table. */
+			memset(hashtable->buckets, 0,
+				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
+			/*
+			 * This participant will also make the decision about whether to
+			 * disable further attempts to shrink.
+			 */
+			size_before_shrink = hashtable->shared->size;
+			elected_to_decide = true;
+		}
+	clearing:
+		/* Wait until hash table is cleared. */
+		BarrierWait(&hashtable->shared->shrink_barrier,
+					WAIT_EVENT_HASH_SHRINKING2);
+
+		Assert(hashtable->shared->nbatch == hashtable->nbatch);
+	}
+	else
+	{
+		/* Clear the hash table. */
+		memset(hashtable->buckets, 0,
+			   sizeof(HashJoinBucketHead) * hashtable->nbuckets);
+	}
+	
+ working:
+	/* Pop first chunk from the shrink queue. */
+	if (HashJoinTableIsShared(hashtable))
+		chunk = pop_chunk_queue(hashtable, &chunk_shared);
+	else
+		chunk = hashtable->chunks_to_shrink;
+
 	while (oldchunks != NULL)
 	{
 		HashMemoryChunk nextchunk = oldchunks->next.unshared;
@@ -1099,10 +1179,29 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 		++chunks_processed;
 #endif
 
-		/* we're done with this chunk - free it and proceed to the next one */
-		hashtable->spaceUsed -= oldchunks->maxlen + HASH_CHUNK_HEADER_SIZE;
-		pfree(oldchunks);
-		oldchunks = nextchunk;
+		/* Free chunk and pop next from the queue. */
+		if (HashJoinTableIsShared(hashtable))
+ 		{
+			Size size = chunk->maxlen + HASH_CHUNK_HEADER_SIZE;
+
+			dsa_free(hashtable->area, chunk_shared);
+
+			LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
+			Assert(hashtable->shared->size > size);
+			hashtable->shared->size -= size;
+			hashtable->shared->tuples_in_memory += tuples_in_memory;
+			hashtable->shared->tuples_written_out += tuples_written_out;
+			tuples_in_memory = 0;
+			tuples_written_out = 0;
+			chunk = pop_chunk_queue_unlocked(hashtable, &chunk_shared);
+			LWLockRelease(&hashtable->shared->chunk_lock);
+		}
+		else
+		{
+			hashtable->spaceUsed -= oldchunks->maxlen + HASH_CHUNK_HEADER_SIZE;
+			pfree(oldchunks);
+			oldchunks = nextchunk;
+		}
 	}
 	TRACE_POSTGRESQL_HASH_SHRINK_DONE(tuples_processed, chunks_processed);
 

@@ -138,6 +138,78 @@ typedef struct HashMemoryChunkData *HashMemoryChunk;
 #define HASH_CHUNK_THRESHOLD	(HASH_CHUNK_SIZE / 4)
 
 /*
+ * Read head position in a shared batch file.
+ */
+typedef struct HashJoinBatchPosition
+{
+	int fileno;
+	off_t offset;
+} HashJoinBatchPosition;
+
+/*
+ * The state exposed in shared memory by each participant to coordinate
+ * reading of batch files that it wrote.
+ */
+typedef struct HashJoinSharedBatchReader
+{
+	int batchno;				/* the batch number we are currently reading */
+
+	LWLock lock;				/* protects access to the members below */
+	bool error;					/* has an IO error occurred? */
+	HashJoinBatchPosition head;	/* shared read head for current batch */
+} HashJoinSharedBatchReader;
+
+/*
+ * The state exposed in shared memory by each participant allowing its batch
+ * files to be read by other participants.
+ */
+typedef struct HashJoinParticipantState
+{
+	/*
+	 * To allow other participants to read from this participant's batch
+	 * files, this participant publishes its batch descriptors (or invalid
+	 * pointers) here.
+	 */
+	int inner_batchno;
+	int outer_batchno;
+	dsa_pointer inner_batch_descriptor;
+	dsa_pointer outer_batch_descriptor;
+
+	/*
+	 * In the case of participants that exit early, they must publish all
+	 * their future batches, rather than publishing them one by one above.
+	 * These point to an array of dsa_pointers to BufFileDescriptor objects.
+	 */
+	int nbatch;
+	dsa_pointer inner_batch_descriptors;
+	dsa_pointer outer_batch_descriptors;
+
+	/*
+	 * The shared state used to coordinate reading from the current batch.  We
+	 * need separate objects for the outer and inner side, because in the
+	 * probing phase some participants can be reading from the outer batch,
+	 * while others can be reading from the inner side to preload the next
+	 * batch.
+	 */
+	HashJoinSharedBatchReader inner_batch_reader;
+	HashJoinSharedBatchReader outer_batch_reader;
+} HashJoinParticipantState;
+
+/*
+ * The state used by each backend to manage reading from batch files written
+ * by all participants.
+ */
+typedef struct HashJoinBatchReader
+{
+	int participant_number;				/* read which participant's batch? */
+	int batchno;						/* which batch are we reading? */
+	bool inner;							/* inner or outer? */
+	HashJoinSharedBatchReader *shared;	/* holder of the shared read head */
+	BufFile *file;						/* the file opened in this backend */
+	HashJoinBatchPosition head;			/* local read head position */
+} HashJoinBatchReader;
+
+/*
  * State for a shared hash join table.  Each backend participating in a hash
  * join with a shared hash table also has a HashJoinTableData object in
  * backend-private memory, which points to this shared state in the DSM
@@ -156,6 +228,9 @@ typedef struct SharedHashJoinTableData
 	dsa_pointer chunk_work_queue;	/* next chunk for shared processing */
 	Size size;						/* size of buckets + chunks */
 	Size ntuples;
+	
+	/* state exposed by each participant for sharing batches */
+	HashJoinParticipantState participants[FLEXIBLE_ARRAY_MEMBER];
 } SharedHashJoinTableData;
 
 /*
@@ -245,6 +320,9 @@ typedef struct HashJoinTableData
 	/* State for coordinating shared hash tables. */
 	dsa_area *area;
 	SharedHashJoinTableData *shared;	/* the shared state */
+	int attached_at_phase;				/* the phase this participant joined */
+	bool detached_early;				/* did we decide to detach early? */
+	HashJoinBatchReader batch_reader;	/* state for reading batches in */
 	dsa_pointer current_chunk_shared;	/* DSA pointer to 'current_chunk' */
 
 }	HashJoinTableData;
@@ -260,5 +338,41 @@ typedef struct HashJoinTableData
 #define PHJ_PHASE_REINSERTING			4
 #define PHJ_PHASE_PROBING				5
 #define PHJ_PHASE_UNMATCHED				6
+
+/* The subphases for batches. */
+#define PHJ_SUBPHASE_PROMOTING			0
+#define PHJ_SUBPHASE_LOADING			1
+#define PHJ_SUBPHASE_PREPARING			2
+#define PHJ_SUBPHASE_PROBING			3
+#define PHJ_SUBPHASE_UNMATCHED			4
+
+/* The phases of parallel processing for batch(n). */
+#define PHJ_PHASE_PROMOTING_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 5 - 4)
+#define PHJ_PHASE_LOADING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 5 - 3)
+#define PHJ_PHASE_PREPARING_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 5 - 2)
+#define PHJ_PHASE_PROBING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 5 - 1)
+#define PHJ_PHASE_UNMATCHED_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 5 - 0)
+
+/* Phase number -> sub-phase within a batch. */
+#define PHJ_PHASE_TO_SUBPHASE(p)										\
+	(((int)(p) - PHJ_PHASE_UNMATCHED + PHJ_SUBPHASE_UNMATCHED) % 5)
+
+/* Phase number -> batch number. */
+#define PHJ_PHASE_TO_BATCHNO(p)											\
+	(((int)(p) - PHJ_PHASE_UNMATCHED + PHJ_SUBPHASE_UNMATCHED) / 5)
+
+/* The phases of ExecHashShrink. */
+#define PHJ_SHRINK_PHASE_BEGINNING		0
+#define PHJ_SHRINK_PHASE_CLEARING		1
+#define PHJ_SHRINK_PHASE_WORKING		2
+#define PHJ_SHRINK_PHASE_DECIDING		3
+
+/*
+ * Return the 'participant number' for a process participating in a parallel
+ * hash join.  We give a number < hashtable->shared->planned_participants
+ * to each potential participant, including the leader.
+ */
+#define HashJoinParticipantNumber() \
+	(IsParallelWorker() ? ParallelWorkerNumber + 1 : 0)
 
 #endif   /* HASHJOIN_H */
