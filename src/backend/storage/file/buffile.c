@@ -40,6 +40,7 @@
 #include "storage/fd.h"
 #include "storage/buffile.h"
 #include "storage/buf_internals.h"
+#include "utils/probes.h"
 #include "utils/resowner.h"
 
 /*
@@ -87,6 +88,24 @@ struct BufFile
 	int			pos;			/* next read/write position in buffer */
 	int			nbytes;			/* total # of valid bytes in buffer */
 	char		buffer[BLCKSZ];
+};
+
+/*
+ * Serialized representation of a single file managed by a BufFile.
+ */
+typedef struct BufFileFileDescriptor
+{
+	char path[MAXPGPATH];
+} BufFileFileDescriptor;
+
+/*
+ * Serialized representation of a BufFile, to be created by BufFileExport and
+ * consumed by BufFileImport.
+ */
+struct BufFileDescriptor
+{
+	size_t num_files;
+	BufFileFileDescriptor files[FLEXIBLE_ARRAY_MEMBER];
 };
 
 static BufFile *makeBufFile(File firstfile);
@@ -174,6 +193,81 @@ BufFileCreateTemp(bool interXact)
 	file = makeBufFile(pfile);
 	file->isTemp = true;
 	file->isInterXact = interXact;
+
+	return file;
+}
+
+/*
+ * Export a BufFile description in a serialized form so that another backend
+ * can attach to it and read from it.  The format is opaque, but it may be
+ * bitwise copied, and its size may be obtained with BufFileDescriptorSize().
+ */
+BufFileDescriptor *
+BufFileExport(BufFile *file)
+{
+	BufFileDescriptor *descriptor;
+	int i;
+
+	/* Flush output from local buffers. */
+	BufFileFlush(file);
+
+	/* Create and fill in a descriptor. */
+	descriptor = palloc0(offsetof(BufFileDescriptor, files) +
+						 sizeof(BufFileFileDescriptor) * file->numFiles);
+	descriptor->num_files = file->numFiles;
+	for (i = 0; i < descriptor->num_files; ++i)
+	{
+		TRACE_POSTGRESQL_BUFFILE_EXPORT_FILE(FilePathName(file->files[i]));
+		strcpy(descriptor->files[i].path, FilePathName(file->files[i]));
+	}
+
+	return descriptor;
+}
+
+/*
+ * Return the size in bytes of a BufFileDescriptor, so that it can be copied.
+ */
+size_t
+BufFileDescriptorSize(const BufFileDescriptor *descriptor)
+{
+	return offsetof(BufFileDescriptor, files) +
+		sizeof(BufFileFileDescriptor) * descriptor->num_files;
+}
+
+/*
+ * Open a BufFile that was created by another backend and then exported.  The
+ * file must be read-only in all backends, and is still owned by the backend
+ * that created it.  This provides a way for cooperating backends to share
+ * immutable temporary data such as hash join batches.
+ */
+BufFile *
+BufFileImport(BufFileDescriptor *descriptor)
+{
+	BufFile    *file = (BufFile *) palloc0(sizeof(BufFile));
+	int i;
+
+	file->numFiles = descriptor->num_files;
+	file->files = (File *) palloc0(sizeof(File) * descriptor->num_files);
+	file->offsets = (off_t *) palloc0(sizeof(off_t) * descriptor->num_files);
+	file->isTemp = false;
+	file->isInterXact = true; /* prevent cleanup by this backend */
+	file->dirty = false;
+	file->resowner = CurrentResourceOwner;
+	file->curFile = 0;
+	file->curOffset = 0L;
+	file->pos = 0;
+	file->nbytes = 0;
+
+	for (i = 0; i < descriptor->num_files; ++i)
+	{
+		TRACE_POSTGRESQL_BUFFILE_IMPORT_FILE(descriptor->files[i].path);
+		file->files[i] =
+			PathNameOpenFile(descriptor->files[i].path,
+							 O_RDONLY | PG_BINARY, 0600);
+		if (file->files[i] <= 0)
+			elog(ERROR, "failed to import \"%s\": %m",
+				 descriptor->files[i].path);
+	}
 
 	return file;
 }

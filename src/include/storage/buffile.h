@@ -30,12 +30,17 @@
 
 typedef struct BufFile BufFile;
 
+typedef struct BufFileDescriptor BufFileDescriptor;
+
 /*
  * prototypes for functions in buffile.c
  */
 
 extern BufFile *BufFileCreateTemp(bool interXact);
 extern void BufFileClose(BufFile *file);
+extern BufFileDescriptor *BufFileExport(BufFile *file);
+extern BufFile *BufFileImport(BufFileDescriptor *descriptor);
+extern size_t BufFileDescriptorSize(const BufFileDescriptor *descriptor);
 extern size_t BufFileRead(BufFile *file, void *ptr, size_t size);
 extern size_t BufFileWrite(BufFile *file, void *ptr, size_t size);
 extern int	BufFileSeek(BufFile *file, int fileno, off_t offset, int whence);

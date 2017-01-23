@@ -73,6 +73,9 @@ provider postgresql {
 	probe hash__reset__match__start();
 	probe hash__reset__match__done(int, int);
 
+	probe buffile__import__file(const char *);
+	probe buffile__export__file(const char *);
+
 	probe buffer__read__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool);
 	probe buffer__read__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool, bool);
 	probe buffer__flush__start(ForkNumber, BlockNumber, Oid, Oid, Oid);
