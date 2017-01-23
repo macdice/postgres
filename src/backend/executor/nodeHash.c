@@ -229,6 +229,7 @@ MultiExecHash(HashState *node)
 	}
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
+	ExecHashUpdate(hashtable);
 	ExecHashIncreaseNumBuckets(hashtable);
 
  post_resize:
@@ -986,24 +987,13 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 
 /*
  * Update the local hashtable with the current pointers and sizes from
- * hashtable->parallel_state.
+ * hashtable->shared.
  */
 void
 ExecHashUpdate(HashJoinTable hashtable)
 {
-	Barrier *barrier;
-
 	if (!HashJoinTableIsShared(hashtable))
 		return;
-
-	barrier = &hashtable->shared->barrier;
-
-	/*
-	 * This should only be called in a phase when the hash table is not being
-	 * mutated (initialized or resized).
-	 */
-	Assert(BarrierPhase(barrier) != PHJ_PHASE_CREATING &&
-		   BarrierPhase(barrier) != PHJ_PHASE_RESIZING);
 
 	/* The hash table. */
 	hashtable->spaceUsed = hashtable->shared->size;
@@ -1060,6 +1050,9 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 	 */
 	if (HashJoinTableIsShared(hashtable))
 	{
+		HashJoinBucketHead *buckets;
+		int i;
+
 		Assert(BarrierPhase(&hashtable->shared->barrier) == PHJ_PHASE_RESIZING);
 
 		/* Free the existing bucket array. */
@@ -1080,7 +1073,14 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 					 errmsg("out of memory")));
 
-		/* ExecHashReinsert needs a shared queue of chunks to process. */
+		/* Initialize the new buckets. */
+		buckets = dsa_get_address(hashtable->area,
+								  hashtable->shared->buckets);
+		for (i = 0; i < hashtable->nbuckets; ++i)
+			dsa_pointer_atomic_init(&buckets[i].shared,
+									InvalidDsaPointer);
+
+		/* ExecHashReinsert needs to process all chunks. */
 		hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 	}
 	else
@@ -1089,9 +1089,9 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 			repalloc(hashtable->buckets,
 					 hashtable->nbuckets * sizeof(HashJoinBucketHead));
 		hashtable->chunks_to_reinsert = hashtable->chunks;
+		memset(hashtable->buckets, 0,
+			   hashtable->nbuckets * sizeof(HashJoinBucketHead));
 	}
-	memset(hashtable->buckets, 0,
-		   hashtable->nbuckets * sizeof(HashJoinBucketHead));
 }
 
 /*
@@ -1141,12 +1141,12 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 			idx += MAXALIGN(HJTUPLE_OVERHEAD +
 							HJTUPLE_MINTUPLE(hashTuple)->t_len);
 
-#ifdef TRACE_POSTGREQL_HASH_REINSERT_DONE
+#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
 			++tuples_processed;
 #endif
 		}
 
-#ifdef TRACE_POSTGREQL_HASH_REINSERT_DONE
+#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
 		++chunks_processed;
 #endif
 
