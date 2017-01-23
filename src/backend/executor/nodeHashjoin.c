@@ -21,6 +21,7 @@
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "utils/memutils.h"
 
 
@@ -997,6 +998,14 @@ ExecReScanHashJoin(HashJoinState *node)
 
 			/* ExecHashJoin can skip the BUILD_HASHTABLE step */
 			node->hj_JoinState = HJ_NEED_NEW_OUTER;
+
+			if (HashJoinTableIsShared(node->hj_HashTable))
+			{
+				/* Coordinate a rewind to the probing phase. */
+				BarrierWaitSet(&node->hj_HashTable->shared->barrier,
+							   PHJ_PHASE_PROBING,
+							   WAIT_EVENT_HASHJOIN_REWINDING);
+			}
 		}
 		else
 		{

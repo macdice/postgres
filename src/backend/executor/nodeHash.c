@@ -799,6 +799,42 @@ ExecHashTableDestroy(HashJoinTable hashtable)
 {
 	int			i;
 
+	if (HashJoinTableIsShared(hashtable))
+	{
+		Barrier *barrier = &hashtable->shared->barrier;
+
+		/*
+		 * Wait for anyone probing to finish doing that and free all memory.
+		 * We do that by going back to the initial state, so that
+		 * ExecHashTableCreate can work in case of rescan.  We need to wait
+		 * until all participants agree that we're doing that, so that it's
+		 * safe to reattach if required.
+		 */
+		if (BarrierWaitSet(barrier, PHJ_PHASE_BEGINNING,
+						   WAIT_EVENT_HASH_DESTROY))
+		{
+			/* Serial: free the buckets and chunks */
+			if (DsaPointerIsValid(hashtable->shared->buckets))
+			{
+				dsa_pointer chunk_shared;
+
+				dsa_free(hashtable->area, hashtable->shared->buckets);
+				hashtable->shared->buckets = InvalidDsaPointer;
+
+				/*
+				 * Should we put these chunks on a freelist to be used next
+				 * time in case of rescan, to avoid having one backend freeing
+				 * all chunks like this?
+				 */
+				hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+				while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
+					dsa_free(hashtable->area, chunk_shared);
+			}
+		}
+
+		BarrierDetach(&hashtable->shared->barrier);
+	}
+
 	/*
 	 * Make sure all the temp files are closed.  We skip batch 0, since it
 	 * can't have any temp files (and the arrays might not even exist if
@@ -1684,7 +1720,16 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 	HashJoinTuple tuple;
 	int			i;
 
-	/* TODO: put all chunks on the queue! */
+	if (HashJoinTableIsShared(hashtable))
+	{
+		if (BarrierWait(&hashtable->shared->barrier,
+						WAIT_EVENT_HASH_RESET_MATCH1))
+		{
+			/* Serial phase:  put all chunks on the queue for processing. */
+			hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+		}
+		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_RESET_MATCH2);
+	}
 
 	/* Reset all flags in the main table ... */
 	if (HashJoinTableIsShared(hashtable))
