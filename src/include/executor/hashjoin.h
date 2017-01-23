@@ -148,6 +148,7 @@ typedef struct SharedHashJoinTableData
 	Barrier barrier;				/* synchronization for the hash join */
 	dsa_pointer buckets;			/* shared hash table buckets */
 	int nbuckets;
+	int log2_nbuckets;
 	int planned_participants;		/* number of planned workers + leader */
 
 	LWLock chunk_lock;				/* protects the following members */
@@ -199,7 +200,8 @@ typedef struct HashJoinTableData
 
 	bool		growEnabled;	/* flag to shut off nbatch increases */
 
-	double		totalTuples;	/* # tuples obtained from inner plan */
+	double		partialTuples;	/* # tuples obtained from inner plan by me */
+	double		totalTuples;	/* # tuples obtained from inner plan by all */
 	double		skewTuples;		/* # tuples inserted into skew tuples */
 
 	/*
