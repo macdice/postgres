@@ -100,7 +100,7 @@ MultiExecHash(HashState *node)
 	/*
 	 * get all inner tuples and insert into the hash table (or temp files)
 	 */
-	TRACE_POSTGRESQL_HASH_BUILDING_START();
+	TRACE_POSTGRESQL_HASH_BUILD_START();
 	for (;;)
 	{
 		slot = ExecProcNode(outerNode);
@@ -130,7 +130,7 @@ MultiExecHash(HashState *node)
 			hashtable->totalTuples += 1;
 		}
 	}
-	TRACE_POSTGRESQL_HASH_BUILDING_DONE((int) hashtable->totalTuples);
+	TRACE_POSTGRESQL_HASH_BUILD_DONE((int) hashtable->totalTuples);
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
@@ -615,6 +615,10 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	long		ninmemory;
 	long		nfreed;
 	HashMemoryChunk oldchunks;
+#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
+	int tuples_processed = 0;
+	int chunks_processed = 0;
+#endif
 
 	/* do nothing if we've decided to shut off growth */
 	if (!hashtable->growEnabled)
@@ -631,6 +635,8 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	printf("Hashjoin %p: increasing nbatch to %d because space = %zu\n",
 		   hashtable, nbatch, hashtable->spaceUsed);
 #endif
+
+	TRACE_POSTGRESQL_HASH_INCREASE_BATCHES(oldnbatch, nbatch);
 
 	oldcxt = MemoryContextSwitchTo(hashtable->hashCxt);
 
@@ -690,6 +696,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	hashtable->chunks = NULL;
 
 	/* so, let's scan through the old chunks, and all tuples in each chunk */
+	TRACE_POSTGRESQL_HASH_SHRINK_START();
 	while (oldchunks != NULL)
 	{
 		HashMemoryChunk nextchunk = oldchunks->next;
@@ -735,13 +742,22 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 
 			/* next tuple in this chunk */
 			idx += MAXALIGN(hashTupleSize);
+
+#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
+			++tuples_processed;
+#endif
 		}
+
+#ifdef TRACE_POSTGRESQL_HASH_SRHINK_DONE
+		++chunks_processed;
+#endif
 
 		/* we're done with this chunk - free it and proceed to the next one */
 		hashtable->spaceUsed -= oldchunks->maxlen + HASH_CHUNK_HEADER_SIZE;
 		pfree(oldchunks);
 		oldchunks = nextchunk;
 	}
+	TRACE_POSTGRESQL_HASH_SHRINK_DONE(tuples_processed, chunks_processed);
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: freed %ld of %ld tuples, space now %zu\n",
@@ -841,12 +857,12 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 			idx += MAXALIGN(HJTUPLE_OVERHEAD +
 							HJTUPLE_MINTUPLE(hashTuple)->t_len);
 
-#ifdef TRACE_POSTGREQL_HASH_REINSERT_DONE
+#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
 			++tuples_processed;
 #endif
 		}
 
-#ifdef TRACE_POSTGREQL_HASH_REINSERT_DONE
+#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
 		++chunks_processed;
 #endif
 	}
