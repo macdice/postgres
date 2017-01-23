@@ -37,6 +37,7 @@
 #include "storage/barrier.h"
 #include "utils/dynahash.h"
 #include "utils/memutils.h"
+#include "utils/probes.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -169,6 +170,7 @@ MultiExecHash(HashState *node)
 	/*
 	 * get all inner tuples and insert into the hash table (or temp files)
 	 */
+	TRACE_POSTGRESQL_HASH_BUILDING_START();
 	for (;;)
 	{
 		slot = ExecProcNode(outerNode);
@@ -201,6 +203,7 @@ MultiExecHash(HashState *node)
 		}
 	}
 	finish_loading(hashtable);
+	TRACE_POSTGRESQL_HASH_BUILDING_DONE((int) hashtable->partialTuples);
 
  post_build:
 	if (HashJoinTableIsShared(hashtable))
@@ -1033,6 +1036,9 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 		   hashtable, hashtable->nbuckets, hashtable->nbuckets_optimal);
 #endif
 
+	TRACE_POSTGRESQL_HASH_INCREASE_BUCKETS(hashtable->nbuckets,
+										   hashtable->nbuckets_optimal);
+
 	/* account for the increase in space that will be used by buckets */
 	hashtable->spaceUsed += sizeof(HashJoinBucketHead) *
 		(hashtable->nbuckets_optimal - hashtable->nbuckets);
@@ -1098,9 +1104,13 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 {
 	HashMemoryChunk chunk;
 	dsa_pointer chunk_shared;
+#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
+	int tuples_processed = 0;
 	int chunks_processed = 0;
+#endif
 
 	/* scan through all tuples in all chunks to rebuild the hash table */
+	TRACE_POSTGRESQL_HASH_REINSERT_START();
 	if (HashJoinTableIsShared(hashtable))
 		chunk = pop_chunk_queue(hashtable, &chunk_shared);
 	else
@@ -1130,8 +1140,15 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 			/* advance index past the tuple */
 			idx += MAXALIGN(HJTUPLE_OVERHEAD +
 							HJTUPLE_MINTUPLE(hashTuple)->t_len);
+
+#ifdef TRACE_POSTGREQL_HASH_REINSERT_DONE
+			++tuples_processed;
+#endif
 		}
+
+#ifdef TRACE_POSTGREQL_HASH_REINSERT_DONE
 		++chunks_processed;
+#endif
 
 		/* advance to the next chunk */
 		if (HashJoinTableIsShared(hashtable))
@@ -1139,6 +1156,7 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 		else
 			chunk = chunk->next.unshared;
 	}
+	TRACE_POSTGRESQL_HASH_REINSERT_DONE(tuples_processed, chunks_processed);
 }
 
 
@@ -1467,6 +1485,8 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 			hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 		}
 	}
+
+	TRACE_POSTGRESQL_HASH_UNMATCHED_START();
 }
 
 /*
@@ -1599,6 +1619,7 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 	/*
 	 * no more unmatched tuples
 	 */
+	TRACE_POSTGRESQL_HASH_UNMATCHED_DONE();
 	return false;
 }
 
