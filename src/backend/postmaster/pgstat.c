@@ -3419,6 +3419,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_HASH_RESET_MATCH2:
 			event_name = "Hash/ResetMatch2";
 			break;
+		case WAIT_EVENT_HASHJOIN_PROBING:
+			event_name = "HashJoin/Probing";
+			break;
 		case WAIT_EVENT_HASHJOIN_REWINDING:
 			event_name = "HashJoin/Rewinding";
 			break;

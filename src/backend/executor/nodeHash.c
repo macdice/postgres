@@ -1512,8 +1512,6 @@ ExecScanHashBucket(HashJoinState *hjstate,
 void
 ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 {
-	HashJoinTable hashtable = hjstate->hj_HashTable;
-
 	/*----------
 	 * During this scan we use the HashJoinState fields as follows:
 	 *
@@ -1528,15 +1526,6 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 	hjstate->hj_HashTable->current_chunk = NULL;
 	hjstate->hj_CurSkewBucketNo = 0;
 	hjstate->hj_CurTuple = NULL;
-
-	if (HashJoinTableIsShared(hashtable))
-	{
-		if (BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_UNMATCHED))
-		{
-			/* Serial phase: one participant sets up shared state */
-			hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
-		}
-	}
 
 	TRACE_POSTGRESQL_HASH_UNMATCHED_START();
 }
