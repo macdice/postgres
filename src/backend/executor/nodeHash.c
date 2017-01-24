@@ -42,7 +42,7 @@
 #include "utils/syscache.h"
 
 
-static void ExecHashIncreaseNumBatches(HashJoinTable hashtable);
+static void ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch);
 static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
 static void ExecHashReinsertAll(HashJoinTable hashtable);
 static void ExecHashBuildSkewHash(HashJoinTable hashtable, Hash *node,
@@ -55,6 +55,8 @@ static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
 static HashMemoryChunk pop_chunk_queue(HashJoinTable table,
 									   dsa_pointer *shared);
+static HashMemoryChunk pop_chunk_queue_unlocked(HashJoinTable table,
+												dsa_pointer *shared);
 static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
 										  HashJoinTuple tuple);
 
@@ -68,7 +70,8 @@ static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
 static void *dense_alloc(HashJoinTable hashtable, Size size,
 						 bool respect_work_mem);
 static void *dense_alloc_shared(HashJoinTable hashtable, Size size,
-								dsa_pointer *shared);
+								dsa_pointer *shared,
+								bool respect_work_mem);
 static void finish_loading(HashJoinTable hashtable);
 
 /* ----------------------------------------------------------------
@@ -953,20 +956,15 @@ ExecHashTableDestroy(HashJoinTable hashtable)
  *		current memory consumption
  */
 static void
-ExecHashIncreaseNumBatches(HashJoinTable hashtable)
+ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch)
 {
 	int			oldnbatch = hashtable->nbatch;
-	int			nbatch;
 	MemoryContext oldcxt;
-	long		ninmemory;
-	long		nfreed;
-	HashMemoryChunk oldchunks;
 
 	/* safety check to avoid overflow */
 	if (oldnbatch > Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2)))
 		return;
 
-	nbatch = oldnbatch * 2;
 	Assert(nbatch > 1);
 
 #ifdef HJDEBUG
@@ -1005,42 +1003,14 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 
 	hashtable->nbatch = nbatch;
 
-	/*
-	 * Scan through the existing hash table entries and dump out any that are
-	 * no longer of the current batch.
-	 */
-	ninmemory = nfreed = 0;
-
-	/* If know we need to resize nbuckets, we can do it while rebatching. */
-	if (hashtable->nbuckets_optimal != hashtable->nbuckets)
-	{
-		/* we never decrease the number of buckets */
-		Assert(hashtable->nbuckets_optimal > hashtable->nbuckets);
-
-		hashtable->nbuckets = hashtable->nbuckets_optimal;
-		hashtable->log2_nbuckets = hashtable->log2_nbuckets_optimal;
-
-		hashtable->buckets = repalloc(hashtable->buckets,
-								sizeof(HashJoinTuple) * hashtable->nbuckets);
-	}
-
-	/*
-	 * We will scan through the chunks directly, so that we can reset the
-	 * buckets now and not have to keep track which tuples in the buckets have
-	 * already been processed. We will free the old chunks as we go.
-	 */
-	memset(hashtable->buckets, 0, sizeof(HashJoinTuple) * hashtable->nbuckets);
-	oldchunks = hashtable->chunks;
-	hashtable->chunks = NULL;
-
-	/* TODO ^^^ */
+	/* TODO: If know we need to resize nbuckets, we can do it while rebatching. */
 }
 
 /*
  * Process the queue of chunks whose tuples need to be redistributed into the
- * correct batches until it is empty.  Hopefully this will shrink the hash
- * table, keeping about half of the tuples in memory and sending the rest to a
- * future batch.
+ * correct batches until it is empty.  In the best case this will shrink the
+ * hash table, keeping about half of the tuples in memory and sending the rest
+ * to a future batch.
  */
 static void
 ExecHashShrink(HashJoinTable hashtable)
@@ -1089,6 +1059,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			/* Serial phase: one participant clears the hash table. */
 			memset(hashtable->buckets, 0,
 				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
+			
 		}
 	clearing:
 		/* Wait until hash table is cleared. */
@@ -1109,19 +1080,20 @@ ExecHashShrink(HashJoinTable hashtable)
 	if (HashJoinTableIsShared(hashtable))
 		chunk = pop_chunk_queue(hashtable, &chunk_shared);
 	else
-		chunk = hashtable->chunks_to_shrink;
-
-	while (oldchunks != NULL)
 	{
-		HashMemoryChunk nextchunk = oldchunks->next.unshared;
+		chunk = hashtable->chunks;
+		hashtable->chunks = NULL;
+	}
 
+	while (chunk != NULL)
+	{
 		/* position within the buffer (up to oldchunks->used) */
 		size_t		idx = 0;
 
 		/* process all tuples stored in this chunk (and then free it) */
-		while (idx < oldchunks->used)
+		while (idx < chunk->used)
 		{
-			HashJoinTuple hashTuple = (HashJoinTuple) (oldchunks->data + idx);
+			HashJoinTuple hashTuple = (HashJoinTuple) (chunk->data + idx);
 			MinimalTuple tuple = HJTUPLE_MINTUPLE(hashTuple);
 			int			hashTupleSize = (HJTUPLE_OVERHEAD + tuple->t_len);
 			int			bucketno;
@@ -1131,7 +1103,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			ExecHashGetBucketAndBatch(hashtable, hashTuple->hashvalue,
 									  &bucketno, &batchno);
 
-			if (batchno == curbatch)
+			if (batchno == hashtable->curbatch)
 			{
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
@@ -1147,7 +1119,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			else
 			{
 				/* dump it out */
-				Assert(batchno > curbatch);
+				Assert(batchno > hashtable->curbatch);
 				ExecHashJoinSaveTuple(HJTUPLE_MINTUPLE(hashTuple),
 									  hashTuple->hashvalue,
 									  &hashtable->innerBatchFile[batchno]);
@@ -1187,9 +1159,13 @@ ExecHashShrink(HashJoinTable hashtable)
 		}
 		else
 		{
-			hashtable->spaceUsed -= oldchunks->maxlen + HASH_CHUNK_HEADER_SIZE;
-			pfree(oldchunks);
-			oldchunks = nextchunk;
+			Size size = chunk->maxlen + HASH_CHUNK_HEADER_SIZE;
+			HashMemoryChunk nextchunk = chunk->next.unshared;
+
+			Assert(hashtable->spaceUsed > size);
+			hashtable->spaceUsed -= size;
+			pfree(chunk);
+			chunk = nextchunk;
 		}
 	}
 	TRACE_POSTGRESQL_HASH_SHRINK_DONE(tuples_processed, chunks_processed);
@@ -1461,7 +1437,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		if (HashJoinTableIsShared(hashtable))
 			hashTuple = (HashJoinTuple)
 				dense_alloc_shared(hashtable, hashTupleSize,
-								   &hashTuple_shared);
+								   &hashTuple_shared, true);
 		else
 			hashTuple = (HashJoinTuple)
 				dense_alloc(hashtable, hashTupleSize, true);
@@ -2249,7 +2225,7 @@ ExecHashSkewTableInsert(HashJoinTable hashtable,
 	/* Check we are not over the total spaceAllowed, either */
 	if (hashtable->spaceUsed > hashtable->spaceAllowed &&
 		hashtable->growEnabled)
-		ExecHashIncreaseNumBatches(hashtable);
+		ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
 }
 
 /*
@@ -2395,7 +2371,7 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 			hashtable->spaceAllowed)
 		{
 			/* work_mem would be exceeded: try to shrink hash table */
-			ExecHashIncreaseNumBatches(hashtable);
+			ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
 		}
 
 		/* allocate new chunk and put it at the beginning of the list */
@@ -2443,7 +2419,7 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 			hashtable->spaceUsed + HASH_CHUNK_SIZE > hashtable->spaceAllowed)
 		{
 			/* work_mem would be exceeded: try to shrink hash table */
-			ExecHashIncreaseNumBatches(hashtable);
+			ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
 		}
 
 		/* allocate new chunk and put it at the beginning of the list */
@@ -2483,7 +2459,8 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 static void *
 dense_alloc_shared(HashJoinTable hashtable,
 				   Size size,
-				   dsa_pointer *shared)
+				   dsa_pointer *shared,
+				   bool respect_work_mem)
 {
 	dsa_pointer chunk_shared;
 	HashMemoryChunk chunk;
@@ -2516,12 +2493,28 @@ dense_alloc_shared(HashJoinTable hashtable,
 		return result;
 	}
 
+ retry:
 	/*
 	 * Slow path: try to allocate a new chunk.
 	 */
 	LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
 
-	/* TODO: detect batch increase in progress here */
+	/* Check if some other participant has increased nbatch. */
+	if (hashtable->shared->nbatch > hashtable->nbatch)
+	{
+		Assert(respect_work_mem);
+		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
+		LWLockRelease(&hashtable->shared->chunk_lock);
+		
+		/*
+		 * Whenever nbatch changes, every participant attached to
+		 * shrink_barrier must run ExecHashShrink to help shrink the hash
+		 * table until that work is finished.  Then we can try to allocate
+		 * again.
+		 */
+		ExecHashShrink(hashtable);
+		goto retry;
+	}
 
 	/* Oversized tuples get their own chunk. */
 	if (size > HASH_CHUNK_THRESHOLD)
@@ -2529,7 +2522,26 @@ dense_alloc_shared(HashJoinTable hashtable,
 	else
 		chunk_size = HASH_CHUNK_SIZE;
 
-	/* TODO: work_mem size check triggering batch increase here */
+	/* If appropriate, check if work_mem would be exceeded by a new chunk. */
+	if (respect_work_mem &&
+		hashtable->shared->grow_enabled &&
+		(hashtable->shared->size +
+		 chunk_size) > (work_mem * 1024L))
+	{
+		/*
+		 * It would be exceeded.  Let's increase the number of batches, so we
+		 * can try to shrink the hash table.
+		 */
+		hashtable->shared->nbatch *= 2;
+		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
+		hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+		hashtable->shared->chunks = InvalidDsaPointer;
+		LWLockRelease(&hashtable->shared->chunk_lock);
+
+		/* Begin shrinking.  Other participants will help. */
+		ExecHashShrink(hashtable);
+		goto retry;
+	}
 
 	/*
 	 * If there was a chunk already, then add its tuple count to the shared

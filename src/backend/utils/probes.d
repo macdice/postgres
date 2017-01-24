@@ -70,10 +70,17 @@ provider postgresql {
 	probe hash__increase__batches(int, int);
 	probe hash__shrink__start();
 	probe hash__shrink__done(int, int);
+	probe hash__shrink__disabled();
 	probe hash__unmatched__start();
 	probe hash__unmatched__done();
 	probe hash__reset__match__start();
 	probe hash__reset__match__done(int, int);
+
+	probe hashjoin__export__all__batches(int, int);
+	probe hashjoin__export__batch(int, int, bool);
+	probe hashjoin__import__batch(int, int, bool);
+	probe hashjoin__open__batch(int, int, bool);
+	probe hashjoin__seek(int, int, int, int, int, size_t);
 
 	probe buffile__import__file(const char *);
 	probe buffile__export__file(const char *);
