@@ -222,6 +222,31 @@ ExecHashJoin(HashJoinState *node)
 				if (TupIsNull(outerTupleSlot))
 				{
 					/* end of batch, or maybe whole join */
+
+					if (HashJoinTableIsShared(hashtable))
+					{
+						/*
+						 * We can't start searching for unmatched tuples until
+						 * all participants have finished probing, so we
+						 * synchronize here.
+						 */
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_PROBING);
+						if (BarrierWait(&hashtable->shared->barrier,
+										WAIT_EVENT_HASHJOIN_PROBING))
+						{
+							/* Serial phase: prepare for unmatched. */
+							if (HJ_FILL_INNER(node))
+							{
+								hashtable->shared->chunk_work_queue =
+									hashtable->shared->chunks;
+								hashtable->shared->chunks = InvalidDsaPointer;
+							}
+						}
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_UNMATCHED);
+					}
+
 					if (HJ_FILL_INNER(node))
 					{
 						/* set up to scan for unmatched inner tuples */
