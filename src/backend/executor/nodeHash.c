@@ -956,19 +956,11 @@ static void
 ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 {
 	int			oldnbatch = hashtable->nbatch;
-	int			curbatch = hashtable->curbatch;
 	int			nbatch;
 	MemoryContext oldcxt;
 	long		ninmemory;
 	long		nfreed;
 	HashMemoryChunk oldchunks;
-#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
-	int tuples_processed = 0;
-	int chunks_processed = 0;
-#endif
-
-	/* TODO: support multi-batch joins with shared hash tables */
-	Assert(!HashJoinTableIsShared(hashtable));
 
 	/* safety check to avoid overflow */
 	if (oldnbatch > Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2)))
@@ -1053,12 +1045,14 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 static void
 ExecHashShrink(HashJoinTable hashtable)
 {
-	Size size_before_shrink = 0;
-	Size tuples_in_memory = 0;
-	Size tuples_written_out = 0;
+	long		ninmemory;
+	long		nfreed;
 	dsa_pointer chunk_shared;
 	HashMemoryChunk chunk;
-	bool elected_to_decide = false;
+#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
+	int tuples_processed = 0;
+	int chunks_processed = 0;
+#endif
 
 	TRACE_POSTGRESQL_HASH_SHRINK_START();
 
@@ -1095,12 +1089,6 @@ ExecHashShrink(HashJoinTable hashtable)
 			/* Serial phase: one participant clears the hash table. */
 			memset(hashtable->buckets, 0,
 				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
-			/*
-			 * This participant will also make the decision about whether to
-			 * disable further attempts to shrink.
-			 */
-			size_before_shrink = hashtable->shared->size;
-			elected_to_decide = true;
 		}
 	clearing:
 		/* Wait until hash table is cleared. */
@@ -1189,11 +1177,12 @@ ExecHashShrink(HashJoinTable hashtable)
 			LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
 			Assert(hashtable->shared->size > size);
 			hashtable->shared->size -= size;
-			hashtable->shared->tuples_in_memory += tuples_in_memory;
-			hashtable->shared->tuples_written_out += tuples_written_out;
-			tuples_in_memory = 0;
-			tuples_written_out = 0;
+			hashtable->shared->nfreed += nfreed;
+			hashtable->shared->ninmemory += ninmemory;
+			nfreed = 0;
+			ninmemory = 0;
 			chunk = pop_chunk_queue_unlocked(hashtable, &chunk_shared);
+			hashtable->spaceUsed = hashtable->shared->size;
 			LWLockRelease(&hashtable->shared->chunk_lock);
 		}
 		else
@@ -1218,14 +1207,42 @@ ExecHashShrink(HashJoinTable hashtable)
 	 * group any more finely. We have to just gut it out and hope the server
 	 * has enough RAM.
 	 */
-	if (nfreed == 0 || nfreed == ninmemory)
+	if (HashJoinTableIsShared(hashtable))
 	{
-		hashtable->growEnabled = false;
-#ifdef HJDEBUG
-		printf("Hashjoin %p: disabling further increase of nbatch\n",
-			   hashtable);
-#endif
+		/*
+		 * Wait until all have finished shrinking chunks.  We need to do that
+		 * because we need the total tuple counts before we can decide whether
+		 * to prevent further attempts at shrinking.
+		 */
+		if (BarrierWait(&hashtable->shared->shrink_barrier,
+						WAIT_EVENT_HASH_SHRINKING3))
+		{
+			/* Serial phase: one participant decides whether that paid off. */
+			if (hashtable->shared->nfreed == 0 ||
+				hashtable->shared->nfreed == hashtable->shared->ninmemory)
+			{
+				TRACE_POSTGRESQL_HASH_SHRINK_DISABLED();
+				hashtable->shared->grow_enabled = false;
+			}
+		}
+	deciding:
+		/* Wait for above decision to be made. */
+		BarrierWaitSet(&hashtable->shared->shrink_barrier,
+					   PHJ_SHRINK_PHASE_BEGINNING,
+					   WAIT_EVENT_HASH_SHRINKING4);
 	}
+	else
+	{
+		if (nfreed == 0 || nfreed == ninmemory)
+		{
+			TRACE_POSTGRESQL_HASH_SHRINK_DISABLED();
+			hashtable->growEnabled = false;
+#ifdef HJDEBUG
+			printf("Hashjoin %p: disabling further increase of nbatch\n",
+				   hashtable);
+#endif
+ 		}
+ 	}	
 }
 
 /*

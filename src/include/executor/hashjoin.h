@@ -219,9 +219,16 @@ typedef struct SharedHashJoinTableData
 {
 	Barrier barrier;				/* synchronization for the hash join */
 	dsa_pointer buckets;			/* shared hash table buckets */
+	bool at_least_one_worker;		/* did at least one worker join in time? */
 	int nbuckets;
 	int log2_nbuckets;
+	int nbatch;
 	int planned_participants;		/* number of planned workers + leader */
+	
+	Barrier shrink_barrier;			/* synchronization of hashtable shrink */
+	long nfreed;					/* shared counter for hashtable shrink */
+	long ninmemory;					/* shared counter for hashtable shrink */
+	bool grow_enabled;				/* shared flag to prevent useless growth */
 
 	LWLock chunk_lock;				/* protects the following members */
 	dsa_pointer chunks;				/* chunks loaded for the current batch */

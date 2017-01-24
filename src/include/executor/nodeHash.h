@@ -51,6 +51,7 @@ extern void ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 						int *numbatches,
 						int *num_skew_mcvs);
 extern int	ExecHashGetSkewBucket(HashJoinTable hashtable, uint32 hashvalue);
+extern bool ExecHashCheckForEarlyExit(HashJoinTable hashtable);
 extern void ExecHashUpdate(HashJoinTable hashtable);
 
 #endif   /* NODEHASH_H */

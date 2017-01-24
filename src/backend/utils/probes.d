@@ -60,6 +60,8 @@ provider postgresql {
 	probe sort__start(int, bool, int, int, bool);
 	probe sort__done(bool, long);
 
+	probe hash__leader__early__exit();
+	probe hash__worker__early__exit();
 	probe hash__build__start();
 	probe hash__build__done(int);
 	probe hash__increase__buckets(int, int);
