@@ -30,5 +30,10 @@ extern void ExecHashJoinInitializeWorker(HashJoinState *state, shm_toc *toc);
 
 extern void ExecHashJoinSaveTuple(MinimalTuple tuple, uint32 hashvalue,
 					  BufFile **fileptr);
+extern void ExecHashJoinRewindBatches(HashJoinTable hashtable, int batchno);
+extern void ExecHashJoinOpenBatch(HashJoinTable hashtable,
+								  int batchno, bool inner);
+extern void ExecHashJoinCloseBatch(HashJoinTable hashtable,
+								   int batchno, bool inner);
 
 #endif   /* NODEHASHJOIN_H */

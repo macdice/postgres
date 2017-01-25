@@ -81,6 +81,8 @@ provider postgresql {
 	probe hashjoin__import__batch(int, int, bool);
 	probe hashjoin__open__batch(int, int, bool);
 	probe hashjoin__seek(int, int, int, int, int, size_t);
+	probe hashjoin__load__start(int);
+	probe hashjoin__load__done(int, int);
 
 	probe buffile__import__file(const char *);
 	probe buffile__export__file(const char *);

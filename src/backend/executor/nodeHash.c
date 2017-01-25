@@ -544,6 +544,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	hashtable->current_chunk = NULL;
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->shared = state->shared_table_data;
+	hashtable->detached_early = false;
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: initial nbatch = %d, nbuckets = %d\n",
@@ -1696,8 +1697,6 @@ ExecScanHashBucket(HashJoinState *hjstate,
 void
 ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 {
-	HashJoinTable hashtable = hjstate->hj_HashTable;
-
 	/*----------
 	 * During this scan we use the HashJoinState fields as follows:
 	 *
@@ -1712,15 +1711,6 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 	hjstate->hj_HashTable->current_chunk = NULL;
 	hjstate->hj_CurSkewBucketNo = 0;
 	hjstate->hj_CurTuple = NULL;
-
-	if (HashJoinTableIsShared(hashtable))
-	{
-		if (BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_UNMATCHED))
-		{
-			/* Serial phase: one participant sets up shared state */
-			hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
-		}
-	}
 
 	TRACE_POSTGRESQL_HASH_UNMATCHED_START();
 }
@@ -1870,9 +1860,50 @@ ExecHashTableReset(HashJoinTable hashtable)
 	MemoryContext oldcxt;
 	int			nbuckets = hashtable->nbuckets;
 
-	/* TODO: No multi-batch support for shared tables yet. */
-	Assert(!HashJoinTableIsShared(hashtable));
+	if (HashJoinTableIsShared(hashtable))
+	{
+		/* Wait for all workers to finish accessing the hash table. */
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_UNMATCHED_BATCH(hashtable->curbatch));
+		if (BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_UNMATCHED))
+		{
+			/* Serial phase: set up hash table for new batch. */
+			dsa_pointer chunk_shared;
 
+			Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(&hashtable->shared->barrier)) ==
+				   PHJ_SUBPHASE_PROMOTING);
+
+			/* Clear the hash table. */
+			memset(hashtable->buckets, 0, sizeof(HashJoinBucketHead) * hashtable->nbuckets);
+
+			/* Free all the chunks. */
+			/*
+			 * TODO: Put them on a freelist instead?  Better than making one
+			 * backend free them all, and then allocating them all again!
+			 */
+			hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+			hashtable->shared->chunks = InvalidDsaPointer;
+			while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
+				dsa_free(hashtable->area, chunk_shared);
+
+			/* Reset the hash table size. */
+			hashtable->shared->size =
+				(hashtable->nbuckets * sizeof(HashJoinBucketHead));
+
+			/* Rewind the shared read heads for this batch. */
+			ExecHashJoinRewindBatches(hashtable, hashtable->curbatch);	
+		}
+		/* Wait again, so that all workers now have the new table. */
+		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_PROMOTING);
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
+		ExecHashUpdate(hashtable);
+
+		/* Forget the current chunks. */
+		hashtable->current_chunk = NULL;
+		return;
+	}
+	
 	/*
 	 * Release all the hash buckets and tuples acquired in the prior pass, and
 	 * reinitialize the context for a new pass.
@@ -2504,6 +2535,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 	{
 		Assert(respect_work_mem);
 		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
+		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
 		
 		/*
@@ -2536,6 +2568,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
 		hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 		hashtable->shared->chunks = InvalidDsaPointer;
+		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
 
 		/* Begin shrinking.  Other participants will help. */
