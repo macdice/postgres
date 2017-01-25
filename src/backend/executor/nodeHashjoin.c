@@ -207,7 +207,41 @@ ExecHashJoin(HashJoinState *node)
 				 */
 				node->hj_OuterNotEmpty = false;
 
-				node->hj_JoinState = HJ_NEED_NEW_OUTER;
+				if (HashJoinTableIsShared(hashtable))
+				{
+					Barrier *barrier = &hashtable->shared->barrier;
+					int phase = BarrierPhase(barrier);
+
+					/*
+					 * Map the current phase to the appropriate initial state
+					 * for this participant, so we can get started.
+					 * MultiExecHash made sure that the parallel hash join has
+					 * reached at least PHJ_PHASE_PROBING, but it's possible
+					 * that this participant joined the work later than that,
+					 * so we need another switch statement here to get our
+					 * local state machine in sync.
+					 */
+					Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
+					switch (phase)
+					{
+					case PHJ_PHASE_PROBING:
+						/* Help probe the hashtable. */
+						ExecHashUpdate(hashtable);
+						node->hj_JoinState = HJ_NEED_NEW_OUTER;
+						break;
+					case PHJ_PHASE_UNMATCHED:
+						/* Help scan for unmatched inner tuples. */
+						ExecHashUpdate(hashtable);
+						ExecPrepHashTableForUnmatched(node);
+						node->hj_JoinState = HJ_FILL_INNER_TUPLES;
+						break;
+					default:
+						Assert(false);
+					}
+					continue;
+				}
+				else
+					node->hj_JoinState = HJ_NEED_NEW_OUTER;
 
 				/* FALL THRU */
 
