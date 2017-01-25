@@ -272,38 +272,6 @@ ExecHashJoin(HashJoinState *node)
 					 * local state machine in sync.
 					 */
 					Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
-					switch (phase)
-					{
-					case PHJ_PHASE_PROBING:
-						/* Help probe the hashtable. */
-						ExecHashUpdate(hashtable);
-						node->hj_JoinState = HJ_NEED_NEW_OUTER;
-						break;
-					case PHJ_PHASE_UNMATCHED:
-						/* Help scan for unmatched inner tuples. */
-						ExecHashUpdate(hashtable);
-						ExecPrepHashTableForUnmatched(node);
-						node->hj_JoinState = HJ_FILL_INNER_TUPLES;
-						break;
-					default:
-						Assert(false);
-					}
-					continue;
-				}
-				else
-					node->hj_JoinState = HJ_NEED_NEW_OUTER;
-
-				if (HashJoinTableIsShared(hashtable))
-				{
-					Barrier *barrier = &hashtable->shared->barrier;
-					int phase = BarrierPhase(barrier);
-
-					/*
-					 * Map the current phase to the appropriate initial state
-					 * for this worker, so we can get started.
-					 */
-					Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
-					hashtable->curbatch = PHJ_PHASE_TO_BATCHNO(phase);
 					switch (PHJ_PHASE_TO_SUBPHASE(phase))
 					{
 					case PHJ_SUBPHASE_PROMOTING:
@@ -320,7 +288,7 @@ ExecHashJoin(HashJoinState *node)
 							   PHJ_SUBPHASE_PROBING);
 						/* fall through */
 					case PHJ_SUBPHASE_PROBING:
-						/* Help probe the current batch. */
+						/* Help probe the hashtable. */
 						ExecHashUpdate(hashtable);
 						ExecHashJoinOpenBatch(hashtable, hashtable->curbatch,
 											  false);
@@ -335,10 +303,7 @@ ExecHashJoin(HashJoinState *node)
 					continue;
 				}
 				else
-				{
 					node->hj_JoinState = HJ_NEED_NEW_OUTER;
-					ExecHashJoinOpenBatch(hashtable, 0, false);
-				}
 
 				/* FALL THRU */
 
@@ -608,6 +573,10 @@ ExecHashJoin(HashJoinState *node)
 				 */
 				if (!ExecHashJoinNewBatch(node))
 					return NULL;	/* end of join */
+
+				/* Prepare to read tuples from the outer batch. */
+				ExecHashJoinOpenBatch(hashtable, hashtable->curbatch, false);
+
 				node->hj_JoinState = HJ_NEED_NEW_OUTER;
 				break;
 
@@ -973,6 +942,7 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 	 */
 	curbatch++;
 	while (!HashJoinTableIsShared(hashtable) &&
+		   curbatch < nbatch &&
 		   (hashtable->outerBatchFile[curbatch] == NULL ||
 			hashtable->innerBatchFile[curbatch] == NULL))
 	{
@@ -1490,6 +1460,11 @@ ExecHashJoinOpenBatch(HashJoinTable hashtable, int batchno, bool inner)
 										 batchno,
 										 inner);
 
+	/*
+	 * TODO: Here we could close the previously open batch file because it
+	 * certainly isn't needed anymore and might as well be deleted.
+	 */
+
 	if (batchno == 0)
 		batch_reader->file = NULL;
 	else
@@ -1500,7 +1475,7 @@ ExecHashJoinOpenBatch(HashJoinTable hashtable, int batchno, bool inner)
 	if (HashJoinTableIsShared(hashtable))
 	{
 		HashJoinParticipantState *participant;
-		
+
 		/* Initially we will read from the caller's batch file. */
 		participant =
 			&hashtable->shared->participants[HashJoinParticipantNumber()];
