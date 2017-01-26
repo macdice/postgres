@@ -122,10 +122,10 @@ ExecHashCheckForEarlyExit(HashJoinTable hashtable)
 	 *     batches to completion, because that's the only way for the join
 	 *     to complete.  There is no deadlock risk if there are no workers.
 	 *
-	 * 3.  Workers MUST NOT participate if the hashing phase has finished by
-	 *     the time they have joined, so that the leader can reliably determine
-	 *     whether there are any workers running when it comes to the point
-	 *     where it must choose between 1 and 2.
+	 * 3.  Workers MUST NOT participate if the building phase has finished by
+	 *     the time they have joined, so that the leader can reliably
+	 *     determine whether there are any workers running when it comes to
+	 *     the point where it must choose between 1 and 2.
 	 *
 	 * In other words, if the leader makes it all the way through building and
 	 * probing before any workers show up, then the leader will run the whole
@@ -168,7 +168,7 @@ ExecHashCheckForEarlyExit(HashJoinTable hashtable)
 			 */
 			hashtable->shared->at_least_one_worker = true;
 		}
-		else
+		else if (!hashtable->shared->at_least_one_worker)
 		{
 			/* Abandon ship due to rule 3. */
 			TRACE_POSTGRESQL_HASH_WORKER_EARLY_EXIT();
@@ -254,6 +254,9 @@ MultiExecHash(HashState *node)
 		/* Make sure our local state is up-to-date so we can build. */
 		Assert(BarrierPhase(barrier) == PHJ_PHASE_BUILDING);
 		ExecHashUpdate(hashtable);
+
+		/* Coordinate shrinking while we build the hash table. */
+		BarrierAttach(&hashtable->shared->shrink_barrier);
 	}
 
 	/*
@@ -299,6 +302,9 @@ MultiExecHash(HashState *node)
 	}
 	finish_loading(hashtable);
 	TRACE_POSTGRESQL_HASH_BUILD_DONE((int) hashtable->partialTuples);
+
+	if (HashJoinTableIsShared(hashtable))
+		BarrierDetach(&hashtable->shared->shrink_barrier);
 
  post_build:
 	if (HashJoinTableIsShared(hashtable))
@@ -545,6 +551,8 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->shared = state->shared_table_data;
 	hashtable->detached_early = false;
+	hashtable->batch_reader.batchno = 0;
+	hashtable->batch_reader.inner = false;
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: initial nbatch = %d, nbuckets = %d\n",
@@ -1060,7 +1068,6 @@ ExecHashShrink(HashJoinTable hashtable)
 			/* Serial phase: one participant clears the hash table. */
 			memset(hashtable->buckets, 0,
 				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
-			
 		}
 	clearing:
 		/* Wait until hash table is cleared. */
@@ -1075,7 +1082,7 @@ ExecHashShrink(HashJoinTable hashtable)
 		memset(hashtable->buckets, 0,
 			   sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 	}
-	
+
  working:
 	/* Pop first chunk from the shrink queue. */
 	if (HashJoinTableIsShared(hashtable))
@@ -1142,7 +1149,7 @@ ExecHashShrink(HashJoinTable hashtable)
 
 		/* Free chunk and pop next from the queue. */
 		if (HashJoinTableIsShared(hashtable))
- 		{
+		{
 			Size size = chunk->maxlen + HASH_CHUNK_HEADER_SIZE;
 
 			dsa_free(hashtable->area, chunk_shared);
@@ -1200,6 +1207,10 @@ ExecHashShrink(HashJoinTable hashtable)
 			{
 				TRACE_POSTGRESQL_HASH_SHRINK_DISABLED();
 				hashtable->shared->grow_enabled = false;
+#ifdef HJDEBUG
+			printf("Hashjoin %p: disabling further increase of nbatch\n",
+				   hashtable);
+#endif
 			}
 		}
 	deciding:
@@ -1218,8 +1229,8 @@ ExecHashShrink(HashJoinTable hashtable)
 			printf("Hashjoin %p: disabling further increase of nbatch\n",
 				   hashtable);
 #endif
- 		}
- 	}	
+		}
+	}
 }
 
 /*
@@ -1240,10 +1251,10 @@ ExecHashUpdate(HashJoinTable hashtable)
 	hashtable->log2_nbuckets = my_log2(hashtable->nbuckets);
 	hashtable->buckets = (HashJoinBucketHead *)
 		dsa_get_address(hashtable->area, hashtable->shared->buckets);
-
-	/* TODO: We don't support multi-batch shared table joins yet. */
-	hashtable->nbatch = 1;
-	hashtable->curbatch = 0;
+	hashtable->curbatch =
+		PHJ_PHASE_TO_BATCHNO(BarrierPhase(&hashtable->shared->barrier));
+	if (hashtable->shared->nbatch > hashtable->nbatch)
+		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
 }
 
 /*
@@ -1862,19 +1873,23 @@ ExecHashTableReset(HashJoinTable hashtable)
 
 	if (HashJoinTableIsShared(hashtable))
 	{
-		/* Wait for all workers to finish accessing the hash table. */
+		/*
+		 * Wait for all workers to finish accessing the hash table for the
+		 * previous batch.
+		 */
 		Assert(BarrierPhase(&hashtable->shared->barrier) ==
-			   PHJ_PHASE_UNMATCHED_BATCH(hashtable->curbatch));
+			   PHJ_PHASE_UNMATCHED_BATCH(hashtable->curbatch - 1));
 		if (BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_UNMATCHED))
 		{
-			/* Serial phase: set up hash table for new batch. */
+			/* Serial phase: prepare shared state for new batch. */
 			dsa_pointer chunk_shared;
 
-			Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(&hashtable->shared->barrier)) ==
-				   PHJ_SUBPHASE_PROMOTING);
+			Assert(BarrierPhase(&hashtable->shared->barrier) ==
+				   PHJ_PHASE_RESETTING_BATCH(hashtable->curbatch));
 
 			/* Clear the hash table. */
-			memset(hashtable->buckets, 0, sizeof(HashJoinBucketHead) * hashtable->nbuckets);
+			memset(hashtable->buckets, 0,
+				   sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 
 			/* Free all the chunks. */
 			/*
@@ -1890,11 +1905,24 @@ ExecHashTableReset(HashJoinTable hashtable)
 			hashtable->shared->size =
 				(hashtable->nbuckets * sizeof(HashJoinBucketHead));
 
-			/* Rewind the shared read heads for this batch. */
-			ExecHashJoinRewindBatches(hashtable, hashtable->curbatch);	
+			/* Rewind the shared read heads for this batch, inner and outer. */
+			ExecHashJoinRewindBatches(hashtable, hashtable->curbatch);
 		}
-		/* Wait again, so that all workers now have the new table. */
-		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_PROMOTING);
+
+		/*
+		 * Export this participant's inner and outer batch files, because they
+		 * are now read-only.
+		 */
+		ExecHashJoinExportBatch(hashtable, hashtable->curbatch, true);
+		ExecHashJoinExportBatch(hashtable, hashtable->curbatch, false);
+
+		/*
+		 * Wait again, so that all workers see the new hash table and can
+		 * safely read from batch files from any participant.
+		 */
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_RESETTING_BATCH(hashtable->curbatch));
+		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_RESETTING);
 		Assert(BarrierPhase(&hashtable->shared->barrier) ==
 			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
 		ExecHashUpdate(hashtable);
@@ -1903,7 +1931,7 @@ ExecHashTableReset(HashJoinTable hashtable)
 		hashtable->current_chunk = NULL;
 		return;
 	}
-	
+
 	/*
 	 * Release all the hash buckets and tuples acquired in the prior pass, and
 	 * reinitialize the context for a new pass.
@@ -2537,7 +2565,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
 		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
-		
+
 		/*
 		 * Whenever nbatch changes, every participant attached to
 		 * shrink_barrier must run ExecHashShrink to help shrink the hash

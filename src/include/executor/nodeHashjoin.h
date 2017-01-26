@@ -33,7 +33,7 @@ extern void ExecHashJoinSaveTuple(MinimalTuple tuple, uint32 hashvalue,
 extern void ExecHashJoinRewindBatches(HashJoinTable hashtable, int batchno);
 extern void ExecHashJoinOpenBatch(HashJoinTable hashtable,
 								  int batchno, bool inner);
-extern void ExecHashJoinCloseBatch(HashJoinTable hashtable,
-								   int batchno, bool inner);
+extern void ExecHashJoinCloseBatch(HashJoinTable hashtable);
+extern void ExecHashJoinExportBatch(HashJoinTable hashtable, int batchno, bool inner);
 
 #endif   /* NODEHASHJOIN_H */

@@ -50,7 +50,6 @@ static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
 static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
 static void ExecHashJoinLoadBatch(HashJoinState *hjstate);
 static void ExecHashJoinExportAllBatches(HashJoinTable hashtable);
-static void ExecHashJoinExportBatch(HashJoinTable hashtable, int batchno, bool inner);
 static void ExecHashJoinImportBatch(HashJoinTable hashtable,
 									HashJoinBatchReader *reader);
 
@@ -205,7 +204,7 @@ ExecHashJoin(HashJoinState *node)
 					{
 						/*
 						 * Other participants will need to handle all future
-						 * batches written by me.  We don't detach until after
+						 * batches written by me.  We can't detach until after
 						 * we've exported all batches, otherwise the phase
 						 * might advance and another participant might try to
 						 * import them.
@@ -216,22 +215,6 @@ ExecHashJoin(HashJoinState *node)
 						BarrierDetach(&hashtable->shared->barrier);
 						hashtable->detached_early = true;
 						return NULL;
-					}
-
-					/*
-					 * Export just the next batch, if there is one, because it
-					 * is now read-only and other participants may decide to
-					 * read from it.  Future batches can still be written to
-					 * if work_mem is exceeded by any future batch and we
-					 * decide to increase their number, so we can't export
-					 * those yet.  We'll export the batch files written by
-					 * each participant only as they become read-only, but
-					 * before any participant reads from them.
-					 */
-					if (hashtable->nbatch > 1)
-					{
-						ExecHashJoinExportBatch(hashtable, 1, false);
-						ExecHashJoinExportBatch(hashtable, 1, true);
 					}
 				}
 
@@ -274,9 +257,9 @@ ExecHashJoin(HashJoinState *node)
 					Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
 					switch (PHJ_PHASE_TO_SUBPHASE(phase))
 					{
-					case PHJ_SUBPHASE_PROMOTING:
+					case PHJ_SUBPHASE_RESETTING:
 						/* Wait for serial phase to finish. */
-						BarrierWait(barrier, WAIT_EVENT_HASHJOIN_PROMOTING);
+						BarrierWait(barrier, WAIT_EVENT_HASHJOIN_RESETTING);
 						Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(barrier)) ==
 							   PHJ_SUBPHASE_LOADING);
 						/* fall through */
@@ -326,7 +309,7 @@ ExecHashJoin(HashJoinState *node)
 				if (TupIsNull(outerTupleSlot))
 				{
 					/* end of batch, or maybe whole join */
-				
+
 					if (HashJoinTableIsShared(hashtable))
 					{
 						/*
@@ -379,6 +362,7 @@ ExecHashJoin(HashJoinState *node)
 					}
 					else
 						node->hj_JoinState = HJ_NEED_NEW_BATCH;
+
 					continue;
 				}
 
@@ -567,6 +551,12 @@ ExecHashJoin(HashJoinState *node)
 				break;
 
 			case HJ_NEED_NEW_BATCH:
+
+				/* Close the previous batch file to free up disk space. */
+				if (HashJoinTableIsShared(hashtable))
+					Assert(BarrierPhase(&hashtable->shared->barrier) ==
+						   PHJ_PHASE_UNMATCHED_BATCH(hashtable->curbatch));
+				ExecHashJoinCloseBatch(hashtable);
 
 				/*
 				 * Try to advance to next batch.  Done if there are no more.
@@ -897,7 +887,7 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 	if (HashJoinTableIsShared(hashtable))
 		Assert(BarrierPhase(&hashtable->shared->barrier) ==
 			   PHJ_PHASE_UNMATCHED_BATCH(curbatch));
-	
+
 	if (curbatch > 0)
 	{
 		/*
@@ -974,7 +964,7 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 
 	hashtable->curbatch = curbatch;
 
-	/* Clear the hash table in preparation for loading a batch. */
+	/* Clear the hash table and load the batch. */
 	ExecHashTableReset(hashtable);
 	ExecHashJoinLoadBatch(hjstate);
 
@@ -992,12 +982,12 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 	int			tuples_processed = 0;
 #endif
 
-	TRACE_POSTGRESQL_HASHJOIN_LOAD_START(hashtable->curbatch);
-	
 	/* We'll need to read from the inner batch file(s). */
 	ExecHashJoinOpenBatch(hashtable, hashtable->curbatch, true);
 	Assert(hashtable->batch_reader.batchno == curbatch);
 	Assert(hashtable->batch_reader.inner);
+
+	TRACE_POSTGRESQL_HASHJOIN_LOAD_START(hashtable->curbatch);
 
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -1027,7 +1017,23 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 	}
 	TRACE_POSTGRESQL_HASHJOIN_LOAD_DONE(hashtable->curbatch, tuples_processed);
 
-	/* TODO: close batch file as it is no longer needed */
+	if (HashJoinTableIsShared(hashtable))
+	{
+		BarrierDetach(&hashtable->shared->shrink_barrier);
+
+		/*
+		 * Wait until all participants have finished loading their portion of
+		 * the hash table.
+		 */
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
+		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASHJOIN_LOADING);
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_PROBING_BATCH(hashtable->curbatch));
+	}
+
+	/* Close the batch to free up disk space. */
+	ExecHashJoinCloseBatch(hashtable);
 }
 
 /*
@@ -1153,7 +1159,7 @@ ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
 			{
 				ereport(ERROR,
 					(errcode_for_file_access(),
- 				 errmsg("could not read from hash-join temporary file: %m")));
+				 errmsg("could not read from hash-join temporary file: %m")));
 			}
 			*hashvalue = header[0];
 			tuple = (MinimalTuple) palloc(header[1]);
@@ -1257,7 +1263,7 @@ make_batch_descriptor(dsa_area *area, BufFile *file)
 
 	return pointer;
 }
-		
+
 /*
  * Export the inner or outer batch file written by this participant for a
  * given batch number, so that other backends can import and read from it if
@@ -1265,7 +1271,7 @@ make_batch_descriptor(dsa_area *area, BufFile *file)
  * after this participant has finished writing to the batch, but before any
  * other participant might attempt to read from it.
  */
-static void
+void
 ExecHashJoinExportBatch(HashJoinTable hashtable, int batchno, bool inner)
 {
 	HashJoinParticipantState *participant;
@@ -1500,38 +1506,33 @@ ExecHashJoinOpenBatch(HashJoinTable hashtable, int batchno, bool inner)
 }
 
 /*
- * Close a batch, once it is not needed by any participant.  This causes batch
- * files created by this participant to be deleted.
+ * Close the most recently opened batch, once it is not needed by any
+ * participant.  This causes batch files created by this participant to be
+ * deleted.
  */
 void
-ExecHashJoinCloseBatch(HashJoinTable hashtable, int batchno, bool inner)
+ExecHashJoinCloseBatch(HashJoinTable hashtable)
 {
-	HashJoinParticipantState *participant;
+	BufFile *file = NULL;
 	HashJoinBatchReader *batch_reader;
-	BufFile *file;
 
 	/*
-	 * We only need to close the batch owned by THIS participant.  That causes
-	 * it to be deleted.  Batches opened in this backend but created by other
-	 * participants are closed by ExecHashJoinGetSavedTuple when it reaches
-	 * the end of the file, allowing them to be closed sooner.
+	 * Close the most recently opened batch, but only the file owned by this
+	 * participant.
 	 */
 	batch_reader = &hashtable->batch_reader;
-	participant = &hashtable->shared->participants[HashJoinParticipantNumber()];
-	if (inner)
+	if (batch_reader->inner && hashtable->innerBatchFile != NULL)
 	{
-		file = hashtable->innerBatchFile[batchno];
-		hashtable->innerBatchFile[batchno] = NULL;
+		file = hashtable->innerBatchFile[batch_reader->batchno];
+		hashtable->innerBatchFile[batch_reader->batchno] = NULL;
 	}
-	else
+	else if (hashtable->outerBatchFile != NULL)
 	{
-		file = hashtable->outerBatchFile[batchno];
-		hashtable->outerBatchFile[batchno] = NULL;
+		file = hashtable->outerBatchFile[batch_reader->batchno];
+		hashtable->outerBatchFile[batch_reader->batchno] = NULL;
 	}
 	if (file == NULL)
 		return;
-
-	Assert(batch_reader->file == NULL || file == batch_reader->file);
 
 	BufFileClose(file);
 	batch_reader->file = NULL;
@@ -1559,11 +1560,13 @@ ExecHashJoinRewindBatches(HashJoinTable hashtable, int batchno)
 			reader->batchno = batchno; /* for loading this batch */
 			reader->head.fileno = 0;
 			reader->head.offset = 0;
+			reader->error = false;
 
 			reader = &hashtable->shared->participants[i].outer_batch_reader;
 			reader->batchno = batchno; /* for probing this batch */
 			reader->head.fileno = 0;
 			reader->head.offset = 0;
+			reader->error = false;
 		}
 	}
 	else
@@ -1667,7 +1670,8 @@ void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
 {
 	size_t size;
 
-	size = sizeof(SharedHashJoinTableData);
+	size = sizeof(SharedHashJoinTableData) +
+		sizeof(HashJoinParticipantState) * (pcxt->nworkers + 1);
 	shm_toc_estimate_chunk(&pcxt->estimator, size);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 }
@@ -1679,6 +1683,7 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	SharedHashJoinTable shared;
 	size_t size;
 	int planned_participants;
+	int i;
 
 	/*
 	 * Disable shared hash table mode if we failed to create a real DSM
@@ -1693,7 +1698,8 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	 * using the plan node ID as the toc key.
 	 */
 	planned_participants = pcxt->nworkers + 1;	/* possible workers + leader */
-	size = sizeof(SharedHashJoinTableData);
+	size = sizeof(SharedHashJoinTableData) +
+		sizeof(HashJoinParticipantState) * planned_participants;
 	shared = shm_toc_allocate(pcxt->toc, size);
 	BarrierInit(&shared->barrier, 0);
 	shared->nbuckets = 0;
@@ -1706,6 +1712,13 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	shm_toc_insert(pcxt->toc, state->js.ps.plan->plan_node_id, shared);
 
 	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
+	for (i = 0; i < planned_participants; ++i)
+	{
+		LWLockInitialize(&shared->participants[i].inner_batch_reader.lock,
+						 LWTRANCHE_PARALLEL_HASH_JOIN_INNER_BATCH_READER);
+		LWLockInitialize(&shared->participants[i].outer_batch_reader.lock,
+						 LWTRANCHE_PARALLEL_HASH_JOIN_OUTER_BATCH_READER);
+	}
 
 	/*
 	 * Pass the SharedHashJoinTable to the hash node.  If the Gather node

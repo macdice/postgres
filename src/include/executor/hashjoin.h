@@ -347,13 +347,13 @@ typedef struct HashJoinTableData
 #define PHJ_PHASE_UNMATCHED				6	/* PHJ_PHASE_UNMATCHED_BATCH(0) */
 
 /* The subphases for batches. */
-#define PHJ_SUBPHASE_PROMOTING			0
+#define PHJ_SUBPHASE_RESETTING			0
 #define PHJ_SUBPHASE_LOADING			1
 #define PHJ_SUBPHASE_PROBING			2
 #define PHJ_SUBPHASE_UNMATCHED			3
 
 /* The phases of parallel processing for batch(n). */
-#define PHJ_PHASE_PROMOTING_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 4 - 3)
+#define PHJ_PHASE_RESETTING_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 4 - 3)
 #define PHJ_PHASE_LOADING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 4 - 2)
 #define PHJ_PHASE_PROBING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 4 - 1)
 #define PHJ_PHASE_UNMATCHED_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 4 - 0)
