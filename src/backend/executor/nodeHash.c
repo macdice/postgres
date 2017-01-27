@@ -1171,6 +1171,7 @@ ExecHashShrink(HashJoinTable hashtable)
 		{
 			Size size = chunk->maxlen + HASH_CHUNK_HEADER_SIZE;
 
+			Assert(chunk == dsa_get_address(hashtable->area, chunk_shared));
 			dsa_free(hashtable->area, chunk_shared);
 
 			LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
@@ -2580,7 +2581,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 	}
 
 	/* Check if we need to help shrinking. */
-	if (hashtable->shared->shrink_needed)
+	if (hashtable->shared->shrink_needed && respect_work_mem)
 	{
 		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
