@@ -787,18 +787,13 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	*numbatches = nbatch;
 }
 
-
-/* ----------------------------------------------------------------
- *		ExecHashTableDestroy
- *
- *		destroy a hash table
- * ----------------------------------------------------------------
+/*
+ * Detach from the shared hash table, freeing all memory if we are the last to
+ * detach.
  */
 void
-ExecHashTableDestroy(HashJoinTable hashtable)
+ExecHashTableDetach(HashJoinTable hashtable)
 {
-	int			i;
-
 	if (HashJoinTableIsShared(hashtable))
 	{
 		Barrier *barrier = &hashtable->shared->barrier;
@@ -806,7 +801,8 @@ ExecHashTableDestroy(HashJoinTable hashtable)
 		/*
 		 * Instead of waiting at the end of a hash join for all participants
 		 * to finish, we detach and let the last to detach clean up the shared
-		 * resources.
+		 * resources.  This avoids unnecessary waiting at the end of single
+		 * batch probes.
 		 */
 		if (BarrierDetach(barrier))
 		{
@@ -831,7 +827,23 @@ ExecHashTableDestroy(HashJoinTable hashtable)
 					dsa_free(hashtable->area, chunk_shared);
 			}
 		}
+		hashtable->shared = NULL;
 	}
+}
+
+/* ----------------------------------------------------------------
+ *		ExecHashTableDestroy
+ *
+ *		destroy a hash table
+ * ----------------------------------------------------------------
+ */
+void
+ExecHashTableDestroy(HashJoinTable hashtable)
+{
+	int			i;
+
+	/* If shared, clean up shared memory and detach. */
+	ExecHashTableDetach(hashtable);
 
 	/*
 	 * Make sure all the temp files are closed.  We skip batch 0, since it

@@ -25,6 +25,7 @@ extern void ExecReScanHash(HashState *node);
 extern HashJoinTable ExecHashTableCreate(HashState *state, List *hashOperators,
 					bool keepNulls);
 extern void ExecHashTableDestroy(HashJoinTable hashtable);
+extern void ExecHashTableDetach(HashJoinTable hashtable);
 extern void ExecHashTableInsert(HashJoinTable hashtable,
 					TupleTableSlot *slot,
 					uint32 hashvalue);
