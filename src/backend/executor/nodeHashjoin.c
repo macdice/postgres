@@ -260,12 +260,21 @@ ExecHashJoin(HashJoinState *node)
 					if (HashJoinTableIsShared(hashtable))
 					{
 						/*
+						 * An important optimization: if this is a
+						 * single-batch join and not an outer join, there is
+						 * no reason to synchronize again when we've finished
+						 * probing.
+						 */
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_PROBING);
+						if (hashtable->nbatch == 1 && !HJ_FILL_INNER(node))
+							return NULL;	/* end of join */
+
+						/*
 						 * We can't start searching for unmatched tuples until
 						 * all participants have finished probing, so we
 						 * synchronize here.
 						 */
-						Assert(BarrierPhase(&hashtable->shared->barrier) ==
-							   PHJ_PHASE_PROBING);
 						if (BarrierWait(&hashtable->shared->barrier,
 										WAIT_EVENT_HASHJOIN_PROBING))
 						{
