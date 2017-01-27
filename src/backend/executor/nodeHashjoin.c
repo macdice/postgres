@@ -1591,6 +1591,7 @@ ExecReScanHashJoin(HashJoinState *node)
 			/* Only the leader is running now, so we can reinitialize. */
 			Assert(!IsParallelWorker());
 			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
+			node->hj_HashTable->shared->at_least_one_worker = false;
 		}
 
 		if (node->hj_HashTable->nbatch == 1 &&
@@ -1612,6 +1613,7 @@ ExecReScanHashJoin(HashJoinState *node)
 				BarrierWaitSet(&node->hj_HashTable->shared->barrier,
 							   PHJ_PHASE_PROBING,
 							   WAIT_EVENT_HASHJOIN_REWINDING);
+				node->hj_HashTable->attached_at_phase = PHJ_PHASE_PROBING;
 			}
 
 			/*
