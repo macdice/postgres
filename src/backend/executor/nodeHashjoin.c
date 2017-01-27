@@ -699,18 +699,6 @@ ExecEndHashJoin(HashJoinState *node)
 	ExecEndNode(innerPlanState(node));
 }
 
-void
-ExecShutdownHashJoin(HashJoinState *node)
-{
-	/*
-	 * TODO: Figure out how to handle this.  For now, just clear the shared
-	 * hash table so that ExecEndHashJoin won't blow up when it's called after
-	 * the dsa_area has been detached.
-	 */
-	if (node->hj_HashTable)
-		node->hj_HashTable->shared = NULL;
-}
-
 /*
  * ExecHashJoinOuterGetTuple
  *
@@ -1032,6 +1020,13 @@ ExecReScanHashJoin(HashJoinState *node)
 	 */
 	if (node->hj_HashTable != NULL)
 	{
+		if (HashJoinTableIsShared(node->hj_HashTable))
+		{
+			/* Only the leader is running now, so we can reinitialize. */
+			Assert(!IsParallelWorker());
+			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
+		}
+
 		if (node->hj_HashTable->nbatch == 1 &&
 			node->js.ps.righttree->chgParam == NULL)
 		{
@@ -1043,6 +1038,15 @@ ExecReScanHashJoin(HashJoinState *node)
 			 */
 			if (HJ_FILL_INNER(node))
 				ExecHashTableResetMatchFlags(node->hj_HashTable);
+
+			if (HashJoinTableIsShared(node->hj_HashTable))
+			{
+				/* Reattach and fast-forward to the probing phase. */
+				BarrierAttach(&node->hj_HashTable->shared->barrier);
+				BarrierWaitSet(&node->hj_HashTable->shared->barrier,
+							   PHJ_PHASE_PROBING,
+							   WAIT_EVENT_HASHJOIN_REWINDING);
+			}
 
 			/*
 			 * Also, we need to reset our state about the emptiness of the
@@ -1057,14 +1061,6 @@ ExecReScanHashJoin(HashJoinState *node)
 
 			/* ExecHashJoin can skip the BUILD_HASHTABLE step */
 			node->hj_JoinState = HJ_NEED_NEW_OUTER;
-
-			if (HashJoinTableIsShared(node->hj_HashTable))
-			{
-				/* Coordinate a rewind to the probing phase. */
-				BarrierWaitSet(&node->hj_HashTable->shared->barrier,
-							   PHJ_PHASE_PROBING,
-							   WAIT_EVENT_HASHJOIN_REWINDING);
-			}
 		}
 		else
 		{

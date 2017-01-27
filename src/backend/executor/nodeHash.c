@@ -804,35 +804,33 @@ ExecHashTableDestroy(HashJoinTable hashtable)
 		Barrier *barrier = &hashtable->shared->barrier;
 
 		/*
-		 * Wait for anyone probing to finish doing that and free all memory.
-		 * We do that by going back to the initial state, so that
-		 * ExecHashTableCreate can work in case of rescan.  We need to wait
-		 * until all participants agree that we're doing that, so that it's
-		 * safe to reattach if required.
+		 * Instead of waiting at the end of a hash join for all participants
+		 * to finish, we detach and let the last to detach clean up the shared
+		 * resources.
 		 */
-		if (BarrierWaitSet(barrier, PHJ_PHASE_BEGINNING,
-						   WAIT_EVENT_HASH_DESTROY))
+		if (BarrierDetach(barrier))
 		{
 			/* Serial: free the buckets and chunks */
 			if (DsaPointerIsValid(hashtable->shared->buckets))
 			{
 				dsa_pointer chunk_shared;
 
+				/*
+				 * We could just forget about the memory, since the whole area
+				 * will be freed at the end of the query anyway.  But that
+				 * wouldn't work for rescans, where we'll be allocating a
+				 * whole hashtable again, creating a leak.  Perhaps we could
+				 * consider moving all the chunks to a freelist here for reuse
+				 * in the cast of a rescan, so that we can avoid the cost of
+				 * one backend freeing all chunks in the common case.
+				 */
 				dsa_free(hashtable->area, hashtable->shared->buckets);
 				hashtable->shared->buckets = InvalidDsaPointer;
-
-				/*
-				 * Should we put these chunks on a freelist to be used next
-				 * time in case of rescan, to avoid having one backend freeing
-				 * all chunks like this?
-				 */
 				hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 				while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
 					dsa_free(hashtable->area, chunk_shared);
 			}
 		}
-
-		BarrierDetach(&hashtable->shared->barrier);
 	}
 
 	/*

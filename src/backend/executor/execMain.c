@@ -469,6 +469,9 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 
 	ExecEndPlan(queryDesc->planstate, estate);
 
+	/* Allow nodes to release or shut down resources. */
+	(void) ExecShutdownNode(queryDesc->planstate);
+
 	/* do away with our snapshots */
 	UnregisterSnapshot(estate->es_snapshot);
 	UnregisterSnapshot(estate->es_crosscheck_snapshot);
@@ -1591,11 +1594,7 @@ ExecutePlan(EState *estate,
 		 * process so we just end the loop...
 		 */
 		if (TupIsNull(slot))
-		{
-			/* Allow nodes to release or shut down resources. */
-			(void) ExecShutdownNode(planstate);
 			break;
-		}
 
 		/*
 		 * If we have a junk filter, then project a new tuple with the junk

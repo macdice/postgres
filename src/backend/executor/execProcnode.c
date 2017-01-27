@@ -806,9 +806,6 @@ ExecShutdownNode(PlanState *node)
 		case T_GatherState:
 			ExecShutdownGather((GatherState *) node);
 			break;
-		case T_HashJoinState:
-			ExecShutdownHashJoin((HashJoinState *) node);
-			break;
 		default:
 			break;
 	}
