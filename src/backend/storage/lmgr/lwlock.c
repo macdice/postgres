@@ -955,7 +955,7 @@ LWLockWakeup(LWLock *lock)
 		 * that happens before the list unlink happens, the list would end up
 		 * being corrupted.
 		 *
-		 * The barrier pairs with the LWLockWaitListLock() when enqueing for
+		 * The barrier pairs with the LWLockWaitListLock() when enqueueing for
 		 * another lock.
 		 */
 		pg_write_barrier();
@@ -1189,7 +1189,7 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 		 * Instead add us to the queue and try to grab the lock again. If we
 		 * succeed we need to revert the queuing and be happy, otherwise we
 		 * recheck the lock. If we still couldn't grab it, we know that the
-		 * other lock will see our queue entries when releasing since they
+		 * other locker will see our queue entries when releasing since they
 		 * existed before we checked for the lock.
 		 */
 

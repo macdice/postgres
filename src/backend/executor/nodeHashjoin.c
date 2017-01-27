@@ -71,7 +71,6 @@ ExecHashJoin(HashJoinState *node)
 	List	   *joinqual;
 	List	   *otherqual;
 	ExprContext *econtext;
-	ExprDoneCond isDone;
 	HashJoinTable hashtable;
 	TupleTableSlot *outerTupleSlot;
 	uint32		hashvalue;
@@ -88,25 +87,8 @@ ExecHashJoin(HashJoinState *node)
 	econtext = node->js.ps.ps_ExprContext;
 
 	/*
-	 * Check to see if we're still projecting out tuples from a previous join
-	 * tuple (because there is a function-returning-set in the projection
-	 * expressions).  If so, try to project another one.
-	 */
-	if (node->js.ps.ps_TupFromTlist)
-	{
-		TupleTableSlot *result;
-
-		result = ExecProject(node->js.ps.ps_ProjInfo, &isDone);
-		if (isDone == ExprMultipleResult)
-			return result;
-		/* Done with that source tuple... */
-		node->js.ps.ps_TupFromTlist = false;
-	}
-
-	/*
 	 * Reset per-tuple memory context to free any expression evaluation
-	 * storage allocated in the previous tuple cycle.  Note this can't happen
-	 * until we're done projecting out tuples from a join tuple.
+	 * storage allocated in the previous tuple cycle.
 	 */
 	ResetExprContext(econtext);
 
@@ -467,18 +449,7 @@ ExecHashJoin(HashJoinState *node)
 
 					if (otherqual == NIL ||
 						ExecQual(otherqual, econtext, false))
-					{
-						TupleTableSlot *result;
-
-						result = ExecProject(node->js.ps.ps_ProjInfo, &isDone);
-
-						if (isDone != ExprEndResult)
-						{
-							node->js.ps.ps_TupFromTlist =
-								(isDone == ExprMultipleResult);
-							return result;
-						}
-					}
+						return ExecProject(node->js.ps.ps_ProjInfo);
 					else
 						InstrCountFiltered2(node, 1);
 				}
@@ -506,18 +477,7 @@ ExecHashJoin(HashJoinState *node)
 
 					if (otherqual == NIL ||
 						ExecQual(otherqual, econtext, false))
-					{
-						TupleTableSlot *result;
-
-						result = ExecProject(node->js.ps.ps_ProjInfo, &isDone);
-
-						if (isDone != ExprEndResult)
-						{
-							node->js.ps.ps_TupFromTlist =
-								(isDone == ExprMultipleResult);
-							return result;
-						}
-					}
+						return ExecProject(node->js.ps.ps_ProjInfo);
 					else
 						InstrCountFiltered2(node, 1);
 				}
@@ -545,18 +505,7 @@ ExecHashJoin(HashJoinState *node)
 
 				if (otherqual == NIL ||
 					ExecQual(otherqual, econtext, false))
-				{
-					TupleTableSlot *result;
-
-					result = ExecProject(node->js.ps.ps_ProjInfo, &isDone);
-
-					if (isDone != ExprEndResult)
-					{
-						node->js.ps.ps_TupFromTlist =
-							(isDone == ExprMultipleResult);
-						return result;
-					}
-				}
+					return ExecProject(node->js.ps.ps_ProjInfo);
 				else
 					InstrCountFiltered2(node, 1);
 				break;
@@ -733,12 +682,9 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hoperators = NIL;
 	foreach(l, hjstate->hashclauses)
 	{
-		FuncExprState *fstate = (FuncExprState *) lfirst(l);
-		OpExpr	   *hclause;
+		FuncExprState *fstate = castNode(FuncExprState, lfirst(l));
+		OpExpr	   *hclause = castNode(OpExpr, fstate->xprstate.expr);
 
-		Assert(IsA(fstate, FuncExprState));
-		hclause = (OpExpr *) fstate->xprstate.expr;
-		Assert(IsA(hclause, OpExpr));
 		lclauses = lappend(lclauses, linitial(fstate->args));
 		rclauses = lappend(rclauses, lsecond(fstate->args));
 		hoperators = lappend_oid(hoperators, hclause->opno);
@@ -749,7 +695,6 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	/* child Hash node needs to evaluate inner hash keys, too */
 	((HashState *) innerPlanState(hjstate))->hashkeys = rclauses;
 
-	hjstate->js.ps.ps_TupFromTlist = false;
 	hjstate->hj_JoinState = HJ_BUILD_HASHTABLE;
 	hjstate->hj_MatchedOuter = false;
 	hjstate->hj_OuterNotEmpty = false;
@@ -1668,7 +1613,6 @@ ExecReScanHashJoin(HashJoinState *node)
 	node->hj_CurSkewBucketNo = INVALID_SKEW_BUCKET_NO;
 	node->hj_CurTuple = NULL;
 
-	node->js.ps.ps_TupFromTlist = false;
 	node->hj_MatchedOuter = false;
 	node->hj_FirstOuterTupleSlot = NULL;
 
