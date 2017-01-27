@@ -622,17 +622,35 @@ partition_bounds_equal(PartitionKey key,
 
 		for (j = 0; j < key->partnatts; j++)
 		{
-			int32		cmpval;
+			/* For range partitions, the bounds might not be finite. */
+			if (b1->content != NULL)
+			{
+				/*
+				 * A finite bound always differs from an infinite bound, and
+				 * different kinds of infinities differ from each other.
+				 */
+				if (b1->content[i][j] != b2->content[i][j])
+					return false;
 
-			cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[j],
-													 key->partcollation[j],
-													 b1->datums[i][j],
-													 b2->datums[i][j]));
-			if (cmpval != 0)
-				return false;
+				/* Non-finite bounds are equal without further examination. */
+				if (b1->content[i][j] != RANGE_DATUM_FINITE)
+					continue;
+			}
 
-			/* Range partitions can have infinite datums */
-			if (b1->content != NULL && b1->content[i][j] != b2->content[i][j])
+			/*
+			 * Compare the actual values. Note that it would be both incorrect
+			 * and unsafe to invoke the comparison operator derived from the
+			 * partitioning specification here.  It would be incorrect because
+			 * we want the relcache entry to be updated for ANY change to the
+			 * partition bounds, not just those that the partitioning operator
+			 * thinks are significant.  It would be unsafe because we might
+			 * reach this code in the context of an aborted transaction, and
+			 * an arbitrary partitioning operator might not be safe in that
+			 * context.  datumIsEqual() should be simple enough to be safe.
+			 */
+			if (!datumIsEqual(b1->datums[i][j], b2->datums[i][j],
+							  key->parttypbyval[j],
+							  key->parttyplen[j]))
 				return false;
 		}
 
@@ -741,37 +759,68 @@ check_new_partition_bound(char *relname, Relation parent, Node *bound)
 						   boundinfo->strategy == PARTITION_STRATEGY_RANGE);
 
 					/*
-					 * Find the greatest index of a range bound that is less
-					 * than or equal with the new lower bound.
+					 * Firstly, find the greatest range bound that is less
+					 * than or equal to the new lower bound.
 					 */
 					off1 = partition_bound_bsearch(key, boundinfo, lower, true,
 												   &equal);
 
 					/*
-					 * If equal has been set to true, that means the new lower
-					 * bound is found to be equal with the bound at off1,
-					 * which clearly means an overlap with the partition at
-					 * index off1+1).
-					 *
-					 * Otherwise, check if there is a "gap" that could be
-					 * occupied by the new partition.  In case of a gap, the
-					 * new upper bound should not cross past the upper
-					 * boundary of the gap, that is, off2 == off1 should be
-					 * true.
+					 * off1 == -1 means that all existing bounds are greater
+					 * than the new lower bound.  In that case and the case
+					 * where no partition is defined between the bounds at
+					 * off1 and off1 + 1, we have a "gap" in the range that
+					 * could be occupied by the new partition.  We confirm if
+					 * so by checking whether the new upper bound is confined
+					 * within the gap.
 					 */
 					if (!equal && boundinfo->indexes[off1 + 1] < 0)
 					{
 						off2 = partition_bound_bsearch(key, boundinfo, upper,
 													   true, &equal);
 
+						/*
+						 * If the new upper bound is returned to be equal to
+						 * the bound at off2, the latter must be the upper
+						 * bound of some partition with which the new
+						 * partition clearly overlaps.
+						 *
+						 * Also, if bound at off2 is not same as the one
+						 * returned for the new lower bound (IOW, off1 !=
+						 * off2), then the new partition overlaps at least one
+						 * partition.
+						 */
 						if (equal || off1 != off2)
 						{
 							overlap = true;
-							with = boundinfo->indexes[off2 + 1];
+
+							/*
+							 * The bound at off2 could be the lower bound of
+							 * the partition with which the new partition
+							 * overlaps.  In that case, use the upper bound
+							 * (that is, the bound at off2 + 1) to get the
+							 * index of that partition.
+							 */
+							if (boundinfo->indexes[off2] < 0)
+								with = boundinfo->indexes[off2 + 1];
+							else
+								with = boundinfo->indexes[off2];
 						}
 					}
 					else
 					{
+						/*
+						 * Equal has been set to true and there is no "gap"
+						 * between the bound at off1 and that at off1 + 1, so
+						 * the new partition will overlap some partition. In
+						 * the former case, the new lower bound is found to be
+						 * equal to the bound at off1, which could only ever
+						 * be true if the latter is the lower bound of some
+						 * partition.  It's clear in such a case that the new
+						 * partition overlaps that partition, whose index we
+						 * get using its upper bound (that is, using the bound
+						 * at off1 + 1).
+						 */
 						overlap = true;
 						with = boundinfo->indexes[off1 + 1];
 					}
@@ -883,34 +932,22 @@ get_qual_from_partbound(Relation rel, Relation parent, Node *bound)
  * different from the parent's.
  */
 List *
-map_partition_varattnos(List *expr, Relation partrel, Relation parent)
+map_partition_varattnos(List *expr, int target_varno,
+						Relation partrel, Relation parent)
 {
-	TupleDesc	tupdesc = RelationGetDescr(parent);
-	AttrNumber	attno;
 	AttrNumber *part_attnos;
 	bool		found_whole_row;
 
 	if (expr == NIL)
 		return NIL;
 
-	part_attnos = (AttrNumber *) palloc0(tupdesc->natts * sizeof(AttrNumber));
-	for (attno = 1; attno <= tupdesc->natts; attno++)
-	{
-		Form_pg_attribute attribute = tupdesc->attrs[attno - 1];
-		char	   *attname = NameStr(attribute->attname);
-		AttrNumber	part_attno;
-
-		if (attribute->attisdropped)
-			continue;
-
-		part_attno = get_attnum(RelationGetRelid(partrel), attname);
-		part_attnos[attno - 1] = part_attno;
-	}
-
+	part_attnos = convert_tuples_by_name_map(RelationGetDescr(partrel),
+											 RelationGetDescr(parent),
+								 gettext_noop("could not convert row type"));
 	expr = (List *) map_variable_attnos((Node *) expr,
-										1, 0,
+										target_varno, 0,
 										part_attnos,
-										tupdesc->natts,
+										RelationGetDescr(parent)->natts,
 										&found_whole_row);
 	/* There can never be a whole-row reference here */
 	if (found_whole_row)
@@ -1032,7 +1069,7 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 		Relation	partrel = lfirst(lc1);
 		Relation	parent = lfirst(lc2);
 		PartitionKey partkey = RelationGetPartitionKey(partrel);
-		TupleDesc	 tupdesc = RelationGetDescr(partrel);
+		TupleDesc	tupdesc = RelationGetDescr(partrel);
 		PartitionDesc partdesc = RelationGetPartitionDesc(partrel);
 		int			j,
 					m;
@@ -1045,17 +1082,17 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 		if (parent != NULL)
 		{
 			/*
-			 * For every partitioned table other than root, we must store
-			 * a tuple table slot initialized with its tuple descriptor and
-			 * a tuple conversion map to convert a tuple from its parent's
-			 * rowtype to its own. That is to make sure that we are looking
-			 * at the correct row using the correct tuple descriptor when
+			 * For every partitioned table other than root, we must store a
+			 * tuple table slot initialized with its tuple descriptor and a
+			 * tuple conversion map to convert a tuple from its parent's
+			 * rowtype to its own. That is to make sure that we are looking at
+			 * the correct row using the correct tuple descriptor when
 			 * computing its partition key for tuple routing.
 			 */
 			pd[i]->tupslot = MakeSingleTupleTableSlot(tupdesc);
 			pd[i]->tupmap = convert_tuples_by_name(RelationGetDescr(parent),
 												   tupdesc,
-								gettext_noop("could not convert row type"));
+								 gettext_noop("could not convert row type"));
 		}
 		else
 		{
@@ -1339,7 +1376,7 @@ get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec)
 			test_exprstate = ExecInitExpr(test_expr, NULL);
 			test_result = ExecEvalExprSwitchContext(test_exprstate,
 											  GetPerTupleExprContext(estate),
-													&isNull, NULL);
+													&isNull);
 			MemoryContextSwitchTo(oldcxt);
 			FreeExecutorState(estate);
 
@@ -1537,11 +1574,12 @@ generate_partition_qual(Relation rel)
 		result = my_qual;
 
 	/*
-	 * Change Vars to have partition's attnos instead of the parent's.
-	 * We do this after we concatenate the parent's quals, because
-	 * we want every Var in it to bear this relation's attnos.
+	 * Change Vars to have partition's attnos instead of the parent's. We do
+	 * this after we concatenate the parent's quals, because we want every Var
+	 * in it to bear this relation's attnos. It's safe to assume varno = 1
+	 * here.
 	 */
-	result = map_partition_varattnos(result, rel, parent);
+	result = map_partition_varattnos(result, 1, rel, parent);
 
 	/* Save a copy in the relcache */
 	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
@@ -1610,8 +1648,7 @@ FormPartitionKeyDatum(PartitionDispatch pd,
 				elog(ERROR, "wrong number of partition key expressions");
 			datum = ExecEvalExprSwitchContext((ExprState *) lfirst(partexpr_item),
 											  GetPerTupleExprContext(estate),
-											  &isNull,
-											  NULL);
+											  &isNull);
 			partexpr_item = lnext(partexpr_item);
 		}
 		values[i] = datum;
@@ -1642,7 +1679,10 @@ get_partition_for_tuple(PartitionDispatch *pd,
 	bool		isnull[PARTITION_MAX_KEYS];
 	int			cur_offset,
 				cur_index;
-	int			i;
+	int			i,
+				result;
+	ExprContext *ecxt = GetPerTupleExprContext(estate);
+	TupleTableSlot *ecxt_scantuple_old = ecxt->ecxt_scantuple;
 
 	/* start with the root partitioned table */
 	parent = pd[0];
@@ -1660,18 +1700,25 @@ get_partition_for_tuple(PartitionDispatch *pd,
 			return -1;
 		}
 
-		if (myslot != NULL)
+		if (myslot != NULL && map != NULL)
 		{
 			HeapTuple	tuple = ExecFetchSlotTuple(slot);
 
 			ExecClearTuple(myslot);
-			Assert(map != NULL);
 			tuple = do_convert_tuple(tuple, map);
 			ExecStoreTuple(tuple, myslot, InvalidBuffer, true);
 			slot = myslot;
 		}
 
-		/* Extract partition key from tuple */
+		/*
+		 * Extract partition key from tuple. Expression evaluation machinery
+		 * that FormPartitionKeyDatum() invokes expects ecxt_scantuple to
+		 * point to the correct tuple slot.  The slot might have changed from
+		 * what was used for the parent table if the table of the current
+		 * partitioning level has different tuple descriptor from the parent.
+		 * So update ecxt_scantuple accordingly.
+		 */
+		ecxt->ecxt_scantuple = slot;
 		FormPartitionKeyDatum(parent, slot, estate, values, isnull);
 
 		if (key->strategy == PARTITION_STRATEGY_RANGE)
@@ -1726,16 +1773,21 @@ get_partition_for_tuple(PartitionDispatch *pd,
 		 */
 		if (cur_index < 0)
 		{
+			result = -1;
 			*failed_at = RelationGetRelid(parent->reldesc);
-			return -1;
-		}
-		else if (parent->indexes[cur_index] < 0)
-			parent = pd[-parent->indexes[cur_index]];
-		else
 			break;
+		}
+		else if (parent->indexes[cur_index] >= 0)
+		{
+			result = parent->indexes[cur_index];
+			break;
+		}
+		else
+			parent = pd[-parent->indexes[cur_index]];
 	}
 
-	return parent->indexes[cur_index];
+	ecxt->ecxt_scantuple = ecxt_scantuple_old;
+	return result;
 }
 
 /*
@@ -1955,8 +2007,8 @@ partition_bound_cmp(PartitionKey key, PartitionBoundInfo boundinfo,
 }
 
 /*
- * Binary search on a collection of partition bounds. Returns greatest index
- * of bound in array boundinfo->datums which is less or equal with *probe.
+ * Binary search on a collection of partition bounds. Returns greatest
+ * bound in array boundinfo->datums which is less than or equal to *probe
  * If all bounds in the array are greater than *probe, -1 is returned.
  *
  * *probe could either be a partition bound or a Datum array representing
@@ -1988,6 +2040,9 @@ partition_bound_bsearch(PartitionKey key, PartitionBoundInfo boundinfo,
 		{
 			lo = mid;
 			*is_equal = (cmpval == 0);
+
+			if (*is_equal)
+				break;
 		}
 		else
 			hi = mid - 1;
