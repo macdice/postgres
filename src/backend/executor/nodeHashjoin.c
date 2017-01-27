@@ -1109,15 +1109,11 @@ void
 ExecDetachHashJoin(HashJoinState *node)
 {
 	/*
-	 * In a worker this runs before ExecEndHashJoin, but shared memory
-	 * disappears in between.  So this is our last chance to destroy the hash
-	 * table.
+	 * By the time ExecEndHashJoin runs in a work, shared memory has been
+	 * destroyed.  So this is our last chance to do any shared memory cleanup.
 	 */
 	if (node->hj_HashTable)
-	{
-		ExecHashTableDestroy(node->hj_HashTable);
-		node->hj_HashTable = NULL;
-	}
+		ExecHashTableDetach(node->hj_HashTable);
 }
 
 void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
