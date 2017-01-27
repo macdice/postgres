@@ -166,6 +166,22 @@ _copyResult(const Result *from)
 }
 
 /*
+ * _copyProjectSet
+ */
+static ProjectSet *
+_copyProjectSet(const ProjectSet *from)
+{
+	ProjectSet *newnode = makeNode(ProjectSet);
+
+	/*
+	 * copy node superclass fields
+	 */
+	CopyPlanFields((const Plan *) from, (Plan *) newnode);
+
+	return newnode;
+}
+
+/*
  * _copyModifyTable
  */
 static ModifyTable *
@@ -2027,6 +2043,8 @@ _copyRestrictInfo(const RestrictInfo *from)
 	COPY_SCALAR_FIELD(outerjoin_delayed);
 	COPY_SCALAR_FIELD(can_join);
 	COPY_SCALAR_FIELD(pseudoconstant);
+	COPY_SCALAR_FIELD(leakproof);
+	COPY_SCALAR_FIELD(security_level);
 	COPY_BITMAPSET_FIELD(clause_relids);
 	COPY_BITMAPSET_FIELD(required_relids);
 	COPY_BITMAPSET_FIELD(outer_relids);
@@ -4268,6 +4286,69 @@ _copyPartitionCmd(const PartitionCmd *from)
 	return newnode;
 }
 
+static CreatePublicationStmt *
+_copyCreatePublicationStmt(const CreatePublicationStmt *from)
+{
+	CreatePublicationStmt *newnode = makeNode(CreatePublicationStmt);
+
+	COPY_STRING_FIELD(pubname);
+	COPY_NODE_FIELD(options);
+	COPY_NODE_FIELD(tables);
+	COPY_SCALAR_FIELD(for_all_tables);
+
+	return newnode;
+}
+
+static AlterPublicationStmt *
+_copyAlterPublicationStmt(const AlterPublicationStmt *from)
+{
+	AlterPublicationStmt *newnode = makeNode(AlterPublicationStmt);
+
+	COPY_STRING_FIELD(pubname);
+	COPY_NODE_FIELD(options);
+	COPY_NODE_FIELD(tables);
+	COPY_SCALAR_FIELD(for_all_tables);
+	COPY_SCALAR_FIELD(tableAction);
+
+	return newnode;
+}
+
+static CreateSubscriptionStmt *
+_copyCreateSubscriptionStmt(const CreateSubscriptionStmt *from)
+{
+	CreateSubscriptionStmt *newnode = makeNode(CreateSubscriptionStmt);
+
+	COPY_STRING_FIELD(subname);
+	COPY_STRING_FIELD(conninfo);
+	COPY_NODE_FIELD(publication);
+	COPY_NODE_FIELD(options);
+
+	return newnode;
+}
+
+static AlterSubscriptionStmt *
+_copyAlterSubscriptionStmt(const AlterSubscriptionStmt *from)
+{
+	AlterSubscriptionStmt *newnode = makeNode(AlterSubscriptionStmt);
+
+	COPY_STRING_FIELD(subname);
+	COPY_NODE_FIELD(options);
+
+	return newnode;
+}
+
+static DropSubscriptionStmt *
+_copyDropSubscriptionStmt(const DropSubscriptionStmt *from)
+{
+	DropSubscriptionStmt *newnode = makeNode(DropSubscriptionStmt);
+
+	COPY_STRING_FIELD(subname);
+	COPY_SCALAR_FIELD(drop_slot);
+	COPY_SCALAR_FIELD(missing_ok);
+
+	return newnode;
+}
+
 /* ****************************************************************
  *					pg_list.h copy functions
  * ****************************************************************
@@ -4412,6 +4493,9 @@ copyObject(const void *from)
 			break;
 		case T_Result:
 			retval = _copyResult(from);
+			break;
+		case T_ProjectSet:
+			retval = _copyProjectSet(from);
 			break;
 		case T_ModifyTable:
 			retval = _copyModifyTable(from);
@@ -5064,6 +5148,21 @@ copyObject(const void *from)
 			break;
 		case T_AlterPolicyStmt:
 			retval = _copyAlterPolicyStmt(from);
+			break;
+		case T_CreatePublicationStmt:
+			retval = _copyCreatePublicationStmt(from);
+			break;
+		case T_AlterPublicationStmt:
+			retval = _copyAlterPublicationStmt(from);
+			break;
+		case T_CreateSubscriptionStmt:
+			retval = _copyCreateSubscriptionStmt(from);
+			break;
+		case T_AlterSubscriptionStmt:
+			retval = _copyAlterSubscriptionStmt(from);
+			break;
+		case T_DropSubscriptionStmt:
+			retval = _copyDropSubscriptionStmt(from);
 			break;
 		case T_A_Expr:
 			retval = _copyAExpr(from);
