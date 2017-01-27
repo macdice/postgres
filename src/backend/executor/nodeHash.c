@@ -898,7 +898,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 void
 ExecHashTableDetach(HashJoinTable hashtable)
 {
-	if (HashJoinTableIsShared(hashtable))
+	if (HashJoinTableIsShared(hashtable) && !hashtable->detached_early)
 	{
 		Barrier *barrier = &hashtable->shared->barrier;
 

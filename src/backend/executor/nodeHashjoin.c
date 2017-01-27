@@ -319,7 +319,7 @@ ExecHashJoin(HashJoinState *node)
 						 * probing.
 						 */
 						Assert(BarrierPhase(&hashtable->shared->barrier) ==
-							   PHJ_PHASE_PROBING);
+							   PHJ_PHASE_PROBING_BATCH(hashtable->curbatch));
 						if (hashtable->nbatch == 1 && !HJ_FILL_INNER(node))
 							return NULL;	/* end of join */
 
