@@ -1902,10 +1902,6 @@ ExecHashTableReset(HashJoinTable hashtable)
 				   sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 
 			/* Free all the chunks. */
-			/*
-			 * TODO: Put them on a freelist instead?  Better than making one
-			 * backend free them all, and then allocating them all again!
-			 */
 			hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 			hashtable->shared->chunks = InvalidDsaPointer;
 			while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
