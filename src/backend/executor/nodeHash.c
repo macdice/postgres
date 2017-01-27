@@ -806,7 +806,8 @@ ExecHashTableDestroy(HashJoinTable hashtable)
 		/*
 		 * Instead of waiting at the end of a hash join for all participants
 		 * to finish, we detach and let the last to detach clean up the shared
-		 * resources.
+		 * resources.  This avoids unnecessary waiting at the end of single
+		 * batch probes.
 		 */
 		if (BarrierDetach(barrier))
 		{

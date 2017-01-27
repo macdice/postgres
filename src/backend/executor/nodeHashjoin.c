@@ -1105,6 +1105,22 @@ ExecReScanHashJoin(HashJoinState *node)
 		ExecReScan(node->js.ps.lefttree);
 }
 
+void
+ExecShutdownHashJoin(HashJoinState *node)
+{
+	/*
+	 * In a worker this runs before ExecEndHashJoin, but shared memory
+	 * disappears in between.  So this is our last chance to destroy the hash
+	 * table and make sure ExecEndHashJoin doesn't try to access shared
+	 * memory.
+	 */
+	if (node->hj_HashTable)
+	{
+		ExecHashTableDestroy(node->hj_HashTable);
+		node->hj_HashTable = NULL;
+	}
+}
+
 void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
 {
 	size_t size;
