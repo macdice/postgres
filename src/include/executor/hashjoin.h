@@ -226,6 +226,7 @@ typedef struct SharedHashJoinTableData
 	int planned_participants;		/* number of planned workers + leader */
 	
 	Barrier shrink_barrier;			/* synchronization of hashtable shrink */
+	bool shrink_needed;				/* flag indicating all must help shrink */
 	long nfreed;					/* shared counter for hashtable shrink */
 	long ninmemory;					/* shared counter for hashtable shrink */
 	bool grow_enabled;				/* shared flag to prevent useless growth */

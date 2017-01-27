@@ -667,6 +667,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 				hashtable->shared->nbuckets = nbuckets;
 				hashtable->shared->log2_nbuckets = log2_nbuckets;
 				hashtable->shared->size = bytes;
+				hashtable->shared->nbatch = hashtable->nbatch;
 
 				/* TODO: ExecHashBuildSkewHash */
 
@@ -1073,8 +1074,6 @@ ExecHashShrink(HashJoinTable hashtable)
 		if (BarrierWait(&hashtable->shared->shrink_barrier,
 						WAIT_EVENT_HASH_SHRINKING1))
 		{
-			/* TODO: could also resize hash table here! */
-
 			/* Serial phase: one participant clears the hash table. */
 			memset(hashtable->buckets, 0,
 				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
@@ -1125,14 +1124,20 @@ ExecHashShrink(HashJoinTable hashtable)
 			{
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
+				dsa_pointer copyShared = InvalidDsaPointer;
 
-				copyTuple = (HashJoinTuple)
-					dense_alloc(hashtable, hashTupleSize, true);
+				if (HashJoinTableIsShared(hashtable))
+					copyTuple = (HashJoinTuple)
+						dense_alloc_shared(hashtable, hashTupleSize,
+										   &copyShared, false);
+				else
+					copyTuple = (HashJoinTuple)
+						dense_alloc(hashtable, hashTupleSize, false);
 				memcpy(copyTuple, hashTuple, hashTupleSize);
 
 				/* and add it back to the appropriate bucket */
 				insert_tuple_into_bucket(hashtable, bucketno, copyTuple,
-										 InvalidDsaPointer);
+										 copyShared);
 			}
 			else
 			{
@@ -1153,7 +1158,7 @@ ExecHashShrink(HashJoinTable hashtable)
 #endif
 		}
 
-#ifdef TRACE_POSTGRESQL_HASH_SRHINK_DONE
+#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
 		++chunks_processed;
 #endif
 
@@ -1222,6 +1227,7 @@ ExecHashShrink(HashJoinTable hashtable)
 				   hashtable);
 #endif
 			}
+			hashtable->shared->shrink_needed = false;
 		}
 	deciding:
 		/* Wait for above decision to be made. */
@@ -2555,15 +2561,13 @@ dense_alloc_shared(HashJoinTable hashtable,
 	{
 		Assert(respect_work_mem);
 		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
+	}
+
+	/* Check if we need to help shrinking. */
+	if (hashtable->shared->shrink_needed)
+	{
 		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
-
-		/*
-		 * Whenever nbatch changes, every participant attached to
-		 * shrink_barrier must run ExecHashShrink to help shrink the hash
-		 * table until that work is finished.  Then we can try to allocate
-		 * again.
-		 */
 		ExecHashShrink(hashtable);
 		goto retry;
 	}
@@ -2588,6 +2592,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 		ExecHashIncreaseNumBatches(hashtable, hashtable->shared->nbatch);
 		hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 		hashtable->shared->chunks = InvalidDsaPointer;
+		hashtable->shared->shrink_needed = true;
 		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
 

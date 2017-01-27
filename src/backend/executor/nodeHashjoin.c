@@ -1734,6 +1734,8 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	shared->chunk_work_queue = InvalidDsaPointer;
 	shared->size = 0;
 	shared->ntuples = 0;
+	shared->shrink_needed = false;
+	shared->grow_enabled = true;
 	shm_toc_insert(pcxt->toc, state->js.ps.plan->plan_node_id, shared);
 
 	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
