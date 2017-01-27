@@ -43,6 +43,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
+#include "catalog/pg_publication.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
@@ -824,10 +825,10 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 
 			resultRelationOid = getrelid(resultRelationIndex, rangeTable);
 			resultRelation = heap_open(resultRelationOid, RowExclusiveLock);
+
 			InitResultRelInfo(resultRelInfo,
 							  resultRelation,
 							  resultRelationIndex,
-							  true,
 							  NULL,
 							  estate->es_instrument);
 			resultRelInfo++;
@@ -1024,7 +1025,7 @@ CheckValidResultRel(Relation resultRel, CmdType operation)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
-			/* OK */
+			CheckCmdReplicaIdentity(resultRel, operation);
 			break;
 		case RELKIND_SEQUENCE:
 			ereport(ERROR,
@@ -1218,10 +1219,11 @@ void
 InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
-				  bool load_partition_check,
 				  Relation partition_root,
 				  int instrument_options)
 {
+	List	   *partition_check = NIL;
+
 	MemSet(resultRelInfo, 0, sizeof(ResultRelInfo));
 	resultRelInfo->type = T_ResultRelInfo;
 	resultRelInfo->ri_RangeTableIndex = resultRelationIndex;
@@ -1257,13 +1259,38 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_ConstraintExprs = NULL;
 	resultRelInfo->ri_junkFilter = NULL;
 	resultRelInfo->ri_projectReturning = NULL;
-	if (load_partition_check)
-		resultRelInfo->ri_PartitionCheck =
-							RelationGetPartitionQual(resultRelationDesc);
+
 	/*
-	 * The following gets set to NULL unless we are initializing leaf
-	 * partitions for tuple-routing.
+	 * If partition_root has been specified, that means we are builiding the
+	 * ResultRelationInfo for one of its leaf partitions.  In that case, we
+	 * need *not* initialize the leaf partition's constraint, but rather the
+	 * the partition_root's (if any).  We must do that explicitly like this,
+	 * because implicit partition constraints are not inherited like user-
+	 * defined constraints and would fail to be enforced by ExecConstraints()
+	 * after a tuple is routed to a leaf partition.
 	 */
+	if (partition_root)
+	{
+		/*
+		 * Root table itself may or may not be a partition; partition_check
+		 * would be NIL in the latter case.
+		 */
+		partition_check = RelationGetPartitionQual(partition_root);
+
+		/*
+		 * This is not our own partition constraint, but rather an ancestor's.
+		 * So any Vars in it bear the ancestor's attribute numbers.  We must
+		 * switch them to our own. (dummy varno = 1)
+		 */
+		if (partition_check != NIL)
+			partition_check = map_partition_varattnos(partition_check, 1,
+													  resultRelationDesc,
+													  partition_root);
+	}
+	else
+		partition_check = RelationGetPartitionQual(resultRelationDesc);
+
+	resultRelInfo->ri_PartitionCheck = partition_check;
 	resultRelInfo->ri_PartitionRoot = partition_root;
 }
 
@@ -1327,7 +1354,6 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 	InitResultRelInfo(rInfo,
 					  rel,
 					  0,		/* dummy rangetable index */
-					  true,
 					  NULL,
 					  estate->es_instrument);
 	estate->es_trig_target_relations =
@@ -1728,10 +1754,10 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	 */
 	if (resultRelInfo->ri_PartitionCheckExpr == NULL)
 	{
-		List *qual = resultRelInfo->ri_PartitionCheck;
+		List	   *qual = resultRelInfo->ri_PartitionCheck;
 
 		resultRelInfo->ri_PartitionCheckExpr = (List *)
-									ExecPrepareExpr((Expr *) qual, estate);
+			ExecPrepareExpr((Expr *) qual, estate);
 	}
 
 	/*
@@ -1811,7 +1837,7 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 				ereport(ERROR,
 						(errcode(ERRCODE_NOT_NULL_VIOLATION),
 						 errmsg("null value in column \"%s\" violates not-null constraint",
-						  NameStr(orig_tupdesc->attrs[attrChk - 1]->attname)),
+						 NameStr(orig_tupdesc->attrs[attrChk - 1]->attname)),
 						 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0,
 						 errtablecol(orig_rel, attrChk)));
 			}
@@ -1874,9 +1900,9 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 												 64);
 		ereport(ERROR,
 				(errcode(ERRCODE_CHECK_VIOLATION),
-				 errmsg("new row for relation \"%s\" violates partition constraint",
-						RelationGetRelationName(orig_rel)),
-		  val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
+		  errmsg("new row for relation \"%s\" violates partition constraint",
+				 RelationGetRelationName(orig_rel)),
+			val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
 	}
 }
 
@@ -3092,7 +3118,7 @@ ExecSetupPartitionTupleRouting(Relation rel,
 	*partitions = (ResultRelInfo *) palloc(*num_partitions *
 										   sizeof(ResultRelInfo));
 	*tup_conv_maps = (TupleConversionMap **) palloc0(*num_partitions *
-										   sizeof(TupleConversionMap *));
+											   sizeof(TupleConversionMap *));
 
 	/*
 	 * Initialize an empty slot that will be used to manipulate tuples of any
@@ -3131,8 +3157,7 @@ ExecSetupPartitionTupleRouting(Relation rel,
 
 		InitResultRelInfo(leaf_part_rri,
 						  partrel,
-						  1,	 /* dummy */
-						  false,
+						  1,	/* dummy */
 						  rel,
 						  0);
 
@@ -3165,11 +3190,9 @@ int
 ExecFindPartition(ResultRelInfo *resultRelInfo, PartitionDispatch *pd,
 				  TupleTableSlot *slot, EState *estate)
 {
-	int		result;
-	Oid		failed_at;
-	ExprContext *econtext = GetPerTupleExprContext(estate);
+	int			result;
+	Oid			failed_at;
 
-	econtext->ecxt_scantuple = slot;
 	result = get_partition_for_tuple(pd, slot, estate, &failed_at);
 	if (result < 0)
 	{
@@ -3193,7 +3216,7 @@ ExecFindPartition(ResultRelInfo *resultRelInfo, PartitionDispatch *pd,
 				(errcode(ERRCODE_CHECK_VIOLATION),
 				 errmsg("no partition of relation \"%s\" found for row",
 						get_rel_name(failed_at)),
-		  val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
+			val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
 	}
 
 	return result;
