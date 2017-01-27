@@ -739,7 +739,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	 * If there's not enough space to store the projected number of tuples and
 	 * the required bucket headers, we will need multiple batches.
 	 */
-	bucket_bytes = sizeof(HashJoinTuple) * nbuckets;
+	bucket_bytes = sizeof(HashJoinBucketHead) * nbuckets;
 	if (inner_rel_bytes + bucket_bytes > hash_table_bytes)
 	{
 		/* We'll need multiple batches */
@@ -754,12 +754,12 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 		 * NTUP_PER_BUCKET tuples, whose projected size already includes
 		 * overhead for the hash code, pointer to the next tuple, etc.
 		 */
-		bucket_size = (tupsize * NTUP_PER_BUCKET + sizeof(HashJoinTuple));
+		bucket_size = (tupsize * NTUP_PER_BUCKET + sizeof(HashJoinBucketHead));
 		lbuckets = 1L << my_log2(hash_table_bytes / bucket_size);
 		lbuckets = Min(lbuckets, max_pointers);
 		nbuckets = (int) lbuckets;
 		nbuckets = 1 << my_log2(nbuckets);
-		bucket_bytes = nbuckets * sizeof(HashJoinTuple);
+		bucket_bytes = nbuckets * sizeof(HashJoinBucketHead);
 
 		/*
 		 * Buckets are simple pointers to hashjoin tuples, while tupsize
@@ -947,7 +947,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 		hashtable->log2_nbuckets = hashtable->log2_nbuckets_optimal;
 
 		hashtable->buckets = repalloc(hashtable->buckets,
-								sizeof(HashJoinTuple) * hashtable->nbuckets);
+								sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 	}
 
 	/*
@@ -955,7 +955,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	 * buckets now and not have to keep track which tuples in the buckets have
 	 * already been processed. We will free the old chunks as we go.
 	 */
-	memset(hashtable->buckets, 0, sizeof(HashJoinTuple) * hashtable->nbuckets);
+	memset(hashtable->buckets, 0, sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 	oldchunks = hashtable->chunks;
 	hashtable->chunks = NULL;
 
@@ -1293,7 +1293,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		{
 			/* Guard against integer overflow and alloc size overflow */
 			if (hashtable->nbuckets_optimal <= INT_MAX / 2 &&
-				hashtable->nbuckets_optimal * 2 <= MaxAllocSize / sizeof(HashJoinTuple))
+				hashtable->nbuckets_optimal * 2 <= MaxAllocSize / sizeof(HashJoinBucketHead))
 			{
 				hashtable->nbuckets_optimal *= 2;
 				hashtable->log2_nbuckets_optimal += 1;
@@ -1699,7 +1699,7 @@ ExecHashTableReset(HashJoinTable hashtable)
 	hashtable->buckets = (HashJoinBucketHead *)
 		palloc0(nbuckets * sizeof(HashJoinBucketHead));
 
-	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
+	hashtable->spaceUsed = nbuckets * sizeof(HashJoinBucketHead);
 
 	MemoryContextSwitchTo(oldcxt);
 
