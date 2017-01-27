@@ -74,7 +74,7 @@ provider postgresql {
 	probe hash__unmatched__start();
 	probe hash__unmatched__done();
 	probe hash__reset__match__start();
-	probe hash__reset__match__done(int, int);
+	probe hash__reset__match__done();
 
 	probe hashjoin__export__all__batches(int, int);
 	probe hashjoin__export__batch(int, int, bool);
