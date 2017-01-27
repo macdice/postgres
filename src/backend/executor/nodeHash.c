@@ -844,7 +844,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	 * If there's not enough space to store the projected number of tuples and
 	 * the required bucket headers, we will need multiple batches.
 	 */
-	bucket_bytes = sizeof(HashJoinTuple) * nbuckets;
+	bucket_bytes = sizeof(HashJoinBucketHead) * nbuckets;
 	if (inner_rel_bytes + bucket_bytes > hash_table_bytes)
 	{
 		/* We'll need multiple batches */
@@ -859,12 +859,12 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 		 * NTUP_PER_BUCKET tuples, whose projected size already includes
 		 * overhead for the hash code, pointer to the next tuple, etc.
 		 */
-		bucket_size = (tupsize * NTUP_PER_BUCKET + sizeof(HashJoinTuple));
+		bucket_size = (tupsize * NTUP_PER_BUCKET + sizeof(HashJoinBucketHead));
 		lbuckets = 1L << my_log2(hash_table_bytes / bucket_size);
 		lbuckets = Min(lbuckets, max_pointers);
 		nbuckets = (int) lbuckets;
 		nbuckets = 1 << my_log2(nbuckets);
-		bucket_bytes = nbuckets * sizeof(HashJoinTuple);
+		bucket_bytes = nbuckets * sizeof(HashJoinBucketHead);
 
 		/*
 		 * Buckets are simple pointers to hashjoin tuples, while tupsize
@@ -1955,12 +1955,15 @@ ExecHashTableReset(HashJoinTable hashtable)
 	hashtable->buckets = (HashJoinBucketHead *)
 		palloc0(nbuckets * sizeof(HashJoinBucketHead));
 
-	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
+	hashtable->spaceUsed = nbuckets * sizeof(HashJoinBucketHead);
 
 	MemoryContextSwitchTo(oldcxt);
 
 	/* Forget the chunks (the memory was freed by the context reset above). */
 	hashtable->chunks = NULL;
+
+	/* Rewind the shared read heads for this batch, inner and outer. */
+	ExecHashJoinRewindBatches(hashtable, hashtable->curbatch);
 }
 
 /*
@@ -2282,7 +2285,10 @@ ExecHashSkewTableInsert(HashJoinTable hashtable,
 	/* Check we are not over the total spaceAllowed, either */
 	if (hashtable->spaceUsed > hashtable->spaceAllowed &&
 		hashtable->growEnabled)
+	{
 		ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
+		ExecHashShrink(hashtable);
+	}
 }
 
 /*
@@ -2429,6 +2435,7 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 		{
 			/* work_mem would be exceeded: try to shrink hash table */
 			ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
+			ExecHashShrink(hashtable);
 		}
 
 		/* allocate new chunk and put it at the beginning of the list */
@@ -2477,6 +2484,7 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 		{
 			/* work_mem would be exceeded: try to shrink hash table */
 			ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
+			ExecHashShrink(hashtable);
 		}
 
 		/* allocate new chunk and put it at the beginning of the list */
