@@ -71,7 +71,7 @@ provider postgresql {
 	probe hash__unmatched__start();
 	probe hash__unmatched__done();
 	probe hash__reset__match__start();
-	probe hash__reset__match__done(int, int);
+	probe hash__reset__match__done();
 
 	probe buffer__read__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool);
 	probe buffer__read__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool, bool);
