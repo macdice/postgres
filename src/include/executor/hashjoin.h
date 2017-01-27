@@ -224,7 +224,7 @@ typedef struct SharedHashJoinTableData
 	int log2_nbuckets;
 	int nbatch;
 	int planned_participants;		/* number of planned workers + leader */
-	
+
 	Barrier shrink_barrier;			/* synchronization of hashtable shrink */
 	bool shrink_needed;				/* flag indicating all must help shrink */
 	long nfreed;					/* shared counter for hashtable shrink */
@@ -236,7 +236,7 @@ typedef struct SharedHashJoinTableData
 	dsa_pointer chunk_work_queue;	/* next chunk for shared processing */
 	Size size;						/* size of buckets + chunks */
 	Size ntuples;
-	
+
 	/* state exposed by each participant for sharing batches */
 	HashJoinParticipantState participants[FLEXIBLE_ARRAY_MEMBER];
 } SharedHashJoinTableData;
