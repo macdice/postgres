@@ -510,6 +510,10 @@ RegisterLWLockTranches(void)
 						  "predicate_lock_manager");
 	LWLockRegisterTranche(LWTRANCHE_PARALLEL_QUERY_DSA,
 						  "parallel_query_dsa");
+	LWLockRegisterTranche(LWTRANCHE_PARALLEL_HASH_JOIN_INNER_BATCH_READER,
+						  "hash_join_inner_batches");
+	LWLockRegisterTranche(LWTRANCHE_PARALLEL_HASH_JOIN_OUTER_BATCH_READER,
+						  "hash_join_outer_batches");
 	LWLockRegisterTranche(LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK,
 						  "hash_join_chunk");
 
