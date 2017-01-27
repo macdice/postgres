@@ -236,6 +236,14 @@ CREATE TABLE testjsonb (
        j jsonb
 );
 
+CREATE TABLE unknowntab (
+	u unknown    -- fail
+);
+
+CREATE TYPE unknown_comptype AS (
+	u unknown    -- fail
+);
+
 CREATE TABLE IF NOT EXISTS test_tsvector(
 	t text,
 	a tsvector
@@ -519,6 +527,10 @@ CREATE TABLE part0 PARTITION OF range_parted2 FOR VALUES FROM (unbounded) TO (1)
 CREATE TABLE fail_part PARTITION OF range_parted2 FOR VALUES FROM (unbounded) TO (2);
 CREATE TABLE part1 PARTITION OF range_parted2 FOR VALUES FROM (1) TO (10);
 CREATE TABLE fail_part PARTITION OF range_parted2 FOR VALUES FROM (9) TO (unbounded);
+CREATE TABLE part2 PARTITION OF range_parted2 FOR VALUES FROM (20) TO (30);
+CREATE TABLE part3 PARTITION OF range_parted2 FOR VALUES FROM (30) TO (40);
+CREATE TABLE fail_part PARTITION OF range_parted2 FOR VALUES FROM (10) TO (30);
+CREATE TABLE fail_part PARTITION OF range_parted2 FOR VALUES FROM (10) TO (50);
 
 -- now check for multi-column range partition key
 CREATE TABLE range_parted3 (
@@ -581,10 +593,10 @@ CREATE TABLE part_c_1_10 PARTITION OF part_c FOR VALUES FROM (1) TO (10);
 -- returned.
 \d parted
 
--- partitions cannot be dropped directly
-DROP TABLE part_a;
-
--- need to specify CASCADE to drop partitions along with the parent
-DROP TABLE parted;
-
-DROP TABLE parted, list_parted, range_parted, list_parted2, range_parted2, range_parted3 CASCADE;
+-- cleanup: avoid using CASCADE
+DROP TABLE parted, part_a, part_b, part_c, part_c_1_10;
+DROP TABLE list_parted, part_1, part_2, part_null;
+DROP TABLE range_parted;
+DROP TABLE list_parted2, part_ab, part_null_z;
+DROP TABLE range_parted2, part0, part1, part2, part3;
+DROP TABLE range_parted3, part00, part10, part11, part12;
