@@ -1088,7 +1088,6 @@ ExecHashShrink(HashJoinTable hashtable)
 		BarrierWait(&hashtable->shared->shrink_barrier,
 					WAIT_EVENT_HASH_SHRINKING2);
 
-		Assert(hashtable->shared->nbatch == hashtable->nbatch);
 	}
 	else
 	{
@@ -1504,7 +1503,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		{
 			/* Guard against integer overflow and alloc size overflow */
 			if (hashtable->nbuckets_optimal <= INT_MAX / 2 &&
-				hashtable->nbuckets_optimal * 2 <= MaxAllocSize / sizeof(HashJoinTuple))
+				hashtable->nbuckets_optimal * 2 <= MaxAllocSize / sizeof(HashJoinBucketHead))
 			{
 				hashtable->nbuckets_optimal *= 2;
 				hashtable->log2_nbuckets_optimal += 1;
