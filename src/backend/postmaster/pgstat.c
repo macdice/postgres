@@ -3413,9 +3413,6 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_HASH_RESETTING:
 			event_name = "Hash/Resetting";
 			break;
-		case WAIT_EVENT_HASH_DESTROY:
-			event_name = "Hash/Destroy";
-			break;
 		case WAIT_EVENT_HASH_RESET_MATCH1:
 			event_name = "Hash/ResetMatch1";
 			break;
