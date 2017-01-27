@@ -1075,6 +1075,11 @@ ExecHashShrink(HashJoinTable hashtable)
 						WAIT_EVENT_HASH_SHRINKING1))
 		{
 			/* Serial phase: one participant clears the hash table. */
+			/*
+			 * TODO: Also expland the bucket array if nbuckets_optimal >
+			 * nbuckets (but nbuckets_optional may need to be halved, to
+			 * account for the shink we're about to perform!)
+			 */
 			memset(hashtable->buckets, 0,
 				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
 		}
@@ -1283,6 +1288,10 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 {
 	/* do nothing if not an increase (it's called increase for a reason) */
 	if (hashtable->nbuckets >= hashtable->nbuckets_optimal)
+		return;
+
+	/* can't increase number of buckets once we have multiple batches */
+	if (hashtable->nbatch > 1)
 		return;
 
 #ifdef HJDEBUG
