@@ -987,7 +987,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 				HashJoinTuple copyTuple;
 
 				copyTuple = (HashJoinTuple)
-					dense_alloc(hashtable, hashTupleSize, true);
+					dense_alloc(hashtable, hashTupleSize, false);
 				memcpy(copyTuple, hashTuple, hashTupleSize);
 
 				/* and add it back to the appropriate bucket */
