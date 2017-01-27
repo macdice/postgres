@@ -193,7 +193,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("\"%s\" is a partitioned table",
 							RelationGetRelationName(rel)),
-					 errdetail("Partitioned tables cannot have ROW triggers.")));
+				 errdetail("Partitioned tables cannot have ROW triggers.")));
 	}
 	else if (rel->rd_rel->relkind == RELKIND_VIEW)
 	{
@@ -340,9 +340,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 
 		foreach(lc, varList)
 		{
-			TriggerTransition   *tt = (TriggerTransition *) lfirst(lc);
-
-			Assert(IsA(tt, TriggerTransition));
+			TriggerTransition   *tt = castNode(TriggerTransition, lfirst(lc));
 
 			if (!(tt->isTable))
 				ereport(ERROR,
@@ -522,8 +520,9 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 		if (funcrettype == OPAQUEOID)
 		{
 			ereport(WARNING,
-					(errmsg("changing return type of function %s from \"opaque\" to \"trigger\"",
-							NameListToString(stmt->funcname))));
+				 (errmsg("changing return type of function %s from %s to %s",
+						 NameListToString(stmt->funcname),
+						 "opaque", "trigger")));
 			SetFunctionReturnType(funcoid, TRIGGEROID);
 		}
 		else

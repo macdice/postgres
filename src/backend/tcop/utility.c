@@ -44,9 +44,11 @@
 #include "commands/portalcmds.h"
 #include "commands/prepare.h"
 #include "commands/proclang.h"
+#include "commands/publicationcmds.h"
 #include "commands/schemacmds.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
+#include "commands/subscriptioncmds.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -209,6 +211,11 @@ check_xact_readonly(Node *parsetree)
 		case T_CreateForeignTableStmt:
 		case T_ImportForeignSchemaStmt:
 		case T_SecLabelStmt:
+		case T_CreatePublicationStmt:
+		case T_AlterPublicationStmt:
+		case T_CreateSubscriptionStmt:
+		case T_AlterSubscriptionStmt:
+		case T_DropSubscriptionStmt:
 			PreventCommandIfReadOnly(CreateCommandTag(parsetree));
 			PreventCommandIfParallelMode(CreateCommandTag(parsetree));
 			break;
@@ -304,13 +311,22 @@ CheckRestrictedOperation(const char *cmdname)
  *	completionTag: points to a buffer of size COMPLETION_TAG_BUFSIZE
  *		in which to store a command completion status string.
  *
- * Notes: as of PG 8.4, caller MUST supply a queryString; it is not
- * allowed anymore to pass NULL.  (If you really don't have source text,
- * you can pass a constant string, perhaps "(query not available)".)
+ * Caller MUST supply a queryString; it is not allowed (anymore) to pass NULL.
+ * If you really don't have source text, you can pass a constant string,
+ * perhaps "(query not available)".
  *
  * completionTag is only set nonempty if we want to return a nondefault status.
  *
  * completionTag may be NULL if caller doesn't want a status string.
+ *
+ * Note for users of ProcessUtility_hook: the same queryString may be passed
+ * to multiple invocations of ProcessUtility when processing a query string
+ * containing multiple semicolon-separated statements.  One should use
+ * pstmt->stmt_location and pstmt->stmt_len to identify the substring
+ * containing the current statement.  Keep in mind also that some utility
+ * statements (e.g., CREATE SCHEMA) will recurse to ProcessUtility to process
+ * sub-statements, often passing down the same queryString, stmt_location,
+ * and stmt_len that were given for the whole statement.
  */
 void
 ProcessUtility(PlannedStmt *pstmt,
@@ -1578,6 +1594,33 @@ ProcessUtilitySlow(ParseState *pstate,
 				address = CreateAccessMethod((CreateAmStmt *) parsetree);
 				break;
 
+			case T_CreatePublicationStmt:
+				address = CreatePublication((CreatePublicationStmt *) parsetree);
+				break;
+
+			case T_AlterPublicationStmt:
+				AlterPublication((AlterPublicationStmt *) parsetree);
+				/*
+				 * AlterPublication calls EventTriggerCollectSimpleCommand
+				 * directly
+				 */
+				commandCollected = true;
+				break;
+
+			case T_CreateSubscriptionStmt:
+				address = CreateSubscription((CreateSubscriptionStmt *) parsetree);
+				break;
+
+			case T_AlterSubscriptionStmt:
+				address = AlterSubscription((AlterSubscriptionStmt *) parsetree);
+				break;
+
+			case T_DropSubscriptionStmt:
+				DropSubscription((DropSubscriptionStmt *) parsetree);
+				/* no commands stashed for DROP */
+				commandCollected = true;
+				break;
+
 			default:
 				elog(ERROR, "unrecognized node type: %d",
 					 (int) nodeTag(parsetree));
@@ -1795,22 +1838,19 @@ UtilityContainsQuery(Node *parsetree)
 	switch (nodeTag(parsetree))
 	{
 		case T_DeclareCursorStmt:
-			qry = (Query *) ((DeclareCursorStmt *) parsetree)->query;
-			Assert(IsA(qry, Query));
+			qry = castNode(Query, ((DeclareCursorStmt *) parsetree)->query);
 			if (qry->commandType == CMD_UTILITY)
 				return UtilityContainsQuery(qry->utilityStmt);
 			return qry;
 
 		case T_ExplainStmt:
-			qry = (Query *) ((ExplainStmt *) parsetree)->query;
-			Assert(IsA(qry, Query));
+			qry = castNode(Query, ((ExplainStmt *) parsetree)->query);
 			if (qry->commandType == CMD_UTILITY)
 				return UtilityContainsQuery(qry->utilityStmt);
 			return qry;
 
 		case T_CreateTableAsStmt:
-			qry = (Query *) ((CreateTableAsStmt *) parsetree)->query;
-			Assert(IsA(qry, Query));
+			qry = castNode(Query, ((CreateTableAsStmt *) parsetree)->query);
 			if (qry->commandType == CMD_UTILITY)
 				return UtilityContainsQuery(qry->utilityStmt);
 			return qry;
@@ -1940,6 +1980,12 @@ AlterObjectTypeCommandTag(ObjectType objtype)
 			break;
 		case OBJECT_MATVIEW:
 			tag = "ALTER MATERIALIZED VIEW";
+			break;
+		case OBJECT_PUBLICATION:
+			tag = "ALTER PUBLICATION";
+			break;
+		case OBJECT_SUBSCRIPTION:
+			tag = "ALTER SUBSCRIPTION";
 			break;
 		default:
 			tag = "???";
@@ -2231,6 +2277,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = "DROP ACCESS METHOD";
+					break;
+				case OBJECT_PUBLICATION:
+					tag = "DROP PUBLICATION";
 					break;
 				default:
 					tag = "???";
@@ -2600,6 +2649,26 @@ CreateCommandTag(Node *parsetree)
 
 		case T_CreateAmStmt:
 			tag = "CREATE ACCESS METHOD";
+			break;
+
+		case T_CreatePublicationStmt:
+			tag = "CREATE PUBLICATION";
+			break;
+
+		case T_AlterPublicationStmt:
+			tag = "ALTER PUBLICATION";
+			break;
+
+		case T_CreateSubscriptionStmt:
+			tag = "CREATE SUBSCRIPTION";
+			break;
+
+		case T_AlterSubscriptionStmt:
+			tag = "ALTER SUBSCRIPTION";
+			break;
+
+		case T_DropSubscriptionStmt:
+			tag = "DROP SUBSCRIPTION";
 			break;
 
 		case T_PrepareStmt:
@@ -3163,6 +3232,26 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_CreateAmStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreatePublicationStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_AlterPublicationStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateSubscriptionStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_AlterSubscriptionStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_DropSubscriptionStmt:
 			lev = LOGSTMT_DDL;
 			break;
 
