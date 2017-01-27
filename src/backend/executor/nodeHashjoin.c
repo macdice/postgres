@@ -313,6 +313,17 @@ ExecHashJoin(HashJoinState *node)
 					if (HashJoinTableIsShared(hashtable))
 					{
 						/*
+						 * An important optimization: if this is a
+						 * single-batch join and not an outer join, there is
+						 * no reason to synchronize again when we've finished
+						 * probing.
+						 */
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_PROBING);
+						if (hashtable->nbatch == 1 && !HJ_FILL_INNER(node))
+							return NULL;	/* end of join */
+
+						/*
 						 * Check if we are a leader that can't go further than
 						 * probing the first batch without deadlock risk,
 						 * because there are workers running.
@@ -1667,6 +1678,17 @@ ExecReScanHashJoin(HashJoinState *node)
 	 */
 	if (node->js.ps.lefttree->chgParam == NULL)
 		ExecReScan(node->js.ps.lefttree);
+}
+
+void
+ExecDetachHashJoin(HashJoinState *node)
+{
+	/*
+	 * By the time ExecEndHashJoin runs in a work, shared memory has been
+	 * destroyed.  So this is our last chance to do any shared memory cleanup.
+	 */
+	if (node->hj_HashTable)
+		ExecHashTableDetach(node->hj_HashTable);
 }
 
 void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
