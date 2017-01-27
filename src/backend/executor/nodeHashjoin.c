@@ -1588,10 +1588,15 @@ ExecReScanHashJoin(HashJoinState *node)
 	{
 		if (HashJoinTableIsShared(node->hj_HashTable))
 		{
-			/* Only the leader is running now, so we can reinitialize. */
+			/*
+			 * Only the leader is running now, so we can reinitialize the
+			 * shared state.  It was originally initialized by
+			 * ExecHashJoinInitializeDSM.
+			 */
 			Assert(!IsParallelWorker());
 			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
 			node->hj_HashTable->shared->at_least_one_worker = false;
+			node->hj_HashTable->shared->grow_enabled = true;
 		}
 
 		if (node->hj_HashTable->nbatch == 1 &&
