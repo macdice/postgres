@@ -1581,7 +1581,7 @@ ExecHashJoinRewindBatches(HashJoinTable hashtable, int batchno)
 		if (file != NULL && BufFileSeek(file, 0, 0L, SEEK_SET))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not rewind hash-join temporary file: %m")));		
+					 errmsg("could not rewind hash-join temporary file: %m")));
 	}
 }
 
