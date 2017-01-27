@@ -1106,13 +1106,12 @@ ExecReScanHashJoin(HashJoinState *node)
 }
 
 void
-ExecShutdownHashJoin(HashJoinState *node)
+ExecDetachHashJoin(HashJoinState *node)
 {
 	/*
 	 * In a worker this runs before ExecEndHashJoin, but shared memory
 	 * disappears in between.  So this is our last chance to destroy the hash
-	 * table and make sure ExecEndHashJoin doesn't try to access shared
-	 * memory.
+	 * table.
 	 */
 	if (node->hj_HashTable)
 	{

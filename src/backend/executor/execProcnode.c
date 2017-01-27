@@ -800,6 +800,9 @@ ExecDetachNode(PlanState *node)
 
 	switch (nodeTag(node))
 	{
+		case T_HashJoinState:
+			ExecDetachHashJoin((HashJoinState *) node);
+			break;
 		default:
 			break;
 	}
@@ -827,9 +830,6 @@ ExecShutdownNode(PlanState *node)
 	{
 		case T_GatherState:
 			ExecShutdownGather((GatherState *) node);
-			break;
-		case T_HashJoinState:
-			ExecShutdownHashJoin((HashJoinState *) node);
 			break;
 		default:
 			break;
