@@ -928,6 +928,7 @@ ExecHashTableDetach(HashJoinTable hashtable)
 				dsa_free(hashtable->area, hashtable->shared->buckets);
 				hashtable->shared->buckets = InvalidDsaPointer;
 				hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+				hashtable->shared->chunks = InvalidDsaPointer;
 				while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
 					dsa_free(hashtable->area, chunk_shared);
 			}
