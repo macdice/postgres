@@ -1176,7 +1176,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			dsa_free(hashtable->area, chunk_shared);
 
 			LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
-			Assert(hashtable->shared->size > size);
+			Assert(hashtable->shared->size >= size);
 			hashtable->shared->size -= size;
 			hashtable->shared->nfreed += nfreed;
 			hashtable->shared->ninmemory += ninmemory;
@@ -1191,7 +1191,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			Size size = chunk->maxlen + HASH_CHUNK_HEADER_SIZE;
 			HashMemoryChunk nextchunk = chunk->next.unshared;
 
-			Assert(hashtable->spaceUsed > size);
+			Assert(hashtable->spaceUsed >= size);
 			hashtable->spaceUsed -= size;
 			pfree(chunk);
 			chunk = nextchunk;
