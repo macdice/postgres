@@ -236,8 +236,7 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	pgs_values[Anum_pg_sequence_seqcache - 1] = Int64GetDatumFast(seqform.seqcache);
 
 	tuple = heap_form_tuple(tupDesc, pgs_values, pgs_nulls);
-	simple_heap_insert(rel, tuple);
-	CatalogUpdateIndexes(rel, tuple);
+	CatalogTupleInsert(rel, tuple);
 
 	heap_freetuple(tuple);
 	heap_close(rel, RowExclusiveLock);
@@ -504,8 +503,7 @@ AlterSequence(ParseState *pstate, AlterSeqStmt *stmt)
 
 	relation_close(seqrel, NoLock);
 
-	simple_heap_update(rel, &tuple->t_self, tuple);
-	CatalogUpdateIndexes(rel, tuple);
+	CatalogTupleUpdate(rel, &tuple->t_self, tuple);
 	heap_close(rel, RowExclusiveLock);
 
 	return address;
@@ -523,7 +521,7 @@ DeleteSequenceTuple(Oid relid)
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for sequence %u", relid);
 
-	simple_heap_delete(rel, &tuple->t_self);
+	CatalogTupleDelete(rel, &tuple->t_self);
 
 	ReleaseSysCache(tuple);
 	heap_close(rel, RowExclusiveLock);
