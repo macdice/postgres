@@ -34,8 +34,6 @@ typedef struct Barrier
 
 extern void BarrierInit(Barrier *barrier, int num_workers);
 extern bool BarrierWait(Barrier *barrier, uint32 wait_event_info);
-extern bool BarrierWaitSet(Barrier *barrier, int new_phase,
-						   uint32 wait_event_info);
 extern int BarrierAttach(Barrier *barrier);
 extern bool BarrierDetach(Barrier *barrier);
 extern int BarrierPhase(Barrier *barrier);
