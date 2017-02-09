@@ -38,8 +38,8 @@ BarrierInit(Barrier *barrier, int participants)
 
 /*
  * Wait for all participants to arrive at this barrier, and then return in all
- * participants.  Sets the phase to the given phase, which must not be equal
- * to the current phase.  The caller must be attached to this barrier.
+ * participants.  Increments the current phase.  The caller must be attached
+ * to this barrier.
  *
  * While waiting, pg_stat_activity shows a wait_event_class and wait_event
  * controlled by the wait_event_info passed in, which should be a value from
@@ -51,80 +51,66 @@ BarrierInit(Barrier *barrier, int participants)
  * participant while the others wait.
  */
 bool
-BarrierWaitSet(Barrier *barrier, int new_phase, uint32 wait_event_info)
+BarrierWait(Barrier *barrier, uint32 wait_event_info)
 {
 	bool first;
-	bool release;
-	int phase;
-
-	TRACE_POSTGRESQL_BARRIER_WAIT_START(new_phase);
+	bool last;
+	int start_phase;
+	int next_phase;
 
 	SpinLockAcquire(&barrier->mutex);
-	Assert(barrier->phase != new_phase);
+	start_phase = barrier->phase;
+	next_phase = start_phase + 1;
 	++barrier->arrived;
-	first = barrier->arrived == 1;
+	if (barrier->arrived == 1)
+		first = true;
+	else
+		first = false;
 	if (barrier->arrived == barrier->participants)
 	{
-		release = true;
+		last = true;
 		barrier->arrived = 0;
-		barrier->phase = new_phase;
+		barrier->phase = next_phase;
 	}
 	else
-	{
-		release = false;
-		phase = barrier->phase;
-	}
+		last = false;
 	SpinLockRelease(&barrier->mutex);
 
-	/* Check if we can release our peers and return. */
-	if (release)
+	TRACE_POSTGRESQL_BARRIER_WAIT_START(next_phase);
+
+	/*
+	 * If we were the last expected participant to arrive, we can release our
+	 * peers and return.
+	 */
+	if (last)
 	{
 		ConditionVariableBroadcast(&barrier->condition_variable);
-		TRACE_POSTGRESQL_BARRIER_WAIT_DONE(new_phase, first);
-
+		TRACE_POSTGRESQL_BARRIER_WAIT_DONE(next_phase, first, last);
 		return first;
 	}
 
-	/* Wait for phase to change. */
+	/*
+	 * Otherwise we have to wait for the last participant to arrive and
+	 * advance the phase.
+	 */
 	ConditionVariablePrepareToSleep(&barrier->condition_variable);
 	for (;;)
 	{
+		bool advanced;
+
 		SpinLockAcquire(&barrier->mutex);
-		release = barrier->phase != phase;
+		Assert(barrier->phase == start_phase || barrier->phase == next_phase);
+		advanced = barrier->phase == next_phase;
 		SpinLockRelease(&barrier->mutex);
-		if (release)
+		if (advanced)
 			break;
 		ConditionVariableSleep(&barrier->condition_variable, wait_event_info);
 	}
 	ConditionVariableCancelSleep();
 
-	TRACE_POSTGRESQL_BARRIER_WAIT_DONE(new_phase, first);
-
-	/* The callers should all agree on the new phase. */
-	Assert(barrier->phase == new_phase);
+	TRACE_POSTGRESQL_BARRIER_WAIT_DONE(next_phase, first, last);
 
 	return first;
-}
-
-/*
- * Wait for all participants to arrive at this barrier, and then return in all
- * participants.  Advance the phase by one.  The caller must be attached to
- * this barrier.
- *
- * While waiting, pg_stat_activity shows a wait_event_class and wait_event
- * controlled by the wait_event_info passed in, which should be a value from
- * from one of the WaitEventXXX enums defined in pgstat.h.
- *
- * Return true in one arbitrarily selected participant (currently the first
- * one to arrive).  Return false in all others.  The differing return code
- * can be used to coordinate a phase of work that must be done in only one
- * worker while the others wait.
- */
-bool
-BarrierWait(Barrier *barrier, uint32 wait_event_info)
-{
-	/* See BarrierPhase for why it is safe to read the phase without lock. */
-	return BarrierWaitSet(barrier, barrier->phase + 1, wait_event_info);
 }
 
 /*
