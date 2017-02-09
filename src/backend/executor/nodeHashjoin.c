@@ -1551,6 +1551,7 @@ ExecReScanHashJoin(HashJoinState *node)
 			 */
 			Assert(!IsParallelWorker());
 			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
+			BarrierInit(&node->hj_HashTable->shared->shrink_barrier, 0);
 			node->hj_HashTable->shared->at_least_one_worker = false;
 			node->hj_HashTable->shared->grow_enabled = true;
 		}
@@ -1671,6 +1672,7 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 		sizeof(HashJoinParticipantState) * planned_participants;
 	shared = shm_toc_allocate(pcxt->toc, size);
 	BarrierInit(&shared->barrier, 0);
+	BarrierInit(&shared->shrink_barrier, 0);
 	shared->nbuckets = 0;
 	shared->planned_participants = planned_participants;
 	shared->buckets = InvalidDsaPointer;
