@@ -1572,10 +1572,11 @@ ExecReScanHashJoin(HashJoinState *node)
 			{
 				/* Reattach and fast-forward to the probing phase. */
 				BarrierAttach(&node->hj_HashTable->shared->barrier);
-				BarrierWaitSet(&node->hj_HashTable->shared->barrier,
-							   PHJ_PHASE_PROBING,
-							   WAIT_EVENT_HASHJOIN_REWINDING);
-				node->hj_HashTable->attached_at_phase = PHJ_PHASE_PROBING;
+				while (BarrierPhase(&node->hj_HashTable->shared->barrier)
+					   < PHJ_PHASE_PROBING)
+					BarrierWait(&node->hj_HashTable->shared->barrier,
+								WAIT_EVENT_HASHJOIN_REWINDING);
+				node->hj_HashTable->attached_at_phase = PHJ_PHASE_CREATING;
 			}
 
 			/*

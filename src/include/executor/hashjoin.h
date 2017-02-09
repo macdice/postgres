@@ -372,6 +372,7 @@ typedef struct HashJoinTableData
 #define PHJ_SHRINK_PHASE_CLEARING		1
 #define PHJ_SHRINK_PHASE_WORKING		2
 #define PHJ_SHRINK_PHASE_DECIDING		3
+#define PHJ_SHRINK_PHASE(n) (n % 4)
 
 /*
  * Return the 'participant number' for a process participating in a parallel

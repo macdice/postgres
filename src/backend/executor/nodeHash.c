@@ -1054,7 +1054,7 @@ ExecHashShrink(HashJoinTable hashtable)
 		 * already underway, we need to be able to jump to the correct place
 		 * in this function.
 		 */
-		switch (BarrierPhase(&hashtable->shared->shrink_barrier))
+		switch (PHJ_SHRINK_PHASE(BarrierPhase(&hashtable->shared->shrink_barrier)))
 		{
 		case PHJ_SHRINK_PHASE_BEGINNING: /* likely case */
 			break;
@@ -1237,9 +1237,10 @@ ExecHashShrink(HashJoinTable hashtable)
 		}
 	deciding:
 		/* Wait for above decision to be made. */
-		BarrierWaitSet(&hashtable->shared->shrink_barrier,
-					   PHJ_SHRINK_PHASE_BEGINNING,
-					   WAIT_EVENT_HASH_SHRINKING4);
+		BarrierWait(&hashtable->shared->shrink_barrier,
+					WAIT_EVENT_HASH_SHRINKING4);
+		Assert(PHJ_SHRINK_PHASE(BarrierPhase(&hashtable->shared->shrink_barrier)) ==
+			   PHJ_SHRINK_PHASE_BEGINNING);
 	}
 	else
 	{
