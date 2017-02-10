@@ -41,6 +41,12 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
+/*
+ * To avoid overflow we don't allow batch increases if we have more than this
+ * number already.
+ */
+#define MAX_BATCHES_BEFORE_INCREASES_STOP \
+	Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2))
 
 static void ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch);
 static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
@@ -983,7 +989,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch)
 	MemoryContext oldcxt;
 
 	/* safety check to avoid overflow */
-	if (oldnbatch > Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2)))
+	if (oldnbatch > MAX_BATCHES_BEFORE_INCREASES_STOP)
 		return;
 
 	Assert(nbatch > 1);
@@ -2603,6 +2609,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 	/* If appropriate, check if work_mem would be exceeded by a new chunk. */
 	if (respect_work_mem &&
 		hashtable->shared->grow_enabled &&
+		hashtable->shared->nbatch <= MAX_BATCHES_BEFORE_INCREASES_STOP &&
 		(hashtable->shared->size +
 		 chunk_size) > (work_mem * 1024L))
 	{
