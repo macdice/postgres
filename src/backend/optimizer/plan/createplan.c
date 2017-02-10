@@ -3971,13 +3971,15 @@ create_hashjoin_plan(PlannerInfo *root,
 
 	/*
 	 * Set the table as sharable if appropriate, with parallel or serial
-	 * building.
+	 * building.  If parallel, the executor will also need an estimate of the
+	 * total number of rows expected from all participants.
 	 */
 	switch (best_path->table_type)
 	{
 	case HASHPATH_TABLE_SHARED_PARALLEL:
 		hash_plan->shared_table = true;
 		hash_plan->plan.parallel_aware = true;
+		hash_plan->rows_total = best_path->inner_rows_total;
 		break;
 	case HASHPATH_TABLE_SHARED_SERIAL:
 		hash_plan->shared_table = true;
