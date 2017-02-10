@@ -487,6 +487,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	size_t		space_allowed;
 	int			nbuckets;
 	int			nbatch;
+	double		rows;
 	int			num_skew_mcvs;
 	int			log2_nbuckets;
 	int			nkeys;
@@ -502,8 +503,15 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	node = (Hash *) state->ps.plan;
 	outerNode = outerPlan(node);
 
+	/*
+	 * If this is shared hash table with a partial plan, then we can't use
+	 * outerNode->plan_rows to estimate its size.  We need an estimate of the
+	 * total number of rows from all partial plans running.
+	 */
+	rows = node->plan.parallel_aware ? node->rows_total : outerNode->plan_rows;
+
 	shared_hashtable = state->shared_table_data;
-	ExecChooseHashTableSize(outerNode->plan_rows, outerNode->plan_width,
+	ExecChooseHashTableSize(rows, outerNode->plan_width,
 							OidIsValid(node->skewTable),
 							shared_hashtable != NULL,
 							shared_hashtable != NULL ?
