@@ -1327,6 +1327,9 @@ ExecHashTableReset(HashJoinTable hashtable)
 
 	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
 
+	/* Cannot be more than our previous peak; we had this size before. */
+	Assert(hashtable->spaceUsed <= hashtable->spacePeak);
+
 	MemoryContextSwitchTo(oldcxt);
 
 	/* Forget the chunks (the memory was freed by the context reset above). */
