@@ -595,6 +595,8 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 
 		hashtable->buckets = (HashJoinBucketHead *)
 			palloc0(nbuckets * sizeof(HashJoinBucketHead));
+		hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
+		hashtable->spacePeak = hashtable->spaceUsed;
 
 		MemoryContextSwitchTo(oldcxt);
 
