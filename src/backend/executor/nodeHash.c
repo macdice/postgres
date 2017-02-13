@@ -637,7 +637,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 
 		/*
 		 * Attach to the barrier.  The corresponding detach operation is in
-		 * ExecHashTableDestroy.
+		 * ExecHashTableDetach.
 		 */
 		barrier = &hashtable->shared->barrier;
 		hashtable->attached_at_phase = BarrierAttach(barrier);
@@ -653,7 +653,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 		{
 			if (BarrierWait(barrier, WAIT_EVENT_HASH_BEGINNING))
 			{
-				/* Serial phase: create the hash tables */
+				/* Serial phase: create the hash table */
 				Size bytes;
 				HashJoinBucketHead *buckets;
 				int i;
@@ -706,6 +706,8 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 
 		hashtable->buckets = (HashJoinBucketHead *)
 			palloc0(nbuckets * sizeof(HashJoinBucketHead));
+		hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
+		hashtable->spacePeak = hashtable->spaceUsed;
 
 		MemoryContextSwitchTo(oldcxt);
 
