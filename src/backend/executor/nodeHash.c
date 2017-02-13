@@ -377,8 +377,7 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 		palloc0(nbuckets * sizeof(HashJoinTuple));
 
 	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
-	if (hashtable->spaceUsed > hashtable->spacePeak)
-		hashtable->spacePeak = hashtable->spaceUsed;
+	hashtable->spacePeak = hashtable->spaceUsed;
 
 	/*
 	 * Set up for skew optimization, if possible and there's a need for more
