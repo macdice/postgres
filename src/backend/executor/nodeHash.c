@@ -1122,6 +1122,7 @@ ExecHashShrink(HashJoinTable hashtable)
 		chunk = hashtable->chunks;
 		hashtable->chunks = NULL;
 	}
+	ninmemory = nfreed = 0;
 
 	while (chunk != NULL)
 	{
@@ -2621,8 +2622,9 @@ dense_alloc_shared(HashJoinTable hashtable,
 		hashtable->shared->grow_enabled &&
 		hashtable->shared->nbatch <= MAX_BATCHES_BEFORE_INCREASES_STOP &&
 		(hashtable->shared->size +
-		 chunk_size) > (work_mem * 1024L))
-	{
+		 chunk_size) > (work_mem * 1024L *
+						hashtable->shared->planned_participants))
+	{		
 		/*
 		 * It would be exceeded.  Let's increase the number of batches, so we
 		 * can try to shrink the hash table.
