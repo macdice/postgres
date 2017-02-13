@@ -1254,6 +1254,8 @@ ExecHashShrink(HashJoinTable hashtable)
 		}
 	deciding:
 		/* Wait for above decision to be made. */
+		Assert(PHJ_SHRINK_PHASE(BarrierPhase(&hashtable->shared->shrink_barrier)) ==
+			   PHJ_SHRINK_PHASE_DECIDING);
 		BarrierWait(&hashtable->shared->shrink_barrier,
 					WAIT_EVENT_HASH_SHRINKING4);
 		Assert(PHJ_SHRINK_PHASE(BarrierPhase(&hashtable->shared->shrink_barrier)) ==
