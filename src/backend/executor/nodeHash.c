@@ -2627,7 +2627,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 		(hashtable->shared->size +
 		 chunk_size) > (work_mem * 1024L *
 						hashtable->shared->planned_participants))
-	{		
+	{
 		/*
 		 * It would be exceeded.  Let's increase the number of batches, so we
 		 * can try to shrink the hash table.
