@@ -1214,7 +1214,6 @@ ExecHashShrink(HashJoinTable hashtable)
 			chunk = nextchunk;
 		}
 	}
-	TRACE_POSTGRESQL_HASH_SHRINK_DONE(tuples_processed, chunks_processed);
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: freed %ld of %ld tuples, space now %zu\n",
@@ -1273,6 +1272,8 @@ ExecHashShrink(HashJoinTable hashtable)
 #endif
 		}
 	}
+
+	TRACE_POSTGRESQL_HASH_SHRINK_DONE(tuples_processed, chunks_processed);
 }
 
 /*
