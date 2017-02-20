@@ -70,6 +70,7 @@ struct BufFile
 	bool		isTemp;			/* can only add files if this is TRUE */
 	bool		isInterXact;	/* keep open over transactions? */
 	bool		dirty;			/* does buffer need to be written? */
+	bool		isReadOnly;		/* has the file been set to read only? */
 
 	/*
 	 * resowner is the ResourceOwner to use for underlying temp files.  (We
@@ -407,6 +408,8 @@ BufFileWrite(BufFile *file, void *ptr, size_t size)
 	size_t		nwritten = 0;
 	size_t		nthistime;
 
+	Assert(!file->isReadOnly);
+	
 	while (size > 0)
 	{
 		if (file->pos >= BLCKSZ)

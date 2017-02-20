@@ -1344,6 +1344,68 @@ OpenTemporaryFile(bool interXact)
 	return file;
 }
 
+static void
+build_tempdirpath(Oid tblspcOid, char *output)
+{
+	if (tblspcOid == DEFAULTTABLESPACE_OID ||
+		tblspcOid == GLOBALTABLESPACE_OID)
+		snprintf(tempdirpath, MAXPGPATH, "base/%s", PG_TEMP_FILES_DIR);
+	else
+	{
+		snprintf(tempdirpath, MAXPGPATH, "pg_tblspc/%u/%s/%s",
+				 tblspcOid, TABLESPACE_VERSION_DIRECTORY, PG_TEMP_FILES_DIR);
+	}
+}
+
+static void
+build_tempfilepath_for_file_in_set(const char *tempdir, pid_t pid, int set,
+								   int number, int segment, char *output)
+{
+	snprintf(output, MAXPGPATH, "%s/%s%d.%d.%d.%d", tempdir,
+			 PG_TEMP_FILE_PREFIX,
+			 pid, set, number, segment);
+}
+
+/*
+ * Open a temporary file using deterministic naming scheme that allows for
+ * discovery and bulk cleanup.  Return value <= 0 if there is no such file.
+ */
+File
+OpenTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int number, int segment)
+{
+	char		tempdirpath[MAXPGPATH];
+	char		tempfilepath[MAXPGPATH];
+	File		file;
+
+	build_tempdirpath(tblspcOid, tempdirpath);
+	build_tempfilepath_for_file_in_set(tempdirpath, pid, set, number, segment,
+									   tempfilepath);
+	file = PathNameOpenFile(tempfilepath,
+							O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
+							0600);	
+}
+
+bool
+DeleteTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int number, int segment)
+{
+	char		tempdirpath[MAXPGPATH];
+	char		tempfilepath[MAXPGPATH];
+
+	build_tempdirpath(tblspcOid, tempdirpath);
+	build_tempfilepath_for_file_in_set(tempdirpath, pid, set, number, segment,
+									   tempfilepath);
+
+	if (unlink(tempfilepath) < 0)
+	{
+		if (errno != NOENT)
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not delete file \"%s\": %m", tempfilepath)));
+		return false;
+	}
+	return true;
+}
+	
 /*
  * Open a temporary file in a specific tablespace.
  * Subroutine for OpenTemporaryFile, which see for details.
