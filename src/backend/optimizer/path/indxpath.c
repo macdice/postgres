@@ -1048,9 +1048,9 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 
 		/*
 		 * If appropriate, consider parallel index scan.  We don't allow
-		 * parallel index scan for bitmap or index only scans.
+		 * parallel index scan for bitmap index scans.
 		 */
-		if (index->amcanparallel && !index_only_scan &&
+		if (index->amcanparallel &&
 			rel->consider_parallel && outer_relids == NULL &&
 			scantype != ST_BITMAPSCAN)
 		{
@@ -1104,7 +1104,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			result = lappend(result, ipath);
 
 			/* If appropriate, consider parallel index scan */
-			if (index->amcanparallel && !index_only_scan &&
+			if (index->amcanparallel &&
 				rel->consider_parallel && outer_relids == NULL &&
 				scantype != ST_BITMAPSCAN)
 			{
@@ -1273,12 +1273,11 @@ generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 
 	foreach(lc, clauses)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(lc));
 		List	   *pathlist;
 		Path	   *bitmapqual;
 		ListCell   *j;
 
-		Assert(IsA(rinfo, RestrictInfo));
 		/* Ignore RestrictInfos that aren't ORs */
 		if (!restriction_is_or_clause(rinfo))
 			continue;
@@ -1310,11 +1309,11 @@ generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 			}
 			else
 			{
+				RestrictInfo *rinfo = castNode(RestrictInfo, orarg);
 				List	   *orargs;
 
-				Assert(IsA(orarg, RestrictInfo));
-				Assert(!restriction_is_or_clause((RestrictInfo *) orarg));
-				orargs = list_make1(orarg);
+				Assert(!restriction_is_or_clause(rinfo));
+				orargs = list_make1(rinfo);
 
 				indlist = build_paths_for_OR(root, rel,
 											 orargs,
@@ -2174,9 +2173,8 @@ match_clauses_to_index(IndexOptInfo *index,
 
 	foreach(lc, clauses)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(lc));
 
-		Assert(IsA(rinfo, RestrictInfo));
 		match_clause_to_index(index, rinfo, clauseset);
 	}
 }

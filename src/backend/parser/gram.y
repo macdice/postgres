@@ -3249,8 +3249,7 @@ ColQualList:
 ColConstraint:
 			CONSTRAINT name ColConstraintElem
 				{
-					Constraint *n = (Constraint *) $3;
-					Assert(IsA(n, Constraint));
+					Constraint *n = castNode(Constraint, $3);
 					n->conname = $2;
 					n->location = @1;
 					$$ = (Node *) n;
@@ -3442,8 +3441,7 @@ TableLikeOption:
 TableConstraint:
 			CONSTRAINT name ConstraintElem
 				{
-					Constraint *n = (Constraint *) $3;
-					Assert(IsA(n, Constraint));
+					Constraint *n = castNode(Constraint, $3);
 					n->conname = $2;
 					n->location = @1;
 					$$ = (Node *) n;
@@ -6283,16 +6281,6 @@ CommentStmt:
 					n->objname = lappend($6, makeString($4));
 					n->objargs = NIL;
 					n->comment = $8;
-					$$ = (Node *) n;
-				}
-			| COMMENT ON RULE name IS comment_text
-				{
-					/* Obsolete syntax supported for awhile for compatibility */
-					CommentStmt *n = makeNode(CommentStmt);
-					n->objtype = OBJECT_RULE;
-					n->objname = list_make1(makeString($4));
-					n->objargs = NIL;
-					n->comment = $6;
 					$$ = (Node *) n;
 				}
 			| COMMENT ON TRANSFORM FOR Typename LANGUAGE name IS comment_text
@@ -12845,8 +12833,7 @@ c_expr:		columnref								{ $$ = $1; }
 				}
 			| ARRAY array_expr
 				{
-					A_ArrayExpr *n = (A_ArrayExpr *) $2;
-					Assert(IsA(n, A_ArrayExpr));
+					A_ArrayExpr *n = castNode(A_ArrayExpr, $2);
 					/* point outermost A_ArrayExpr to the ARRAY keyword */
 					n->location = @1;
 					$$ = (Node *)n;

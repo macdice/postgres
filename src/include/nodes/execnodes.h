@@ -371,6 +371,7 @@ typedef struct EState
 	Snapshot	es_crosscheck_snapshot; /* crosscheck time qual for RI */
 	List	   *es_range_table; /* List of RangeTblEntry */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
+	const char *es_sourceText;	/* Source text from QueryDesc */
 
 	JunkFilter *es_junkFilter;	/* top-level junk filter, if any */
 
@@ -1409,6 +1410,7 @@ typedef struct IndexScanState
  *		ScanDesc		   index scan descriptor
  *		VMBuffer		   buffer in use for visibility map testing, if any
  *		HeapFetches		   number of tuples we were forced to fetch from heap
+ *		ioss_PscanLen	   Size of parallel index-only scan descriptor
  * ----------------
  */
 typedef struct IndexOnlyScanState
@@ -1427,6 +1429,7 @@ typedef struct IndexOnlyScanState
 	IndexScanDesc ioss_ScanDesc;
 	Buffer		ioss_VMBuffer;
 	long		ioss_HeapFetches;
+	Size		ioss_PscanLen;
 } IndexOnlyScanState;
 
 /* ----------------

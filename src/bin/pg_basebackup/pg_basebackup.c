@@ -16,7 +16,6 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <time.h>
@@ -337,7 +336,7 @@ usage(void)
 	printf(_("  -r, --max-rate=RATE    maximum transfer rate to transfer data directory\n"
 	  "                         (in kB/s, or use suffix \"k\" or \"M\")\n"));
 	printf(_("  -R, --write-recovery-conf\n"
-			 "                         write recovery.conf after backup\n"));
+			 "                         write recovery.conf for replication\n"));
 	printf(_("  -S, --slot=SLOTNAME    replication slot to use\n"));
 	printf(_("      --no-slot          prevent creation of temporary replication slot\n"));
 	printf(_("  -T, --tablespace-mapping=OLDDIR=NEWDIR\n"
@@ -1754,6 +1753,14 @@ BaseBackup(void)
 	if (maxrate > 0)
 		maxrate_clause = psprintf("MAX_RATE %u", maxrate);
 
+	if (verbose)
+		fprintf(stderr,
+				_("%s: initiating base backup, waiting for checkpoint to complete\n"),
+				progname);
+
+	if (showprogress && !verbose)
+		fprintf(stderr, "waiting for checkpoint\n");
+
 	basebkp =
 		psprintf("BASE_BACKUP LABEL '%s' %s %s %s %s %s %s",
 				 escaped_label,
@@ -1791,6 +1798,9 @@ BaseBackup(void)
 
 	strlcpy(xlogstart, PQgetvalue(res, 0, 0), sizeof(xlogstart));
 
+	if (verbose)
+		fprintf(stderr, _("%s: checkpoint completed\n"), progname);
+
 	/*
 	 * 9.3 and later sends the TLI of the starting point. With older servers,
 	 * assume it's the same as the latest timeline reported by
@@ -1804,8 +1814,8 @@ BaseBackup(void)
 	MemSet(xlogend, 0, sizeof(xlogend));
 
 	if (verbose && includewal != NO_WAL)
-		fprintf(stderr, _("transaction log start point: %s on timeline %u\n"),
-				xlogstart, starttli);
+		fprintf(stderr, _("%s: transaction log start point: %s on timeline %u\n"),
+				progname, xlogstart, starttli);
 
 	/*
 	 * Get the header
@@ -1907,7 +1917,7 @@ BaseBackup(void)
 	}
 	strlcpy(xlogend, PQgetvalue(res, 0, 0), sizeof(xlogend));
 	if (verbose && includewal != NO_WAL)
-		fprintf(stderr, "transaction log end point: %s\n", xlogend);
+		fprintf(stderr, _("%s: transaction log end point: %s\n"), progname, xlogend);
 	PQclear(res);
 
 	res = PQgetResult(conn);
@@ -2048,7 +2058,7 @@ BaseBackup(void)
 	}
 
 	if (verbose)
-		fprintf(stderr, "%s: base backup completed\n", progname);
+		fprintf(stderr, _("%s: base backup completed\n"), progname);
 }
 
 
