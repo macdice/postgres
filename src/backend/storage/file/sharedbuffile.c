@@ -13,19 +13,32 @@
  *
  * BufFiles are used to spill temporary data to disk, but can normally only be
  * accessed by a single backend process.  This mechanism allows for a limited
- * form of BufFile sharing between backends, with appropriate cleanup.
+ * form of BufFile sharing between backends, with shared ownership/cleanup.
  *
- * A single SharedBufFileManager can manage any number of shared BufFiles
- * that are shared between a fixed number of participating backends.
- * Each shared BufFile can be written to by a single participant but can be
- * read by any backend after it has been 'shared'.  Once a given BufFile is
- * shared, it becomes read-only and cannot be extended.  To create a new
- * shared BufFile, a participant needs its own distinct participant number,
- * and needs to specify an arbitrary index number for the file.  To make it
- * available to other backends, it must be explicitly 'shared', which
- * flushes internal buffers and renders it read-only.  To open a file that has
- * been shared, a backend needs to know the number of the participant that
- * created the file, and the index number.
+ * A single SharedBufFileManager can manage any number of shared BufFiles that
+ * are shared between a fixed number of participating backends.  Each shared
+ * BufFile can be written to by a single participant but can be read by any
+ * backend after it has been 'shared'.  Once a given BufFile is shared, it
+ * becomes read-only and cannot be extended.  To create a new shared BufFile,
+ * a participant needs its own distinct participant number, and needs to
+ * specify an arbitrary index number for the file.  To make it available to
+ * other backends, it must be explicitly 'shared', which flushes internal
+ * buffers and renders it read-only.  To open a file that has been shared, a
+ * backend needs to know the number of the participant that created the file,
+ * and the index number.  It is the responsibilit of calling code to ensure
+ * that files are not accessed before they have been shared.
+ *
+ * Each file is identified by a file number and a participant number, so that
+ * a SharedBufFileManager manages a 2D table of individual files To allow each
+ * backend to export exactly one file, only file number 0 need to be used; an
+ * example use case is a parallel tuple sort where each participant exports a
+ * tape which a final merge will read.  To allow backends to export multiple
+ * files each, a numbering scheme must be invented by the calling code; an
+ * example use case is a parallel operation such as hash join which needs to
+ * partition data into numbered batches.  The latter use case combined with
+ * the desire to have a fixed sized shared memory footprint while permitting
+ * dynamic expansion of the number of batches is what motivates the [low_file,
+ * high_file) range tracking.
  *
  *-------------------------------------------------------------------------
  */
@@ -34,10 +47,10 @@
 
 #include "storage/buffile.h"
 #include "storage/sharedbuffile.h"
+#include "storage/spin.h"
 
 typedef struct SharedBufFileParticipant
 {
-	pid_t pid;					/* PID of this participant (once known) */
 	Oid tablespace;				/* tablespace for this participant's files */
 	int low_file;				/* lowest known file number */
 	int high_file;				/* one past the highest known file number */
@@ -45,11 +58,15 @@ typedef struct SharedBufFileParticipant
 
 struct SharedBufFileManager
 {
-	s_lock mutex;
-	int refcount;
-	int nparticipants;
+	slock_t mutex;
+	pid_t creator_pid;			/* PID of the creating backing */
+	int set_number;				/* a unique identifier for this set of files */
+	int refcount;				/* number of backends attached */
+	int nparticipants;			/* number of backends expected */
+
+	/* per-participant state */
 	SharedBufFileParticipant participants[FLEXIBLE_ARRAY_MEMBER];
-} SharedBufFileManager;
+};
 
 /*
  * Initialize an object in shared memory that can manage a group of shared
@@ -58,7 +75,7 @@ struct SharedBufFileManager
  * number of participants (backends) that can create and access shared
  * BufFiles.  'segment' should point to the DSM segment that holds this
  * SharedBufFile, or NULL if the object is being initialized in fixed shared
- * memory.
+ * memory.  Other backends should call SharedBufFileManagerAttach.
  */
 void
 SharedBufFileManagerInitialize(SharedBufFileManager *manager,
@@ -66,25 +83,36 @@ SharedBufFileManagerInitialize(SharedBufFileManager *manager,
 {
 	int i;
 
-	SpinLockInitialize(&manager->mutex);
+	SpinLockInit(&manager->mutex);
 	manager->refcount = 1;
 	manager->nparticipants = nparticipants;
+	manager->creator_pid = MyProcPid;
 	for (i = 0; i < nparticipants; ++i)
 	{
 		SharedBufFileParticipant *p = &manager->participants[participant];
 
-		/* PID unknown and no files yet. */
-		p->pid = InvalidPid;		
+		/* No files yet. */
 		p->low_file = 0;
 		p->high_file = 0;
 
-		/* Rotate through the configured tablespaces. */
+		/* Rotate through the configured tablespaces to spread files out. */
 		if (numTempTablespaces > 0)
 			p->tablespace = tempTablespaces[i % numTempTablespaces];
 		else
 			p->tablespace = DEFAULTTABLESPACE_OID;
 	}
+
+	/* Register our detach callback. */
 }
+
+void
+SharedBufFileManagerAttach(SharedBufFileManager *manager,
+						   dsm_segment *segment)
+{
+	SpinLockAcquire(&manager->mutex);
+	++manager->refcount;	
+	SpinLockRelease(&manager->mutex);
+}							   
 
 /*
  * The number of bytes of shared memory required to construct a
@@ -174,13 +202,15 @@ SharedBufFileImport(SharedBufFileManager *manager, int participant,
  * Destroy a shared BufFile early.  Files are normally cleaned up
  * automatically when all participants detach, but it might be useful to
  * reclaim disk space sooner than that.  The caller asserts that no backends
- * will attempt to read from this file again.
+ * will attempt to read from this file again and that only one backend will
+ * destroy it.
  */
 void
 SharedBufFileDestroy(SharedBufFileManager *manager, int participant,
 					 int number)
 {
 	SharedBufFileParticipant *p = &manager->participants[participant];
+	int s;
 
 	Assert(participant < manager->nparticipants);
 	Assert(participant >= 0);
@@ -195,8 +225,12 @@ SharedBufFileDestroy(SharedBufFileManager *manager, int participant,
 	Assert(p->pid != InvalidPid);
 	Assert(p->low_file <= number || p->high_file > number);
 
-	/* Delete the underlying files. */
-	delete_backing_files(p->pid, p->key, number);
+	/* Delete segment files until we run out. */
+	s = 0;
+	while (DeleteTemporaryFileInSet(participant->tablespace,
+									manager->pid, manager->set,
+									n, s))
+		++s;
 	
 	/*
 	 * If this file number happens to be at the beginning or end of the range,
@@ -210,13 +244,41 @@ SharedBufFileDestroy(SharedBufFileManager *manager, int participant,
 		--p->high_file;
 }
 
-
 static void
-delete_backing_files(pid_t pid, int set, int number)
+shared_buf_file_on_dsm_detach(dsm_segment *segment, Datum datum)
 {
+	bool unlink_files = false;
+	SharedBufFileManager *manager = (SharedBufFileManager *)
+		DatumGetPointer(datum);
+
+	SpinLockAcquire(&manager->mutex);
+	Assert(manager->refcount > 0);
+	if (--manager->refcount == 0)
+		unlink_files = true;
+	SpinLockRelease(&manager->mutex);
+
+	if (unlink_files)
+	{
+		int p;
+		int n;
+		int s;
+
+		/* Scan the list of participants. */
+		for (p = 0; p < manager->nparticipants; ++p)
+		{
+			SharedBufFileParticipant *participant = &manager->participants[p];
+
+			/* Scan the range of file numbers. */
+			for (n = participant->low_file; n < participant->high_file; ++n)
+			{
+				/* Delete segment files until we run out. */
+				s = 0;
+				while (DeleteTemporaryFileInSet(participant->tablespace,
+												manager->pid,
+												manager->set_number,
+												n, s))
+					++s;
+			}
+		}
+	}
 }
-
-static void
-deelte_all_files_for_pid_and_set(pid_t pid, 
-
-#endif

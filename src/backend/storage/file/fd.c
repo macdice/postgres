@@ -1383,7 +1383,7 @@ OpenTemporaryFile(bool interXact)
 }
 
 static void
-build_tempdirpath(Oid tblspcOid, char *output)
+build_tempdirpath(Oid tblspcOid, char *tempdirpath)
 {
 	if (tblspcOid == DEFAULTTABLESPACE_OID ||
 		tblspcOid == GLOBALTABLESPACE_OID)
@@ -1407,9 +1407,12 @@ build_tempfilepath_for_file_in_set(const char *tempdir, pid_t pid, int set,
 /*
  * Open a temporary file using deterministic naming scheme that allows for
  * discovery and bulk cleanup.  Return value <= 0 if there is no such file.
+ * This interface is intended for use by sharedbuffile.c, not for direct usage
+ * by client code.
  */
 File
-OpenTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int number, int segment)
+OpenTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int number,
+					   int segment)
 {
 	char		tempdirpath[MAXPGPATH];
 	char		tempfilepath[MAXPGPATH];
@@ -1420,22 +1423,33 @@ OpenTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int number, int segmen
 									   tempfilepath);
 	file = PathNameOpenFile(tempfilepath,
 							O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
-							0600);	
+							0600);
+
+	return file;
 }
 
 bool
-DeleteTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int number, int segment)
+DeleteTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int file,
+						 int segment)
 {
 	char		tempdirpath[MAXPGPATH];
 	char		tempfilepath[MAXPGPATH];
 
 	build_tempdirpath(tblspcOid, tempdirpath);
-	build_tempfilepath_for_file_in_set(tempdirpath, pid, set, number, segment,
+	build_tempfilepath_for_file_in_set(tempdirpath, pid, set, file, segment,
 									   tempfilepath);
 
 	if (unlink(tempfilepath) < 0)
 	{
-		if (errno != NOENT)
+		/*
+		 * Don't complain if the file doesn't exist.  That is necessary
+		 * because sharedbuffile.c doesn't know which numbers exist, or how
+		 * many segments are present for each, so it casts a wide enough net.
+		 * Failure to delete for any other reason is unexpected and logs an
+		 * error for manual investigation, but doesn't raise an error so that
+		 * we can continue cleaning up.
+		 */
+		if (errno != ENOENT)
 			ereport(LOG,
 					(errcode_for_file_access(),
 					 errmsg("could not delete file \"%s\": %m", tempfilepath)));
@@ -1443,7 +1457,7 @@ DeleteTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set, int number, int segm
 	}
 	return true;
 }
-	
+
 /*
  * Open a temporary file in a specific tablespace.
  * Subroutine for OpenTemporaryFile, which see for details.

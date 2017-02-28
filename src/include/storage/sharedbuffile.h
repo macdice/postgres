@@ -14,6 +14,8 @@
 #ifndef SHAREDBUFFILE_H
 #define SHAREDBUFFILE_H
 
+#include "storage/dsm.h"
+
 struct SharedBufFileManager;
 typedef struct SharedBufFileManager SharedBufFileManager;
 
@@ -22,7 +24,7 @@ extern void SharedBufFileManagerInitialize(SharedBufFileManager *manager,
 										   dsm_segment *segment);
 extern Size SharedBufFileManagerSize(int nparticipants);
 
-extern BufFile *SharedBufFileCreate(SharedBufFileManger *manager,
+extern BufFile *SharedBufFileCreate(SharedBufFileManager *manager,
 									int participant,
 									int number);
 extern void SharedBufFileDestroy(SharedBufFileManager *manager,
