@@ -36,6 +36,8 @@
 
 #include "postgres.h"
 
+#include "catalog/catalog.h"
+#include "catalog/pg_tablespace.h"
 #include "executor/instrument.h"
 #include "storage/fd.h"
 #include "storage/buffile.h"
@@ -70,7 +72,7 @@ struct BufFile
 	bool		isTemp;			/* can only add files if this is TRUE */
 	bool		isInterXact;	/* keep open over transactions? */
 	bool		dirty;			/* does buffer need to be written? */
-	bool		isReadOnly;		/* has the file been set to read only? */
+	bool		readOnly;		/* has the file been set to read only? */
 
 	/*
 	 * resowner is the ResourceOwner to use for underlying temp files.  (We
@@ -114,6 +116,7 @@ makeBufFile(File firstfile)
 	file->isTemp = false;
 	file->isInterXact = false;
 	file->dirty = false;
+	file->readOnly = false;
 	file->resowner = CurrentResourceOwner;
 	file->curFile = 0;
 	file->curOffset = 0L;
@@ -193,6 +196,160 @@ BufFileCreate(File file)
 	return makeBufFile(file);
 }
 #endif
+
+static void
+make_shareable_path(char *tempdirpath, char *tempfilepath,
+					Oid tablespace, pid_t pid, int set, int file,
+					int participant, int segment)
+{
+	if (tablespace == DEFAULTTABLESPACE_OID ||
+		tablespace == GLOBALTABLESPACE_OID)
+		snprintf(tempdirpath, MAXPGPATH, "base/%s", PG_TEMP_FILES_DIR);
+	else
+	{
+		snprintf(tempdirpath, MAXPGPATH, "pg_tblspc/%u/%s/%s",
+				 tablespace, TABLESPACE_VERSION_DIRECTORY, PG_TEMP_FILES_DIR);
+	}
+
+	snprintf(tempfilepath, MAXPGPATH, "%s/%s%d.%d.%d.%d.%d", tempdirpath,
+			 PG_TEMP_FILE_PREFIX,
+			 pid, set, file, participant, segment);
+}
+
+/*
+ * Create a BufFile that can be discovered and opened read-only by other
+ * backends.  Intended for use by SharedBufFile.
+ */
+BufFile *
+BufFileCreateShared(Oid tablespace, pid_t pid, int set, int file_number,
+					int participant)
+{
+	File		firstFile;
+	BufFile    *file = (BufFile *) palloc(sizeof(BufFile));
+	char		tempdirpath[MAXPGPATH];
+	char		tempfilepath[MAXPGPATH];
+
+	make_shareable_path(tempdirpath, tempfilepath,
+						tablespace, pid, set, file_number, participant, 0);
+	firstFile = PathNameCreateFile(tempdirpath, tempfilepath, true);
+	if (firstFile <= 0)
+		elog(ERROR, "could not create temporary file \"%s\": %m",
+			 tempfilepath);
+
+	file->numFiles = 1;
+	file->files = (File *) palloc(sizeof(File));
+	file->files[0] = firstFile;
+	file->offsets = (off_t *) palloc(sizeof(off_t));
+	file->offsets[0] = 0L;
+	file->isTemp = false;
+	file->isInterXact = false;
+	file->dirty = false;
+	file->resowner = CurrentResourceOwner;
+	file->curFile = 0;
+	file->curOffset = 0L;
+	file->pos = 0;
+	file->nbytes = 0;
+	file->readOnly = false;
+
+	return file;
+}
+
+/*
+ * Open a file that was previously created in another backend with
+ * BufFileCreateShared.
+ */
+BufFile *
+BufFileOpenShared(Oid tablespace, pid_t pid, int set, int number,
+				  int participant)
+{
+	BufFile    *file = (BufFile *) palloc(sizeof(BufFile));
+	char		tempdirpath[MAXPGPATH];
+	char		tempfilepath[MAXPGPATH];
+	Size		capacity = 1024;
+	File	   *files = palloc(sizeof(File) * capacity);
+	int			nfiles = 0;
+
+	/*
+	 * We don't know how many segments there are, so we'll probe the
+	 * filesystem to find out.
+	 */
+	for (;;)
+	{
+		/* See if we need to expand our file space. */
+		if (nfiles + 1 > capacity)
+		{
+			capacity *= 2;
+			files = repalloc(files, sizeof(File) * capacity);
+		}
+		/* Try to load a segment. */
+		make_shareable_path(tempdirpath, tempfilepath, tablespace,
+							pid, set, number, participant, nfiles);
+		files[nfiles] = PathNameCreateFile(tempdirpath, tempfilepath, true);
+		if (file < 0)
+		{
+			if (errno == ENOENT)
+				break;
+			elog(ERROR, "could not open temporary file \"%s\": %m",
+				 tempfilepath);
+		}
+		++nfiles;
+	}
+
+	/* If we didn't find any files at all, there is no shared BufFile. */
+	if (nfiles == 0)
+		return NULL;
+
+	file->numFiles = nfiles;
+	file->files = files;
+	file->offsets = (off_t *) palloc0(sizeof(off_t) * nfiles);
+	file->isTemp = false;
+	file->isInterXact = false;
+	file->dirty = false;
+	file->resowner = CurrentResourceOwner;
+	file->curFile = 0;
+	file->curOffset = 0L;
+	file->pos = 0;
+	file->nbytes = 0;
+	file->readOnly = true;
+
+	return file;
+}
+
+/*
+ * Delete a BufFile that was created by BufFileCreateShared.  Intended for use
+ * by SharedBufFile.  Return true if at least one segment was deleted; false
+ * indicates that no segment was found, or an error occurred while trying to
+ * delete.  Errors are logged but the function returns normally because this
+ * is assumed to run in a clean-up path that might already involve an error.
+ */
+bool
+BufFileDeleteShared(Oid tablespace, pid_t pid, int set, int file_number,
+					int participant)
+{
+	char		tempdirpath[MAXPGPATH];
+	char		tempfilepath[MAXPGPATH];
+	int			segment = 0;
+	bool		found = false;
+
+	/*
+	 * We don't know if the BufFile really exists, because SharedBufFile
+	 * tracks only the range of file numbers.  If it does exists, we don't
+	 * khow many 1GB segments it has, so we'll delete until we hit ENOENT or
+	 * an IO error.
+	 */
+	for (;;)
+	{
+		make_shareable_path(tempdirpath, tempfilepath,
+							tablespace, pid, set, file_number,
+							participant, segment);
+		if (!PathNameDelete(tempfilepath))
+			break;
+		found = true;
+		++segment;
+	}
+
+	return found;
+}
 
 /*
  * Close a BufFile
@@ -408,8 +565,8 @@ BufFileWrite(BufFile *file, void *ptr, size_t size)
 	size_t		nwritten = 0;
 	size_t		nthistime;
 
-	Assert(!file->isReadOnly);
-	
+	Assert(!file->readOnly);
+
 	while (size > 0)
 	{
 		if (file->pos >= BLCKSZ)
@@ -607,3 +764,13 @@ BufFileTellBlock(BufFile *file)
 }
 
 #endif
+
+/*
+ * BufFileSetReadOnly --- flush and make read-only, in preparation for sharing
+ */
+void
+BufFileSetReadOnly(BufFile *file)
+{
+	BufFileFlush(file);
+	file->readOnly = true;
+}

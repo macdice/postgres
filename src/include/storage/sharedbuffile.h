@@ -16,24 +16,26 @@
 
 #include "storage/dsm.h"
 
-struct SharedBufFileManager;
-typedef struct SharedBufFileManager SharedBufFileManager;
+struct SharedBufFileSet;
+typedef struct SharedBufFileSet SharedBufFileSet;
 
-extern void SharedBufFileManagerInitialize(SharedBufFileManager *manager,
-										   int nparticipants,
-										   dsm_segment *segment);
-extern Size SharedBufFileManagerSize(int nparticipants);
+extern void SharedBufFileSetInitialize(SharedBufFileSet *set,
+									   int nparticipants,
+									   dsm_segment *segment);
+extern Size SharedBufFileSetSize(int nparticipants);
+extern void SharedBufFileSetAttach(SharedBufFileSet *set,
+								   dsm_segment *segment);
 
-extern BufFile *SharedBufFileCreate(SharedBufFileManager *manager,
-									int participant,
-									int number);
-extern void SharedBufFileDestroy(SharedBufFileManager *manager,
-								 int participant,
-								 int number);
-extern void SharedBufFileExport(SharedBufFileManager *manager,
+extern BufFile *SharedBufFileCreate(SharedBufFileSet *set,
+									int file_number,
+									int participant);
+extern void SharedBufFileDestroy(SharedBufFileSet *set,
+								 int file_number,
+								 int participant);
+extern void SharedBufFileExport(SharedBufFileSet *set,
 								BufFile *file);
-extern BufFile *SharedBufFileImport(SharedBufFileManager *manager,
-									int participant,
-									int number);
+extern BufFile *SharedBufFileImport(SharedBufFileSet *set,
+									int file_number,
+									int participant);
 
 #endif   /* SHAREDBUFFILE_H */

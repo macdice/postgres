@@ -81,10 +81,9 @@ extern int	FileGetRawFlags(File file);
 extern int	FileGetRawMode(File file);
 
 /* Operations used by sharedbuffile.c to manage sets of files */
-extern File OpenTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set,
-								   int number, int segment);
-extern bool DeleteTemporaryFileInSet(Oid tblspcOid, pid_t pid, int set,
-									 int number, int segment);
+extern File PathNameCreateFile(FileName directory, FileName filename,
+							   bool rejectError);
+extern bool PathNameDelete(FileName fileName);
 
 /* Operations that allow use of regular stdio --- USE WITH CAUTION */
 extern FILE *AllocateFile(const char *name, const char *mode);
