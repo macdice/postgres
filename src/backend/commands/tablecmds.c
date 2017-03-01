@@ -634,19 +634,14 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 									  relkind == RELKIND_PARTITIONED_TABLE));
 	descriptor->tdhasoid = (localHasOids || parentOidCount > 0);
 
-	if (stmt->partbound)
-	{
-		/* If the parent has OIDs, partitions must have them too. */
-		if (parentOidCount > 0 && !localHasOids)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot create table without OIDs as partition of table with OIDs")));
-		/* If the parent doesn't, partitions must not have them. */
-		if (parentOidCount == 0 && localHasOids)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot create table with OIDs as partition of table without OIDs")));
-	}
+	/*
+	 * If a partitioned table doesn't have the system OID column, then none
+	 * of its partitions should have it.
+	 */
+	if (stmt->partbound && parentOidCount == 0 && localHasOids)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot create table with OIDs as partition of table without OIDs")));
 
 	/*
 	 * Find columns with default values and prepare for insertion of the
@@ -5593,18 +5588,22 @@ ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode)
 	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		PartitionKey key = RelationGetPartitionKey(rel);
-		int			partnatts = get_partition_natts(key),
-					i;
 
-		for (i = 0; i < partnatts; i++)
+		if (get_partition_strategy(key) == PARTITION_STRATEGY_RANGE)
 		{
-			AttrNumber	partattnum = get_partition_col_attnum(key, i);
+			int			partnatts = get_partition_natts(key),
+						i;
 
-			if (partattnum == attnum)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-						 errmsg("column \"%s\" is in range partition key",
-								colName)));
+			for (i = 0; i < partnatts; i++)
+			{
+				AttrNumber	partattnum = get_partition_col_attnum(key, i);
+
+				if (partattnum == attnum)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+							 errmsg("column \"%s\" is in range partition key",
+									colName)));
+			}
 		}
 	}
 
