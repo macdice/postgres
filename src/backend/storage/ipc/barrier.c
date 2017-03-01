@@ -18,7 +18,6 @@
  */
 
 #include "storage/barrier.h"
-#include "utils/probes.h"
 
 /*
  * Initialize this barrier, setting a static number of participants that we
@@ -76,8 +75,6 @@ BarrierWait(Barrier *barrier, uint32 wait_event_info)
 		last = false;
 	SpinLockRelease(&barrier->mutex);
 
-	TRACE_POSTGRESQL_BARRIER_WAIT_START(next_phase);
-
 	/*
 	 * If we were the last expected participant to arrive, we can release our
 	 * peers and return.
@@ -85,7 +82,6 @@ BarrierWait(Barrier *barrier, uint32 wait_event_info)
 	if (last)
 	{
 		ConditionVariableBroadcast(&barrier->condition_variable);
-		TRACE_POSTGRESQL_BARRIER_WAIT_DONE(next_phase, first, last);
 		return first;
 	}
 
@@ -108,8 +104,6 @@ BarrierWait(Barrier *barrier, uint32 wait_event_info)
 	}
 	ConditionVariableCancelSleep();
 
-	TRACE_POSTGRESQL_BARRIER_WAIT_DONE(next_phase, first, last);
-
 	return first;
 }
 
@@ -122,8 +116,6 @@ int
 BarrierAttach(Barrier *barrier)
 {
 	int phase;
-
-	TRACE_POSTGRESQL_BARRIER_ATTACH();
 
 	SpinLockAcquire(&barrier->mutex);
 	++barrier->participants;
@@ -143,8 +135,6 @@ BarrierDetach(Barrier *barrier)
 {
 	bool release;
 	bool last;
-
-	TRACE_POSTGRESQL_BARRIER_DETACH();
 
 	SpinLockAcquire(&barrier->mutex);
 	Assert(barrier->participants > 0);

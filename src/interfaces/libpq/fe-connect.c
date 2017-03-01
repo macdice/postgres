@@ -15,7 +15,6 @@
 
 #include "postgres_fe.h"
 
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
@@ -1896,6 +1895,7 @@ PQconnectPoll(PGconn *conn)
 		case CONNECTION_SSL_STARTUP:
 		case CONNECTION_NEEDED:
 		case CONNECTION_CHECK_WRITABLE:
+		case CONNECTION_CONSUME:
 			break;
 
 		default:
@@ -2908,7 +2908,7 @@ keep_going:						/* We will come back to here until there is
 			}
 
 			/*
-			 * If a read-write connection is requisted check for same.
+			 * If a read-write connection is requested check for same.
 			 */
 			if (conn->target_session_attrs != NULL &&
 				strcmp(conn->target_session_attrs, "read-write") == 0)
@@ -2935,6 +2935,34 @@ keep_going:						/* We will come back to here until there is
 			conn->status = CONNECTION_OK;
 			return PGRES_POLLING_OK;
 
+		case CONNECTION_CONSUME:
+			{
+				conn->status = CONNECTION_OK;
+				if (!PQconsumeInput(conn))
+					goto error_return;
+
+				if (PQisBusy(conn))
+				{
+					conn->status = CONNECTION_CONSUME;
+					restoreErrorMessage(conn, &savedMessage);
+					return PGRES_POLLING_READING;
+				}
+
+				/*
+				 * Call PQgetResult() again to consume NULL result.
+				 */
+				res = PQgetResult(conn);
+				if (res != NULL)
+				{
+					PQclear(res);
+					conn->status = CONNECTION_CONSUME;
+					goto keep_going;
+				}
+
+				/* We are open for business! */
+				conn->status = CONNECTION_OK;
+				return PGRES_POLLING_OK;
+			}
 		case CONNECTION_CHECK_WRITABLE:
 			{
 				if (!saveErrorMessage(conn, &savedMessage))
@@ -2994,9 +3022,12 @@ keep_going:						/* We will come back to here until there is
 					/* We can release the address lists now. */
 					release_all_addrinfo(conn);
 
-					/* We are open for business! */
-					conn->status = CONNECTION_OK;
-					return PGRES_POLLING_OK;
+					/*
+					 * Finish reading any remaining messages before
+					 * being considered as ready.
+					 */
+					conn->status = CONNECTION_CONSUME;
+					goto keep_going;
 				}
 
 				/*

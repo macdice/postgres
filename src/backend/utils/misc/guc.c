@@ -1507,11 +1507,7 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&integer_datetimes,
-#ifdef HAVE_INT64_TIMESTAMP
 		true,
-#else
-		false,
-#endif
 		NULL, NULL, NULL
 	},
 
@@ -2776,13 +2772,24 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"min_parallel_relation_size", PGC_USERSET, QUERY_TUNING_COST,
-			gettext_noop("Sets the minimum size of relations to be considered for parallel scan."),
-			NULL,
+		{"min_parallel_table_scan_size", PGC_USERSET, QUERY_TUNING_COST,
+			gettext_noop("Sets the minimum amount of table data for a parallel scan."),
+			gettext_noop("If the planner estimates that it will read a number of table pages too small to reach this limit, a parallel scan will not be considered."),
 			GUC_UNIT_BLOCKS,
 		},
-		&min_parallel_relation_size,
+		&min_parallel_table_scan_size,
 		(8 * 1024 * 1024) / BLCKSZ, 0, INT_MAX / 3,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"min_parallel_index_scan_size", PGC_USERSET, QUERY_TUNING_COST,
+			gettext_noop("Sets the minimum amount of index data for a parallel scan."),
+			gettext_noop("If the planner estimates that it will read a number of index pages too small to reach this limit, a parallel scan will not be considered."),
+			GUC_UNIT_BLOCKS,
+		},
+		&min_parallel_index_scan_size,
+		(512 * 1024) / BLCKSZ, 0, INT_MAX / 3,
 		NULL, NULL, NULL
 	},
 
@@ -7321,7 +7328,7 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 			}
 			else if (strcmp(stmt->name, "TRANSACTION SNAPSHOT") == 0)
 			{
-				A_Const    *con = (A_Const *) linitial(stmt->args);
+				A_Const    *con = castNode(A_Const, linitial(stmt->args));
 
 				if (stmt->is_local)
 					ereport(ERROR,
@@ -7329,7 +7336,6 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 							 errmsg("SET LOCAL TRANSACTION SNAPSHOT is not implemented")));
 
 				WarnNoTransactionChain(isTopLevel, "SET TRANSACTION");
-				Assert(IsA(con, A_Const));
 				Assert(nodeTag(&con->val) == T_String);
 				ImportSnapshot(strVal(&con->val));
 			}
