@@ -922,16 +922,11 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 	int			curbatch = hashtable->curbatch;
 	TupleTableSlot *slot;
 	uint32		hashvalue;
-#ifdef TRACE_POSTGRESQL_HASHJOIN_LOAD_DONE
-	int			tuples_processed = 0;
-#endif
 
 	/* We'll need to read from the inner batch file(s). */
 	ExecHashJoinOpenBatch(hashtable, hashtable->curbatch, true);
 	Assert(hashtable->batch_reader.batchno == curbatch);
 	Assert(hashtable->batch_reader.inner);
-
-	TRACE_POSTGRESQL_HASHJOIN_LOAD_START(hashtable->curbatch);
 
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -955,11 +950,7 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 		 * possible for hashtable->nbatch to be increased here!
 		 */
 		ExecHashTableInsert(hashtable, slot, hashvalue);
-#ifdef TRACE_POSTGRESQL_HASHJOIN_LOAD_DONE
-		++tuples_processed;
-#endif
 	}
-	TRACE_POSTGRESQL_HASHJOIN_LOAD_DONE(hashtable->curbatch, tuples_processed);
 
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -1036,6 +1027,13 @@ ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
 	TupleTableSlot *result = NULL;
 	HashJoinBatchReader *batch_reader = &hashtable->batch_reader;
 
+	/*
+	 * We check for interrupts here because this is typically taken as an
+	 * alternative code path to an ExecProcNode() call, which would include
+	 * such a check.
+	 */
+	CHECK_FOR_INTERRUPTS();
+
 	for (;;)
 	{
 		uint32		header[2];
@@ -1081,12 +1079,6 @@ ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
 			if (batch_reader->head.fileno != batch_reader->shared->head.fileno ||
 				batch_reader->head.offset != batch_reader->shared->head.offset)
 			{
-				TRACE_POSTGRESQL_HASHJOIN_SEEK(HashJoinParticipantNumber(),
-											   batch_reader->participant_number,
-											   batch_reader->batchno,
-											   batch_reader->inner,
-											   batch_reader->shared->head.fileno,
-											   batch_reader->shared->head.offset);
 				BufFileSeek(batch_reader->file,
 							batch_reader->shared->head.fileno,
 							batch_reader->shared->head.offset,
@@ -1182,33 +1174,6 @@ next_participant:
 }
 
 /*
- * Export a BufFile, copy the descriptor to DSA memory and return the
- * dsa_pointer.
- */
-static dsa_pointer
-make_batch_descriptor(dsa_area *area, BufFile *file)
-{
-	dsa_pointer pointer;
-	BufFileDescriptor *source;
-	BufFileDescriptor *target;
-	size_t size;
-
-	source = BufFileExport(file);
-	size = BufFileDescriptorSize(source);
-	pointer = dsa_allocate(area, size);
-	if (!DsaPointerIsValid(pointer))
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Failed on dsa_allocate of size %zu.", size)));
-	target = dsa_get_address(area, pointer);
-	memcpy(target, source, size);
-	pfree(source);
-
-	return pointer;
-}
-
-/*
  * Export the inner or outer batch file written by this participant for a
  * given batch number, so that other backends can import and read from it if
  * they run out of tuples to read from their own files.  This must be done
@@ -1220,10 +1185,6 @@ ExecHashJoinExportBatch(HashJoinTable hashtable, int batchno, bool inner)
 {
 	HashJoinParticipantState *participant;
 	BufFile *file;
-
-	TRACE_POSTGRESQL_HASHJOIN_EXPORT_BATCH(HashJoinParticipantNumber(),
-										   batchno,
-										   inner);
 
 	Assert(HashJoinTableIsShared(hashtable));
 	Assert(batchno < hashtable->nbatch);
@@ -1279,9 +1240,6 @@ ExecHashJoinExportAllBatches(HashJoinTable hashtable)
 	Assert(BarrierPhase(&hashtable->shared->barrier) == PHJ_PHASE_BUILDING ||
 		   BarrierPhase(&hashtable->shared->barrier) == PHJ_PHASE_PROBING);
 
-	TRACE_POSTGRESQL_HASHJOIN_EXPORT_ALL_BATCHES(HashJoinParticipantNumber(),
-												 hashtable->nbatch);
-
 	/* If we didn't generate any batches there is nothing to do. */
 	participant = &hashtable->shared->participants[HashJoinParticipantNumber()];
 	if (hashtable->nbatch <= 1)
@@ -1335,10 +1293,6 @@ ExecHashJoinImportBatch(HashJoinTable hashtable, HashJoinBatchReader *reader)
 {
 	dsa_pointer descriptor = InvalidDsaPointer;
 	HashJoinParticipantState *participant;
-
-	TRACE_POSTGRESQL_HASHJOIN_IMPORT_BATCH(reader->participant_number,
-										   reader->batchno,
-										   reader->inner);
 
 	Assert(reader->participant_number >= 0 &&
 		   reader->participant_number < hashtable->shared->planned_participants);
@@ -1405,10 +1359,6 @@ void
 ExecHashJoinOpenBatch(HashJoinTable hashtable, int batchno, bool inner)
 {
 	HashJoinBatchReader *batch_reader = &hashtable->batch_reader;
-
-	TRACE_POSTGRESQL_HASHJOIN_OPEN_BATCH(HashJoinParticipantNumber(),
-										 batchno,
-										 inner);
 
 	/*
 	 * TODO: Here we could close the previously open batch file because it

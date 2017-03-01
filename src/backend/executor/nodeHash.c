@@ -37,7 +37,6 @@
 #include "storage/barrier.h"
 #include "utils/dynahash.h"
 #include "utils/memutils.h"
-#include "utils/probes.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -149,35 +148,6 @@ ExecHashCheckForEarlyExit(HashJoinTable hashtable)
 			hashtable->shared->at_least_one_worker)
 		{
 			/* Abandon ship due to rule 1.  There are workers running. */
-			TRACE_POSTGRESQL_HASH_LEADER_EARLY_EXIT();
-			return true;
-		}
-		else
-		{
-			/*
-			 * Continue processing due to rule 2.  There are no workers, and
-			 * any workers that show up later will abandon ship.
-			 */
-		}
-	}
-	else
-	{
-		/* Running in a worker process. */
-		if (hashtable->attached_at_phase < PHJ_PHASE_PROBING)
-		{
-			/*
-			 * Advertise that there are workers, so that the leader can
-			 * choose between rules 1 and 2.  It's OK that several workers can
-			 * write to this variable without immediately memory
-			 * synchronization, because the leader will only read it in a later
-			 * phase (see above).
-			 */
-			hashtable->shared->at_least_one_worker = true;
-		}
-		else if (!hashtable->shared->at_least_one_worker)
-		{
-			/* Abandon ship due to rule 3. */
-			TRACE_POSTGRESQL_HASH_WORKER_EARLY_EXIT();
 			return true;
 		}
 	}
@@ -274,7 +244,6 @@ MultiExecHash(HashState *node)
 	/*
 	 * get all inner tuples and insert into the hash table (or temp files)
 	 */
-	TRACE_POSTGRESQL_HASH_BUILD_START();
 	for (;;)
 	{
 		slot = ExecProcNode(outerNode);
@@ -307,7 +276,6 @@ MultiExecHash(HashState *node)
 		}
 	}
 	finish_loading(hashtable);
-	TRACE_POSTGRESQL_HASH_BUILD_DONE((int) hashtable->partialTuples);
 
 	if (HashJoinTableIsShared(hashtable))
 		BarrierDetach(&hashtable->shared->shrink_barrier);
@@ -1009,8 +977,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch)
 		   hashtable, nbatch, hashtable->spaceUsed);
 #endif
 
-	TRACE_POSTGRESQL_HASH_INCREASE_BATCHES(oldnbatch, nbatch);
-
 	oldcxt = MemoryContextSwitchTo(hashtable->hashCxt);
 
 	if (hashtable->innerBatchFile == NULL)
@@ -1056,12 +1022,6 @@ ExecHashShrink(HashJoinTable hashtable)
 	long		nfreed;
 	dsa_pointer chunk_shared;
 	HashMemoryChunk chunk;
-#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
-	int tuples_processed = 0;
-	int chunks_processed = 0;
-#endif
-
-	TRACE_POSTGRESQL_HASH_SHRINK_START();
 
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -1175,14 +1135,9 @@ ExecHashShrink(HashJoinTable hashtable)
 			/* next tuple in this chunk */
 			idx += MAXALIGN(hashTupleSize);
 
-#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
-			++tuples_processed;
-#endif
+			/* allow this loop to be cancellable */
+			CHECK_FOR_INTERRUPTS();
 		}
-
-#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
-		++chunks_processed;
-#endif
 
 		/* Free chunk and pop next from the queue. */
 		if (HashJoinTableIsShared(hashtable))
@@ -1242,7 +1197,6 @@ ExecHashShrink(HashJoinTable hashtable)
 			if (hashtable->shared->nfreed == 0 ||
 				hashtable->shared->nfreed == hashtable->shared->ninmemory)
 			{
-				TRACE_POSTGRESQL_HASH_SHRINK_DISABLED();
 				hashtable->shared->grow_enabled = false;
 #ifdef HJDEBUG
 			printf("Hashjoin %p: disabling further increase of nbatch\n",
@@ -1264,7 +1218,6 @@ ExecHashShrink(HashJoinTable hashtable)
 	{
 		if (nfreed == 0 || nfreed == ninmemory)
 		{
-			TRACE_POSTGRESQL_HASH_SHRINK_DISABLED();
 			hashtable->growEnabled = false;
 #ifdef HJDEBUG
 			printf("Hashjoin %p: disabling further increase of nbatch\n",
@@ -1272,8 +1225,6 @@ ExecHashShrink(HashJoinTable hashtable)
 #endif
 		}
 	}
-
-	TRACE_POSTGRESQL_HASH_SHRINK_DONE(tuples_processed, chunks_processed);
 }
 
 /*
@@ -1320,9 +1271,6 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 	printf("Hashjoin %p: increasing nbuckets %d => %d\n",
 		   hashtable, hashtable->nbuckets, hashtable->nbuckets_optimal);
 #endif
-
-	TRACE_POSTGRESQL_HASH_INCREASE_BUCKETS(hashtable->nbuckets,
-										   hashtable->nbuckets_optimal);
 
 	/* account for the increase in space that will be used by buckets */
 	hashtable->spaceUsed += sizeof(HashJoinBucketHead) *
@@ -1399,13 +1347,8 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 {
 	HashMemoryChunk chunk;
 	dsa_pointer chunk_shared;
-#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
-	int tuples_processed = 0;
-	int chunks_processed = 0;
-#endif
 
 	/* scan through all tuples in all chunks to rebuild the hash table */
-	TRACE_POSTGRESQL_HASH_REINSERT_START();
 	if (HashJoinTableIsShared(hashtable))
 		chunk = pop_chunk_queue(hashtable, &chunk_shared);
 	else
@@ -1435,15 +1378,7 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 			/* advance index past the tuple */
 			idx += MAXALIGN(HJTUPLE_OVERHEAD +
 							HJTUPLE_MINTUPLE(hashTuple)->t_len);
-
-#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
-			++tuples_processed;
-#endif
 		}
-
-#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
-		++chunks_processed;
-#endif
 
 		/* advance to the next chunk */
 		if (HashJoinTableIsShared(hashtable))
@@ -1451,7 +1386,6 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 		else
 			chunk = chunk->next.unshared;
 	}
-	TRACE_POSTGRESQL_HASH_REINSERT_DONE(tuples_processed, chunks_processed);
 }
 
 
@@ -1769,8 +1703,6 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 	hjstate->hj_HashTable->current_chunk = NULL;
 	hjstate->hj_CurSkewBucketNo = 0;
 	hjstate->hj_CurTuple = NULL;
-
-	TRACE_POSTGRESQL_HASH_UNMATCHED_START();
 }
 
 /*
@@ -1903,7 +1835,6 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 	/*
 	 * no more unmatched tuples
 	 */
-	TRACE_POSTGRESQL_HASH_UNMATCHED_DONE();
 	return false;
 }
 
@@ -2013,8 +1944,6 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 	int			i;
 
 	/* Reset all flags in the main table ... */
-	TRACE_POSTGRESQL_HASH_RESET_MATCH_START();
-
 	if (HashJoinTableIsShared(hashtable))
 	{
 		/* This only runs in the leader during rescan initialization. */
@@ -2024,7 +1953,6 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 	}
 	else
 		chunk = hashtable->chunks;
-
 	while (chunk != NULL)
 	{
 		Size index = 0;
@@ -2053,7 +1981,6 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 			 tuple = tuple->next.unshared)
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
 	}
-	TRACE_POSTGRESQL_HASH_RESET_MATCH_DONE();
 }
 
 
@@ -2406,6 +2333,9 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 		}
 
 		hashTuple = nextHashTuple;
+
+		/* allow this loop to be cancellable */
+		CHECK_FOR_INTERRUPTS();
 	}
 
 	/*

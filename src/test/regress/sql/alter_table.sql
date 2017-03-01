@@ -1917,18 +1917,23 @@ ALTER TABLE partitioned ALTER COLUMN b TYPE char(5);
 -- cannot drop NOT NULL on columns in the range partition key
 ALTER TABLE partitioned ALTER COLUMN a DROP NOT NULL;
 
+-- it's fine however to drop one on the list partition key column
+CREATE TABLE list_partitioned (a int not null) partition by list (a);
+ALTER TABLE list_partitioned ALTER a DROP NOT NULL;
+DROP TABLE list_partitioned;
+
 -- partitioned table cannot participate in regular inheritance
-CREATE TABLE foo (
+CREATE TABLE nonpartitioned (
 	a int,
 	b int
 );
-ALTER TABLE partitioned INHERIT foo;
-ALTER TABLE foo INHERIT partitioned;
+ALTER TABLE partitioned INHERIT nonpartitioned;
+ALTER TABLE nonpartitioned INHERIT partitioned;
 
 -- cannot add NO INHERIT constraint to partitioned tables
 ALTER TABLE partitioned ADD CONSTRAINT chk_a CHECK (a > 0) NO INHERIT;
 
-DROP TABLE partitioned, foo;
+DROP TABLE partitioned, nonpartitioned;
 
 --
 -- ATTACH PARTITION
@@ -2133,6 +2138,11 @@ ALTER TABLE list_parted2 ATTACH PARTITION list_parted2 FOR VALUES IN (0);
 --
 -- DETACH PARTITION
 --
+
+-- check that the table is partitioned at all
+CREATE TABLE regular_table (a int);
+ALTER TABLE regular_table DETACH PARTITION any_name;
+DROP TABLE regular_table;
 
 -- check that the partition being detached exists at all
 ALTER TABLE list_parted2 DETACH PARTITION part_4;
