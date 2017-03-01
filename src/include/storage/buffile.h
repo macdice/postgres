@@ -45,9 +45,6 @@ extern bool BufFileDeleteShared(Oid tablespace, pid_t pid, int set,
 								int file_number, int participant);
 extern void BufFileSetReadOnly(BufFile *file);
 extern void BufFileClose(BufFile *file);
-extern BufFileDescriptor *BufFileExport(BufFile *file);
-extern BufFile *BufFileImport(BufFileDescriptor *descriptor);
-extern size_t BufFileDescriptorSize(const BufFileDescriptor *descriptor);
 extern size_t BufFileRead(BufFile *file, void *ptr, size_t size);
 extern size_t BufFileWrite(BufFile *file, void *ptr, size_t size);
 extern int	BufFileSeek(BufFile *file, int fileno, off_t offset, int whence);
