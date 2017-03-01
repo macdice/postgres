@@ -34,7 +34,6 @@
 #include "miscadmin.h"
 #include "utils/dynahash.h"
 #include "utils/memutils.h"
-#include "utils/probes.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -101,7 +100,6 @@ MultiExecHash(HashState *node)
 	/*
 	 * get all inner tuples and insert into the hash table (or temp files)
 	 */
-	TRACE_POSTGRESQL_HASH_BUILD_START();
 	for (;;)
 	{
 		slot = ExecProcNode(outerNode);
@@ -131,7 +129,6 @@ MultiExecHash(HashState *node)
 			hashtable->totalTuples += 1;
 		}
 	}
-	TRACE_POSTGRESQL_HASH_BUILD_DONE((int) hashtable->totalTuples);
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
@@ -615,10 +612,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	long		ninmemory;
 	long		nfreed;
 	HashMemoryChunk oldchunks;
-#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
-	int tuples_processed = 0;
-	int chunks_processed = 0;
-#endif
 
 	/* safety check to avoid overflow */
 	if (oldnbatch > Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2)))
@@ -631,8 +624,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	printf("Hashjoin %p: increasing nbatch to %d because space = %zu\n",
 		   hashtable, nbatch, hashtable->spaceUsed);
 #endif
-
-	TRACE_POSTGRESQL_HASH_INCREASE_BATCHES(oldnbatch, nbatch);
 
 	oldcxt = MemoryContextSwitchTo(hashtable->hashCxt);
 
@@ -692,7 +683,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	hashtable->chunks = NULL;
 
 	/* so, let's scan through the old chunks, and all tuples in each chunk */
-	TRACE_POSTGRESQL_HASH_SHRINK_START();
 	while (oldchunks != NULL)
 	{
 		HashMemoryChunk nextchunk = oldchunks->next;
@@ -740,21 +730,15 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 			/* next tuple in this chunk */
 			idx += MAXALIGN(hashTupleSize);
 
-#ifdef TRACE_POSTGRESQL_HASH_SHRINK_DONE
-			++tuples_processed;
-#endif
+			/* allow this loop to be cancellable */
+			CHECK_FOR_INTERRUPTS();
 		}
-
-#ifdef TRACE_POSTGRESQL_HASH_SRHINK_DONE
-		++chunks_processed;
-#endif
 
 		/* we're done with this chunk - free it and proceed to the next one */
 		hashtable->spaceUsed -= oldchunks->maxlen + HASH_CHUNK_HEADER_SIZE;
 		pfree(oldchunks);
 		oldchunks = nextchunk;
 	}
-	TRACE_POSTGRESQL_HASH_SHRINK_DONE(tuples_processed, chunks_processed);
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: freed %ld of %ld tuples, space now %zu\n",
@@ -788,10 +772,6 @@ static void
 ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 {
 	HashMemoryChunk chunk;
-#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
-	int tuples_processed = 0;
-	int chunks_processed = 0;
-#endif
 
 	/* do nothing if not an increase (it's called increase for a reason) */
 	if (hashtable->nbuckets >= hashtable->nbuckets_optimal)
@@ -801,9 +781,6 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 	printf("Hashjoin %p: increasing nbuckets %d => %d\n",
 		   hashtable, hashtable->nbuckets, hashtable->nbuckets_optimal);
 #endif
-
-	TRACE_POSTGRESQL_HASH_INCREASE_BUCKETS(hashtable->nbuckets,
-										   hashtable->nbuckets_optimal);
 
 	/* account for the increase in space that will be used by buckets */
 	hashtable->spaceUsed += sizeof(HashJoinTuple) *
@@ -831,7 +808,6 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 	memset(hashtable->buckets, 0, hashtable->nbuckets * sizeof(HashJoinTuple));
 
 	/* scan through all tuples in all chunks to rebuild the hash table */
-	TRACE_POSTGRESQL_HASH_REINSERT_START();
 	for (chunk = hashtable->chunks; chunk != NULL; chunk = chunk->next)
 	{
 		/* process all tuples stored in this chunk */
@@ -853,17 +829,8 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 			/* advance index past the tuple */
 			idx += MAXALIGN(HJTUPLE_OVERHEAD +
 							HJTUPLE_MINTUPLE(hashTuple)->t_len);
-
-#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
-			++tuples_processed;
-#endif
 		}
-
-#ifdef TRACE_POSTGRESQL_HASH_REINSERT_DONE
-		++chunks_processed;
-#endif
 	}
-	TRACE_POSTGRESQL_HASH_REINSERT_DONE(tuples_processed, chunks_processed);
 }
 
 
@@ -1171,8 +1138,6 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 	hjstate->hj_CurBucketNo = 0;
 	hjstate->hj_CurSkewBucketNo = 0;
 	hjstate->hj_CurTuple = NULL;
-
-	TRACE_POSTGRESQL_HASH_UNMATCHED_START();
 }
 
 /*
@@ -1243,7 +1208,6 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 	/*
 	 * no more unmatched tuples
 	 */
-	TRACE_POSTGRESQL_HASH_UNMATCHED_DONE();
 	return false;
 }
 
@@ -1291,7 +1255,6 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 	int			i;
 
 	/* Reset all flags in the main table ... */
-	TRACE_POSTGRESQL_HASH_RESET_MATCH_START();
 	for (i = 0; i < hashtable->nbuckets; i++)
 	{
 		for (tuple = hashtable->buckets[i]; tuple != NULL; tuple = tuple->next)
@@ -1307,7 +1270,6 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 		for (tuple = skewBucket->tuples; tuple != NULL; tuple = tuple->next)
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
 	}
-	TRACE_POSTGRESQL_HASH_RESET_MATCH_DONE();
 }
 
 
@@ -1652,6 +1614,9 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 		}
 
 		hashTuple = nextHashTuple;
+
+		/* allow this loop to be cancellable */
+		CHECK_FOR_INTERRUPTS();
 	}
 
 	/*

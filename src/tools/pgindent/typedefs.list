@@ -161,6 +161,9 @@ BTPageOpaque
 BTPageOpaqueData
 BTPageStat
 BTPageState
+BTParallelScanDesc
+BTParallelScanDescData
+BTPS_State
 BTScanOpaque
 BTScanOpaqueData
 BTScanPos
@@ -1938,6 +1941,9 @@ SimpleStringList
 SimpleStringListCell
 SingleBoundSortItem
 Size
+SlabBlock
+SlabContext
+SlabChunk
 SlabSlot
 SlotNumber
 SlruCtl

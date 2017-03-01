@@ -815,14 +815,22 @@ ExecShutdownNode(PlanState *node)
 	if (node == NULL)
 		return false;
 
+	planstate_tree_walker(node, ExecShutdownNode, NULL);
+
 	switch (nodeTag(node))
 	{
 		case T_GatherState:
 			ExecShutdownGather((GatherState *) node);
 			break;
+		case T_ForeignScanState:
+			ExecShutdownForeignScan((ForeignScanState *) node);
+			break;
+		case T_CustomScanState:
+			ExecShutdownCustomScan((CustomScanState *) node);
+			break;
 		default:
 			break;
 	}
 
-	return planstate_tree_walker(node, ExecShutdownNode, NULL);
+	return false;
 }

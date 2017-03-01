@@ -55,19 +55,6 @@ provider postgresql {
 	probe sort__start(int, bool, int, int, bool);
 	probe sort__done(bool, long);
 
-	probe hash__build__start();
-	probe hash__build__done(int);
-	probe hash__increase__buckets(int, int);
-	probe hash__reinsert__start();
-	probe hash__reinsert__done(int, int);
-	probe hash__increase__batches(int, int);
-	probe hash__shrink__start();
-	probe hash__shrink__done(int, int);
-	probe hash__unmatched__start();
-	probe hash__unmatched__done();
-	probe hash__reset__match__start();
-	probe hash__reset__match__done();
-
 	probe buffer__read__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool);
 	probe buffer__read__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool, bool);
 	probe buffer__flush__start(ForkNumber, BlockNumber, Oid, Oid, Oid);
