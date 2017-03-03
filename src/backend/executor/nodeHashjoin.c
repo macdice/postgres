@@ -22,6 +22,7 @@
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/sharedbuffile.h"
 #include "utils/memutils.h"
 #include "utils/probes.h"
 
@@ -1191,30 +1192,19 @@ ExecHashJoinExportBatch(HashJoinTable hashtable, int batchno, bool inner)
 
 	participant = &hashtable->shared->participants[HashJoinParticipantNumber()];
 
-	/* We will export batches one-by-one. */
-	participant->nbatch = -1;
-
 	if (inner)
 	{
-		participant->inner_batchno = batchno;
+		participant->inner_batchno = batchno;		
 		file = hashtable->innerBatchFile[batchno];
 		if (file != NULL)
-			participant->inner_batch_descriptor =
-				make_batch_descriptor(hashtable->area, file);
-		else
-			participant->inner_batch_descriptor =
-				InvalidDsaPointer;
+			SharedBufFileExport(hashtable->shared_inner_batch_set, file);
 	}
 	else
 	{
 		participant->outer_batchno = batchno;
 		file = hashtable->outerBatchFile[batchno];
 		if (file != NULL)
-			participant->outer_batch_descriptor =
-				make_batch_descriptor(hashtable->area, file);
-		else
-			participant->outer_batch_descriptor =
-				InvalidDsaPointer;
+			SharedBufFileExport(hashtable->shared_outer_batch_set, file);
 	}
 }
 
@@ -1227,9 +1217,6 @@ static void
 ExecHashJoinExportAllBatches(HashJoinTable hashtable)
 {
 	HashJoinParticipantState *participant;
-	dsa_pointer *inner_batch_descriptors;
-	dsa_pointer *outer_batch_descriptors;
-	Size size;
 	BufFile *file;
 	int i;
 
@@ -1245,41 +1232,18 @@ ExecHashJoinExportAllBatches(HashJoinTable hashtable)
 	if (hashtable->nbatch <= 1)
 	{
 		/* No one ever needs to read batch 0. */
-		participant->nbatch = 0;
 		return;
 	}
-
-	/* Set up space for descriptors for all my batches. */
-	participant->nbatch = hashtable->nbatch;
-	size = sizeof(dsa_pointer) * hashtable->nbatch;
-	participant->inner_batch_descriptors = dsa_allocate(hashtable->area, size);
-	participant->outer_batch_descriptors = dsa_allocate(hashtable->area, size);
-	if (!DsaPointerIsValid(participant->inner_batch_descriptors) ||
-		!DsaPointerIsValid(participant->outer_batch_descriptors))
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Failed on dsa_allocate of size %zu.", size)));
-	inner_batch_descriptors =
-		dsa_get_address(hashtable->area,
-						participant->inner_batch_descriptors);
-	outer_batch_descriptors =
-		dsa_get_address(hashtable->area,
-						participant->outer_batch_descriptors);
-	memset(inner_batch_descriptors, 0, size);
-	memset(outer_batch_descriptors, 0, size);
 
 	/* Now export all batches that were written by this participant. */
 	for (i = hashtable->curbatch + 1; i < hashtable->nbatch; ++i)
 	{
 		file = hashtable->innerBatchFile[i];
 		if (file != NULL)
-			inner_batch_descriptors[i] =
-				make_batch_descriptor(hashtable->area, file);
+			SharedBufFileExport(hashtable->shared_inner_batch_set, file);
 		file = hashtable->outerBatchFile[i];
 		if (file != NULL)
-			outer_batch_descriptors[i] =
-				make_batch_descriptor(hashtable->area, file);
+			SharedBufFileExport(hashtable->shared_outer_batch_set, file);
 	}
 }
 
@@ -1291,7 +1255,6 @@ ExecHashJoinExportAllBatches(HashJoinTable hashtable)
 static void
 ExecHashJoinImportBatch(HashJoinTable hashtable, HashJoinBatchReader *reader)
 {
-	dsa_pointer descriptor = InvalidDsaPointer;
 	HashJoinParticipantState *participant;
 
 	Assert(reader->participant_number >= 0 &&
@@ -1300,45 +1263,17 @@ ExecHashJoinImportBatch(HashJoinTable hashtable, HashJoinBatchReader *reader)
 	/* Find the participant referenced by the reader. */
 	participant = &hashtable->shared->participants[reader->participant_number];
 
-	/* Find the descriptor exported by that participant for that batch. */
-	if (participant->nbatch != -1)
-	{
-		/* It exported all its batches and left.  Find the correct one. */
-		if (reader->batchno < participant->nbatch)
-		{
-			dsa_pointer *descriptors;
+	/* Try to import that participant's batch file. */
+	reader->file = SharedBufFileImport(reader->inner
+									   ? hashtable->shared_inner_batch_set
+									   : hashtable->shared_outer_batch_set,
+									   reader->batchno,
+									   reader->participant_number);
 
-			Assert(DsaPointerIsValid(participant->inner_batch_descriptors));
-			Assert(DsaPointerIsValid(participant->outer_batch_descriptors));
-			descriptors =
-				dsa_get_address(hashtable->area,
-								reader->inner
-								? participant->inner_batch_descriptors
-								: participant->outer_batch_descriptors);
-			if (DsaPointerIsValid(descriptors[reader->batchno]))
-				descriptor = descriptors[reader->batchno];
-		}
-	}
-	else
-	{
-		/* It must have just exported the exact batch we expect. */
-		Assert((reader->inner &&
-				(reader->batchno == participant->inner_batchno)) ||
-			   (!reader->inner &&
-				(reader->batchno == participant->outer_batchno)));
-
-		if (reader->inner)
-			descriptor = participant->inner_batch_descriptor;
-		else
-			descriptor = participant->outer_batch_descriptor;
-	}
-
-	/* Import the BufFile, if we found one. */
-	if (DsaPointerIsValid(descriptor))
+	/* If we found one, then we can set the reader up to read. */
+	if (reader->file != NULL)
 	{
 		reader->head.fileno = reader->head.offset = -1;
-		reader->file = BufFileImport(dsa_get_address(hashtable->area,
-													 descriptor));
 		if (reader->inner)
 			reader->shared = &participant->inner_batch_reader;
 		else
@@ -1346,10 +1281,7 @@ ExecHashJoinImportBatch(HashJoinTable hashtable, HashJoinBatchReader *reader)
 		Assert(reader->shared->batchno == reader->batchno);
 	}
 	else
-	{
-		reader->file = NULL;
 		reader->shared = NULL;
-	}
 }
 
 /*
@@ -1600,11 +1532,14 @@ void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
 void
 ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 {
+	int plan_node_id = state->js.ps.plan->plan_node_id;
 	HashState *hashNode;
 	SharedHashJoinTable shared;
 	size_t size;
 	int planned_participants;
 	int i;
+	SharedBufFileSet *inner_batches;
+	SharedBufFileSet *outer_batches;
 
 	/*
 	 * Disable shared hash table mode if we failed to create a real DSM
@@ -1633,7 +1568,7 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	shared->ntuples = 0;
 	shared->shrink_needed = false;
 	shared->grow_enabled = true;
-	shm_toc_insert(pcxt->toc, state->js.ps.plan->plan_node_id, shared);
+	shm_toc_insert(pcxt->toc, plan_node_id, shared);
 
 	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
 	for (i = 0; i < planned_participants; ++i)
@@ -1645,6 +1580,25 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	}
 
 	/*
+	 * We also need to create two variable-sized SharedBufFileSet objects, for
+	 * inner and outer batch files.  It's not convenient to put those inside
+	 * the SharedHashJoinTableData struct because it already has a variable
+	 * sized final member, so we'll use separate TOC entries.
+	 */
+
+	inner_batches =
+		shm_toc_allocate(pcxt->toc, SharedBufFileSetSize(planned_participants));
+	SharedBufFileSetInitialize(inner_batches, planned_participants, pcxt->seg);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 1),
+				   inner_batches);
+
+	outer_batches =
+		shm_toc_allocate(pcxt->toc, SharedBufFileSetSize(planned_participants));
+	SharedBufFileSetInitialize(outer_batches, planned_participants, pcxt->seg);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 2),
+				   outer_batches);
+
+	/*
 	 * Pass the SharedHashJoinTable to the hash node.  If the Gather node
 	 * running in the leader backend decides to execute the hash join, it
 	 * hasn't called ExecHashJoinInitializeWorker so it doesn't have
@@ -1652,6 +1606,8 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	 */
 	hashNode = (HashState *) innerPlanState(state);
 	hashNode->shared_table_data = shared;
+	hashNode->shared_inner_batches = inner_batches;
+	hashNode->shared_outer_batches = outer_batches;
 }
 
 void
@@ -1673,5 +1629,7 @@ ExecHashJoinInitializeWorker(HashJoinState *state, shm_toc *toc)
 	 */
 	hashNode = (HashState *) innerPlanState(state);
 	hashNode->shared_table_data = state->hj_sharedHashJoinTable;
+	hashNode->shared_inner_batches = state->hj_sharedInnerBatches;
+	hashNode->shared_outer_batches = state->hj_sharedOuterBatches;
 	Assert(hashNode->shared_table_data != NULL);
 }

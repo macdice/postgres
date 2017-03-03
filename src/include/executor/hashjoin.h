@@ -18,6 +18,7 @@
 #include "storage/buffile.h"
 #include "storage/barrier.h"
 #include "storage/lwlock.h"
+#include "storage/sharedbuffile.h"
 #include "utils/dsa.h"
 
 /* ----------------------------------------------------------------
@@ -165,24 +166,9 @@ typedef struct HashJoinSharedBatchReader
  */
 typedef struct HashJoinParticipantState
 {
-	/*
-	 * To allow other participants to read from this participant's batch
-	 * files, this participant publishes its batch descriptors (or invalid
-	 * pointers) here.
-	 */
+	/* For assertions only, the batch currently exported by this participant. */
 	int inner_batchno;
 	int outer_batchno;
-	dsa_pointer inner_batch_descriptor;
-	dsa_pointer outer_batch_descriptor;
-
-	/*
-	 * In the case of participants that exit early, they must publish all
-	 * their future batches, rather than publishing them one by one above.
-	 * These point to an array of dsa_pointers to BufFileDescriptor objects.
-	 */
-	int nbatch;
-	dsa_pointer inner_batch_descriptors;
-	dsa_pointer outer_batch_descriptors;
 
 	/*
 	 * The shared state used to coordinate reading from the current batch.  We
@@ -328,6 +314,8 @@ typedef struct HashJoinTableData
 	/* State for coordinating shared hash tables. */
 	dsa_area *area;
 	SharedHashJoinTableData *shared;	/* the shared state */
+	SharedBufFileSet *shared_inner_batch_set;
+	SharedBufFileSet *shared_outer_batch_set;
 	int attached_at_phase;				/* the phase this participant joined */
 	bool detached_early;				/* did we decide to detach early? */
 	HashJoinBatchReader batch_reader;	/* state for reading batches in */
