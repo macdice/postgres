@@ -512,6 +512,8 @@ RegisterLWLockTranches(void)
 						  "parallel_query_dsa");
 	LWLockRegisterTranche(LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK,
 						  "hash_join_chunk");
+	LWLockRegisterTranche(LWTRANCHE_SHARED_TUPLESTORE,
+						  "shared_tuplestore");
 
 	/* Register named tranches. */
 	for (i = 0; i < NamedLWLockTrancheRequests; i++)
