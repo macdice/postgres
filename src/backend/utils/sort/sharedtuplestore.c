@@ -151,6 +151,19 @@ sts_attach(SharedTuplestore *sts,
 }
 
 /*
+ * Finish writing tuples.  This should be called by all backends that have
+ * written data, before any backend begins reading it.
+ */
+void
+sts_end_writing(SharedTuplestoreAccessor *accessor, int partition)
+{
+	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
+
+	if (partition < accessor->nfiles && accessor->files[partition] != NULL)
+		SharedBufFileExport(fileset, accessor->files[partition]);
+}
+
+/*
  * Prepare for a shared read of one partition by all participants, where all
  * partiticipants read an arbitrary subset of the tuples in the same partition
  * until there are non left.  Only one backend needs to call this.  After it
