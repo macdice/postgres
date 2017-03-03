@@ -18,27 +18,27 @@
  * A single SharedBufFileSet can manage any number of shared BufFiles that are
  * shared between a fixed number of participating backends.  Each shared
  * BufFile can be written to by a single participant but can be read by any
- * backend after it has been 'shared'.  Once a given BufFile is shared, it
+ * backend after it has been 'exported'.  Once a given BufFile is exported, it
  * becomes read-only and cannot be extended.  To create a new shared BufFile,
  * a participant needs its own distinct participant number, and needs to
- * specify an arbitrary index number for the file.  To make it available to
- * other backends, it must be explicitly 'shared', which flushes internal
+ * specify an arbitrary partition number for the file.  To make it available
+ * to other backends, it must be explicitly exported, which flushes internal
  * buffers and renders it read-only.  To open a file that has been shared, a
  * backend needs to know the number of the participant that created the file,
- * and the file number.  It is the responsibily of calling code to ensure that
- * files are not accessed before they have been shared.
+ * and the partition number.  It is the responsibily of calling code to ensure
+ * that files are not accessed before they have been shared.
  *
- * Each file is identified by a file number and a participant number, so that
- * a SharedBufFileSet manages a 2D table of individual files.  To allow each
- * backend to export exactly one file, only file number 0 needs to be used; an
- * example use case is a parallel tuple sort where each participant exports a
- * tape which a final merge will read.  To allow backends to export multiple
- * files each, a numbering scheme must be invented by the calling code; an
- * example use case is a parallel operation such as hash join which needs to
- * partition data into numbered batches.  The latter use case combined with
- * the desire to have a fixed sized shared memory footprint while permitting
- * dynamic expansion of the number of batches is what motivates the [low_file,
- * high_file) range tracking.
+ * Each file is identified by a partition number and a participant number, so
+ * that a SharedBufFileSet can be viewed as a 2D table of individual files.
+ * To allow each backend to export exactly one file, partition number 0 can be
+ * used; an example use case is a parallel tuple sort where each participant
+ * exports a tape which a final merge will read.  To allow backends to export
+ * multiple files each, a numbering scheme must be invented by the calling
+ * code; an example use case is a parallel operation such as hash join which
+ * needs to partition data into numbered batches.  The latter use case
+ * combined with the desire to have a fixed sized shared memory footprint
+ * while permitting dynamic expansion of the number of batches is what
+ * motivates the [low_partition, high_partition) range tracking.
  *
  *-------------------------------------------------------------------------
  */
@@ -55,8 +55,8 @@ typedef struct SharedBufFileParticipant
 {
 	pid_t writer_pid;			/* PID of the participant (debug info only) */
 	Oid tablespace;				/* tablespace for this participant's files */
-	int low_file;				/* lowest known file number */
-	int high_file;				/* one past the highest known file number */
+	int low_partition;			/* lowest known partition */
+	int high_partition;			/* one past the highest known patition */
 } SharedBufFileParticipant;
 
 struct SharedBufFileSet
@@ -83,21 +83,21 @@ static void shared_buf_file_on_dsm_detach(dsm_segment *segment, Datum datum);
  */
 void
 SharedBufFileSetInitialize(SharedBufFileSet *set,
-						   int nparticipants, dsm_segment *segment)
+						   int participants, dsm_segment *segment)
 {
 	int i;
 
 	SpinLockInit(&set->mutex);
 	set->refcount = 1;
-	set->nparticipants = nparticipants;
+	set->nparticipants = participants;
 	set->creator_pid = MyProcPid;
-	for (i = 0; i < nparticipants; ++i)
+	for (i = 0; i < participants; ++i)
 	{
 		SharedBufFileParticipant *p = &set->participants[i];
 
-		/* No files yet. */
-		p->low_file = 0;
-		p->high_file = 0;
+		/* No partitions yet. */
+		p->low_partition = 0;
+		p->high_partition = 0;
 
 		/* Rotate through the configured tablespaces to spread files out. */
 		p->tablespace = GetNextTempTableSpace();
@@ -126,22 +126,23 @@ SharedBufFileSetAttach(SharedBufFileSet *set,
  * SharedBufFileSet.
  */
 Size
-SharedBufFileSetSize(int nparticipants)
+SharedBufFileSetSize(int participants)
 {
 	return offsetof(SharedBufFileSet, participants) +
-		sizeof(SharedBufFileParticipant) * nparticipants;
+		sizeof(SharedBufFileParticipant) * participants;
 }
 
 /*
  * Create a new file suitable for sharing.  Each backend that calls this must
  * use a distinct participant number.  Behavior is undefined if a participant
- * calls this more than once for the same file number.  Files should ideally
- * be numbered consecutively or in as small a range as possible, because file
- * cleanup will scan this range looking for files.
+ * calls this more than once for the same partition number.  Partitions should
+ * ideally be numbered consecutively or in as small a range as possible,
+ * because file cleanup will scan the range of known partitions looking for
+ * files.
  */
 BufFile *
 SharedBufFileCreate(SharedBufFileSet *set,
-					int file_number, int participant)
+					int partition, int participant)
 {
 	SharedBufFileParticipant *p = &set->participants[participant];
 
@@ -162,13 +163,13 @@ SharedBufFileCreate(SharedBufFileSet *set,
 	 * known to be destroyed.  We'll eventually clean up all file numbers in
 	 * this range that we can find on disk.
 	 */
-	p->low_file = Min(file_number, p->low_file);
-	p->high_file = Max(file_number + 1, p->high_file);
+	p->low_partition = Min(partition, p->low_partition);
+	p->high_partition = Max(partition + 1, p->high_partition);
 	SpinLockRelease(&set->mutex);
 
 	return BufFileCreateShared(p->tablespace, set->creator_pid,
 							   set->set_number,
-							   file_number, participant);
+							   partition, participant);
 }
 
 /*
@@ -190,7 +191,7 @@ SharedBufFileExport(SharedBufFileSet *set, BufFile *file)
  * SharedBufFileManager.
  */
 BufFile *
-SharedBufFileImport(SharedBufFileSet *set, int file_number, int participant)
+SharedBufFileImport(SharedBufFileSet *set, int partition, int participant)
 {
 	SharedBufFileParticipant *p = &set->participants[participant];
 
@@ -198,10 +199,10 @@ SharedBufFileImport(SharedBufFileSet *set, int file_number, int participant)
 	Assert(participant >= 0);
 	Assert(p->writer_pid != InvalidPid);
 	Assert(p->writer_pid != MyProcPid);
-	Assert(p->low_file <= file_number || p->high_file > file_number);
+	Assert(p->low_partition <= partition || p->high_partition > partition);
 
 	return BufFileOpenShared(p->tablespace, set->creator_pid,
-							 set->set_number, file_number, participant);
+							 set->set_number, partition, participant);
 }
 
 /*
@@ -212,7 +213,7 @@ SharedBufFileImport(SharedBufFileSet *set, int file_number, int participant)
  * destroy it.
  */
 void
-SharedBufFileDestroy(SharedBufFileSet *set, int file_number, int participant)
+SharedBufFileDestroy(SharedBufFileSet *set, int partition, int participant)
 {
 	SharedBufFileParticipant *p = &set->participants[participant];
 
@@ -227,21 +228,21 @@ SharedBufFileDestroy(SharedBufFileSet *set, int file_number, int participant)
 	 * on it?)
 	 */
 	Assert(set->creator_pid != InvalidPid);
-	Assert(p->low_file <= file_number || p->high_file > file_number);
+	Assert(p->low_partition <= partition || p->high_partition > partition);
 
 	BufFileDeleteShared(p->tablespace, set->creator_pid,
-						set->set_number, file_number, participant);
+						set->set_number, partition, participant);
 
 	/*
-	 * If this file number happens to be at the beginning or end of the range,
+	 * If this partition happens to be at the beginning or end of the range,
 	 * we can adjust the range.  This optimization allows the final cleanup to
 	 * avoid looking for files that have been explicitly destroyed in
 	 * ascending file number order, as is the case for batched hash joins.
 	 */
-	if (file_number == p->low_file)
-	   ++p->low_file;
-	if (file_number + 1 == p->high_file)
-		--p->high_file;
+	if (partition == p->low_partition)
+	   ++p->low_partition;
+	if (partition + 1 == p->high_partition)
+		--p->high_partition;
 }
 
 static void
@@ -267,7 +268,9 @@ shared_buf_file_on_dsm_detach(dsm_segment *segment, Datum datum)
 			SharedBufFileParticipant *participant = &set->participants[p];
 
 			/* Scan the range of file numbers cleaning up. */
-			for (n = participant->low_file; n < participant->high_file; ++n)
+			for (n = participant->low_partition;
+				 n < participant->high_partition;
+				 ++n)
 				BufFileDeleteShared(participant->tablespace,
 									set->creator_pid,
 									set->set_number,
