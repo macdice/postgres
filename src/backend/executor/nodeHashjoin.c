@@ -22,9 +22,9 @@
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "storage/sharedbuffile.h"
 #include "utils/memutils.h"
 #include "utils/probes.h"
+#include "utils/sharedtuplestore.h"
 
 
 /*
@@ -1538,8 +1538,10 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	size_t size;
 	int planned_participants;
 	int i;
-	SharedBufFileSet *inner_batches;
-	SharedBufFileSet *outer_batches;
+	SharedTuplestore *inner_batches;
+	SharedTuplestore *outer_batches;
+	SharedTuplestoreAccessor *inner_batches_accessor;
+	SharedTuplestoreAccessor *outer_batches_accessor;
 
 	/*
 	 * Disable shared hash table mode if we failed to create a real DSM
@@ -1571,30 +1573,25 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	shm_toc_insert(pcxt->toc, plan_node_id, shared);
 
 	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
-	for (i = 0; i < planned_participants; ++i)
-	{
-		LWLockInitialize(&shared->participants[i].inner_batch_reader.lock,
-						 LWTRANCHE_PARALLEL_HASH_JOIN_INNER_BATCH_READER);
-		LWLockInitialize(&shared->participants[i].outer_batch_reader.lock,
-						 LWTRANCHE_PARALLEL_HASH_JOIN_OUTER_BATCH_READER);
-	}
 
 	/*
-	 * We also need to create two variable-sized SharedBufFileSet objects, for
-	 * inner and outer batch files.  It's not convenient to put those inside
-	 * the SharedHashJoinTableData struct because it already has a variable
-	 * sized final member, so we'll use separate TOC entries.
+	 * We also need to create two variable-sized shared tuplestore objects,
+	 * for inner and outer batch files.  It's not convenient to put those
+	 * inside the SharedHashJoinTableData struct because it already has a
+	 * variable sized final member, so we'll use separate TOC entries.
 	 */
 
-	inner_batches =
-		shm_toc_allocate(pcxt->toc, SharedBufFileSetSize(planned_participants));
-	SharedBufFileSetInitialize(inner_batches, planned_participants, pcxt->seg);
+	inner_batches = shm_toc_allocate(pcxt->toc, sts_size(planned_participants));
+	inner_batches_accessor =
+		sts_initialize(inner_batches, planned_participants, 0, sizeof(uint32),
+					   SHARED_TUPLESTORE_SINGLE_PASS, pcxt->seg);
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 1),
 				   inner_batches);
 
-	outer_batches =
-		shm_toc_allocate(pcxt->toc, SharedBufFileSetSize(planned_participants));
-	SharedBufFileSetInitialize(outer_batches, planned_participants, pcxt->seg);
+	outer_batches = shm_toc_allocate(pcxt->toc, sts_size(planned_participants));
+	outer_batches_accessor =
+		sts_initialize(outer_batches, planned_participants, 0, sizeof(uint32),
+					   SHARED_TUPLESTORE_SINGLE_PASS, pcxt->seg);
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 2),
 				   outer_batches);
 
@@ -1606,8 +1603,8 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	 */
 	hashNode = (HashState *) innerPlanState(state);
 	hashNode->shared_table_data = shared;
-	hashNode->shared_inner_batches = inner_batches;
-	hashNode->shared_outer_batches = outer_batches;
+	hashNode->shared_inner_batches = inner_batches_accessor;
+	hashNode->shared_outer_batches = outer_batches_accessor;
 }
 
 void

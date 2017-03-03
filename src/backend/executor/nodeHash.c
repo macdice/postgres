@@ -533,8 +533,6 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->shared = state->shared_table_data;
 	hashtable->detached_early = false;
-	hashtable->batch_reader.batchno = 0;
-	hashtable->batch_reader.inner = false;
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: initial nbatch = %d, nbuckets = %d\n",

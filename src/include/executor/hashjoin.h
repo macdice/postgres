@@ -18,8 +18,8 @@
 #include "storage/buffile.h"
 #include "storage/barrier.h"
 #include "storage/lwlock.h"
-#include "storage/sharedbuffile.h"
 #include "utils/dsa.h"
+#include "utils/sharedtuplestore.h"
 
 /* ----------------------------------------------------------------
  *				hash-join hash table structures
@@ -139,63 +139,6 @@ typedef struct HashMemoryChunkData *HashMemoryChunk;
 #define HASH_CHUNK_THRESHOLD	(HASH_CHUNK_SIZE / 4)
 
 /*
- * Read head position in a shared batch file.
- */
-typedef struct HashJoinBatchPosition
-{
-	int fileno;
-	off_t offset;
-} HashJoinBatchPosition;
-
-/*
- * The state exposed in shared memory by each participant to coordinate
- * reading of batch files that it wrote.
- */
-typedef struct HashJoinSharedBatchReader
-{
-	int batchno;				/* the batch number we are currently reading */
-
-	LWLock lock;				/* protects access to the members below */
-	bool error;					/* has an IO error occurred? */
-	HashJoinBatchPosition head;	/* shared read head for current batch */
-} HashJoinSharedBatchReader;
-
-/*
- * The state exposed in shared memory by each participant allowing its batch
- * files to be read by other participants.
- */
-typedef struct HashJoinParticipantState
-{
-	/* For assertions only, the batch currently exported by this participant. */
-	int inner_batchno;
-	int outer_batchno;
-
-	/*
-	 * The shared state used to coordinate reading from the current batch.  We
-	 * need separate objects for the outer and inner side, because in the
-	 * probing phase some participants can be reading from the outer batch,
-	 * while others can be reading from the inner side to preload the next
-	 * batch.
-	 */
-	HashJoinSharedBatchReader inner_batch_reader;
-	HashJoinSharedBatchReader outer_batch_reader;
-} HashJoinParticipantState;
-
-/*
- * The state used by each backend to manage reading from batch files written
- * by all participants.
- */
-typedef struct HashJoinBatchReader
-{
-	int participant_number;				/* read which participant's batch? */
-	int batchno;						/* which batch are we reading? */
-	bool inner;							/* inner or outer? */
-	HashJoinSharedBatchReader *shared;	/* holder of the shared read head */
-	BufFile *file;						/* the file opened in this backend */
-	HashJoinBatchPosition head;			/* local read head position */
-} HashJoinBatchReader;
-
-/*
  * State for a shared hash join table.  Each backend participating in a hash
  * join with a shared hash table also has a HashJoinTableData object in
  * backend-private memory, which points to this shared state in the DSM
@@ -222,9 +165,6 @@ typedef struct SharedHashJoinTableData
 	dsa_pointer chunk_work_queue;	/* next chunk for shared processing */
 	Size size;						/* size of buckets + chunks */
 	Size ntuples;
-
-	/* state exposed by each participant for sharing batches */
-	HashJoinParticipantState participants[FLEXIBLE_ARRAY_MEMBER];
 } SharedHashJoinTableData;
 
 /*
@@ -314,11 +254,10 @@ typedef struct HashJoinTableData
 	/* State for coordinating shared hash tables. */
 	dsa_area *area;
 	SharedHashJoinTableData *shared;	/* the shared state */
-	SharedBufFileSet *shared_inner_batch_set;
-	SharedBufFileSet *shared_outer_batch_set;
+	SharedTuplestoreAccessor *shared_inner_batches;
+	SharedTuplestoreAccessor *shared_outer_batches;
 	int attached_at_phase;				/* the phase this participant joined */
 	bool detached_early;				/* did we decide to detach early? */
-	HashJoinBatchReader batch_reader;	/* state for reading batches in */
 	dsa_pointer current_chunk_shared;	/* DSA pointer to 'current_chunk' */
 
 }	HashJoinTableData;
