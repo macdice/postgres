@@ -34,6 +34,9 @@ extern SharedTuplestoreAccessor *sts_attach(SharedTuplestore *sts,
 											int my_participant_number,
 											dsm_segment *segment);
 
+extern void sts_end_writing(SharedTuplestoreAccessor *accessor,
+							int partition);
+
 extern void sts_rewind_for_shared_read(SharedTuplestoreAccessor *accessor,
 									   int partition);
 

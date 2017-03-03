@@ -51,9 +51,6 @@ static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
 static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
 static void ExecHashJoinLoadBatch(HashJoinState *hjstate);
 static void ExecHashJoinExportAllBatches(HashJoinTable hashtable);
-static void ExecHashJoinImportBatch(HashJoinTable hashtable,
-									HashJoinBatchReader *reader);
-
 
 /* ----------------------------------------------------------------
  *		ExecHashJoin
@@ -1227,23 +1224,11 @@ ExecHashJoinExportAllBatches(HashJoinTable hashtable)
 	Assert(BarrierPhase(&hashtable->shared->barrier) == PHJ_PHASE_BUILDING ||
 		   BarrierPhase(&hashtable->shared->barrier) == PHJ_PHASE_PROBING);
 
-	/* If we didn't generate any batches there is nothing to do. */
-	participant = &hashtable->shared->participants[HashJoinParticipantNumber()];
-	if (hashtable->nbatch <= 1)
-	{
-		/* No one ever needs to read batch 0. */
-		return;
-	}
-
-	/* Now export all batches that were written by this participant. */
+	/* Finish writing all that were written by this participant. */
 	for (i = hashtable->curbatch + 1; i < hashtable->nbatch; ++i)
 	{
-		file = hashtable->innerBatchFile[i];
-		if (file != NULL)
-			SharedBufFileExport(hashtable->shared_inner_batch_set, file);
-		file = hashtable->outerBatchFile[i];
-		if (file != NULL)
-			SharedBufFileExport(hashtable->shared_outer_batch_set, file);
+		sts_end_writing(hashtable->shared_inner_batches, i);
+		sts_end_writing(hashtable->shared_outer_batches, i);
 	}
 }
 
