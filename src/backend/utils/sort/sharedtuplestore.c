@@ -155,7 +155,7 @@ sts_attach(SharedTuplestore *sts,
  * written data, before any backend begins reading it.
  */
 void
-sts_end_writing(SharedTuplestoreAccessor *accessor, int partition)
+sts_end_write(SharedTuplestoreAccessor *accessor, int partition)
 {
 	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
 
@@ -164,14 +164,14 @@ sts_end_writing(SharedTuplestoreAccessor *accessor, int partition)
 }
 
 /*
- * Prepare for a shared read of one partition by all participants, where all
- * partiticipants read an arbitrary subset of the tuples in the same partition
- * until there are non left.  Only one backend needs to call this.  After it
- * returns, all participating backends should call sts_begin_shared_read().
+ * Prepare to read one partition in all partiticpants in parallel.  Each will
+ * read an arbitrary subset of the tuples in the same partition until there
+ * are none left.  Only one backend needs to call this.  After it returns, all
+ * participating backends should call sts_begin_parallel_read().
  */
 void
-sts_rewind_for_shared_read(SharedTuplestoreAccessor *accessor,
-						   int partition)
+sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
+						  int partition)
 {
 	int i;
 
@@ -195,7 +195,7 @@ sts_rewind_for_shared_read(SharedTuplestoreAccessor *accessor,
  * Pepare for a shared read of one partition.
  */
 void
-sts_begin_shared_read(SharedTuplestoreAccessor *accessor,
+sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
 					  int partition)
 {
 	/*
