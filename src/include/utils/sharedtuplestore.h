@@ -37,6 +37,8 @@ extern SharedTuplestoreAccessor *sts_attach(SharedTuplestore *sts,
 extern void sts_end_write(SharedTuplestoreAccessor *accessor,
 						  int partition);
 
+extern void sts_end_write_all_partitions(SharedTuplestoreAccessor *accessor);
+
 extern void sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
 									  int partition);
 

@@ -164,6 +164,21 @@ sts_end_write(SharedTuplestoreAccessor *accessor, int partition)
 }
 
 /*
+ * Finish writing tuples in all partitions, so that other backends can begin
+ * reading from any partition.
+ */
+void
+sts_end_write_all_partitions(SharedTuplestoreAccessor *accessor)
+{
+	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
+	int partition;
+
+	for (partition = 0; partition < accessor->nfiles; ++partition)
+		if (accessor->files[partition] != NULL)
+			SharedBufFileExport(fileset, accessor->files[partition]);
+}
+
+/*
  * Prepare to read one partition in all partiticpants in parallel.  Each will
  * read an arbitrary subset of the tuples in the same partition until there
  * are none left.  Only one backend needs to call this.  After it returns, all
