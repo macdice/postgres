@@ -1058,7 +1058,7 @@ ExecReScanHashJoin(HashJoinState *node)
 }
 
 void
-ExecDetachHashJoin(HashJoinState *node)
+ExecShutdownHashJoin(HashJoinState *node)
 {
 	/*
 	 * By the time ExecEndHashJoin runs in a work, shared memory has been

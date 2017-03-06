@@ -800,31 +800,6 @@ ExecEndNode(PlanState *node)
 }
 
 /*
- * ExecDetachNode
- *
- * Give parallel-aware execution nodes a chance to do any cleanup that must be
- * done before the parallel environment is removed.  Runs before
- * ExecShutdownNode in parallel workers.
- */
-bool
-ExecDetachNode(PlanState *node)
-{
-	if (node == NULL)
-		return false;
-
-	switch (nodeTag(node))
-	{
-		case T_HashJoinState:
-			ExecDetachHashJoin((HashJoinState *) node);
-			break;
-		default:
-			break;
-	}
-
-	return planstate_tree_walker(node, ExecDetachNode, NULL);
-}
-
-/*
  * ExecShutdownNode
  *
  * Give execution nodes a chance to stop asynchronous resource consumption
@@ -852,6 +827,9 @@ ExecShutdownNode(PlanState *node)
 			break;
 		case T_CustomScanState:
 			ExecShutdownCustomScan((CustomScanState *) node);
+			break;
+		case T_HashJoinState:
+			ExecShutdownHashJoin((HashJoinState *) node);
 			break;
 		default:
 			break;
