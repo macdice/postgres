@@ -45,7 +45,8 @@
 static TupleTableSlot *ExecHashJoinOuterGetTuple(PlanState *outerNode,
 						  HashJoinState *hjstate,
 						  uint32 *hashvalue);
-static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
+static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
+						  BufFile *file,
 						  uint32 *hashvalue,
 						  TupleTableSlot *tupleSlot);
 static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
@@ -799,11 +800,31 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 	}
 	else if (curbatch < hashtable->nbatch)
 	{
-		slot = ExecHashJoinGetSavedTuple(hashtable,
-										 hashvalue,
-										 hjstate->hj_OuterTupleSlot);
-		if (!TupIsNull(slot))
-			return slot;
+		if (HashJoinTableIsShared(hashtable))
+		{
+			bool must_free;
+			MinimalTuple tuple;
+
+			tuple = sts_gettuple(hashtable->shared_outer_batches,
+								 curbatch, hashvalue, &must_free);
+			if (tuple != NULL)
+			{
+				slot = ExecStoreMinimalTuple(tuple,
+											 hj_state->hj_OuterTupleSlot,
+											 must_free);
+				return slot;
+			}
+			else
+				ExecClearTuple(hashtable->hjstate->hj_OuterTupleSlot);
+		}
+		else
+		{
+			slot = ExecHashJoinGetSavedTuple(hashtable,
+											 hashvalue,
+											 hjstate->hj_OuterTupleSlot);
+			if (!TupIsNull(slot))
+				return slot;
+		}
 	}
 
 	/* End of this batch */
@@ -928,6 +949,9 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 
 	if (HashJoinTableIsShared(hashtable))
 	{
+		MinimalTuple tuple;
+		bool must_free;
+
 		Assert(BarrierPhase(&hashtable->shared->barrier) ==
 			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
 
@@ -937,6 +961,30 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 		 * that among participants.
 		 */
 		BarrierAttach(&hashtable->shared->shrink_barrier);
+
+		sts_begin_parallel_read(hashtable->shared_inner_batches, curbatch);
+		while ((tuple = sts_gettuple(hashtable->shared_inner_batches,
+									 &hashvalue, &must_free)))
+		{
+			slot = ExecStoreMinimalTuple(tuple, hjstate->hj_HashTupleSlot,
+										 must_free);
+			ExecHashTableInsert(hashtable, slot, hashvalue);
+		}
+		ExecClearTuple(hjstate->hj_HashTupleSlot);
+
+		BarrierDetach(&hashtable->shared->shrink_barrier);
+
+		/*
+		 * Wait until all participants have finished loading their portion of
+		 * the hash table.
+		 */
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
+		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASHJOIN_LOADING);
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_PROBING_BATCH(hashtable->curbatch));
+
+		return;
 	}
 
 	while ((slot = ExecHashJoinGetSavedTuple(hashtable,
@@ -952,17 +1000,6 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 
 	if (HashJoinTableIsShared(hashtable))
 	{
-		BarrierDetach(&hashtable->shared->shrink_barrier);
-
-		/*
-		 * Wait until all participants have finished loading their portion of
-		 * the hash table.
-		 */
-		Assert(BarrierPhase(&hashtable->shared->barrier) ==
-			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
-		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASHJOIN_LOADING);
-		Assert(BarrierPhase(&hashtable->shared->barrier) ==
-			   PHJ_PHASE_PROBING_BATCH(hashtable->curbatch));
 	}
 
 	/* Close the batch to free up disk space. */
@@ -1018,12 +1055,14 @@ ExecHashJoinSaveTuple(MinimalTuple tuple, uint32 hashvalue,
  * itself is stored in the given slot.
  */
 static TupleTableSlot *
-ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
+ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
+						  BufFile *file,
 						  uint32 *hashvalue,
 						  TupleTableSlot *tupleSlot)
 {
-	TupleTableSlot *result = NULL;
-	HashJoinBatchReader *batch_reader = &hashtable->batch_reader;
+	uint32		header[2];
+	size_t		nread;
+	MinimalTuple tuple;
 
 	/*
 	 * We check for interrupts here because this is typically taken as an
@@ -1032,143 +1071,32 @@ ExecHashJoinGetSavedTuple(HashJoinTable hashtable,
 	 */
 	CHECK_FOR_INTERRUPTS();
 
-	for (;;)
+	/*
+	 * Since both the hash value and the MinimalTuple length word are uint32,
+	 * we can read them both in one BufFileRead() call without any type
+	 * cheating.
+	 */
+	nread = BufFileRead(file, (void *) header, sizeof(header));
+	if (nread == 0)				/* end of file */
 	{
-		uint32		header[2];
-		size_t		nread;
-		MinimalTuple tuple;
-		bool		can_close = false;
-
-		if (batch_reader->file == NULL)
-		{
-			/*
-			 * No file found for the current participant.  Try stealing tuples
-			 * from the next participant.
-			 */
-			goto next_participant;
-		}
-
-		if (HashJoinTableIsShared(hashtable))
-		{
-			Assert((batch_reader->inner &&
-					batch_reader->shared ==
-					&hashtable->shared->participants[batch_reader->participant_number].inner_batch_reader) ||
-				   (!batch_reader->inner &&
-					batch_reader->shared ==
-					&hashtable->shared->participants[batch_reader->participant_number].outer_batch_reader));
-
-			LWLockAcquire(&batch_reader->shared->lock, LW_EXCLUSIVE);
-			Assert(batch_reader->shared->batchno == batch_reader->batchno);
-			if (batch_reader->shared->error)
-			{
-				/* Don't try to read if reading failed in some other backend. */
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not read from hash-join temporary file")));
-			}
-
-			/* Set the shared error flag, which we'll clear if we succeed. */
-			batch_reader->shared->error = true;
-
-			/*
-			 * If another worker has moved the shared read head since we last read,
-			 * we'll need to seek to the new shared position.
-			 */
-			if (batch_reader->head.fileno != batch_reader->shared->head.fileno ||
-				batch_reader->head.offset != batch_reader->shared->head.offset)
-			{
-				BufFileSeek(batch_reader->file,
-							batch_reader->shared->head.fileno,
-							batch_reader->shared->head.offset,
-							SEEK_SET);
-				batch_reader->head = batch_reader->shared->head;
-			}
-		}
-
-		/* Try to read the size and hash. */
-		nread = BufFileRead(batch_reader->file, (void *) header, sizeof(header));
-		if (nread > 0)
-		{
-			if (nread != sizeof(header))
-			{
-				ereport(ERROR,
-					(errcode_for_file_access(),
-				 errmsg("could not read from hash-join temporary file: %m")));
-			}
-			*hashvalue = header[0];
-			tuple = (MinimalTuple) palloc(header[1]);
-			tuple->t_len = header[1];
-			nread = BufFileRead(batch_reader->file,
-								(void *) ((char *) tuple + sizeof(uint32)),
-								header[1] - sizeof(uint32));
-			if (nread != header[1] - sizeof(uint32))
-			{
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not read from hash-join temporary file: %m")));
-			}
-
-			result = ExecStoreMinimalTuple(tuple, tupleSlot, true);
-		}
-
-		if (HashJoinTableIsShared(hashtable))
-		{
-			if (nread == 0 &&
-				batch_reader->participant_number !=
-				HashJoinParticipantNumber())
-			{
-				/*
-				 * We've reached the end of another paticipant's batch file,
-				 * so close it now.  We'll deal with closing THIS
-				 * participant's batch file later, because we don't want the
-				 * files to be deleted just yet.
-				 */
-				can_close = true;
-			}
-			/* Commit new head position to shared memory and clear error. */
-			BufFileTell(batch_reader->file,
-						&batch_reader->head.fileno,
-						&batch_reader->head.offset);
-			batch_reader->shared->head = batch_reader->head;
-			batch_reader->shared->error = false;
-			LWLockRelease(&batch_reader->shared->lock);
-		}
-
-		if (can_close)
-		{
-			BufFileClose(batch_reader->file);
-			batch_reader->file = NULL;
-		}
-
-		if (result != NULL)
-			return result;
-
-next_participant:
-		if (!HashJoinTableIsShared(hashtable))
-		{
-			/* Private hash table, end of batch. */
-			ExecClearTuple(tupleSlot);
-			return NULL;
-		}
-
-		/* Try the next participant's batch file. */
-		batch_reader->participant_number =
-			(batch_reader->participant_number + 1) %
-				hashtable->shared->planned_participants;
-		if (batch_reader->participant_number == HashJoinParticipantNumber())
-		{
-			/*
-			 * We've made it all the way back to the file we started with,
-			 * which is the one that this backend wrote.  So there are no more
-			 * tuples to be had in any participant's batch file.
-			 */
-			ExecClearTuple(tupleSlot);
-			return NULL;
-		}
-
-		/* Import the BufFile from that participant, if it exported one. */
-		ExecHashJoinImportBatch(hashtable, batch_reader);
+		ExecClearTuple(tupleSlot);
+		return NULL;
 	}
+	if (nread != sizeof(header))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read from hash-join temporary file: %m")));
+	*hashvalue = header[0];
+	tuple = (MinimalTuple) palloc(header[1]);
+	tuple->t_len = header[1];
+	nread = BufFileRead(file,
+						(void *) ((char *) tuple + sizeof(uint32)),
+						header[1] - sizeof(uint32));
+	if (nread != header[1] - sizeof(uint32))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read from hash-join temporary file: %m")));
+	return ExecStoreMinimalTuple(tuple, tupleSlot, true);
 }
 
 /*

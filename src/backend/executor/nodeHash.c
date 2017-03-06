@@ -1878,15 +1878,18 @@ ExecHashTableReset(HashJoinTable hashtable)
 				(hashtable->nbuckets * sizeof(HashJoinBucketHead));
 
 			/* Rewind the shared read heads for this batch, inner and outer. */
-			ExecHashJoinRewindBatches(hashtable, hashtable->curbatch);
+			sts_prepare_parallel_read(hashtable->shared_inner_batches,
+									  hashtable->curbatch);
+			sts_prepare_parallel_read(hashtable->shared_outer_batches,
+									  hashtable->curbatch);
 		}
 
 		/*
-		 * Export this participant's inner and outer batch files, because they
-		 * are now read-only.
+		 * Each participant needs to make sure that data it has written for
+		 * this partition is now read-only and visible to other participants.
 		 */
-		ExecHashJoinExportBatch(hashtable, hashtable->curbatch, true);
-		ExecHashJoinExportBatch(hashtable, hashtable->curbatch, false);
+		sts_end_write(hashtable->shared_inner_batches, hashtable->curbatch);
+		sts_end_write(hashtable->shared_outer_batches, hashtable->curbatch);
 
 		/*
 		 * Wait again, so that all workers see the new hash table and can
