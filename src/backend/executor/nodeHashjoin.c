@@ -387,9 +387,14 @@ ExecHashJoin(HashJoinState *node)
 					 * Save it in the corresponding outer-batch file.
 					 */
 					Assert(batchno > hashtable->curbatch);
-					ExecHashJoinSaveTuple(ExecFetchSlotMinimalTuple(outerTupleSlot),
-										  hashvalue,
-										&hashtable->outerBatchFile[batchno]);
+					if (HashJoinTableIsShared(hashtable))
+						sts_puttuple(hashtable->shared_outer_batches,
+									 batchno, &hashvalue,
+									 ExecFetchSlotMinimalTuple(outerTupleSlot));
+					else
+						ExecHashJoinSaveTuple(ExecFetchSlotMinimalTuple(outerTupleSlot),
+											  hashvalue,
+											  &hashtable->outerBatchFile[batchno]);
 					/* Loop around, staying in HJ_NEED_NEW_OUTER state */
 					continue;
 				}

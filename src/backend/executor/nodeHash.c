@@ -1152,9 +1152,14 @@ ExecHashShrink(HashJoinTable hashtable)
 			{
 				/* dump it out */
 				Assert(batchno > hashtable->curbatch);
-				ExecHashJoinSaveTuple(HJTUPLE_MINTUPLE(hashTuple),
-									  hashTuple->hashvalue,
-									  &hashtable->innerBatchFile[batchno]);
+				if (HashJoinTableIsShared(hashtable))
+					sts_puttuple(hashtable->shared_inner_batches, batchno,
+								 &hashTuple->hashvalue,
+								 HJTUPLE_MINTUPLE(hashTuple));
+				else
+					ExecHashJoinSaveTuple(HJTUPLE_MINTUPLE(hashTuple),
+										  hashTuple->hashvalue,
+										  &hashtable->innerBatchFile[batchno]);
 
 				nfreed++;
 			}
@@ -1500,9 +1505,13 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		 * put the tuple into a temp file for later batches
 		 */
 		Assert(batchno > hashtable->curbatch);
-		ExecHashJoinSaveTuple(tuple,
-							  hashvalue,
-							  &hashtable->innerBatchFile[batchno]);
+		if (HashJoinTableIsShared(hashtable))
+			sts_puttuple(hashtable->shared_inner_batches, batchno, &hashvalue,
+						 tuple);
+		else
+			ExecHashJoinSaveTuple(tuple,
+								  hashvalue,
+								  &hashtable->innerBatchFile[batchno]);
 	}
 }
 
