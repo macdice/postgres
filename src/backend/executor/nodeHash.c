@@ -532,6 +532,8 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	hashtable->current_chunk = NULL;
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->shared = state->shared_table_data;
+	hashtable->shared_inner_batches = state->shared_inner_batches;
+	hashtable->shared_outer_batches = state->shared_outer_batches;
 	hashtable->detached_early = false;
 
 #ifdef HJDEBUG
@@ -1846,6 +1848,7 @@ ExecHashTableReset(HashJoinTable hashtable)
 {
 	MemoryContext oldcxt;
 	int			nbuckets = hashtable->nbuckets;
+	int			curbatch = hashtable->curbatch;
 
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -1854,7 +1857,7 @@ ExecHashTableReset(HashJoinTable hashtable)
 		 * previous batch.
 		 */
 		Assert(BarrierPhase(&hashtable->shared->barrier) ==
-			   PHJ_PHASE_UNMATCHED_BATCH(hashtable->curbatch - 1));
+			   PHJ_PHASE_UNMATCHED_BATCH(curbatch - 1));
 		if (BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_UNMATCHED))
 		{
 			/* Serial phase: prepare shared state for new batch. */
@@ -1879,27 +1882,28 @@ ExecHashTableReset(HashJoinTable hashtable)
 
 			/* Rewind the shared read heads for this batch, inner and outer. */
 			sts_prepare_parallel_read(hashtable->shared_inner_batches,
-									  hashtable->curbatch);
+									  curbatch);
 			sts_prepare_parallel_read(hashtable->shared_outer_batches,
-									  hashtable->curbatch);
+									  curbatch);
 		}
 
 		/*
 		 * Each participant needs to make sure that data it has written for
 		 * this partition is now read-only and visible to other participants.
 		 */
-		sts_end_write(hashtable->shared_inner_batches, hashtable->curbatch);
-		sts_end_write(hashtable->shared_outer_batches, hashtable->curbatch);
+		sts_end_write(hashtable->shared_inner_batches, curbatch);
+		sts_end_write(hashtable->shared_outer_batches, curbatch);
 
 		/*
 		 * Wait again, so that all workers see the new hash table and can
-		 * safely read from batch files from any participant.
+		 * safely read from batch files from any participant because they have
+		 * all ended writing.
 		 */
 		Assert(BarrierPhase(&hashtable->shared->barrier) ==
-			   PHJ_PHASE_RESETTING_BATCH(hashtable->curbatch));
+			   PHJ_PHASE_RESETTING_BATCH(curbatch));
 		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASH_RESETTING);
 		Assert(BarrierPhase(&hashtable->shared->barrier) ==
-			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
+			   PHJ_PHASE_LOADING_BATCH(curbatch));
 		ExecHashUpdate(hashtable);
 
 		/* Forget the current chunks. */
@@ -1929,7 +1933,20 @@ ExecHashTableReset(HashJoinTable hashtable)
 	hashtable->chunks = NULL;
 
 	/* Rewind the shared read heads for this batch, inner and outer. */
-	ExecHashJoinRewindBatches(hashtable, hashtable->curbatch);
+	if (hashtable->innerBatchFile[curbatch] != NULL)
+	{
+		if (BufFileSeek(hashtable->innerBatchFile[curbatch], 0, 0L, SEEK_SET))
+			ereport(ERROR,
+					(errcode_for_file_access(),
+				   errmsg("could not rewind hash-join temporary file: %m")));
+	}
+	if (hashtable->outerBatchFile[curbatch] != NULL)
+	{
+		if (BufFileSeek(hashtable->outerBatchFile[curbatch], 0, 0L, SEEK_SET))
+			ereport(ERROR,
+					(errcode_for_file_access(),
+				   errmsg("could not rewind hash-join temporary file: %m")));
+	}
 }
 
 /*

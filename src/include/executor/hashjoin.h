@@ -301,12 +301,4 @@ typedef struct HashJoinTableData
 #define PHJ_SHRINK_PHASE_DECIDING		3
 #define PHJ_SHRINK_PHASE(n) (n % 4)
 
-/*
- * Return the 'participant number' for a process participating in a parallel
- * hash join.  We give a number < hashtable->shared->planned_participants
- * to each potential participant, including the leader.
- */
-//#define HashJoinParticipantNumber()					\
-//	(IsParallelWorker() ? ParallelWorkerNumber + 1 : 0)
-
 #endif   /* HASHJOIN_H */

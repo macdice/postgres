@@ -256,8 +256,8 @@ ExecHashJoin(HashJoinState *node)
 					case PHJ_SUBPHASE_PROBING:
 						/* Help probe the hashtable. */
 						ExecHashUpdate(hashtable);
-						ExecHashJoinOpenBatch(hashtable, hashtable->curbatch,
-											  false);
+						sts_begin_parallel_read(hashtable->shared_outer_batches,
+												hashtable->curbatch);
 						node->hj_JoinState = HJ_NEED_NEW_OUTER;
 						break;
 					case PHJ_SUBPHASE_UNMATCHED:
@@ -997,6 +997,7 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 	{
 		BufFile    *innerFile;
 
+		/* The reset position was reset to the start in ExecHashTableReset. */
 		innerFile = hashtable->innerBatchFile[curbatch];
 		while ((slot = ExecHashJoinGetSavedTuple(hjstate,
 												 innerFile,
@@ -1046,10 +1047,7 @@ ExecHashJoinSaveTuple(MinimalTuple tuple, uint32 hashvalue,
 
 /*
  * ExecHashJoinGetSavedTuple
- *		read the next tuple from the batch selected with
- *		ExecHashJoinOpenBatch, including the batch files of
- *		other participants if the hash table is shared.  Return NULL if no
- *		more.
+ *		read the next tuple from a batch file.  Return NULL if no more.
  *
  * On success, *hashvalue is set to the tuple's hash value, and the tuple
  * itself is stored in the given slot.
@@ -1098,6 +1096,7 @@ ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
 				 errmsg("could not read from hash-join temporary file: %m")));
 	return ExecStoreMinimalTuple(tuple, tupleSlot, true);
 }
+
 
 void
 ExecReScanHashJoin(HashJoinState *node)
