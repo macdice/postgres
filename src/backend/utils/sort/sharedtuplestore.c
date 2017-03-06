@@ -75,7 +75,7 @@ Size
 sts_size(int participants)
 {
 	return offsetof(SharedTuplestore, participants) +
-		sizeof(SharedTuplestoreParticipant) +
+		sizeof(SharedTuplestoreParticipant) * participants +
 		SharedBufFileSetSize(participants);
 }
 
