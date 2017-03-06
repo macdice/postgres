@@ -306,7 +306,7 @@ typedef struct HashJoinTableData
  * hash join.  We give a number < hashtable->shared->planned_participants
  * to each potential participant, including the leader.
  */
-#define HashJoinParticipantNumber() \
-	(IsParallelWorker() ? ParallelWorkerNumber + 1 : 0)
+//#define HashJoinParticipantNumber()					\
+//	(IsParallelWorker() ? ParallelWorkerNumber + 1 : 0)
 
 #endif   /* HASHJOIN_H */

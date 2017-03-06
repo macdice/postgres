@@ -24,6 +24,7 @@
 #include "utils/dsa.h"
 #include "utils/hsearch.h"
 #include "utils/reltrigger.h"
+#include "utils/sharedtuplestore.h"
 #include "utils/sortsupport.h"
 #include "utils/tuplestore.h"
 #include "utils/tuplesort.h"
@@ -2027,6 +2028,8 @@ typedef struct HashState
 	/* hashkeys is same as parent's hj_InnerHashKeys */
 
 	SharedHashJoinTable shared_table_data;
+	SharedTuplestoreAccessor *shared_inner_batches;
+	SharedTuplestoreAccessor *shared_outer_batches;
 } HashState;
 
 /* ----------------
