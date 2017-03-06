@@ -30,8 +30,6 @@
 
 typedef struct BufFile BufFile;
 
-typedef struct BufFileDescriptor BufFileDescriptor;
-
 /*
  * prototypes for functions in buffile.c
  */
