@@ -150,6 +150,33 @@ ExecHashCheckForEarlyExit(HashJoinTable hashtable)
 			/* Abandon ship due to rule 1.  There are workers running. */
 			return true;
 		}
+		else
+		{
+			/*
+			 * Continue processing due to rule 2.  There are no workers, and
+			 * any workers that show up later will abandon ship.
+			 */
+		}
+	}
+	else
+	{
+		/* Running in a worker process. */
+		if (hashtable->attached_at_phase < PHJ_PHASE_PROBING)
+		{
+			/*
+			 * Advertise that there are workers, so that the leader can
+			 * choose between rules 1 and 2.  It's OK that several workers can
+			 * write to this variable without immediately memory
+			 * synchronization, because the leader will only read it in a later
+			 * phase (see above).
+			 */
+			hashtable->shared->at_least_one_worker = true;
+		}
+		else if (!hashtable->shared->at_least_one_worker)
+		{
+			/* Abandon ship due to rule 3. */
+			return true;
+		}
 	}
 
 	return false;
