@@ -199,7 +199,7 @@ BufFileCreate(File file)
 
 static void
 make_shareable_path(char *tempdirpath, char *tempfilepath,
-					Oid tablespace, pid_t pid, int set, int file,
+					Oid tablespace, pid_t pid, int set, int partition,
 					int participant, int segment)
 {
 	if (tablespace == DEFAULTTABLESPACE_OID ||
@@ -213,7 +213,7 @@ make_shareable_path(char *tempdirpath, char *tempfilepath,
 
 	snprintf(tempfilepath, MAXPGPATH, "%s/%s%d.%d.%d.%d.%d", tempdirpath,
 			 PG_TEMP_FILE_PREFIX,
-			 pid, set, file, participant, segment);
+			 pid, set, partition, participant, segment);
 }
 
 /*
@@ -221,7 +221,7 @@ make_shareable_path(char *tempdirpath, char *tempfilepath,
  * backends.  Intended for use by SharedBufFile.
  */
 BufFile *
-BufFileCreateShared(Oid tablespace, pid_t pid, int set, int file_number,
+BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
 					int participant)
 {
 	File		firstFile;
@@ -230,7 +230,7 @@ BufFileCreateShared(Oid tablespace, pid_t pid, int set, int file_number,
 	char		tempfilepath[MAXPGPATH];
 
 	make_shareable_path(tempdirpath, tempfilepath,
-						tablespace, pid, set, file_number, participant, 0);
+						tablespace, pid, set, partition, participant, 0);
 	firstFile = PathNameCreateFile(tempdirpath, tempfilepath, true);
 	if (firstFile <= 0)
 		elog(ERROR, "could not create temporary file \"%s\": %m",
@@ -259,7 +259,7 @@ BufFileCreateShared(Oid tablespace, pid_t pid, int set, int file_number,
  * BufFileCreateShared.
  */
 BufFile *
-BufFileOpenShared(Oid tablespace, pid_t pid, int set, int number,
+BufFileOpenShared(Oid tablespace, pid_t pid, int set, int partition,
 				  int participant)
 {
 	BufFile    *file = (BufFile *) palloc(sizeof(BufFile));
@@ -283,7 +283,7 @@ BufFileOpenShared(Oid tablespace, pid_t pid, int set, int number,
 		}
 		/* Try to load a segment. */
 		make_shareable_path(tempdirpath, tempfilepath, tablespace,
-							pid, set, number, participant, nfiles);
+							pid, set, partition, participant, nfiles);
 		files[nfiles] = PathNameCreateFile(tempdirpath, tempfilepath, true);
 		if (file < 0)
 		{
@@ -323,7 +323,7 @@ BufFileOpenShared(Oid tablespace, pid_t pid, int set, int number,
  * is assumed to run in a clean-up path that might already involve an error.
  */
 bool
-BufFileDeleteShared(Oid tablespace, pid_t pid, int set, int file_number,
+BufFileDeleteShared(Oid tablespace, pid_t pid, int set, int partition,
 					int participant)
 {
 	char		tempdirpath[MAXPGPATH];
@@ -340,7 +340,7 @@ BufFileDeleteShared(Oid tablespace, pid_t pid, int set, int file_number,
 	for (;;)
 	{
 		make_shareable_path(tempdirpath, tempfilepath,
-							tablespace, pid, set, file_number,
+							tablespace, pid, set, partition,
 							participant, segment);
 		if (!PathNameDelete(tempfilepath))
 			break;

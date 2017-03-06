@@ -36,11 +36,11 @@ typedef struct BufFile BufFile;
 
 extern BufFile *BufFileCreateTemp(bool interXact);
 extern BufFile *BufFileCreateShared(Oid tablespace, pid_t pid, int set,
-									int file_number, int participant);
+									int partition, int participant);
 extern BufFile *BufFileOpenShared(Oid tablespace, pid_t pid, int set,
-								  int file_number, int participant);
+								  int partition, int participant);
 extern bool BufFileDeleteShared(Oid tablespace, pid_t pid, int set,
-								int file_number, int participant);
+								int partition, int participant);
 extern void BufFileSetReadOnly(BufFile *file);
 extern void BufFileClose(BufFile *file);
 extern size_t BufFileRead(BufFile *file, void *ptr, size_t size);
