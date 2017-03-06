@@ -45,6 +45,7 @@
 
 #include "postgres.h"
 
+#include "catalog/pg_tablespace.h"
 #include "miscadmin.h"
 #include "storage/buffile.h"
 #include "storage/fd.h"
@@ -101,6 +102,8 @@ SharedBufFileSetInitialize(SharedBufFileSet *set,
 
 		/* Rotate through the configured tablespaces to spread files out. */
 		p->tablespace = GetNextTempTableSpace();
+		if (!OidIsValid(p->tablespace))
+			p->tablespace = DEFAULTTABLESPACE_OID;
 	}
 
 	/* Register our callback to clean up if we are last to detach. */
@@ -184,11 +187,11 @@ SharedBufFileExport(SharedBufFileSet *set, BufFile *file)
 
 /*
  * Import a BufFile that has been created and exported by another backend.
- * The calling code is responsible for obtaining the participant number and
- * file number of such a file, and coordinating so that the file has been
- * exported before any attempt to import it.  Any number of backends may
- * import the same file, as long as they have attached to the
- * SharedBufFileManager.
+ * The calling code is responsible for coordinating with the creator of the
+ * file so that it is known to have been been exported before any attempt to
+ * import it.  Any number of backends may import the same file, as long as
+ * they have attached to the SharedBufFileManager.  Return NULL if there is no
+ * such file.
  */
 BufFile *
 SharedBufFileImport(SharedBufFileSet *set, int partition, int participant)
@@ -197,10 +200,15 @@ SharedBufFileImport(SharedBufFileSet *set, int partition, int participant)
 
 	Assert(participant < set->nparticipants);
 	Assert(participant >= 0);
-	Assert(p->writer_pid != InvalidPid);
 	Assert(p->writer_pid != MyProcPid);
-	Assert(p->low_partition <= partition || p->high_partition > partition);
 
+	/* Cheap check for non-existent file. */
+	if (p->writer_pid == InvalidPid ||
+		partition < p->low_partition ||
+		partition >= p->high_partition)
+		return NULL;
+
+	/* Try to open the file.  May be NULL if it doesn't exist. */
 	return BufFileOpenShared(p->tablespace, set->creator_pid,
 							 set->set_number, partition, participant);
 }
