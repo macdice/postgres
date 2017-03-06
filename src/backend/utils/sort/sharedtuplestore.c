@@ -122,8 +122,8 @@ sts_initialize(SharedTuplestore *sts, int participants,
 	accessor = palloc0(sizeof(SharedTuplestoreAccessor));
 	accessor->participant = my_participant_number;
 	accessor->sts = sts;
-	accessor->nfiles = 0;
-	accessor->files = NULL;
+	accessor->nfiles = 16;
+	accessor->files = palloc0(sizeof(BufFile *));
 	return accessor;
 }
 
@@ -146,8 +146,8 @@ sts_attach(SharedTuplestore *sts,
 	accessor = palloc0(sizeof(SharedTuplestoreAccessor));
 	accessor->participant = my_participant_number;
 	accessor->sts = sts;
-	accessor->nfiles = 0;
-	accessor->files = NULL;
+	accessor->nfiles = 16;
+	accessor->files = palloc0(sizeof(BufFile *));
 	return accessor;
 }
 
