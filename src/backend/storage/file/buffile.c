@@ -284,8 +284,9 @@ BufFileOpenShared(Oid tablespace, pid_t pid, int set, int partition,
 		/* Try to load a segment. */
 		make_shareable_path(tempdirpath, tempfilepath, tablespace,
 							pid, set, partition, participant, nfiles);
-		files[nfiles] = PathNameCreateFile(tempdirpath, tempfilepath, true);
-		if (file < 0)
+		files[nfiles] = PathNameOpenFile(tempfilepath,
+										 O_RDWR | PG_BINARY, 0600);
+		if (files[nfiles] < 0)
 		{
 			if (errno == ENOENT)
 				break;
