@@ -51,7 +51,6 @@ static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
 						  TupleTableSlot *tupleSlot);
 static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
 static void ExecHashJoinLoadBatch(HashJoinState *hjstate);
-static void ExecHashJoinExportAllBatches(HashJoinTable hashtable);
 
 /* ----------------------------------------------------------------
  *		ExecHashJoin
@@ -192,7 +191,10 @@ ExecHashJoin(HashJoinState *node)
 						 */
 						if (BarrierPhase(&hashtable->shared->barrier) <=
 							PHJ_PHASE_PROBING)
-							ExecHashJoinExportAllBatches(hashtable);
+						{
+							sts_end_write_all_partitions(hashNode->shared_inner_batches);
+							sts_end_write_all_partitions(hashNode->shared_outer_batches);
+						}
 						BarrierDetach(&hashtable->shared->barrier);
 						hashtable->detached_early = true;
 						return NULL;
@@ -314,11 +316,12 @@ ExecHashJoin(HashJoinState *node)
 							/*
 							 * Other backends will need to handle all future
 							 * batches written by me.  We don't detach until
-							 * after we've exported all batches, otherwise
-							 * another participant might try to import them
-							 * too soon.
+							 * after we've finished writing to all batches so
+							 * that they are flushed, otherwise another
+							 * participant might try to read them too soon.
 							 */
-							ExecHashJoinExportAllBatches(hashtable);
+							sts_end_write_all_partitions(hashNode->shared_inner_batches);
+							sts_end_write_all_partitions(hashNode->shared_outer_batches);
 							BarrierDetach(&hashtable->shared->barrier);
 							hashtable->detached_early = true;
 							return NULL;
