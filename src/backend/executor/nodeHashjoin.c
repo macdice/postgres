@@ -1300,15 +1300,15 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 }
 
 void
-ExecHashJoinInitializeWorker(HashJoinState *state, shm_toc *toc,
-							 dsm_segment *seg)
+ExecHashJoinInitializeWorker(HashJoinState *state,
+							 ParallelWorkerContext *pwcxt)
 {
 	HashState  *hashNode;
 	SharedTuplestore *inner_shared_batches;
 	SharedTuplestore *outer_shared_batches;
 	int plan_node_id = state->js.ps.plan->plan_node_id;
 
-	state->hj_sharedHashJoinTable = shm_toc_lookup(toc, plan_node_id);
+	state->hj_sharedHashJoinTable = shm_toc_lookup(pwcxt->toc, plan_node_id);
 
 	/*
 	 * Inject SharedHashJoinTable into the hash node.  It could instead have
@@ -1328,13 +1328,15 @@ ExecHashJoinInitializeWorker(HashJoinState *state, shm_toc *toc,
 	 * outer batches.
 	 */
 	inner_shared_batches =
-		shm_toc_lookup(toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 1));
+		shm_toc_lookup(pwcxt->toc,
+					   PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 1));
 	hashNode->shared_inner_batches = sts_attach(inner_shared_batches,
 												ParallelWorkerNumber + 1,
-												seg);
+												pwcxt->seg);
 	outer_shared_batches =
-		shm_toc_lookup(toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 2));
+		shm_toc_lookup(pwcxt->toc,
+					   PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 2));
 	hashNode->shared_outer_batches = sts_attach(outer_shared_batches,
 												ParallelWorkerNumber + 1,
-												seg);
+												pwcxt->seg);
 }
