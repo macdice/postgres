@@ -845,6 +845,18 @@ static const SchemaQuery Query_for_list_of_matviews = {
 "   FROM pg_catalog.pg_am "\
 "  WHERE substring(pg_catalog.quote_ident(amname),1,%d)='%s'"
 
+#define Query_for_list_of_publications \
+" SELECT pg_catalog.quote_ident(pubname) "\
+"   FROM pg_catalog.pg_publication "\
+"  WHERE substring(pg_catalog.quote_ident(pubname),1,%d)='%s'"
+
+#define Query_for_list_of_subscriptions \
+" SELECT pg_catalog.quote_ident(s.subname) "\
+"   FROM pg_catalog.pg_subscription s, pg_catalog.pg_database d "\
+"  WHERE substring(pg_catalog.quote_ident(s.subname),1,%d)='%s' "\
+"    AND d.datname = pg_catalog.current_database() "\
+"    AND s.subdbid = d.oid"
+
 /* the silly-looking length condition is just to eat up the current word */
 #define Query_for_list_of_arguments \
 "SELECT pg_catalog.oidvectortypes(proargtypes)||')' "\
@@ -985,13 +997,13 @@ static const pgsql_thing_t words_after_create[] = {
 	{"OWNED", NULL, NULL, THING_NO_CREATE},		/* for DROP OWNED BY ... */
 	{"PARSER", Query_for_list_of_ts_parsers, NULL, THING_NO_SHOW},
 	{"POLICY", NULL, NULL},
-	{"PUBLICATION", NULL, NULL},
+	{"PUBLICATION", Query_for_list_of_publications},
 	{"ROLE", Query_for_list_of_roles},
 	{"RULE", "SELECT pg_catalog.quote_ident(rulename) FROM pg_catalog.pg_rules WHERE substring(pg_catalog.quote_ident(rulename),1,%d)='%s'"},
 	{"SCHEMA", Query_for_list_of_schemas},
 	{"SEQUENCE", NULL, &Query_for_list_of_sequences},
 	{"SERVER", Query_for_list_of_servers},
-	{"SUBSCRIPTION", NULL, NULL},
+	{"SUBSCRIPTION", Query_for_list_of_subscriptions},
 	{"TABLE", NULL, &Query_for_list_of_tables},
 	{"TABLESPACE", Query_for_list_of_tablespaces},
 	{"TEMP", NULL, NULL, THING_NO_DROP},		/* for CREATE TEMP TABLE ... */
@@ -1463,7 +1475,8 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER PUBLICATION <name> ...*/
 	else if (Matches3("ALTER","PUBLICATION",MatchAny))
 	{
-		COMPLETE_WITH_LIST5("WITH", "ADD TABLE", "SET TABLE", "DROP TABLE", "OWNER TO");
+		COMPLETE_WITH_LIST6("WITH", "ADD TABLE", "SET TABLE", "DROP TABLE",
+							"OWNER TO", "RENAME TO");
 	}
 	/* ALTER PUBLICATION <name> .. WITH ( ... */
 	else if (HeadMatches3("ALTER", "PUBLICATION",MatchAny) && TailMatches2("WITH", "("))
@@ -1474,7 +1487,8 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SUBSCRIPTION <name> ... */
 	else if (Matches3("ALTER","SUBSCRIPTION",MatchAny))
 	{
-		COMPLETE_WITH_LIST6("WITH", "CONNECTION", "SET PUBLICATION", "ENABLE", "DISABLE", "OWNER TO");
+		COMPLETE_WITH_LIST7("WITH", "CONNECTION", "SET PUBLICATION", "ENABLE",
+							"DISABLE", "OWNER TO", "RENAME TO");
 	}
 	else if (HeadMatches3("ALTER", "SUBSCRIPTION", MatchAny) && TailMatches2("WITH", "("))
 	{
@@ -2372,8 +2386,13 @@ psql_completion(const char *text, int start, int end)
 /* CREATE SUBSCRIPTION */
 	else if (Matches3("CREATE", "SUBSCRIPTION", MatchAny))
 		COMPLETE_WITH_CONST("CONNECTION");
-	else if (Matches5("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION",MatchAny))
+	else if (Matches5("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION", MatchAny))
 		COMPLETE_WITH_CONST("PUBLICATION");
+	else if (Matches6("CREATE", "SUBSCRIPTION", MatchAny, "CONNECTION",
+					  MatchAny, "PUBLICATION"))
+	{
+		/* complete with nothing here as this refers to remote publications */
+	}
 	/* Complete "CREATE SUBSCRIPTION <name> ...  WITH ( <opt>" */
 	else if (HeadMatches2("CREATE", "SUBSCRIPTION") && TailMatches2("WITH", "("))
 		COMPLETE_WITH_LIST5("ENABLED", "DISABLED", "CREATE SLOT",
@@ -2508,6 +2527,10 @@ psql_completion(const char *text, int start, int end)
 	/* Complete CREATE EVENT TRIGGER <name> ON with event_type */
 	else if (Matches5("CREATE", "EVENT", "TRIGGER", MatchAny, "ON"))
 		COMPLETE_WITH_LIST3("ddl_command_start", "ddl_command_end", "sql_drop");
+
+/* DEALLOCATE */
+	else if (Matches1("DEALLOCATE"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_prepared_statements);
 
 /* DECLARE */
 	else if (Matches2("DECLARE", MatchAny))

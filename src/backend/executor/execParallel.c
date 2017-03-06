@@ -756,7 +756,7 @@ ExecParallelReportInstrumentation(PlanState *planstate,
  * is allocated and initialized by executor; that is, after ExecutorStart().
  */
 static bool
-ExecParallelInitializeWorker(PlanState *planstate, shm_toc *toc)
+ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 {
 	if (planstate == NULL)
 		return false;
@@ -767,21 +767,21 @@ ExecParallelInitializeWorker(PlanState *planstate, shm_toc *toc)
 		switch (nodeTag(planstate))
 		{
 			case T_SeqScanState:
-				ExecSeqScanInitializeWorker((SeqScanState *) planstate, toc);
+				ExecSeqScanInitializeWorker((SeqScanState *) planstate, pwcxt);
 				break;
 			case T_IndexScanState:
-				ExecIndexScanInitializeWorker((IndexScanState *) planstate, toc);
+				ExecIndexScanInitializeWorker((IndexScanState *) planstate, pwcxt);
 				break;
 			case T_IndexOnlyScanState:
-				ExecIndexOnlyScanInitializeWorker((IndexOnlyScanState *) planstate, toc);
+				ExecIndexOnlyScanInitializeWorker((IndexOnlyScanState *) planstate, pwcxt);
 				break;
 			case T_ForeignScanState:
 				ExecForeignScanInitializeWorker((ForeignScanState *) planstate,
-												toc);
+												pwcxt);
 				break;
 			case T_CustomScanState:
 				ExecCustomScanInitializeWorker((CustomScanState *) planstate,
-											   toc);
+											   pwcxt);
 				break;
 			case T_HashJoinState:
 				ExecHashJoinInitializeWorker((HashJoinState *) planstate,
@@ -792,7 +792,7 @@ ExecParallelInitializeWorker(PlanState *planstate, shm_toc *toc)
 		}
 	}
 
-	return planstate_tree_walker(planstate, ExecParallelInitializeWorker, toc);
+	return planstate_tree_walker(planstate, ExecParallelInitializeWorker, pwcxt);
 }
 
 /*
@@ -821,6 +821,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	int			instrument_options = 0;
 	void	   *area_space;
 	dsa_area   *area;
+	ParallelWorkerContext pwcxt;
 
 	/* Set up DestReceiver, SharedExecutorInstrumentation, and QueryDesc. */
 	receiver = ExecParallelGetReceiver(seg, toc);
@@ -847,7 +848,9 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Special executor initialization steps for parallel workers */
 	queryDesc->planstate->state->es_query_dsa = area;
-	ExecParallelInitializeWorker(queryDesc->planstate, toc);
+	pwcxt.toc = toc;
+	pwcxt.seg = seg;
+	ExecParallelInitializeWorker(queryDesc->planstate, &pwcxt);
 
 	/* Run the plan */
 	ExecutorRun(queryDesc, ForwardScanDirection, 0L);
