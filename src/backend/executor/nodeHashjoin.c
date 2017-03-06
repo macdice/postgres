@@ -263,6 +263,7 @@ ExecHashJoin(HashJoinState *node)
 					case PHJ_SUBPHASE_UNMATCHED:
 						/* Help scan for unmatched inner tuples. */
 						ExecHashUpdate(hashtable);
+						ExecPrepHashTableForUnmatched(node);
 						node->hj_JoinState = HJ_FILL_INNER_TUPLES;
 						break;
 					}
