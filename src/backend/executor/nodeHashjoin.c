@@ -1123,12 +1123,13 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 }
 
 void
-ExecHashJoinInitializeWorker(HashJoinState *state, shm_toc *toc)
+ExecHashJoinInitializeWorker(HashJoinState *state,
+							 ParallelWorkerContext *pwcxt)
 {
 	HashState  *hashNode;
+	int plan_node_id = state->js.ps.plan->plan_node_id;
 
-	state->hj_sharedHashJoinTable =
-		shm_toc_lookup(toc, state->js.ps.plan->plan_node_id);
+	state->hj_sharedHashJoinTable = shm_toc_lookup(pwcxt->toc, plan_node_id);
 
 	/*
 	 * Inject SharedHashJoinTable into the hash node.  It could instead have
