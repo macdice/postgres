@@ -86,12 +86,14 @@ void
 SharedBufFileSetInitialize(SharedBufFileSet *set,
 						   int participants, dsm_segment *segment)
 {
+	static int next_set_number;
 	int i;
 
 	SpinLockInit(&set->mutex);
 	set->refcount = 1;
 	set->nparticipants = participants;
 	set->creator_pid = MyProcPid;
+	set->set_number = next_set_number++;
 	for (i = 0; i < participants; ++i)
 	{
 		SharedBufFileParticipant *p = &set->participants[i];
@@ -104,6 +106,9 @@ SharedBufFileSetInitialize(SharedBufFileSet *set,
 		p->tablespace = GetNextTempTableSpace();
 		if (!OidIsValid(p->tablespace))
 			p->tablespace = DEFAULTTABLESPACE_OID;
+
+		/* PID of writer unknown for now. */
+		p->writer_pid = InvalidPid;
 	}
 
 	/* Register our callback to clean up if we are last to detach. */
