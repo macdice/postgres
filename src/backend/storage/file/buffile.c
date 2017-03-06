@@ -42,7 +42,6 @@
 #include "storage/fd.h"
 #include "storage/buffile.h"
 #include "storage/buf_internals.h"
-#include "utils/probes.h"
 #include "utils/resowner.h"
 
 /*
@@ -91,24 +90,6 @@ struct BufFile
 	int			pos;			/* next read/write position in buffer */
 	int			nbytes;			/* total # of valid bytes in buffer */
 	char		buffer[BLCKSZ];
-};
-
-/*
- * Serialized representation of a single file managed by a BufFile.
- */
-typedef struct BufFileFileDescriptor
-{
-	char path[MAXPGPATH];
-} BufFileFileDescriptor;
-
-/*
- * Serialized representation of a BufFile, to be created by BufFileExport and
- * consumed by BufFileImport.
- */
-struct BufFileDescriptor
-{
-	size_t num_files;
-	BufFileFileDescriptor files[FLEXIBLE_ARRAY_MEMBER];
 };
 
 static BufFile *makeBufFile(File firstfile);
