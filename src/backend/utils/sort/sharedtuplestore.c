@@ -98,7 +98,7 @@ sts_initialize(SharedTuplestore *sts, int participants,
 			   dsm_segment *segment)
 {
 	SharedTuplestoreAccessor *accessor;
-	SharedBufFileSet *fileset = GetSharedBufFileSet(sts);
+	SharedBufFileSet *fileset;
 	int i;
 
 	Assert(my_participant_number < participants);
@@ -116,6 +116,7 @@ sts_initialize(SharedTuplestore *sts, int participants,
 		LWLockInitialize(&sts->participants[i].lock,
 						 LWTRANCHE_SHARED_TUPLESTORE);
 	}
+	fileset = GetSharedBufFileSet(sts);
 	SharedBufFileSetInitialize(fileset, participants, segment);
 
 	accessor = palloc0(sizeof(SharedTuplestoreAccessor));
