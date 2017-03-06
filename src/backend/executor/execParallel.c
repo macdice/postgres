@@ -785,7 +785,7 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 				break;
 			case T_HashJoinState:
 				ExecHashJoinInitializeWorker((HashJoinState *) planstate,
-											 toc);
+											 pwcxt);
 				break;
 			default:
 				break;
