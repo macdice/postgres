@@ -50,7 +50,6 @@ extern void sts_puttuple(SharedTuplestoreAccessor *accessor,
 
 
 extern MinimalTuple sts_gettuple(SharedTuplestoreAccessor *accessor,
-								 void *meta_data,
-								 bool *must_free);
+								 void *meta_data);
 
 #endif   /* SHAREDTUPLESTORE_H */

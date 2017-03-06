@@ -274,8 +274,7 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, int partition,
 }
 
 MinimalTuple
-sts_gettuple(SharedTuplestoreAccessor *accessor,
-			 void *meta_data, bool *must_free)
+sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 {
 	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
 
