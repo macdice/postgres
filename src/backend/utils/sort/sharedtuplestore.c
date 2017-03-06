@@ -123,7 +123,7 @@ sts_initialize(SharedTuplestore *sts, int participants,
 	accessor->participant = my_participant_number;
 	accessor->sts = sts;
 	accessor->nfiles = 16;
-	accessor->files = palloc0(sizeof(BufFile *));
+	accessor->files = palloc0(sizeof(BufFile *) * accessor->nfiles);
 	return accessor;
 }
 
@@ -147,7 +147,7 @@ sts_attach(SharedTuplestore *sts,
 	accessor->participant = my_participant_number;
 	accessor->sts = sts;
 	accessor->nfiles = 16;
-	accessor->files = palloc0(sizeof(BufFile *));
+	accessor->files = palloc0(sizeof(BufFile *) * accessor->nfiles);
 	return accessor;
 }
 
@@ -220,7 +220,7 @@ sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
 	 * minimal contention at first.
 	 */
 	if (partition < accessor->nfiles)
-		accessor->read_file = accessor->files[accessor->nfiles];
+		accessor->read_file = accessor->files[partition];
 	else
 		accessor->read_file = NULL;
 	accessor->read_participant = accessor->participant;
@@ -239,10 +239,17 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, int partition,
 	BufFile *file;
 	Size written;
 
+	/* Sanity check to avoid overflow. */
+	if (partition >= INT_MAX / 2)
+		elog(ERROR, "too many shared tuplestore partitions");
+
 	/* Do we need to extend our local array of files to cover 'partition'? */
 	if (partition >= accessor->nfiles)
 	{
-		int new_nfiles = partition + 1;
+		int new_nfiles = accessor->nfiles * 2;
+
+		while (new_nfiles <= partition)
+			new_nfiles *= 2;
 
 		accessor->files = repalloc(accessor->files,
 								   sizeof(BufFile *) * new_nfiles);
