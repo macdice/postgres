@@ -53,7 +53,8 @@ extern BitmapHeapPath *create_bitmap_heap_path(PlannerInfo *root,
 						RelOptInfo *rel,
 						Path *bitmapqual,
 						Relids required_outer,
-						double loop_count);
+						double loop_count,
+						int parallel_degree);
 extern BitmapAndPath *create_bitmap_and_path(PlannerInfo *root,
 					   RelOptInfo *rel,
 					   List *bitmapquals);
@@ -82,8 +83,12 @@ extern SubqueryScanPath *create_subqueryscan_path(PlannerInfo *root,
 						 List *pathkeys, Relids required_outer);
 extern Path *create_functionscan_path(PlannerInfo *root, RelOptInfo *rel,
 						 List *pathkeys, Relids required_outer);
+extern Path *create_tablexprscan_path(PlannerInfo *root, RelOptInfo *rel,
+						 List *pathkeys, Relids required_outer);
 extern Path *create_valuesscan_path(PlannerInfo *root, RelOptInfo *rel,
 					   Relids required_outer);
+extern Path *create_tablefuncscan_path(PlannerInfo *root, RelOptInfo *rel,
+						  Relids required_outer);
 extern Path *create_ctescan_path(PlannerInfo *root, RelOptInfo *rel,
 					Relids required_outer);
 extern Path *create_worktablescan_path(PlannerInfo *root, RelOptInfo *rel,
