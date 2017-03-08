@@ -860,6 +860,7 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 	QualCost	qpqual_cost;
 	Cost		cpu_per_tuple;
 	Cost		cost_per_page;
+	Cost		cpu_run_cost;
 	double		tuples_fetched;
 	double		pages_fetched;
 	double		spc_seq_page_cost,
@@ -921,8 +922,21 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 
 	startup_cost += qpqual_cost.startup;
 	cpu_per_tuple = cpu_tuple_cost + qpqual_cost.per_tuple;
+	cpu_run_cost = cpu_per_tuple * tuples_fetched;
 
-	run_cost += cpu_per_tuple * tuples_fetched;
+	/* Adjust costing for parallelism, if used. */
+	if (path->parallel_workers > 0)
+	{
+		double		parallel_divisor = get_parallel_divisor(path);
+
+		/* The CPU cost is divided among all the workers. */
+		cpu_run_cost /= parallel_divisor;
+
+		path->rows = clamp_row_est(path->rows / parallel_divisor);
+	}
+
+
+	run_cost += cpu_run_cost;
 
 	/* tlist eval costs are paid per output row, not per tuple scanned */
 	startup_cost += path->pathtarget->cost.startup;
@@ -1259,6 +1273,62 @@ cost_functionscan(Path *path, PlannerInfo *root,
 	 * refinement right now.
 	 */
 	cost_qual_eval_node(&exprcost, (Node *) rte->functions, root);
+
+	startup_cost += exprcost.startup + exprcost.per_tuple;
+
+	/* Add scanning CPU costs */
+	get_restriction_qual_cost(root, baserel, param_info, &qpqual_cost);
+
+	startup_cost += qpqual_cost.startup;
+	cpu_per_tuple = cpu_tuple_cost + qpqual_cost.per_tuple;
+	run_cost += cpu_per_tuple * baserel->tuples;
+
+	/* tlist eval costs are paid per output row, not per tuple scanned */
+	startup_cost += path->pathtarget->cost.startup;
+	run_cost += path->pathtarget->cost.per_tuple * path->rows;
+
+	path->startup_cost = startup_cost;
+	path->total_cost = startup_cost + run_cost;
+}
+
+/*
+ * cost_tablefuncscan
+ *	  Determines and returns the cost of scanning a table function.
+ *
+ * 'baserel' is the relation to be scanned
+ * 'param_info' is the ParamPathInfo if this is a parameterized path, else NULL
+ */
+void
+cost_tablefuncscan(Path *path, PlannerInfo *root,
+				   RelOptInfo *baserel, ParamPathInfo *param_info)
+{
+	Cost		startup_cost = 0;
+	Cost		run_cost = 0;
+	QualCost	qpqual_cost;
+	Cost		cpu_per_tuple;
+	RangeTblEntry *rte;
+	QualCost	exprcost;
+
+	/* Should only be applied to base relations that are functions */
+	Assert(baserel->relid > 0);
+	rte = planner_rt_fetch(baserel->relid, root);
+	Assert(rte->rtekind == RTE_TABLEFUNC);
+
+	/* Mark the path with the correct row estimate */
+	if (param_info)
+		path->rows = param_info->ppi_rows;
+	else
+		path->rows = baserel->rows;
+
+	/*
+	 * Estimate costs of executing the table func expression(s).
+	 *
+	 * XXX in principle we ought to charge tuplestore spill costs if the
+	 * number of rows is large.  However, given how phony our rowcount
+	 * estimates for tablefuncs tend to be, there's not a lot of point in that
+	 * refinement right now.
+	 */
+	cost_qual_eval_node(&exprcost, (Node *) rte->tablefunc, root);
 
 	startup_cost += exprcost.startup + exprcost.per_tuple;
 
@@ -4416,6 +4486,31 @@ set_function_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 		if (ntup > rel->tuples)
 			rel->tuples = ntup;
 	}
+
+	/* Now estimate number of output rows, etc */
+	set_baserel_size_estimates(root, rel);
+}
+
+/*
+ * set_function_size_estimates
+ *		Set the size estimates for a base relation that is a function call.
+ *
+ * The rel's targetlist and restrictinfo list must have been constructed
+ * already.
+ *
+ * We set the same fields as set_tablefunc_size_estimates.
+ */
+void
+set_tablefunc_size_estimates(PlannerInfo *root, RelOptInfo *rel)
+{
+	RangeTblEntry *rte;
+
+	/* Should only be applied to base relations that are functions */
+	Assert(rel->relid > 0);
+	rte = planner_rt_fetch(rel->relid, root);
+	Assert(rte->rtekind == RTE_TABLEFUNC);
+
+	rel->tuples = 100;
 
 	/* Now estimate number of output rows, etc */
 	set_baserel_size_estimates(root, rel);
