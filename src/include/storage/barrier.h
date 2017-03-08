@@ -18,8 +18,6 @@
  * barriers.
  */
 
-#include "postgres.h"
-
 #include "storage/condition_variable.h"
 #include "storage/spin.h"
 
