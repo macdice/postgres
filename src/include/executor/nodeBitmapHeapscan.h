@@ -26,6 +26,6 @@ extern void ExecBitmapHeapEstimate(BitmapHeapScanState *node,
 extern void ExecBitmapHeapInitializeDSM(BitmapHeapScanState *node,
 							ParallelContext *pcxt);
 extern void ExecBitmapHeapInitializeWorker(BitmapHeapScanState *node,
-							   shm_toc *toc);
+										   ParallelWorkerContext *pwcxt);
 
 #endif   /* NODEBITMAPHEAPSCAN_H */

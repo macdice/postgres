@@ -787,7 +787,7 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 				break;
 			case T_BitmapHeapScanState:
 				ExecBitmapHeapInitializeWorker(
-									 (BitmapHeapScanState *) planstate, toc);
+									 (BitmapHeapScanState *) planstate, pwcxt);
 				break;
 			default:
 				break;
