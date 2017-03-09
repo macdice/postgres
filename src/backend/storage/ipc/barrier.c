@@ -3,19 +3,81 @@
  * barrier.c
  *	  Barriers for synchronizing cooperating processes.
  *
- * Copyright (c) 2017, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
  *
  * This implementation of barriers allows for static sets of participants
- * known up front, or dynamic sets of participants which processes can join
- * or leave at any time.  In the dynamic case, a phase number can be used to
- * track progress through a parallel algorithm; in the static case it isn't
- * needed.
+ * known up front, or dynamic sets of participants which processes can join or
+ * leave at any time.  In the dynamic case, a phase number can be used to
+ * track progress through a parallel algorithm, and may be necessary to
+ * synchronize with the current phase of a multi-phase algorithm when a new
+ * participant joins.  In the static case, the phase number is used
+ * internally, but it isn't strictly necessary for client code to access it
+ * because the phase can only advance when the declared number of participants
+ * reaches the barrier so client code should be in no doubt about the current
+ * phase of computation at all times.
+ *
+ * Consider a parallel algorithm that involves separate phases of computation
+ * A, B and C where the output of each phase is needed before the next phase
+ * can begin.
+ *
+ * In the case of a static barrier initialized with 4 participants, each
+ * participant works on phase A, then calls BarrierWait to wait until all 4
+ * participants have reached that point.  When BarrierWait returns control,
+ * each participant can work on B, and so on.  Because the barrier knows how
+ * many participants to expect, the phases of computation don't need labels or
+ * numbers, since the program counter of the processors implies the current
+ * phase.  Even if some of the processes are slow to start up and begin
+ * running phase A, the other participants are expecting them and will
+ * patiently wait at the barrier.  The code could be written as follows:
+ *
+ *     perform_a();
+ *     BarrierWait(&barrier, ...);
+ *     perform_b();
+ *     BarrierWait(&barrier, ...);
+ *     perform_c();
+ *     BarrierWait(&barrier, ...);
+ *
+ * If the number of participants is not known up front, then a dynamic barrier
+ * is needed and the number should be set to zero at initialization.  New
+ * complications arise because the number necessarily changes over time as
+ * participants attach and detach, and therefore phases B, C or even the end
+ * of processing may be reached before any given participant has started
+ * running and attached.  Therefore the client code must perform an initial
+ * test of the phase number after attaching, because it needs to find out
+ * which phase of the algorithm has been reached by any participants that are
+ * already attached in order to synchronize with that work.  Once the program
+ * counter or some other representation of current progress is synchronized
+ * with the barrier's phase, normal control flow can be used just as in the
+ * static case.  Our example could be written using a switch statement with
+ * cases that fall-through, as follows:
+ *
+ *     phase = BarrierAttach(&barrier);
+ *     switch (phase)
+ *     {
+ *     case PHASE_A:
+ *         perform_a();
+ *         BarrierWait(&barrier, ...);
+ *     case PHASE_B:
+ *         perform_b();
+ *         BarrierWait(&barrier, ...);
+ *     case PHASE_C:
+ *         perform_c();
+ *         BarrierWait(&barrier, ...);
+ *     default:
+ *     }
+ *     BarrierDetach(&barrier);
+ *
+ * Static barriers behave similarly to POSIX's pthread_barrier_t.  Dynamic
+ * barriers behave similarly to Java's java.util.concurrent.Phaser.
  *
  * IDENTIFICATION
  *	  src/backend/storage/ipc/barrier.c
  *
  *-------------------------------------------------------------------------
  */
+
+#include "postgres.h"
 
 #include "storage/barrier.h"
 
@@ -94,6 +156,14 @@ BarrierWait(Barrier *barrier, uint32 wait_event_info)
 	{
 		bool advanced;
 
+		/*
+		 * We know that phase must either be start_phase, indicating that we
+		 * need to keep waiting, or next_phase, indicating that the last
+		 * participant that we were waiting for has either arrived or detached
+		 * so that the next phase has begun.  The phase cannot advance any
+		 * further than that without this backend's participation, because
+		 * this backend is attached.
+		 */
 		SpinLockAcquire(&barrier->mutex);
 		Assert(barrier->phase == start_phase || barrier->phase == next_phase);
 		advanced = barrier->phase == next_phase;
@@ -149,7 +219,7 @@ BarrierDetach(Barrier *barrier)
 	{
 		release = true;
 		barrier->arrived = 0;
-		barrier->phase++;
+		++barrier->phase;
 	}
 	else
 		release = false;
