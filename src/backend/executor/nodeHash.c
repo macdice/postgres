@@ -1785,36 +1785,36 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 		if (hashtable->current_chunk == NULL)
 			break;
 
-		/* Have we reached the end of this chunk yet? */
-		if (hashtable->current_chunk_index >= hashtable->current_chunk->used)
+		/* Scan the current chunk looking for unmatched tuples. */
+		while (hashtable->current_chunk_index < hashtable->current_chunk->used)
 		{
-			/* Go around again to get the next chunk from the queue. */
-			hashtable->current_chunk = NULL;
-			continue;
+			/* Take the next tuple from this chunk. */
+			hashTuple = (HashJoinTuple)
+				(hashtable->current_chunk->data + hashtable->current_chunk_index);
+			tuple = HJTUPLE_MINTUPLE(hashTuple);
+			hashtable->current_chunk_index +=
+				MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
+
+			/* Is it unmatched? */
+			if (!HeapTupleHeaderHasMatch(tuple))
+			{
+				TupleTableSlot *inntuple;
+
+				/* insert hashtable's tuple into exec slot */
+				inntuple = ExecStoreMinimalTuple(tuple,
+												 hjstate->hj_HashTupleSlot,
+												 false); /* do not pfree */
+				econtext->ecxt_innertuple = inntuple;
+
+				/* reset context each time (see below for explanation) */
+				ResetExprContext(econtext);
+				return true;
+			}
 		}
 
-		/* Take the next tuple from this chunk. */
-		hashTuple = (HashJoinTuple)
-			(hashtable->current_chunk->data + hashtable->current_chunk_index);
-		tuple = HJTUPLE_MINTUPLE(hashTuple);
-		hashtable->current_chunk_index +=
-			MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
-
-		/* Is it unmatched? */
-		if (!HeapTupleHeaderHasMatch(tuple))
-		{
-			TupleTableSlot *inntuple;
-
-			/* insert hashtable's tuple into exec slot */
-			inntuple = ExecStoreMinimalTuple(tuple,
-											 hjstate->hj_HashTupleSlot,
-											 false); /* do not pfree */
-			econtext->ecxt_innertuple = inntuple;
-
-			/* reset context each time (see below for explanation) */
-			ResetExprContext(econtext);
-			return true;
-		}
+		/* Go around again to get the next chunk from the queue. */
+		hashtable->current_chunk = NULL;
+		continue;
 	}
 
 	/*
