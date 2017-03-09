@@ -26,10 +26,10 @@
  * participants have reached that point.  When BarrierWait returns control,
  * each participant can work on B, and so on.  Because the barrier knows how
  * many participants to expect, the phases of computation don't need labels or
- * numbers, since the program counter of the processors implies the current
- * phase.  Even if some of the processes are slow to start up and begin
- * running phase A, the other participants are expecting them and will
- * patiently wait at the barrier.  The code could be written as follows:
+ * numbers, since each process's program counter implies the current phase.
+ * Even if some of the processes are slow to start up and begin running phase
+ * A, the other participants are expecting them and will patiently wait at the
+ * barrier.  The code could be written as follows:
  *
  *     perform_a();
  *     BarrierWait(&barrier, ...);
