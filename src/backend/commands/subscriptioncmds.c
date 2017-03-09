@@ -461,7 +461,12 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	if (stmt->drop_slot)
 		PreventTransactionChain(isTopLevel, "DROP SUBSCRIPTION ... DROP SLOT");
 
-	rel = heap_open(SubscriptionRelationId, RowExclusiveLock);
+	/*
+	 * Lock pg_subscription with AccessExclusiveLock to ensure
+	 * that the launcher doesn't restart new worker during dropping
+	 * the subscription
+	 */
+	rel = heap_open(SubscriptionRelationId, AccessExclusiveLock);
 
 	tup = SearchSysCache2(SUBSCRIPTIONNAME, MyDatabaseId,
 						  CStringGetDatum(stmt->subname));
@@ -528,13 +533,8 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	/* Clean up dependencies */
 	deleteSharedDependencyRecordsFor(SubscriptionRelationId, subid, 0);
 
-	/* Protect against launcher restarting the worker. */
-	LWLockAcquire(LogicalRepLauncherLock, LW_EXCLUSIVE);
-
 	/* Kill the apply worker so that the slot becomes accessible. */
 	logicalrep_worker_stop(subid);
-
-	LWLockRelease(LogicalRepLauncherLock);
 
 	/* Remove the origin tracking if exists. */
 	snprintf(originname, sizeof(originname), "pg_%u", subid);
@@ -565,19 +565,25 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 						"drop the replication slot \"%s\"", slotname),
 				 errdetail("The error was: %s", err)));
 
-	if (!walrcv_command(wrconn, cmd.data, &err))
+	PG_TRY();
+	{
+		if (!walrcv_command(wrconn, cmd.data, &err))
+			ereport(ERROR,
+					(errmsg("could not drop the replication slot \"%s\" on publisher",
+							slotname),
+					 errdetail("The error was: %s", err)));
+		else
+			ereport(NOTICE,
+					(errmsg("dropped replication slot \"%s\" on publisher",
+							slotname)));
+	}
+	PG_CATCH();
 	{
 		/* Close the connection in case of failure */
 		walrcv_disconnect(wrconn);
-		ereport(ERROR,
-				(errmsg("could not drop the replication slot \"%s\" on publisher",
-						slotname),
-				 errdetail("The error was: %s", err)));
+		PG_RE_THROW();
 	}
-	else
-		ereport(NOTICE,
-				(errmsg("dropped replication slot \"%s\" on publisher",
-						slotname)));
+	PG_END_TRY();
 
 	walrcv_disconnect(wrconn);
 
