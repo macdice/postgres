@@ -64,6 +64,26 @@ select  count(*) from tenk1 where thousand > 95;
 reset enable_seqscan;
 reset enable_bitmapscan;
 
+-- test parallel bitmap heap scan.
+set enable_seqscan to off;
+set enable_indexscan to off;
+
+explain (costs off)
+	select  count((unique1)) from tenk1 where hundred > 1;
+
+reset enable_seqscan;
+reset enable_indexscan;
+
+-- test parallel merge join path.
+set enable_hashjoin to off;
+set enable_nestloop to off;
+
+explain (costs off)
+	select  count(*) from tenk1, tenk2 where tenk1.unique1 = tenk2.unique1;
+select  count(*) from tenk1, tenk2 where tenk1.unique1 = tenk2.unique1;
+
+reset enable_hashjoin;
+reset enable_nestloop;
 set force_parallel_mode=1;
 
 explain (costs off)

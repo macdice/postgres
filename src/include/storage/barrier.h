@@ -1,9 +1,10 @@
 /*-------------------------------------------------------------------------
  *
  * barrier.h
- *	  Barriers for synchronizing workers.
+ *	  Barriers for synchronizing cooperating processes.
  *
- * Copyright (c) 2017, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/barrier.h
  *
@@ -17,8 +18,6 @@
  * "port/atomics.h", which deals with atomics, compiler barriers and memory
  * barriers.
  */
-
-#include "postgres.h"
 
 #include "storage/condition_variable.h"
 #include "storage/spin.h"
