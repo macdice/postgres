@@ -107,6 +107,7 @@ double		cpu_tuple_cost = DEFAULT_CPU_TUPLE_COST;
 double		cpu_shared_tuple_cost = DEFAULT_CPU_SHARED_TUPLE_COST;
 double		cpu_index_tuple_cost = DEFAULT_CPU_INDEX_TUPLE_COST;
 double		cpu_operator_cost = DEFAULT_CPU_OPERATOR_COST;
+double		cpu_synchronization_cost = DEFAULT_CPU_SYNCHRONIZATION_COST;
 double		parallel_tuple_cost = DEFAULT_PARALLEL_TUPLE_COST;
 double		parallel_setup_cost = DEFAULT_PARALLEL_SETUP_COST;
 
@@ -664,14 +665,21 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 	if (partial_path)
 	{
 		/*
+		 * For index only scans compute workers based on number of index pages
+		 * fetched; the number of heap pages we fetch might be so small as
+		 * to effectively rule out parallelism, which we don't want to do.
+		 */
+		if (indexonly)
+			rand_heap_pages = -1;
+
+		/*
 		 * Estimate the number of parallel workers required to scan index. Use
 		 * the number of heap pages computed considering heap fetches won't be
 		 * sequential as for parallel scans the pages are accessed in random
 		 * order.
 		 */
 		path->path.parallel_workers = compute_parallel_worker(baserel,
-											   (BlockNumber) rand_heap_pages,
-												  (BlockNumber) index_pages);
+											   rand_heap_pages, index_pages);
 
 		/*
 		 * Fall out if workers can't be assigned for parallel scan, because in
@@ -2935,7 +2943,38 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 		run_cost += seq_page_cost * (innerpages + 2 * outerpages);
 	}
 
-	/* CPU costs left for later */
+	/*
+	 * Shared hash tables incur an extra cost by waiting at barriers.  This
+	 * represents the average time that we expect any participant to have to
+	 * wait for the slowest participant to complete.
+	 */
+	if (table_type != HASHPATH_TABLE_PRIVATE)
+	{
+		/*
+		 * We'll have to wait for the build to finish in all participants
+		 * before probing begins.
+		 */
+		startup_cost += cpu_synchronization_cost;
+
+		/*
+		 * For each batch, we'll have to synchronize after building, after
+		 * probing, and before building the next batch.  We can subtract three
+		 * because in the final batch we don't wait after probing and there is
+		 * no next batch, and we already accounted for one barrier above in
+		 * startup_cost.
+		 */
+		run_cost += (numbatches * 3 - 3) * cpu_synchronization_cost;
+
+		/*
+		 * For right/full outer joins, we'll also have to wait for all
+		 * participants to finish probing before scanning for unmatched
+		 * tuples, so charge one per batch.
+		 */
+		if (jointype == JOIN_RIGHT || jointype == JOIN_FULL)
+			run_cost += numbatches * cpu_synchronization_cost;
+	}
+
+	/* Other CPU costs left for later */
 
 	/* Public result fields */
 	workspace->startup_cost = startup_cost;
@@ -4507,8 +4546,10 @@ set_subquery_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 
 	/* Should only be applied to base relations that are subqueries */
 	Assert(rel->relid > 0);
+#ifdef USE_ASSERT_CHECKING
 	rte = planner_rt_fetch(rel->relid, root);
 	Assert(rte->rtekind == RTE_SUBQUERY);
+#endif
 
 	/*
 	 * Copy raw number of output rows from subquery.  All of its paths should
@@ -4620,12 +4661,14 @@ set_function_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 void
 set_tablefunc_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
-	RangeTblEntry *rte;
+	RangeTblEntry *rte PG_USED_FOR_ASSERTS_ONLY;
 
 	/* Should only be applied to base relations that are functions */
 	Assert(rel->relid > 0);
+#ifdef USE_ASSERT_CHECKING
 	rte = planner_rt_fetch(rel->relid, root);
 	Assert(rte->rtekind == RTE_TABLEFUNC);
+#endif
 
 	rel->tuples = 100;
 

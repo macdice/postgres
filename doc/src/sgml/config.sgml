@@ -2153,10 +2153,9 @@ include_dir 'conf.d'
          has materialized a result set, no error will be generated even if the
          underlying rows in the referenced table have been vacuumed away.
          Some tables cannot safely be vacuumed early, and so will not be
-         affected by this setting.  Examples include system catalogs and any
-         table which has a hash index.  For such tables this setting will
-         neither reduce bloat nor create a possibility of a <literal>snapshot
-         too old</> error on scanning.
+         affected by this setting, such as system catalogs.  For such tables
+         this setting will neither reduce bloat nor create a possibility
+         of a <literal>snapshot too old</> error on scanning.
         </para>
        </listitem>
       </varlistentry>
@@ -3790,6 +3789,21 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-cpu-shared-tuple-cost" xreflabel="cpu_shared_tuple_cost">
+      <term><varname>cpu_shared_tuple_cost</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>cpu_shared_tuple_cost</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the planner's estimate of the cost of sharing rows in
+        memory during a parallel query.
+        The default is 0.001.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-cpu-index-tuple-cost" xreflabel="cpu_index_tuple_cost">
       <term><varname>cpu_index_tuple_cost</varname> (<type>floating point</type>)
       <indexterm>
@@ -3816,6 +3830,21 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         Sets the planner's estimate of the cost of processing each
         operator or function executed during a query.
         The default is 0.0025.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-cpu-synchronization-cost" xreflabel="cpu_synchronization_cost">
+      <term><varname>cpu_synchronization_cost</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>cpu_synchronization_cost</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the planner's estimate of the cost of waiting at synchronization
+        points for other processes while executing parallel queries.
+        The default is 1.0.
        </para>
       </listitem>
      </varlistentry>
@@ -8268,9 +8297,9 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
         records, or to a comma-separated list of resource managers to check
         only records originating from those resource managers.  Currently,
         the supported resource managers are <literal>heap</>,
-        <literal>heap2</>, <literal>btree</>, <literal>gin</>,
-        <literal>gist</>, <literal>sequence</>, <literal>spgist</>,
-        <literal>brin</>, and <literal>generic</>. Only
+        <literal>heap2</>, <literal>btree</>, <literal>hash</>,
+        <literal>gin</>, <literal>gist</>, <literal>sequence</>,
+        <literal>spgist</>, <literal>brin</>, and <literal>generic</>. Only
         superusers can change this setting.
        </para>
       </listitem>

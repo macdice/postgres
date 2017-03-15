@@ -27,6 +27,7 @@
 #define DEFAULT_CPU_SHARED_TUPLE_COST 0.001
 #define DEFAULT_CPU_INDEX_TUPLE_COST 0.005
 #define DEFAULT_CPU_OPERATOR_COST  0.0025
+#define DEFAULT_CPU_SYNCHRONIZATION_COST 1.0
 #define DEFAULT_PARALLEL_TUPLE_COST 0.1
 #define DEFAULT_PARALLEL_SETUP_COST  1000.0
 
@@ -50,6 +51,7 @@ extern PGDLLIMPORT double seq_page_cost;
 extern PGDLLIMPORT double random_page_cost;
 extern PGDLLIMPORT double cpu_tuple_cost;
 extern PGDLLIMPORT double cpu_shared_tuple_cost;
+extern PGDLLIMPORT double cpu_synchronization_cost;
 extern PGDLLIMPORT double cpu_index_tuple_cost;
 extern PGDLLIMPORT double cpu_operator_cost;
 extern PGDLLIMPORT double parallel_tuple_cost;
