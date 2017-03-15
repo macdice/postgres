@@ -100,6 +100,9 @@ set force_parallel_mode=1;
 explain (costs off)
   select stringu1::int2 from tenk1 where unique1 = 1;
 
+set enable_nestloop to off;
+set enable_mergejoin to off;
+
 -- test parallel hash join (Parallel Shared Hash).
 explain (costs off)
      select  count(*) from tenk1 join tenk2 using (unique1);
@@ -114,6 +117,9 @@ select  count(*) from tenk1 full outer join tenk2 using (unique1);
 explain (costs off)
      select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1);
 select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1);
+
+reset enable_nestloop;
+reset enable_mergejoin;
 
 -- provoke error in worker
 select stringu1::int2 from tenk1 where unique1 = 1;
