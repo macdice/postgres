@@ -279,8 +279,8 @@ make_shared_segment(Oid tablespace, pid_t pid, int set, int partition,
 }
 
 /*
- * Create a BufFile that can be discovered and opened read-only by other
- * backends.  Intended for use by SharedBufFile.
+ * Create a temporary BufFile that can be discovered and opened read-only by
+ * other backends.  Intended for use by SharedBufFile.
  */
 BufFile *
 BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
@@ -294,7 +294,7 @@ BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
 		make_shared_segment(tablespace, pid, set, partition, participant, 0);
 	file->offsets = (off_t *) palloc(sizeof(off_t));
 	file->offsets[0] = 0L;
-	file->isTemp = false;
+	file->isTemp = true;		/* the file is segmented */
 	file->isInterXact = false;
 	file->dirty = false;
 	file->resowner = CurrentResourceOwner;
