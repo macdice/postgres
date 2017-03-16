@@ -102,6 +102,7 @@ explain (costs off)
 
 set enable_nestloop to off;
 set enable_mergejoin to off;
+set enable_indexscan to off;
 
 -- test parallel hash join (Parallel Shared Hash).
 explain (costs off)
@@ -120,6 +121,7 @@ select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2
 
 reset enable_nestloop;
 reset enable_mergejoin;
+reset enable_indexscan;
 
 -- provoke error in worker
 select stringu1::int2 from tenk1 where unique1 = 1;
