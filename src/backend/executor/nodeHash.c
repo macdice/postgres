@@ -72,11 +72,13 @@ static HashJoinTuple first_tuple_in_bucket(HashJoinTable table, int bucketno);
 static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
 										  HashJoinTuple tuple);
 
-static void *dense_alloc(HashJoinTable hashtable, Size size,
-						 bool respect_work_mem);
-static void *dense_alloc_shared(HashJoinTable hashtable, Size size,
-								dsa_pointer *shared,
-								bool respect_work_mem);
+static HashJoinTuple load_private_tuple(HashJoinTable hashtable,
+										MinimalTuple tuple,
+										bool respect_work_mem);
+static HashJoinTuple load_shared_tuple(HashJoinTable hashtable,
+									   MinimalTuple tuple,
+									   dsa_pointer *shared,
+									   bool respect_work_mem);
 static void finish_loading(HashJoinTable hashtable);
 
 /* ----------------------------------------------------------------
@@ -1121,11 +1123,11 @@ ExecHashShrink(HashJoinTable hashtable)
 		{
 			HashJoinTuple hashTuple = (HashJoinTuple) (chunk->data + idx);
 			MinimalTuple tuple = HJTUPLE_MINTUPLE(hashTuple);
-			int			hashTupleSize = (HJTUPLE_OVERHEAD + tuple->t_len);
 			int			bucketno;
 			int			batchno;
 
 			ninmemory++;
+
 			ExecHashGetBucketAndBatch(hashtable, hashTuple->hashvalue,
 									  &bucketno, &batchno);
 
@@ -1133,20 +1135,18 @@ ExecHashShrink(HashJoinTable hashtable)
 			{
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
-				dsa_pointer copyShared = InvalidDsaPointer;
+				dsa_pointer shared = InvalidDsaPointer;
 
 				if (HashJoinTableIsShared(hashtable))
-					copyTuple = (HashJoinTuple)
-						dense_alloc_shared(hashtable, hashTupleSize,
-										   &copyShared, false);
+					copyTuple = load_shared_tuple(hashtable, tuple, &shared,
+												  false);
 				else
-					copyTuple = (HashJoinTuple)
-						dense_alloc(hashtable, hashTupleSize, false);
-				memcpy(copyTuple, hashTuple, hashTupleSize);
+					copyTuple = load_private_tuple(hashtable, tuple, false);
 
 				/* and add it back to the appropriate bucket */
+				copyTuple->hashvalue = hashTuple->hashvalue;
 				insert_tuple_into_bucket(hashtable, bucketno, copyTuple,
-										 copyShared);
+										 shared);
 			}
 			else
 			{
@@ -1155,9 +1155,9 @@ ExecHashShrink(HashJoinTable hashtable)
 				if (HashJoinTableIsShared(hashtable))
 					sts_puttuple(hashtable->shared_inner_batches, batchno,
 								 &hashTuple->hashvalue,
-								 HJTUPLE_MINTUPLE(hashTuple));
+								 tuple);
 				else
-					ExecHashJoinSaveTuple(HJTUPLE_MINTUPLE(hashTuple),
+					ExecHashJoinSaveTuple(tuple,
 										  hashTuple->hashvalue,
 										  &hashtable->innerBatchFile[batchno]);
 
@@ -1165,7 +1165,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			}
 
 			/* next tuple in this chunk */
-			idx += MAXALIGN(hashTupleSize);
+			idx += MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 
 			/* allow this loop to be cancellable */
 			CHECK_FOR_INTERRUPTS();
@@ -1441,6 +1441,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 	int			bucketno;
 	int			batchno;
 
+ retry:
 	ExecHashGetBucketAndBatch(hashtable, hashvalue,
 							  &bucketno, &batchno);
 
@@ -1453,22 +1454,27 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		 * put the tuple in hash table
 		 */
 		HashJoinTuple hashTuple;
-		dsa_pointer hashTuple_shared = InvalidDsaPointer;
-		int			hashTupleSize;
 		double		ntuples = (hashtable->totalTuples - hashtable->skewTuples);
+		dsa_pointer shared = InvalidDsaPointer;
 
 		/* Create the HashJoinTuple */
-		hashTupleSize = HJTUPLE_OVERHEAD + tuple->t_len;
 		if (HashJoinTableIsShared(hashtable))
-			hashTuple = (HashJoinTuple)
-				dense_alloc_shared(hashtable, hashTupleSize,
-								   &hashTuple_shared, true);
+			hashTuple = load_shared_tuple(hashtable, tuple, &shared, true);
 		else
-			hashTuple = (HashJoinTuple)
-				dense_alloc(hashtable, hashTupleSize, true);
+			hashTuple = load_private_tuple(hashtable, tuple, true);
+		if (hashTuple == NULL)
+		{
+			/*
+			 * We ran out of work_mem.  Try to shrink the hash table and try
+			 * again, in case this tuple now needs to be thrown into a future
+			 * batch.
+			 */
+			ExecHashShrink(hashtable);
+			goto retry;
+		}
 
+		/* Store the hash value in the HashJoinTuple header. */
 		hashTuple->hashvalue = hashvalue;
-		memcpy(HJTUPLE_MINTUPLE(hashTuple), tuple, tuple->t_len);
 
 		/*
 		 * We always reset the tuple-matched flag on insertion.  This is okay
@@ -1479,8 +1485,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(hashTuple));
 
 		/* Push it onto the front of the bucket's list */
-		insert_tuple_into_bucket(hashtable, bucketno, hashTuple,
-								 hashTuple_shared);
+		insert_tuple_into_bucket(hashtable, bucketno, hashTuple, shared);
 
 		/*
 		 * Increase the (optimal) number of buckets if we just exceeded the
@@ -2364,11 +2369,10 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 			 * We must copy the tuple into the dense storage, else it will not
 			 * be found by, eg, ExecHashIncreaseNumBatches.
 			 */
-			copyTuple = (HashJoinTuple)
-				dense_alloc(hashtable, tupleSize, false);
-			memcpy(copyTuple, hashTuple, tupleSize);
+			copyTuple = load_private_tuple(hashtable, tuple, false);
 			pfree(hashTuple);
 
+			copyTuple->hashvalue = hashvalue;
 			insert_tuple_into_bucket(hashtable, bucketno, copyTuple,
 									 InvalidDsaPointer);
 
@@ -2427,18 +2431,25 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 }
 
 /*
- * Allocate 'size' bytes from the currently active HashMemoryChunk.  If
- * 'respect_work_mem' is true, this may cause the number of batches to be
- * increased in an attempt to shrink the hash table.
+ * Copy 'tuple' into backend-local dense storage with a HashJoinTuple header,
+ * and return a pointer to the new copy.  If 'respect_work_mem' is true, this
+ * may return NULL to indicate that work_mem would be exceeded.  NULL
+ * indicates that the caller should try to shrink the hash table.  The result
+ * includes an uninitialized HashJoinTuple header which the caller must fill
+ * in.
  */
-static void *
-dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
+static HashJoinTuple
+load_private_tuple(HashJoinTable hashtable, MinimalTuple tuple,
+				   bool respect_work_mem)
 {
 	HashMemoryChunk newChunk;
-	char	   *ptr;
+	Size		size;
+	HashJoinTuple result;
 
-	/* just in case the size is not already aligned properly */
-	size = MAXALIGN(size);
+	Assert(!HashJoinTableIsShared(hashtable));
+
+	/* compute the size of the tuple + HashJoinTuple header */
+	size = MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 
 	/*
 	 * If tuple size is larger than of 1/4 of chunk size, allocate a separate
@@ -2446,14 +2457,14 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 	 */
 	if (size > HASH_CHUNK_THRESHOLD)
 	{
+		/* Check if work_mem would be exceeded. */
 		if (respect_work_mem &&
 			hashtable->growEnabled &&
 			hashtable->spaceUsed + HASH_CHUNK_HEADER_SIZE + size >
 			hashtable->spaceAllowed)
 		{
-			/* work_mem would be exceeded: try to shrink hash table */
 			ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
-			ExecHashShrink(hashtable);
+			return NULL;
 		}
 
 		/* allocate new chunk and put it at the beginning of the list */
@@ -2486,7 +2497,10 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 		if (hashtable->spaceUsed > hashtable->spacePeak)
 			hashtable->spacePeak = hashtable->spaceUsed;
 
-		return newChunk->data;
+		result = (HashJoinTuple) newChunk->data;
+		memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+		return result;
 	}
 
 	/*
@@ -2500,9 +2514,9 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 			hashtable->growEnabled &&
 			hashtable->spaceUsed + HASH_CHUNK_SIZE > hashtable->spaceAllowed)
 		{
-			/* work_mem would be exceeded: try to shrink hash table */
+			/* work_mem would be exceeded: prepare to shrink hash table */
 			ExecHashIncreaseNumBatches(hashtable, hashtable->nbatch * 2);
-			ExecHashShrink(hashtable);
+			return NULL;
 		}
 
 		/* allocate new chunk and put it at the beginning of the list */
@@ -2521,36 +2535,42 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 		if (hashtable->spaceUsed > hashtable->spacePeak)
 			hashtable->spacePeak = hashtable->spaceUsed;
 
-		return newChunk->data;
+		result = (HashJoinTuple) newChunk->data;
+		memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+		return result;
 	}
 
 	/* There is enough space in the current chunk, let's add the tuple */
-	ptr = hashtable->chunks->data + hashtable->chunks->used;
+	result = (HashJoinTuple)
+		(hashtable->chunks->data + hashtable->chunks->used);
+
 	hashtable->chunks->used += size;
 	hashtable->chunks->ntuples += 1;
 
-	/* return pointer to the start of the tuple memory */
-	return ptr;
+	memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+	return result;
 }
 
- /*
- * Allocate 'size' bytes from the currently active shared HashMemoryChunk, or
- * create a new chunk if necessary.  This is similar to the private memory
- * version, but coordinates memory accounting with other participants whenever
- * new chunks are needed.
+/*
+ * Load a tuple into shared dense storage, like 'load_private_tuple'.  This
+ * version is for shared hash tables.
  */
-static void *
-dense_alloc_shared(HashJoinTable hashtable,
-				   Size size,
-				   dsa_pointer *shared,
-				   bool respect_work_mem)
+static HashJoinTuple
+load_shared_tuple(HashJoinTable hashtable, MinimalTuple tuple,
+				  dsa_pointer *shared, bool respect_work_mem)
 {
 	dsa_pointer chunk_shared;
 	HashMemoryChunk chunk;
 	Size chunk_size;
+	Size size;
+	HashJoinTuple result;
 
-	/* just in case the size is not already aligned properly */
-	size = MAXALIGN(size);
+	Assert(HashJoinTableIsShared(hashtable));
+
+	/* compute the size of the tuple + HashJoinTuple header */
+	size = MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 
 	/*
 	 * Fast path: if there is enough space in this backend's current chunk,
@@ -2561,25 +2581,23 @@ dense_alloc_shared(HashJoinTable hashtable,
 		size < HASH_CHUNK_THRESHOLD &&
 		chunk->maxlen - chunk->used >= size)
 	{
-		void *result;
 
 		chunk_shared = hashtable->current_chunk_shared;
 		Assert(chunk == dsa_get_address(hashtable->area, chunk_shared));
 		*shared = chunk_shared + HASH_CHUNK_HEADER_SIZE + chunk->used;
-		result = chunk->data + chunk->used;
+		result = (HashJoinTuple) (chunk->data + chunk->used);
 		chunk->used += size;
 		chunk->ntuples += 1;
 
 		Assert(chunk->used <= chunk->maxlen);
 		Assert(result == dsa_get_address(hashtable->area, *shared));
 
+		memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
 		return result;
 	}
 
- retry:
-	/*
-	 * Slow path: try to allocate a new chunk.
-	 */
+	/* Slow path: try to allocate a new chunk. */
 	LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
 
 	/* Check if some other participant has increased nbatch. */
@@ -2594,8 +2612,7 @@ dense_alloc_shared(HashJoinTable hashtable,
 	{
 		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
-		ExecHashShrink(hashtable);
-		goto retry;
+		return NULL;
 	}
 
 	/* Oversized tuples get their own chunk. */
@@ -2624,9 +2641,8 @@ dense_alloc_shared(HashJoinTable hashtable,
 		hashtable->current_chunk = NULL;
 		LWLockRelease(&hashtable->shared->chunk_lock);
 
-		/* Begin shrinking.  Other participants will help. */
-		ExecHashShrink(hashtable);
-		goto retry;
+		/* The caller needs to shrink the hash table. */
+		return NULL;
 	}
 
 	/*
@@ -2686,8 +2702,10 @@ dense_alloc_shared(HashJoinTable hashtable,
 	LWLockRelease(&hashtable->shared->chunk_lock);
 
 	Assert(chunk->data == dsa_get_address(hashtable->area, *shared));
+	result = (HashJoinTuple) chunk->data;
+	memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
 
-	return chunk->data;
+	return result;
 }
 
 /*
