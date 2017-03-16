@@ -1317,12 +1317,13 @@ PathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
 }
 
 bool
-PathNameDelete(FileName fileName)
+PathNameDelete(FileName fileName, bool error_on_failure)
 {
 	if (unlink(fileName) < 0)
 	{
 		if (errno != ENOENT)
-			elog(ERROR, "cannot unlink temporary file \"%s\": %m", fileName);
+			elog(error_on_failure ? ERROR : LOG,
+				 "cannot unlink temporary file \"%s\": %m", fileName);
 		return false;
 	}
 	return true;
