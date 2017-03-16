@@ -284,7 +284,10 @@ The insertion algorithm is rather similar:
 		if we get the lock on both the buckets
 			finish the split using algorithm mentioned below for split
 		release the pin on old bucket and restart the insert from beginning.
-	if current page is full, release lock but not pin, read/exclusive-lock
+	if current page is full, first check if this page contains any dead tuples.
+	if yes, remove dead tuples from the current page and again check for the
+	availability of the space. If enough space found, insert the tuple else
+	release lock but not pin, read/exclusive-lock
      next page; repeat as needed
 	>> see below if no space in any page of bucket
 	take buffer content lock in exclusive mode on metapage
@@ -364,9 +367,6 @@ unfinished doesn't prevent subsequent buckets from being split, but we won't
 try to split the bucket again until the prior split is finished.  In other
 words, a bucket can be in the middle of being split for some time, but it can't
 be in the middle of two splits at the same time.
-
-Although we can survive a failure to split a bucket, a crash is likely to
-corrupt the index, since hash indexes are not yet WAL-logged.
 
 The fourth operation is garbage collection (bulk deletion):
 
