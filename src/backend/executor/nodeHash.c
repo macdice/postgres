@@ -48,8 +48,8 @@ static void ExecHashSkewTableInsert(HashJoinTable hashtable,
 						int bucketNumber);
 static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
-static void *dense_alloc(HashJoinTable hashtable, Size size,
-						 bool respect_work_mem);
+static HashJoinTuple load_tuple(HashJoinTable hashtable, MinimalTuple tuple,
+								bool respect_work_mem);
 
 /* ----------------------------------------------------------------
  *		ExecHash
@@ -695,11 +695,11 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 		{
 			HashJoinTuple hashTuple = (HashJoinTuple) (oldchunks->data + idx);
 			MinimalTuple tuple = HJTUPLE_MINTUPLE(hashTuple);
-			int			hashTupleSize = (HJTUPLE_OVERHEAD + tuple->t_len);
 			int			bucketno;
 			int			batchno;
 
 			ninmemory++;
+
 			ExecHashGetBucketAndBatch(hashtable, hashTuple->hashvalue,
 									  &bucketno, &batchno);
 
@@ -708,11 +708,10 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
 
-				copyTuple = (HashJoinTuple)
-					dense_alloc(hashtable, hashTupleSize, true);
-				memcpy(copyTuple, hashTuple, hashTupleSize);
+				copyTuple = load_tuple(hashtable, tuple, false);
 
 				/* and add it back to the appropriate bucket */
+				copyTuple->hashvalue = hashTuple->hashvalue;
 				copyTuple->next = hashtable->buckets[bucketno];
 				hashtable->buckets[bucketno] = copyTuple;
 			}
@@ -720,7 +719,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 			{
 				/* dump it out */
 				Assert(batchno > curbatch);
-				ExecHashJoinSaveTuple(HJTUPLE_MINTUPLE(hashTuple),
+				ExecHashJoinSaveTuple(tuple,
 									  hashTuple->hashvalue,
 									  &hashtable->innerBatchFile[batchno]);
 
@@ -728,7 +727,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 			}
 
 			/* next tuple in this chunk */
-			idx += MAXALIGN(hashTupleSize);
+			idx += MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 
 			/* allow this loop to be cancellable */
 			CHECK_FOR_INTERRUPTS();
@@ -854,6 +853,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 	int			bucketno;
 	int			batchno;
 
+ retry:
 	ExecHashGetBucketAndBatch(hashtable, hashvalue,
 							  &bucketno, &batchno);
 
@@ -866,15 +866,23 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		 * put the tuple in hash table
 		 */
 		HashJoinTuple hashTuple;
-		int			hashTupleSize;
 		double		ntuples = (hashtable->totalTuples - hashtable->skewTuples);
 
 		/* Create the HashJoinTuple */
-		hashTupleSize = HJTUPLE_OVERHEAD + tuple->t_len;
-		hashTuple = (HashJoinTuple) dense_alloc(hashtable, hashTupleSize, true);
+		hashTuple = load_tuple(hashtable, tuple, true);
+		if (hashTuple == NULL)
+		{
+			/*
+			 * We ran out of work_mem.  Try to shrink the hash table and try
+			 * again, in case this tuple now needs to be thrown into a future
+			 * batch.
+			 */
+			ExecHashIncreaseNumBatches(hashtable);
+			goto retry;
+		}
 
+		/* Store the hash value in the HashJoinTuple header. */
 		hashTuple->hashvalue = hashvalue;
-		memcpy(HJTUPLE_MINTUPLE(hashTuple), tuple, tuple->t_len);
 
 		/*
 		 * We always reset the tuple-matched flag on insertion.  This is okay
@@ -1591,11 +1599,10 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 			 * We must copy the tuple into the dense storage, else it will not
 			 * be found by, eg, ExecHashIncreaseNumBatches.
 			 */
-			copyTuple = (HashJoinTuple)
-				dense_alloc(hashtable, tupleSize, false);
-			memcpy(copyTuple, hashTuple, tupleSize);
+			copyTuple = load_tuple(hashtable, tuple, false);
 			pfree(hashTuple);
 
+			copyTuple->hashvalue = hashvalue;
 			copyTuple->next = hashtable->buckets[bucketno];
 			hashtable->buckets[bucketno] = copyTuple;
 
@@ -1654,18 +1661,22 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 }
 
 /*
- * Allocate 'size' bytes from the currently active HashMemoryChunk.  If
- * 'respect_work_mem' is true, this may cause the number of batches to be
- * increased in an attempt to shrink the hash table.
+ * Copy 'tuple' into the hash table's dense storage with a HashJoinTuple
+ * header, and return a pointer to the new copy.  If 'respect_work_mem' is
+ * true, this may return NULL to indicate that work_mem would be exceeded.
+ * NULL indicates that the caller should try to increase the number of batches
+ * to shrink the hash table.  The result includes an uninitialized
+ * HashJoinTuple header which the caller must fill in.
  */
-static void *
-dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
+static HashJoinTuple
+load_tuple(HashJoinTable hashtable, MinimalTuple tuple, bool respect_work_mem)
 {
 	HashMemoryChunk newChunk;
-	char	   *ptr;
+	Size		size;
+	HashJoinTuple result;
 
-	/* just in case the size is not already aligned properly */
-	size = MAXALIGN(size);
+	/* compute the size of the tuple + HashJoinTuple header */
+	size = MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
 
 	/*
 	 * If tuple size is larger than of 1/4 of chunk size, allocate a separate
@@ -1673,14 +1684,12 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 	 */
 	if (size > HASH_CHUNK_THRESHOLD)
 	{
+		/* Check if work_mem would be exceeded. */
 		if (respect_work_mem &&
 			hashtable->growEnabled &&
 			hashtable->spaceUsed + HASH_CHUNK_HEADER_SIZE + size >
 			hashtable->spaceAllowed)
-		{
-			/* work_mem would be exceeded: try to shrink hash table */
-			ExecHashIncreaseNumBatches(hashtable);
-		}
+			return NULL;
 
 		/* allocate new chunk and put it at the beginning of the list */
 		newChunk = (HashMemoryChunk) MemoryContextAlloc(hashtable->batchCxt,
@@ -1712,7 +1721,10 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 		if (hashtable->spaceUsed > hashtable->spacePeak)
 			hashtable->spacePeak = hashtable->spaceUsed;
 
-		return newChunk->data;
+		result = (HashJoinTuple) newChunk->data;
+		memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+		return result;
 	}
 
 	/*
@@ -1746,14 +1758,20 @@ dense_alloc(HashJoinTable hashtable, Size size, bool respect_work_mem)
 		if (hashtable->spaceUsed > hashtable->spacePeak)
 			hashtable->spacePeak = hashtable->spaceUsed;
 
-		return newChunk->data;
+		result = (HashJoinTuple) newChunk->data;
+		memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+		return result;
 	}
 
 	/* There is enough space in the current chunk, let's add the tuple */
-	ptr = hashtable->chunks->data + hashtable->chunks->used;
+	result = (HashJoinTuple)
+		(hashtable->chunks->data + hashtable->chunks->used);
+
 	hashtable->chunks->used += size;
 	hashtable->chunks->ntuples += 1;
 
-	/* return pointer to the start of the tuple memory */
-	return ptr;
+	memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+	return result;
 }
