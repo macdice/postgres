@@ -83,7 +83,7 @@ extern int	FileGetRawMode(File file);
 /* Operations used by sharedbuffile.c to manage sets of files */
 extern File PathNameCreateFile(FileName directory, FileName filename,
 							   bool rejectError);
-extern bool PathNameDelete(FileName fileName);
+extern bool PathNameDelete(FileName fileName, bool error_on_failure);
 
 /* Operations that allow use of regular stdio --- USE WITH CAUTION */
 extern FILE *AllocateFile(const char *name, const char *mode);
