@@ -39,6 +39,7 @@
 #include "catalog/catalog.h"
 #include "catalog/pg_tablespace.h"
 #include "executor/instrument.h"
+#include "miscadmin.h"
 #include "storage/fd.h"
 #include "storage/buffile.h"
 #include "storage/buf_internals.h"
@@ -81,6 +82,13 @@ struct BufFile
 	 */
 	ResourceOwner resowner;
 
+	/* components used to build the names of segments for shared files */
+	Oid			tablespace;		/* the tablespace for this BufFile */
+	pid_t		creator_pid;	/* the PID of the creator process */
+	int			set;			/* the shared file set number */
+	int			partition;		/* the partition number, if partitioned */
+	int			participant;	/* the number of the writer */
+
 	/*
 	 * "current pos" is position of start of buffer within the logical file.
 	 * Position as seen by user of BufFile is (curFile, curOffset + pos).
@@ -97,6 +105,8 @@ static void extendBufFile(BufFile *file);
 static void BufFileLoadBuffer(BufFile *file);
 static void BufFileDumpBuffer(BufFile *file);
 static int	BufFileFlush(BufFile *file);
+static File make_shared_segment(Oid tablespace, pid_t pid, int set,
+								int partition, int participant, int segment);
 
 
 /*
@@ -123,6 +133,13 @@ makeBufFile(File firstfile)
 	file->pos = 0;
 	file->nbytes = 0;
 
+	/* unused fields relating to sharing */
+	file->tablespace = InvalidOid;
+	file->creator_pid = InvalidPid;
+	file->set = 0;
+	file->partition = 0;
+	file->participant = 0;
+
 	return file;
 }
 
@@ -139,8 +156,21 @@ extendBufFile(BufFile *file)
 	oldowner = CurrentResourceOwner;
 	CurrentResourceOwner = file->resowner;
 
-	Assert(file->isTemp);
-	pfile = OpenTemporaryFile(file->isInterXact);
+	if (file->creator_pid == InvalidPid)
+	{
+		Assert(file->isTemp);
+		pfile = OpenTemporaryFile(file->isInterXact);
+	}
+	else
+	{
+		Assert(!file->readOnly);
+		pfile = make_shared_segment(file->tablespace,
+									file->creator_pid,
+									file->set,
+									file->partition,
+									file->participant,
+									file->numFiles);
+	}
 	Assert(pfile >= 0);
 
 	CurrentResourceOwner = oldowner;
@@ -216,6 +246,38 @@ make_shareable_path(char *tempdirpath, char *tempfilepath,
 			 pid, set, partition, participant, segment);
 }
 
+static File
+make_shared_segment(Oid tablespace, pid_t pid, int set, int partition,
+					int participant, int segment)
+{
+	File		file;
+	char		tempdirpath[MAXPGPATH];
+	char		tempfilepath[MAXPGPATH];
+
+	/*
+	 * There is a remote chance that disk files with this (pid, set) pair
+	 * already exists after a crash-restart.  Since the presence of
+	 * consecutively numbered segment files is used by BufFileOpenShared to
+	 * determine the total size of a shared BufFile, we'll defend against
+	 * confusion by unlinking segment 1 (if it exists) before creating segment
+	 * 0.
+	 */
+	make_shareable_path(tempdirpath, tempfilepath,
+						tablespace, pid, set, partition, participant,
+						segment + 1);
+	PathNameDelete(tempfilepath, true);
+
+	make_shareable_path(tempdirpath, tempfilepath,
+						tablespace, pid, set, partition, participant,
+						segment);
+	file = PathNameCreateFile(tempdirpath, tempfilepath, true);
+	if (file <= 0)
+		elog(ERROR, "could not create temporary file \"%s\": %m",
+			 tempfilepath);
+	elog(LOG, "make_shared_segment created %s", tempfilepath);
+	return file;
+}
+
 /*
  * Create a BufFile that can be discovered and opened read-only by other
  * backends.  Intended for use by SharedBufFile.
@@ -224,21 +286,12 @@ BufFile *
 BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
 					int participant)
 {
-	File		firstFile;
 	BufFile    *file = (BufFile *) palloc(sizeof(BufFile));
-	char		tempdirpath[MAXPGPATH];
-	char		tempfilepath[MAXPGPATH];
-
-	make_shareable_path(tempdirpath, tempfilepath,
-						tablespace, pid, set, partition, participant, 0);
-	firstFile = PathNameCreateFile(tempdirpath, tempfilepath, true);
-	if (firstFile <= 0)
-		elog(ERROR, "could not create temporary file \"%s\": %m",
-			 tempfilepath);
 
 	file->numFiles = 1;
 	file->files = (File *) palloc(sizeof(File));
-	file->files[0] = firstFile;
+	file->files[0] =
+		make_shared_segment(tablespace, pid, set, partition, participant, 0);
 	file->offsets = (off_t *) palloc(sizeof(off_t));
 	file->offsets[0] = 0L;
 	file->isTemp = false;
@@ -250,6 +303,16 @@ BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
 	file->pos = 0;
 	file->nbytes = 0;
 	file->readOnly = false;
+
+	/*
+	 * Remember the elements required to build the path in case we need to
+	 * create more segments.
+	 */
+	file->tablespace = tablespace;
+	file->creator_pid = pid;
+	file->set = set;
+	file->partition = partition;
+	file->participant = participant;
 
 	return file;
 }
@@ -313,6 +376,16 @@ BufFileOpenShared(Oid tablespace, pid_t pid, int set, int partition,
 	file->nbytes = 0;
 	file->readOnly = true;
 
+	/*
+	 * We don't currently need these when opening a shared file because it's
+	 * always opened read only, but it's better to be consistent.
+	 */
+	file->tablespace = tablespace;
+	file->creator_pid = pid;
+	file->set = set;
+	file->partition = partition;
+	file->participant = participant;
+
 	return file;
 }
 
@@ -343,7 +416,7 @@ BufFileDeleteShared(Oid tablespace, pid_t pid, int set, int partition,
 		make_shareable_path(tempdirpath, tempfilepath,
 							tablespace, pid, set, partition,
 							participant, segment);
-		if (!PathNameDelete(tempfilepath))
+		if (!PathNameDelete(tempfilepath, false))
 			break;
 		found = true;
 		++segment;
