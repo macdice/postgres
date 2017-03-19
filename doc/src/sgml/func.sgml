@@ -15616,7 +15616,7 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
  postmaster.pid  |  9
  pg_ident.conf   | 10
  global          | 11
- pg_clog         | 12
+ pg_xact         | 12
  pg_snapshots    | 13
  pg_multixact    | 14
  PG_VERSION      | 15
@@ -18163,7 +18163,7 @@ SELECT set_config('log_statement_stats', 'off', false);
     The functions shown in <xref
     linkend="functions-admin-signal-table"> send control signals to
     other server processes.  Use of these functions is restricted to
-    superusers by default but access may be granted to others with the
+    superusers by default but access may be granted to others using
     <command>GRANT</command>, with noted exceptions.
    </para>
 
