@@ -40,6 +40,7 @@
 #include "catalog/pg_tablespace.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/buffile.h"
 #include "storage/buf_internals.h"
@@ -486,7 +487,10 @@ BufFileLoadBuffer(BufFile *file)
 	/*
 	 * Read whatever we can get, up to a full bufferload.
 	 */
-	file->nbytes = FileRead(thisfile, file->buffer, sizeof(file->buffer));
+	file->nbytes = FileRead(thisfile,
+							file->buffer,
+							sizeof(file->buffer),
+							WAIT_EVENT_BUFFILE_READ);
 	if (file->nbytes < 0)
 		file->nbytes = 0;
 	file->offsets[file->curFile] += file->nbytes;
@@ -549,7 +553,10 @@ BufFileDumpBuffer(BufFile *file)
 				return;			/* seek failed, give up */
 			file->offsets[file->curFile] = file->curOffset;
 		}
-		bytestowrite = FileWrite(thisfile, file->buffer + wpos, bytestowrite);
+		bytestowrite = FileWrite(thisfile,
+								 file->buffer + wpos,
+								 bytestowrite,
+								 WAIT_EVENT_BUFFILE_WRITE);
 		if (bytestowrite <= 0)
 			return;				/* failed to write */
 		file->offsets[file->curFile] += bytestowrite;
