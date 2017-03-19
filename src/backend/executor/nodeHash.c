@@ -94,96 +94,6 @@ ExecHash(HashState *node)
 	return NULL;
 }
 
- /* ----------------------------------------------------------------
-  *		ExecHashCheckForEarlyExit
-  *
-  *		return true if this process needs to abandon work on the
-  *		hash join to avoid a deadlock
-  * ----------------------------------------------------------------
-  */
-bool
-ExecHashCheckForEarlyExit(HashJoinTable hashtable)
-{
-	/*
-	 * The golden rule of leader deadlock avoidance: since leader processes
-	 * have two separate roles, namely reading from worker queues AND executing
-	 * the same plan as workers, we must never allow a leader to wait for
-	 * workers if there is any possibility those workers have emitted tuples.
-	 * Otherwise we could get into a situation where a worker fills up its
-	 * output tuple queue and begins waiting for the leader to read, while
-	 * the leader is busy waiting for the worker.
-	 *
-	 * Parallel hash joins with shared tables are inherently susceptible to
-	 * such deadlocks because there are points at which all participants must
-	 * wait (you can't start check for unmatched tuples in the hash table until
-	 * probing has completed in all workers, etc).
-	 *
-	 * So we follow these rules:
-	 *
-	 * 1.  If there are workers participating, the leader MUST NOT not
-	 *     participate in any further work after probing the first batch, so
-	 *     that it never has to wait for workers that might have emitted
-	 *     tuples.
-	 *
-	 * 2.  If there are no workers participating, the leader MUST run all the
-	 *     batches to completion, because that's the only way for the join
-	 *     to complete.  There is no deadlock risk if there are no workers.
-	 *
-	 * 3.  Workers MUST NOT participate if the building phase has finished by
-	 *     the time they have joined, so that the leader can reliably
-	 *     determine whether there are any workers running when it comes to
-	 *     the point where it must choose between 1 and 2.
-	 *
-	 * In other words, if the leader makes it all the way through building and
-	 * probing before any workers show up, then the leader will run the whole
-	 * hash join on its own.  If workers do show up any time before building
-	 * is finished, the leader will stop executing the join after helping
-	 * probe the first batch.  In the unlikely event of the first worker
-	 * showing up after the leader has finished building, it will exit because
-	 * it's too late, the leader has already decided to do all the work alone.
-	 */
-
-	if (!IsParallelWorker())
-	{
-		/* Running in the leader process. */
-		if (BarrierPhase(&hashtable->shared->barrier) >= PHJ_PHASE_PROBING &&
-			hashtable->shared->at_least_one_worker)
-		{
-			/* Abandon ship due to rule 1.  There are workers running. */
-			return true;
-		}
-		else
-		{
-			/*
-			 * Continue processing due to rule 2.  There are no workers, and
-			 * any workers that show up later will abandon ship.
-			 */
-		}
-	}
-	else
-	{
-		/* Running in a worker process. */
-		if (hashtable->attached_at_phase < PHJ_PHASE_PROBING)
-		{
-			/*
-			 * Advertise that there are workers, so that the leader can
-			 * choose between rules 1 and 2.  It's OK that several workers can
-			 * write to this variable without immediately memory
-			 * synchronization, because the leader will only read it in a later
-			 * phase (see above).
-			 */
-			hashtable->shared->at_least_one_worker = true;
-		}
-		else if (!hashtable->shared->at_least_one_worker)
-		{
-			/* Abandon ship due to rule 3. */
-			return true;
-		}
-	}
-
-	return false;
-}
-
 /* ----------------------------------------------------------------
  *		MultiExecHash
  *
@@ -638,6 +548,13 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 		 */
 		barrier = &hashtable->shared->barrier;
 		hashtable->attached_at_phase = BarrierAttach(barrier);
+
+		/*
+		 * Attach to the LeaderGate so that we can avoid leader/worker
+		 * deadlocks if this join turns out to involve a synchronization point
+		 * after probing batch zero.
+		 */
+		LeaderGateAttach(&hashtable->shared->leader_gate);
 
 		/*
 		 * So far we have no idea whether there are any other participants, and

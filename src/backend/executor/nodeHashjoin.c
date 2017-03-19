@@ -176,11 +176,12 @@ ExecHashJoin(HashJoinState *node)
 						   PHJ_PHASE_BUILDING);
 
 					/*
-					 * Check if we are a worker that attached too late to
-					 * avoid deadlock risk with the leader, or a leader that
-					 * arrived here too late.
+					 * There is a check for deadlock-avoidance at the end of
+					 * probing the first batch.  Check if we're so late to
+					 * start that we've missed that.
 					 */
-					if (ExecHashCheckForEarlyExit(hashtable))
+					if (BarrierPhase(&hashtable->shared->barrier) > PHJ_PHASE_PROBING &&
+						!LeaderGateCanContinue(&hashtable->shared->leader_gate))
 					{
 						/*
 						 * Other participants will need to handle all future
@@ -312,7 +313,7 @@ ExecHashJoin(HashJoinState *node)
 						 * probing the first batch without deadlock risk,
 						 * because there are workers running.
 						 */
-						if (ExecHashCheckForEarlyExit(hashtable))
+						if (!LeaderGateCanContinue(&hashtable->shared->leader_gate))
 						{
 							/*
 							 * Other backends will need to handle all future
@@ -1126,8 +1127,8 @@ ExecReScanHashJoin(HashJoinState *node)
 			Assert(!IsParallelWorker());
 			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
 			BarrierInit(&node->hj_HashTable->shared->shrink_barrier, 0);
-			node->hj_HashTable->shared->at_least_one_worker = false;
 			node->hj_HashTable->shared->grow_enabled = true;
+			LeaderGateInit(&node->hj_HashTable->shared->leader_gate);
 		}
 
 		if (node->hj_HashTable->nbatch == 1 &&
@@ -1151,6 +1152,7 @@ ExecReScanHashJoin(HashJoinState *node)
 					BarrierWait(&node->hj_HashTable->shared->barrier,
 								WAIT_EVENT_HASHJOIN_REWINDING);
 				node->hj_HashTable->attached_at_phase = PHJ_PHASE_CREATING;
+				LeaderGateAttach(&node->hj_HashTable->shared->leader_gate);
 			}
 
 			/*
@@ -1273,6 +1275,8 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	shm_toc_insert(pcxt->toc, plan_node_id, shared);
 
 	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
+
+	LeaderGateInit(&shared->leader_gate);
 
 	/*
 	 * We also need to create two variable-sized shared tuplestore objects,

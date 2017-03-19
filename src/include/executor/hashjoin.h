@@ -19,6 +19,7 @@
 #include "storage/barrier.h"
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
+#include "utils/leader_gate.h"
 #include "utils/sharedtuplestore.h"
 
 /* ----------------------------------------------------------------
@@ -148,11 +149,12 @@ typedef struct SharedHashJoinTableData
 {
 	Barrier barrier;				/* synchronization for the hash join */
 	dsa_pointer buckets;			/* shared hash table buckets */
-	bool at_least_one_worker;		/* did at least one worker join in time? */
 	int nbuckets;
 	int log2_nbuckets;
 	int nbatch;
 	int planned_participants;		/* number of planned workers + leader */
+
+	LeaderGate leader_gate;			/* gate to avoid leader/worker deadlock */
 
 	Barrier shrink_barrier;			/* synchronization of hashtable shrink */
 	bool shrink_needed;				/* flag indicating all must help shrink */
