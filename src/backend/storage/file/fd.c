@@ -1573,7 +1573,7 @@ FileClose(File file)
  * to read into.
  */
 int
-FilePrefetch(File file, off_t offset, int amount)
+FilePrefetch(File file, off_t offset, int amount, uint32 wait_event_info)
 {
 #if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_WILLNEED)
 	int			returnCode;
@@ -1588,8 +1588,10 @@ FilePrefetch(File file, off_t offset, int amount)
 	if (returnCode < 0)
 		return returnCode;
 
+	pgstat_report_wait_start(wait_event_info);
 	returnCode = posix_fadvise(VfdCache[file].fd, offset, amount,
 							   POSIX_FADV_WILLNEED);
+	pgstat_report_wait_end();
 
 	return returnCode;
 #else
@@ -1599,7 +1601,7 @@ FilePrefetch(File file, off_t offset, int amount)
 }
 
 void
-FileWriteback(File file, off_t offset, off_t nbytes)
+FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 {
 	int			returnCode;
 
@@ -1620,11 +1622,13 @@ FileWriteback(File file, off_t offset, off_t nbytes)
 	if (returnCode < 0)
 		return;
 
+	pgstat_report_wait_start(wait_event_info);
 	pg_flush_data(VfdCache[file].fd, offset, nbytes);
+	pgstat_report_wait_end();
 }
 
 int
-FileRead(File file, char *buffer, int amount)
+FileRead(File file, char *buffer, int amount, uint32 wait_event_info)
 {
 	int			returnCode;
 	Vfd		   *vfdP;
@@ -1643,7 +1647,9 @@ FileRead(File file, char *buffer, int amount)
 	vfdP = &VfdCache[file];
 
 retry:
+	pgstat_report_wait_start(wait_event_info);
 	returnCode = read(vfdP->fd, buffer, amount);
+	pgstat_report_wait_end();
 
 	if (returnCode >= 0)
 	{
@@ -1686,7 +1692,7 @@ retry:
 }
 
 int
-FileWrite(File file, char *buffer, int amount)
+FileWrite(File file, char *buffer, int amount, uint32 wait_event_info)
 {
 	int			returnCode;
 	Vfd		   *vfdP;
@@ -1744,7 +1750,9 @@ FileWrite(File file, char *buffer, int amount)
 
 retry:
 	errno = 0;
+	pgstat_report_wait_start(wait_event_info);
 	returnCode = write(vfdP->fd, buffer, amount);
+	pgstat_report_wait_end();
 
 	/* if write didn't set errno, assume problem is no disk space */
 	if (returnCode != amount && errno == 0)
@@ -1805,7 +1813,7 @@ retry:
 }
 
 int
-FileSync(File file)
+FileSync(File file, uint32 wait_event_info)
 {
 	int			returnCode;
 
@@ -1818,7 +1826,11 @@ FileSync(File file)
 	if (returnCode < 0)
 		return returnCode;
 
-	return pg_fsync(VfdCache[file].fd);
+	pgstat_report_wait_start(wait_event_info);
+	returnCode = pg_fsync(VfdCache[file].fd);
+	pgstat_report_wait_end();
+
+	return returnCode;
 }
 
 off_t
@@ -1910,7 +1922,7 @@ FileTell(File file)
 #endif
 
 int
-FileTruncate(File file, off_t offset)
+FileTruncate(File file, off_t offset, uint32 wait_event_info)
 {
 	int			returnCode;
 
@@ -1923,7 +1935,9 @@ FileTruncate(File file, off_t offset)
 	if (returnCode < 0)
 		return returnCode;
 
+	pgstat_report_wait_start(wait_event_info);
 	returnCode = ftruncate(VfdCache[file].fd, offset);
+	pgstat_report_wait_end();
 
 	if (returnCode == 0 && VfdCache[file].fileSize > offset)
 	{
