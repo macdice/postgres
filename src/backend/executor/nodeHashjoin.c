@@ -176,26 +176,18 @@ ExecHashJoin(HashJoinState *node)
 						   PHJ_PHASE_BUILDING);
 
 					/*
-					 * There is a check for deadlock-avoidance at the end of
-					 * probing the first batch.  Check if we're so late to
-					 * start that we've missed that.
+					 * There is a deadlock avoidance check at the end of
+					 * probing.  It's unlikely, but we also need to check if
+					 * we're so late to start that probing has already
+					 * finished.
+					 *
+					 * In this case there can't be any batch files created by
+					 * us, because we missed the building phase, so there is
+					 * nothing to do but exit early.
 					 */
 					if (BarrierPhase(&hashtable->shared->barrier) > PHJ_PHASE_PROBING &&
 						!LeaderGateCanContinue(&hashtable->shared->leader_gate))
 					{
-						/*
-						 * Other participants will need to handle all future
-						 * batches written by me.  We can't detach until after
-						 * we've exported all batches, otherwise the phase
-						 * might advance and another participant might try to
-						 * import them.
-						 */
-						if (BarrierPhase(&hashtable->shared->barrier) <=
-							PHJ_PHASE_PROBING)
-						{
-							sts_end_write_all_partitions(hashNode->shared_inner_batches);
-							sts_end_write_all_partitions(hashNode->shared_outer_batches);
-						}
 						BarrierDetach(&hashtable->shared->barrier);
 						hashtable->detached_early = true;
 						return NULL;
