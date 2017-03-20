@@ -223,6 +223,7 @@ sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
 		accessor->read_file = accessor->files[partition];
 	else
 		accessor->read_file = NULL;
+	accessor->read_partition = partition;
 	accessor->read_participant = accessor->participant;
 	accessor->read_fileno = -1;
 	accessor->read_offset = -1;
@@ -300,13 +301,13 @@ MinimalTuple
 sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 {
 	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
+	MinimalTuple tuple = NULL;
 
 	for (;;)
 	{
 		SharedTuplestoreParticipant *participant;
 		Size nread;
 		uint32 tuple_size;
-		MinimalTuple tuple;
 		bool eof;
 
 		if (accessor->read_file == NULL)
@@ -327,7 +328,7 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 				 * started with, that is, our own one.  So there are no more
 				 * tuples to be read.
 				 */
-				return NULL;
+				break;
 			}
 
 			/*
@@ -450,5 +451,9 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 		accessor->read_offset = participant->read_offset;
 		participant->error = false;
 		LWLockRelease(&participant->lock);
+
+		break;
 	}
+
+	return tuple;
 }
