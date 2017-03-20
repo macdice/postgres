@@ -15,8 +15,8 @@
  * accessed by a single backend process.  This mechanism allows for a limited
  * form of BufFile sharing between backends, with shared ownership/cleanup.
  *
- * A single SharedBufFileSet can manage any number of shared BufFiles that are
- * shared between a fixed number of participating backends.  Each shared
+ * A single SharedBufFileSet can manage any number of 'tagged' BufFiles that
+ * are shared between a fixed number of participating backends.  Each shared
  * BufFile can be written to by a single participant but can be read by any
  * backend after it has been 'exported'.  Once a given BufFile is exported, it
  * becomes read-only and cannot be extended.  To create a new shared BufFile,
@@ -54,19 +54,19 @@
 
 typedef struct SharedBufFileParticipant
 {
-	pid_t writer_pid;			/* PID of the participant (debug info only) */
-	Oid tablespace;				/* tablespace for this participant's files */
-	int low_partition;			/* lowest known partition */
-	int high_partition;			/* one past the highest known patition */
+	pid_t	writer_pid;			/* PID of the participant (debug info only) */
+	Oid		tablespace;			/* tablespace for this participant's files */
+	int		low_partition;		/* lowest known partition */
+	int		high_partition;		/* one past the highest known partition */
 } SharedBufFileParticipant;
 
 struct SharedBufFileSet
 {
 	slock_t mutex;
-	pid_t creator_pid;			/* PID of the creating backend */
-	int set_number;				/* a unique identifier for this set of files */
-	int refcount;				/* number of backends attached */
-	int nparticipants;			/* number of backends expected */
+	pid_t	creator_pid;		/* PID of the creating backend */
+	int		set_number;			/* a unique identifier for this set of files */
+	int		refcount;			/* number of backends attached */
+	int		nparticipants;		/* number of backends expected */
 
 	/* per-participant state */
 	SharedBufFileParticipant participants[FLEXIBLE_ARRAY_MEMBER];
@@ -86,14 +86,18 @@ void
 SharedBufFileSetInitialize(SharedBufFileSet *set,
 						   int participants, dsm_segment *segment)
 {
-	static int next_set_number;
 	int i;
+	static int next_set_number = 0;
+
+	++next_set_number;
+	if (next_set_number < 0)
+		next_set_number = 0;
 
 	SpinLockInit(&set->mutex);
 	set->refcount = 1;
 	set->nparticipants = participants;
 	set->creator_pid = MyProcPid;
-	set->set_number = next_set_number++;
+	set->set_number = next_set_number;
 	for (i = 0; i < participants; ++i)
 	{
 		SharedBufFileParticipant *p = &set->participants[i];
@@ -107,7 +111,7 @@ SharedBufFileSetInitialize(SharedBufFileSet *set,
 		if (!OidIsValid(p->tablespace))
 			p->tablespace = DEFAULTTABLESPACE_OID;
 
-		/* PID of writer unknown for now. */
+		/* PID of participant unknown for now. */
 		p->writer_pid = InvalidPid;
 	}
 
@@ -149,10 +153,10 @@ SharedBufFileSetSize(int participants)
  * files.
  */
 BufFile *
-SharedBufFileCreate(SharedBufFileSet *set,
-					int partition, int participant)
+SharedBufFileCreate(SharedBufFileSet *set, int partition, int participant)
 {
 	SharedBufFileParticipant *p = &set->participants[participant];
+	BufFileTag tag;
 
 	SpinLockAcquire(&set->mutex);
 	Assert(participant < set->nparticipants);
@@ -166,18 +170,23 @@ SharedBufFileCreate(SharedBufFileSet *set,
 
 	/*
 	 * Because we have a fixed space but want to allow variable numbers of
-	 * files to be created per participant, we only keep track of the range of
-	 * numbers that have been created by this participant and are not yet
-	 * known to be destroyed.  We'll eventually clean up all file numbers in
-	 * this range that we can find on disk.
+	 * partitions to be created by each participant, we only keep track of the
+	 * range of numbers that have been created by this participant and are not
+	 * yet known to be destroyed.  We'll eventually clean up all partition
+	 * numbers in this range that we can find on disk.
 	 */
 	p->low_partition = Min(partition, p->low_partition);
 	p->high_partition = Max(partition + 1, p->high_partition);
 	SpinLockRelease(&set->mutex);
 
-	return BufFileCreateShared(p->tablespace, set->creator_pid,
-							   set->set_number,
-							   partition, participant);
+	/* Create unique tag that attaching backends will be able to construct. */
+	tag.tablespace = p->tablespace;
+	tag.creator_pid = set->creator_pid;
+	tag.set = set->set_number;
+	tag.partition = partition;
+	tag.participant = participant;
+
+	return BufFileCreateTagged(&tag);
 }
 
 /*
@@ -202,6 +211,7 @@ BufFile *
 SharedBufFileImport(SharedBufFileSet *set, int partition, int participant)
 {
 	SharedBufFileParticipant *p = &set->participants[participant];
+	BufFileTag tag;
 
 	Assert(participant < set->nparticipants);
 	Assert(participant >= 0);
@@ -213,9 +223,14 @@ SharedBufFileImport(SharedBufFileSet *set, int partition, int participant)
 		partition >= p->high_partition)
 		return NULL;
 
+	tag.tablespace = p->tablespace;
+	tag.creator_pid = set->creator_pid;
+	tag.set = set->set_number;
+	tag.partition = partition;
+	tag.participant = participant;
+
 	/* Try to open the file.  May be NULL if it doesn't exist. */
-	return BufFileOpenShared(p->tablespace, set->creator_pid,
-							 set->set_number, partition, participant);
+	return BufFileOpenTagged(&tag);
 }
 
 /*
@@ -229,22 +244,20 @@ void
 SharedBufFileDestroy(SharedBufFileSet *set, int partition, int participant)
 {
 	SharedBufFileParticipant *p = &set->participants[participant];
+	BufFileTag tag;
 
 	Assert(participant < set->nparticipants);
 	Assert(participant >= 0);
-
-	/*
-	 * Even though we perform no explicit locking or cache coherency here, the
-	 * contract is that the caller must know that the described shared BufFile
-	 * has been exported.  The only sensible ways we could know that involve a
-	 * memory barrier.  (Is this stupid and unnecessary?  Just stick a mutex
-	 * on it?)
-	 */
 	Assert(set->creator_pid != InvalidPid);
-	Assert(p->low_partition <= partition || p->high_partition > partition);
 
-	BufFileDeleteShared(p->tablespace, set->creator_pid,
-						set->set_number, partition, participant);
+
+	tag.tablespace = p->tablespace;
+	tag.creator_pid = set->creator_pid;
+	tag.set = set->set_number;
+	tag.partition = partition;
+	tag.participant = participant;
+
+	BufFileDeleteTagged(&tag);
 
 	/*
 	 * If this partition happens to be at the beginning or end of the range,
@@ -252,10 +265,13 @@ SharedBufFileDestroy(SharedBufFileSet *set, int partition, int participant)
 	 * avoid looking for files that have been explicitly destroyed in
 	 * ascending file number order, as is the case for batched hash joins.
 	 */
+	SpinLockAcquire(&set->mutex);
+	Assert(p->low_partition <= partition || p->high_partition > partition);
 	if (partition == p->low_partition)
 	   ++p->low_partition;
 	if (partition + 1 == p->high_partition)
 		--p->high_partition;
+	SpinLockRelease(&set->mutex);
 }
 
 static void
@@ -274,20 +290,27 @@ shared_buf_file_on_dsm_detach(dsm_segment *segment, Datum datum)
 	{
 		int p;
 		int n;
+		BufFileTag tag;
+
+		tag.creator_pid = set->creator_pid;
+		tag.set = set->set_number;
 
 		/* Scan the list of participants. */
 		for (p = 0; p < set->nparticipants; ++p)
 		{
 			SharedBufFileParticipant *participant = &set->participants[p];
 
+			tag.tablespace = participant->tablespace;
+			tag.participant = p;
+
 			/* Scan the range of file numbers cleaning up. */
 			for (n = participant->low_partition;
 				 n < participant->high_partition;
 				 ++n)
-				BufFileDeleteShared(participant->tablespace,
-									set->creator_pid,
-									set->set_number,
-									n, p);
+			{
+				tag.partition = n;
+				BufFileDeleteTagged(&tag);
+			}
 		}
 	}
 }

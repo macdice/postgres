@@ -71,7 +71,7 @@ struct BufFile
 	 * avoid making redundant FileSeek calls.
 	 */
 
-	bool		isTemp;			/* can only add files if this is TRUE */
+	bool		isSegmented;	/* can only add files if this is TRUE */
 	bool		isInterXact;	/* keep open over transactions? */
 	bool		dirty;			/* does buffer need to be written? */
 	bool		readOnly;		/* has the file been set to read only? */
@@ -83,12 +83,7 @@ struct BufFile
 	 */
 	ResourceOwner resowner;
 
-	/* components used to build the names of segments for shared files */
-	Oid			tablespace;		/* the tablespace for this BufFile */
-	pid_t		creator_pid;	/* the PID of the creator process */
-	int			set;			/* the shared file set number */
-	int			partition;		/* the partition number, if partitioned */
-	int			participant;	/* the number of the writer */
+	BufFileTag	tag;			/* for discoverability between backends */
 
 	/*
 	 * "current pos" is position of start of buffer within the logical file.
@@ -106,13 +101,12 @@ static void extendBufFile(BufFile *file);
 static void BufFileLoadBuffer(BufFile *file);
 static void BufFileDumpBuffer(BufFile *file);
 static int	BufFileFlush(BufFile *file);
-static File make_shared_segment(Oid tablespace, pid_t pid, int set,
-								int partition, int participant, int segment);
+static File make_tagged_segment(const BufFileTag *tag, int segment);
 
 
 /*
  * Create a BufFile given the first underlying physical file.
- * NOTE: caller must set isTemp and isInterXact if appropriate.
+ * NOTE: caller must set isSegmented and isInterXact if appropriate.
  */
 static BufFile *
 makeBufFile(File firstfile)
@@ -124,7 +118,7 @@ makeBufFile(File firstfile)
 	file->files[0] = firstfile;
 	file->offsets = (off_t *) palloc(sizeof(off_t));
 	file->offsets[0] = 0L;
-	file->isTemp = false;
+	file->isSegmented = false;
 	file->isInterXact = false;
 	file->dirty = false;
 	file->readOnly = false;
@@ -134,12 +128,12 @@ makeBufFile(File firstfile)
 	file->pos = 0;
 	file->nbytes = 0;
 
-	/* unused fields relating to sharing */
-	file->tablespace = InvalidOid;
-	file->creator_pid = InvalidPid;
-	file->set = 0;
-	file->partition = 0;
-	file->participant = 0;
+	/* unused fields relating to tagged files */
+	file->tag.tablespace = InvalidOid;
+	file->tag.creator_pid = InvalidPid;
+	file->tag.set = 0;
+	file->tag.partition = 0;
+	file->tag.participant = 0;
 
 	return file;
 }
@@ -157,21 +151,11 @@ extendBufFile(BufFile *file)
 	oldowner = CurrentResourceOwner;
 	CurrentResourceOwner = file->resowner;
 
-	if (file->creator_pid == InvalidPid)
-	{
-		Assert(file->isTemp);
+	if (file->tag.creator_pid == InvalidPid)
 		pfile = OpenTemporaryFile(file->isInterXact);
-	}
 	else
-	{
-		Assert(!file->readOnly);
-		pfile = make_shared_segment(file->tablespace,
-									file->creator_pid,
-									file->set,
-									file->partition,
-									file->participant,
-									file->numFiles);
-	}
+		pfile = make_tagged_segment(&file->tag, file->numFiles);
+
 	Assert(pfile >= 0);
 
 	CurrentResourceOwner = oldowner;
@@ -207,7 +191,7 @@ BufFileCreateTemp(bool interXact)
 	Assert(pfile >= 0);
 
 	file = makeBufFile(pfile);
-	file->isTemp = true;
+	file->isSegmented = true;
 	file->isInterXact = interXact;
 
 	return file;
@@ -229,27 +213,27 @@ BufFileCreate(File file)
 #endif
 
 static void
-make_shareable_path(char *tempdirpath, char *tempfilepath,
-					Oid tablespace, pid_t pid, int set, int partition,
-					int participant, int segment)
+make_tagged_path(char *tempdirpath, char *tempfilepath,
+				 const BufFileTag *tag, int segment)
 {
-	if (tablespace == DEFAULTTABLESPACE_OID ||
-		tablespace == GLOBALTABLESPACE_OID)
+	if (tag->tablespace == DEFAULTTABLESPACE_OID ||
+		tag->tablespace == GLOBALTABLESPACE_OID)
 		snprintf(tempdirpath, MAXPGPATH, "base/%s", PG_TEMP_FILES_DIR);
 	else
 	{
 		snprintf(tempdirpath, MAXPGPATH, "pg_tblspc/%u/%s/%s",
-				 tablespace, TABLESPACE_VERSION_DIRECTORY, PG_TEMP_FILES_DIR);
+				 tag->tablespace, TABLESPACE_VERSION_DIRECTORY,
+				 PG_TEMP_FILES_DIR);
 	}
 
 	snprintf(tempfilepath, MAXPGPATH, "%s/%s%d.%d.%d.%d.%d", tempdirpath,
 			 PG_TEMP_FILE_PREFIX,
-			 pid, set, partition, participant, segment);
+			 tag->creator_pid, tag->set, tag->partition, tag->participant,
+			 segment);
 }
 
 static File
-make_shared_segment(Oid tablespace, pid_t pid, int set, int partition,
-					int participant, int segment)
+make_tagged_segment(const BufFileTag *tag, int segment)
 {
 	File		file;
 	char		tempdirpath[MAXPGPATH];
@@ -263,39 +247,34 @@ make_shared_segment(Oid tablespace, pid_t pid, int set, int partition,
 	 * confusion by unlinking segment 1 (if it exists) before creating segment
 	 * 0.
 	 */
-	make_shareable_path(tempdirpath, tempfilepath,
-						tablespace, pid, set, partition, participant,
-						segment + 1);
+	make_tagged_path(tempdirpath, tempfilepath, tag, segment + 1);
 	PathNameDelete(tempfilepath, true);
 
-	make_shareable_path(tempdirpath, tempfilepath,
-						tablespace, pid, set, partition, participant,
-						segment);
+	make_tagged_path(tempdirpath, tempfilepath, tag, segment);
 	file = PathNameCreateFile(tempdirpath, tempfilepath, true);
 	if (file <= 0)
 		elog(ERROR, "could not create temporary file \"%s\": %m",
 			 tempfilepath);
-	elog(LOG, "make_shared_segment created %s", tempfilepath);
+
 	return file;
 }
 
 /*
- * Create a temporary BufFile that can be discovered and opened read-only by
- * other backends.  Intended for use by SharedBufFile.
+ * Create a 'tagged' BufFile that can be discovered and opened read-only by
+ * other backends.  This is intended to be used by SharedBufFileSet, which
+ * provides shared ownership and clean-up of a set of tagged BufFiles.
  */
 BufFile *
-BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
-					int participant)
+BufFileCreateTagged(const BufFileTag *tag)
 {
 	BufFile    *file = (BufFile *) palloc(sizeof(BufFile));
 
 	file->numFiles = 1;
 	file->files = (File *) palloc(sizeof(File));
-	file->files[0] =
-		make_shared_segment(tablespace, pid, set, partition, participant, 0);
+	file->files[0] = make_tagged_segment(tag, 0);
 	file->offsets = (off_t *) palloc(sizeof(off_t));
 	file->offsets[0] = 0L;
-	file->isTemp = true;		/* the file is segmented */
+	file->isSegmented = true;
 	file->isInterXact = false;
 	file->dirty = false;
 	file->resowner = CurrentResourceOwner;
@@ -304,16 +283,7 @@ BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
 	file->pos = 0;
 	file->nbytes = 0;
 	file->readOnly = false;
-
-	/*
-	 * Remember the elements required to build the path in case we need to
-	 * create more segments.
-	 */
-	file->tablespace = tablespace;
-	file->creator_pid = pid;
-	file->set = set;
-	file->partition = partition;
-	file->participant = participant;
+	file->tag = *tag;
 
 	return file;
 }
@@ -323,8 +293,7 @@ BufFileCreateShared(Oid tablespace, pid_t pid, int set, int partition,
  * BufFileCreateShared.
  */
 BufFile *
-BufFileOpenShared(Oid tablespace, pid_t pid, int set, int partition,
-				  int participant)
+BufFileOpenTagged(const BufFileTag *tag)
 {
 	BufFile    *file = (BufFile *) palloc(sizeof(BufFile));
 	char		tempdirpath[MAXPGPATH];
@@ -346,8 +315,7 @@ BufFileOpenShared(Oid tablespace, pid_t pid, int set, int partition,
 			files = repalloc(files, sizeof(File) * capacity);
 		}
 		/* Try to load a segment. */
-		make_shareable_path(tempdirpath, tempfilepath, tablespace,
-							pid, set, partition, participant, nfiles);
+		make_tagged_path(tempdirpath, tempfilepath, tag, nfiles);
 		files[nfiles] = PathNameOpenFile(tempfilepath,
 										 O_RDWR | PG_BINARY, 0600);
 		if (files[nfiles] < 0)
@@ -360,14 +328,17 @@ BufFileOpenShared(Oid tablespace, pid_t pid, int set, int partition,
 		++nfiles;
 	}
 
-	/* If we didn't find any files at all, there is no shared BufFile. */
+	/*
+	 * If we didn't find any files at all, then no BufFile exists with this
+	 * tag.
+	 */
 	if (nfiles == 0)
 		return NULL;
 
 	file->numFiles = nfiles;
 	file->files = files;
 	file->offsets = (off_t *) palloc0(sizeof(off_t) * nfiles);
-	file->isTemp = false;
+	file->isSegmented = true;
 	file->isInterXact = false;
 	file->dirty = false;
 	file->resowner = CurrentResourceOwner;
@@ -376,30 +347,20 @@ BufFileOpenShared(Oid tablespace, pid_t pid, int set, int partition,
 	file->pos = 0;
 	file->nbytes = 0;
 	file->readOnly = true;
-
-	/*
-	 * We don't currently need these when opening a shared file because it's
-	 * always opened read only, but it's better to be consistent.
-	 */
-	file->tablespace = tablespace;
-	file->creator_pid = pid;
-	file->set = set;
-	file->partition = partition;
-	file->participant = participant;
+	file->tag = *tag;
 
 	return file;
 }
 
 /*
- * Delete a BufFile that was created by BufFileCreateShared.  Intended for use
- * by SharedBufFile.  Return true if at least one segment was deleted; false
- * indicates that no segment was found, or an error occurred while trying to
- * delete.  Errors are logged but the function returns normally because this
- * is assumed to run in a clean-up path that might already involve an error.
+ * Delete a BufFile that was created by BufFileCreateTagged.  Return true if
+ * at least one segment was deleted; false indicates that no segment was
+ * found, or an error occurred while trying to delete.  Errors are logged but
+ * the function returns normally because this is assumed to run in a clean-up
+ * path that might already involve an error.
  */
 bool
-BufFileDeleteShared(Oid tablespace, pid_t pid, int set, int partition,
-					int participant)
+BufFileDeleteTagged(const BufFileTag *tag)
 {
 	char		tempdirpath[MAXPGPATH];
 	char		tempfilepath[MAXPGPATH];
@@ -414,9 +375,7 @@ BufFileDeleteShared(Oid tablespace, pid_t pid, int set, int partition,
 	 */
 	for (;;)
 	{
-		make_shareable_path(tempdirpath, tempfilepath,
-							tablespace, pid, set, partition,
-							participant, segment);
+		make_tagged_path(tempdirpath, tempfilepath, tag, segment);
 		if (!PathNameDelete(tempfilepath, false))
 			break;
 		found = true;
@@ -522,7 +481,7 @@ BufFileDumpBuffer(BufFile *file)
 		/*
 		 * Advance to next component file if necessary and possible.
 		 */
-		if (file->curOffset >= MAX_PHYSICAL_FILESIZE && file->isTemp)
+		if (file->curOffset >= MAX_PHYSICAL_FILESIZE && file->isSegmented)
 		{
 			while (file->curFile + 1 >= file->numFiles)
 				extendBufFile(file);
@@ -535,7 +494,7 @@ BufFileDumpBuffer(BufFile *file)
 		 * write as much as asked...
 		 */
 		bytestowrite = file->nbytes - wpos;
-		if (file->isTemp)
+		if (file->isSegmented)
 		{
 			off_t		availbytes = MAX_PHYSICAL_FILESIZE - file->curOffset;
 
@@ -776,7 +735,7 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 	 * above flush could have created a new segment, so checking sooner would
 	 * not work (at least not with this code).
 	 */
-	if (file->isTemp)
+	if (file->isSegmented)
 	{
 		/* convert seek to "start of next seg" to "end of last seg" */
 		if (newFile == file->numFiles && newOffset == 0)

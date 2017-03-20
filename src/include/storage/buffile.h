@@ -31,16 +31,26 @@
 typedef struct BufFile BufFile;
 
 /*
+ * A descriptor for a BufFile that can be used to share read-only data between
+ * backends using the 'tagged' BufFile interface.
+ */
+typedef struct BufFileTag
+{
+	Oid		tablespace;			/* OID of the tablespace for undlying files */
+	pid_t	creator_pid;		/* PID of the creating process */
+	int		set;				/* per-creator-PID unique identifier */
+	int		partition;			/* partition number of this file within set */
+	int		participant;		/* participant number of the creator */
+} BufFileTag;
+
+/*
  * prototypes for functions in buffile.c
  */
 
 extern BufFile *BufFileCreateTemp(bool interXact);
-extern BufFile *BufFileCreateShared(Oid tablespace, pid_t pid, int set,
-									int partition, int participant);
-extern BufFile *BufFileOpenShared(Oid tablespace, pid_t pid, int set,
-								  int partition, int participant);
-extern bool BufFileDeleteShared(Oid tablespace, pid_t pid, int set,
-								int partition, int participant);
+extern BufFile *BufFileCreateTagged(const BufFileTag *tag);
+extern BufFile *BufFileOpenTagged(const BufFileTag *tag);
+extern bool BufFileDeleteTagged(const BufFileTag *tag);
 extern void BufFileSetReadOnly(BufFile *file);
 extern void BufFileClose(BufFile *file);
 extern size_t BufFileRead(BufFile *file, void *ptr, size_t size);
