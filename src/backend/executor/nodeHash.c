@@ -547,13 +547,8 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 		 * ExecHashTableDetach.
 		 */
 		barrier = &hashtable->shared->barrier;
-		hashtable->attached_at_phase = BarrierAttach(barrier);
 
-		/*
-		 * Attach to the LeaderGate so that we can avoid leader/worker
-		 * deadlocks if this join turns out to involve a synchronization point
-		 * after probing batch zero.
-		 */
+		BarrierAttach(barrier);
 		LeaderGateAttach(&hashtable->shared->leader_gate);
 
 		/*

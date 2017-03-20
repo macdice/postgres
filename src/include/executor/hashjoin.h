@@ -258,7 +258,6 @@ typedef struct HashJoinTableData
 	SharedHashJoinTableData *shared;	/* the shared state */
 	SharedTuplestoreAccessor *shared_inner_batches;
 	SharedTuplestoreAccessor *shared_outer_batches;
-	int attached_at_phase;				/* the phase this participant joined */
 	bool detached_early;				/* did we decide to detach early? */
 	dsa_pointer current_chunk_shared;	/* DSA pointer to 'current_chunk' */
 

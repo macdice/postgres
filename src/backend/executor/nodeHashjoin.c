@@ -223,6 +223,21 @@ ExecHashJoin(HashJoinState *node)
 					int phase = BarrierPhase(barrier);
 
 					/*
+					 * There is a deadlock avoidance check at the end of
+					 * probing.  It's unlikely, but we also need to check if
+					 * we're so late to start that probing has already
+					 * finished, so that it's already been determined whether
+					 * leader or workers can continue.
+					 */
+					if (BarrierPhase(&hashtable->shared->barrier) > PHJ_PHASE_PROBING &&
+						!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+					{
+						BarrierDetach(&hashtable->shared->barrier);
+						hashtable->detached_early = true;
+						return NULL;
+					}
+
+					/*
 					 * Map the current phase to the appropriate initial state
 					 * for this participant, so we can get started.
 					 * MultiExecHash made sure that the parallel hash join has
@@ -1144,7 +1159,6 @@ ExecReScanHashJoin(HashJoinState *node)
 					   < PHJ_PHASE_PROBING)
 					BarrierWait(&node->hj_HashTable->shared->barrier,
 								WAIT_EVENT_HASHJOIN_REWINDING);
-				node->hj_HashTable->attached_at_phase = PHJ_PHASE_CREATING;
 				LeaderGateAttach(&node->hj_HashTable->shared->leader_gate);
 			}
 
