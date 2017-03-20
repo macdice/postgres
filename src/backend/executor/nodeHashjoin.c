@@ -179,7 +179,8 @@ ExecHashJoin(HashJoinState *node)
 					 * There is a deadlock avoidance check at the end of
 					 * probing.  It's unlikely, but we also need to check if
 					 * we're so late to start that probing has already
-					 * finished.
+					 * finished, so that it's already been determined whether
+					 * leader or workers can continue.
 					 *
 					 * In this case there can't be any batch files created by
 					 * us, because we missed the building phase, so there is
