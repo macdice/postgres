@@ -104,20 +104,20 @@ set enable_nestloop to off;
 set enable_mergejoin to off;
 set enable_indexscan to off;
 
--- test parallel hash join (Parallel Shared Hash).
+-- test parallel hash join.
 explain (costs off)
-     select  count(*) from tenk1 join tenk2 using (unique1);
-select  count(*) from tenk1 join tenk2 using (unique1);
+     select  count(*) from tenk1 join tenk2 using (unique1) where tenk2.unique1 > 10;
+select  count(*) from tenk1 join tenk2 using (unique1) where tenk2.unique1 > 10;
 
--- test parallel hash join (Parallel Shared Hash, outer join, all matched).
+-- test parallel hash join (outer join, all matched).
 explain (costs off)
-     select  count(*) from tenk1 full outer join tenk2 using (unique1);
-select  count(*) from tenk1 full outer join tenk2 using (unique1);
+     select  count(*) from tenk1 full outer join tenk2 using (unique1) where tenk2.unique1 > 10;
+select  count(*) from tenk1 full outer join tenk2 using (unique1) where tenk2.unique1 > 10;
 
--- test parallel hash join (Parallel Shared Hash, outer join, all unmatched).
+-- test parallel hash join (outer join, all unmatched).
 explain (costs off)
-     select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1);
-select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1);
+     select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1) where tenk2.unique1 > 10;
+select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1) where tenk2.unique1 > 10;
 
 reset enable_nestloop;
 reset enable_mergejoin;
