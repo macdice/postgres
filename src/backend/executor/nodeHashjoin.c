@@ -195,6 +195,21 @@ ExecHashJoin(HashJoinState *node)
 					int phase = BarrierPhase(barrier);
 
 					/*
+					 * There is a deadlock avoidance check at the end of
+					 * probing.  It's unlikely, but we also need to check if
+					 * we're so late to start that probing has already
+					 * finished, so that it's already been determined whether
+					 * leader or workers can continue.
+					 */
+					if (BarrierPhase(&hashtable->shared->barrier) > PHJ_PHASE_PROBING &&
+						!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+					{
+						BarrierDetach(&hashtable->shared->barrier);
+						hashtable->detached_early = true;
+						return NULL;
+					}
+
+					/*
 					 * Map the current phase to the appropriate initial state
 					 * for this participant, so we can get started.
 					 * MultiExecHash made sure that the parallel hash join has
@@ -251,6 +266,17 @@ ExecHashJoin(HashJoinState *node)
 							   PHJ_PHASE_PROBING);
 						if (hashtable->nbatch == 1 && !HJ_FILL_INNER(node))
 							return NULL;	/* end of join */
+
+						/*
+						 * Check if we are a leader that can't go further than
+						 * probing, to avoid risk of deadlock against workers.
+						 */
+						if (!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+						{
+							BarrierDetach(&hashtable->shared->barrier);
+							hashtable->detached_early = true;
+							return NULL;
+						}
 
 						/*
 						 * We can't start searching for unmatched tuples until
@@ -986,6 +1012,7 @@ ExecReScanHashJoin(HashJoinState *node)
 			/* Only the leader is running now, so we can reinitialize. */
 			Assert(!IsParallelWorker());
 			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
+			LeaderGateInit(&node->hj_HashTable->shared->leader_gate);
 		}
 
 		if (node->hj_HashTable->nbatch == 1 &&
@@ -1008,6 +1035,7 @@ ExecReScanHashJoin(HashJoinState *node)
 					   < PHJ_PHASE_PROBING)
 					BarrierWait(&node->hj_HashTable->shared->barrier,
 								WAIT_EVENT_HASHJOIN_REWINDING);
+				LeaderGateAttach(&node->hj_HashTable->shared->leader_gate);
 			}
 
 			/*
@@ -1111,6 +1139,8 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	shm_toc_insert(pcxt->toc, state->js.ps.plan->plan_node_id, shared);
 
 	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
+
+	LeaderGateInit(&shared->leader_gate);
 
 	/*
 	 * Pass the SharedHashJoinTable to the hash node.  If the Gather node

@@ -456,6 +456,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 	hashtable->current_chunk = NULL;
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->shared = state->shared_table_data;
+	hashtable->detached_early = false;
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: initial nbatch = %d, nbuckets = %d\n",
@@ -530,6 +531,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 		 */
 		barrier = &hashtable->shared->barrier;
 		BarrierAttach(barrier);
+		LeaderGateAttach(&hashtable->shared->leader_gate);
 
 		/*
 		 * So far we have no idea whether there are any other participants, and
@@ -803,7 +805,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 void
 ExecHashTableDetach(HashJoinTable hashtable)
 {
-	if (HashJoinTableIsShared(hashtable))
+	if (HashJoinTableIsShared(hashtable) && !hashtable->detached_early)
 	{
 		Barrier *barrier = &hashtable->shared->barrier;
 
@@ -832,6 +834,7 @@ ExecHashTableDetach(HashJoinTable hashtable)
 				dsa_free(hashtable->area, hashtable->shared->buckets);
 				hashtable->shared->buckets = InvalidDsaPointer;
 				hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+				hashtable->shared->chunks = InvalidDsaPointer;
 				while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
 					dsa_free(hashtable->area, chunk_shared);
 			}
