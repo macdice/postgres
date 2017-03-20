@@ -255,9 +255,9 @@ explain (costs off)
 set enable_nestloop to off;
 set enable_mergejoin to off;
 set enable_indexscan to off;
--- test parallel hash join (Parallel Shared Hash).
+-- test parallel hash join.
 explain (costs off)
-     select  count(*) from tenk1 join tenk2 using (unique1);
+     select  count(*) from tenk1 join tenk2 using (unique1) where tenk2.unique1 > 10;
                            QUERY PLAN                           
 ----------------------------------------------------------------
  Finalize Aggregate
@@ -265,60 +265,63 @@ explain (costs off)
          Workers Planned: 4
          ->  Partial Aggregate
                ->  Parallel Hash Join
-                     Hash Cond: (tenk1.unique1 = tenk2.unique1)
-                     ->  Parallel Seq Scan on tenk1
+                     Hash Cond: (tenk2.unique1 = tenk1.unique1)
+                     ->  Parallel Seq Scan on tenk2
+                           Filter: (unique1 > 10)
                      ->  Parallel Shared Hash
-                           ->  Parallel Seq Scan on tenk2
-(9 rows)
+                           ->  Parallel Seq Scan on tenk1
+(10 rows)
 
-select  count(*) from tenk1 join tenk2 using (unique1);
+select  count(*) from tenk1 join tenk2 using (unique1) where tenk2.unique1 > 10;
  count 
 -------
- 10000
+  9989
 (1 row)
 
--- test parallel hash join (Parallel Shared Hash, outer join, all matched).
+-- test parallel hash join (outer join, all matched).
 explain (costs off)
-     select  count(*) from tenk1 full outer join tenk2 using (unique1);
+     select  count(*) from tenk1 full outer join tenk2 using (unique1) where tenk2.unique1 > 10;
                            QUERY PLAN                           
 ----------------------------------------------------------------
  Finalize Aggregate
    ->  Gather
          Workers Planned: 4
          ->  Partial Aggregate
-               ->  Parallel Hash Full Join
-                     Hash Cond: (tenk1.unique1 = tenk2.unique1)
-                     ->  Parallel Seq Scan on tenk1
+               ->  Parallel Hash Left Join
+                     Hash Cond: (tenk2.unique1 = tenk1.unique1)
+                     ->  Parallel Seq Scan on tenk2
+                           Filter: (unique1 > 10)
                      ->  Parallel Shared Hash
-                           ->  Parallel Seq Scan on tenk2
-(9 rows)
+                           ->  Parallel Seq Scan on tenk1
+(10 rows)
 
-select  count(*) from tenk1 full outer join tenk2 using (unique1);
+select  count(*) from tenk1 full outer join tenk2 using (unique1) where tenk2.unique1 > 10;
  count 
 -------
- 10000
+  9989
 (1 row)
 
--- test parallel hash join (Parallel Shared Hash, outer join, all unmatched).
+-- test parallel hash join (outer join, all unmatched).
 explain (costs off)
-     select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1);
+     select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1) where tenk2.unique1 > 10;
                                     QUERY PLAN                                    
 ----------------------------------------------------------------------------------
  Finalize Aggregate
    ->  Gather
          Workers Planned: 4
          ->  Partial Aggregate
-               ->  Parallel Hash Full Join
+               ->  Parallel Hash Left Join
                      Hash Cond: (('-1'::integer - tenk2.unique1) = tenk1.unique1)
                      ->  Parallel Seq Scan on tenk2
+                           Filter: (unique1 > 10)
                      ->  Parallel Shared Hash
                            ->  Parallel Seq Scan on tenk1
-(9 rows)
+(10 rows)
 
-select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1);
+select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1) where tenk2.unique1 > 10;
  count 
 -------
- 20000
+  9989
 (1 row)
 
 reset enable_nestloop;
