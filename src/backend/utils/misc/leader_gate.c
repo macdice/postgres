@@ -9,22 +9,22 @@
  * In PostgreSQL's implementation of parallel query execution, leader
  * processes have two separate roles.  They are responsible for reading from
  * worker queues, but they may also choose to execute the same plan as workers
- * (see Gather and Gather Merge nodes).  Because of this dual role, we must
- * never allow a leader to wait for workers (for example, using a Barrier,
- * ConditionVariable, Latch or other synchronization mechanism) if there is
- * any possibility that those workers have emitted tuples.  Otherwise we could
- * get into a situation where a worker fills up its output tuple queue and
- * begins waiting for the leader to read from the queue to make space, while
- * the leader is blocked waiting for the worker inside an executor node.
+ * (see Gather and Gather Merge nodes).  We must therefore never allow a
+ * leader to wait for workers with a synchronous Barrier, ConditionVariable,
+ * Latch or other synchronization mechanism if there is any possibility that
+ * those workers have emitted tuples.  Otherwise we could get into a situation
+ * where a worker fills up its output tuple queue and begins waiting for the
+ * leader to read from the queue to make space, while the leader is blocked
+ * waiting for the worker inside an executor node.
  *
  * Longer term solutions to this problem involving asynchronous execution
- * might eventually be developed, but in the short term this gating decide
+ * might eventually be developed, but in the short term this gating mechanism
  * provides a way for the leader to bow out of parallel execution at a safe
  * time, while also making sure that it can't decide to bow out if no workers
  * have shown up.  In other words, this is a gate that allows only the leader
  * OR the workers through, but never both and never none.
  *
- * It works by allowing all participating processes to reach consensus by
+ * It works by allowing the participating processes to reach consensus by
  * holding a simple two-step election.  First, each participant must call
  * LeaderGateAttach(gate) in order to register to vote.  Next, at a point in
  * time where a participant might have emitted tuples but before it waits for
