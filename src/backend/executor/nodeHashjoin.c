@@ -302,8 +302,8 @@ ExecHashJoin(HashJoinState *node)
 
 						/*
 						 * Check if we are a leader that can't go further than
-						 * probing the first batch without deadlock risk,
-						 * because there are workers running.
+						 * probing the first batch, to avoid risk of deadlock
+						 * against workers.
 						 */
 						if (!LeaderGateCanContinue(&hashtable->shared->leader_gate))
 						{
