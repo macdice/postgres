@@ -19,6 +19,7 @@
 #include "storage/barrier.h"
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
+#include "utils/leader_gate.h"
 
 /* ----------------------------------------------------------------
  *				hash-join hash table structures
@@ -151,6 +152,8 @@ typedef struct SharedHashJoinTableData
 	int log2_nbuckets;
 	int planned_participants;		/* number of planned workers + leader */
 
+	LeaderGate leader_gate;			/* gate to avoid leader/worker deadlock */
+
 	LWLock chunk_lock;				/* protects the following members */
 	dsa_pointer chunks;				/* chunks loaded for the current batch */
 	dsa_pointer chunk_work_queue;	/* next chunk for shared processing */
@@ -245,6 +248,7 @@ typedef struct HashJoinTableData
 	/* State for coordinating shared hash tables. */
 	dsa_area *area;
 	SharedHashJoinTableData *shared;	/* the shared state */
+	bool detached_early;				/* did we decide to detach early? */
 	dsa_pointer current_chunk_shared;	/* DSA pointer to 'current_chunk' */
 
 }	HashJoinTableData;
