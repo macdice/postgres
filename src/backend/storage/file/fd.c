@@ -1472,12 +1472,12 @@ PathNameCreateTemporaryFile(char *tempdirpath, char *tempfilepath,
 		if (file <= 0 && error_on_failure)
 			elog(ERROR, "could not create temporary file \"%s\": %m",
 				 tempfilepath);
+	}
 
-		if (file >= 0)
-		{
-			/* Mark it for temp_file_limit accounting */
-			VfdCache[file].fdstate |= FD_TEMP_FILE_LIMIT;
-		}
+	if (file >= 0)
+	{
+		/* Mark it for temp_file_limit accounting */
+		VfdCache[file].fdstate |= FD_TEMP_FILE_LIMIT;
 	}
 
 	return file;

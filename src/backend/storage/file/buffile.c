@@ -51,7 +51,8 @@
  * The reason is that we'd like large temporary BufFiles to be spread across
  * multiple tablespaces when available.
  */
-#define MAX_PHYSICAL_FILESIZE	0x40000000
+//#define MAX_PHYSICAL_FILESIZE	0x40000000
+#define MAX_PHYSICAL_FILESIZE	BLCKSZ
 #define BUFFILE_SEG_SIZE		(MAX_PHYSICAL_FILESIZE / BLCKSZ)
 
 /*
