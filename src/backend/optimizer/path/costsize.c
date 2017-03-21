@@ -2982,6 +2982,12 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 		 */
 		if (jointype == JOIN_RIGHT || jointype == JOIN_FULL)
 			run_cost += numbatches * cpu_synchronization_cost;
+
+		/*
+		 * Ideally we'd account for the fact that the leader runs in the first
+		 * batch but not in the later batches, affecting the number of tuples
+		 * expected per participant, but it's not clear how to do that.
+		 */
 	}
 
 	/* Other CPU costs left for later */
