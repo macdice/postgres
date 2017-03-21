@@ -80,9 +80,9 @@ extern int	FileGetRawDesc(File file);
 extern int	FileGetRawFlags(File file);
 extern int	FileGetRawMode(File file);
 
-/* Operations used by sharedbuffile.c to manage sets of files */
-extern File PathNameCreateFile(FileName directory, FileName filename,
-							   bool rejectError);
+/* Operations used by buffile.c to support tagged files */
+extern File PathNameCreateTemporaryFile(FileName directory, FileName filename,
+										bool error_on_failure);
 extern bool PathNameDelete(FileName fileName, bool error_on_failure);
 
 /* Operations that allow use of regular stdio --- USE WITH CAUTION */
