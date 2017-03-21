@@ -2211,8 +2211,7 @@ create_hashjoin_path(PlannerInfo *root,
 								  &restrict_clauses);
 	pathnode->jpath.path.parallel_aware =
 		joinrel->consider_parallel &&
-		(table_type == HASHPATH_TABLE_SHARED_SERIAL ||
-		 table_type == HASHPATH_TABLE_SHARED_PARALLEL);
+		(table_type != HASHPATH_TABLE_PRIVATE);
 	pathnode->jpath.path.parallel_safe = joinrel->consider_parallel &&
 		outer_path->parallel_safe && inner_path->parallel_safe;
 	pathnode->table_type = table_type;

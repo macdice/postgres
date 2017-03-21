@@ -1768,14 +1768,6 @@ hash_inner_and_outer(PlannerInfo *root,
 
 			if (cheapest_safe_inner != NULL)
 			{
-				/* Try a shared table with only one worker building the table. */
-				if (!tlist_references_transient_type(cheapest_safe_inner->pathtarget->exprs))
-					try_partial_hashjoin_path(root, joinrel,
-											  cheapest_partial_outer,
-											  cheapest_safe_inner,
-											  hashclauses, jointype, extra,
-											  HASHPATH_TABLE_SHARED_SERIAL);
-
 				/*
 				 * Also try private hash tables built by each worker, but
 				 * only if it's not a FULL or RIGHT join.  Those rely on being
