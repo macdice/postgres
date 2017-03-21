@@ -1723,7 +1723,6 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 
 		/* Go around again to get the next chunk from the queue. */
 		hashtable->current_chunk = NULL;
-		continue;
 	}
 
 	/*
