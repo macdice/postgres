@@ -4098,9 +4098,6 @@ create_hashjoin_plan(PlannerInfo *root,
 		hash_plan->plan.parallel_aware = true;
 		hash_plan->rows_total = best_path->inner_rows_total;
 		break;
-	case HASHPATH_TABLE_SHARED_SERIAL:
-		hash_plan->shared_table = true;
-		break;
 	case HASHPATH_TABLE_PRIVATE:
 		break;
 	}

@@ -1285,8 +1285,6 @@ typedef enum
 {
 	/* All participants builds their own private copy of the hash table. */
 	HASHPATH_TABLE_PRIVATE,
-	/* One participant builds a shared hash table. */
-	HASHPATH_TABLE_SHARED_SERIAL,
 	/* All participants build a shared hash table. */
 	HASHPATH_TABLE_SHARED_PARALLEL
 } HashPathTableType;

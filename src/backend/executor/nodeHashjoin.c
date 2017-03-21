@@ -1161,15 +1161,7 @@ ExecHashJoinInitializeWorker(HashJoinState *state,
 
 	state->hj_sharedHashJoinTable = shm_toc_lookup(pwcxt->toc, plan_node_id);
 
-	/*
-	 * Inject SharedHashJoinTable into the hash node.  It could instead have
-	 * its own ExecHashInitializeWorker function, but we only want to set its
-	 * 'parallel_aware' flag if we want to tell it to actually build the hash
-	 * table in parallel.  Since its parallel_aware flag also controls whether
-	 * its 'InitializeWorker' function gets called, and it also needs access
-	 * to this object for serial shared hash mode, we'll pass it on here
-	 * instead of depending on that.
-	 */
+	/* Inject SharedHashJoinTable into the hash node. */
 	hashNode = (HashState *) innerPlanState(state);
 	hashNode->shared_table_data = state->hj_sharedHashJoinTable;
 	Assert(hashNode->shared_table_data != NULL);
