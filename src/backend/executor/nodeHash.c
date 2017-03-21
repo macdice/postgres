@@ -130,18 +130,11 @@ MultiExecHash(HashState *node)
 			Assert(false);
 		case PHJ_PHASE_CREATING:
 			/* Wait for serial phase, and then either build or wait. */
-			if (BarrierWait(barrier, WAIT_EVENT_HASH_CREATING))
-				goto build;
-			else if (node->ps.plan->parallel_aware)
-				goto build;
-			else
-				goto post_build;
+			BarrierWait(barrier, WAIT_EVENT_HASH_CREATING);
+			goto build;
 		case PHJ_PHASE_BUILDING:
-			/* Building is already underway.  Can we join in? */
-			if (node->ps.plan->parallel_aware)
-				goto build;
-			else
-				goto post_build;
+			/* Building is already underway.  Join in. */
+			goto build;
 		case PHJ_PHASE_RESIZING:
 			/* Can't help with serial phase. */
 			goto post_resize;
@@ -204,7 +197,6 @@ MultiExecHash(HashState *node)
 	}
 	finish_loading(hashtable);
 
- post_build:
 	if (HashJoinTableIsShared(hashtable))
 	{
 		bool elected_to_resize;
