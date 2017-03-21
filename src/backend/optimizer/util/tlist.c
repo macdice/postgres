@@ -14,10 +14,17 @@
  */
 #include "postgres.h"
 
+#include "access/htup.h"
+#include "access/htup_details.h"
+#include "catalog/pg_type.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/print.h"
 #include "optimizer/cost.h"
 #include "optimizer/tlist.h"
+#include "utils/syscache.h"
+#include "utils/typcache.h"
 
 
 /* Test if an expression node represents a SRF call.  Beware multiple eval! */
@@ -1121,4 +1128,119 @@ split_pathtarget_walker(Node *node, split_pathtarget_context *context)
 	 */
 	return expression_tree_walker(node, split_pathtarget_walker,
 								  (void *) context);
+}
+
+/*
+ * Check if a type is transient or references a transient type.
+ */
+static bool
+typid_is_or_contains_transient_type(Oid typid)
+{
+	HeapTuple tup;
+	Form_pg_type typ;
+
+	/* This is recursive, so it could be driven to stack overflow. */
+	check_stack_depth();
+
+	/* The simple case. */
+	if (typid == RECORDOID)
+		return true;
+
+	/* Next we have to deal with nested types. */
+	tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for type %u", typid);
+	typ = (Form_pg_type) GETSTRUCT(tup);
+
+	if (typ->typtype == TYPTYPE_DOMAIN)
+	{
+		/* Look through domains to underlying base type. */
+		typid = typ->typbasetype;
+		ReleaseSysCache(tup);
+
+		return typid_is_or_contains_transient_type(typid);
+	}
+	else if (OidIsValid(typ->typelem))
+	{
+		/*
+		 * If it's an array or other type with an element type, test the
+		 * element type.
+		 */
+		typid = typ->typelem;
+		ReleaseSysCache(tup);
+
+		return typid_is_or_contains_transient_type(typid);
+	}
+	else if (typ->typtype == TYPTYPE_COMPOSITE)
+	{
+		/* If it's a composite type, test each attribute. */
+		TupleDesc	tupdesc;
+		int			i;
+		bool		found_transient = false;
+
+		ReleaseSysCache(tup);
+
+		/* Scan attributes looking for transient types. */
+		tupdesc = lookup_rowtype_tupdesc(typid, 0);
+		for (i = 0; i < tupdesc->natts; ++i)
+		{
+			if (tupdesc->attrs[i]->attisdropped)
+				continue;
+			if (typid_is_or_contains_transient_type(tupdesc->attrs[i]->atttypid))
+			{
+				found_transient = true;
+				break;
+			}
+		}
+		ReleaseTupleDesc(tupdesc);
+
+		return found_transient;
+	}
+	else if (typ->typtype == TYPTYPE_RANGE)
+	{
+		/* If it's a range type, test the underlying type. */
+		TypeCacheEntry *typcache;
+
+		typcache = lookup_type_cache(typid, TYPECACHE_RANGE_INFO);
+		if (typcache->rngelemtype == NULL)
+			elog(ERROR, "type %u is not a range type", typid);
+
+		typid = typcache->rngelemtype->type_id;
+		ReleaseSysCache(tup);
+
+		return typid_is_or_contains_transient_type(typid);
+	}
+	else
+	{
+		ReleaseSysCache(tup);
+
+		return false;
+	}
+}
+
+/*
+ * Tuples can only be exchanged directly with other backends via shared memory
+ * if they don't reference transient types that only have a backend-local
+ * meaning.  In tqueue.c this problem is handled by translating types between
+ * sender and receiver, but shared hash tables can't easily do that because
+ * tuples may be inserted and probed by any backend.
+ *
+ * Perhaps in future we might have a better way to coordinate types, but until
+ * then this function provides a check for types that would be unsafe in a
+ * shared hash table.
+ */
+bool
+tlist_has_transient_types(List *tlist)
+{
+	ListCell   *l;
+
+	foreach(l, tlist)
+	{
+		Node   *node = (Node *) lfirst(l);
+
+		if (typid_is_or_contains_transient_type(exprType(node)))
+			return true;
+	}
+
+	return false;
 }

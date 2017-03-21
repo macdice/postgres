@@ -21,6 +21,7 @@
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/tlist.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -1737,11 +1738,15 @@ hash_inner_and_outer(PlannerInfo *root,
 			cheapest_partial_outer =
 				(Path *) linitial(outerrel->partial_pathlist);
 
-			/* Can we use a partial inner plan too? */
+			/*
+			 * Can we use a partial inner plan too, so that we can build a
+			 * shared hash table in parallel?
+			 */
 			if (innerrel->partial_pathlist != NIL)
 				cheapest_partial_inner =
 					(Path *) linitial(innerrel->partial_pathlist);
-			if (cheapest_partial_inner != NULL)
+			if (cheapest_partial_inner != NULL &&
+				!tlist_has_transient_types(cheapest_partial_inner->pathtarget->exprs))
 				try_partial_hashjoin_path(root, joinrel,
 										  cheapest_partial_outer,
 										  cheapest_partial_inner,
@@ -1764,11 +1769,12 @@ hash_inner_and_outer(PlannerInfo *root,
 			if (cheapest_safe_inner != NULL)
 			{
 				/* Try a shared table with only one worker building the table. */
-				try_partial_hashjoin_path(root, joinrel,
-										  cheapest_partial_outer,
-										  cheapest_safe_inner,
-										  hashclauses, jointype, extra,
-										  HASHPATH_TABLE_SHARED_SERIAL);
+				if (!tlist_has_transient_types(cheapest_safe_inner->pathtarget->exprs))
+					try_partial_hashjoin_path(root, joinrel,
+											  cheapest_partial_outer,
+											  cheapest_safe_inner,
+											  hashclauses, jointype, extra,
+											  HASHPATH_TABLE_SHARED_SERIAL);
 
 				/*
 				 * Also try private hash tables built by each worker, but
