@@ -2885,15 +2885,6 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	 * for probing the hash table for outer path row, on the basis that
 	 * read-only access to a shared hash table shouldn't be any more
 	 * expensive.
-	 *
-	 * cpu_shared_tuple_cost acts a tie-breaker controlling whether we prefer
-	 * HASHPATH_TABLE_PRIVATE or HASHPATH_TABLE_SHARED_SERIAL plans when the
-	 * hash table fits in work_mem, since the cost is otherwise the same.  If
-	 * it is positive, then we'll prefer private hash tables, even though that
-	 * means that we'll be running N copies of the inner plan.  Running N
-	 * copies of the copies of the inner plan in parallel is not considered
-	 * more expensive than running 1 copy of the inner plan while N-1
-	 * participants do nothing, despite doing less work in total.
 	 */
 	if (table_type != HASHPATH_TABLE_PRIVATE)
 		startup_cost += cpu_shared_tuple_cost * inner_path_rows;
@@ -2912,11 +2903,7 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	 *
 	 * Shared hash tables are allowed to use the work_mem of all participants
 	 * combined to make up for the fact that there is only one copy shared by
-	 * all.  That's because they would be allowed to use the same amount of
-	 * memory building multiple copies.  HASH_TABLE_SHARED_SERIAL is therefore
-	 * likely to beat HASH_TABLE_PRIVATE when we expect to exceed work_mem,
-	 * because at that point we may be able to avoid switching to a
-	 * multi-batch join.
+	 * all.
 	 *
 	 * XXX for the moment, always assume that skew optimization will be
 	 * performed.  As long as SKEW_WORK_MEM_PERCENT is small, it's not worth
