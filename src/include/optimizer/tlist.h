@@ -31,7 +31,7 @@ extern bool tlist_same_exprs(List *tlist1, List *tlist2);
 extern bool tlist_same_datatypes(List *tlist, List *colTypes, bool junkOK);
 extern bool tlist_same_collations(List *tlist, List *colCollations, bool junkOK);
 
-extern bool tlist_has_transient_types(List *tlist);
+extern bool tlist_references_transient_type(List *tlist);
 
 extern void apply_tlist_labeling(List *dest_tlist, List *src_tlist);
 

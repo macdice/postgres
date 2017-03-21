@@ -1219,18 +1219,21 @@ typid_is_or_contains_transient_type(Oid typid)
 }
 
 /*
- * Tuples can only be exchanged directly with other backends via shared memory
- * if they don't reference transient types that only have a backend-local
- * meaning.  In tqueue.c this problem is handled by translating types between
+ * Check if the type of any expression in the given target list is of a
+ * transient type.
+ *
+ * Tuples can only be accessed directly by other backends via shared memory if
+ * they don't reference transient types that only have a backend-local
+ * meaning.  In tqueue.c this problem is avoided by translating types between
  * sender and receiver, but shared hash tables can't easily do that because
  * tuples may be inserted and probed by any backend.
  *
  * Perhaps in future we might have a better way to coordinate types, but until
- * then this function provides a check for types that would be unsafe in a
- * shared hash table.
+ * then this function provides a way for the planner to check for paths that
+ * would produce tuples that can't be shared directly between backends.
  */
 bool
-tlist_has_transient_types(List *tlist)
+tlist_references_transient_type(List *tlist)
 {
 	ListCell   *l;
 

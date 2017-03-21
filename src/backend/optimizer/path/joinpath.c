@@ -1750,7 +1750,7 @@ hash_inner_and_outer(PlannerInfo *root,
 				cheapest_partial_inner =
 					(Path *) linitial(innerrel->partial_pathlist);
 			if (cheapest_partial_inner != NULL &&
-				!tlist_has_transient_types(cheapest_partial_inner->pathtarget->exprs))
+				!tlist_references_transient_type(cheapest_partial_inner->pathtarget->exprs))
 				try_partial_hashjoin_path(root, joinrel,
 										  cheapest_partial_outer,
 										  cheapest_partial_inner,
@@ -1773,7 +1773,7 @@ hash_inner_and_outer(PlannerInfo *root,
 			if (cheapest_safe_inner != NULL)
 			{
 				/* Try a shared table with only one worker building the table. */
-				if (!tlist_has_transient_types(cheapest_safe_inner->pathtarget->exprs))
+				if (!tlist_references_transient_type(cheapest_safe_inner->pathtarget->exprs))
 					try_partial_hashjoin_path(root, joinrel,
 											  cheapest_partial_outer,
 											  cheapest_safe_inner,
