@@ -4087,9 +4087,9 @@ create_hashjoin_plan(PlannerInfo *root,
 	hash_plan->plan.startup_cost = hash_plan->plan.total_cost;
 
 	/*
-	 * Set the table as sharable if appropriate, with parallel or serial
-	 * building.  If parallel, the executor will also need an estimate of the
-	 * total number of rows expected from all participants.
+	 * Set the hash table to shared if appropriate.  If parallel, the executor
+	 * will also need an estimate of the total number of rows expected from
+	 * all participants.
 	 */
 	switch (best_path->table_type)
 	{
