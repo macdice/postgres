@@ -251,7 +251,7 @@ make_tagged_segment(const BufFileTag *tag, int segment)
 	PathNameDelete(tempfilepath, true);
 
 	make_tagged_path(tempdirpath, tempfilepath, tag, segment);
-	file = PathNameCreateFile(tempdirpath, tempfilepath, true);
+	file = PathNameCreateTemporaryFile(tempdirpath, tempfilepath, true);
 	if (file <= 0)
 		elog(ERROR, "could not create temporary file \"%s\": %m",
 			 tempfilepath);

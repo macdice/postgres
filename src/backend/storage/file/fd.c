@@ -170,8 +170,9 @@ int			max_safe_fds = 32;	/* default if not changed */
 #define FilePosIsUnknown(pos) ((pos) < 0)
 
 /* these are the assigned bits in fdstate below: */
-#define FD_TEMPORARY		(1 << 0)	/* T = delete when closed */
-#define FD_XACT_TEMPORARY	(1 << 1)	/* T = delete at eoXact */
+#define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
+#define FD_DELETE_AT_EOXACT	(1 << 1)	/* T = delete at eoXact */
+#define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
 
 typedef struct vfd
 {
@@ -1377,12 +1378,12 @@ OpenTemporaryFile(bool interXact)
 											 true);
 
 	/* Mark it for deletion at close */
-	VfdCache[file].fdstate |= FD_TEMPORARY;
+	VfdCache[file].fdstate |= FD_DELETE_AT_CLOSE;
 
 	/* Register it with the current resource owner */
 	if (!interXact)
 	{
-		VfdCache[file].fdstate |= FD_XACT_TEMPORARY;
+		VfdCache[file].fdstate |= FD_DELETE_AT_EOXACT;
 
 		ResourceOwnerEnlargeFiles(CurrentResourceOwner);
 		ResourceOwnerRememberFile(CurrentResourceOwner, file);
@@ -1431,14 +1432,18 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 	snprintf(tempfilepath, sizeof(tempfilepath), "%s/%s%d.%ld",
 			 tempdirpath, PG_TEMP_FILE_PREFIX, MyProcPid, tempFileCounter++);
 
-	return PathNameCreateFile(tempdirpath, tempfilepath, rejectError);
+	return PathNameCreateTemporaryFile(tempdirpath, tempfilepath, rejectError);
 }
 
 /*
  * Create a new file, and also the directory that contains it if necessary.
+ * Files created this way are subject to temp_file_limit, but are not
+ * automatically deleted on close or at end of transaction because they are
+ * intended to be shared between cooperating backends..
  */
 File
-PathNameCreateFile(char *tempdirpath, char *tempfilepath, bool rejectError)
+PathNameCreateTemporaryFile(char *tempdirpath, char *tempfilepath,
+							bool error_on_failure)
 {
 	File file;
 
@@ -1464,9 +1469,15 @@ PathNameCreateFile(char *tempdirpath, char *tempfilepath, bool rejectError)
 		file = PathNameOpenFile(tempfilepath,
 								O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
 								0600);
-		if (file <= 0 && rejectError)
+		if (file <= 0 && error_on_failure)
 			elog(ERROR, "could not create temporary file \"%s\": %m",
 				 tempfilepath);
+
+		if (file >= 0)
+		{
+			/* Mark it for temp_file_limit accounting */
+			VfdCache[file].fdstate |= FD_TEMP_FILE_LIMIT;
+		}
 	}
 
 	return file;
@@ -1500,10 +1511,17 @@ FileClose(File file)
 		Delete(file);
 	}
 
+	if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
+	{
+		/* Subtract its size from current usage (do first in case of error) */
+		temporary_files_size -= vfdP->fileSize;
+		vfdP->fileSize = 0;
+	}
+
 	/*
 	 * Delete the file if it was temporary, and make a log entry if wanted
 	 */
-	if (vfdP->fdstate & FD_TEMPORARY)
+	if (vfdP->fdstate & FD_DELETE_AT_CLOSE)
 	{
 		struct stat filestats;
 		int			stat_errno;
@@ -1515,11 +1533,8 @@ FileClose(File file)
 		 * is arranged to ensure that the worst-case consequence is failing to
 		 * emit log message(s), not failing to attempt the unlink.
 		 */
-		vfdP->fdstate &= ~FD_TEMPORARY;
+		vfdP->fdstate &= ~FD_DELETE_AT_CLOSE;
 
-		/* Subtract its size from current usage (do first in case of error) */
-		temporary_files_size -= vfdP->fileSize;
-		vfdP->fileSize = 0;
 
 		/* first try the stat() */
 		if (stat(vfdP->fileName, &filestats))
@@ -1718,7 +1733,7 @@ FileWrite(File file, char *buffer, int amount, uint32 wait_event_info)
 	 * message if we do that.  All current callers would just throw error
 	 * immediately anyway, so this is safe at present.
 	 */
-	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMPORARY))
+	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
 	{
 		off_t		newPos;
 
@@ -1771,7 +1786,7 @@ retry:
 		 * get here in that state if we're not enforcing temporary_files_size,
 		 * so we don't care.
 		 */
-		if (vfdP->fdstate & FD_TEMPORARY)
+		if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
 		{
 			off_t		newPos = vfdP->seekPos;
 
@@ -2644,7 +2659,7 @@ CleanupTempFiles(bool isProcExit)
 		{
 			unsigned short fdstate = VfdCache[i].fdstate;
 
-			if ((fdstate & FD_TEMPORARY) && VfdCache[i].fileName != NULL)
+			if ((fdstate & FD_DELETE_AT_CLOSE) && VfdCache[i].fileName != NULL)
 			{
 				/*
 				 * If we're in the process of exiting a backend process, close
@@ -2655,7 +2670,7 @@ CleanupTempFiles(bool isProcExit)
 				 */
 				if (isProcExit)
 					FileClose(i);
-				else if (fdstate & FD_XACT_TEMPORARY)
+				else if (fdstate & FD_DELETE_AT_EOXACT)
 				{
 					elog(WARNING,
 						 "temporary file %s not closed at end-of-transaction",
