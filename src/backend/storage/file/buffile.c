@@ -340,7 +340,7 @@ BufFileOpenTagged(const BufFileTag *tag)
 	file->isSegmented = true;
 	file->isInterXact = false;
 	file->dirty = false;
-	file->resowner = CurrentResourceOwner;
+	file->resowner = CurrentResourceOwner; /* Unused, can't extend */
 	file->curFile = 0;
 	file->curOffset = 0L;
 	file->pos = 0;
