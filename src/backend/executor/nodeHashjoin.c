@@ -268,7 +268,7 @@ ExecHashJoin(HashJoinState *node)
 				 * doing a left outer join, we can quit without scanning the
 				 * outer relation.
 				 */
-				if (!HashJoinTableIsShared(hashtable) && /* TODO:TM */
+				if (!HashJoinTableIsShared(hashtable) &&
 					hashtable->totalTuples == 0 && !HJ_FILL_OUTER(node))
 					return NULL;
 
