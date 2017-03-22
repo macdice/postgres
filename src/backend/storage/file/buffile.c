@@ -251,7 +251,7 @@ make_tagged_segment(const BufFileTag *tag, int segment)
 	PathNameDelete(tempfilepath, true);
 
 	make_tagged_path(tempdirpath, tempfilepath, tag, segment);
-	file = PathNameCreateTemporaryFile(tempdirpath, tempfilepath, true);
+	file = PathNameCreateTemporaryFile(tempdirpath, tempfilepath);
 	if (file <= 0)
 		elog(ERROR, "could not create temporary file \"%s\": %m",
 			 tempfilepath);
@@ -317,13 +317,8 @@ BufFileOpenTagged(const BufFileTag *tag)
 		/* Try to load a segment. */
 		make_tagged_path(tempdirpath, tempfilepath, tag, nfiles);
 		files[nfiles] = PathNameOpenTemporaryFile(tempfilepath);
-		if (files[nfiles] < 0)
-		{
-			if (errno == ENOENT)
-				break;
-			elog(ERROR, "could not open temporary file \"%s\": %m",
-				 tempfilepath);
-		}
+		if (files[nfiles] <= 0)
+			break;
 		++nfiles;
 	}
 
