@@ -1,10 +1,14 @@
 /*
- * contrib/btree_gist/btree_oid.c
+ * contrib/btree_gist/btree_enum.c
  */
 #include "postgres.h"
+#include "fmgr.h"
+#include "utils/builtins.h"
 
 #include "btree_gist.h"
 #include "btree_utils_num.h"
+
+/* enums are really Oids, so we just use the same structure */
 
 typedef struct
 {
@@ -13,46 +17,53 @@ typedef struct
 } oidKEY;
 
 /*
-** OID ops
+** enum ops
 */
-PG_FUNCTION_INFO_V1(gbt_oid_compress);
-PG_FUNCTION_INFO_V1(gbt_oid_fetch);
-PG_FUNCTION_INFO_V1(gbt_oid_union);
-PG_FUNCTION_INFO_V1(gbt_oid_picksplit);
-PG_FUNCTION_INFO_V1(gbt_oid_consistent);
-PG_FUNCTION_INFO_V1(gbt_oid_distance);
-PG_FUNCTION_INFO_V1(gbt_oid_penalty);
-PG_FUNCTION_INFO_V1(gbt_oid_same);
+PG_FUNCTION_INFO_V1(gbt_enum_compress);
+PG_FUNCTION_INFO_V1(gbt_enum_fetch);
+PG_FUNCTION_INFO_V1(gbt_enum_union);
+PG_FUNCTION_INFO_V1(gbt_enum_picksplit);
+PG_FUNCTION_INFO_V1(gbt_enum_consistent);
+PG_FUNCTION_INFO_V1(gbt_enum_penalty);
+PG_FUNCTION_INFO_V1(gbt_enum_same);
 
 
 static bool
-gbt_oidgt(const void *a, const void *b, FmgrInfo *flinfo)
+gbt_enumgt(const void *a, const void *b, FmgrInfo *flinfo)
 {
-	return (*((const Oid *) a) > *((const Oid *) b));
+	return DatumGetBool(
+		CallerFInfoFunctionCall2(enum_gt, flinfo, InvalidOid, ObjectIdGetDatum(*((const Oid *) a)), ObjectIdGetDatum(*((const Oid *) b)))
+		);
 }
 static bool
-gbt_oidge(const void *a, const void *b, FmgrInfo *flinfo)
+gbt_enumge(const void *a, const void *b, FmgrInfo *flinfo)
 {
-	return (*((const Oid *) a) >= *((const Oid *) b));
+	return DatumGetBool(
+		CallerFInfoFunctionCall2(enum_ge, flinfo, InvalidOid, ObjectIdGetDatum(*((const Oid *) a)), ObjectIdGetDatum(*((const Oid *) b)))
+		);
 }
 static bool
-gbt_oideq(const void *a, const void *b, FmgrInfo *flinfo)
+gbt_enumeq(const void *a, const void *b, FmgrInfo *flinfo)
 {
 	return (*((const Oid *) a) == *((const Oid *) b));
 }
 static bool
-gbt_oidle(const void *a, const void *b, FmgrInfo *flinfo)
+gbt_enumle(const void *a, const void *b, FmgrInfo *flinfo)
 {
-	return (*((const Oid *) a) <= *((const Oid *) b));
+	return DatumGetBool(
+						CallerFInfoFunctionCall2(enum_le, flinfo, InvalidOid, ObjectIdGetDatum(*((const Oid *) a)), ObjectIdGetDatum(*((const Oid *) b)))
+		);
 }
 static bool
-gbt_oidlt(const void *a, const void *b, FmgrInfo *flinfo)
+gbt_enumlt(const void *a, const void *b, FmgrInfo *flinfo)
 {
-	return (*((const Oid *) a) < *((const Oid *) b));
+	return DatumGetBool(
+						CallerFInfoFunctionCall2(enum_lt, flinfo, InvalidOid, ObjectIdGetDatum(*((const Oid *) a)), ObjectIdGetDatum(*((const Oid *) b)))
+		);
 }
 
 static int
-gbt_oidkey_cmp(const void *a, const void *b, FmgrInfo *flinfo)
+gbt_enumkey_cmp(const void *a, const void *b, FmgrInfo *flinfo)
 {
 	oidKEY	   *ia = (oidKEY *) (((const Nsrt *) a)->t);
 	oidKEY	   *ib = (oidKEY *) (((const Nsrt *) b)->t);
@@ -62,63 +73,38 @@ gbt_oidkey_cmp(const void *a, const void *b, FmgrInfo *flinfo)
 		if (ia->upper == ib->upper)
 			return 0;
 
-		return (ia->upper > ib->upper) ? 1 : -1;
+		return DatumGetInt32(
+			CallerFInfoFunctionCall2(enum_cmp, flinfo, InvalidOid, ObjectIdGetDatum(ia->upper), ObjectIdGetDatum(ib->upper))
+			);
 	}
 
-	return (ia->lower > ib->lower) ? 1 : -1;
+	return DatumGetInt32(
+		CallerFInfoFunctionCall2(enum_cmp, flinfo, InvalidOid, ObjectIdGetDatum(ia->lower), ObjectIdGetDatum(ib->lower))
+		);
 }
-
-static float8
-gbt_oid_dist(const void *a, const void *b, FmgrInfo *flinfo)
-{
-	Oid			aa = *(const Oid *) a;
-	Oid			bb = *(const Oid *) b;
-
-	if (aa < bb)
-		return (float8) (bb - aa);
-	else
-		return (float8) (aa - bb);
-}
-
 
 static const gbtree_ninfo tinfo =
 {
-	gbt_t_oid,
+	gbt_t_enum,
 	sizeof(Oid),
 	8,							/* sizeof(gbtreekey8) */
-	gbt_oidgt,
-	gbt_oidge,
-	gbt_oideq,
-	gbt_oidle,
-	gbt_oidlt,
-	gbt_oidkey_cmp,
-	gbt_oid_dist
+	gbt_enumgt,
+	gbt_enumge,
+	gbt_enumeq,
+	gbt_enumle,
+	gbt_enumlt,
+	gbt_enumkey_cmp,
+	NULL /* no KNN support at least for now */
 };
 
 
-PG_FUNCTION_INFO_V1(oid_dist);
-Datum
-oid_dist(PG_FUNCTION_ARGS)
-{
-	Oid			a = PG_GETARG_OID(0);
-	Oid			b = PG_GETARG_OID(1);
-	Oid			res;
-
-	if (a < b)
-		res = b - a;
-	else
-		res = a - b;
-	PG_RETURN_OID(res);
-}
-
-
 /**************************************************
- * Oid ops
+ * Enum ops
  **************************************************/
 
 
 Datum
-gbt_oid_compress(PG_FUNCTION_ARGS)
+gbt_enum_compress(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 
@@ -126,7 +112,7 @@ gbt_oid_compress(PG_FUNCTION_ARGS)
 }
 
 Datum
-gbt_oid_fetch(PG_FUNCTION_ARGS)
+gbt_enum_fetch(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 
@@ -134,7 +120,7 @@ gbt_oid_fetch(PG_FUNCTION_ARGS)
 }
 
 Datum
-gbt_oid_consistent(PG_FUNCTION_ARGS)
+gbt_enum_consistent(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	Oid			query = PG_GETARG_OID(1);
@@ -156,28 +142,8 @@ gbt_oid_consistent(PG_FUNCTION_ARGS)
 		);
 }
 
-
 Datum
-gbt_oid_distance(PG_FUNCTION_ARGS)
-{
-	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
-	Oid			query = PG_GETARG_OID(1);
-
-	/* Oid		subtype = PG_GETARG_OID(3); */
-	oidKEY	   *kkk = (oidKEY *) DatumGetPointer(entry->key);
-	GBT_NUMKEY_R key;
-
-	key.lower = (GBT_NUMKEY *) &kkk->lower;
-	key.upper = (GBT_NUMKEY *) &kkk->upper;
-
-	PG_RETURN_FLOAT8(
-			gbt_num_distance(&key, (void *) &query, GIST_LEAF(entry), &tinfo, fcinfo->flinfo)
-		);
-}
-
-
-Datum
-gbt_oid_union(PG_FUNCTION_ARGS)
+gbt_enum_union(PG_FUNCTION_ARGS)
 {
 	GistEntryVector *entryvec = (GistEntryVector *) PG_GETARG_POINTER(0);
 	void	   *out = palloc(sizeof(oidKEY));
@@ -188,7 +154,7 @@ gbt_oid_union(PG_FUNCTION_ARGS)
 
 
 Datum
-gbt_oid_penalty(PG_FUNCTION_ARGS)
+gbt_enum_penalty(PG_FUNCTION_ARGS)
 {
 	oidKEY	   *origentry = (oidKEY *) DatumGetPointer(((GISTENTRY *) PG_GETARG_POINTER(0))->key);
 	oidKEY	   *newentry = (oidKEY *) DatumGetPointer(((GISTENTRY *) PG_GETARG_POINTER(1))->key);
@@ -200,7 +166,7 @@ gbt_oid_penalty(PG_FUNCTION_ARGS)
 }
 
 Datum
-gbt_oid_picksplit(PG_FUNCTION_ARGS)
+gbt_enum_picksplit(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_POINTER(gbt_num_picksplit(
 									(GistEntryVector *) PG_GETARG_POINTER(0),
@@ -210,7 +176,7 @@ gbt_oid_picksplit(PG_FUNCTION_ARGS)
 }
 
 Datum
-gbt_oid_same(PG_FUNCTION_ARGS)
+gbt_enum_same(PG_FUNCTION_ARGS)
 {
 	oidKEY	   *b1 = (oidKEY *) PG_GETARG_POINTER(0);
 	oidKEY	   *b2 = (oidKEY *) PG_GETARG_POINTER(1);
