@@ -161,7 +161,11 @@ sts_end_write(SharedTuplestoreAccessor *accessor, int partition)
 	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
 
 	if (partition < accessor->nfiles && accessor->files[partition] != NULL)
+	{
 		SharedBufFileExport(fileset, accessor->files[partition]);
+		BufFileClose(accessor->files[partition]);
+		accessor->files[partition] = NULL;
+	}
 }
 
 /*
@@ -171,12 +175,10 @@ sts_end_write(SharedTuplestoreAccessor *accessor, int partition)
 void
 sts_end_write_all_partitions(SharedTuplestoreAccessor *accessor)
 {
-	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
 	int partition;
 
 	for (partition = 0; partition < accessor->nfiles; ++partition)
-		if (accessor->files[partition] != NULL)
-			SharedBufFileExport(fileset, accessor->files[partition]);
+		sts_end_write(accessor, partition);
 }
 
 /*
@@ -212,21 +214,35 @@ sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
  */
 void
 sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
-					  int partition)
+						int partition)
 {
+	SharedBufFileSet *fileset = GetSharedBufFileSet(accessor->sts);
+
 	/*
 	 * We will start out reading the file that THIS backend wrote.  The idea
 	 * is that all backends do this, so we read all the files in parallel with
 	 * minimal contention at first.
 	 */
-	if (partition < accessor->nfiles)
-		accessor->read_file = accessor->files[partition];
-	else
-		accessor->read_file = NULL;
 	accessor->read_partition = partition;
 	accessor->read_participant = accessor->participant;
 	accessor->read_fileno = -1;
 	accessor->read_offset = -1;
+	accessor->read_file = SharedBufFileImport(fileset,
+											  accessor->read_partition,
+											  accessor->read_participant);
+}
+
+/*
+ * Finish reading.
+ */
+void
+sts_end_parallel_read(SharedTuplestoreAccessor *accessor)
+{
+	if (accessor->read_file != NULL)
+	{
+		BufFileClose(accessor->read_file);
+		accessor->read_file = NULL;
+	}
 }
 
 /*
@@ -359,6 +375,7 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 		/* Check if this participant's file has already been entirely read. */
 		if (participant->eof)
 		{
+			BufFileClose(accessor->read_file);
 			accessor->read_file = NULL;
 			LWLockRelease(&participant->lock);
 			continue;
@@ -423,6 +440,7 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 			LWLockRelease(&participant->lock);
 
 			/* Move to next participant's file. */
+			BufFileClose(accessor->read_file);
 			accessor->read_file = NULL;
 			continue;
 		}

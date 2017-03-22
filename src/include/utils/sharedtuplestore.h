@@ -45,6 +45,8 @@ extern void sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
 extern void sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
 									int partition);
 
+extern void sts_end_parallel_read(SharedTuplestoreAccessor *accessor);
+
 extern void sts_puttuple(SharedTuplestoreAccessor *accessor,
 						 int partition,
 						 void *meta_data,
