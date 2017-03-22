@@ -17,9 +17,8 @@
  * non-parallel-aware mode, where each backend builds an identical hash table
  * and then probes it with a partial outer relation, or parallel-aware mode
  * where there is a shared hash table that all participants help to build.  A
- * parallel-aware hash join can divide the work of building the hash table up
- * over all workers instead of having each worker build its own copy of the
- * whole hash table, but has extra communication overheads.
+ * parallel-aware hash join can save time and space by dividing the work up
+ * and sharing the result, but has extra communication overheads.
  *
  * In both cases, hash joins use a private state machine to track progress
  * through the hash join algorithm.
