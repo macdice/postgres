@@ -6,9 +6,51 @@
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *
  * IDENTIFICATION
  *	  src/backend/executor/nodeHashjoin.c
+ *
+ * NOTES:
+ *
+ * PARALLELISM
+ *
+ * Hash joins can participate in parallel queries in two ways: in
+ * non-parallel-aware mode, where each backend builds an identical hash table
+ * and then probes it with a partial outer relation, or parallel-aware mode
+ * where there is a shared hash table that all participants help to build.  A
+ * parallel-aware hash join can divide the work of building the hash table up
+ * over all workers instead of having each worker build its own copy of the
+ * whole hash table, but has extra communication overheads.
+ *
+ * In both cases, hash joins use a private state machine to track progress
+ * through the hash join algorithm.
+ *
+ * In a parallel-aware hash join, there is also a shared 'phase' which
+ * co-operating backends use to synchronize their local state machine and
+ * program counter with the multi-process join.  The phase is managed by a
+ * 'barrier' IPC primitive.
+ *
+ * When a participant begins working on a parallel hash join, it must first
+ * figure out how much progress has already been made, because participants
+ * don't wait for each other to begin.  For this reason there are switch
+ * statements at key points in the code where we have to synchronize our local
+ * state machine with the phase, and then jump to the correct part of the
+ * algorithm so that we can get started.
+ *
+ * While running the algorithm, there are key points in the code where we must
+ * wait for all participants to reach the same point before we can continue,
+ * in the form of BarrierWait calls.  We cannot beginning building the hash
+ * table until it has been created, and we cannot begin probing it until it is
+ * entirely built.
+ *
+ * The phases are as follows:
+ *
+ *   PHJ_PHASE_BEGINNING   -- initial phase, before any participant acts
+ *   PHJ_PHASE_CREATING	   -- one participant creates the shmem hash table
+ *   PHJ_PHASE_BUILDING	   -- all participants build the hash table
+ *   PHJ_PHASE_RESIZING	   -- one participant decides whether to expand buckets
+ *   PHJ_PHASE_REINSERTING -- all participants reinsert tuples if necessary
+ *   PHJ_PHASE_PROBING	   -- all participants probe the hash table
+ *   PHJ_PHASE_UNMATCHED   -- all participants scan for unmatched tuples
  *
  *-------------------------------------------------------------------------
  */
