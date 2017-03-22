@@ -316,8 +316,7 @@ BufFileOpenTagged(const BufFileTag *tag)
 		}
 		/* Try to load a segment. */
 		make_tagged_path(tempdirpath, tempfilepath, tag, nfiles);
-		files[nfiles] = PathNameOpenFile(tempfilepath,
-										 O_RDWR | PG_BINARY, 0600);
+		files[nfiles] = PathNameOpenTemporaryFile(tempfilepath);
 		if (files[nfiles] < 0)
 		{
 			if (errno == ENOENT)

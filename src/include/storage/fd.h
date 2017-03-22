@@ -83,6 +83,7 @@ extern int	FileGetRawMode(File file);
 /* Operations used by buffile.c to support tagged files */
 extern File PathNameCreateTemporaryFile(FileName directory, FileName filename,
 										bool error_on_failure);
+extern File PathNameOpenTemporaryFile(FileName filename);
 extern bool PathNameDelete(FileName fileName, bool error_on_failure);
 
 /* Operations that allow use of regular stdio --- USE WITH CAUTION */
