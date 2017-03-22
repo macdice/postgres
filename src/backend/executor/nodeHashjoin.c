@@ -52,6 +52,33 @@
  *   PHJ_PHASE_PROBING	   -- all participants probe the hash table
  *   PHJ_PHASE_UNMATCHED   -- all participants scan for unmatched tuples
  *
+ * Then follow phases for later batches, in the case where the hash table
+ * wouldn't fit in work_mem, so must be spilled to disk.  For each batch n,
+ * the phases are:
+ *
+ *   PHJ_PHASE_RESETTING_BATCH(n) -- one participant prepared the hash table
+ *   PHJ_PHASE_LOADING_BATCH(n)   -- all participants load the batch
+ *   PHJ_PHASE_PROBING_BATCH(n)   -- all participants probe the batch
+ *   PHJ_PHASE_UNMATCHED_BATCH(n) -- all participants scan for unmatched
+ *
+ * If it turns out that we run out of work_mem because the planner
+ * underestimated the number of batches required in order for each one to fit
+ * in work_mem, then we may need to increase the number of batches at
+ * execution time.  This can occur during PHJ_PHASE_BUILDING or
+ * PHJ_PHASE_LOADING_BATCH(n), because those are the phases when we are
+ * loading data into the hash table and we might discover that work_mem might
+ * be exceeded.  In this case a second barrier is used to manage hash table
+ * shrinking.  Its phases are:
+ *
+ *   PHJ_SHRINK_PHASE_BEGINNING  -- initial phase
+ *   PHJ_SHRINK_PHASE_CLEARING   -- one participant clears the hash table
+ *   PHJ_SHRINK_PHASE_WORKING    -- all participants shrink the hash table
+ *   PHJ_SHRINK_PHASE_DECIDING   -- one participant checks for degenerate case
+ *
+ * The 'degenerate case' refers to the case where our attempt to shrink the
+ * hash table failed due to extreme skew that can't be helped by splitting
+ * buckets, and we shouldn't try again.
+ *
  *-------------------------------------------------------------------------
  */
 
