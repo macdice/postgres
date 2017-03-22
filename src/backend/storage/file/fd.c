@@ -39,6 +39,16 @@
  * for a long time, like relation files. It is the caller's responsibility
  * to close them, there is no automatic mechanism in fd.c for that.
  *
+ * PathNameCreateTemporaryFile and PathNameOpenTemporaryFile are used for
+ * temporary files that may be shared between backends.  A File created or
+ * opened with these functions is not automatically deleted when the file is
+ * closed, but it is automatically closed and end of transaction and counts
+ * agains the temporary file limit of the backend that created it.  Any File
+ * created this way must be explicitly deleted with PathNameDelete.  Automatic
+ * file deletion is not provided because this interface is designed for use by
+ * buffile.c and indirectly by sharedbuffile.c to implement temporary files
+ * with shared ownership and cleanup.
+ *
  * AllocateFile, AllocateDir, OpenPipeStream and OpenTransientFile are
  * wrappers around fopen(3), opendir(3), popen(3) and open(2), respectively.
  * They behave like the corresponding native functions, except that the handle
@@ -171,7 +181,7 @@ int			max_safe_fds = 32;	/* default if not changed */
 
 /* these are the assigned bits in fdstate below: */
 #define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
-#define FD_DELETE_AT_EOXACT	(1 << 1)	/* T = delete at eoXact */
+#define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
 #define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
 
 typedef struct vfd
@@ -1383,7 +1393,7 @@ OpenTemporaryFile(bool interXact)
 	/* Register it with the current resource owner */
 	if (!interXact)
 	{
-		VfdCache[file].fdstate |= FD_DELETE_AT_EOXACT;
+		VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT;
 
 		ResourceOwnerEnlargeFiles(CurrentResourceOwner);
 		ResourceOwnerRememberFile(CurrentResourceOwner, file);
@@ -1437,9 +1447,9 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 
 /*
  * Create a new file, and also the directory that contains it if necessary.
- * Files created this way are subject to temp_file_limit, but are not
- * automatically deleted on close or at end of transaction because they are
- * intended to be shared between cooperating backends..
+ * Files created this way are subject to temp_file_limit and are automatically
+ * closed at end of transaction, but are not automatically deleted on close
+ * because they are intended to be shared between cooperating backends.
  */
 File
 PathNameCreateTemporaryFile(char *tempdirpath, char *tempfilepath,
@@ -1474,10 +1484,56 @@ PathNameCreateTemporaryFile(char *tempdirpath, char *tempfilepath,
 				 tempfilepath);
 	}
 
-	if (file >= 0)
+	if (file > 0)
 	{
-		/* Mark it for temp_file_limit accounting */
+		/* Mark it for temp_file_limit accounting. */
 		VfdCache[file].fdstate |= FD_TEMP_FILE_LIMIT;
+
+		/*
+		 * We don't set FD_DELETE_AT_CLOSE for files opened this way, but we
+		 * still want to make sure they get closed at end of xact.
+		 */
+		ResourceOwnerEnlargeFiles(CurrentResourceOwner);
+		ResourceOwnerRememberFile(CurrentResourceOwner, file);
+		VfdCache[file].resowner = CurrentResourceOwner;
+
+		/* Backup mechanism for closing at end of xact. */
+		VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT;
+		have_xact_temporary_files = true;
+	}
+
+	return file;
+}
+
+/*
+ * Open a file that was created with PathNameCreateTemporaryFile in another
+ * backend.  Files opened this way don't count agains the temp_file_limit of
+ * the caller, are read-only and are automatically closed at the end of the
+ * transaction but are not deleted on close.
+ */
+File
+PathNameOpenTemporaryFile(char *tempfilepath)
+{
+	File file;
+
+	/*
+	 * Open the file.  Note: we don't use O_EXCL, in case there is an orphaned
+	 * temp file that can be reused.
+	 */
+	file = PathNameOpenFile(tempfilepath, O_RDONLY | PG_BINARY, 0);
+	if (file > 0)
+	{
+		/*
+		 * We don't set FD_DELETE_AT_CLOSE for files opened this way, but we
+		 * still want to make sure they get closed at end of xact.
+		 */
+		ResourceOwnerEnlargeFiles(CurrentResourceOwner);
+		ResourceOwnerRememberFile(CurrentResourceOwner, file);
+		VfdCache[file].resowner = CurrentResourceOwner;
+
+		/* Backup mechanism for closing at end of xact. */
+		VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT;
+		have_xact_temporary_files = true;
 	}
 
 	return file;
@@ -2659,7 +2715,8 @@ CleanupTempFiles(bool isProcExit)
 		{
 			unsigned short fdstate = VfdCache[i].fdstate;
 
-			if ((fdstate & FD_DELETE_AT_CLOSE) && VfdCache[i].fileName != NULL)
+			if (((fdstate & FD_DELETE_AT_CLOSE) || (fdstate & FD_CLOSE_AT_EOXACT)) &&
+				VfdCache[i].fileName != NULL)
 			{
 				/*
 				 * If we're in the process of exiting a backend process, close
@@ -2670,7 +2727,7 @@ CleanupTempFiles(bool isProcExit)
 				 */
 				if (isProcExit)
 					FileClose(i);
-				else if (fdstate & FD_DELETE_AT_EOXACT)
+				else if (fdstate & FD_CLOSE_AT_EOXACT)
 				{
 					elog(WARNING,
 						 "temporary file %s not closed at end-of-transaction",
