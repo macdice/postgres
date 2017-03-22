@@ -565,8 +565,6 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 				hashtable->shared->log2_nbuckets = log2_nbuckets;
 				hashtable->shared->size = bytes;
 
-				/* TODO: ExecHashBuildSkewHash */
-
 				/*
 				 * The backend-local pointers in hashtable will be set up by
 				 * ExecHashUpdate, at each point where they might have
