@@ -584,8 +584,6 @@ ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 				hashtable->shared->size = bytes;
 				hashtable->shared->nbatch = hashtable->nbatch;
 
-				/* TODO: ExecHashBuildSkewHash */
-
 				/*
 				 * The backend-local pointers in hashtable will be set up by
 				 * ExecHashUpdate, at each point where they might have
@@ -938,8 +936,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch)
 	MemoryContextSwitchTo(oldcxt);
 
 	hashtable->nbatch = nbatch;
-
-	/* TODO: If know we need to resize nbuckets, we can do it while rebatching. */
 }
 
 /*
@@ -986,9 +982,10 @@ ExecHashShrink(HashJoinTable hashtable)
 		{
 			/* Serial phase: one participant clears the hash table. */
 			/*
-			 * TODO: Also expland the bucket array if nbuckets_optimal >
-			 * nbuckets (but nbuckets_optional may need to be halved, to
-			 * account for the shink we're about to perform!)
+			 * We could also expland the bucket array if nbuckets_optimal >
+			 * nbuckets (if we do that we need to remember that
+			 * nbuckets_optional may need to be halved, to account for the
+			 * shink we're about to perform).
 			 */
 			memset(hashtable->buckets, 0,
 				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
