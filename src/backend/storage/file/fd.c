@@ -313,6 +313,8 @@ static void FreeVfd(File file);
 
 static int	FileAccess(File file);
 static File OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError);
+static File PathNameCreateDirAndFile(char *tempdirpath, char *tempfilepath,
+									 bool error_on_failure);
 static bool reserveAllocatedDesc(void);
 static int	FreeDesc(AllocateDesc *desc);
 static struct dirent *ReadDirExtended(DIR *dir, const char *dirname, int elevel);
@@ -1442,18 +1444,15 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 	snprintf(tempfilepath, sizeof(tempfilepath), "%s/%s%d.%ld",
 			 tempdirpath, PG_TEMP_FILE_PREFIX, MyProcPid, tempFileCounter++);
 
-	return PathNameCreateTemporaryFile(tempdirpath, tempfilepath, rejectError);
+	return PathNameCreateDirAndFile(tempdirpath, tempfilepath, rejectError);
 }
 
 /*
  * Create a new file, and also the directory that contains it if necessary.
- * Files created this way are subject to temp_file_limit and are automatically
- * closed at end of transaction, but are not automatically deleted on close
- * because they are intended to be shared between cooperating backends.
  */
-File
-PathNameCreateTemporaryFile(char *tempdirpath, char *tempfilepath,
-							bool error_on_failure)
+static File
+PathNameCreateDirAndFile(char *tempdirpath, char *tempfilepath,
+						 bool error_on_failure)
 {
 	File file;
 
@@ -1483,6 +1482,26 @@ PathNameCreateTemporaryFile(char *tempdirpath, char *tempfilepath,
 			elog(ERROR, "could not create temporary file \"%s\": %m",
 				 tempfilepath);
 	}
+
+	return file;
+}
+
+/*
+ * Create a new file, and also the directory that contains it if necessary.
+ * Files created this way are subject to temp_file_limit and are automatically
+ * closed at end of transaction, but are not automatically deleted on close
+ * because they are intended to be shared between cooperating backends.
+ */
+File
+PathNameCreateTemporaryFile(char *tempdirpath, char *tempfilepath)
+{
+	File file;
+
+	/*
+	 * Open the file.  Note: we don't use O_EXCL, in case there is an orphaned
+	 * temp file that can be reused.
+	 */
+	file = PathNameCreateDirAndFile(tempdirpath, tempfilepath, true);
 
 	if (file > 0)
 	{
@@ -1521,6 +1540,11 @@ PathNameOpenTemporaryFile(char *tempfilepath)
 	 * temp file that can be reused.
 	 */
 	file = PathNameOpenFile(tempfilepath, O_RDONLY | PG_BINARY, 0);
+
+	/* If no such file, then we'll return failure quietly. */
+	if (file <= 0 && errno != ENOENT)
+		elog(ERROR, "could not open temporary file \"%s\": %m", tempfilepath);
+
 	if (file > 0)
 	{
 		/*
