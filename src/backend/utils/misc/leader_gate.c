@@ -71,7 +71,7 @@ LeaderGateAttach(LeaderGate *gate)
 		Assert(!gate->leader_attached);
 		gate->leader_attached = true;
 	}
-	SpinLockRelease(&gate->mutex);	
+	SpinLockRelease(&gate->mutex);
 }
 
 /*
@@ -139,7 +139,7 @@ LeaderGateCanContinue(LeaderGate *gate)
 			 * If any workers have reported for duty, the leader stops.
 			 * Otherwise it seizes control, because we have to make sure that
 			 * SOMEONE continues.  Any workers that arrive after this have
-			 * arrived too late and will stop.			 
+			 * arrived too late and will stop.
 			 */
 			if (gate->at_least_one_worker_attached)
 			{
