@@ -24,6 +24,7 @@
 #include <sys/select.h>
 #endif
 
+#include "commands/user.h"
 #include "common/ip.h"
 #include "common/md5.h"
 #include "libpq/auth.h"
@@ -49,17 +50,15 @@ static char *recv_password_packet(Port *port);
 
 
 /*----------------------------------------------------------------
- * MD5 authentication
+ * Password-based authentication methods (password, md5, and scram)
  *----------------------------------------------------------------
  */
-static int	CheckMD5Auth(Port *port, char **logdetail);
-
-/*----------------------------------------------------------------
- * Plaintext password authentication
- *----------------------------------------------------------------
- */
-
 static int	CheckPasswordAuth(Port *port, char **logdetail);
+static int	CheckPWChallengeAuth(Port *port, char **logdetail);
+
+static int	CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail);
+static int	CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail);
+
 
 /*----------------------------------------------------------------
  * Ident authentication
@@ -200,12 +199,6 @@ static int	CheckRADIUSAuth(Port *port);
 static int	PerformRadiusTransaction(char *server, char *secret, char *portstr, char *identifier, char *user_name, char *passwd);
 
 
-/*----------------------------------------------------------------
- * SASL authentication
- *----------------------------------------------------------------
- */
-static int	CheckSASLAuth(Port *port, char **logdetail);
-
 /*
  * Maximum accepted size of GSS and SSPI authentication tokens.
  *
@@ -291,7 +284,7 @@ auth_failed(Port *port, int status, char *logdetail)
 			break;
 		case uaPassword:
 		case uaMD5:
-		case uaSASL:
+		case uaSCRAM:
 			errstr = gettext_noop("password authentication failed for user \"%s\"");
 			/* We use it to indicate if a .pgpass password failed. */
 			errcode_return = ERRCODE_INVALID_PASSWORD;
@@ -552,15 +545,12 @@ ClientAuthentication(Port *port)
 			break;
 
 		case uaMD5:
-			status = CheckMD5Auth(port, &logdetail);
+		case uaSCRAM:
+			status = CheckPWChallengeAuth(port, &logdetail);
 			break;
 
 		case uaPassword:
 			status = CheckPasswordAuth(port, &logdetail);
-			break;
-
-		case uaSASL:
-			status = CheckSASLAuth(port, &logdetail);
 			break;
 
 		case uaPAM:
@@ -710,16 +700,116 @@ recv_password_packet(Port *port)
 
 
 /*----------------------------------------------------------------
- * MD5 authentication
+ * Password-based authentication mechanisms
  *----------------------------------------------------------------
  */
 
+/*
+ * Plaintext password authentication.
+ */
 static int
-CheckMD5Auth(Port *port, char **logdetail)
+CheckPasswordAuth(Port *port, char **logdetail)
+{
+	char	   *passwd;
+	int			result;
+	char	   *shadow_pass;
+
+	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
+
+	passwd = recv_password_packet(port);
+	if (passwd == NULL)
+		return STATUS_EOF;		/* client wouldn't send password */
+
+	shadow_pass = get_role_password(port->user_name, logdetail);
+	if (shadow_pass)
+	{
+		result = plain_crypt_verify(port->user_name, shadow_pass, passwd,
+									logdetail);
+	}
+	else
+		result = STATUS_ERROR;
+
+	if (shadow_pass)
+		pfree(shadow_pass);
+	pfree(passwd);
+
+	return result;
+}
+
+/*
+ * MD5 and SCRAM authentication.
+ */
+static int
+CheckPWChallengeAuth(Port *port, char **logdetail)
+{
+	int			auth_result;
+	char	   *shadow_pass;
+	PasswordType pwtype;
+
+	Assert(port->hba->auth_method == uaSCRAM ||
+		   port->hba->auth_method == uaMD5);
+
+	/* First look up the user's password. */
+	shadow_pass = get_role_password(port->user_name, logdetail);
+
+	/*
+	 * If the user does not exist, or has no password, we still go through the
+	 * motions of authentication, to avoid revealing to the client that the
+	 * user didn't exist.  If 'md5' is allowed, we choose whether to use 'md5'
+	 * or 'scram' authentication based on current password_encryption setting.
+	 * The idea is that most genuine users probably have a password of that
+	 * type, if we pretend that this user had a password of that type, too, it
+	 * "blends in" best.
+	 *
+	 * If the user had a password, but it was expired, we'll use the details
+	 * of the expired password for the authentication, but report it as
+	 * failure to the client even if correct password was given.
+	 */
+	if (!shadow_pass)
+		pwtype = Password_encryption;
+	else
+		pwtype = get_password_type(shadow_pass);
+
+	/*
+	 * If 'md5' authentication is allowed, decide whether to perform 'md5' or
+	 * 'scram' authentication based on the type of password the user has.  If
+	 * it's an MD5 hash, we must do MD5 authentication, and if it's a SCRAM
+	 * verifier, we must do SCRAM authentication.  If it's stored in
+	 * plaintext, we could do either one, so we opt for the more secure
+	 * mechanism, SCRAM.
+	 *
+	 * If MD5 authentication is not allowed, always use SCRAM.  If the user
+	 * had an MD5 password, CheckSCRAMAuth() will fail.
+	 */
+	if (port->hba->auth_method == uaMD5 && pwtype == PASSWORD_TYPE_MD5)
+	{
+		auth_result = CheckMD5Auth(port, shadow_pass, logdetail);
+	}
+	else
+	{
+		auth_result = CheckSCRAMAuth(port, shadow_pass, logdetail);
+	}
+
+	if (shadow_pass)
+		pfree(shadow_pass);
+
+	/*
+	 * If get_role_password() returned error, return error, even if the
+	 * authentication succeeded.
+	 */
+	if (!shadow_pass)
+	{
+		Assert(auth_result != STATUS_OK);
+		return STATUS_ERROR;
+	}
+	return auth_result;
+}
+
+static int
+CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 {
 	char		md5Salt[4];		/* Password salt */
 	char	   *passwd;
-	char	   *shadow_pass;
 	int			result;
 
 	if (Db_user_namespace)
@@ -741,54 +831,19 @@ CheckMD5Auth(Port *port, char **logdetail)
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
 
-	result = get_role_password(port->user_name, &shadow_pass, logdetail);
-	if (result == STATUS_OK)
+	if (shadow_pass)
 		result = md5_crypt_verify(port->user_name, shadow_pass, passwd,
 								  md5Salt, 4, logdetail);
+	else
+		result = STATUS_ERROR;
 
-	if (shadow_pass)
-		pfree(shadow_pass);
 	pfree(passwd);
 
 	return result;
 }
 
-/*----------------------------------------------------------------
- * Plaintext password authentication
- *----------------------------------------------------------------
- */
-
 static int
-CheckPasswordAuth(Port *port, char **logdetail)
-{
-	char	   *passwd;
-	int			result;
-	char	   *shadow_pass;
-
-	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
-
-	passwd = recv_password_packet(port);
-	if (passwd == NULL)
-		return STATUS_EOF;		/* client wouldn't send password */
-
-	result = get_role_password(port->user_name, &shadow_pass, logdetail);
-	if (result == STATUS_OK)
-		result = plain_crypt_verify(port->user_name, shadow_pass, passwd,
-									logdetail);
-
-	if (shadow_pass)
-		pfree(shadow_pass);
-	pfree(passwd);
-
-	return result;
-}
-
-/*----------------------------------------------------------------
- * SASL authentication system
- *----------------------------------------------------------------
- */
-static int
-CheckSASLAuth(Port *port, char **logdetail)
+CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 {
 	int			mtype;
 	StringInfoData buf;
@@ -796,8 +851,6 @@ CheckSASLAuth(Port *port, char **logdetail)
 	char	   *output = NULL;
 	int			outputlen = 0;
 	int			result;
-	char	   *shadow_pass;
-	bool		doomed = false;
 
 	/*
 	 * SASL auth is not supported for protocol versions before 3, because it
@@ -827,11 +880,9 @@ CheckSASLAuth(Port *port, char **logdetail)
 	 * This is because we don't want to reveal to an attacker what usernames
 	 * are valid, nor which users have a valid password.
 	 */
-	if (get_role_password(port->user_name, &shadow_pass, logdetail) != STATUS_OK)
-		doomed = true;
 
 	/* Initialize the status tracker for message exchanges */
-	scram_opaq = pg_be_scram_init(port->user_name, shadow_pass, doomed);
+	scram_opaq = pg_be_scram_init(port->user_name, shadow_pass);
 
 	/*
 	 * Loop through SASL message exchange.  This exchange can consist of
@@ -875,7 +926,7 @@ CheckSASLAuth(Port *port, char **logdetail)
 		 */
 		result = pg_be_scram_exchange(scram_opaq, buf.data, buf.len,
 									  &output, &outputlen,
-									  doomed ? NULL : logdetail);
+									  logdetail);
 
 		/* input buffer no longer used */
 		pfree(buf.data);
@@ -2519,13 +2570,15 @@ CheckCertAuth(Port *port)
  */
 
 /*
- * RADIUS authentication is described in RFC2865 (and several
- * others).
+ * RADIUS authentication is described in RFC2865 (and several others).
  */
 
 #define RADIUS_VECTOR_LENGTH 16
 #define RADIUS_HEADER_LENGTH 20
 #define RADIUS_MAX_PASSWORD_LENGTH 128
+
+/* Maximum size of a RADIUS packet we will create or accept */
+#define RADIUS_BUFFER_SIZE 1024
 
 typedef struct
 {
@@ -2540,6 +2593,8 @@ typedef struct
 	uint8		id;
 	uint16		length;
 	uint8		vector[RADIUS_VECTOR_LENGTH];
+	/* this is a bit longer than strictly necessary: */
+	char		pad[RADIUS_BUFFER_SIZE - RADIUS_VECTOR_LENGTH];
 } radius_packet;
 
 /* RADIUS packet types */
@@ -2555,9 +2610,6 @@ typedef struct
 
 /* RADIUS service types */
 #define RADIUS_AUTHENTICATE_ONLY	8
-
-/* Maximum size of a RADIUS packet we will create or accept */
-#define RADIUS_BUFFER_SIZE 1024
 
 /* Seconds to wait - XXX: should be in a config variable! */
 #define RADIUS_TIMEOUT 3
@@ -2683,10 +2735,12 @@ CheckRADIUSAuth(Port *port)
 static int
 PerformRadiusTransaction(char *server, char *secret, char *portstr, char *identifier, char *user_name, char *passwd)
 {
-	char		radius_buffer[RADIUS_BUFFER_SIZE];
-	char		receive_buffer[RADIUS_BUFFER_SIZE];
-	radius_packet *packet = (radius_packet *) radius_buffer;
-	radius_packet *receivepacket = (radius_packet *) receive_buffer;
+	radius_packet radius_send_pack;
+	radius_packet radius_recv_pack;
+	radius_packet *packet = &radius_send_pack;
+	radius_packet *receivepacket = &radius_recv_pack;
+	char	   *radius_buffer = (char *) &radius_send_pack;
+	char	   *receive_buffer = (char *) &radius_recv_pack;
 	int32		service = htonl(RADIUS_AUTHENTICATE_ONLY);
 	uint8	   *cryptvector;
 	int			encryptedpasswordlen;
@@ -2742,6 +2796,7 @@ PerformRadiusTransaction(char *server, char *secret, char *portstr, char *identi
 	{
 		ereport(LOG,
 				(errmsg("could not generate random encryption vector")));
+		pg_freeaddrinfo_all(hint.ai_family, serveraddrs);
 		return STATUS_ERROR;
 	}
 	packet->id = packet->vector[0];
@@ -2776,6 +2831,7 @@ PerformRadiusTransaction(char *server, char *secret, char *portstr, char *identi
 			ereport(LOG,
 					(errmsg("could not perform MD5 encryption of password")));
 			pfree(cryptvector);
+			pg_freeaddrinfo_all(hint.ai_family, serveraddrs);
 			return STATUS_ERROR;
 		}
 
@@ -2791,7 +2847,7 @@ PerformRadiusTransaction(char *server, char *secret, char *portstr, char *identi
 
 	radius_add_attribute(packet, RADIUS_PASSWORD, encryptedpassword, encryptedpasswordlen);
 
-	/* Length need to be in network order on the wire */
+	/* Length needs to be in network order on the wire */
 	packetlength = packet->length;
 	packet->length = htons(packet->length);
 
@@ -2817,6 +2873,7 @@ PerformRadiusTransaction(char *server, char *secret, char *portstr, char *identi
 	localaddr.sin_addr.s_addr = INADDR_ANY;
 	addrsize = sizeof(struct sockaddr_in);
 #endif
+
 	if (bind(sock, (struct sockaddr *) & localaddr, addrsize))
 	{
 		ereport(LOG,
@@ -2913,6 +2970,7 @@ PerformRadiusTransaction(char *server, char *secret, char *portstr, char *identi
 		{
 			ereport(LOG,
 					(errmsg("could not read RADIUS response: %m")));
+			closesocket(sock);
 			return STATUS_ERROR;
 		}
 
