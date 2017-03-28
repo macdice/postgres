@@ -27,10 +27,10 @@
  * to blame query costs on the proper queryId.
  *
  * To facilitate presenting entries to users, we create "representative" query
- * strings in which constants are replaced with '?' characters, to make it
- * clearer what a normalized entry can represent.  To save on shared memory,
- * and to avoid having to truncate oversized query strings, we store these
- * strings in a temporary external query-texts file.  Offsets into this
+ * strings in which constants are replaced with parameter symbols ($n), to
+ * make it clearer what a normalized entry can represent.  To save on shared
+ * memory, and to avoid having to truncate oversized query strings, we store
+ * these strings in a temporary external query-texts file.  Offsets into this
  * file are kept in shared memory.
  *
  * Note about locking issues: to create or delete an entry in the shared
@@ -219,6 +219,9 @@ typedef struct pgssJumbleState
 
 	/* Current number of valid entries in clocations array */
 	int			clocations_count;
+
+	/* highest Param id we've seen, in order to start normalization correctly */
+	int			highest_extern_param_id;
 } pgssJumbleState;
 
 /*---- Local variables ----*/
@@ -290,7 +293,7 @@ static void pgss_post_parse_analyze(ParseState *pstate, Query *query);
 static void pgss_ExecutorStart(QueryDesc *queryDesc, int eflags);
 static void pgss_ExecutorRun(QueryDesc *queryDesc,
 				 ScanDirection direction,
-				 uint64 count);
+				 uint64 count, bool execute_once);
 static void pgss_ExecutorFinish(QueryDesc *queryDesc);
 static void pgss_ExecutorEnd(QueryDesc *queryDesc);
 static void pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
@@ -803,6 +806,7 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 	jstate.clocations = (pgssLocationLen *)
 		palloc(jstate.clocations_buf_size * sizeof(pgssLocationLen));
 	jstate.clocations_count = 0;
+	jstate.highest_extern_param_id = 0;
 
 	/* Compute query ID and mark the Query node with it */
 	JumbleQuery(&jstate, query);
@@ -871,15 +875,16 @@ pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
  * ExecutorRun hook: all we need do is track nesting depth
  */
 static void
-pgss_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count)
+pgss_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
+				 bool execute_once)
 {
 	nested_level++;
 	PG_TRY();
 	{
 		if (prev_ExecutorRun)
-			prev_ExecutorRun(queryDesc, direction, count);
+			prev_ExecutorRun(queryDesc, direction, count, execute_once);
 		else
-			standard_ExecutorRun(queryDesc, direction, count);
+			standard_ExecutorRun(queryDesc, direction, count, execute_once);
 		nested_level--;
 	}
 	PG_CATCH();
@@ -2481,6 +2486,10 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 				APP_JUMB(p->paramkind);
 				APP_JUMB(p->paramid);
 				APP_JUMB(p->paramtype);
+				/* Also, track the highest external Param id */
+				if (p->paramkind == PARAM_EXTERN &&
+					p->paramid > jstate->highest_extern_param_id)
+					jstate->highest_extern_param_id = p->paramid;
 			}
 			break;
 		case T_Aggref:
@@ -2873,7 +2882,7 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 			break;
 		case T_TableFunc:
 			{
-				TableFunc	*tablefunc = (TableFunc *) node;
+				TableFunc  *tablefunc = (TableFunc *) node;
 
 				JumbleExpr(jstate, tablefunc->docexpr);
 				JumbleExpr(jstate, tablefunc->rowexpr);
@@ -2937,7 +2946,8 @@ RecordConstLocation(pgssJumbleState *jstate, int location)
  * of interest, so it's worth doing.)
  *
  * *query_len_p contains the input string length, and is updated with
- * the result string length (which cannot be longer) on exit.
+ * the result string length on exit.  The resulting string might be longer
+ * or shorter depending on what happens with replacement of constants.
  *
  * Returns a palloc'd string.
  */
@@ -2948,6 +2958,7 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 	char	   *norm_query;
 	int			query_len = *query_len_p;
 	int			i,
+				norm_query_buflen,		/* Space allowed for norm_query */
 				len_to_wrt,		/* Length (in bytes) to write */
 				quer_loc = 0,	/* Source query byte location */
 				n_quer_loc = 0, /* Normalized query byte location */
@@ -2960,8 +2971,17 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 	 */
 	fill_in_constant_lengths(jstate, query, query_loc);
 
+	/*
+	 * Allow for $n symbols to be longer than the constants they replace.
+	 * Constants must take at least one byte in text form, while a $n symbol
+	 * certainly isn't more than 11 bytes, even if n reaches INT_MAX.  We
+	 * could refine that limit based on the max value of n for the current
+	 * query, but it hardly seems worth any extra effort to do so.
+	 */
+	norm_query_buflen = query_len + jstate->clocations_count * 10;
+
 	/* Allocate result buffer */
-	norm_query = palloc(query_len + 1);
+	norm_query = palloc(norm_query_buflen + 1);
 
 	for (i = 0; i < jstate->clocations_count; i++)
 	{
@@ -2985,8 +3005,9 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 		memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
 		n_quer_loc += len_to_wrt;
 
-		/* And insert a '?' in place of the constant token */
-		norm_query[n_quer_loc++] = '?';
+		/* And insert a param symbol in place of the constant token */
+		n_quer_loc += sprintf(norm_query + n_quer_loc, "$%d",
+							  i + 1 + jstate->highest_extern_param_id);
 
 		quer_loc = off + tok_len;
 		last_off = off;
@@ -3003,7 +3024,7 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 	memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
 	n_quer_loc += len_to_wrt;
 
-	Assert(n_quer_loc <= query_len);
+	Assert(n_quer_loc <= norm_query_buflen);
 	norm_query[n_quer_loc] = '\0';
 
 	*query_len_p = n_quer_loc;

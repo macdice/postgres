@@ -856,7 +856,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	ExecParallelInitializeWorker(queryDesc->planstate, &pwcxt);
 
 	/* Run the plan */
-	ExecutorRun(queryDesc, ForwardScanDirection, 0L);
+	ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
 
 	/* Shut down the executor */
 	ExecutorFinish(queryDesc);
