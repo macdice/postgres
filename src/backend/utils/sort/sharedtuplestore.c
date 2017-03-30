@@ -283,8 +283,7 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, int partition,
 		BufFileSet *fileset = GetBufFileSet(accessor->sts);
 
 		/* Create one.  Only this backend will write into it. */
-		snprintf(name, sizeof(name), "partition%d.participant%d",
-				 partition, accessor->participant);
+		make_name(name, partition, accessor->participant);
 		file = BufFileCreateShared(fileset, name, accessor->participant);
 		accessor->files[partition] = file;
 	}
