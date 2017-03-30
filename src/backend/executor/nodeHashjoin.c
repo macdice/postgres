@@ -333,8 +333,8 @@ ExecHashJoin(HashJoinState *node)
 					case PHJ_SUBPHASE_PROBING:
 						/* Help probe the hashtable. */
 						ExecHashUpdate(hashtable);
-						sts_begin_parallel_read(hashtable->shared_outer_batches,
-												hashtable->curbatch);
+						sts_begin_partial_scan(hashtable->shared_outer_batches,
+											   hashtable->curbatch);
 						node->hj_JoinState = HJ_NEED_NEW_OUTER;
 						break;
 					case PHJ_SUBPHASE_UNMATCHED:
@@ -601,8 +601,8 @@ ExecHashJoin(HashJoinState *node)
 
 				/* We'll need to read tuples from the outer batch. */
 				if (HashJoinTableIsShared(hashtable))
-					sts_begin_parallel_read(hashtable->shared_outer_batches,
-											hashtable->curbatch);
+					sts_begin_partial_scan(hashtable->shared_outer_batches,
+										   hashtable->curbatch);
 
 				node->hj_JoinState = HJ_NEED_NEW_OUTER;
 				break;
@@ -882,7 +882,7 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 			{
 				slot = ExecStoreMinimalTuple(tuple,
 											 hjstate->hj_OuterTupleSlot,
-											 true);
+											 false);
 				return slot;
 			}
 			else
@@ -1045,12 +1045,12 @@ ExecHashJoinLoadBatch(HashJoinState *hjstate)
 		 */
 		BarrierAttach(&hashtable->shared->shrink_barrier);
 
-		sts_begin_parallel_read(hashtable->shared_inner_batches, curbatch);
+		sts_begin_partial_scan(hashtable->shared_inner_batches, curbatch);
 		while ((tuple = sts_gettuple(hashtable->shared_inner_batches,
 									 &hashvalue)))
 		{
 			slot = ExecStoreMinimalTuple(tuple, hjstate->hj_HashTupleSlot,
-										 true);
+										 false);
 			ExecHashTableInsert(hashtable, slot, hashvalue);
 		}
 		ExecClearTuple(hjstate->hj_HashTupleSlot);

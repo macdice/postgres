@@ -1818,10 +1818,10 @@ ExecHashTableReset(HashJoinTable hashtable)
 				(hashtable->nbuckets * sizeof(HashJoinBucketHead));
 
 			/* Rewind the shared read heads for this batch, inner and outer. */
-			sts_prepare_parallel_read(hashtable->shared_inner_batches,
-									  curbatch);
-			sts_prepare_parallel_read(hashtable->shared_outer_batches,
-									  curbatch);
+			sts_prepare_partial_scan(hashtable->shared_inner_batches,
+									 curbatch);
+			sts_prepare_partial_scan(hashtable->shared_outer_batches,
+									 curbatch);
 		}
 
 		/*
