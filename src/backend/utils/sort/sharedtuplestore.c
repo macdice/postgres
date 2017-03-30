@@ -222,11 +222,11 @@ sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
 	 * is that all backends do this, so we read all the files in parallel with
 	 * minimal contention at first.
 	 */
-	make_name(name, accessor->read_partition, accessor->read_participant);
 	accessor->read_partition = partition;
 	accessor->read_participant = accessor->participant;
 	accessor->read_fileno = -1;
 	accessor->read_offset = -1;
+	make_name(name, accessor->read_partition, accessor->read_participant);
 	accessor->read_file = BufFileOpenShared(fileset, name,
 											accessor->read_participant);
 }
