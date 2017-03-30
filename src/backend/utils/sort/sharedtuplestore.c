@@ -32,23 +32,27 @@ typedef struct SharedTuplestoreParticipant
 	off_t read_offset;			/* Offset within segment file. */
 } SharedTuplestoreParticipant;
 
-/* The main data structure in shared memory. */
+/* The control object that lives in shared memory. */
 struct SharedTuplestore
 {
-	int reading_partition;
-	int nparticipants;
-	int flags;
-	size_t meta_data_size;
+	int reading_partition;		/* The partition we are currently reading. */
+	int nparticipants;			/* Number of participants that can write. */
+	int flags;					/* Flag bits from SHARED_TUPLESTORE_XXX */
+	size_t meta_data_size;		/* Size of per-tuple header. */
+
+	/* Followed by shared state for 'nparticipants' participants. */
 	SharedTuplestoreParticipant participants[FLEXIBLE_ARRAY_MEMBER];
+
+	/* Followed by a BufFileSet.  See GetBufFileSet macro. */
 };
 
-/* Per-participant backend-private state. */
+/* Per-participant state that lives in backend-local memory. */
 struct SharedTuplestoreAccessor
 {
 	int participant;			/* My partitipant number. */
 	SharedTuplestore *sts;		/* The shared state. */
 	int nfiles;					/* Size of local files array. */
-	BufFile **files;			/* Files we have open locally for writing. */
+	BufFile **files;			/* Per-partition files open for writing. */
 
 	BufFile *read_file;			/* The current file to read from. */
 	int read_partition;			/* The current partition to read from. */
@@ -379,9 +383,9 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 		/* Check if this participant's file has already been entirely read. */
 		if (participant->eof)
 		{
+			LWLockRelease(&participant->lock);
 			BufFileClose(accessor->read_file);
 			accessor->read_file = NULL;
-			LWLockRelease(&participant->lock);
 			continue;
 		}
 
