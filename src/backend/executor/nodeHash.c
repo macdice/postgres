@@ -210,11 +210,11 @@ MultiExecHash(HashState *node)
 	ExecHashFinishLoading(hashtable);
 
 	if (HashJoinTableIsShared(hashtable))
-		BarrierDetach(&hashtable->shared->shrink_barrier);
-
-	if (HashJoinTableIsShared(hashtable))
 	{
 		bool elected_to_resize;
+
+		/* Shinking is finished. */
+		BarrierDetach(&hashtable->shared->shrink_barrier);
 
 		/*
 		 * Wait for all backends to finish building.  If only one worker is
