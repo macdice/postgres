@@ -1273,7 +1273,7 @@ void
 ExecShutdownHashJoin(HashJoinState *node)
 {
 	/*
-	 * By the time ExecEndHashJoin runs in a work, shared memory has been
+	 * By the time ExecEndHashJoin runs in a worker, shared memory has been
 	 * destroyed.  So this is our last chance to do any shared memory cleanup.
 	 */
 	if (node->hj_HashTable)
