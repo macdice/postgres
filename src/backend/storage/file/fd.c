@@ -1651,13 +1651,10 @@ PathNameOpenTemporaryFile(char *tempfilepath)
 {
 	File file;
 
-	/*
-	 * Open the file.  Note: we don't use O_EXCL, in case there is an orphaned
-	 * temp file that can be reused.
-	 */
+	/* We open the file read-only. */
 	file = PathNameOpenFile(tempfilepath, O_RDONLY | PG_BINARY, 0);
 
-	/* If no such file, then we'll return failure quietly. */
+	/* If no such file, then we don't raise an error. */
 	if (file <= 0 && errno != ENOENT)
 		elog(ERROR, "could not open temporary file \"%s\": %m", tempfilepath);
 
