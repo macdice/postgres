@@ -111,6 +111,7 @@ MultiExecHash(HashState *node)
 	ExprContext *econtext;
 	uint32		hashvalue;
 	Barrier	   *barrier;
+	bool		is_shared;
 
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
@@ -128,7 +129,9 @@ MultiExecHash(HashState *node)
 	hashkeys = node->hashkeys;
 	econtext = node->ps.ps_ExprContext;
 
-	if (HashJoinTableIsShared(hashtable))
+	is_shared = HashJoinTableIsShared(hashtable);
+
+	if (is_shared)
 	{
 		/*
 		 * Synchronize parallel hash table builds.  At this stage we know that
@@ -163,7 +166,7 @@ MultiExecHash(HashState *node)
 	}
 
  build:
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 	{
 		/* Make sure our local state is up-to-date so we can build. */
 		Assert(BarrierPhase(barrier) == PHJ_PHASE_BUILDING);
@@ -203,13 +206,13 @@ MultiExecHash(HashState *node)
 				ExecHashTableInsert(hashtable, slot, hashvalue);
 			}
 			hashtable->partialTuples += 1;
-			if (!HashJoinTableIsShared(hashtable))
+			if (is_shared)
 				hashtable->totalTuples += 1;
 		}
 	}
 	ExecHashFinishLoading(hashtable);
 
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 	{
 		bool elected_to_resize;
 
@@ -237,7 +240,7 @@ MultiExecHash(HashState *node)
 	ExecHashIncreaseNumBucketsIfNeeded(hashtable);
 
  post_resize:
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 	{
 		Assert(BarrierPhase(barrier) == PHJ_PHASE_RESIZING);
 		BarrierWait(barrier, WAIT_EVENT_HASH_RESIZING);
@@ -252,7 +255,7 @@ MultiExecHash(HashState *node)
 	ExecHashUpdate(hashtable);
 	ExecHashReinsertHashtableIfNeeded(hashtable);
 
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 	{
 		Assert(BarrierPhase(barrier) == PHJ_PHASE_REINSERTING);
 		BarrierWait(barrier, WAIT_EVENT_HASH_REINSERTING);
@@ -260,7 +263,7 @@ MultiExecHash(HashState *node)
 	}
 
  finish:
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 	{
 		/*
 		 * Building has finished.  The other workers may be probing or
@@ -952,8 +955,9 @@ ExecHashShrink(HashJoinTable hashtable)
 	long		nfreed;
 	dsa_pointer chunk_shared;
 	HashMemoryChunk chunk;
+	bool		is_shared = HashJoinTableIsShared(hashtable);
 
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 	{
 		/*
 		 * Since a newly launched participant could arrive while shrinking is
@@ -1006,7 +1010,7 @@ ExecHashShrink(HashJoinTable hashtable)
 
  working:
 	/* Pop first chunk from the shrink queue. */
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 		chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 	else
 	{
@@ -1039,7 +1043,7 @@ ExecHashShrink(HashJoinTable hashtable)
 				HashJoinTuple copyTuple;
 				dsa_pointer shared = InvalidDsaPointer;
 
-				if (HashJoinTableIsShared(hashtable))
+				if (is_shared)
 					copyTuple = ExecHashLoadSharedTuple(hashtable, tuple, &shared,
 														false);
 				else
@@ -1054,7 +1058,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			{
 				/* dump it out */
 				Assert(batchno > hashtable->curbatch);
-				if (HashJoinTableIsShared(hashtable))
+				if (is_shared)
 					sts_puttuple(hashtable->shared_inner_batches, batchno,
 								 &hashTuple->hashvalue,
 								 tuple);
@@ -1074,7 +1078,7 @@ ExecHashShrink(HashJoinTable hashtable)
 		}
 
 		/* Free chunk and pop next from the queue. */
-		if (HashJoinTableIsShared(hashtable))
+		if (is_shared)
 		{
 			Size size = chunk->maxlen + HASH_CHUNK_HEADER_SIZE;
 
@@ -1117,7 +1121,7 @@ ExecHashShrink(HashJoinTable hashtable)
 	 * group any more finely. We have to just gut it out and hope the server
 	 * has enough RAM.
 	 */
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 	{
 		/*
 		 * Wait until all have finished shrinking chunks.  We need to do that
@@ -1285,9 +1289,10 @@ ExecHashReinsertHashtableIfNeeded(HashJoinTable hashtable)
 {
 	HashMemoryChunk chunk;
 	dsa_pointer chunk_shared;
+	bool is_shared = HashJoinTableIsShared(hashtable);
 
 	/* scan through all tuples in all chunks to rebuild the hash table */
-	if (HashJoinTableIsShared(hashtable))
+	if (is_shared)
 		chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 	else
 		chunk = hashtable->chunks_to_reinsert;
@@ -1308,7 +1313,7 @@ ExecHashReinsertHashtableIfNeeded(HashJoinTable hashtable)
 									  &bucketno, &batchno);
 
 			/* add the tuple to the proper bucket */
-			if (HashJoinTableIsShared(hashtable))
+			if (is_shared)
 				hashTuple_shared = chunk_shared + HASH_CHUNK_HEADER_SIZE + idx;
 			ExecHashInsertTupleIntoBucket(hashtable, bucketno, hashTuple,
 										  hashTuple_shared);
@@ -1319,7 +1324,7 @@ ExecHashReinsertHashtableIfNeeded(HashJoinTable hashtable)
 		}
 
 		/* advance to the next chunk */
-		if (HashJoinTableIsShared(hashtable))
+		if (is_shared)
 			chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 		else
 			chunk = chunk->next.unshared;
