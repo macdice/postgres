@@ -539,8 +539,8 @@ BufFileCreateShared(const BufFileSet *set, const char *name, int stripe)
  * Open a file that was previously created in another backend with
  * BufFileCreateShared in the same BufFileSet, using the same 'name' and
  * 'stripe' values.  The backend that created the file must have called
- * BufFileExportShared() to make sure that it is ready to be opened by other
- * backends and render it read-only.
+ * BufFileClose() or BufFileExport() to make sure that it is ready to be
+ * opened by other backends and render it read-only.
  *
  * The caller must have either created or attached to 'set'.
  */
