@@ -3590,8 +3590,29 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_HASH_UNMATCHED:
 			event_name = "Hash/Unmatched";
 			break;
+		case WAIT_EVENT_HASH_RESETTING:
+			event_name = "Hash/Resetting";
+			break;
+		case WAIT_EVENT_HASH_SHRINKING1:
+			event_name = "Hash/Shrinking1";
+			break;
+		case WAIT_EVENT_HASH_SHRINKING2:
+			event_name = "Hash/Shrinking2";
+			break;
+		case WAIT_EVENT_HASH_SHRINKING3:
+			event_name = "Hash/Shrinking3";
+			break;
+		case WAIT_EVENT_HASH_SHRINKING4:
+			event_name = "Hash/Shrinking4";
+			break;
+		case WAIT_EVENT_HASHJOIN_LOADING:
+			event_name = "HashJoin/Loading";
+			break;
 		case WAIT_EVENT_HASHJOIN_PROBING:
 			event_name = "HashJoin/Probing";
+			break;
+		case WAIT_EVENT_HASHJOIN_RESETTING:
+			event_name = "HashJoin/Resetting";
 			break;
 		case WAIT_EVENT_HASHJOIN_REWINDING:
 			event_name = "HashJoin/Rewinding";

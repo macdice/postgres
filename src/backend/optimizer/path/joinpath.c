@@ -692,10 +692,6 @@ try_partial_hashjoin_path(PlannerInfo *root,
 	if (!add_partial_path_precheck(joinrel, workspace.total_cost, NIL))
 		return;
 
-	/* TODO: No multi-batch support for shared hash tables yet. */
-	if (table_type != HASHPATH_TABLE_PRIVATE && workspace.numbatches > 1)
-		return;
-
 	/* Might be good enough to be worth trying, so let's try it. */
 	add_partial_path(joinrel, (Path *)
 					 create_hashjoin_path(root,

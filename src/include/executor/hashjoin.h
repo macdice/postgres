@@ -20,6 +20,7 @@
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
 #include "utils/leader_gate.h"
+#include "utils/sharedtuplestore.h"
 
 /* ----------------------------------------------------------------
  *				hash-join hash table structures
@@ -150,9 +151,16 @@ typedef struct SharedHashJoinTableData
 	dsa_pointer buckets;			/* shared hash table buckets */
 	int nbuckets;
 	int log2_nbuckets;
+	int nbatch;
 	int planned_participants;		/* number of planned workers + leader */
 
 	LeaderGate leader_gate;			/* gate to avoid leader/worker deadlock */
+
+	Barrier shrink_barrier;			/* synchronization of hashtable shrink */
+	bool shrink_needed;				/* flag indicating all must help shrink */
+	long nfreed;					/* shared counter for hashtable shrink */
+	long ninmemory;					/* shared counter for hashtable shrink */
+	bool grow_enabled;				/* shared flag to prevent useless growth */
 
 	LWLock chunk_lock;				/* protects the following members */
 	dsa_pointer chunks;				/* chunks loaded for the current batch */
@@ -248,6 +256,8 @@ typedef struct HashJoinTableData
 	/* State for coordinating shared hash tables. */
 	dsa_area *area;
 	SharedHashJoinTableData *shared;	/* the shared state */
+	SharedTuplestoreAccessor *shared_inner_batches;
+	SharedTuplestoreAccessor *shared_outer_batches;
 	bool detached_early;				/* did we decide to detach early? */
 	dsa_pointer current_chunk_shared;	/* DSA pointer to 'current_chunk' */
 
@@ -262,7 +272,34 @@ typedef struct HashJoinTableData
 #define PHJ_PHASE_BUILDING				2
 #define PHJ_PHASE_RESIZING				3
 #define PHJ_PHASE_REINSERTING			4
-#define PHJ_PHASE_PROBING				5
-#define PHJ_PHASE_UNMATCHED				6
+#define PHJ_PHASE_PROBING				5	/* PHJ_PHASE_PROBING_BATCH(0) */
+#define PHJ_PHASE_UNMATCHED				6	/* PHJ_PHASE_UNMATCHED_BATCH(0) */
+
+/* The subphases for batches. */
+#define PHJ_SUBPHASE_RESETTING			0
+#define PHJ_SUBPHASE_LOADING			1
+#define PHJ_SUBPHASE_PROBING			2
+#define PHJ_SUBPHASE_UNMATCHED			3
+
+/* The phases of parallel processing for batch(n). */
+#define PHJ_PHASE_RESETTING_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 4 - 3)
+#define PHJ_PHASE_LOADING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 4 - 2)
+#define PHJ_PHASE_PROBING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 4 - 1)
+#define PHJ_PHASE_UNMATCHED_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 4 - 0)
+
+/* Phase number -> sub-phase within a batch. */
+#define PHJ_PHASE_TO_SUBPHASE(p)										\
+	(((int)(p) - PHJ_PHASE_UNMATCHED + PHJ_SUBPHASE_UNMATCHED) % 4)
+
+/* Phase number -> batch number. */
+#define PHJ_PHASE_TO_BATCHNO(p)											\
+	(((int)(p) - PHJ_PHASE_UNMATCHED + PHJ_SUBPHASE_UNMATCHED) / 4)
+
+/* The phases of ExecHashShrink. */
+#define PHJ_SHRINK_PHASE_BEGINNING		0
+#define PHJ_SHRINK_PHASE_CLEARING		1
+#define PHJ_SHRINK_PHASE_WORKING		2
+#define PHJ_SHRINK_PHASE_DECIDING		3
+#define PHJ_SHRINK_PHASE(n) (n % 4)
 
 #endif   /* HASHJOIN_H */

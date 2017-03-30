@@ -58,6 +58,15 @@ extern bool InitializingParallelWorker;
 
 #define		IsParallelWorker()		(ParallelWorkerNumber >= 0)
 
+/*
+ * Executor nodes normally use their plan node ID as a key for accessing a
+ * shared space in the DSM segment.  If a single node needs more than one TOC
+ * entry, it can instead use this macro to generate a unique key for up to
+ * 2^16 numbered TOC entries.
+ */
+#define PARALLEL_KEY_EXECUTOR_NODE_NTH(node_id, n) \
+	(AssertMacro((n) <= 0xffff), ((uint64) (n)) << 32 | (node_id))
+
 extern ParallelContext *CreateParallelContext(parallel_worker_main_type entrypoint, int nworkers);
 extern ParallelContext *CreateParallelContextForExternalFunction(char *library_name, char *function_name, int nworkers);
 extern void InitializeParallelDSM(ParallelContext *pcxt);
