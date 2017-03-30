@@ -329,7 +329,8 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, int partition,
  * will remain untouched until the next call to this function.  Return NULL if
  * there are no more tuples.  If the SharedTuplestore was initialized with
  * non-zero meta_data_size, the meta-data associate with any tuple
- * successfully retrieved will be written to 'meta_data'.
+ * successfully retrieved will be written to 'meta_data'.  The result should
+ * not be freed.
  */
 MinimalTuple
 sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
