@@ -58,28 +58,28 @@ static void ExecHashSkewTableInsert(HashJoinTable hashtable,
 						int bucketNumber);
 static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
-static HashMemoryChunk pop_chunk_queue(HashJoinTable table,
-									   dsa_pointer *shared);
-static HashMemoryChunk pop_chunk_queue_unlocked(HashJoinTable table,
-												dsa_pointer *shared);
-static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
-										  HashJoinTuple tuple);
+static HashMemoryChunk ExecHashPopChunkQueue(HashJoinTable table,
+											 dsa_pointer *shared);
+static HashMemoryChunk ExecHashPopChunkQueueUnlocked(HashJoinTable table,
+													 dsa_pointer *shared);
+static HashJoinTuple ExecHashNextTupleInBucket(HashJoinTable table,
+											   HashJoinTuple tuple);
 
-static void insert_tuple_into_bucket(HashJoinTable table, int bucketno,
-									 HashJoinTuple tuple,
-									 dsa_pointer tuple_pointer);
-static HashJoinTuple first_tuple_in_bucket(HashJoinTable table, int bucketno);
-static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
-										  HashJoinTuple tuple);
+static void ExecHashInsertTupleIntoBucket(HashJoinTable table, int bucketno,
+										  HashJoinTuple tuple,
+										  dsa_pointer tuple_pointer);
+static HashJoinTuple ExecHashFirstTupleInBucket(HashJoinTable table, int bucketno);
+static HashJoinTuple ExecHashNextTupleInBucket(HashJoinTable table,
+											   HashJoinTuple tuple);
 
-static HashJoinTuple load_private_tuple(HashJoinTable hashtable,
-										MinimalTuple tuple,
-										bool respect_work_mem);
-static HashJoinTuple load_shared_tuple(HashJoinTable hashtable,
-									   MinimalTuple tuple,
-									   dsa_pointer *shared,
-									   bool respect_work_mem);
-static void finish_loading(HashJoinTable hashtable);
+static HashJoinTuple ExecHashLoadPrivateTuple(HashJoinTable hashtable,
+											  MinimalTuple tuple,
+											  bool respect_work_mem);
+static HashJoinTuple ExecHashLoadSharedTuple(HashJoinTable hashtable,
+											 MinimalTuple tuple,
+											 dsa_pointer *shared,
+											 bool respect_work_mem);
+static void ExecHashFinishLoading(HashJoinTable hashtable);
 
 /* ----------------------------------------------------------------
  *		ExecHash
@@ -121,6 +121,12 @@ MultiExecHash(HashState *node)
 	 */
 	outerNode = outerPlanState(node);
 	hashtable = node->hashtable;
+
+	/*
+	 * set expression context
+	 */
+	hashkeys = node->hashkeys;
+	econtext = node->ps.ps_ExprContext;
 
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -168,12 +174,6 @@ MultiExecHash(HashState *node)
 	}
 
 	/*
-	 * set expression context
-	 */
-	hashkeys = node->hashkeys;
-	econtext = node->ps.ps_ExprContext;
-
-	/*
 	 * get all inner tuples and insert into the hash table (or temp files)
 	 */
 	for (;;)
@@ -207,7 +207,7 @@ MultiExecHash(HashState *node)
 				hashtable->totalTuples += 1;
 		}
 	}
-	finish_loading(hashtable);
+	ExecHashFinishLoading(hashtable);
 
 	if (HashJoinTableIsShared(hashtable))
 		BarrierDetach(&hashtable->shared->shrink_barrier);
@@ -840,7 +840,7 @@ ExecHashTableDetach(HashJoinTable hashtable)
 				hashtable->shared->buckets = InvalidDsaPointer;
 				hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 				hashtable->shared->chunks = InvalidDsaPointer;
-				while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
+				while (ExecHashPopChunkQueue(hashtable, &chunk_shared) != NULL)
 					dsa_free(hashtable->area, chunk_shared);
 			}
 		}
@@ -1002,7 +1002,7 @@ ExecHashShrink(HashJoinTable hashtable)
  working:
 	/* Pop first chunk from the shrink queue. */
 	if (HashJoinTableIsShared(hashtable))
-		chunk = pop_chunk_queue(hashtable, &chunk_shared);
+		chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 	else
 	{
 		chunk = hashtable->chunks;
@@ -1035,15 +1035,15 @@ ExecHashShrink(HashJoinTable hashtable)
 				dsa_pointer shared = InvalidDsaPointer;
 
 				if (HashJoinTableIsShared(hashtable))
-					copyTuple = load_shared_tuple(hashtable, tuple, &shared,
-												  false);
+					copyTuple = ExecHashLoadSharedTuple(hashtable, tuple, &shared,
+														false);
 				else
-					copyTuple = load_private_tuple(hashtable, tuple, false);
+					copyTuple = ExecHashLoadPrivateTuple(hashtable, tuple, false);
 
 				/* and add it back to the appropriate bucket */
 				copyTuple->hashvalue = hashTuple->hashvalue;
-				insert_tuple_into_bucket(hashtable, bucketno, copyTuple,
-										 shared);
+				ExecHashInsertTupleIntoBucket(hashtable, bucketno, copyTuple,
+											  shared);
 			}
 			else
 			{
@@ -1083,7 +1083,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			hashtable->shared->ninmemory += ninmemory;
 			nfreed = 0;
 			ninmemory = 0;
-			chunk = pop_chunk_queue_unlocked(hashtable, &chunk_shared);
+			chunk = ExecHashPopChunkQueueUnlocked(hashtable, &chunk_shared);
 			hashtable->spaceUsed = hashtable->shared->size;
 			LWLockRelease(&hashtable->shared->chunk_lock);
 		}
@@ -1279,7 +1279,7 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 
 	/* scan through all tuples in all chunks to rebuild the hash table */
 	if (HashJoinTableIsShared(hashtable))
-		chunk = pop_chunk_queue(hashtable, &chunk_shared);
+		chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 	else
 		chunk = hashtable->chunks_to_reinsert;
 
@@ -1301,8 +1301,8 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 			/* add the tuple to the proper bucket */
 			if (HashJoinTableIsShared(hashtable))
 				hashTuple_shared = chunk_shared + HASH_CHUNK_HEADER_SIZE + idx;
-			insert_tuple_into_bucket(hashtable, bucketno, hashTuple,
-									 hashTuple_shared);
+			ExecHashInsertTupleIntoBucket(hashtable, bucketno, hashTuple,
+										  hashTuple_shared);
 
 			/* advance index past the tuple */
 			idx += MAXALIGN(HJTUPLE_OVERHEAD +
@@ -1311,7 +1311,7 @@ ExecHashReinsertAll(HashJoinTable hashtable)
 
 		/* advance to the next chunk */
 		if (HashJoinTableIsShared(hashtable))
-			chunk = pop_chunk_queue(hashtable, &chunk_shared);
+			chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 		else
 			chunk = chunk->next.unshared;
 	}
@@ -1356,9 +1356,9 @@ ExecHashTableInsert(HashJoinTable hashtable,
 
 		/* Create the HashJoinTuple */
 		if (HashJoinTableIsShared(hashtable))
-			hashTuple = load_shared_tuple(hashtable, tuple, &shared, true);
+			hashTuple = ExecHashLoadSharedTuple(hashtable, tuple, &shared, true);
 		else
-			hashTuple = load_private_tuple(hashtable, tuple, true);
+			hashTuple = ExecHashLoadPrivateTuple(hashtable, tuple, true);
 		if (hashTuple == NULL)
 		{
 			/*
@@ -1382,7 +1382,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(hashTuple));
 
 		/* Push it onto the front of the bucket's list */
-		insert_tuple_into_bucket(hashtable, bucketno, hashTuple, shared);
+		ExecHashInsertTupleIntoBucket(hashtable, bucketno, hashTuple, shared);
 
 		/*
 		 * Increase the (optimal) number of buckets if we just exceeded the
@@ -1583,11 +1583,11 @@ ExecScanHashBucket(HashJoinState *hjstate,
 	 * otherwise scan the standard hashtable bucket.
 	 */
 	if (hashTuple != NULL)
-		hashTuple = next_tuple_in_bucket(hashtable, hashTuple);
+		hashTuple = ExecHashNextTupleInBucket(hashtable, hashTuple);
 	else if (hjstate->hj_CurSkewBucketNo != INVALID_SKEW_BUCKET_NO)
 		hashTuple = hashtable->skewBucket[hjstate->hj_CurSkewBucketNo]->tuples;
 	else
-		hashTuple = first_tuple_in_bucket(hashtable, hjstate->hj_CurBucketNo);
+		hashTuple = ExecHashFirstTupleInBucket(hashtable, hjstate->hj_CurBucketNo);
 
 	while (hashTuple != NULL)
 	{
@@ -1611,7 +1611,7 @@ ExecScanHashBucket(HashJoinState *hjstate,
 			}
 		}
 
-		hashTuple = next_tuple_in_bucket(hashtable, hashTuple);
+		hashTuple = ExecHashNextTupleInBucket(hashtable, hashTuple);
 	}
 
 	/*
@@ -1671,8 +1671,8 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 			if (HashJoinTableIsShared(hashtable))
 			{
 				hashtable->current_chunk =
-					pop_chunk_queue(hashtable,
-									&hashtable->current_chunk_shared);
+					ExecHashPopChunkQueue(hashtable,
+										  &hashtable->current_chunk_shared);
 			}
 			else if (hashtable->unmatched_chunks != NULL)
 			{
@@ -1810,7 +1810,7 @@ ExecHashTableReset(HashJoinTable hashtable)
 			/* Free all the chunks. */
 			hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
 			hashtable->shared->chunks = InvalidDsaPointer;
-			while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
+			while (ExecHashPopChunkQueue(hashtable, &chunk_shared) != NULL)
 				dsa_free(hashtable->area, chunk_shared);
 
 			/* Reset the hash table size. */
@@ -1904,7 +1904,7 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 		/* This only runs in the leader during rescan initialization. */
 		Assert(!IsParallelWorker());
 		hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
-		chunk = pop_chunk_queue(hashtable, &chunk_shared);
+		chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 	}
 	else
 		chunk = hashtable->chunks;
@@ -1921,7 +1921,7 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 							  HJTUPLE_MINTUPLE(tuple)->t_len);
 		}
 		if (HashJoinTableIsShared(hashtable))
-			chunk = pop_chunk_queue(hashtable, &chunk_shared);
+			chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
 		else
 			chunk = chunk->next.unshared;
 	}
@@ -2243,7 +2243,7 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 	while (hashTuple != NULL)
 	{
 		HashJoinTuple nextHashTuple =
-			next_tuple_in_bucket(hashtable, hashTuple);
+			ExecHashNextTupleInBucket(hashtable, hashTuple);
 		MinimalTuple tuple;
 		Size		tupleSize;
 
@@ -2265,12 +2265,12 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 			 * We must copy the tuple into the dense storage, else it will not
 			 * be found by, eg, ExecHashIncreaseNumBatches.
 			 */
-			copyTuple = load_private_tuple(hashtable, tuple, false);
+			copyTuple = ExecHashLoadPrivateTuple(hashtable, tuple, false);
 			pfree(hashTuple);
 
 			copyTuple->hashvalue = hashvalue;
-			insert_tuple_into_bucket(hashtable, bucketno, copyTuple,
-									 InvalidDsaPointer);
+			ExecHashInsertTupleIntoBucket(hashtable, bucketno, copyTuple,
+										  InvalidDsaPointer);
 
 			/* We have reduced skew space, but overall space doesn't change */
 			hashtable->spaceUsedSkew -= tupleSize;
@@ -2335,8 +2335,8 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
  * in.
  */
 static HashJoinTuple
-load_private_tuple(HashJoinTable hashtable, MinimalTuple tuple,
-				   bool respect_work_mem)
+ExecHashLoadPrivateTuple(HashJoinTable hashtable, MinimalTuple tuple,
+						 bool respect_work_mem)
 {
 	HashMemoryChunk newChunk;
 	Size		size;
@@ -2454,8 +2454,8 @@ load_private_tuple(HashJoinTable hashtable, MinimalTuple tuple,
  * version is for shared hash tables.
  */
 static HashJoinTuple
-load_shared_tuple(HashJoinTable hashtable, MinimalTuple tuple,
-				  dsa_pointer *shared, bool respect_work_mem)
+ExecHashLoadSharedTuple(HashJoinTable hashtable, MinimalTuple tuple,
+						dsa_pointer *shared, bool respect_work_mem)
 {
 	dsa_pointer chunk_shared;
 	HashMemoryChunk chunk;
@@ -2610,7 +2610,7 @@ load_shared_tuple(HashJoinTable hashtable, MinimalTuple tuple,
  * when a new chunk is allocated, leaving the final chunk unaccounted for.
  */
 static void
-finish_loading(HashJoinTable hashtable)
+ExecHashFinishLoading(HashJoinTable hashtable)
 {
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -2629,8 +2629,8 @@ finish_loading(HashJoinTable hashtable)
  * InvalidDsaPointer.
  */
 static void
-insert_tuple_into_bucket(HashJoinTable table, int bucketno,
-						 HashJoinTuple tuple, dsa_pointer tuple_shared)
+ExecHashInsertTupleIntoBucket(HashJoinTable table, int bucketno,
+							  HashJoinTuple tuple, dsa_pointer tuple_shared)
 {
 	if (HashJoinTableIsShared(table))
 	{
@@ -2656,7 +2656,7 @@ insert_tuple_into_bucket(HashJoinTable table, int bucketno,
  * Get the first tuple in a given bucket identified by number.
  */
 static HashJoinTuple
-first_tuple_in_bucket(HashJoinTable table, int bucketno)
+ExecHashFirstTupleInBucket(HashJoinTable table, int bucketno)
 {
 	if (HashJoinTableIsShared(table))
 	{
@@ -2672,7 +2672,7 @@ first_tuple_in_bucket(HashJoinTable table, int bucketno)
  * Get the next tuple in the same bucket as 'tuple'.
  */
 static HashJoinTuple
-next_tuple_in_bucket(HashJoinTable table, HashJoinTuple tuple)
+ExecHashNextTupleInBucket(HashJoinTable table, HashJoinTuple tuple)
 {
 	if (HashJoinTableIsShared(table))
 		return (HashJoinTuple)
@@ -2687,7 +2687,7 @@ next_tuple_in_bucket(HashJoinTable table, HashJoinTuple tuple)
  * to the chunk, and set *shared to the DSA pointer to the chunk.
  */
 static HashMemoryChunk
-pop_chunk_queue_unlocked(HashJoinTable hashtable, dsa_pointer *shared)
+ExecHashPopChunkQueueUnlocked(HashJoinTable hashtable, dsa_pointer *shared)
 {
 	HashMemoryChunk chunk;
 
@@ -2709,12 +2709,12 @@ pop_chunk_queue_unlocked(HashJoinTable hashtable, dsa_pointer *shared)
  * See pop_chunk_unlocked.
  */
 static HashMemoryChunk
-pop_chunk_queue(HashJoinTable hashtable, dsa_pointer *shared)
+ExecHashPopChunkQueue(HashJoinTable hashtable, dsa_pointer *shared)
 {
 	HashMemoryChunk chunk;
 
 	LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
-	chunk = pop_chunk_queue_unlocked(hashtable, shared);
+	chunk = ExecHashPopChunkQueueUnlocked(hashtable, shared);
 	LWLockRelease(&hashtable->shared->chunk_lock);
 
 	return chunk;
