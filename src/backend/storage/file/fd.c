@@ -1430,6 +1430,9 @@ PathNameDeleteTemporaryFile(FileName fileName, bool error_on_failure)
  * Create directory 'directory'.  If necessary, create 'basedir', which must
  * be the directory above it.  This is designed for creating the top-level
  * temporary directory on demand before creating a directory underneath it.
+ * If necessary, delete a pre-existing directory of the same name, on the
+ * theory that crash-restarts can leave junk behind that we'll eventually
+ * crash into (see RemovePgTempFiles).
  */
 void
 PathNameCreateTemporaryDir(FileName basedir, FileName directory)
@@ -1437,8 +1440,9 @@ PathNameCreateTemporaryDir(FileName basedir, FileName directory)
 	if (mkdir(directory, S_IRWXU) < 0)
 	{
 		/*
-		 * Failed.  Try to create basedir first.  Tolerate ENOENT to close a
-		 * race against another process following the same algorithm.
+		 * Failed.  Try to create basedir first in case it's missing.
+		 * Tolerate ENOENT to close a race against another process following
+		 * the same algorithm.
 		 */
 		if (mkdir(basedir, S_IRWXU) < 0 && errno != ENOENT)
 			elog(ERROR, "cannot create temporary directory \"%s\": %m",
@@ -1446,8 +1450,20 @@ PathNameCreateTemporaryDir(FileName basedir, FileName directory)
 
 		/* Try again. */
 		if (mkdir(directory, S_IRWXU) < 0)
-			elog(ERROR, "cannot create temporary subdirectory \"%s\": %m",
+		{
+			elog(LOG, "cannot create temporary subdirectory \"%s\": %m (will try to unlink and then try again)",
 				 directory);
+			/*
+			 * Failed again.  Perhaps there is a directory in the way that is
+			 * left-over from a crash-restart?  Try to delete it.
+			 */
+			PathNameDeleteTemporaryDirRecursively(directory);
+
+			/* Now try one more time. */
+			if (mkdir(directory, S_IRWXU) < 0)
+				elog(ERROR, "cannot create temporary subdirectory \"%s\": %m",
+					 directory);
+		}
 	}
 }
 
