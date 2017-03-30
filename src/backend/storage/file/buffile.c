@@ -106,7 +106,6 @@ struct BufFile
 	 * avoid making redundant FileSeek calls.
 	 */
 
-	bool		isSegmented;	/* can only add files if this is TRUE */
 	bool		isInterXact;	/* keep open over transactions? */
 	bool		dirty;			/* does buffer need to be written? */
 	bool		readOnly;		/* has the file been set to read only? */
@@ -151,7 +150,7 @@ static File MakeSharedSegment(Oid tablespace,
 
 /*
  * Create a BufFile given the first underlying physical file.
- * NOTE: caller must set isSegmented and isInterXact if appropriate.
+ * NOTE: caller must set isInterXact if appropriate.
  */
 static BufFile *
 makeBufFile(File firstfile)
@@ -163,7 +162,6 @@ makeBufFile(File firstfile)
 	file->files[0] = firstfile;
 	file->offsets = (off_t *) palloc(sizeof(off_t));
 	file->offsets[0] = 0L;
-	file->isSegmented = false;
 	file->isInterXact = false;
 	file->dirty = false;
 	file->readOnly = false;
@@ -236,7 +234,6 @@ BufFileCreateTemp(bool interXact)
 	Assert(pfile >= 0);
 
 	file = makeBufFile(pfile);
-	file->isSegmented = true;
 	file->isInterXact = interXact;
 
 	return file;
@@ -519,7 +516,6 @@ BufFileCreateShared(const BufFileSet *set, const char *name, int stripe)
 									   &set->descriptor, name, 0);
 	file->offsets = (off_t *) palloc(sizeof(off_t));
 	file->offsets[0] = 0L;
-	file->isSegmented = true;
 	file->isInterXact = false;
 	file->dirty = false;
 	file->resowner = CurrentResourceOwner;
@@ -590,7 +586,6 @@ BufFileOpenShared(const BufFileSet *set, const char *name, int stripe)
 	file->numFiles = nfiles;
 	file->files = files;
 	file->offsets = (off_t *) palloc0(sizeof(off_t) * nfiles);
-	file->isSegmented = true;
 	file->isInterXact = false;
 	file->dirty = false;
 	file->resowner = CurrentResourceOwner; /* Unused, can't extend */
@@ -759,10 +754,12 @@ BufFileDumpBuffer(BufFile *file)
 	 */
 	while (wpos < file->nbytes)
 	{
+		off_t		availbytes;
+
 		/*
 		 * Advance to next component file if necessary and possible.
 		 */
-		if (file->curOffset >= MAX_PHYSICAL_FILESIZE && file->isSegmented)
+		if (file->curOffset >= MAX_PHYSICAL_FILESIZE)
 		{
 			while (file->curFile + 1 >= file->numFiles)
 				extendBufFile(file);
@@ -775,13 +772,10 @@ BufFileDumpBuffer(BufFile *file)
 		 * write as much as asked...
 		 */
 		bytestowrite = file->nbytes - wpos;
-		if (file->isSegmented)
-		{
-			off_t		availbytes = MAX_PHYSICAL_FILESIZE - file->curOffset;
+		availbytes = MAX_PHYSICAL_FILESIZE - file->curOffset;
 
-			if ((off_t) bytestowrite > availbytes)
-				bytestowrite = (int) availbytes;
-		}
+		if ((off_t) bytestowrite > availbytes)
+			bytestowrite = (int) availbytes;
 
 		/*
 		 * May need to reposition physical file.
@@ -1016,20 +1010,18 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 	 * above flush could have created a new segment, so checking sooner would
 	 * not work (at least not with this code).
 	 */
-	if (file->isSegmented)
+
+	/* convert seek to "start of next seg" to "end of last seg" */
+	if (newFile == file->numFiles && newOffset == 0)
 	{
-		/* convert seek to "start of next seg" to "end of last seg" */
-		if (newFile == file->numFiles && newOffset == 0)
-		{
-			newFile--;
-			newOffset = MAX_PHYSICAL_FILESIZE;
-		}
-		while (newOffset > MAX_PHYSICAL_FILESIZE)
-		{
-			if (++newFile >= file->numFiles)
-				return EOF;
-			newOffset -= MAX_PHYSICAL_FILESIZE;
-		}
+		newFile--;
+		newOffset = MAX_PHYSICAL_FILESIZE;
+	}
+	while (newOffset > MAX_PHYSICAL_FILESIZE)
+	{
+		if (++newFile >= file->numFiles)
+			return EOF;
+		newOffset -= MAX_PHYSICAL_FILESIZE;
 	}
 	if (newFile >= file->numFiles)
 		return EOF;
