@@ -39,13 +39,13 @@ extern void sts_end_write(SharedTuplestoreAccessor *accessor,
 
 extern void sts_end_write_all_partitions(SharedTuplestoreAccessor *accessor);
 
-extern void sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
-									  int partition);
+extern void sts_prepare_partial_scan(SharedTuplestoreAccessor *accessor,
+									 int partition);
 
-extern void sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
-									int partition);
+extern void sts_begin_partial_scan(SharedTuplestoreAccessor *accessor,
+								   int partition);
 
-extern void sts_end_parallel_read(SharedTuplestoreAccessor *accessor);
+extern void sts_end_partial_scan(SharedTuplestoreAccessor *accessor);
 
 extern void sts_puttuple(SharedTuplestoreAccessor *accessor,
 						 int partition,

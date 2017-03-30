@@ -32,29 +32,36 @@ typedef struct SharedTuplestoreParticipant
 	off_t read_offset;			/* Offset within segment file. */
 } SharedTuplestoreParticipant;
 
-/* The main data structure in shared memory. */
+/* The control object that lives in shared memory. */
 struct SharedTuplestore
 {
-	int reading_partition;
-	int nparticipants;
-	int flags;
-	size_t meta_data_size;
+	int reading_partition;		/* The partition we are currently reading. */
+	int nparticipants;			/* Number of participants that can write. */
+	int flags;					/* Flag bits from SHARED_TUPLESTORE_XXX */
+	size_t meta_data_size;		/* Size of per-tuple header. */
+
+	/* Followed by shared state for 'nparticipants' participants. */
 	SharedTuplestoreParticipant participants[FLEXIBLE_ARRAY_MEMBER];
+
+	/* Followed by a BufFileSet.  See GetBufFileSet macro. */
 };
 
-/* Per-participant backend-private state. */
+/* Per-participant state that lives in backend-local memory. */
 struct SharedTuplestoreAccessor
 {
 	int participant;			/* My partitipant number. */
 	SharedTuplestore *sts;		/* The shared state. */
 	int nfiles;					/* Size of local files array. */
-	BufFile **files;			/* Files we have open locally for writing. */
+	BufFile **files;			/* Per-partition files open for writing. */
 
 	BufFile *read_file;			/* The current file to read from. */
 	int read_partition;			/* The current partition to read from. */
 	int read_participant;		/* The current participant to read from. */
 	int read_fileno;			/* BufFile segment file number. */
 	off_t read_offset;			/* Offset within segment file. */
+
+	void *buffer;				/* A reusable tuple buffer. */
+	size_t buffer_size;			/* Size of above buffer. */
 };
 
 /*
@@ -125,6 +132,8 @@ sts_initialize(SharedTuplestore *sts, int participants,
 	accessor->sts = sts;
 	accessor->nfiles = 16;
 	accessor->files = palloc0(sizeof(BufFile *) * accessor->nfiles);
+	accessor->buffer_size = 1024;
+	accessor->buffer = palloc(accessor->buffer_size);
 	return accessor;
 }
 
@@ -149,6 +158,8 @@ sts_attach(SharedTuplestore *sts,
 	accessor->sts = sts;
 	accessor->nfiles = 16;
 	accessor->files = palloc0(sizeof(BufFile *) * accessor->nfiles);
+	accessor->buffer_size = 1024;
+	accessor->buffer = palloc(accessor->buffer_size);
 	return accessor;
 }
 
@@ -180,14 +191,14 @@ sts_end_write_all_partitions(SharedTuplestoreAccessor *accessor)
 }
 
 /*
- * Prepare to read one partition in all partiticpants in parallel.  Each will
+ * Prepare to read one partition in all participants in parallel.  Each will
  * read an arbitrary subset of the tuples in the same partition until there
- * are none left.  Only one backend needs to call this.  After it returns, all
- * participating backends should call sts_begin_parallel_read().
+ * are none left.  One backend should call this.  After it returns, all
+ * participating backends should call sts_begin_partial_scan() and then loop
+ * over sts_gettuple().
  */
 void
-sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
-						  int partition)
+sts_prepare_partial_scan(SharedTuplestoreAccessor *accessor, int partition)
 {
 	int i;
 
@@ -208,11 +219,10 @@ sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
 }
 
 /*
- * Pepare for a shared read of one partition.
+ * Begin scanning the contents of one partition.
  */
 void
-sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
-						int partition)
+sts_begin_partial_scan(SharedTuplestoreAccessor *accessor, int partition)
 {
 	char name[MAXPGPATH];
 	BufFileSet *fileset = GetBufFileSet(accessor->sts);
@@ -232,10 +242,10 @@ sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
 }
 
 /*
- * Finish reading.
+ * Finish a partial scan, freeing associated backend-local resources.
  */
 void
-sts_end_parallel_read(SharedTuplestoreAccessor *accessor)
+sts_end_partial_scan(SharedTuplestoreAccessor *accessor)
 {
 	if (accessor->read_file != NULL)
 	{
@@ -314,6 +324,13 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, int partition,
 				 errmsg("could not write to temporary file: %m")));
 }
 
+/*
+ * Get the next tuple in the current scan.  Points to a private buffer which
+ * will remain untouched until the next call to this function.  Return NULL if
+ * there are no more tuples.  If the SharedTuplestore was initialized with
+ * non-zero meta_data_size, the meta-data associate with any tuple
+ * successfully retrieved will be written to 'meta_data'.
+ */
 MinimalTuple
 sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 {
@@ -379,9 +396,9 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 		/* Check if this participant's file has already been entirely read. */
 		if (participant->eof)
 		{
+			LWLockRelease(&participant->lock);
 			BufFileClose(accessor->read_file);
 			accessor->read_file = NULL;
-			LWLockRelease(&participant->lock);
 			continue;
 		}
 
@@ -459,8 +476,19 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 			continue;
 		}
 
-		/* Read the tuple. */
-		tuple = (MinimalTuple) palloc(tuple_size);
+		/* Enlarge buffer if necessary. */
+		if (tuple_size > accessor->buffer_size)
+		{
+			size_t new_buffer_size = Max(accessor->buffer_size * 2, tuple_size);
+			void *new_buffer = palloc(new_buffer_size);
+
+			pfree(accessor->buffer);
+			accessor->buffer_size = new_buffer_size;
+			accessor->buffer = new_buffer;
+		}
+
+		/* Read tuple. */
+		tuple = (MinimalTuple) accessor->buffer;
 		tuple->t_len = tuple_size;
 		nread = BufFileRead(accessor->read_file,
 							((char *) tuple) + sizeof(tuple->t_len),

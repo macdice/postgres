@@ -345,7 +345,8 @@ BufFileSetOnDetach(dsm_segment *segment, Datum datum)
 
 	/*
 	 * If we are the last to detach, we delete the directory in all referenced
-	 * tablespaces.
+	 * tablespaces.  Note that we are still actually attached for the rest of
+	 * this function so we can safely access its data.
 	 */
 	if (unlink_all)
 	{
