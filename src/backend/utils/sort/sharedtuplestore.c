@@ -329,7 +329,8 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, int partition,
  * will remain untouched until the next call to this function.  Return NULL if
  * there are no more tuples.  If the SharedTuplestore was initialized with
  * non-zero meta_data_size, the meta-data associate with any tuple
- * successfully retrieved will be written to 'meta_data'.
+ * successfully retrieved will be written to 'meta_data'.  The result should
+ * not be freed.
  */
 MinimalTuple
 sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
@@ -420,7 +421,11 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 			accessor->read_offset = participant->read_offset;
 		}
 
-		/* Read the optional meta-data. */
+		/*
+		 * Read the optional meta-data, if configured for that.  If using
+		 * meta-data, this it the point at which we'll discover the end of the
+		 * file.
+		 */
 		eof = false;
 		if (accessor->sts->meta_data_size > 0)
 		{
@@ -434,7 +439,12 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 						 errmsg("could not read from temporary file: %m")));
 		}
 
-		/* Read the size. */
+		/*
+		 * If we haven't already hit the end of the file above while trying to
+		 * read per-tuple meta-data, then it's time to read the size.  If we
+		 * aren't configured for meta-data, then this is the point at which we
+		 * expect to discover the end of the file.
+		 */
 		if (!eof)
 		{
 			nread = BufFileRead(accessor->read_file, &tuple_size, sizeof(tuple_size));
