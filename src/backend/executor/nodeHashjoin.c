@@ -26,7 +26,9 @@
  * In a parallel-aware hash join, there is also a shared 'phase' which
  * co-operating backends use to synchronize their local state machine and
  * program counter with the multi-process join.  The phase is managed by a
- * 'barrier' IPC primitive.
+ * 'barrier' IPC primitive.  The only way for it to move forward is through
+ * the BarrierWait() primitive.  When all attached participants arrive at a
+ * BarrierWait() call, the phase advances and the participants are released.
  *
  * When a participant begins working on a parallel hash join, it must first
  * figure out how much progress has already been made, because participants
@@ -41,7 +43,8 @@
  * table until it has been created, and we cannot begin probing it until it is
  * entirely built.
  *
- * The phases are as follows:
+ * The phase is an integer which begins at zero and increments one by one, but
+ * in the code it is referred to by symbolic names as follows:
  *
  *   PHJ_PHASE_BEGINNING   -- initial phase, before any participant acts
  *   PHJ_PHASE_CREATING	   -- one participant creates the shmem hash table
@@ -53,12 +56,17 @@
  *
  * Then follow phases for later batches, in the case where the hash table
  * wouldn't fit in work_mem, so must be spilled to disk.  For each batch n,
- * the phases are:
+ * the phases are encoded into numbers which are represented with macros:
  *
  *   PHJ_PHASE_RESETTING_BATCH(n) -- one participant prepared the hash table
  *   PHJ_PHASE_LOADING_BATCH(n)   -- all participants load the batch
  *   PHJ_PHASE_PROBING_BATCH(n)   -- all participants probe the batch
  *   PHJ_PHASE_UNMATCHED_BATCH(n) -- all participants scan for unmatched
+ *
+ * The only exception to the rule that the phase only travels in one direction
+ * one step at a time is the during a rescan.  In that case, there is a time
+ * when only the leader process is running, in between scans.  The leader is
+ * then able to reset the Barrier to its initial state safely.
  *
  * If it turns out that we run out of work_mem because the planner
  * underestimated the number of batches required in order for each one to fit
