@@ -2465,7 +2465,11 @@ ExecHashLoadPrivateTuple(HashJoinTable hashtable, MinimalTuple tuple,
 
 /*
  * Load a tuple into shared dense storage, like 'load_private_tuple'.  This
- * version is for shared hash tables.
+ * version is for shared hash tables.  Note that in general we can't actually
+ * exchange tuples with other backends directly like this because they might
+ * contain non-blessed records.  This is avoided by the planner, which never
+ * plans a shared hash table that would receive a tlist containing a transient
+ * type.
  */
 static HashJoinTuple
 ExecHashLoadSharedTuple(HashJoinTable hashtable, MinimalTuple tuple,
