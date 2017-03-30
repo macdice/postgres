@@ -59,6 +59,9 @@ struct SharedTuplestoreAccessor
 	int read_participant;		/* The current participant to read from. */
 	int read_fileno;			/* BufFile segment file number. */
 	off_t read_offset;			/* Offset within segment file. */
+
+	void *buffer;				/* A reusable tuple buffer. */
+	size_t buffer_size;			/* Size of above buffer. */
 };
 
 /*
@@ -129,6 +132,8 @@ sts_initialize(SharedTuplestore *sts, int participants,
 	accessor->sts = sts;
 	accessor->nfiles = 16;
 	accessor->files = palloc0(sizeof(BufFile *) * accessor->nfiles);
+	accessor->buffer_size = 1024;
+	accessor->buffer = palloc(accessor->buffer_size);
 	return accessor;
 }
 
@@ -153,6 +158,8 @@ sts_attach(SharedTuplestore *sts,
 	accessor->sts = sts;
 	accessor->nfiles = 16;
 	accessor->files = palloc0(sizeof(BufFile *) * accessor->nfiles);
+	accessor->buffer_size = 1024;
+	accessor->buffer = palloc(accessor->buffer_size);
 	return accessor;
 }
 
@@ -463,8 +470,19 @@ sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 			continue;
 		}
 
-		/* Read the tuple. */
-		tuple = (MinimalTuple) palloc(tuple_size);
+		/* Enlarge buffer if necessary. */
+		if (tuple_size > accessor->buffer_size)
+		{
+			size_t new_buffer_size = Max(accessor->buffer_size * 2, tuple_size);
+			void *new_buffer = palloc(new_buffer_size);
+
+			pfree(accessor->buffer);
+			accessor->buffer_size = new_buffer_size;
+			accessor->buffer = new_buffer;
+		}
+
+		/* Read tuple. */
+		tuple = (MinimalTuple) accessor->buffer;
 		tuple->t_len = tuple_size;
 		nread = BufFileRead(accessor->read_file,
 							((char *) tuple) + sizeof(tuple->t_len),
