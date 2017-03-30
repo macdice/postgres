@@ -3324,8 +3324,8 @@ unlink_if_exists_fname(const char *fname, bool isdir, int elevel)
 	}
 	else
 	{
-		if (unlink(fname) != 0 && errno != ENOENT)
-			elog(elevel, "could not unlink file \"%s\": %m", fname);
+		/* Use PathNameDeleteTemporaryFile to report filesize */
+		PathNameDeleteTemporaryFile((FileName) fname, false);
 	}
 }
 
