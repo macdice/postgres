@@ -191,14 +191,14 @@ sts_end_write_all_partitions(SharedTuplestoreAccessor *accessor)
 }
 
 /*
- * Prepare to read one partition in all partiticpants in parallel.  Each will
+ * Prepare to read one partition in all participants in parallel.  Each will
  * read an arbitrary subset of the tuples in the same partition until there
- * are none left.  Only one backend needs to call this.  After it returns, all
- * participating backends should call sts_begin_parallel_read().
+ * are none left.  One backend should call this.  After it returns, all
+ * participating backends should call sts_begin_partial_scan() and then loop
+ * over sts_gettuple().
  */
 void
-sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
-						  int partition)
+sts_prepare_partial_scan(SharedTuplestoreAccessor *accessor, int partition)
 {
 	int i;
 
@@ -219,11 +219,10 @@ sts_prepare_parallel_read(SharedTuplestoreAccessor *accessor,
 }
 
 /*
- * Pepare for a shared read of one partition.
+ * Begin scanning the contents of one partition.
  */
 void
-sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
-						int partition)
+sts_begin_partial_scan(SharedTuplestoreAccessor *accessor, int partition)
 {
 	char name[MAXPGPATH];
 	BufFileSet *fileset = GetBufFileSet(accessor->sts);
@@ -243,10 +242,10 @@ sts_begin_parallel_read(SharedTuplestoreAccessor *accessor,
 }
 
 /*
- * Finish reading.
+ * Finish a partial scan, freeing associated backend-local resources.
  */
 void
-sts_end_parallel_read(SharedTuplestoreAccessor *accessor)
+sts_end_partial_scan(SharedTuplestoreAccessor *accessor)
 {
 	if (accessor->read_file != NULL)
 	{
@@ -325,6 +324,13 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, int partition,
 				 errmsg("could not write to temporary file: %m")));
 }
 
+/*
+ * Get the next tuple in the current scan.  Points to a private buffer which
+ * will remain untouched until the next call to this function.  Return NULL if
+ * there are no more tuples.  If the SharedTuplestore was initialized with
+ * non-zero meta_data_size, the meta-data associate with any tuple
+ * successfully retrieved will be written to 'meta_data'.
+ */
 MinimalTuple
 sts_gettuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 {
