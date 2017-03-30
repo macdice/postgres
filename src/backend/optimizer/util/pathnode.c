@@ -2183,6 +2183,7 @@ create_mergejoin_path(PlannerInfo *root,
  * 'required_outer' is the set of required outer rels
  * 'hashclauses' are the RestrictInfo nodes to use as hash clauses
  *		(this should be a subset of the restrict_clauses list)
+ * 'table_type' to select [[Parallel] Shared] Hash
  */
 HashPath *
 create_hashjoin_path(PlannerInfo *root,
@@ -2195,7 +2196,8 @@ create_hashjoin_path(PlannerInfo *root,
 					 Path *inner_path,
 					 List *restrict_clauses,
 					 Relids required_outer,
-					 List *hashclauses)
+					 List *hashclauses,
+					 HashPathTableType table_type)
 {
 	HashPath   *pathnode = makeNode(HashPath);
 
@@ -2210,9 +2212,12 @@ create_hashjoin_path(PlannerInfo *root,
 								  sjinfo,
 								  required_outer,
 								  &restrict_clauses);
-	pathnode->jpath.path.parallel_aware = false;
+	pathnode->jpath.path.parallel_aware =
+		joinrel->consider_parallel &&
+		(table_type != HASHPATH_TABLE_PRIVATE);
 	pathnode->jpath.path.parallel_safe = joinrel->consider_parallel &&
 		outer_path->parallel_safe && inner_path->parallel_safe;
+	pathnode->table_type = table_type;
 	/* This is a foolish way to estimate parallel_workers, but for now... */
 	pathnode->jpath.path.parallel_workers = outer_path->parallel_workers;
 

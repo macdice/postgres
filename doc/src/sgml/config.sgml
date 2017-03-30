@@ -3814,6 +3814,21 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-cpu-shared-tuple-cost" xreflabel="cpu_shared_tuple_cost">
+      <term><varname>cpu_shared_tuple_cost</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>cpu_shared_tuple_cost</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the planner's estimate of the cost of sharing rows in
+        memory during a parallel query.
+        The default is 0.001.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-cpu-index-tuple-cost" xreflabel="cpu_index_tuple_cost">
       <term><varname>cpu_index_tuple_cost</varname> (<type>floating point</type>)
       <indexterm>
@@ -3840,6 +3855,21 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         Sets the planner's estimate of the cost of processing each
         operator or function executed during a query.
         The default is 0.0025.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-cpu-synchronization-cost" xreflabel="cpu_synchronization_cost">
+      <term><varname>cpu_synchronization_cost</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>cpu_synchronization_cost</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the planner's estimate of the cost of waiting at synchronization
+        points for other processes while executing parallel queries.
+        The default is 1.0.
        </para>
       </listitem>
      </varlistentry>

@@ -828,7 +828,10 @@ typedef struct GatherMerge
  * If the executor is supposed to try to apply skew join optimization, then
  * skewTable/skewColumn/skewInherit identify the outer relation's join key
  * column, from which the relevant MCV statistics can be fetched.  Also, its
- * type information is provided to save a lookup.
+ * type information is provided to save a lookup.  The total number of
+ * estimated rows is needed for Parallel Shared Hash, because the number
+ * in plan.plan_rows is only a partial estimate.  To size a shared hash table
+ * we need the total size.
  * ----------------
  */
 typedef struct Hash
@@ -839,6 +842,8 @@ typedef struct Hash
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */
 	Oid			skewColType;	/* datatype of the outer key column */
 	int32		skewColTypmod;	/* typmod of the outer key column */
+	bool		shared_table;	/* table shared by multiple participants? */
+	double		rows_total;		/* estimated total rows (sum of partials) */
 	/* all other info is in the parent HashJoin node */
 } Hash;
 

@@ -1308,6 +1308,14 @@ typedef struct MergePath
 	bool		materialize_inner;		/* add Materialize to inner? */
 } MergePath;
 
+typedef enum
+{
+	/* All participants builds their own private copy of the hash table. */
+	HASHPATH_TABLE_PRIVATE,
+	/* All participants build a shared hash table. */
+	HASHPATH_TABLE_SHARED_PARALLEL
+} HashPathTableType;
+
 /*
  * A hashjoin path has these fields.
  *
@@ -1322,6 +1330,8 @@ typedef struct HashPath
 	JoinPath	jpath;
 	List	   *path_hashclauses;		/* join clauses used for hashing */
 	int			num_batches;	/* number of batches expected */
+	double		inner_rows_total;	/* total inner rows expected */
+	HashPathTableType table_type;		/* hash table sharing */
 } HashPath;
 
 /*
@@ -2168,6 +2178,7 @@ typedef struct JoinCostWorkspace
 	/* private for cost_hashjoin code */
 	int			numbuckets;
 	int			numbatches;
+	double		inner_rows_total;
 } JoinCostWorkspace;
 
 #endif   /* RELATION_H */

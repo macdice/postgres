@@ -28,6 +28,7 @@
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
+#include "executor/nodeHashjoin.h"
 #include "executor/nodeSeqscan.h"
 #include "executor/nodeIndexscan.h"
 #include "executor/nodeIndexonlyscan.h"
@@ -223,6 +224,10 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 				ExecBitmapHeapEstimate((BitmapHeapScanState *) planstate,
 									   e->pcxt);
 				break;
+			case T_HashJoinState:
+				ExecHashJoinEstimate((HashJoinState *) planstate,
+									 e->pcxt);
+				break;
 			default:
 				break;
 		}
@@ -287,7 +292,10 @@ ExecParallelInitializeDSM(PlanState *planstate,
 				ExecBitmapHeapInitializeDSM((BitmapHeapScanState *) planstate,
 											d->pcxt);
 				break;
-
+			case T_HashJoinState:
+				ExecHashJoinInitializeDSM((HashJoinState *) planstate,
+										  d->pcxt);
+				break;
 			default:
 				break;
 		}
@@ -789,6 +797,10 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 			case T_BitmapHeapScanState:
 				ExecBitmapHeapInitializeWorker(
 									 (BitmapHeapScanState *) planstate, pwcxt);
+				break;
+			case T_HashJoinState:
+				ExecHashJoinInitializeWorker((HashJoinState *) planstate,
+											 pwcxt);
 				break;
 			default:
 				break;

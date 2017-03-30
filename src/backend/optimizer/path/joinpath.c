@@ -21,6 +21,7 @@
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/tlist.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -596,7 +597,8 @@ try_hashjoin_path(PlannerInfo *root,
 				  Path *inner_path,
 				  List *hashclauses,
 				  JoinType jointype,
-				  JoinPathExtraData *extra)
+				  JoinPathExtraData *extra,
+				  HashPathTableType table_type)
 {
 	Relids		required_outer;
 	JoinCostWorkspace workspace;
@@ -621,7 +623,7 @@ try_hashjoin_path(PlannerInfo *root,
 	 */
 	initial_cost_hashjoin(root, &workspace, jointype, hashclauses,
 						  outer_path, inner_path,
-						  extra->sjinfo, &extra->semifactors);
+						  extra->sjinfo, &extra->semifactors, table_type);
 
 	if (add_path_precheck(joinrel,
 						  workspace.startup_cost, workspace.total_cost,
@@ -638,7 +640,8 @@ try_hashjoin_path(PlannerInfo *root,
 									  inner_path,
 									  extra->restrictlist,
 									  required_outer,
-									  hashclauses));
+									  hashclauses,
+									  table_type));
 	}
 	else
 	{
@@ -659,7 +662,8 @@ try_partial_hashjoin_path(PlannerInfo *root,
 						  Path *inner_path,
 						  List *hashclauses,
 						  JoinType jointype,
-						  JoinPathExtraData *extra)
+						  JoinPathExtraData *extra,
+						  HashPathTableType table_type)
 {
 	JoinCostWorkspace workspace;
 
@@ -684,8 +688,12 @@ try_partial_hashjoin_path(PlannerInfo *root,
 	 */
 	initial_cost_hashjoin(root, &workspace, jointype, hashclauses,
 						  outer_path, inner_path,
-						  extra->sjinfo, &extra->semifactors);
+						  extra->sjinfo, &extra->semifactors, table_type);
 	if (!add_partial_path_precheck(joinrel, workspace.total_cost, NIL))
+		return;
+
+	/* TODO: No multi-batch support for shared hash tables yet. */
+	if (table_type != HASHPATH_TABLE_PRIVATE && workspace.numbatches > 1)
 		return;
 
 	/* Might be good enough to be worth trying, so let's try it. */
@@ -700,7 +708,8 @@ try_partial_hashjoin_path(PlannerInfo *root,
 										  inner_path,
 										  extra->restrictlist,
 										  NULL,
-										  hashclauses));
+										  hashclauses,
+										  table_type));
 }
 
 /*
@@ -1624,7 +1633,8 @@ hash_inner_and_outer(PlannerInfo *root,
 							  cheapest_total_inner,
 							  hashclauses,
 							  jointype,
-							  extra);
+							  extra,
+							  HASHPATH_TABLE_PRIVATE);
 			/* no possibility of cheap startup here */
 		}
 		else if (jointype == JOIN_UNIQUE_INNER)
@@ -1640,7 +1650,8 @@ hash_inner_and_outer(PlannerInfo *root,
 							  cheapest_total_inner,
 							  hashclauses,
 							  jointype,
-							  extra);
+							  extra,
+							  HASHPATH_TABLE_PRIVATE);
 			if (cheapest_startup_outer != NULL &&
 				cheapest_startup_outer != cheapest_total_outer)
 				try_hashjoin_path(root,
@@ -1649,7 +1660,8 @@ hash_inner_and_outer(PlannerInfo *root,
 								  cheapest_total_inner,
 								  hashclauses,
 								  jointype,
-								  extra);
+								  extra,
+								  HASHPATH_TABLE_PRIVATE);
 		}
 		else
 		{
@@ -1670,7 +1682,8 @@ hash_inner_and_outer(PlannerInfo *root,
 								  cheapest_total_inner,
 								  hashclauses,
 								  jointype,
-								  extra);
+								  extra,
+								  HASHPATH_TABLE_PRIVATE);
 
 			foreach(lc1, outerrel->cheapest_parameterized_paths)
 			{
@@ -1704,7 +1717,8 @@ hash_inner_and_outer(PlannerInfo *root,
 									  innerpath,
 									  hashclauses,
 									  jointype,
-									  extra);
+									  extra,
+									  HASHPATH_TABLE_PRIVATE);
 				}
 			}
 		}
@@ -1713,22 +1727,35 @@ hash_inner_and_outer(PlannerInfo *root,
 		 * If the joinrel is parallel-safe, we may be able to consider a
 		 * partial hash join.  However, we can't handle JOIN_UNIQUE_OUTER,
 		 * because the outer path will be partial, and therefore we won't be
-		 * able to properly guarantee uniqueness.  Similarly, we can't handle
-		 * JOIN_FULL and JOIN_RIGHT, because they can produce false null
-		 * extended rows.  Also, the resulting path must not be parameterized.
+		 * able to properly guarantee uniqueness.  Also, the resulting path
+		 * must not be parameterized.
 		 */
 		if (joinrel->consider_parallel &&
 			save_jointype != JOIN_UNIQUE_OUTER &&
-			save_jointype != JOIN_FULL &&
-			save_jointype != JOIN_RIGHT &&
 			outerrel->partial_pathlist != NIL &&
 			bms_is_empty(joinrel->lateral_relids))
 		{
 			Path	   *cheapest_partial_outer;
+			Path	   *cheapest_partial_inner = NULL;
 			Path	   *cheapest_safe_inner = NULL;
 
 			cheapest_partial_outer =
 				(Path *) linitial(outerrel->partial_pathlist);
+
+			/*
+			 * Can we use a partial inner plan too, so that we can build a
+			 * shared hash table in parallel?
+			 */
+			if (innerrel->partial_pathlist != NIL)
+				cheapest_partial_inner =
+					(Path *) linitial(innerrel->partial_pathlist);
+			if (cheapest_partial_inner != NULL &&
+				!tlist_references_transient_type(cheapest_partial_inner->pathtarget->exprs))
+				try_partial_hashjoin_path(root, joinrel,
+										  cheapest_partial_outer,
+										  cheapest_partial_inner,
+										  hashclauses, jointype, extra,
+										  HASHPATH_TABLE_SHARED_PARALLEL);
 
 			/*
 			 * Normally, given that the joinrel is parallel-safe, the cheapest
@@ -1744,10 +1771,21 @@ hash_inner_and_outer(PlannerInfo *root,
 					get_cheapest_parallel_safe_total_inner(innerrel->pathlist);
 
 			if (cheapest_safe_inner != NULL)
-				try_partial_hashjoin_path(root, joinrel,
-										  cheapest_partial_outer,
-										  cheapest_safe_inner,
-										  hashclauses, jointype, extra);
+			{
+				/*
+				 * Also try private hash tables built by each worker, but
+				 * only if it's not a FULL or RIGHT join.  Those rely on being
+				 * able to track which hash table entries have been matched,
+				 * but we don't have a way to unify the HEAP_TUPLE_HAS_MATCH
+				 * flags from all the private copies of the hash table.
+				 */
+				if (save_jointype != JOIN_FULL && save_jointype != JOIN_RIGHT)
+					try_partial_hashjoin_path(root, joinrel,
+											  cheapest_partial_outer,
+											  cheapest_safe_inner,
+											  hashclauses, jointype, extra,
+											  HASHPATH_TABLE_PRIVATE);
+			}
 		}
 	}
 }

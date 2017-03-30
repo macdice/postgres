@@ -252,6 +252,81 @@ explain (costs off)
          Index Cond: (unique1 = 1)
 (5 rows)
 
+set enable_nestloop to off;
+set enable_mergejoin to off;
+set enable_indexscan to off;
+-- test parallel hash join.
+explain (costs off)
+     select  count(*) from tenk1 join tenk2 using (unique1) where tenk2.unique1 > 10;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Parallel Hash Join
+                     Hash Cond: (tenk2.unique1 = tenk1.unique1)
+                     ->  Parallel Seq Scan on tenk2
+                           Filter: (unique1 > 10)
+                     ->  Parallel Shared Hash
+                           ->  Parallel Seq Scan on tenk1
+(10 rows)
+
+select  count(*) from tenk1 join tenk2 using (unique1) where tenk2.unique1 > 10;
+ count 
+-------
+  9989
+(1 row)
+
+-- test parallel hash join (outer join, all matched).
+explain (costs off)
+     select  count(*) from tenk1 full outer join tenk2 using (unique1) where tenk2.unique1 > 10;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Parallel Hash Left Join
+                     Hash Cond: (tenk2.unique1 = tenk1.unique1)
+                     ->  Parallel Seq Scan on tenk2
+                           Filter: (unique1 > 10)
+                     ->  Parallel Shared Hash
+                           ->  Parallel Seq Scan on tenk1
+(10 rows)
+
+select  count(*) from tenk1 full outer join tenk2 using (unique1) where tenk2.unique1 > 10;
+ count 
+-------
+  9989
+(1 row)
+
+-- test parallel hash join (outer join, all unmatched).
+explain (costs off)
+     select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1) where tenk2.unique1 > 10;
+                                    QUERY PLAN                                    
+----------------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Parallel Hash Left Join
+                     Hash Cond: (('-1'::integer - tenk2.unique1) = tenk1.unique1)
+                     ->  Parallel Seq Scan on tenk2
+                           Filter: (unique1 > 10)
+                     ->  Parallel Shared Hash
+                           ->  Parallel Seq Scan on tenk1
+(10 rows)
+
+select  count(*) from tenk1 full outer join tenk2 on (tenk1.unique1 = -1 - tenk2.unique1) where tenk2.unique1 > 10;
+ count 
+-------
+  9989
+(1 row)
+
+reset enable_nestloop;
+reset enable_mergejoin;
+reset enable_indexscan;
 -- provoke error in worker
 select stringu1::int2 from tenk1 where unique1 = 1;
 ERROR:  invalid input syntax for integer: "BAAAAA"

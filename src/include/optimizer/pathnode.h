@@ -149,7 +149,8 @@ extern HashPath *create_hashjoin_path(PlannerInfo *root,
 					 Path *inner_path,
 					 List *restrict_clauses,
 					 Relids required_outer,
-					 List *hashclauses);
+					 List *hashclauses,
+					 HashPathTableType table_type);
 
 extern ProjectionPath *create_projection_path(PlannerInfo *root,
 					   RelOptInfo *rel,

@@ -2176,6 +2176,7 @@ _readHash(void)
 	READ_BOOL_FIELD(skewInherit);
 	READ_OID_FIELD(skewColType);
 	READ_INT_FIELD(skewColTypmod);
+	READ_FLOAT_FIELD(rows_total);
 
 	READ_DONE();
 }

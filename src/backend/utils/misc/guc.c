@@ -2904,6 +2904,17 @@ static struct config_real ConfigureNamesReal[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"cpu_shared_tuple_cost", PGC_USERSET, QUERY_TUNING_COST,
+			gettext_noop("Sets the planner's estimate of the cost of "
+						 "memory contention introduced by sharing tuples"
+						 "with other parallel workers."),
+			NULL
+		},
+		&cpu_shared_tuple_cost,
+		DEFAULT_CPU_SHARED_TUPLE_COST, -DBL_MAX, DBL_MAX,
+		NULL, NULL, NULL
+	},
+	{
 		{"cpu_index_tuple_cost", PGC_USERSET, QUERY_TUNING_COST,
 			gettext_noop("Sets the planner's estimate of the cost of "
 						 "processing each index entry during an index scan."),
@@ -2921,6 +2932,17 @@ static struct config_real ConfigureNamesReal[] =
 		},
 		&cpu_operator_cost,
 		DEFAULT_CPU_OPERATOR_COST, 0, DBL_MAX,
+		NULL, NULL, NULL
+	},
+	{
+		{"cpu_synchronization_cost", PGC_USERSET, QUERY_TUNING_COST,
+			gettext_noop("Sets the planner's estimate of the cost of "
+						 "waiting at a synchronization point for other "
+						 "parallel query participants."),
+			NULL
+		},
+		&cpu_synchronization_cost,
+		DEFAULT_CPU_SYNCHRONIZATION_COST, -DBL_MAX, DBL_MAX,
 		NULL, NULL, NULL
 	},
 	{

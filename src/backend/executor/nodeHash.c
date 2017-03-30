@@ -25,6 +25,7 @@
 #include <limits.h>
 
 #include "access/htup_details.h"
+#include "access/parallel.h"
 #include "catalog/pg_statistic.h"
 #include "commands/tablespace.h"
 #include "executor/execdebug.h"
@@ -32,6 +33,8 @@
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
+#include "pgstat.h"
+#include "storage/barrier.h"
 #include "utils/dynahash.h"
 #include "utils/memutils.h"
 #include "utils/lsyscache.h"
@@ -40,6 +43,7 @@
 
 static void ExecHashIncreaseNumBatches(HashJoinTable hashtable);
 static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
+static void ExecHashReinsertAll(HashJoinTable hashtable);
 static void ExecHashBuildSkewHash(HashJoinTable hashtable, Hash *node,
 					  int mcvsToUse);
 static void ExecHashSkewTableInsert(HashJoinTable hashtable,
@@ -48,8 +52,25 @@ static void ExecHashSkewTableInsert(HashJoinTable hashtable,
 						int bucketNumber);
 static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
-static HashJoinTuple load_tuple(HashJoinTable hashtable, MinimalTuple tuple,
-								bool respect_work_mem);
+static HashMemoryChunk pop_chunk_queue(HashJoinTable table,
+									   dsa_pointer *shared);
+static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
+										  HashJoinTuple tuple);
+
+static void insert_tuple_into_bucket(HashJoinTable table, int bucketno,
+									 HashJoinTuple tuple,
+									 dsa_pointer tuple_pointer);
+static HashJoinTuple first_tuple_in_bucket(HashJoinTable table, int bucketno);
+static HashJoinTuple next_tuple_in_bucket(HashJoinTable table,
+										  HashJoinTuple tuple);
+
+static HashJoinTuple load_private_tuple(HashJoinTable hashtable,
+										MinimalTuple tuple,
+										bool respect_work_mem);
+static HashJoinTuple load_shared_tuple(HashJoinTable hashtable,
+									   MinimalTuple tuple,
+									   dsa_pointer *shared);
+static void finish_loading(HashJoinTable hashtable);
 
 /* ----------------------------------------------------------------
  *		ExecHash
@@ -80,6 +101,7 @@ MultiExecHash(HashState *node)
 	TupleTableSlot *slot;
 	ExprContext *econtext;
 	uint32		hashvalue;
+	Barrier	   *barrier;
 
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
@@ -90,6 +112,48 @@ MultiExecHash(HashState *node)
 	 */
 	outerNode = outerPlanState(node);
 	hashtable = node->hashtable;
+
+	if (HashJoinTableIsShared(hashtable))
+	{
+		/*
+		 * Synchronize parallel hash table builds.  At this stage we know that
+		 * the shared hash table has been created, but we don't know if our
+		 * peers are still in MultiExecHash and if so how far through.  We use
+		 * the phase to synchronize with them.
+		 */
+		barrier = &hashtable->shared->barrier;
+
+		switch (BarrierPhase(barrier))
+		{
+		case PHJ_PHASE_BEGINNING:
+			/* ExecHashTableCreate already handled this phase. */
+			Assert(false);
+		case PHJ_PHASE_CREATING:
+			/* Wait for serial phase, and then either build or wait. */
+			BarrierWait(barrier, WAIT_EVENT_HASH_CREATING);
+			goto build;
+		case PHJ_PHASE_BUILDING:
+			/* Building is already underway.  Join in. */
+			goto build;
+		case PHJ_PHASE_RESIZING:
+			/* Can't help with serial phase. */
+			goto post_resize;
+		case PHJ_PHASE_REINSERTING:
+			/* Reinserting is in progress after resizing.  Let's help. */
+			goto reinsert;
+		default:
+			/* The hash table building work is already finished. */
+			goto finish;
+		}
+	}
+
+ build:
+	if (HashJoinTableIsShared(hashtable))
+	{
+		/* Make sure our local state is up-to-date so we can build. */
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_BUILDING);
+		ExecHashUpdate(hashtable);
+	}
 
 	/*
 	 * set expression context
@@ -126,17 +190,76 @@ MultiExecHash(HashState *node)
 				/* Not subject to skew optimization, so insert normally */
 				ExecHashTableInsert(hashtable, slot, hashvalue);
 			}
-			hashtable->totalTuples += 1;
+			hashtable->partialTuples += 1;
+			if (!HashJoinTableIsShared(hashtable))
+				hashtable->totalTuples += 1;
 		}
+	}
+	finish_loading(hashtable);
+
+	if (HashJoinTableIsShared(hashtable))
+	{
+		bool elected_to_resize;
+
+		/*
+		 * Wait for all backends to finish building.  If only one worker is
+		 * running the building phase because of a non-partial inner plan, the
+		 * other workers will pile up here waiting.  If multiple worker are
+		 * building, they should finish close to each other in time.
+		 */
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_BUILDING);
+		elected_to_resize = BarrierWait(barrier, WAIT_EVENT_HASH_BUILDING);
+		/*
+		 * Resizing is a serial phase.  All but one should skip ahead to
+		 * reinserting phase, but all workers should update their copy of the
+		 * shared tuple count with the final total first.
+		 */
+		if (!elected_to_resize)
+			goto post_resize;
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_RESIZING);
 	}
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
-	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
-		ExecHashIncreaseNumBuckets(hashtable);
+	ExecHashUpdate(hashtable);
+	ExecHashIncreaseNumBuckets(hashtable);
+
+ post_resize:
+	if (HashJoinTableIsShared(hashtable))
+	{
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_RESIZING);
+		BarrierWait(barrier, WAIT_EVENT_HASH_RESIZING);
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_REINSERTING);
+	}
+
+ reinsert:
+	/* If the table was resized, insert tuples into the new buckets. */
+	ExecHashUpdate(hashtable);
+	ExecHashReinsertAll(hashtable);
+
+	if (HashJoinTableIsShared(hashtable))
+	{
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_REINSERTING);
+		BarrierWait(barrier, WAIT_EVENT_HASH_REINSERTING);
+		Assert(BarrierPhase(barrier) == PHJ_PHASE_PROBING);
+	}
+
+ finish:
+	if (HashJoinTableIsShared(hashtable))
+	{
+		/*
+		 * Building has finished.  The other workers may be probing or
+		 * processing unmatched tuples for the initial batch, or dealing with
+		 * later batches.  The next synchronization point is in ExecHashJoin's
+		 * HJ_BUILD_HASHTABLE case, which will figure that out and synchronize
+		 * this backend's local state machine with the group phase.
+		 */
+		Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
+		ExecHashUpdate(hashtable);
+	}
 
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
-		InstrStopNode(node->ps.instrument, hashtable->totalTuples);
+		InstrStopNode(node->ps.instrument, hashtable->partialTuples);
 
 	/*
 	 * We do not return the hash table directly because it's not a subtype of
@@ -235,12 +358,16 @@ ExecEndHash(HashState *node)
  * ----------------------------------------------------------------
  */
 HashJoinTable
-ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
+ExecHashTableCreate(HashState *state, List *hashOperators, bool keepNulls)
 {
+	Hash	   *node;
 	HashJoinTable hashtable;
+	SharedHashJoinTable shared_hashtable;
 	Plan	   *outerNode;
+	size_t		space_allowed;
 	int			nbuckets;
 	int			nbatch;
+	double		rows;
 	int			num_skew_mcvs;
 	int			log2_nbuckets;
 	int			nkeys;
@@ -253,10 +380,23 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 	 * "outer" subtree of this node, but the inner relation of the hashjoin).
 	 * Compute the appropriate size of the hash table.
 	 */
+	node = (Hash *) state->ps.plan;
 	outerNode = outerPlan(node);
 
-	ExecChooseHashTableSize(outerNode->plan_rows, outerNode->plan_width,
+	/*
+	 * If this is shared hash table with a partial plan, then we can't use
+	 * outerNode->plan_rows to estimate its size.  We need an estimate of the
+	 * total number of rows from all partial plans running.
+	 */
+	rows = node->plan.parallel_aware ? node->rows_total : outerNode->plan_rows;
+
+	shared_hashtable = state->shared_table_data;
+	ExecChooseHashTableSize(rows, outerNode->plan_width,
 							OidIsValid(node->skewTable),
+							shared_hashtable != NULL,
+							shared_hashtable != NULL ?
+							shared_hashtable->planned_participants - 1 : 0,
+							&space_allowed,
 							&nbuckets, &nbatch, &num_skew_mcvs);
 
 	/* nbuckets must be a power of 2 */
@@ -287,17 +427,24 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 	hashtable->nbatch_original = nbatch;
 	hashtable->nbatch_outstart = nbatch;
 	hashtable->growEnabled = true;
+	hashtable->partialTuples = 0;
 	hashtable->totalTuples = 0;
 	hashtable->skewTuples = 0;
 	hashtable->innerBatchFile = NULL;
 	hashtable->outerBatchFile = NULL;
 	hashtable->spaceUsed = 0;
 	hashtable->spacePeak = 0;
-	hashtable->spaceAllowed = work_mem * 1024L;
+	hashtable->spaceAllowed = space_allowed;
 	hashtable->spaceUsedSkew = 0;
 	hashtable->spaceAllowedSkew =
 		hashtable->spaceAllowed * SKEW_WORK_MEM_PERCENT / 100;
 	hashtable->chunks = NULL;
+	hashtable->unmatched_chunks = NULL;
+	hashtable->chunks_to_reinsert = NULL;
+	hashtable->current_chunk = NULL;
+	hashtable->area = state->ps.state->es_query_dsa;
+	hashtable->shared = state->shared_table_data;
+	hashtable->detached_early = false;
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: initial nbatch = %d, nbuckets = %d\n",
@@ -332,7 +479,7 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 
 	/*
 	 * Create temporary memory contexts in which to keep the hashtable working
-	 * storage.  See notes in executor/hashjoin.h.
+	 * storage if using private hash table.  See notes in executor/hashjoin.h.
 	 */
 	hashtable->hashCxt = AllocSetContextCreate(CurrentMemoryContext,
 											   "HashTableContext",
@@ -360,26 +507,94 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 		PrepareTempTablespaces();
 	}
 
-	/*
-	 * Prepare context for the first-scan space allocations; allocate the
-	 * hashbucket array therein, and set each bucket "empty".
-	 */
-	MemoryContextSwitchTo(hashtable->batchCxt);
-
-	hashtable->buckets = (HashJoinTuple *)
-		palloc0(nbuckets * sizeof(HashJoinTuple));
-
-	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
-	hashtable->spacePeak = hashtable->spaceUsed;
-
-	/*
-	 * Set up for skew optimization, if possible and there's a need for more
-	 * than one batch.  (In a one-batch join, there's no point in it.)
-	 */
-	if (nbatch > 1)
-		ExecHashBuildSkewHash(hashtable, node, num_skew_mcvs);
-
 	MemoryContextSwitchTo(oldcxt);
+
+	if (HashJoinTableIsShared(hashtable))
+	{
+		Barrier *barrier;
+
+		/*
+		 * Attach to the barrier.  The corresponding detach operation is in
+		 * ExecHashTableDetach.
+		 */
+		barrier = &hashtable->shared->barrier;
+		BarrierAttach(barrier);
+		LeaderGateAttach(&hashtable->shared->leader_gate);
+
+		/*
+		 * So far we have no idea whether there are any other participants, and
+		 * if so, what phase they are working on.  The only thing we care about
+		 * at this point is whether someone has already created the shared
+		 * hash table yet.  If not, one backend will be elected to do that
+		 * now.
+		 */
+		if (BarrierPhase(barrier) == PHJ_PHASE_BEGINNING)
+		{
+			if (BarrierWait(barrier, WAIT_EVENT_HASH_BEGINNING))
+			{
+				/* Serial phase: create the hash table */
+				Size bytes;
+				HashJoinBucketHead *buckets;
+				int i;
+				SharedHashJoinTable shared;
+				dsa_area *area;
+
+				shared = hashtable->shared;
+				area = hashtable->area;
+				bytes = nbuckets * sizeof(HashJoinBucketHead);
+
+				/* Allocate the hash table buckets. */
+				shared->buckets = dsa_allocate(area, bytes);
+				if (!DsaPointerIsValid(shared->buckets))
+					ereport(ERROR,
+							(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+							 errmsg("out of memory")));
+
+				/* Initialize the hash table buckets to empty. */
+				buckets = dsa_get_address(area, shared->buckets);
+				for (i = 0; i < nbuckets; ++i)
+					dsa_pointer_atomic_init(&buckets[i].shared,
+											InvalidDsaPointer);
+
+				/* Initialize the rest of parallel_state. */
+				hashtable->shared->nbuckets = nbuckets;
+				hashtable->shared->log2_nbuckets = log2_nbuckets;
+				hashtable->shared->size = bytes;
+
+				/*
+				 * The backend-local pointers in hashtable will be set up by
+				 * ExecHashUpdate, at each point where they might have
+				 * changed.
+				 */
+			}
+			Assert(BarrierPhase(&hashtable->shared->barrier) ==
+				   PHJ_PHASE_CREATING);
+			/* The next synchronization point is in MultiExecHash. */
+		}
+	}
+	else
+	{
+		/*
+		 * Prepare context for the first-scan space allocations; allocate the
+		 * hashbucket array therein, and set each bucket "empty".
+		 */
+		MemoryContextSwitchTo(hashtable->batchCxt);
+
+		hashtable->buckets = (HashJoinBucketHead *)
+			palloc0(nbuckets * sizeof(HashJoinBucketHead));
+		hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
+		hashtable->spacePeak = hashtable->spaceUsed;
+
+		MemoryContextSwitchTo(oldcxt);
+
+		/*
+		 * Set up for skew optimization, if possible and there's a need for
+		 * more than one batch.  (In a one-batch join, there's no point in
+		 * it.)
+		 */
+		if (nbatch > 1)
+			ExecHashBuildSkewHash(hashtable, node, num_skew_mcvs);
+	}
 
 	return hashtable;
 }
@@ -397,6 +612,8 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 
 void
 ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
+						bool shared, int parallel_workers,
+						size_t *space_allowed,
 						int *numbuckets,
 						int *numbatches,
 						int *num_skew_mcvs)
@@ -441,9 +658,15 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	}
 
 	/*
-	 * Target in-memory hashtable size is work_mem kilobytes.
+	 * Target in-memory hashtable size is work_mem kilobytes.  Shared hash
+	 * tables are allowed to multiply work_mem by the number of participants,
+	 * since other non-shared memory based plans allow each participant to use
+	 * work_mem for the same total.
 	 */
 	hash_table_bytes = work_mem * 1024L;
+	if (shared && parallel_workers > 0)
+		hash_table_bytes *= parallel_workers + 1;	/* one for the leader */
+	*space_allowed = hash_table_bytes;
 
 	/*
 	 * If skew optimization is possible, estimate the number of skew buckets
@@ -490,8 +713,8 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	 * Note that both nbuckets and nbatch must be powers of 2 to make
 	 * ExecHashGetBucketAndBatch fast.
 	 */
-	max_pointers = (work_mem * 1024L) / sizeof(HashJoinTuple);
-	max_pointers = Min(max_pointers, MaxAllocSize / sizeof(HashJoinTuple));
+	max_pointers = (work_mem * 1024L) / sizeof(HashJoinBucketHead);
+	max_pointers = Min(max_pointers, MaxAllocSize / sizeof(HashJoinBucketHead));
 	/* If max_pointers isn't a power of 2, must round it down to one */
 	mppow2 = 1L << my_log2(max_pointers);
 	if (max_pointers != mppow2)
@@ -513,7 +736,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	 * If there's not enough space to store the projected number of tuples and
 	 * the required bucket headers, we will need multiple batches.
 	 */
-	bucket_bytes = sizeof(HashJoinTuple) * nbuckets;
+	bucket_bytes = sizeof(HashJoinBucketHead) * nbuckets;
 	if (inner_rel_bytes + bucket_bytes > hash_table_bytes)
 	{
 		/* We'll need multiple batches */
@@ -528,12 +751,12 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 		 * NTUP_PER_BUCKET tuples, whose projected size already includes
 		 * overhead for the hash code, pointer to the next tuple, etc.
 		 */
-		bucket_size = (tupsize * NTUP_PER_BUCKET + sizeof(HashJoinTuple));
+		bucket_size = (tupsize * NTUP_PER_BUCKET + sizeof(HashJoinBucketHead));
 		lbuckets = 1L << my_log2(hash_table_bytes / bucket_size);
 		lbuckets = Min(lbuckets, max_pointers);
 		nbuckets = (int) lbuckets;
 		nbuckets = 1 << my_log2(nbuckets);
-		bucket_bytes = nbuckets * sizeof(HashJoinTuple);
+		bucket_bytes = nbuckets * sizeof(HashJoinBucketHead);
 
 		/*
 		 * Buckets are simple pointers to hashjoin tuples, while tupsize
@@ -561,6 +784,50 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	*numbatches = nbatch;
 }
 
+/*
+ * Detach from the shared hash table, freeing all memory if we are the last to
+ * detach.
+ */
+void
+ExecHashTableDetach(HashJoinTable hashtable)
+{
+	if (HashJoinTableIsShared(hashtable) && !hashtable->detached_early)
+	{
+		Barrier *barrier = &hashtable->shared->barrier;
+
+		/*
+		 * Instead of waiting at the end of a hash join for all participants
+		 * to finish, we detach and let the last to detach clean up the shared
+		 * resources.  This avoids unnecessary waiting at the end of single
+		 * batch probes.
+		 */
+		if (BarrierDetach(barrier))
+		{
+			/* Serial: free the buckets and chunks */
+			if (DsaPointerIsValid(hashtable->shared->buckets))
+			{
+				dsa_pointer chunk_shared;
+
+				/*
+				 * We could just forget about the memory, since the whole area
+				 * will be freed at the end of the query anyway.  But that
+				 * wouldn't work for rescans, where we'll be allocating a
+				 * whole hashtable again, creating a leak.  Perhaps we could
+				 * consider moving all the chunks to a freelist here for reuse
+				 * in the cast of a rescan, so that we can avoid the cost of
+				 * one backend freeing all chunks in the common case.
+				 */
+				dsa_free(hashtable->area, hashtable->shared->buckets);
+				hashtable->shared->buckets = InvalidDsaPointer;
+				hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+				hashtable->shared->chunks = InvalidDsaPointer;
+				while (pop_chunk_queue(hashtable, &chunk_shared) != NULL)
+					dsa_free(hashtable->area, chunk_shared);
+			}
+		}
+		hashtable->shared = NULL;
+	}
+}
 
 /* ----------------------------------------------------------------
  *		ExecHashTableDestroy
@@ -572,6 +839,9 @@ void
 ExecHashTableDestroy(HashJoinTable hashtable)
 {
 	int			i;
+
+	/* If shared, clean up shared memory and detach. */
+	ExecHashTableDetach(hashtable);
 
 	/*
 	 * Make sure all the temp files are closed.  We skip batch 0, since it
@@ -608,6 +878,9 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	long		ninmemory;
 	long		nfreed;
 	HashMemoryChunk oldchunks;
+
+	/* TODO: support multi-batch joins with shared hash tables */
+	Assert(!HashJoinTableIsShared(hashtable));
 
 	/* safety check to avoid overflow */
 	if (oldnbatch > Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2)))
@@ -666,7 +939,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 		hashtable->log2_nbuckets = hashtable->log2_nbuckets_optimal;
 
 		hashtable->buckets = repalloc(hashtable->buckets,
-								sizeof(HashJoinTuple) * hashtable->nbuckets);
+								sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 	}
 
 	/*
@@ -674,14 +947,14 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	 * buckets now and not have to keep track which tuples in the buckets have
 	 * already been processed. We will free the old chunks as we go.
 	 */
-	memset(hashtable->buckets, 0, sizeof(HashJoinTuple) * hashtable->nbuckets);
+	memset(hashtable->buckets, 0, sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 	oldchunks = hashtable->chunks;
 	hashtable->chunks = NULL;
 
 	/* so, let's scan through the old chunks, and all tuples in each chunk */
 	while (oldchunks != NULL)
 	{
-		HashMemoryChunk nextchunk = oldchunks->next;
+		HashMemoryChunk nextchunk = oldchunks->next.unshared;
 
 		/* position within the buffer (up to oldchunks->used) */
 		size_t		idx = 0;
@@ -704,12 +977,12 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
 
-				copyTuple = load_tuple(hashtable, tuple, false);
+				copyTuple = load_private_tuple(hashtable, tuple, false);
 
 				/* and add it back to the appropriate bucket */
 				copyTuple->hashvalue = hashTuple->hashvalue;
-				copyTuple->next = hashtable->buckets[bucketno];
-				hashtable->buckets[bucketno] = copyTuple;
+				insert_tuple_into_bucket(hashtable, bucketno, copyTuple,
+										 InvalidDsaPointer);
 			}
 			else
 			{
@@ -759,6 +1032,30 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 }
 
 /*
+ * Update the local hashtable with the current pointers and sizes from
+ * hashtable->shared.
+ */
+void
+ExecHashUpdate(HashJoinTable hashtable)
+{
+	if (!HashJoinTableIsShared(hashtable))
+		return;
+
+	/* The hash table. */
+	hashtable->spaceUsed = hashtable->shared->size;
+	if (hashtable->spaceUsed > hashtable->spacePeak)
+		hashtable->spacePeak = hashtable->spaceUsed;
+	hashtable->nbuckets = hashtable->shared->nbuckets;
+	hashtable->log2_nbuckets = my_log2(hashtable->nbuckets);
+	hashtable->buckets = (HashJoinBucketHead *)
+		dsa_get_address(hashtable->area, hashtable->shared->buckets);
+
+	/* TODO: We don't support multi-batch shared table joins yet. */
+	hashtable->nbatch = 1;
+	hashtable->curbatch = 0;
+}
+
+/*
  * ExecHashIncreaseNumBuckets
  *		increase the original number of buckets in order to reduce
  *		number of tuples per bucket
@@ -766,8 +1063,6 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 static void
 ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 {
-	HashMemoryChunk chunk;
-
 	/* do nothing if not an increase (it's called increase for a reason) */
 	if (hashtable->nbuckets >= hashtable->nbuckets_optimal)
 		return;
@@ -778,7 +1073,7 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 #endif
 
 	/* account for the increase in space that will be used by buckets */
-	hashtable->spaceUsed += sizeof(HashJoinTuple) *
+	hashtable->spaceUsed += sizeof(HashJoinBucketHead) *
 		(hashtable->nbuckets_optimal - hashtable->nbuckets);
 	if (hashtable->spaceUsed > hashtable->spacePeak)
 		hashtable->spacePeak = hashtable->spaceUsed;
@@ -794,22 +1089,79 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 	 * Just reallocate the proper number of buckets - we don't need to walk
 	 * through them - we can walk the dense-allocated chunks (just like in
 	 * ExecHashIncreaseNumBatches, but without all the copying into new
-	 * chunks)
+	 * chunks).  That happens in ExecHashReinsertAll.
 	 */
-	hashtable->buckets =
-		(HashJoinTuple *) repalloc(hashtable->buckets,
-								hashtable->nbuckets * sizeof(HashJoinTuple));
+	if (HashJoinTableIsShared(hashtable))
+	{
+		HashJoinBucketHead *buckets;
+		int i;
 
-	memset(hashtable->buckets, 0, hashtable->nbuckets * sizeof(HashJoinTuple));
+		Assert(BarrierPhase(&hashtable->shared->barrier) == PHJ_PHASE_RESIZING);
+
+		/* Free the existing bucket array. */
+		dsa_free(hashtable->area, hashtable->shared->buckets);
+
+		/*
+		 * Share the bucket array and size information, which all backends
+		 * will pick up when they run ExecHashUpdate.
+		 */
+		hashtable->shared->size = hashtable->spaceUsed;
+		hashtable->shared->nbuckets = hashtable->nbuckets;
+		hashtable->shared->log2_nbuckets = hashtable->log2_nbuckets;
+		hashtable->shared->buckets =
+			dsa_allocate(hashtable->area,
+						 hashtable->nbuckets * sizeof(HashJoinBucketHead));
+		if (!DsaPointerIsValid(hashtable->shared->buckets))
+			ereport(ERROR,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					 errmsg("out of memory")));
+
+		/* Initialize the new buckets. */
+		buckets = dsa_get_address(hashtable->area,
+								  hashtable->shared->buckets);
+		for (i = 0; i < hashtable->nbuckets; ++i)
+			dsa_pointer_atomic_init(&buckets[i].shared,
+									InvalidDsaPointer);
+
+		/* ExecHashReinsert needs to process all chunks. */
+		hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+	}
+	else
+	{
+		hashtable->buckets = (HashJoinBucketHead *)
+			repalloc(hashtable->buckets,
+					 hashtable->nbuckets * sizeof(HashJoinBucketHead));
+		hashtable->chunks_to_reinsert = hashtable->chunks;
+		memset(hashtable->buckets, 0,
+			   hashtable->nbuckets * sizeof(HashJoinBucketHead));
+	}
+}
+
+/*
+ * ExecHashReinsert
+ *		reinsert the tuples from all chunks into the hashtable after increasing
+ *		the number of buckets
+ */
+static void
+ExecHashReinsertAll(HashJoinTable hashtable)
+{
+	HashMemoryChunk chunk;
+	dsa_pointer chunk_shared;
 
 	/* scan through all tuples in all chunks to rebuild the hash table */
-	for (chunk = hashtable->chunks; chunk != NULL; chunk = chunk->next)
+	if (HashJoinTableIsShared(hashtable))
+		chunk = pop_chunk_queue(hashtable, &chunk_shared);
+	else
+		chunk = hashtable->chunks_to_reinsert;
+
+	while (chunk != NULL)
 	{
 		/* process all tuples stored in this chunk */
 		size_t		idx = 0;
 
 		while (idx < chunk->used)
 		{
+			dsa_pointer hashTuple_shared = InvalidDsaPointer;
 			HashJoinTuple hashTuple = (HashJoinTuple) (chunk->data + idx);
 			int			bucketno;
 			int			batchno;
@@ -818,13 +1170,21 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 									  &bucketno, &batchno);
 
 			/* add the tuple to the proper bucket */
-			hashTuple->next = hashtable->buckets[bucketno];
-			hashtable->buckets[bucketno] = hashTuple;
+			if (HashJoinTableIsShared(hashtable))
+				hashTuple_shared = chunk_shared + HASH_CHUNK_HEADER_SIZE + idx;
+			insert_tuple_into_bucket(hashtable, bucketno, hashTuple,
+									 hashTuple_shared);
 
 			/* advance index past the tuple */
 			idx += MAXALIGN(HJTUPLE_OVERHEAD +
 							HJTUPLE_MINTUPLE(hashTuple)->t_len);
 		}
+
+		/* advance to the next chunk */
+		if (HashJoinTableIsShared(hashtable))
+			chunk = pop_chunk_queue(hashtable, &chunk_shared);
+		else
+			chunk = chunk->next.unshared;
 	}
 }
 
@@ -863,9 +1223,13 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		 */
 		HashJoinTuple hashTuple;
 		double		ntuples = (hashtable->totalTuples - hashtable->skewTuples);
+		dsa_pointer shared = InvalidDsaPointer;
 
 		/* Create the HashJoinTuple */
-		hashTuple = load_tuple(hashtable, tuple, true);
+		if (HashJoinTableIsShared(hashtable))
+			hashTuple = load_shared_tuple(hashtable, tuple, &shared);
+		else
+			hashTuple = load_private_tuple(hashtable, tuple, true);
 		if (hashTuple == NULL)
 		{
 			/*
@@ -889,8 +1253,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(hashTuple));
 
 		/* Push it onto the front of the bucket's list */
-		hashTuple->next = hashtable->buckets[bucketno];
-		hashtable->buckets[bucketno] = hashTuple;
+		insert_tuple_into_bucket(hashtable, bucketno, hashTuple, shared);
 
 		/*
 		 * Increase the (optimal) number of buckets if we just exceeded the
@@ -902,7 +1265,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		{
 			/* Guard against integer overflow and alloc size overflow */
 			if (hashtable->nbuckets_optimal <= INT_MAX / 2 &&
-				hashtable->nbuckets_optimal * 2 <= MaxAllocSize / sizeof(HashJoinTuple))
+				hashtable->nbuckets_optimal * 2 <= MaxAllocSize / sizeof(HashJoinBucketHead))
 			{
 				hashtable->nbuckets_optimal *= 2;
 				hashtable->log2_nbuckets_optimal += 1;
@@ -1087,11 +1450,11 @@ ExecScanHashBucket(HashJoinState *hjstate,
 	 * otherwise scan the standard hashtable bucket.
 	 */
 	if (hashTuple != NULL)
-		hashTuple = hashTuple->next;
+		hashTuple = next_tuple_in_bucket(hashtable, hashTuple);
 	else if (hjstate->hj_CurSkewBucketNo != INVALID_SKEW_BUCKET_NO)
 		hashTuple = hashtable->skewBucket[hjstate->hj_CurSkewBucketNo]->tuples;
 	else
-		hashTuple = hashtable->buckets[hjstate->hj_CurBucketNo];
+		hashTuple = first_tuple_in_bucket(hashtable, hjstate->hj_CurBucketNo);
 
 	while (hashTuple != NULL)
 	{
@@ -1115,7 +1478,7 @@ ExecScanHashBucket(HashJoinState *hjstate,
 			}
 		}
 
-		hashTuple = hashTuple->next;
+		hashTuple = next_tuple_in_bucket(hashtable, hashTuple);
 	}
 
 	/*
@@ -1171,15 +1534,25 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 		/* Do we need a new chunk to scan? */
 		if (hashtable->current_chunk == NULL)
 		{
-			/* Have we run out of chunks to scan? */
-			if (hashtable->unmatched_chunks == NULL)
-				break;
-
 			/* Pop the next chunk from the front of the queue. */
-			hashtable->current_chunk = hashtable->unmatched_chunks;
-			hashtable->unmatched_chunks = hashtable->current_chunk->next;
+			if (HashJoinTableIsShared(hashtable))
+			{
+				hashtable->current_chunk =
+					pop_chunk_queue(hashtable,
+									&hashtable->current_chunk_shared);
+			}
+			else if (hashtable->unmatched_chunks != NULL)
+			{
+				hashtable->current_chunk = hashtable->unmatched_chunks;
+				hashtable->unmatched_chunks =
+					hashtable->current_chunk->next.unshared;
+			}
 			hashtable->current_chunk_index = 0;
 		}
+
+		/* Have we run out of chunks to scan? */
+		if (hashtable->current_chunk == NULL)
+			break;
 
 		/* Scan the current chunk looking for unmatched tuples. */
 		while (hashtable->current_chunk_index < hashtable->current_chunk->used)
@@ -1226,7 +1599,7 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 		 * bucket.
 		 */
 		if (hashTuple != NULL)
-			hashTuple = hashTuple->next;
+			hashTuple = hashTuple->next.unshared;
 		else if (hjstate->hj_CurSkewBucketNo < hashtable->nSkewBuckets)
 		{
 			int			j = hashtable->skewBucketNums[hjstate->hj_CurSkewBucketNo];
@@ -1260,7 +1633,7 @@ ExecScanHashTableForUnmatched(HashJoinState *hjstate, ExprContext *econtext)
 				return true;
 			}
 
-			hashTuple = hashTuple->next;
+			hashTuple = hashTuple->next.unshared;
 		}
 	}
 
@@ -1281,6 +1654,9 @@ ExecHashTableReset(HashJoinTable hashtable)
 	MemoryContext oldcxt;
 	int			nbuckets = hashtable->nbuckets;
 
+	/* TODO: No multi-batch support for shared tables yet. */
+	Assert(!HashJoinTableIsShared(hashtable));
+
 	/*
 	 * Release all the hash buckets and tuples acquired in the prior pass, and
 	 * reinitialize the context for a new pass.
@@ -1289,10 +1665,10 @@ ExecHashTableReset(HashJoinTable hashtable)
 	oldcxt = MemoryContextSwitchTo(hashtable->batchCxt);
 
 	/* Reallocate and reinitialize the hash bucket headers. */
-	hashtable->buckets = (HashJoinTuple *)
-		palloc0(nbuckets * sizeof(HashJoinTuple));
+	hashtable->buckets = (HashJoinBucketHead *)
+		palloc0(nbuckets * sizeof(HashJoinBucketHead));
 
-	hashtable->spaceUsed = nbuckets * sizeof(HashJoinTuple);
+	hashtable->spaceUsed = nbuckets * sizeof(HashJoinBucketHead);
 
 	/* Cannot be more than our previous peak; we had this size before. */
 	Assert(hashtable->spaceUsed <= hashtable->spacePeak);
@@ -1310,12 +1686,21 @@ ExecHashTableReset(HashJoinTable hashtable)
 void
 ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 {
+	dsa_pointer chunk_shared = InvalidDsaPointer;
 	HashMemoryChunk chunk;
 	HashJoinTuple tuple;
 	int			i;
 
 	/* Reset all flags in the main table ... */
-	chunk = hashtable->chunks;
+	if (HashJoinTableIsShared(hashtable))
+	{
+		/* This only runs in the leader during rescan initialization. */
+		Assert(!IsParallelWorker());
+		hashtable->shared->chunk_work_queue = hashtable->shared->chunks;
+		chunk = pop_chunk_queue(hashtable, &chunk_shared);
+	}
+	else
+		chunk = hashtable->chunks;
 	while (chunk != NULL)
 	{
 		Size index = 0;
@@ -1328,7 +1713,10 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 			index += MAXALIGN(HJTUPLE_OVERHEAD +
 							  HJTUPLE_MINTUPLE(tuple)->t_len);
 		}
-		chunk = chunk->next;
+		if (HashJoinTableIsShared(hashtable))
+			chunk = pop_chunk_queue(hashtable, &chunk_shared);
+		else
+			chunk = chunk->next.unshared;
 	}
 
 	/* ... and the same for the skew buckets, if any */
@@ -1337,7 +1725,8 @@ ExecHashTableResetMatchFlags(HashJoinTable hashtable)
 		int			j = hashtable->skewBucketNums[i];
 		HashSkewBucket *skewBucket = hashtable->skewBucket[j];
 
-		for (tuple = skewBucket->tuples; tuple != NULL; tuple = tuple->next)
+		for (tuple = skewBucket->tuples; tuple != NULL;
+			 tuple = tuple->next.unshared)
 			HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(tuple));
 	}
 }
@@ -1580,6 +1969,8 @@ ExecHashSkewTableInsert(HashJoinTable hashtable,
 	HashJoinTuple hashTuple;
 	int			hashTupleSize;
 
+	Assert(!HashJoinTableIsShared(hashtable));
+
 	/* Create the HashJoinTuple */
 	hashTupleSize = HJTUPLE_OVERHEAD + tuple->t_len;
 	hashTuple = (HashJoinTuple) MemoryContextAlloc(hashtable->batchCxt,
@@ -1589,7 +1980,7 @@ ExecHashSkewTableInsert(HashJoinTable hashtable,
 	HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(hashTuple));
 
 	/* Push it onto the front of the skew bucket's list */
-	hashTuple->next = hashtable->skewBucket[bucketNumber]->tuples;
+	hashTuple->next.unshared = hashtable->skewBucket[bucketNumber]->tuples;
 	hashtable->skewBucket[bucketNumber]->tuples = hashTuple;
 
 	/* Account for space used, and back off if we've used too much */
@@ -1622,6 +2013,8 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 	int			batchno;
 	HashJoinTuple hashTuple;
 
+	Assert(!HashJoinTableIsShared(hashtable));
+
 	/* Locate the bucket to remove */
 	bucketToRemove = hashtable->skewBucketNums[hashtable->nSkewBuckets - 1];
 	bucket = hashtable->skewBucket[bucketToRemove];
@@ -1639,7 +2032,8 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 	hashTuple = bucket->tuples;
 	while (hashTuple != NULL)
 	{
-		HashJoinTuple nextHashTuple = hashTuple->next;
+		HashJoinTuple nextHashTuple =
+			next_tuple_in_bucket(hashtable, hashTuple);
 		MinimalTuple tuple;
 		Size		tupleSize;
 
@@ -1661,12 +2055,12 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 			 * We must copy the tuple into the dense storage, else it will not
 			 * be found by, eg, ExecHashIncreaseNumBatches.
 			 */
-			copyTuple = load_tuple(hashtable, tuple, false);
+			copyTuple = load_private_tuple(hashtable, tuple, false);
 			pfree(hashTuple);
 
 			copyTuple->hashvalue = hashvalue;
-			copyTuple->next = hashtable->buckets[bucketno];
-			hashtable->buckets[bucketno] = copyTuple;
+			insert_tuple_into_bucket(hashtable, bucketno, copyTuple,
+									 InvalidDsaPointer);
 
 			/* We have reduced skew space, but overall space doesn't change */
 			hashtable->spaceUsedSkew -= tupleSize;
@@ -1723,19 +2117,22 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 }
 
 /*
- * Copy 'tuple' into the hash table's dense storage with a HashJoinTuple
- * header, and return a pointer to the new copy.  If 'respect_work_mem' is
- * true, this may return NULL to indicate that work_mem would be exceeded.
- * NULL indicates that the caller should try to increase the number of batches
- * to shrink the hash table.  The result includes an uninitialized
- * HashJoinTuple header which the caller must fill in.
+ * Copy 'tuple' into backend-local dense storage with a HashJoinTuple header,
+ * and return a pointer to the new copy.  If 'respect_work_mem' is true, this
+ * may return NULL to indicate that work_mem would be exceeded.  NULL
+ * indicates that the caller should try to increase the number of batches to
+ * shrink the hash table.  The result includes an uninitialized HashJoinTuple
+ * header which the caller must fill in.
  */
 static HashJoinTuple
-load_tuple(HashJoinTable hashtable, MinimalTuple tuple, bool respect_work_mem)
+load_private_tuple(HashJoinTable hashtable, MinimalTuple tuple,
+				   bool respect_work_mem)
 {
 	HashMemoryChunk newChunk;
 	Size		size;
 	HashJoinTuple result;
+
+	Assert(!HashJoinTableIsShared(hashtable));
 
 	/* compute the size of the tuple + HashJoinTuple header */
 	size = MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
@@ -1766,12 +2163,12 @@ load_tuple(HashJoinTable hashtable, MinimalTuple tuple, bool respect_work_mem)
 		 */
 		if (hashtable->chunks != NULL)
 		{
-			newChunk->next = hashtable->chunks->next;
-			hashtable->chunks->next = newChunk;
+			newChunk->next.unshared = hashtable->chunks->next.unshared;
+			hashtable->chunks->next.unshared = newChunk;
 		}
 		else
 		{
-			newChunk->next = hashtable->chunks;
+			newChunk->next.unshared = hashtable->chunks;
 			hashtable->chunks = newChunk;
 		}
 
@@ -1812,7 +2209,7 @@ load_tuple(HashJoinTable hashtable, MinimalTuple tuple, bool respect_work_mem)
 		newChunk->used = size;
 		newChunk->ntuples = 1;
 
-		newChunk->next = hashtable->chunks;
+		newChunk->next.unshared = hashtable->chunks;
 		hashtable->chunks = newChunk;
 
 		/* count this whole mostly-empty chunk as space used */
@@ -1836,4 +2233,242 @@ load_tuple(HashJoinTable hashtable, MinimalTuple tuple, bool respect_work_mem)
 	memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
 
 	return result;
+}
+
+/*
+ * Load a tuple into shared dense storage, like 'load_private_tuple'.  This
+ * version is for shared hash tables.
+ */
+static HashJoinTuple
+load_shared_tuple(HashJoinTable hashtable, MinimalTuple tuple,
+				  dsa_pointer *shared)
+{
+	dsa_pointer chunk_shared;
+	HashMemoryChunk chunk;
+	Size chunk_size;
+	Size size;
+	HashJoinTuple result;
+
+	Assert(HashJoinTableIsShared(hashtable));
+
+	/* compute the size of the tuple + HashJoinTuple header */
+	size = MAXALIGN(HJTUPLE_OVERHEAD + tuple->t_len);
+
+	/*
+	 * Fast path: if there is enough space in this backend's current chunk,
+	 * then we can allocate without any locking.
+	 */
+	chunk = hashtable->current_chunk;
+	if (chunk != NULL &&
+		size < HASH_CHUNK_THRESHOLD &&
+		chunk->maxlen - chunk->used >= size)
+	{
+
+		chunk_shared = hashtable->current_chunk_shared;
+		Assert(chunk == dsa_get_address(hashtable->area, chunk_shared));
+		*shared = chunk_shared + HASH_CHUNK_HEADER_SIZE + chunk->used;
+		result = (HashJoinTuple) (chunk->data + chunk->used);
+		chunk->used += size;
+		chunk->ntuples += 1;
+
+		Assert(chunk->used <= chunk->maxlen);
+		Assert(result == dsa_get_address(hashtable->area, *shared));
+
+		memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+		return result;
+	}
+
+	/*
+	 * Slow path: try to allocate a new chunk.
+	 */
+	LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
+
+	/* TODO: detect batch increase in progress here */
+
+	/* Oversized tuples get their own chunk. */
+	if (size > HASH_CHUNK_THRESHOLD)
+		chunk_size = size + HASH_CHUNK_HEADER_SIZE;
+	else
+		chunk_size = HASH_CHUNK_SIZE;
+
+	/* TODO: work_mem size check triggering batch increase here */
+
+	/*
+	 * If there was a chunk already, then add its tuple count to the shared
+	 * total now.  The final chunk's count will be handled in finish_loading.
+	 */
+	if (chunk != NULL)
+		hashtable->shared->ntuples += chunk->ntuples;
+
+	/* We are cleared to allocate a new chunk. */
+	chunk_shared = dsa_allocate(hashtable->area, chunk_size);
+	if (!DsaPointerIsValid(chunk_shared))
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("out of memory")));
+
+	hashtable->shared->size += chunk_size;
+
+	/* Set up the chunk. */
+	chunk = (HashMemoryChunk) dsa_get_address(hashtable->area, chunk_shared);
+	*shared = chunk_shared + HASH_CHUNK_HEADER_SIZE;
+	chunk->maxlen = chunk_size - offsetof(HashMemoryChunkData, data);
+	chunk->used = size;
+	chunk->ntuples = 1;
+
+	/*
+	 * Push it onto the list of chunks, so that it can be found if we need to
+	 * increase the number of buckets or batches and process all tuples.
+	 */
+	chunk->next.shared = hashtable->shared->chunks;
+	hashtable->shared->chunks = chunk_shared;
+
+	if (size > HASH_CHUNK_THRESHOLD)
+	{
+		/*
+		 * Count oversized tuples immediately, but don't bother making this
+		 * chunk the 'current' chunk because it has no more space in it for
+		 * next time.
+		 */
+		++hashtable->shared->ntuples;
+	}
+	else
+	{
+		/*
+		 * Make this the current chunk so that we can use the fast path to
+		 * fill the rest of it up in future called.  We will count this tuple
+		 * later, when the chunk is full.
+		 */
+		hashtable->current_chunk = chunk;
+		hashtable->current_chunk_shared = chunk_shared;
+	}
+	/*
+	 * Update local copy of total tuples so it can be used to compute the load
+	 * factor and trigger bucket growth.
+	 */
+	hashtable->totalTuples = hashtable->shared->ntuples;
+	LWLockRelease(&hashtable->shared->chunk_lock);
+
+	Assert(chunk->data == dsa_get_address(hashtable->area, *shared));
+	result = (HashJoinTuple) chunk->data;
+	memcpy(HJTUPLE_MINTUPLE(result), tuple, tuple->t_len);
+
+	return result;
+}
+
+/*
+ * Add the tuple count from the current chunk to the shared tuple count.  This
+ * is necessary because dense_alloc_shared only updates the shared counter
+ * when a new chunk is allocated, leaving the final chunk unaccounted for.
+ */
+static void
+finish_loading(HashJoinTable hashtable)
+{
+	if (HashJoinTableIsShared(hashtable))
+	{
+		LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
+		if (hashtable->current_chunk != NULL)
+			hashtable->shared->ntuples += hashtable->current_chunk->ntuples;
+		hashtable->totalTuples = hashtable->shared->ntuples;
+		LWLockRelease(&hashtable->shared->chunk_lock);
+	}
+}
+
+/*
+ * Insert a tuple at the front of a given bucket identified by number.  For
+ * shared hash joins, tuple_shared must be provided, pointing to the tuple in
+ * the dsa_area backing the table.  For private hash joins, it should be
+ * InvalidDsaPointer.
+ */
+static void
+insert_tuple_into_bucket(HashJoinTable table, int bucketno,
+						 HashJoinTuple tuple, dsa_pointer tuple_shared)
+{
+	if (HashJoinTableIsShared(table))
+	{
+		Assert(tuple == dsa_get_address(table->area, tuple_shared));
+		for (;;)
+		{
+			tuple->next.shared =
+				dsa_pointer_atomic_read(&table->buckets[bucketno].shared);
+			if (dsa_pointer_atomic_compare_exchange(&table->buckets[bucketno].shared,
+													&tuple->next.shared,
+													tuple_shared))
+				break;
+		}
+	}
+	else
+	{
+		tuple->next.unshared = table->buckets[bucketno].unshared;
+		table->buckets[bucketno].unshared = tuple;
+	}
+}
+
+/*
+ * Get the first tuple in a given bucket identified by number.
+ */
+static HashJoinTuple
+first_tuple_in_bucket(HashJoinTable table, int bucketno)
+{
+	if (HashJoinTableIsShared(table))
+	{
+		dsa_pointer p =
+			dsa_pointer_atomic_read(&table->buckets[bucketno].shared);
+		return (HashJoinTuple) dsa_get_address(table->area, p);
+	}
+	else
+		return table->buckets[bucketno].unshared;
+}
+
+/*
+ * Get the next tuple in the same bucket as 'tuple'.
+ */
+static HashJoinTuple
+next_tuple_in_bucket(HashJoinTable table, HashJoinTuple tuple)
+{
+	if (HashJoinTableIsShared(table))
+		return (HashJoinTuple)
+			dsa_get_address(table->area, tuple->next.shared);
+	else
+		return tuple->next.unshared;
+}
+
+/*
+ * Take the next available chunk from the queue of chunks being worked on in
+ * parallel.  Return NULL if there are none left.  Otherwise return a pointer
+ * to the chunk, and set *shared to the DSA pointer to the chunk.
+ */
+static HashMemoryChunk
+pop_chunk_queue_unlocked(HashJoinTable hashtable, dsa_pointer *shared)
+{
+	HashMemoryChunk chunk;
+
+	Assert(HashJoinTableIsShared(hashtable));
+	Assert(LWLockHeldByMe(&hashtable->shared->chunk_lock));
+
+	if (!DsaPointerIsValid(hashtable->shared->chunk_work_queue))
+		return NULL;
+
+	*shared = hashtable->shared->chunk_work_queue;
+	chunk = (HashMemoryChunk)
+		dsa_get_address(hashtable->area, *shared);
+	hashtable->shared->chunk_work_queue = chunk->next.shared;
+
+	return chunk;
+}
+
+/*
+ * See pop_chunk_unlocked.
+ */
+static HashMemoryChunk
+pop_chunk_queue(HashJoinTable hashtable, dsa_pointer *shared)
+{
+	HashMemoryChunk chunk;
+
+	LWLockAcquire(&hashtable->shared->chunk_lock, LW_EXCLUSIVE);
+	chunk = pop_chunk_queue_unlocked(hashtable, shared);
+	LWLockRelease(&hashtable->shared->chunk_lock);
+
+	return chunk;
 }

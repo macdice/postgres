@@ -3572,6 +3572,30 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_LOGICAL_SYNC_STATE_CHANGE:
 			event_name = "LogicalSyncStateChange";
 			break;
+		case WAIT_EVENT_HASH_BEGINNING:
+			event_name = "Hash/Beginning";
+			break;
+		case WAIT_EVENT_HASH_CREATING:
+			event_name = "Hash/Creating";
+			break;
+		case WAIT_EVENT_HASH_BUILDING:
+			event_name = "Hash/Building";
+			break;
+		case WAIT_EVENT_HASH_RESIZING:
+			event_name = "Hash/Resizing";
+			break;
+		case WAIT_EVENT_HASH_REINSERTING:
+			event_name = "Hash/Reinserting";
+			break;
+		case WAIT_EVENT_HASH_UNMATCHED:
+			event_name = "Hash/Unmatched";
+			break;
+		case WAIT_EVENT_HASHJOIN_PROBING:
+			event_name = "HashJoin/Probing";
+			break;
+		case WAIT_EVENT_HASHJOIN_REWINDING:
+			event_name = "HashJoin/Rewinding";
+			break;
 		/* no default case, so that compiler will warn */
 	}
 

@@ -6,9 +6,50 @@
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *
  * IDENTIFICATION
  *	  src/backend/executor/nodeHashjoin.c
+ *
+ * NOTES:
+ *
+ * PARALLELISM
+ *
+ * Hash joins can participate in parallel queries in two ways: in
+ * non-parallel-aware mode, where each backend builds an identical hash table
+ * and then probes it with a partial outer relation, or parallel-aware mode
+ * where there is a shared hash table that all participants help to build.  A
+ * parallel-aware hash join can save time and space by dividing the work up
+ * and sharing the result, but has extra communication overheads.
+ *
+ * In both cases, hash joins use a private state machine to track progress
+ * through the hash join algorithm.
+ *
+ * In a parallel-aware hash join, there is also a shared 'phase' which
+ * co-operating backends use to synchronize their local state machine and
+ * program counter with the multi-process join.  The phase is managed by a
+ * 'barrier' IPC primitive.
+ *
+ * When a participant begins working on a parallel hash join, it must first
+ * figure out how much progress has already been made, because participants
+ * don't wait for each other to begin.  For this reason there are switch
+ * statements at key points in the code where we have to synchronize our local
+ * state machine with the phase, and then jump to the correct part of the
+ * algorithm so that we can get started.
+ *
+ * While running the algorithm, there are key points in the code where we must
+ * wait for all participants to reach the same point before we can continue,
+ * in the form of BarrierWait calls.  We cannot beginning building the hash
+ * table until it has been created, and we cannot begin probing it until it is
+ * entirely built.
+ *
+ * The phases are as follows:
+ *
+ *   PHJ_PHASE_BEGINNING   -- initial phase, before any participant acts
+ *   PHJ_PHASE_CREATING	   -- one participant creates the shmem hash table
+ *   PHJ_PHASE_BUILDING	   -- all participants build the hash table
+ *   PHJ_PHASE_RESIZING	   -- one participant decides whether to expand buckets
+ *   PHJ_PHASE_REINSERTING -- all participants reinsert tuples if necessary
+ *   PHJ_PHASE_PROBING	   -- all participants probe the hash table
+ *   PHJ_PHASE_UNMATCHED   -- all participants scan for unmatched tuples
  *
  *-------------------------------------------------------------------------
  */
@@ -21,6 +62,7 @@
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "utils/memutils.h"
 
 
@@ -129,6 +171,14 @@ ExecHashJoin(HashJoinState *node)
 					/* no chance to not build the hash table */
 					node->hj_FirstOuterTupleSlot = NULL;
 				}
+				else if (hashNode->shared_table_data != NULL)
+				{
+					/*
+					 * The empty-outer optimization is not implemented for
+					 * shared hash tables yet.
+					 */
+					node->hj_FirstOuterTupleSlot = NULL;
+				}
 				else if (HJ_FILL_OUTER(node) ||
 						 (outerNode->plan->startup_cost < hashNode->ps.plan->total_cost &&
 						  !node->hj_OuterNotEmpty))
@@ -148,7 +198,7 @@ ExecHashJoin(HashJoinState *node)
 				/*
 				 * create the hash table
 				 */
-				hashtable = ExecHashTableCreate((Hash *) hashNode->ps.plan,
+				hashtable = ExecHashTableCreate(hashNode,
 												node->hj_HashOperators,
 												HJ_FILL_INNER(node));
 				node->hj_HashTable = hashtable;
@@ -180,7 +230,56 @@ ExecHashJoin(HashJoinState *node)
 				 */
 				node->hj_OuterNotEmpty = false;
 
-				node->hj_JoinState = HJ_NEED_NEW_OUTER;
+				if (HashJoinTableIsShared(hashtable))
+				{
+					Barrier *barrier = &hashtable->shared->barrier;
+					int phase = BarrierPhase(barrier);
+
+					/*
+					 * There is a deadlock avoidance check at the end of
+					 * probing.  It's unlikely, but we also need to check if
+					 * we're so late to start that probing has already
+					 * finished, so that it's already been determined whether
+					 * leader or workers can continue.
+					 */
+					if (BarrierPhase(&hashtable->shared->barrier) > PHJ_PHASE_PROBING &&
+						!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+					{
+						BarrierDetach(&hashtable->shared->barrier);
+						hashtable->detached_early = true;
+						return NULL;
+					}
+
+					/*
+					 * Map the current phase to the appropriate initial state
+					 * for this participant, so we can get started.
+					 * MultiExecHash made sure that the parallel hash join has
+					 * reached at least PHJ_PHASE_PROBING, but it's possible
+					 * that this participant joined the work later than that,
+					 * so we need another switch statement here to get our
+					 * local state machine in sync.
+					 */
+					Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
+					switch (phase)
+					{
+					case PHJ_PHASE_PROBING:
+						/* Help probe the hashtable. */
+						ExecHashUpdate(hashtable);
+						node->hj_JoinState = HJ_NEED_NEW_OUTER;
+						break;
+					case PHJ_PHASE_UNMATCHED:
+						/* Help scan for unmatched inner tuples. */
+						ExecHashUpdate(hashtable);
+						ExecPrepHashTableForUnmatched(node);
+						node->hj_JoinState = HJ_FILL_INNER_TUPLES;
+						break;
+					default:
+						Assert(false);
+					}
+					continue;
+				}
+				else
+					node->hj_JoinState = HJ_NEED_NEW_OUTER;
 
 				/* FALL THRU */
 
@@ -195,6 +294,51 @@ ExecHashJoin(HashJoinState *node)
 				if (TupIsNull(outerTupleSlot))
 				{
 					/* end of batch, or maybe whole join */
+
+					if (HashJoinTableIsShared(hashtable))
+					{
+						/*
+						 * An important optimization: if this is a
+						 * single-batch join and not an outer join, there is
+						 * no reason to synchronize again when we've finished
+						 * probing.
+						 */
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_PROBING);
+						if (hashtable->nbatch == 1 && !HJ_FILL_INNER(node))
+							return NULL;	/* end of join */
+
+						/*
+						 * Check if we are a leader that can't go further than
+						 * probing, to avoid risk of deadlock against workers.
+						 */
+						if (!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+						{
+							BarrierDetach(&hashtable->shared->barrier);
+							hashtable->detached_early = true;
+							return NULL;
+						}
+
+						/*
+						 * We can't start searching for unmatched tuples until
+						 * all participants have finished probing, so we
+						 * synchronize here.
+						 */
+						if (BarrierWait(&hashtable->shared->barrier,
+										WAIT_EVENT_HASHJOIN_PROBING))
+						{
+							/* Serial phase: prepare for unmatched. */
+							if (HJ_FILL_INNER(node))
+							{
+								hashtable->shared->chunk_work_queue =
+									hashtable->shared->chunks;
+								hashtable->shared->chunks = InvalidDsaPointer;
+							}
+						}
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_UNMATCHED);
+					}
+
 					if (HJ_FILL_INNER(node))
 					{
 						/* set up to scan for unmatched inner tuples */
@@ -896,6 +1040,14 @@ ExecReScanHashJoin(HashJoinState *node)
 	 */
 	if (node->hj_HashTable != NULL)
 	{
+		if (HashJoinTableIsShared(node->hj_HashTable))
+		{
+			/* Only the leader is running now, so we can reinitialize. */
+			Assert(!IsParallelWorker());
+			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
+			LeaderGateInit(&node->hj_HashTable->shared->leader_gate);
+		}
+
 		if (node->hj_HashTable->nbatch == 1 &&
 			node->js.ps.righttree->chgParam == NULL)
 		{
@@ -907,6 +1059,17 @@ ExecReScanHashJoin(HashJoinState *node)
 			 */
 			if (HJ_FILL_INNER(node))
 				ExecHashTableResetMatchFlags(node->hj_HashTable);
+
+			if (HashJoinTableIsShared(node->hj_HashTable))
+			{
+				/* Reattach and fast-forward to the probing phase. */
+				BarrierAttach(&node->hj_HashTable->shared->barrier);
+				while (BarrierPhase(&node->hj_HashTable->shared->barrier)
+					   < PHJ_PHASE_PROBING)
+					BarrierWait(&node->hj_HashTable->shared->barrier,
+								WAIT_EVENT_HASHJOIN_REWINDING);
+				LeaderGateAttach(&node->hj_HashTable->shared->leader_gate);
+			}
 
 			/*
 			 * Also, we need to reset our state about the emptiness of the
@@ -953,4 +1116,86 @@ ExecReScanHashJoin(HashJoinState *node)
 	 */
 	if (node->js.ps.lefttree->chgParam == NULL)
 		ExecReScan(node->js.ps.lefttree);
+}
+
+void
+ExecShutdownHashJoin(HashJoinState *node)
+{
+	/*
+	 * By the time ExecEndHashJoin runs in a work, shared memory has been
+	 * destroyed.  So this is our last chance to do any shared memory cleanup.
+	 */
+	if (node->hj_HashTable)
+		ExecHashTableDetach(node->hj_HashTable);
+}
+
+void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
+{
+	size_t size;
+
+	size = sizeof(SharedHashJoinTableData);
+	shm_toc_estimate_chunk(&pcxt->estimator, size);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+}
+
+void
+ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
+{
+	HashState *hashNode;
+	SharedHashJoinTable shared;
+	size_t size;
+	int planned_participants;
+
+	/*
+	 * Disable shared hash table mode if we failed to create a real DSM
+	 * segment, because that means that we don't have a DSA area to work
+	 * with.
+	 */
+	if (pcxt->seg == NULL)
+		return;
+
+	/*
+	 * Set up the state needed to coordinate access to the shared hash table,
+	 * using the plan node ID as the toc key.
+	 */
+	planned_participants = pcxt->nworkers + 1;	/* possible workers + leader */
+	size = sizeof(SharedHashJoinTableData);
+	shared = shm_toc_allocate(pcxt->toc, size);
+	BarrierInit(&shared->barrier, 0);
+	shared->nbuckets = 0;
+	shared->planned_participants = planned_participants;
+	shared->buckets = InvalidDsaPointer;
+	shared->chunks = InvalidDsaPointer;
+	shared->chunk_work_queue = InvalidDsaPointer;
+	shared->size = 0;
+	shared->ntuples = 0;
+	shm_toc_insert(pcxt->toc, state->js.ps.plan->plan_node_id, shared);
+
+	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
+
+	LeaderGateInit(&shared->leader_gate);
+
+	/*
+	 * Pass the SharedHashJoinTable to the hash node.  If the Gather node
+	 * running in the leader backend decides to execute the hash join, it
+	 * hasn't called ExecHashJoinInitializeWorker so it doesn't have
+	 * state->shared_table_data set up.  So we must do it here.
+	 */
+	hashNode = (HashState *) innerPlanState(state);
+	hashNode->shared_table_data = shared;
+}
+
+void
+ExecHashJoinInitializeWorker(HashJoinState *state,
+							 ParallelWorkerContext *pwcxt)
+{
+	HashState  *hashNode;
+	int plan_node_id = state->js.ps.plan->plan_node_id;
+
+	state->hj_sharedHashJoinTable = shm_toc_lookup(pwcxt->toc, plan_node_id);
+
+	/* Inject SharedHashJoinTable into the hash node. */
+	hashNode = (HashState *) innerPlanState(state);
+	hashNode->shared_table_data = state->hj_sharedHashJoinTable;
+	Assert(hashNode->shared_table_data != NULL);
 }

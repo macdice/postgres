@@ -1028,6 +1028,7 @@ _copyHash(const Hash *from)
 	COPY_SCALAR_FIELD(skewInherit);
 	COPY_SCALAR_FIELD(skewColType);
 	COPY_SCALAR_FIELD(skewColTypmod);
+	COPY_SCALAR_FIELD(rows_total);
 
 	return newnode;
 }

@@ -4099,6 +4099,22 @@ create_hashjoin_plan(PlannerInfo *root,
 	copy_plan_costsize(&hash_plan->plan, inner_plan);
 	hash_plan->plan.startup_cost = hash_plan->plan.total_cost;
 
+	/*
+	 * Set the hash table to shared if appropriate.  If parallel, the executor
+	 * will also need an estimate of the total number of rows expected from
+	 * all participants.
+	 */
+	switch (best_path->table_type)
+	{
+	case HASHPATH_TABLE_SHARED_PARALLEL:
+		hash_plan->shared_table = true;
+		hash_plan->plan.parallel_aware = true;
+		hash_plan->rows_total = best_path->inner_rows_total;
+		break;
+	case HASHPATH_TABLE_PRIVATE:
+		break;
+	}
+
 	join_plan = make_hashjoin(tlist,
 							  joinclauses,
 							  otherclauses,
