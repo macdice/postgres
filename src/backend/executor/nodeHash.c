@@ -48,8 +48,8 @@
 	Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2))
 
 static void ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch);
-static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
-static void ExecHashReinsertAll(HashJoinTable hashtable);
+static void ExecHashIncreaseNumBucketsIfNeeded(HashJoinTable hashtable);
+static void ExecHashReinsertHashtableIfNeeded(HashJoinTable hashtable);
 static void ExecHashBuildSkewHash(HashJoinTable hashtable, Hash *node,
 					  int mcvsToUse);
 static void ExecHashSkewTableInsert(HashJoinTable hashtable,
@@ -217,17 +217,15 @@ MultiExecHash(HashState *node)
 		BarrierDetach(&hashtable->shared->shrink_barrier);
 
 		/*
-		 * Wait for all backends to finish building.  If only one worker is
-		 * running the building phase because of a non-partial inner plan, the
-		 * other workers will pile up here waiting.  If multiple worker are
-		 * building, they should finish close to each other in time.
+		 * Wait for all participants to finish building the hash table and
+		 * arrive here, so we can check the load factor and decide if we need
+		 * to increase the number of buckets to reduce it.
 		 */
 		Assert(BarrierPhase(barrier) == PHJ_PHASE_BUILDING);
 		elected_to_resize = BarrierWait(barrier, WAIT_EVENT_HASH_BUILDING);
 		/*
 		 * Resizing is a serial phase.  All but one should skip ahead to
-		 * reinserting phase, but all workers should update their copy of the
-		 * shared tuple count with the final total first.
+		 * reinserting phase, so we use the barrier to elect one participant.
 		 */
 		if (!elected_to_resize)
 			goto post_resize;
@@ -236,7 +234,7 @@ MultiExecHash(HashState *node)
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
 	ExecHashUpdate(hashtable);
-	ExecHashIncreaseNumBuckets(hashtable);
+	ExecHashIncreaseNumBucketsIfNeeded(hashtable);
 
  post_resize:
 	if (HashJoinTableIsShared(hashtable))
@@ -247,9 +245,12 @@ MultiExecHash(HashState *node)
 	}
 
  reinsert:
-	/* If the table was resized, insert tuples into the new buckets. */
+	/*
+	 * If the table was resized, insert tuples into the new buckets.  If it
+	 * wasn't resized, then this will be a no-op.
+	 */
 	ExecHashUpdate(hashtable);
-	ExecHashReinsertAll(hashtable);
+	ExecHashReinsertHashtableIfNeeded(hashtable);
 
 	if (HashJoinTableIsShared(hashtable))
 	{
@@ -939,6 +940,10 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch)
  * correct batches until it is empty.  In the best case this will shrink the
  * hash table, keeping about half of the tuples in memory and sending the rest
  * to a future batch.
+ *
+ * In a degenerate case, this will send ALL or NONE of the tuples out of the
+ * current batch, which is convincing evidence that no amount of further
+ * partitioning of this data will help.
  */
 static void
 ExecHashShrink(HashJoinTable hashtable)
@@ -1186,7 +1191,7 @@ ExecHashUpdate(HashJoinTable hashtable)
  *		number of tuples per bucket
  */
 static void
-ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
+ExecHashIncreaseNumBucketsIfNeeded(HashJoinTable hashtable)
 {
 	/* do nothing if not an increase (it's called increase for a reason) */
 	if (hashtable->nbuckets >= hashtable->nbuckets_optimal)
@@ -1218,13 +1223,17 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 	 * Just reallocate the proper number of buckets - we don't need to walk
 	 * through them - we can walk the dense-allocated chunks (just like in
 	 * ExecHashIncreaseNumBatches, but without all the copying into new
-	 * chunks).  That happens in ExecHashReinsertAll.
+	 * chunks).  That happens in ExecHashReinsertHashtableIfNeeded.
 	 */
 	if (HashJoinTableIsShared(hashtable))
 	{
 		HashJoinBucketHead *buckets;
 		int i;
 
+		/*
+		 * Only one backend enters this function so it can safely change the
+		 * array while other backends wait.
+		 */
 		Assert(BarrierPhase(&hashtable->shared->barrier) == PHJ_PHASE_RESIZING);
 
 		/* Free the existing bucket array. */
@@ -1272,7 +1281,7 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
  *		the number of buckets
  */
 static void
-ExecHashReinsertAll(HashJoinTable hashtable)
+ExecHashReinsertHashtableIfNeeded(HashJoinTable hashtable)
 {
 	HashMemoryChunk chunk;
 	dsa_pointer chunk_shared;
