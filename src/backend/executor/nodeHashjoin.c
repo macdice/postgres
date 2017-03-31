@@ -15,13 +15,14 @@
  *
  * Hash joins can participate in parallel queries in two ways: in
  * non-parallel-aware mode, where each backend builds an identical hash table
- * and then probes it with a partial outer relation, or parallel-aware mode
- * where there is a shared hash table that all participants help to build.  A
- * parallel-aware hash join can save time and space by dividing the work up
- * and sharing the result, but has extra communication overheads.
+ * and then probes it with an outer relation that may or may not be partial,
+ * or parallel-aware mode where there is a shared hash table that all
+ * participants help to build.  A parallel-aware hash join can save time and
+ * space by dividing the work up and sharing the result, but has extra
+ * communication overheads.
  *
- * In both cases, hash joins use a private state machine to track progress
- * through the hash join algorithm.
+ * Parallel-aware hash joins use the regular state machine to track progress
+ * through the hash join algorithm, just like a regular hash join.
  *
  * In a parallel-aware hash join, there is also a shared 'phase' which
  * co-operating backends use to synchronize their local state machine and
@@ -73,9 +74,9 @@
  * in work_mem, then we may need to increase the number of batches at
  * execution time.  This can occur during PHJ_PHASE_BUILDING or
  * PHJ_PHASE_LOADING_BATCH(n), because those are the phases when we are
- * loading data into the hash table and we might discover that work_mem might
- * be exceeded.  In this case a second barrier is used to manage hash table
- * shrinking.  Its phases are:
+ * loading data into the hash table and we could discover that work_mem would
+ * be exceeded by inserting one more tuple.  In this case a second barrier is
+ * used to manage hash table shrinking.  Its phases are:
  *
  *   PHJ_SHRINK_PHASE_BEGINNING  -- initial phase
  *   PHJ_SHRINK_PHASE_CLEARING   -- one participant clears the hash table
@@ -944,11 +945,11 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 	{
 		/*
 		 * We no longer need the previous outer batch file; close it right
-		 * away to free disk space.
+		 * away to free disk space.  SharedTuplestore will take care of this
+		 * for shared hash tables.
 		 */
 		if (!HashJoinTableIsShared(hashtable))
 		{
-			/* SharedTuplestore will take care of this for shared hash tables. */
 			if (hashtable->outerBatchFile[curbatch])
 				BufFileClose(hashtable->outerBatchFile[curbatch]);
 			hashtable->outerBatchFile[curbatch] = NULL;
