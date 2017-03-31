@@ -206,7 +206,7 @@ MultiExecHash(HashState *node)
 				ExecHashTableInsert(hashtable, slot, hashvalue);
 			}
 			hashtable->partialTuples += 1;
-			if (is_shared)
+			if (!is_shared)
 				hashtable->totalTuples += 1;
 		}
 	}
