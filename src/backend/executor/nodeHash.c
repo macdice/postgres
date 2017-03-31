@@ -48,8 +48,8 @@ static void ExecHashSkewTableInsert(HashJoinTable hashtable,
 						int bucketNumber);
 static void ExecHashRemoveNextSkewBucket(HashJoinTable hashtable);
 
-static HashJoinTuple load_tuple(HashJoinTable hashtable, MinimalTuple tuple,
-								bool respect_work_mem);
+static HashJoinTuple ExecHashLoadTuple(HashJoinTable hashtable, MinimalTuple tuple,
+									   bool respect_work_mem);
 
 /* ----------------------------------------------------------------
  *		ExecHash
@@ -704,7 +704,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 				/* keep tuple in memory - copy it into the new chunk */
 				HashJoinTuple copyTuple;
 
-				copyTuple = load_tuple(hashtable, tuple, false);
+				copyTuple = ExecHashLoadTuple(hashtable, tuple, false);
 
 				/* and add it back to the appropriate bucket */
 				copyTuple->hashvalue = hashTuple->hashvalue;
@@ -865,7 +865,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		double		ntuples = (hashtable->totalTuples - hashtable->skewTuples);
 
 		/* Create the HashJoinTuple */
-		hashTuple = load_tuple(hashtable, tuple, true);
+		hashTuple = ExecHashLoadTuple(hashtable, tuple, true);
 		if (hashTuple == NULL)
 		{
 			/*
@@ -1595,7 +1595,7 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
 			 * We must copy the tuple into the dense storage, else it will not
 			 * be found by, eg, ExecHashIncreaseNumBatches.
 			 */
-			copyTuple = load_tuple(hashtable, tuple, false);
+			copyTuple = ExecHashLoadTuple(hashtable, tuple, false);
 			pfree(hashTuple);
 
 			copyTuple->hashvalue = hashvalue;
@@ -1665,7 +1665,8 @@ ExecHashRemoveNextSkewBucket(HashJoinTable hashtable)
  * HashJoinTuple header which the caller must fill in.
  */
 static HashJoinTuple
-load_tuple(HashJoinTable hashtable, MinimalTuple tuple, bool respect_work_mem)
+ExecHashLoadTuple(HashJoinTable hashtable, MinimalTuple tuple,
+				  bool respect_work_mem)
 {
 	HashMemoryChunk newChunk;
 	Size		size;
