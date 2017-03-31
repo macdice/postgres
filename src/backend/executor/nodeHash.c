@@ -210,6 +210,8 @@ MultiExecHash(HashState *node)
 				hashtable->totalTuples += 1;
 		}
 	}
+
+	/* Make sure the shared tuple count includes every tuple I processed. */
 	ExecHashFinishLoading(hashtable);
 
 	if (is_shared)
@@ -2627,8 +2629,9 @@ ExecHashLoadSharedTuple(HashJoinTable hashtable, MinimalTuple tuple,
 
 /*
  * Add the tuple count from the current chunk to the shared tuple count.  This
- * is necessary because dense_alloc_shared only updates the shared counter
- * when a new chunk is allocated, leaving the final chunk unaccounted for.
+ * is necessary because ExecHashLoadSharedTuple only updates the shared
+ * counter when a new chunk is allocated, leaving the final chunk unaccounted
+ * for.  We need an accurate count for the empty table optimization.
  */
 static void
 ExecHashFinishLoading(HashJoinTable hashtable)

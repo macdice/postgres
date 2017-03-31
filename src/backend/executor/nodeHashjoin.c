@@ -275,10 +275,11 @@ ExecHashJoin(HashJoinState *node)
 				/*
 				 * If the inner relation is completely empty, and we're not
 				 * doing a left outer join, we can quit without scanning the
-				 * outer relation.
+				 * outer relation.  This is safe for shared hash joins because
+				 * MultiExecHash sums hashtable->totalTuples across
+				 * participants.
 				 */
-				if (!HashJoinTableIsShared(hashtable) &&
-					hashtable->totalTuples == 0 && !HJ_FILL_OUTER(node))
+				if (hashtable->totalTuples == 0 && !HJ_FILL_OUTER(node))
 					return NULL;
 
 				/*
