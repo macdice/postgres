@@ -143,25 +143,25 @@ MultiExecHash(HashState *node)
 
 		switch (BarrierPhase(barrier))
 		{
-		case PHJ_PHASE_BEGINNING:
-			/* ExecHashTableCreate already handled this phase. */
-			Assert(false);
-		case PHJ_PHASE_CREATING:
-			/* Wait for serial phase, and then either build or wait. */
-			BarrierWait(barrier, WAIT_EVENT_HASH_CREATING);
-			goto build;
-		case PHJ_PHASE_BUILDING:
-			/* Building is already underway.  Join in. */
-			goto build;
-		case PHJ_PHASE_RESIZING:
-			/* Can't help with serial phase. */
-			goto post_resize;
-		case PHJ_PHASE_REINSERTING:
-			/* Reinserting is in progress after resizing.  Let's help. */
-			goto reinsert;
-		default:
-			/* The hash table building work is already finished. */
-			goto finish;
+			case PHJ_PHASE_BEGINNING:
+				/* ExecHashTableCreate already handled this phase. */
+				Assert(false);
+			case PHJ_PHASE_CREATING:
+				/* Wait for serial phase, and then either build or wait. */
+				BarrierWait(barrier, WAIT_EVENT_HASH_CREATING);
+				goto build;
+			case PHJ_PHASE_BUILDING:
+				/* Building is already underway.  Join in. */
+				goto build;
+			case PHJ_PHASE_RESIZING:
+				/* Can't help with serial phase. */
+				goto post_resize;
+			case PHJ_PHASE_REINSERTING:
+				/* Reinserting is in progress after resizing.  Let's help. */
+				goto reinsert;
+			default:
+				/* The hash table building work is already finished. */
+				goto finish;
 		}
 	}
 
@@ -973,54 +973,45 @@ ExecHashShrink(HashJoinTable hashtable)
 	{
 		/*
 		 * Since a newly launched participant could arrive while shrinking is
-		 * already underway, we need to be able to jump to the correct place
-		 * in this function.
+		 * already underway, we need to be able to synchronize with the
+		 * existing work.
 		 */
 		switch (PHJ_SHRINK_PHASE(BarrierPhase(&hashtable->shared->shrink_barrier)))
 		{
-		case PHJ_SHRINK_PHASE_BEGINNING: /* likely case */
-			break;
-		case PHJ_SHRINK_PHASE_CLEARING:
-			goto clearing;
-		case PHJ_SHRINK_PHASE_WORKING:
-			goto working;
-		case PHJ_SHRINK_PHASE_DECIDING:
-			goto deciding;
+			case PHJ_SHRINK_PHASE_BEGINNING:
+				if (BarrierWait(&hashtable->shared->shrink_barrier,
+								WAIT_EVENT_HASH_SHRINKING1))
+				{
+					/* Serial phase: One participant clears buckets. */
+					memset(hashtable->buckets, 0,
+						   hashtable->nbuckets * sizeof(HashJoinBucketHead));
+				}
+				/* Fall through */
+			case PHJ_SHRINK_PHASE_CLEARING:
+				/* Wait for clearing to finish above. */
+				BarrierWait(&hashtable->shared->shrink_barrier,
+							WAIT_EVENT_HASH_SHRINKING2);
+				/* Fall through */
+			case PHJ_SHRINK_PHASE_WORKING:
+				/* Run main shrinking code below. */
+				break;
+			case PHJ_SHRINK_PHASE_DECIDING:
+				/*
+				 * Tidier to wait and return here than goto end of function
+				 * where there is another one of these.
+				 */
+				BarrierWait(&hashtable->shared->shrink_barrier,
+							WAIT_EVENT_HASH_SHRINKING4);
+				return;
 		}
-
-		/*
-		 * We wait until all participants have reached this point.  We need to
-		 * do that because we can't clear the hash table if any partipicant is
-		 * still inserting tuples into it, and we can't modify chunks that any
-		 * participant is still writing into.
-		 */
-		if (BarrierWait(&hashtable->shared->shrink_barrier,
-						WAIT_EVENT_HASH_SHRINKING1))
-		{
-			/* Serial phase: one participant clears the hash table. */
-			/*
-			 * We could also expland the bucket array if nbuckets_optimal >
-			 * nbuckets (if we do that we need to remember that
-			 * nbuckets_optional may need to be halved, to account for the
-			 * shink we're about to perform).
-			 */
-			memset(hashtable->buckets, 0,
-				   hashtable->nbuckets * sizeof(HashJoinBucketHead));
-		}
-	clearing:
-		/* Wait until hash table is cleared. */
-		BarrierWait(&hashtable->shared->shrink_barrier,
-					WAIT_EVENT_HASH_SHRINKING2);
-
 	}
 	else
 	{
-		/* Clear the hash table. */
+		/* Clear the hash table buckets. */
 		memset(hashtable->buckets, 0,
 			   sizeof(HashJoinBucketHead) * hashtable->nbuckets);
 	}
 
- working:
 	/* Pop first chunk from the shrink queue. */
 	if (is_shared)
 		chunk = ExecHashPopChunkQueue(hashtable, &chunk_shared);
@@ -1155,7 +1146,7 @@ ExecHashShrink(HashJoinTable hashtable)
 			}
 			hashtable->shared->shrink_needed = false;
 		}
-	deciding:
+
 		/* Wait for above decision to be made. */
 		Assert(PHJ_SHRINK_PHASE(BarrierPhase(&hashtable->shared->shrink_barrier)) ==
 			   PHJ_SHRINK_PHASE_DECIDING);
