@@ -869,13 +869,13 @@ ExecHashTableDestroy(HashJoinTable hashtable)
 	/*
 	 * Make sure all the temp files are closed.  We skip batch 0, since it
 	 * can't have any temp files (and the arrays might not even exist if
-	 * nbatch is only 1).
+	 * nbatch is only 1).  Shared hash tables don't use these files.
 	 */
 	for (i = 1; i < hashtable->nbatch; i++)
 	{
-		if (hashtable->innerBatchFile[i])
+		if (hashtable->innerBatchFile != NULL && hashtable->innerBatchFile[i])
 			BufFileClose(hashtable->innerBatchFile[i]);
-		if (hashtable->outerBatchFile[i])
+		if (hashtable->outerBatchFile != NULL && hashtable->outerBatchFile[i])
 			BufFileClose(hashtable->outerBatchFile[i]);
 	}
 
@@ -889,7 +889,8 @@ ExecHashTableDestroy(HashJoinTable hashtable)
 /*
  * ExecHashIncreaseNumBatches
  *		increase the original number of batches in order to reduce
- *		current memory consumption
+ *		current memory consumption.  The actual work of shrinking the
+ *		hash table is done in ExecHashShrink().
  */
 static void
 ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch)
@@ -902,6 +903,17 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable, int nbatch)
 		return;
 
 	Assert(nbatch > 1);
+
+	if (HashJoinTableIsShared(hashtable))
+	{
+		/*
+		 * For shared hash tables, we don't need to manage batch file arrays
+		 * and temporary tablespaces because the SharedTuplestore objects look
+		 * after that for us.  We just note the new number.
+		 */
+		hashtable->nbatch = nbatch;
+		return;
+	}
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: increasing nbatch to %d because space = %zu\n",

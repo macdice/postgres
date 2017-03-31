@@ -946,9 +946,13 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 		 * We no longer need the previous outer batch file; close it right
 		 * away to free disk space.
 		 */
-		if (hashtable->outerBatchFile[curbatch])
-			BufFileClose(hashtable->outerBatchFile[curbatch]);
-		hashtable->outerBatchFile[curbatch] = NULL;
+		if (!HashJoinTableIsShared(hashtable))
+		{
+			/* SharedTuplestore will take care of this for shared hash tables. */
+			if (hashtable->outerBatchFile[curbatch])
+				BufFileClose(hashtable->outerBatchFile[curbatch]);
+			hashtable->outerBatchFile[curbatch] = NULL;
+		}
 	}
 	else	/* we just finished the first batch */
 	{
