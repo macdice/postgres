@@ -326,32 +326,32 @@ ExecHashJoin(HashJoinState *node)
 					Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
 					switch (PHJ_PHASE_TO_SUBPHASE(phase))
 					{
-					case PHJ_SUBPHASE_RESETTING:
-						/* Wait for serial phase to finish. */
-						BarrierWait(barrier, WAIT_EVENT_HASHJOIN_RESETTING);
-						Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(barrier)) ==
-							   PHJ_SUBPHASE_LOADING);
-						/* fall through */
-					case PHJ_SUBPHASE_LOADING:
-						/* Help load the current batch. */
-						ExecHashUpdate(hashtable);
-						ExecHashJoinLoadBatch(node);
-						Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(barrier)) ==
-							   PHJ_SUBPHASE_PROBING);
-						/* fall through */
-					case PHJ_SUBPHASE_PROBING:
-						/* Help probe the hashtable. */
-						ExecHashUpdate(hashtable);
-						sts_begin_partial_scan(hashtable->shared_outer_batches,
-											   hashtable->curbatch);
-						node->hj_JoinState = HJ_NEED_NEW_OUTER;
-						break;
-					case PHJ_SUBPHASE_UNMATCHED:
-						/* Help scan for unmatched inner tuples. */
-						ExecHashUpdate(hashtable);
-						ExecPrepHashTableForUnmatched(node);
-						node->hj_JoinState = HJ_FILL_INNER_TUPLES;
-						break;
+						case PHJ_SUBPHASE_RESETTING:
+							/* Wait for serial phase to finish. */
+							BarrierWait(barrier, WAIT_EVENT_HASHJOIN_RESETTING);
+							Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(barrier)) ==
+								   PHJ_SUBPHASE_LOADING);
+							/* fall through */
+						case PHJ_SUBPHASE_LOADING:
+							/* Help load the current batch. */
+							ExecHashUpdate(hashtable);
+							ExecHashJoinLoadBatch(node);
+							Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(barrier)) ==
+								   PHJ_SUBPHASE_PROBING);
+							/* fall through */
+						case PHJ_SUBPHASE_PROBING:
+							/* Help probe the hashtable. */
+							ExecHashUpdate(hashtable);
+							sts_begin_partial_scan(hashtable->shared_outer_batches,
+												   hashtable->curbatch);
+							node->hj_JoinState = HJ_NEED_NEW_OUTER;
+							break;
+						case PHJ_SUBPHASE_UNMATCHED:
+							/* Help scan for unmatched inner tuples. */
+							ExecHashUpdate(hashtable);
+							ExecPrepHashTableForUnmatched(node);
+							node->hj_JoinState = HJ_FILL_INNER_TUPLES;
+							break;
 					}
 					continue;
 				}
