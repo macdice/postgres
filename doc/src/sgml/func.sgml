@@ -9566,6 +9566,15 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
        </row>
        <row>
         <entry>
+         <literal><function>to_tsvector(<optional> <replaceable class="PARAMETER">config</> <type>regconfig</> , </optional> <replaceable class="PARAMETER">document</> <type>json(b)</type>)</function></literal>
+        </entry>
+        <entry><type>tsvector</type></entry>
+        <entry>reduce document text to <type>tsvector</></entry>
+        <entry><literal>to_tsvector('english', '{"a": "The Fat Rats"}'::json)</literal></entry>
+        <entry><literal>'fat':2 'rat':3</literal></entry>
+       </row>
+       <row>
+        <entry>
          <indexterm>
           <primary>ts_delete</primary>
          </indexterm>
@@ -9609,6 +9618,15 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
         <entry>display a query match</entry>
         <entry><literal>ts_headline('x y z', 'z'::tsquery)</literal></entry>
         <entry><literal>x y &lt;b&gt;z&lt;/b&gt;</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal><function>ts_headline(<optional> <replaceable class="PARAMETER">config</replaceable> <type>regconfig</>, </optional> <replaceable class="PARAMETER">document</replaceable> <type>json(b)</>, <replaceable class="PARAMETER">query</replaceable> <type>tsquery</> <optional>, <replaceable class="PARAMETER">options</replaceable> <type>text</> </optional>)</function></literal>
+        </entry>
+        <entry><type>text</type></entry>
+        <entry>display a query match</entry>
+        <entry><literal>ts_headline('{"a":"x y z"}'::json, 'z'::tsquery)</literal></entry>
+        <entry><literal>{"a":"x y &lt;b&gt;z&lt;/b&gt;"}</literal></entry>
        </row>
        <row>
         <entry>
@@ -19642,6 +19660,14 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
     <primary>gin_clean_pending_list</primary>
    </indexterm>
 
+   <indexterm>
+    <primary>brin_summarize_range</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>brin_desummarize_range</primary>
+   </indexterm>
+
    <para>
     <xref linkend="functions-admin-index-table"> shows the functions
     available for index maintenance tasks.
@@ -19667,6 +19693,20 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
       </row>
       <row>
        <entry>
+        <literal><function>brin_summarize_range(<parameter>index</> <type>regclass</>, <parameter>blockNumber</> <type>bigint</type>)</function></literal>
+       </entry>
+       <entry><type>integer</type></entry>
+       <entry>summarize the page range covering the given block, if not already summarized</entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>brin_desummarize_range(<parameter>index</> <type>regclass</>, <parameter>blockNumber</> <type>bigint</type>)</function></literal>
+       </entry>
+       <entry><type>integer</type></entry>
+       <entry>de-summarize the page range covering the given block, if summarized</entry>
+      </row>
+      <row>
+       <entry>
         <literal><function>gin_clean_pending_list(<parameter>index</> <type>regclass</>)</function></literal>
        </entry>
        <entry><type>bigint</type></entry>
@@ -19682,7 +19722,8 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
     that are not currently summarized by the index; for any such range
     it creates a new summary index tuple by scanning the table pages.
     It returns the number of new page range summaries that were inserted
-    into the index.
+    into the index.  <function>brin_summarize_range</> does the same, except
+    it only summarizes the range that covers the given block number.
    </para>
 
    <para>
