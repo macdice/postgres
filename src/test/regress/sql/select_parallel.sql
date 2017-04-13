@@ -67,12 +67,33 @@ reset enable_bitmapscan;
 -- test parallel bitmap heap scan.
 set enable_seqscan to off;
 set enable_indexscan to off;
-
+set enable_hashjoin to off;
+set enable_mergejoin to off;
+set enable_material to off;
+-- test prefetching, if the platform allows it
+DO $$
+BEGIN
+ SET effective_io_concurrency = 50;
+EXCEPTION WHEN invalid_parameter_value THEN
+END $$;
+set work_mem='64kB';  --set small work mem to force lossy pages
 explain (costs off)
-	select  count((unique1)) from tenk1 where hundred > 1;
+	select count(*) from tenk1, tenk2 where tenk1.hundred > 1 and tenk2.thousand=0;
+select count(*) from tenk1, tenk2 where tenk1.hundred > 1 and tenk2.thousand=0;
+
+create table bmscantest (a int, t text);
+insert into bmscantest select r, 'fooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo' FROM generate_series(1,100000) r;
+create index i_bmtest ON bmscantest(a);
+select count(*) from bmscantest where a>1;
 
 reset enable_seqscan;
 reset enable_indexscan;
+reset enable_hashjoin;
+reset enable_mergejoin;
+reset enable_material;
+reset effective_io_concurrency;
+reset work_mem;
+drop table bmscantest;
 
 -- test parallel merge join path.
 set enable_hashjoin to off;
@@ -99,6 +120,9 @@ set force_parallel_mode=1;
 
 explain (costs off)
   select stringu1::int2 from tenk1 where unique1 = 1;
+
+-- to increase the parallel query test coverage
+EXPLAIN (analyze, timing off, summary off, costs off) SELECT * FROM tenk1;
 
 set enable_nestloop to off;
 set enable_mergejoin to off;

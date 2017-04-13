@@ -68,7 +68,8 @@ typedef struct PlannedStmt
 	/* rtable indexes of non-leaf target relations for INSERT/UPDATE/DELETE */
 	List	   *nonleafResultRelations;
 
-	List	   *subplans;		/* Plan trees for SubPlan expressions */
+	List	   *subplans;		/* Plan trees for SubPlan expressions; note
+								 * that some could be NULL */
 
 	Bitmapset  *rewindPlanIDs;	/* indices of subplans that require REWIND */
 
@@ -124,6 +125,7 @@ typedef struct Plan
 	 * information needed for parallel query
 	 */
 	bool		parallel_aware; /* engage parallel-aware logic? */
+	bool		parallel_safe;	/* OK to use as part of parallel plan? */
 
 	/*
 	 * Common structural data for all Plan types.
@@ -632,6 +634,7 @@ typedef struct CustomScan
  *		Join node
  *
  * jointype:	rule for joining tuples from left and right subtrees
+ * inner_unique each outer tuple can match to no more than one inner tuple
  * joinqual:	qual conditions that came from JOIN/ON or JOIN/USING
  *				(plan.qual contains conditions that came from WHERE)
  *
@@ -642,12 +645,18 @@ typedef struct CustomScan
  * (But plan.qual is still applied before actually returning a tuple.)
  * For an outer join, only joinquals are allowed to be used as the merge
  * or hash condition of a merge or hash join.
+ *
+ * inner_unique is set if the joinquals are such that no more than one inner
+ * tuple could match any given outer tuple.  This allows the executor to
+ * skip searching for additional matches.  (This must be provable from just
+ * the joinquals, ignoring plan.qual, due to where the executor tests it.)
  * ----------------
  */
 typedef struct Join
 {
 	Plan		plan;
 	JoinType	jointype;
+	bool		inner_unique;
 	List	   *joinqual;		/* JOIN quals (in addition to plan.qual) */
 } Join;
 
@@ -689,6 +698,7 @@ typedef struct NestLoopParam
 typedef struct MergeJoin
 {
 	Join		join;
+	bool		skip_mark_restore;		/* Can we skip mark/restore calls? */
 	List	   *mergeclauses;	/* mergeclauses as expression trees */
 	/* these are arrays, but have the same length as the mergeclauses list: */
 	Oid		   *mergeFamilies;	/* per-clause OIDs of btree opfamilies */

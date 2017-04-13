@@ -275,6 +275,7 @@ _outPlanInfo(StringInfo str, const Plan *node)
 	WRITE_FLOAT_FIELD(plan_rows, "%.0f");
 	WRITE_INT_FIELD(plan_width);
 	WRITE_BOOL_FIELD(parallel_aware);
+	WRITE_BOOL_FIELD(parallel_safe);
 	WRITE_INT_FIELD(plan_node_id);
 	WRITE_NODE_FIELD(targetlist);
 	WRITE_NODE_FIELD(qual);
@@ -305,6 +306,7 @@ _outJoinPlanInfo(StringInfo str, const Join *node)
 	_outPlanInfo(str, (const Plan *) node);
 
 	WRITE_ENUM_FIELD(jointype, JoinType);
+	WRITE_BOOL_FIELD(inner_unique);
 	WRITE_NODE_FIELD(joinqual);
 }
 
@@ -714,6 +716,7 @@ _outMergeJoin(StringInfo str, const MergeJoin *node)
 
 	_outJoinPlanInfo(str, (const Join *) node);
 
+	WRITE_BOOL_FIELD(skip_mark_restore);
 	WRITE_NODE_FIELD(mergeclauses);
 
 	numCols = list_length(node->mergeclauses);
@@ -1708,6 +1711,7 @@ _outJoinPathInfo(StringInfo str, const JoinPath *node)
 	_outPathInfo(str, (const Path *) node);
 
 	WRITE_ENUM_FIELD(jointype, JoinType);
+	WRITE_BOOL_FIELD(inner_unique);
 	WRITE_NODE_FIELD(outerjoinpath);
 	WRITE_NODE_FIELD(innerjoinpath);
 	WRITE_NODE_FIELD(joinrestrictinfo);
@@ -2115,6 +2119,7 @@ _outMergePath(StringInfo str, const MergePath *node)
 	WRITE_NODE_FIELD(path_mergeclauses);
 	WRITE_NODE_FIELD(outersortkeys);
 	WRITE_NODE_FIELD(innersortkeys);
+	WRITE_BOOL_FIELD(skip_mark_restore);
 	WRITE_BOOL_FIELD(materialize_inner);
 }
 
@@ -2247,6 +2252,7 @@ _outRelOptInfo(StringInfo str, const RelOptInfo *node)
 	WRITE_OID_FIELD(userid);
 	WRITE_BOOL_FIELD(useridiscurrent);
 	/* we don't try to print fdwroutine or fdw_private */
+	/* can't print unique_for_rels/non_unique_for_rels; BMSes aren't Nodes */
 	WRITE_NODE_FIELD(baserestrictinfo);
 	WRITE_UINT_FIELD(baserestrict_min_security);
 	WRITE_NODE_FIELD(joininfo);
@@ -2764,6 +2770,7 @@ _outColumnDef(StringInfo str, const ColumnDef *node)
 	WRITE_CHAR_FIELD(storage);
 	WRITE_NODE_FIELD(raw_default);
 	WRITE_NODE_FIELD(cooked_default);
+	WRITE_CHAR_FIELD(identity);
 	WRITE_NODE_FIELD(collClause);
 	WRITE_OID_FIELD(collOid);
 	WRITE_NODE_FIELD(constraints);
@@ -2869,6 +2876,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_NODE_FIELD(rtable);
 	WRITE_NODE_FIELD(jointree);
 	WRITE_NODE_FIELD(targetList);
+	WRITE_ENUM_FIELD(override, OverridingKind);
 	WRITE_NODE_FIELD(onConflict);
 	WRITE_NODE_FIELD(returningList);
 	WRITE_NODE_FIELD(groupClause);
@@ -3404,6 +3412,13 @@ _outConstraint(StringInfo str, const Constraint *node)
 			appendStringInfoString(str, "DEFAULT");
 			WRITE_NODE_FIELD(raw_expr);
 			WRITE_STRING_FIELD(cooked_expr);
+			break;
+
+		case CONSTR_IDENTITY:
+			appendStringInfoString(str, "IDENTITY");
+			WRITE_NODE_FIELD(raw_expr);
+			WRITE_STRING_FIELD(cooked_expr);
+			WRITE_CHAR_FIELD(generated_when);
 			break;
 
 		case CONSTR_CHECK:
