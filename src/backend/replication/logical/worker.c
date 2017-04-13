@@ -126,7 +126,7 @@ static void reread_subscription(void);
  * changes coming to the main apply worker during the sync of a table.
  *
  * Note we need to do smaller or equals comparison for SYNCDONE state because
- * it might hold position of end of intitial slot consistent point WAL
+ * it might hold position of end of initial slot consistent point WAL
  * record + 1 (ie start of next record) and next record can be COMMIT of
  * transaction we are now processing (which is what we set remote_final_lsn
  * to in apply_handle_begin).
@@ -421,9 +421,6 @@ apply_handle_begin(StringInfo s)
 
 	logicalrep_read_begin(s, &begin_data);
 
-	replorigin_session_origin_timestamp = begin_data.committime;
-	replorigin_session_origin_lsn = begin_data.final_lsn;
-
 	remote_final_lsn = begin_data.final_lsn;
 
 	in_remote_transaction = true;
@@ -443,14 +440,18 @@ apply_handle_commit(StringInfo s)
 
 	logicalrep_read_commit(s, &commit_data);
 
-	Assert(commit_data.commit_lsn == replorigin_session_origin_lsn);
-	Assert(commit_data.committime == replorigin_session_origin_timestamp);
-
 	Assert(commit_data.commit_lsn == remote_final_lsn);
 
 	/* The synchronization worker runs in single transaction. */
 	if (IsTransactionState() && !am_tablesync_worker())
 	{
+		/*
+		 * Update origin state so we can restart streaming from correct
+		 * position in case of crash.
+		 */
+		replorigin_session_origin_lsn = commit_data.end_lsn;
+		replorigin_session_origin_timestamp = commit_data.committime;
+
 		CommitTransactionCommand();
 
 		store_flush_position(commit_data.end_lsn);
@@ -1137,6 +1138,12 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 		if (rc & WL_POSTMASTER_DEATH)
 			proc_exit(1);
 
+		if (got_SIGHUP)
+		{
+			got_SIGHUP = false;
+			ProcessConfigFile(PGC_SIGHUP);
+		}
+
 		if (rc & WL_TIMEOUT)
 		{
 			/*
@@ -1440,6 +1447,7 @@ ApplyWorkerMain(Datum main_arg)
 	logicalrep_worker_attach(worker_slot);
 
 	/* Setup signal handling */
+	pqsignal(SIGHUP, logicalrep_worker_sighup);
 	pqsignal(SIGTERM, logicalrep_worker_sigterm);
 	BackgroundWorkerUnblockSignals();
 

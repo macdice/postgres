@@ -79,6 +79,7 @@ static List *get_relation_statistics(RelOptInfo *rel, Relation relation);
  *	min_attr	lowest valid AttrNumber
  *	max_attr	highest valid AttrNumber
  *	indexlist	list of IndexOptInfos for relation's indexes
+ *	statlist	list of StatisticExtInfo for relation's statistic objects
  *	serverid	if it's a foreign table, the server OID
  *	fdwroutine	if it's a foreign table, the FDW function pointers
  *	pages		number of pages
@@ -1303,6 +1304,18 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
 			info->statOid = statOid;
 			info->rel = rel;
 			info->kind = STATS_EXT_NDISTINCT;
+			info->keys = bms_copy(keys);
+
+			stainfos = lcons(info, stainfos);
+		}
+
+		if (statext_is_kind_built(htup, STATS_EXT_DEPENDENCIES))
+		{
+			StatisticExtInfo *info = makeNode(StatisticExtInfo);
+
+			info->statOid = statOid;
+			info->rel = rel;
+			info->kind = STATS_EXT_DEPENDENCIES;
 			info->keys = bms_copy(keys);
 
 			stainfos = lcons(info, stainfos);

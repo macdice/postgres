@@ -57,7 +57,7 @@
 #include "parser/scansup.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
-#include "postmaster/bgworker.h"
+#include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
@@ -610,6 +610,8 @@ const char *const config_group_names[] =
 	gettext_noop("Replication / Master Server"),
 	/* REPLICATION_STANDBY */
 	gettext_noop("Replication / Standby Servers"),
+	/* REPLICATION_SUBSCRIBERS */
+	gettext_noop("Replication / Subscribers"),
 	/* QUERY_TUNING */
 	gettext_noop("Query Tuning"),
 	/* QUERY_TUNING_METHOD */
@@ -729,6 +731,11 @@ static const unit_conversion memory_unit_conversion_table[] =
 	{"MB", GUC_UNIT_KB, 1024},
 	{"kB", GUC_UNIT_KB, 1},
 
+	{"TB", GUC_UNIT_MB, 1024 * 1024},
+	{"GB", GUC_UNIT_MB, 1024},
+	{"MB", GUC_UNIT_MB, 1},
+	{"kB", GUC_UNIT_MB, -1024},
+
 	{"TB", GUC_UNIT_BLOCKS, (1024 * 1024 * 1024) / (BLCKSZ / 1024)},
 	{"GB", GUC_UNIT_BLOCKS, (1024 * 1024) / (BLCKSZ / 1024)},
 	{"MB", GUC_UNIT_BLOCKS, 1024 / (BLCKSZ / 1024)},
@@ -738,11 +745,6 @@ static const unit_conversion memory_unit_conversion_table[] =
 	{"GB", GUC_UNIT_XBLOCKS, (1024 * 1024) / (XLOG_BLCKSZ / 1024)},
 	{"MB", GUC_UNIT_XBLOCKS, 1024 / (XLOG_BLCKSZ / 1024)},
 	{"kB", GUC_UNIT_XBLOCKS, -(XLOG_BLCKSZ / 1024)},
-
-	{"TB", GUC_UNIT_XSEGS, (1024 * 1024 * 1024) / (XLOG_SEG_SIZE / 1024)},
-	{"GB", GUC_UNIT_XSEGS, (1024 * 1024) / (XLOG_SEG_SIZE / 1024)},
-	{"MB", GUC_UNIT_XSEGS, -(XLOG_SEG_SIZE / (1024 * 1024))},
-	{"kB", GUC_UNIT_XSEGS, -(XLOG_SEG_SIZE / 1024)},
 
 	{""}						/* end of table marker */
 };
@@ -2200,6 +2202,28 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_pred_locks_per_relation", PGC_SIGHUP, LOCK_MANAGEMENT,
+			gettext_noop("Sets the maximum number of predicate-locked pages and tuples per relation."),
+			gettext_noop("If more than this total of pages and tuples in the same relation are locked "
+						 "by a connection, those locks are replaced by a relation level lock.")
+		},
+		&max_predicate_locks_per_relation,
+		-2, INT_MIN, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_pred_locks_per_page", PGC_SIGHUP, LOCK_MANAGEMENT,
+			gettext_noop("Sets the maximum number of predicate-locked tuples per page."),
+			gettext_noop("If more than this number of tuples on the same page are locked "
+						 "by a connection, those locks are replaced by a page level lock.")
+		},
+		&max_predicate_locks_per_page,
+		2, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"authentication_timeout", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Sets the maximum allowed time to complete client authentication."),
 			NULL,
@@ -2236,10 +2260,10 @@ static struct config_int ConfigureNamesInt[] =
 		{"min_wal_size", PGC_SIGHUP, WAL_CHECKPOINTS,
 			gettext_noop("Sets the minimum size to shrink the WAL to."),
 			NULL,
-			GUC_UNIT_XSEGS
+			GUC_UNIT_MB
 		},
-		&min_wal_size,
-		5, 2, INT_MAX,
+		&min_wal_size_mb,
+		5 * (XLOG_SEG_SIZE/ (1024 * 1024)), 2, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
 
@@ -2247,10 +2271,10 @@ static struct config_int ConfigureNamesInt[] =
 		{"max_wal_size", PGC_SIGHUP, WAL_CHECKPOINTS,
 			gettext_noop("Sets the WAL size that triggers a checkpoint."),
 			NULL,
-			GUC_UNIT_XSEGS
+			GUC_UNIT_MB
 		},
-		&max_wal_size,
-		64, 2, INT_MAX,
+		&max_wal_size_mb,
+		64 * (XLOG_SEG_SIZE/ (1024 * 1024)), 2, MAX_KILOBYTES,
 		NULL, assign_max_wal_size, NULL
 	},
 
@@ -2489,7 +2513,7 @@ static struct config_int ConfigureNamesInt[] =
 	{
 		{"max_logical_replication_workers",
 			PGC_POSTMASTER,
-			RESOURCES_ASYNCHRONOUS,
+			REPLICATION_SUBSCRIBERS,
 			gettext_noop("Maximum number of logical replication worker processes."),
 			NULL,
 		},
@@ -2501,7 +2525,7 @@ static struct config_int ConfigureNamesInt[] =
 	{
 		{"max_sync_workers_per_subscription",
 			PGC_SIGHUP,
-			RESOURCES_ASYNCHRONOUS,
+			REPLICATION_SUBSCRIBERS,
 			gettext_noop("Maximum number of table synchronization workers per subscription."),
 			NULL,
 		},
@@ -2689,7 +2713,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&max_parallel_workers_per_gather,
-		2, 0, 1024,
+		2, 0, MAX_PARALLEL_WORKER_LIMIT,
 		NULL, NULL, NULL
 	},
 
@@ -2699,7 +2723,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&max_parallel_workers,
-		8, 0, 1024,
+		8, 0, MAX_PARALLEL_WORKER_LIMIT,
 		NULL, NULL, NULL
 	},
 
@@ -7344,7 +7368,7 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 			}
 			else if (strcmp(stmt->name, "TRANSACTION SNAPSHOT") == 0)
 			{
-				A_Const    *con = castNode(A_Const, linitial(stmt->args));
+				A_Const    *con = linitial_node(A_Const, stmt->args);
 
 				if (stmt->is_local)
 					ereport(ERROR,
@@ -8085,17 +8109,15 @@ GetConfigOptionByNum(int varnum, const char **values, bool *noshow)
 			case GUC_UNIT_KB:
 				values[2] = "kB";
 				break;
+			case GUC_UNIT_MB:
+				values[2] = "MB";
+				break;
 			case GUC_UNIT_BLOCKS:
 				snprintf(buffer, sizeof(buffer), "%dkB", BLCKSZ / 1024);
 				values[2] = pstrdup(buffer);
 				break;
 			case GUC_UNIT_XBLOCKS:
 				snprintf(buffer, sizeof(buffer), "%dkB", XLOG_BLCKSZ / 1024);
-				values[2] = pstrdup(buffer);
-				break;
-			case GUC_UNIT_XSEGS:
-				snprintf(buffer, sizeof(buffer), "%dMB",
-						 XLOG_SEG_SIZE / (1024 * 1024));
 				values[2] = pstrdup(buffer);
 				break;
 			case GUC_UNIT_MS:

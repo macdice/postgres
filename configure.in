@@ -358,7 +358,11 @@ case ${wal_segsize} in
  16) ;;
  32) ;;
  64) ;;
-  *) AC_MSG_ERROR([Invalid WAL segment size. Allowed values are 1,2,4,8,16,32,64.])
+ 128) ;;
+ 256) ;;
+ 512) ;;
+ 1024) ;;
+  *) AC_MSG_ERROR([Invalid WAL segment size. Allowed values are 1,2,4,8,16,32,64,128,256,512,1024.])
 esac
 AC_MSG_RESULT([${wal_segsize}MB])
 
@@ -2113,14 +2117,12 @@ fi
 # Check for DocBook and tools
 #
 PGAC_PROG_NSGMLS
-PGAC_PROG_JADE
 PGAC_CHECK_DOCBOOK(4.2)
-PGAC_PATH_DOCBOOK_STYLESHEETS
-PGAC_PATH_COLLATEINDEX
 AC_CHECK_PROGS(DBTOEPUB, dbtoepub)
 AC_CHECK_PROGS(XMLLINT, xmllint)
 AC_CHECK_PROGS(XSLTPROC, xsltproc)
 AC_CHECK_PROGS(OSX, [osx sgml2xml sx])
+AC_CHECK_PROGS(FOP, fop)
 
 #
 # Check for test tools

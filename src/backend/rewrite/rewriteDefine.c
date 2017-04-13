@@ -171,7 +171,7 @@ InsertRule(char *rulname,
 	if (event_qual != NULL)
 	{
 		/* Find query containing OLD/NEW rtable entries */
-		Query	   *qry = castNode(Query, linitial(action));
+		Query	   *qry = linitial_node(Query, action);
 
 		qry = getInsertSelectQuery(qry, NULL);
 		recordDependencyOnExpr(&myself, event_qual, qry->rtable,
@@ -284,7 +284,7 @@ DefineQueryRewrite(char *rulename,
 	 */
 	foreach(l, action)
 	{
-		query = castNode(Query, lfirst(l));
+		query = lfirst_node(Query, l);
 		if (query->resultRelation == 0)
 			continue;
 		/* Don't be fooled by INSERT/SELECT */
@@ -326,7 +326,7 @@ DefineQueryRewrite(char *rulename,
 		/*
 		 * ... the one action must be a SELECT, ...
 		 */
-		query = castNode(Query, linitial(action));
+		query = linitial_node(Query, action);
 		if (!is_instead ||
 			query->commandType != CMD_SELECT)
 			ereport(ERROR,
@@ -422,6 +422,12 @@ DefineQueryRewrite(char *rulename,
 			HeapScanDesc scanDesc;
 			Snapshot	snapshot;
 
+			if (event_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("could not convert partitioned table \"%s\" to a view",
+								RelationGetRelationName(event_relation))));
+
 			snapshot = RegisterSnapshot(GetLatestSnapshot());
 			scanDesc = heap_beginscan(event_relation, snapshot, 0, NULL);
 			if (heap_getnext(scanDesc, ForwardScanDirection) != NULL)
@@ -480,7 +486,7 @@ DefineQueryRewrite(char *rulename,
 
 		foreach(l, action)
 		{
-			query = castNode(Query, lfirst(l));
+			query = lfirst_node(Query, l);
 
 			if (!query->returningList)
 				continue;
@@ -900,7 +906,9 @@ RangeVarCallbackForRenameRule(const RangeVar *rv, Oid relid, Oid oldrelid,
 	form = (Form_pg_class) GETSTRUCT(tuple);
 
 	/* only tables and views can have rules */
-	if (form->relkind != RELKIND_RELATION && form->relkind != RELKIND_VIEW)
+	if (form->relkind != RELKIND_RELATION &&
+		form->relkind != RELKIND_VIEW &&
+		form->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not a table or view", rv->relname)));

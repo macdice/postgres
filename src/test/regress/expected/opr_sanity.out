@@ -733,6 +733,14 @@ order by 1;
  lowrite       |  955
 (13 rows)
 
+-- Check that all immutable functions are marked parallel safe
+SELECT p1.oid, p1.proname
+FROM pg_proc AS p1
+WHERE provolatile = 'i' AND proparallel = 'u';
+ oid | proname 
+-----+---------
+(0 rows)
+
 -- **************** pg_cast ****************
 -- Catch bogus values in pg_cast columns (other than cases detected by
 -- oidjoins test).
@@ -824,11 +832,12 @@ WHERE c.castmethod = 'b' AND
  character varying | character         |        0 | i
  pg_node_tree      | text              |        0 | i
  pg_ndistinct      | bytea             |        0 | i
+ pg_dependencies   | bytea             |        0 | i
  cidr              | inet              |        0 | i
  xml               | text              |        0 | a
  xml               | character varying |        0 | a
  xml               | character         |        0 | a
-(8 rows)
+(9 rows)
 
 -- **************** pg_conversion ****************
 -- Look for illegal values in pg_conversion fields.

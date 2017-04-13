@@ -42,14 +42,14 @@ SET search_path TO information_schema;
 /* Expand any 1-D array into a set with integers 1..N */
 CREATE FUNCTION _pg_expandarray(IN anyarray, OUT x anyelement, OUT n int)
     RETURNS SETOF RECORD
-    LANGUAGE sql STRICT IMMUTABLE
+    LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE
     AS 'select $1[s], s - pg_catalog.array_lower($1,1) + 1
         from pg_catalog.generate_series(pg_catalog.array_lower($1,1),
                                         pg_catalog.array_upper($1,1),
                                         1) as g(s)';
 
 CREATE FUNCTION _pg_keysequal(smallint[], smallint[]) RETURNS boolean
-    LANGUAGE sql IMMUTABLE  -- intentionally not STRICT, to allow inlining
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE  -- intentionally not STRICT, to allow inlining
     AS 'select $1 operator(pg_catalog.<@) $2 and $2 operator(pg_catalog.<@) $1';
 
 /* Given an index's OID and an underlying-table column number, return the
@@ -66,6 +66,7 @@ $$;
 CREATE FUNCTION _pg_truetypid(pg_attribute, pg_type) RETURNS oid
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT CASE WHEN $2.typtype = 'd' THEN $2.typbasetype ELSE $1.atttypid END$$;
@@ -73,6 +74,7 @@ $$SELECT CASE WHEN $2.typtype = 'd' THEN $2.typbasetype ELSE $1.atttypid END$$;
 CREATE FUNCTION _pg_truetypmod(pg_attribute, pg_type) RETURNS int4
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT CASE WHEN $2.typtype = 'd' THEN $2.typtypmod ELSE $1.atttypmod END$$;
@@ -82,6 +84,7 @@ $$SELECT CASE WHEN $2.typtype = 'd' THEN $2.typtypmod ELSE $1.atttypmod END$$;
 CREATE FUNCTION _pg_char_max_length(typid oid, typmod int4) RETURNS integer
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT
@@ -97,6 +100,7 @@ $$SELECT
 CREATE FUNCTION _pg_char_octet_length(typid oid, typmod int4) RETURNS integer
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT
@@ -112,6 +116,7 @@ $$SELECT
 CREATE FUNCTION _pg_numeric_precision(typid oid, typmod int4) RETURNS integer
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT
@@ -132,6 +137,7 @@ $$SELECT
 CREATE FUNCTION _pg_numeric_precision_radix(typid oid, typmod int4) RETURNS integer
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT
@@ -143,6 +149,7 @@ $$SELECT
 CREATE FUNCTION _pg_numeric_scale(typid oid, typmod int4) RETURNS integer
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT
@@ -158,6 +165,7 @@ $$SELECT
 CREATE FUNCTION _pg_datetime_precision(typid oid, typmod int4) RETURNS integer
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT
@@ -173,6 +181,7 @@ $$SELECT
 CREATE FUNCTION _pg_interval_type(typid oid, mod int4) RETURNS text
     LANGUAGE sql
     IMMUTABLE
+    PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
     AS
 $$SELECT
@@ -728,13 +737,13 @@ CREATE VIEW columns AS
            CAST(a.attnum AS sql_identifier) AS dtd_identifier,
            CAST('NO' AS yes_or_no) AS is_self_referencing,
 
-           CAST('NO' AS yes_or_no) AS is_identity,
-           CAST(null AS character_data) AS identity_generation,
-           CAST(null AS character_data) AS identity_start,
-           CAST(null AS character_data) AS identity_increment,
-           CAST(null AS character_data) AS identity_maximum,
-           CAST(null AS character_data) AS identity_minimum,
-           CAST(null AS yes_or_no) AS identity_cycle,
+           CAST(CASE WHEN a.attidentity IN ('a', 'd') THEN 'YES' ELSE 'NO' END AS yes_or_no) AS is_identity,
+           CAST(CASE a.attidentity WHEN 'a' THEN 'ALWAYS' WHEN 'd' THEN 'BY DEFAULT' END AS character_data) AS identity_generation,
+           CAST(seq.seqstart AS character_data) AS identity_start,
+           CAST(seq.seqincrement AS character_data) AS identity_increment,
+           CAST(seq.seqmax AS character_data) AS identity_maximum,
+           CAST(seq.seqmin AS character_data) AS identity_minimum,
+           CAST(CASE WHEN seq.seqcycle THEN 'YES' ELSE 'NO' END AS yes_or_no) AS identity_cycle,
 
            CAST('NEVER' AS character_data) AS is_generated,
            CAST(null AS character_data) AS generation_expression,
@@ -751,6 +760,8 @@ CREATE VIEW columns AS
            ON (t.typtype = 'd' AND t.typbasetype = bt.oid)
          LEFT JOIN (pg_collation co JOIN pg_namespace nco ON (co.collnamespace = nco.oid))
            ON a.attcollation = co.oid AND (nco.nspname, co.collname) <> ('pg_catalog', 'default')
+         LEFT JOIN (pg_depend dep JOIN pg_sequence seq ON (dep.classid = 'pg_class'::regclass AND dep.objid = seq.seqrelid AND dep.deptype = 'i'))
+           ON (dep.refclassid = 'pg_class'::regclass AND dep.refobjid = c.oid AND dep.refobjsubid = a.attnum)
 
     WHERE (NOT pg_is_other_temp_schema(nc.oid))
 
@@ -1545,6 +1556,7 @@ CREATE VIEW sequences AS
     FROM pg_namespace nc, pg_class c, pg_sequence s
     WHERE c.relnamespace = nc.oid
           AND c.relkind = 'S'
+          AND NOT EXISTS (SELECT 1 FROM pg_depend WHERE classid = 'pg_class'::regclass AND objid = c.oid AND deptype = 'i')
           AND (NOT pg_is_other_temp_schema(nc.oid))
           AND c.oid = s.seqrelid
           AND (pg_has_role(c.relowner, 'USAGE')

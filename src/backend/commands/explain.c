@@ -253,7 +253,7 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt, const char *queryString,
 		/* Explain every plan */
 		foreach(l, rewritten)
 		{
-			ExplainOneQuery(castNode(Query, lfirst(l)),
+			ExplainOneQuery(lfirst_node(Query, l),
 							CURSOR_OPT_PARALLEL_OK, NULL, es,
 							queryString, params, queryEnv);
 
@@ -408,7 +408,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 
 		rewritten = QueryRewrite(castNode(Query, copyObject(ctas->query)));
 		Assert(list_length(rewritten) == 1);
-		ExplainOneQuery(castNode(Query, linitial(rewritten)),
+		ExplainOneQuery(linitial_node(Query, rewritten),
 						0, ctas->into, es,
 						queryString, params, queryEnv);
 	}
@@ -427,7 +427,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 
 		rewritten = QueryRewrite(castNode(Query, copyObject(dcs->query)));
 		Assert(list_length(rewritten) == 1);
-		ExplainOneQuery(castNode(Query, linitial(rewritten)),
+		ExplainOneQuery(linitial_node(Query, rewritten),
 						dcs->options, NULL, es,
 						queryString, params, queryEnv);
 	}
@@ -1342,6 +1342,23 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/* target list */
 	if (es->verbose)
 		show_plan_tlist(planstate, ancestors, es);
+
+	/* unique join */
+	switch (nodeTag(plan))
+	{
+		case T_NestLoop:
+		case T_MergeJoin:
+		case T_HashJoin:
+			/* try not to be too chatty about this in text mode */
+			if (es->format != EXPLAIN_FORMAT_TEXT ||
+				(es->verbose && ((Join *) plan)->inner_unique))
+				ExplainPropertyBool("Inner Unique",
+									((Join *) plan)->inner_unique,
+									es);
+			break;
+		default:
+			break;
+	}
 
 	/* quals, sort keys, etc */
 	switch (nodeTag(plan))
