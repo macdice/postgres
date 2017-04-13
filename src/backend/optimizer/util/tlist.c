@@ -14,17 +14,10 @@
  */
 #include "postgres.h"
 
-#include "access/htup.h"
-#include "access/htup_details.h"
-#include "catalog/pg_type.h"
-#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
-#include "nodes/print.h"
 #include "optimizer/cost.h"
 #include "optimizer/tlist.h"
-#include "utils/syscache.h"
-#include "utils/typcache.h"
 
 
 /* Test if an expression node represents a SRF call.  Beware multiple eval! */
