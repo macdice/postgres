@@ -1452,6 +1452,13 @@ pg_get_statisticsext_worker(Oid statextid, bool missing_ok)
 	StringInfoData buf;
 	int			colno;
 	char	   *nsp;
+	ArrayType  *arr;
+	char	   *enabled;
+	Datum		datum;
+	bool		isnull;
+	bool		ndistinct_enabled;
+	bool		dependencies_enabled;
+	int			i;
 
 	statexttup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statextid));
 
@@ -1467,9 +1474,54 @@ pg_get_statisticsext_worker(Oid statextid, bool missing_ok)
 	initStringInfo(&buf);
 
 	nsp = get_namespace_name(statextrec->stanamespace);
-	appendStringInfo(&buf, "CREATE STATISTICS %s ON (",
+	appendStringInfo(&buf, "CREATE STATISTICS %s",
 					 quote_qualified_identifier(nsp,
 												NameStr(statextrec->staname)));
+
+	/*
+	 * Lookup the staenabled column so that we know how to handle the WITH
+	 * clause.
+	 */
+	datum = SysCacheGetAttr(STATEXTOID, statexttup,
+							Anum_pg_statistic_ext_staenabled, &isnull);
+	Assert(!isnull);
+	arr = DatumGetArrayTypeP(datum);
+	if (ARR_NDIM(arr) != 1 ||
+		ARR_HASNULL(arr) ||
+		ARR_ELEMTYPE(arr) != CHAROID)
+		elog(ERROR, "staenabled is not a 1-D char array");
+	enabled = (char *) ARR_DATA_PTR(arr);
+
+	ndistinct_enabled = false;
+	dependencies_enabled = false;
+
+	for (i = 0; i < ARR_DIMS(arr)[0]; i++)
+	{
+		if (enabled[i] == STATS_EXT_NDISTINCT)
+			ndistinct_enabled = true;
+		if (enabled[i] == STATS_EXT_DEPENDENCIES)
+			dependencies_enabled = true;
+	}
+
+	/*
+	 * If any option is disabled, then we'll need to append a WITH clause to
+	 * show which options are enabled.  We omit the WITH clause on purpose
+	 * when all options are enabled, so a pg_dump/pg_restore will create all
+	 * statistics types on a newer postgres version, if the statistics had all
+	 * options enabled on the original version.
+	 */
+	if (!ndistinct_enabled || !dependencies_enabled)
+	{
+		appendStringInfoString(&buf, " WITH (");
+		if (ndistinct_enabled)
+			appendStringInfoString(&buf, "ndistinct");
+		else if (dependencies_enabled)
+			appendStringInfoString(&buf, "dependencies");
+
+		appendStringInfoChar(&buf, ')');
+	}
+
+	appendStringInfoString(&buf, " ON (");
 
 	for (colno = 0; colno < statextrec->stakeys.dim1; colno++)
 	{
@@ -5884,6 +5936,14 @@ get_insert_query_def(Query *query, deparse_context *context)
 	if (query->targetList)
 		appendStringInfoString(buf, ") ");
 
+	if (query->override)
+	{
+		if (query->override == OVERRIDING_SYSTEM_VALUE)
+			appendStringInfoString(buf, "OVERRIDING SYSTEM VALUE ");
+		else if (query->override == OVERRIDING_USER_VALUE)
+			appendStringInfoString(buf, "OVERRIDING USER VALUE ");
+	}
+
 	if (select_rte)
 	{
 		/* Add the SELECT */
@@ -7749,7 +7809,7 @@ get_rule_expr(Node *node, deparse_context *context,
 				appendStringInfoString(buf, "(alternatives: ");
 				foreach(lc, asplan->subplans)
 				{
-					SubPlan    *splan = castNode(SubPlan, lfirst(lc));
+					SubPlan    *splan = lfirst_node(SubPlan, lc);
 
 					if (splan->useHashTable)
 						appendStringInfo(buf, "hashed %s", splan->plan_name);
@@ -8304,7 +8364,7 @@ get_rule_expr(Node *node, deparse_context *context,
 							get_rule_expr((Node *) linitial(xexpr->args),
 										  context, true);
 
-							con = castNode(Const, lsecond(xexpr->args));
+							con = lsecond_node(Const, xexpr->args);
 							Assert(!con->constisnull);
 							if (DatumGetBool(con->constvalue))
 								appendStringInfoString(buf,
@@ -8327,7 +8387,7 @@ get_rule_expr(Node *node, deparse_context *context,
 							else
 								get_rule_expr((Node *) con, context, false);
 
-							con = castNode(Const, lthird(xexpr->args));
+							con = lthird_node(Const, xexpr->args);
 							if (con->constisnull)
 								 /* suppress STANDALONE NO VALUE */ ;
 							else
@@ -8839,7 +8899,7 @@ get_agg_expr(Aggref *aggref, deparse_context *context,
 	 */
 	if (DO_AGGSPLIT_COMBINE(aggref->aggsplit))
 	{
-		TargetEntry *tle = castNode(TargetEntry, linitial(aggref->args));
+		TargetEntry *tle = linitial_node(TargetEntry, aggref->args);
 
 		Assert(list_length(aggref->args) == 1);
 		resolve_special_varno((Node *) tle->expr, context, original_aggref,
@@ -9300,7 +9360,7 @@ get_sublink_expr(SubLink *sublink, deparse_context *context)
 			sep = "";
 			foreach(l, ((BoolExpr *) sublink->testexpr)->args)
 			{
-				OpExpr	   *opexpr = castNode(OpExpr, lfirst(l));
+				OpExpr	   *opexpr = lfirst_node(OpExpr, l);
 
 				appendStringInfoString(buf, sep);
 				get_rule_expr(linitial(opexpr->args), context, true);
