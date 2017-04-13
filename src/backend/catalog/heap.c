@@ -144,37 +144,37 @@ static List *insert_ordered_unique_oid(List *list, Oid datum);
 static FormData_pg_attribute a1 = {
 	0, {"ctid"}, TIDOID, 0, sizeof(ItemPointerData),
 	SelfItemPointerAttributeNumber, 0, -1, -1,
-	false, 'p', 's', true, false, false, true, 0
+	false, 'p', 's', true, false, '\0', false, true, 0
 };
 
 static FormData_pg_attribute a2 = {
 	0, {"oid"}, OIDOID, 0, sizeof(Oid),
 	ObjectIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, false, true, 0
+	true, 'p', 'i', true, false, '\0', false, true, 0
 };
 
 static FormData_pg_attribute a3 = {
 	0, {"xmin"}, XIDOID, 0, sizeof(TransactionId),
 	MinTransactionIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, false, true, 0
+	true, 'p', 'i', true, false, '\0', false, true, 0
 };
 
 static FormData_pg_attribute a4 = {
 	0, {"cmin"}, CIDOID, 0, sizeof(CommandId),
 	MinCommandIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, false, true, 0
+	true, 'p', 'i', true, false, '\0', false, true, 0
 };
 
 static FormData_pg_attribute a5 = {
 	0, {"xmax"}, XIDOID, 0, sizeof(TransactionId),
 	MaxTransactionIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, false, true, 0
+	true, 'p', 'i', true, false, '\0', false, true, 0
 };
 
 static FormData_pg_attribute a6 = {
 	0, {"cmax"}, CIDOID, 0, sizeof(CommandId),
 	MaxCommandIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, false, true, 0
+	true, 'p', 'i', true, false, '\0', false, true, 0
 };
 
 /*
@@ -186,7 +186,7 @@ static FormData_pg_attribute a6 = {
 static FormData_pg_attribute a7 = {
 	0, {"tableoid"}, OIDOID, 0, sizeof(Oid),
 	TableOidAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, false, true, 0
+	true, 'p', 'i', true, false, '\0', false, true, 0
 };
 
 static const Form_pg_attribute SysAtt[] = {&a1, &a2, &a3, &a4, &a5, &a6, &a7};
@@ -621,6 +621,7 @@ InsertPgAttributeTuple(Relation pg_attribute_rel,
 	values[Anum_pg_attribute_attalign - 1] = CharGetDatum(new_attribute->attalign);
 	values[Anum_pg_attribute_attnotnull - 1] = BoolGetDatum(new_attribute->attnotnull);
 	values[Anum_pg_attribute_atthasdef - 1] = BoolGetDatum(new_attribute->atthasdef);
+	values[Anum_pg_attribute_attidentity - 1] = CharGetDatum(new_attribute->attidentity);
 	values[Anum_pg_attribute_attisdropped - 1] = BoolGetDatum(new_attribute->attisdropped);
 	values[Anum_pg_attribute_attislocal - 1] = BoolGetDatum(new_attribute->attislocal);
 	values[Anum_pg_attribute_attinhcount - 1] = Int32GetDatum(new_attribute->attinhcount);
@@ -1758,28 +1759,32 @@ void
 heap_drop_with_catalog(Oid relid)
 {
 	Relation	rel;
+	HeapTuple	tuple;
 	Oid			parentOid;
 	Relation	parent = NULL;
+
+	/*
+	 * To drop a partition safely, we must grab exclusive lock on its parent,
+	 * because another backend might be about to execute a query on the parent
+	 * table.  If it relies on previously cached partition descriptor, then
+	 * it could attempt to access the just-dropped relation as its partition.
+	 * We must therefore take a table lock strong enough to prevent all
+	 * queries on the table from proceeding until we commit and send out a
+	 * shared-cache-inval notice that will make them update their index lists.
+	 */
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (((Form_pg_class) GETSTRUCT(tuple))->relispartition)
+	{
+		parentOid = get_partition_parent(relid);
+		parent = heap_open(parentOid, AccessExclusiveLock);
+	}
+
+	ReleaseSysCache(tuple);
 
 	/*
 	 * Open and lock the relation.
 	 */
 	rel = relation_open(relid, AccessExclusiveLock);
-
-	/*
-	 * If the relation is a partition, we must grab exclusive lock on its
-	 * parent because we need to update its partition descriptor. We must take
-	 * a table lock strong enough to prevent all queries on the parent from
-	 * proceeding until we commit and send out a shared-cache-inval notice
-	 * that will make them update their partition descriptor. Sometimes, doing
-	 * this is cycles spent uselessly, especially if the parent will be
-	 * dropped as part of the same command anyway.
-	 */
-	if (rel->rd_rel->relispartition)
-	{
-		parentOid = get_partition_parent(relid);
-		parent = heap_open(parentOid, AccessExclusiveLock);
-	}
 
 	/*
 	 * There can no longer be anyone *else* touching the relation, but we
