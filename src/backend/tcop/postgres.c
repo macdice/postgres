@@ -850,7 +850,7 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
 
 	foreach(query_list, querytrees)
 	{
-		Query	   *query = castNode(Query, lfirst(query_list));
+		Query	   *query = lfirst_node(Query, query_list);
 		PlannedStmt *stmt;
 
 		if (query->commandType == CMD_UTILITY)
@@ -966,7 +966,7 @@ exec_simple_query(const char *query_string)
 	 */
 	foreach(parsetree_item, parsetree_list)
 	{
-		RawStmt    *parsetree = castNode(RawStmt, lfirst(parsetree_item));
+		RawStmt    *parsetree = lfirst_node(RawStmt, parsetree_item);
 		bool		snapshot_set = false;
 		const char *commandTag;
 		char		completionTag[COMPLETION_TAG_BUFSIZE];
@@ -1291,7 +1291,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 		bool		snapshot_set = false;
 		int			i;
 
-		raw_parse_tree = castNode(RawStmt, linitial(parsetree_list));
+		raw_parse_tree = linitial_node(RawStmt, parsetree_list);
 
 		/*
 		 * Get the command name for possible use in status display.
@@ -2154,7 +2154,7 @@ errdetail_execute(List *raw_parsetree_list)
 
 	foreach(parsetree_item, raw_parsetree_list)
 	{
-		RawStmt    *parsetree = castNode(RawStmt, lfirst(parsetree_item));
+		RawStmt    *parsetree = lfirst_node(RawStmt, parsetree_item);
 
 		if (IsA(parsetree->stmt, ExecuteStmt))
 		{
@@ -2508,7 +2508,7 @@ IsTransactionExitStmtList(List *pstmts)
 {
 	if (list_length(pstmts) == 1)
 	{
-		PlannedStmt *pstmt = castNode(PlannedStmt, linitial(pstmts));
+		PlannedStmt *pstmt = linitial_node(PlannedStmt, pstmts);
 
 		if (pstmt->commandType == CMD_UTILITY &&
 			IsTransactionExitStmt(pstmt->utilityStmt))
@@ -2523,7 +2523,7 @@ IsTransactionStmtList(List *pstmts)
 {
 	if (list_length(pstmts) == 1)
 	{
-		PlannedStmt *pstmt = castNode(PlannedStmt, linitial(pstmts));
+		PlannedStmt *pstmt = linitial_node(PlannedStmt, pstmts);
 
 		if (pstmt->commandType == CMD_UTILITY &&
 			IsA(pstmt->utilityStmt, TransactionStmt))
@@ -4164,19 +4164,7 @@ PostgresMain(int argc, char *argv[],
 				/* switch back to message context */
 				MemoryContextSwitchTo(MessageContext);
 
-				if (HandleFunctionRequest(&input_message) == EOF)
-				{
-					/* lost frontend connection during F message input */
-
-					/*
-					 * Reset whereToSendOutput to prevent ereport from
-					 * attempting to send any more messages to client.
-					 */
-					if (whereToSendOutput == DestRemote)
-						whereToSendOutput = DestNone;
-
-					proc_exit(0);
-				}
+				HandleFunctionRequest(&input_message);
 
 				/* commit the function-invocation transaction */
 				finish_xact_command();

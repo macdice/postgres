@@ -1034,7 +1034,7 @@ ProcessCopyOptions(ParseState *pstate,
 	/* Extract options from the statement node tree */
 	foreach(option, options)
 	{
-		DefElem    *defel = castNode(DefElem, lfirst(option));
+		DefElem    *defel = lfirst_node(DefElem, option);
 
 		if (strcmp(defel->defname, "format") == 0)
 		{
@@ -1488,7 +1488,7 @@ BeginCopy(ParseState *pstate,
 			/* examine queries to determine which error message to issue */
 			foreach(lc, rewritten)
 			{
-				Query	   *q = castNode(Query, lfirst(lc));
+				Query	   *q = lfirst_node(Query, lc);
 
 				if (q->querySource == QSRC_QUAL_INSTEAD_RULE)
 					ereport(ERROR,
@@ -1505,7 +1505,7 @@ BeginCopy(ParseState *pstate,
 					 errmsg("multi-statement DO INSTEAD rules are not supported for COPY")));
 		}
 
-		query = castNode(Query, linitial(rewritten));
+		query = linitial_node(Query, rewritten);
 
 		/* The grammar allows SELECT INTO, but we don't support that */
 		if (query->utilityStmt != NULL &&
@@ -2506,8 +2506,7 @@ CopyFrom(CopyState cstate)
 
 	for (;;)
 	{
-		TupleTableSlot *slot,
-				   *oldslot;
+		TupleTableSlot *slot;
 		bool		skip_tuple;
 		Oid			loaded_oid = InvalidOid;
 
@@ -2549,7 +2548,6 @@ CopyFrom(CopyState cstate)
 		ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 
 		/* Determine the partition to heap_insert the tuple into */
-		oldslot = slot;
 		if (cstate->partition_dispatch_info)
 		{
 			int			leaf_part_index;
@@ -2651,7 +2649,7 @@ CopyFrom(CopyState cstate)
 				/* Check the constraints of the tuple */
 				if (cstate->rel->rd_att->constr ||
 					resultRelInfo->ri_PartitionCheck)
-					ExecConstraints(resultRelInfo, slot, oldslot, estate);
+					ExecConstraints(resultRelInfo, slot, estate);
 
 				if (useHeapMultiInsert)
 				{
