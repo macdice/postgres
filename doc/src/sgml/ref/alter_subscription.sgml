@@ -35,6 +35,7 @@ ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> REFRESH PUB
     COPY DATA | NOCOPY DATA
 
 ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_USER | SESSION_USER }
+ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
 ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> CONNECTION '<replaceable>conninfo</replaceable>'
 ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> ENABLE
 ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> DISABLE
@@ -70,6 +71,24 @@ ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> DISABLE
    </varlistentry>
 
    <varlistentry>
+    <term><replaceable class="parameter">new_owner</replaceable></term>
+    <listitem>
+     <para>
+      The user name of the new owner of the subscription.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_name</replaceable></term>
+    <listitem>
+     <para>
+      The new name for the subscription.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>CONNECTION '<replaceable class="parameter">conninfo</replaceable>'</literal></term>
     <term><literal>SLOT NAME = <replaceable class="parameter">slot_name</replaceable></literal></term>
     <listitem>
@@ -98,7 +117,7 @@ ALTER SUBSCRIPTION <replaceable class="PARAMETER">name</replaceable> DISABLE
    </varlistentry>
 
    <varlistentry>
-    <term>REFRESH PUBLICATION</term>
+    <term><literal>REFRESH PUBLICATION</literal></term>
     <listitem>
      <para>
       Fetch missing table information from publisher. This will start

@@ -1039,12 +1039,17 @@ pltcl_trigger_handler(PG_FUNCTION_ARGS, pltcl_call_state *call_state,
 	const char *result;
 	int			result_Objc;
 	Tcl_Obj   **result_Objv;
+	int			rc PG_USED_FOR_ASSERTS_ONLY;
 
 	call_state->trigdata = trigdata;
 
 	/* Connect to SPI manager */
 	if (SPI_connect() != SPI_OK_CONNECT)
 		elog(ERROR, "could not connect to SPI manager");
+
+	/* Make transition tables visible to this SPI connection */
+	rc = SPI_register_trigger_data(trigdata);
+	Assert(rc >= 0);
 
 	/* Find or compile the function */
 	prodesc = compile_pltcl_function(fcinfo->flinfo->fn_oid,
@@ -2530,7 +2535,7 @@ pltcl_SPI_prepare(ClientData cdata, Tcl_Interp *interp,
 	 * occur.  FIXME someday.
 	 ************************************************************/
 	plan_cxt = AllocSetContextCreate(TopMemoryContext,
-									 "PL/TCL spi_prepare query",
+									 "PL/Tcl spi_prepare query",
 									 ALLOCSET_SMALL_SIZES);
 	MemoryContextSwitchTo(plan_cxt);
 	qdesc = (pltcl_query_desc *) palloc0(sizeof(pltcl_query_desc));

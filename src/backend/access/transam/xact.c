@@ -2137,7 +2137,7 @@ CommitTransaction(void)
 	AtEOXact_ComboCid();
 	AtEOXact_HashTables(true);
 	AtEOXact_PgStat(true);
-	AtEOXact_Snapshot(true);
+	AtEOXact_Snapshot(true, false);
 	AtCommit_ApplyLauncher();
 	pgstat_report_xact_timestamp(0);
 
@@ -2409,7 +2409,7 @@ PrepareTransaction(void)
 	AtEOXact_ComboCid();
 	AtEOXact_HashTables(true);
 	/* don't call AtEOXact_PgStat here; we fixed pgstat state above */
-	AtEOXact_Snapshot(true);
+	AtEOXact_Snapshot(true, true);
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2640,7 +2640,7 @@ CleanupTransaction(void)
 	 * do abort cleanup processing
 	 */
 	AtCleanup_Portals();		/* now safe to release portal memory */
-	AtEOXact_Snapshot(false);	/* and release the transaction's snapshots */
+	AtEOXact_Snapshot(false, true); /* and release the transaction's snapshots */
 
 	CurrentResourceOwner = NULL;	/* and resource owner */
 	if (TopTransactionResourceOwner)
@@ -5615,7 +5615,9 @@ xact_redo(XLogReaderState *record)
 			Assert(TransactionIdIsValid(parsed.twophase_xid));
 			xact_redo_commit(&parsed, parsed.twophase_xid,
 							 record->EndRecPtr, XLogRecGetOrigin(record));
-			RemoveTwoPhaseFile(parsed.twophase_xid, false);
+
+			/* Delete TwoPhaseState gxact entry and/or 2PC file. */
+			PrepareRedoRemove(parsed.twophase_xid, false);
 		}
 	}
 	else if (info == XLOG_XACT_ABORT || info == XLOG_XACT_ABORT_PREPARED)
@@ -5635,14 +5637,20 @@ xact_redo(XLogReaderState *record)
 		{
 			Assert(TransactionIdIsValid(parsed.twophase_xid));
 			xact_redo_abort(&parsed, parsed.twophase_xid);
-			RemoveTwoPhaseFile(parsed.twophase_xid, false);
+
+			/* Delete TwoPhaseState gxact entry and/or 2PC file. */
+			PrepareRedoRemove(parsed.twophase_xid, false);
 		}
 	}
 	else if (info == XLOG_XACT_PREPARE)
 	{
-		/* the record contents are exactly the 2PC file */
-		RecreateTwoPhaseFile(XLogRecGetXid(record),
-						  XLogRecGetData(record), XLogRecGetDataLen(record));
+		/*
+		 * Store xid and start/end pointers of the WAL record in
+		 * TwoPhaseState gxact entry.
+		 */
+		PrepareRedoAdd(XLogRecGetData(record),
+					   record->ReadRecPtr,
+					   record->EndRecPtr);
 	}
 	else if (info == XLOG_XACT_ASSIGNMENT)
 	{
