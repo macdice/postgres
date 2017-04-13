@@ -22,7 +22,10 @@
 
 /*
  * FDW-specific planner information kept in RelOptInfo.fdw_private for a
- * foreign table.  This information is collected by postgresGetForeignRelSize.
+ * postgres_fdw foreign table.  For a baserel, this struct is created by
+ * postgresGetForeignRelSize, although some fields are not filled till later.
+ * postgresGetForeignJoinPaths creates it for a joinrel, and
+ * postgresGetForeignUpperPaths creates it for an upperrel.
  */
 typedef struct PgFdwRelationInfo
 {
@@ -34,19 +37,14 @@ typedef struct PgFdwRelationInfo
 
 	/*
 	 * Restriction clauses, divided into safe and unsafe to pushdown subsets.
-	 *
-	 * For a base foreign relation this is a list of clauses along-with
-	 * RestrictInfo wrapper. Keeping RestrictInfo wrapper helps while dividing
-	 * scan_clauses in postgresGetForeignPlan into safe and unsafe subsets.
-	 * Also it helps in estimating costs since RestrictInfo caches the
-	 * selectivity and qual cost for the clause in it.
-	 *
-	 * For a join relation, however, they are part of otherclause list
-	 * obtained from extract_actual_join_clauses, which strips RestrictInfo
-	 * construct. So, for a join relation they are list of bare clauses.
+	 * All entries in these lists should have RestrictInfo wrappers; that
+	 * improves efficiency of selectivity and cost estimation.
 	 */
 	List	   *remote_conds;
 	List	   *local_conds;
+
+	/* Actual remote restriction clauses for scan (sans RestrictInfos) */
+	List	   *final_remote_exprs;
 
 	/* Bitmap of attr numbers we need to fetch from the remote server. */
 	Bitmapset  *attrs_used;
@@ -91,7 +89,8 @@ typedef struct PgFdwRelationInfo
 	RelOptInfo *outerrel;
 	RelOptInfo *innerrel;
 	JoinType	jointype;
-	List	   *joinclauses;
+	/* joinclauses contains only JOIN/ON conditions for an outer join */
+	List	   *joinclauses;	/* List of RestrictInfo */
 
 	/* Grouping information */
 	List	   *grouped_tlist;

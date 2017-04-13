@@ -88,7 +88,7 @@ static Plan *create_unique_plan(PlannerInfo *root, UniquePath *best_path,
 				   int flags);
 static Gather *create_gather_plan(PlannerInfo *root, GatherPath *best_path);
 static Plan *create_projection_plan(PlannerInfo *root, ProjectionPath *best_path);
-static Plan *inject_projection_plan(Plan *subplan, List *tlist);
+static Plan *inject_projection_plan(Plan *subplan, List *tlist, bool parallel_safe);
 static Sort *create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags);
 static Group *create_group_plan(PlannerInfo *root, GroupPath *best_path);
 static Unique *create_upper_unique_plan(PlannerInfo *root, UpperUniquePath *best_path,
@@ -215,12 +215,12 @@ static BitmapOr *make_bitmap_or(List *bitmapplans);
 static NestLoop *make_nestloop(List *tlist,
 			  List *joinclauses, List *otherclauses, List *nestParams,
 			  Plan *lefttree, Plan *righttree,
-			  JoinType jointype);
+			  JoinType jointype, bool inner_unique);
 static HashJoin *make_hashjoin(List *tlist,
 			  List *joinclauses, List *otherclauses,
 			  List *hashclauses,
 			  Plan *lefttree, Plan *righttree,
-			  JoinType jointype);
+			  JoinType jointype, bool inner_unique);
 static Hash *make_hash(Plan *lefttree,
 		  Oid skewTable,
 		  AttrNumber skewColumn,
@@ -235,7 +235,8 @@ static MergeJoin *make_mergejoin(List *tlist,
 			   int *mergestrategies,
 			   bool *mergenullsfirst,
 			   Plan *lefttree, Plan *righttree,
-			   JoinType jointype);
+			   JoinType jointype, bool inner_unique,
+			   bool skip_mark_restore);
 static Sort *make_sort(Plan *lefttree, int numCols,
 		  AttrNumber *sortColIdx, Oid *sortOperators,
 		  Oid *collations, bool *nullsFirst);
@@ -919,6 +920,9 @@ create_gating_plan(PlannerInfo *root, Path *path, Plan *plan,
 	 */
 	copy_plan_costsize(gplan, plan);
 
+	/* Gating quals could be unsafe, so better use the Path's safety flag */
+	gplan->parallel_safe = path->parallel_safe;
+
 	return gplan;
 }
 
@@ -1312,7 +1316,8 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 		 */
 		if (!is_projection_capable_plan(subplan) &&
 			!tlist_same_exprs(newtlist, subplan->targetlist))
-			subplan = inject_projection_plan(subplan, newtlist);
+			subplan = inject_projection_plan(subplan, newtlist,
+											 best_path->path.parallel_safe);
 		else
 			subplan->targetlist = newtlist;
 	}
@@ -1571,7 +1576,8 @@ create_projection_plan(PlannerInfo *root, ProjectionPath *best_path)
 		plan->total_cost = best_path->path.total_cost;
 		plan->plan_rows = best_path->path.rows;
 		plan->plan_width = best_path->path.pathtarget->width;
-		/* ... but be careful not to munge subplan's parallel-aware flag */
+		plan->parallel_safe = best_path->path.parallel_safe;
+		/* ... but don't change subplan's parallel_aware flag */
 	}
 	else
 	{
@@ -1591,9 +1597,12 @@ create_projection_plan(PlannerInfo *root, ProjectionPath *best_path)
  * This is used in a few places where we decide on-the-fly that we need a
  * projection step as part of the tree generated for some Path node.
  * We should try to get rid of this in favor of doing it more honestly.
+ *
+ * One reason it's ugly is we have to be told the right parallel_safe marking
+ * to apply (since the tlist might be unsafe even if the child plan is safe).
  */
 static Plan *
-inject_projection_plan(Plan *subplan, List *tlist)
+inject_projection_plan(Plan *subplan, List *tlist, bool parallel_safe)
 {
 	Plan	   *plan;
 
@@ -1607,6 +1616,7 @@ inject_projection_plan(Plan *subplan, List *tlist)
 	 * consistent not more so.  Hence, just copy the subplan's cost.
 	 */
 	copy_plan_costsize(plan, subplan);
+	plan->parallel_safe = parallel_safe;
 
 	return plan;
 }
@@ -1983,6 +1993,7 @@ create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path)
 		plan->plan_rows = 1;
 		plan->plan_width = mminfo->path->pathtarget->width;
 		plan->parallel_aware = false;
+		plan->parallel_safe = mminfo->path->parallel_safe;
 
 		/* Convert the plan into an InitPlan in the outer query. */
 		SS_make_initplan_from_plan(root, subroot, plan, mminfo->param);
@@ -2549,7 +2560,7 @@ create_indexscan_plan(PlannerInfo *root,
 	qpqual = NIL;
 	foreach(l, scan_clauses)
 	{
-		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(l));
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
 
 		if (rinfo->pseudoconstant)
 			continue;			/* we may drop pseudoconstants here */
@@ -2709,7 +2720,7 @@ create_bitmap_scan_plan(PlannerInfo *root,
 	qpqual = NIL;
 	foreach(l, scan_clauses)
 	{
-		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(l));
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
 		Node	   *clause = (Node *) rinfo->clause;
 
 		if (rinfo->pseudoconstant)
@@ -2828,6 +2839,7 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 			clamp_row_est(apath->bitmapselectivity * apath->path.parent->tuples);
 		plan->plan_width = 0;	/* meaningless */
 		plan->parallel_aware = false;
+		plan->parallel_safe = apath->path.parallel_safe;
 		*qual = subquals;
 		*indexqual = subindexquals;
 		*indexECs = subindexECs;
@@ -2891,6 +2903,7 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 				clamp_row_est(opath->bitmapselectivity * opath->path.parent->tuples);
 			plan->plan_width = 0;		/* meaningless */
 			plan->parallel_aware = false;
+			plan->parallel_safe = opath->path.parallel_safe;
 		}
 
 		/*
@@ -2935,6 +2948,7 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 			clamp_row_est(ipath->indexselectivity * ipath->path.parent->tuples);
 		plan->plan_width = 0;	/* meaningless */
 		plan->parallel_aware = false;
+		plan->parallel_safe = ipath->path.parallel_safe;
 		*qual = get_actual_clauses(ipath->indexclauses);
 		*indexqual = get_actual_clauses(ipath->indexquals);
 		foreach(l, ipath->indexinfo->indpred)
@@ -3714,7 +3728,8 @@ create_nestloop_plan(PlannerInfo *root,
 							  nestParams,
 							  outer_plan,
 							  inner_plan,
-							  best_path->jointype);
+							  best_path->jointype,
+							  best_path->inner_unique);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->path);
 
@@ -3865,7 +3880,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	i = 0;
 	foreach(lc, best_path->path_mergeclauses)
 	{
-		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(lc));
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
 		EquivalenceClass *oeclass;
 		EquivalenceClass *ieclass;
 		PathKey    *opathkey;
@@ -4016,7 +4031,9 @@ create_mergejoin_plan(PlannerInfo *root,
 							   mergenullsfirst,
 							   outer_plan,
 							   inner_plan,
-							   best_path->jpath.jointype);
+							   best_path->jpath.jointype,
+							   best_path->jpath.inner_unique,
+							   best_path->skip_mark_restore);
 
 	/* Costs of sort and material steps are included in path cost already */
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
@@ -4156,7 +4173,8 @@ create_hashjoin_plan(PlannerInfo *root,
 							  hashclauses,
 							  outer_plan,
 							  (Plan *) hash_plan,
-							  best_path->jpath.jointype);
+							  best_path->jpath.jointype,
+							  best_path->jpath.inner_unique);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
 
@@ -4409,7 +4427,7 @@ fix_indexqual_references(PlannerInfo *root, IndexPath *index_path)
 
 	forboth(lcc, index_path->indexquals, lci, index_path->indexqualcols)
 	{
-		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(lcc));
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lcc);
 		int			indexcol = lfirst_int(lci);
 		Node	   *clause;
 
@@ -4829,7 +4847,7 @@ order_qual_clauses(PlannerInfo *root, List *clauses)
 /*
  * Copy cost and size info from a Path node to the Plan node created from it.
  * The executor usually won't use this info, but it's needed by EXPLAIN.
- * Also copy the parallel-aware flag, which the executor *will* use.
+ * Also copy the parallel-related flags, which the executor *will* use.
  */
 static void
 copy_generic_path_info(Plan *dest, Path *src)
@@ -4839,6 +4857,7 @@ copy_generic_path_info(Plan *dest, Path *src)
 	dest->plan_rows = src->rows;
 	dest->plan_width = src->pathtarget->width;
 	dest->parallel_aware = src->parallel_aware;
+	dest->parallel_safe = src->parallel_safe;
 }
 
 /*
@@ -4854,6 +4873,8 @@ copy_plan_costsize(Plan *dest, Plan *src)
 	dest->plan_width = src->plan_width;
 	/* Assume the inserted node is not parallel-aware. */
 	dest->parallel_aware = false;
+	/* Assume the inserted node is parallel-safe, if child plan is. */
+	dest->parallel_safe = src->parallel_safe;
 }
 
 /*
@@ -4883,6 +4904,7 @@ label_sort_with_costsize(PlannerInfo *root, Sort *plan, double limit_tuples)
 	plan->plan.plan_rows = lefttree->plan_rows;
 	plan->plan.plan_width = lefttree->plan_width;
 	plan->plan.parallel_aware = false;
+	plan->plan.parallel_safe = lefttree->parallel_safe;
 }
 
 /*
@@ -5349,7 +5371,8 @@ make_nestloop(List *tlist,
 			  List *nestParams,
 			  Plan *lefttree,
 			  Plan *righttree,
-			  JoinType jointype)
+			  JoinType jointype,
+			  bool inner_unique)
 {
 	NestLoop   *node = makeNode(NestLoop);
 	Plan	   *plan = &node->join.plan;
@@ -5359,6 +5382,7 @@ make_nestloop(List *tlist,
 	plan->lefttree = lefttree;
 	plan->righttree = righttree;
 	node->join.jointype = jointype;
+	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
 	node->nestParams = nestParams;
 
@@ -5372,7 +5396,8 @@ make_hashjoin(List *tlist,
 			  List *hashclauses,
 			  Plan *lefttree,
 			  Plan *righttree,
-			  JoinType jointype)
+			  JoinType jointype,
+			  bool inner_unique)
 {
 	HashJoin   *node = makeNode(HashJoin);
 	Plan	   *plan = &node->join.plan;
@@ -5383,6 +5408,7 @@ make_hashjoin(List *tlist,
 	plan->righttree = righttree;
 	node->hashclauses = hashclauses;
 	node->join.jointype = jointype;
+	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
 
 	return node;
@@ -5424,7 +5450,9 @@ make_mergejoin(List *tlist,
 			   bool *mergenullsfirst,
 			   Plan *lefttree,
 			   Plan *righttree,
-			   JoinType jointype)
+			   JoinType jointype,
+			   bool inner_unique,
+			   bool skip_mark_restore)
 {
 	MergeJoin  *node = makeNode(MergeJoin);
 	Plan	   *plan = &node->join.plan;
@@ -5433,12 +5461,14 @@ make_mergejoin(List *tlist,
 	plan->qual = otherclauses;
 	plan->lefttree = lefttree;
 	plan->righttree = righttree;
+	node->skip_mark_restore = skip_mark_restore;
 	node->mergeclauses = mergeclauses;
 	node->mergeFamilies = mergefamilies;
 	node->mergeCollations = mergecollations;
 	node->mergeStrategies = mergestrategies;
 	node->mergeNullsFirst = mergenullsfirst;
 	node->join.jointype = jointype;
+	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
 
 	return node;
@@ -5683,7 +5713,8 @@ prepare_sort_from_pathkeys(Plan *lefttree, List *pathkeys,
 			{
 				/* copy needed so we don't modify input's tlist below */
 				tlist = copyObject(tlist);
-				lefttree = inject_projection_plan(lefttree, tlist);
+				lefttree = inject_projection_plan(lefttree, tlist,
+												  lefttree->parallel_safe);
 			}
 
 			/* Don't bother testing is_projection_capable_plan again */
@@ -5962,6 +5993,7 @@ materialize_finished_plan(Plan *subplan)
 	matplan->plan_rows = subplan->plan_rows;
 	matplan->plan_width = subplan->plan_width;
 	matplan->parallel_aware = false;
+	matplan->parallel_safe = subplan->parallel_safe;
 
 	return matplan;
 }

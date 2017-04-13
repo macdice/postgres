@@ -322,7 +322,7 @@ ExecBuildProjectionInfo(List *targetList,
 	/* Now compile each tlist column */
 	foreach(lc, targetList)
 	{
-		TargetEntry *tle = castNode(TargetEntry, lfirst(lc));
+		TargetEntry *tle = lfirst_node(TargetEntry, lc);
 		Var		   *variable = NULL;
 		AttrNumber	attnum = 0;
 		bool		isSafeVar = false;
@@ -511,7 +511,11 @@ List *
 ExecPrepareExprList(List *nodes, EState *estate)
 {
 	List	   *result = NIL;
+	MemoryContext oldcontext;
 	ListCell   *lc;
+
+	/* Ensure that the list cell nodes are in the right context too */
+	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
 	foreach(lc, nodes)
 	{
@@ -519,6 +523,8 @@ ExecPrepareExprList(List *nodes, EState *estate)
 
 		result = lappend(result, ExecPrepareExpr(e, estate));
 	}
+
+	MemoryContextSwitchTo(oldcontext);
 
 	return result;
 }
@@ -1989,6 +1995,18 @@ ExecInitExprRec(Expr *node, PlanState *parent, ExprState *state,
 		case T_CurrentOfExpr:
 			{
 				scratch.opcode = EEOP_CURRENTOFEXPR;
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
+		case T_NextValueExpr:
+			{
+				NextValueExpr *nve = (NextValueExpr *) node;
+
+				scratch.opcode = EEOP_NEXTVALUEEXPR;
+				scratch.d.nextvalueexpr.seqid = nve->seqid;
+				scratch.d.nextvalueexpr.seqtypid = nve->typeId;
+
 				ExprEvalPushStep(state, &scratch);
 				break;
 			}

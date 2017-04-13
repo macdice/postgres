@@ -339,7 +339,8 @@ PROVE = @PROVE@
 # There are common routines in src/test/perl, and some test suites have
 # extra perl modules in their own directory.
 PG_PROVE_FLAGS = -I $(top_srcdir)/src/test/perl/ -I $(srcdir)
-PROVE_FLAGS = --verbose
+# For more info, add to your make line: PROVE_FLAGS='--verbose'
+PROVE_FLAGS =
 
 # prepend to path if already set, else just set it
 define add_to_path
@@ -398,11 +399,8 @@ STRIP_SHARED_LIB = @STRIP_SHARED_LIB@
 
 # Documentation
 
-have_docbook	= @have_docbook@
-COLLATEINDEX	= @COLLATEINDEX@
 DBTOEPUB	= @DBTOEPUB@
-DOCBOOKSTYLE	= @DOCBOOKSTYLE@
-JADE			= @JADE@
+FOP				= @FOP@
 NSGMLS			= @NSGMLS@
 OSX				= @OSX@
 XMLLINT			= @XMLLINT@

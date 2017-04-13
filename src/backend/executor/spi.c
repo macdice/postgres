@@ -1233,9 +1233,9 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	if (!(portal->cursorOptions & (CURSOR_OPT_SCROLL | CURSOR_OPT_NO_SCROLL)))
 	{
 		if (list_length(stmt_list) == 1 &&
-			castNode(PlannedStmt, linitial(stmt_list))->commandType != CMD_UTILITY &&
-			castNode(PlannedStmt, linitial(stmt_list))->rowMarks == NIL &&
-			ExecSupportsBackwardScan(castNode(PlannedStmt, linitial(stmt_list))->planTree))
+			linitial_node(PlannedStmt, stmt_list)->commandType != CMD_UTILITY &&
+			linitial_node(PlannedStmt, stmt_list)->rowMarks == NIL &&
+			ExecSupportsBackwardScan(linitial_node(PlannedStmt, stmt_list)->planTree))
 			portal->cursorOptions |= CURSOR_OPT_SCROLL;
 		else
 			portal->cursorOptions |= CURSOR_OPT_NO_SCROLL;
@@ -1249,13 +1249,16 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	if (portal->cursorOptions & CURSOR_OPT_SCROLL)
 	{
 		if (list_length(stmt_list) == 1 &&
-			castNode(PlannedStmt, linitial(stmt_list))->commandType != CMD_UTILITY &&
-			castNode(PlannedStmt, linitial(stmt_list))->rowMarks != NIL)
+			linitial_node(PlannedStmt, stmt_list)->commandType != CMD_UTILITY &&
+			linitial_node(PlannedStmt, stmt_list)->rowMarks != NIL)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("DECLARE SCROLL CURSOR ... FOR UPDATE/SHARE is not supported"),
 					 errdetail("Scrollable cursors must be READ ONLY.")));
 	}
+
+	/* Make current query environment available to portal at execution time. */
+	portal->queryEnv = _SPI_current->queryEnv;
 
 	/*
 	 * If told to be read-only, or in parallel mode, verify that this query is
@@ -1271,7 +1274,7 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 
 		foreach(lc, stmt_list)
 		{
-			PlannedStmt *pstmt = castNode(PlannedStmt, lfirst(lc));
+			PlannedStmt *pstmt = lfirst_node(PlannedStmt, lc);
 
 			if (!CommandIsReadOnly(pstmt))
 			{
@@ -1579,7 +1582,7 @@ SPI_result_code_string(int code)
  * SPI_plan_get_plan_sources --- get a SPI plan's underlying list of
  * CachedPlanSources.
  *
- * This is exported so that pl/pgsql can use it (this beats letting pl/pgsql
+ * This is exported so that PL/pgSQL can use it (this beats letting PL/pgSQL
  * look directly into the SPIPlan for itself).  It's not documented in
  * spi.sgml because we'd just as soon not have too many places using this.
  */
@@ -1595,7 +1598,7 @@ SPI_plan_get_plan_sources(SPIPlanPtr plan)
  * if the SPI plan contains exactly one CachedPlanSource.  If not,
  * return NULL.  Caller is responsible for doing ReleaseCachedPlan().
  *
- * This is exported so that pl/pgsql can use it (this beats letting pl/pgsql
+ * This is exported so that PL/pgSQL can use it (this beats letting PL/pgSQL
  * look directly into the SPIPlan for itself).  It's not documented in
  * spi.sgml because we'd just as soon not have too many places using this.
  */
@@ -1767,7 +1770,7 @@ _SPI_prepare_plan(const char *src, SPIPlanPtr plan)
 
 	foreach(list_item, raw_parsetree_list)
 	{
-		RawStmt    *parsetree = castNode(RawStmt, lfirst(list_item));
+		RawStmt    *parsetree = lfirst_node(RawStmt, list_item);
 		List	   *stmt_list;
 		CachedPlanSource *plansource;
 
@@ -1871,7 +1874,7 @@ _SPI_prepare_oneshot_plan(const char *src, SPIPlanPtr plan)
 
 	foreach(list_item, raw_parsetree_list)
 	{
-		RawStmt    *parsetree = castNode(RawStmt, lfirst(list_item));
+		RawStmt    *parsetree = lfirst_node(RawStmt, list_item);
 		CachedPlanSource *plansource;
 
 		plansource = CreateOneShotCachedPlan(parsetree,
@@ -2032,7 +2035,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 
 		foreach(lc2, stmt_list)
 		{
-			PlannedStmt *stmt = castNode(PlannedStmt, lfirst(lc2));
+			PlannedStmt *stmt = lfirst_node(PlannedStmt, lc2);
 			bool		canSetTag = stmt->canSetTag;
 			DestReceiver *dest;
 
@@ -2715,4 +2718,53 @@ SPI_unregister_relation(const char *name)
 	_SPI_end_call(false);
 
 	return res;
+}
+
+/*
+ * Register the transient relations from 'tdata' using this SPI connection.
+ * This should be called by PL implementations' trigger handlers after
+ * connecting, in order to make transition tables visible to any queries run
+ * in this connection.
+ */
+int
+SPI_register_trigger_data(TriggerData *tdata)
+{
+	if (tdata == NULL)
+		return SPI_ERROR_ARGUMENT;
+
+	if (tdata->tg_newtable)
+	{
+		EphemeralNamedRelation enr =
+			palloc(sizeof(EphemeralNamedRelationData));
+		int		rc;
+
+		enr->md.name = tdata->tg_trigger->tgnewtable;
+		enr->md.reliddesc = tdata->tg_relation->rd_id;
+		enr->md.tupdesc = NULL;
+		enr->md.enrtype = ENR_NAMED_TUPLESTORE;
+		enr->md.enrtuples = tuplestore_tuple_count(tdata->tg_newtable);
+		enr->reldata = tdata->tg_newtable;
+		rc = SPI_register_relation(enr);
+		if (rc != SPI_OK_REL_REGISTER)
+			return rc;
+	}
+
+	if (tdata->tg_oldtable)
+	{
+		EphemeralNamedRelation enr =
+			palloc(sizeof(EphemeralNamedRelationData));
+		int		rc;
+
+		enr->md.name = tdata->tg_trigger->tgoldtable;
+		enr->md.reliddesc = tdata->tg_relation->rd_id;
+		enr->md.tupdesc = NULL;
+		enr->md.enrtype = ENR_NAMED_TUPLESTORE;
+		enr->md.enrtuples = tuplestore_tuple_count(tdata->tg_oldtable);
+		enr->reldata = tdata->tg_oldtable;
+		rc = SPI_register_relation(enr);
+		if (rc != SPI_OK_REL_REGISTER)
+			return rc;
+	}
+
+	return SPI_OK_TD_REGISTER;
 }
