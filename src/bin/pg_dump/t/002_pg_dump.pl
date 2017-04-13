@@ -39,6 +39,7 @@ my %pgdump_runs = (
 	binary_upgrade => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			'--format=custom',
 			"--file=$tempdir/binary_upgrade.dump",
 			'-w',
@@ -55,6 +56,7 @@ my %pgdump_runs = (
 	clean => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/clean.sql",
 			'--include-subscriptions',
 			'-c',
@@ -63,6 +65,7 @@ my %pgdump_runs = (
 	clean_if_exists => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/clean_if_exists.sql",
 			'--include-subscriptions',
 			'-c',
@@ -71,12 +74,16 @@ my %pgdump_runs = (
 			'postgres', ], },
 	column_inserts => {
 		dump_cmd => [
-			'pg_dump', "--file=$tempdir/column_inserts.sql",
-			'-a',      '--column-inserts',
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/column_inserts.sql",
+			'-a',
+		    '--column-inserts',
 			'postgres', ], },
 	createdb => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/createdb.sql",
 			'--include-subscriptions',
 			'-C',
@@ -86,6 +93,7 @@ my %pgdump_runs = (
 	data_only => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/data_only.sql",
 			'--include-subscriptions',
 			'-a',
@@ -94,8 +102,13 @@ my %pgdump_runs = (
 			'-v',                 # no-op, just make sure it works
 			'postgres', ], },
 	defaults => {
-		dump_cmd => [ 'pg_dump', '-f', "$tempdir/defaults.sql", 'postgres', ],
-	},
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			'-f',
+			"$tempdir/defaults.sql",
+			'postgres', ], },
+	# Do not use --no-sync to give test coverage for data sync.
 	defaults_custom_format => {
 		test_key => 'defaults',
 		dump_cmd => [
@@ -105,6 +118,7 @@ my %pgdump_runs = (
 			'pg_restore', '-Fc',
 			"--file=$tempdir/defaults_custom_format.sql",
 			"$tempdir/defaults_custom_format.dump", ], },
+	# Do not use --no-sync to give test coverage for data sync.
 	defaults_dir_format => {
 		test_key => 'defaults',
 		dump_cmd => [
@@ -114,6 +128,7 @@ my %pgdump_runs = (
 			'pg_restore', '-Fd',
 			"--file=$tempdir/defaults_dir_format.sql",
 			"$tempdir/defaults_dir_format", ], },
+	# Do not use --no-sync to give test coverage for data sync.
 	defaults_parallel => {
 		test_key => 'defaults',
 		dump_cmd => [
@@ -123,6 +138,7 @@ my %pgdump_runs = (
 			'pg_restore',
 			"--file=$tempdir/defaults_parallel.sql",
 			"$tempdir/defaults_parallel", ], },
+	# Do not use --no-sync to give test coverage for data sync.
 	defaults_tar_format => {
 		test_key => 'defaults',
 		dump_cmd => [
@@ -135,17 +151,22 @@ my %pgdump_runs = (
 			"$tempdir/defaults_tar_format.tar", ], },
 	exclude_dump_test_schema => {
 		dump_cmd => [
-			'pg_dump', "--file=$tempdir/exclude_dump_test_schema.sql",
-			'--exclude-schema=dump_test', 'postgres', ], },
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/exclude_dump_test_schema.sql",
+			'--exclude-schema=dump_test',
+			'postgres', ], },
 	exclude_test_table => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/exclude_test_table.sql",
 			'--exclude-table=dump_test.test_table',
 			'postgres', ], },
 	exclude_test_table_data => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/exclude_test_table_data.sql",
 			'--exclude-table-data=dump_test.test_table',
 			'--no-unlogged-table-data',
@@ -153,30 +174,52 @@ my %pgdump_runs = (
 	pg_dumpall_globals => {
 		dump_cmd => [
 			'pg_dumpall',                             '-v',
-			"--file=$tempdir/pg_dumpall_globals.sql", '-g', ], },
+			"--file=$tempdir/pg_dumpall_globals.sql", '-g',
+			'--no-sync', ], },
 	pg_dumpall_globals_clean => {
 		dump_cmd => [
-			'pg_dumpall', "--file=$tempdir/pg_dumpall_globals_clean.sql",
-			'-g',         '-c', ], },
+			'pg_dumpall',
+			"--file=$tempdir/pg_dumpall_globals_clean.sql",
+			'-g',
+			'-c',
+			'--no-sync', ], },
 	pg_dumpall_dbprivs => {
-		dump_cmd =>
-		  [ 'pg_dumpall', "--file=$tempdir/pg_dumpall_dbprivs.sql", ], },
+		dump_cmd => [
+			'pg_dumpall',
+			'--no-sync',
+			"--file=$tempdir/pg_dumpall_dbprivs.sql", ], },
 	no_blobs => {
-		dump_cmd =>
-		  [ 'pg_dump', "--file=$tempdir/no_blobs.sql", '-B', 'postgres', ], },
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/no_blobs.sql",
+			'-B',
+			'postgres', ], },
 	no_privs => {
-		dump_cmd =>
-		  [ 'pg_dump', "--file=$tempdir/no_privs.sql", '-x', 'postgres', ], },
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/no_privs.sql",
+			'-x',
+			'postgres', ], },
 	no_owner => {
-		dump_cmd =>
-		  [ 'pg_dump', "--file=$tempdir/no_owner.sql", '-O', 'postgres', ], },
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/no_owner.sql",
+			'-O',
+			'postgres', ], },
 	only_dump_test_schema => {
 		dump_cmd => [
-			'pg_dump', "--file=$tempdir/only_dump_test_schema.sql",
-			'--schema=dump_test', 'postgres', ], },
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/only_dump_test_schema.sql",
+			'--schema=dump_test',
+			'postgres', ], },
 	only_dump_test_table => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/only_dump_test_table.sql",
 			'--table=dump_test.test_table',
 			'--lock-wait-timeout=1000000',
@@ -184,6 +227,7 @@ my %pgdump_runs = (
 	role => {
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			"--file=$tempdir/role.sql",
 			'--role=regress_dump_test_role',
 			'--schema=dump_test_second_schema',
@@ -192,6 +236,7 @@ my %pgdump_runs = (
 		test_key => 'role',
 		dump_cmd => [
 			'pg_dump',
+			'--no-sync',
 			'--format=directory',
 			'--jobs=2',
 			"--file=$tempdir/role_parallel",
@@ -204,28 +249,29 @@ my %pgdump_runs = (
 	schema_only => {
 		dump_cmd => [
 			'pg_dump', '--format=plain', "--file=$tempdir/schema_only.sql",
-			'-s', 'postgres', ], },
+			'--no-sync', '-s', 'postgres', ], },
 	section_pre_data => {
 		dump_cmd => [
 			'pg_dump',            "--file=$tempdir/section_pre_data.sql",
 			'--include-subscriptions',
-			'--section=pre-data', 'postgres', ], },
+			'--section=pre-data', '--no-sync', 'postgres', ], },
 	section_data => {
 		dump_cmd => [
 			'pg_dump',        "--file=$tempdir/section_data.sql",
-			'--section=data', 'postgres', ], },
+			'--section=data', '--no-sync', 'postgres', ], },
 	section_post_data => {
 		dump_cmd => [
 			'pg_dump',             "--file=$tempdir/section_post_data.sql",
-			'--section=post-data', 'postgres', ], },
+			'--section=post-data', '--no-sync', 'postgres', ], },
 	test_schema_plus_blobs => {
 		dump_cmd => [
 			'pg_dump', "--file=$tempdir/test_schema_plus_blobs.sql",
-			'--schema=dump_test', '-b', '-B', 'postgres', ], },
+
+			'--schema=dump_test', '-b', '-B', '--no-sync', 'postgres', ], },
 	with_oids => {
 		dump_cmd => [
 			'pg_dump',                       '--oids',
-			'--include-subscriptions',
+			'--include-subscriptions',       '--no-sync',
 			"--file=$tempdir/with_oids.sql", 'postgres', ], },);
 
 ###############################################################
@@ -2263,6 +2309,37 @@ my %tests = (
 			only_dump_test_table     => 1,
 			role                     => 1, }, },
 
+	'COPY test_table_identity' => {
+		all_runs     => 1,
+		catch_all    => 'COPY ... commands',
+		create_order => 54,
+		create_sql =>
+'INSERT INTO dump_test.test_table_identity (col2) VALUES (\'test\');',
+		regexp => qr/^
+			\QCOPY test_table_identity (col1, col2) FROM stdin;\E
+			\n1\ttest\n\\\.\n
+			/xm,
+		like => {
+			clean                   => 1,
+			clean_if_exists         => 1,
+			createdb                => 1,
+			data_only               => 1,
+			defaults                => 1,
+			exclude_test_table      => 1,
+			exclude_test_table_data => 1,
+			no_blobs                => 1,
+			no_privs                => 1,
+			no_owner                => 1,
+			only_dump_test_schema   => 1,
+			pg_dumpall_dbprivs      => 1,
+			section_data            => 1,
+			test_schema_plus_blobs  => 1,
+			with_oids               => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_test_table     => 1,
+			role                     => 1, }, },
+
 	'COPY ... commands' => {    # catch-all for COPY
 		all_runs => 0,             # catch-all
 		regexp   => qr/^COPY /m,
@@ -2315,6 +2392,14 @@ my %tests = (
 		catch_all => 'INSERT INTO ...',
 		regexp =>
 qr/^\QINSERT INTO test_fifth_table (col1, col2, col3, col4, col5) VALUES (NULL, true, false, B'11001', 'NaN');\E/m,
+		like   => { column_inserts => 1, },
+		unlike => {}, },
+
+	'INSERT INTO test_table_identity' => {
+		all_runs  => 1,
+		catch_all => 'INSERT INTO ...',
+		regexp =>
+qr/^\QINSERT INTO test_table_identity (col1, col2) OVERRIDING SYSTEM VALUE VALUES (1, 'test');\E/m,
 		like   => { column_inserts => 1, },
 		unlike => {}, },
 
@@ -4684,6 +4769,54 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 			\n\s+\Qcol5 double precision\E
 			\n\);
 			/xm,
+		like => {
+			binary_upgrade          => 1,
+			clean                   => 1,
+			clean_if_exists         => 1,
+			createdb                => 1,
+			defaults                => 1,
+			exclude_test_table      => 1,
+			exclude_test_table_data => 1,
+			no_blobs                => 1,
+			no_privs                => 1,
+			no_owner                => 1,
+			only_dump_test_schema   => 1,
+			pg_dumpall_dbprivs      => 1,
+			schema_only             => 1,
+			section_pre_data        => 1,
+			test_schema_plus_blobs  => 1,
+			with_oids               => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_test_table     => 1,
+			pg_dumpall_globals       => 1,
+			pg_dumpall_globals_clean => 1,
+			role                     => 1,
+			section_post_data        => 1, }, },
+
+	'CREATE TABLE test_table_identity' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 3,
+		create_sql   => 'CREATE TABLE dump_test.test_table_identity (
+						   col1 int generated always as identity primary key,
+						   col2 text
+					   );',
+		regexp => qr/^
+			\QCREATE TABLE test_table_identity (\E\n
+			\s+\Qcol1 integer NOT NULL,\E\n
+			\s+\Qcol2 text\E\n
+			\);
+			.*
+			\QALTER TABLE test_table_identity ALTER COLUMN col1 ADD GENERATED ALWAYS AS IDENTITY (\E\n
+			\s+\QSEQUENCE NAME test_table_identity_col1_seq\E\n
+			\s+\QSTART WITH 1\E\n
+			\s+\QINCREMENT BY 1\E\n
+			\s+\QNO MINVALUE\E\n
+			\s+\QNO MAXVALUE\E\n
+			\s+\QCACHE 1\E\n
+			\);
+			/xms,
 		like => {
 			binary_upgrade          => 1,
 			clean                   => 1,

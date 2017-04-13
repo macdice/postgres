@@ -3268,6 +3268,7 @@ RelationBuildLocalRelation(const char *relname,
 	has_not_null = false;
 	for (i = 0; i < natts; i++)
 	{
+		rel->rd_att->attrs[i]->attidentity = tupDesc->attrs[i]->attidentity;
 		rel->rd_att->attrs[i]->attnotnull = tupDesc->attrs[i]->attnotnull;
 		has_not_null |= tupDesc->attrs[i]->attnotnull;
 	}
@@ -4507,7 +4508,6 @@ RelationGetStatExtList(Relation relation)
 								 NULL, 1, &skey);
 
 	while (HeapTupleIsValid(htup = systable_getnext(indscan)))
-		/* TODO maybe include only already built statistics? */
 		result = insert_ordered_oid(result, HeapTupleGetOid(htup));
 
 	systable_endscan(indscan);

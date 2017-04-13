@@ -231,7 +231,7 @@ extern int	pgrename(const char *from, const char *to);
 extern int	pgunlink(const char *path);
 
 /* Include this first so later includes don't see these defines */
-#ifdef WIN32_ONLY_COMPILER
+#ifdef _MSC_VER
 #include <io.h>
 #endif
 
@@ -403,7 +403,7 @@ extern size_t strlcat(char *dst, const char *src, size_t siz);
 extern size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif
 
-#if !defined(HAVE_RANDOM) && !defined(__BORLANDC__)
+#if !defined(HAVE_RANDOM)
 extern long random(void);
 #endif
 
