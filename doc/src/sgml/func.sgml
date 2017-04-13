@@ -9569,7 +9569,10 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
          <literal><function>to_tsvector(<optional> <replaceable class="PARAMETER">config</> <type>regconfig</> , </optional> <replaceable class="PARAMETER">document</> <type>json(b)</type>)</function></literal>
         </entry>
         <entry><type>tsvector</type></entry>
-        <entry>reduce document text to <type>tsvector</></entry>
+        <entry>
+          reduce each string value in the document to a <type>tsvector</>, and then
+          concatentate those in document order to produce a single <type>tsvector</>
+        </entry>
         <entry><literal>to_tsvector('english', '{"a": "The Fat Rats"}'::json)</literal></entry>
         <entry><literal>'fat':2 'rat':3</literal></entry>
        </row>
@@ -11543,12 +11546,12 @@ table2-mapping
          whose columns match the record type defined by <replaceable>base</>
          (see note below).
        </entry>
-       <entry><literal>select * from json_populate_record(null::myrowtype, '{"a":1,"b":2}')</literal></entry>
+       <entry><literal>select * from json_populate_record(null::myrowtype, '{"a": 1, "b": ["2", "a b"], "c": {"d": 4, "e": "a  b c"}}')</literal></entry>
        <entry>
 <programlisting>
- a | b
----+---
- 1 | 2
+ a |   b       |      c
+---+-----------+-------------
+ 1 | {2,"a b"} | (4,"a b c")
 </programlisting>
        </entry>
       </row>
@@ -11637,12 +11640,12 @@ table2-mapping
          explicitly define the structure of the record with an <literal>AS</>
          clause.
        </entry>
-       <entry><literal>select * from json_to_record('{"a":1,"b":[1,2,3],"c":"bar"}') as x(a int, b text, d text) </literal></entry>
+       <entry><literal>select * from json_to_record('{"a":1,"b":[1,2,3],"c":[1,2,3],"e":"bar","r": {"a": 123, "b": "a b c"}}') as x(a int, b text, c int[], d text, r myrowtype) </literal></entry>
        <entry>
 <programlisting>
- a |    b    | d
----+---------+---
- 1 | [1,2,3] |
+ a |    b    |    c    | d |       r
+---+---------+---------+---+---------------
+ 1 | [1,2,3] | {1,2,3} |   | (123,"a b c")
 </programlisting>
        </entry>
       </row>
@@ -13163,13 +13166,14 @@ NULL baz</literallayout>(3 rows)</entry>
 
   <para>
    <firstterm>Aggregate functions</firstterm> compute a single result
-   from a set of input values.  The built-in normal aggregate functions
-   are listed in
-   <xref linkend="functions-aggregate-table"> and
-   <xref linkend="functions-aggregate-statistics-table">.
-   The built-in ordered-set aggregate functions
-   are listed in <xref linkend="functions-orderedset-table"> and
-   <xref linkend="functions-hypothetical-table">.  Grouping operations,
+   from a set of input values.  The built-in general-purpose aggregate
+   functions are listed in <xref linkend="functions-aggregate-table">
+   and statistical aggregates in <xref
+   linkend="functions-aggregate-statistics-table">.
+   The built-in within-group ordered-set aggregate functions
+   are listed in <xref linkend="functions-orderedset-table">
+   while the built-in within-group hypothetical-set ones are in <xref
+   linkend="functions-hypothetical-table">.  Grouping operations,
    which are closely related to aggregate functions, are listed in
    <xref linkend="functions-grouping-table">.
    The special syntax considerations for aggregate
@@ -14410,17 +14414,19 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
   <para>
    The built-in window functions are listed in
    <xref linkend="functions-window-table">.  Note that these functions
-   <emphasis>must</> be invoked using window function syntax; that is an
+   <emphasis>must</> be invoked using window function syntax, i.e., an
    <literal>OVER</> clause is required.
   </para>
 
   <para>
-   In addition to these functions, any built-in or user-defined normal
-   aggregate function (but not ordered-set or hypothetical-set aggregates)
+   In addition to these functions, any built-in or user-defined
+   general-purpose or statistical
+   aggregate (i.e., not ordered-set or hypothetical-set aggregates)
    can be used as a window function; see
    <xref linkend="functions-aggregate"> for a list of the built-in aggregates.
    Aggregate functions act as window functions only when an <literal>OVER</>
-   clause follows the call; otherwise they act as regular aggregates.
+   clause follows the call; otherwise they act as non-window aggregates
+   and return a single row for the entire set.
   </para>
 
   <table id="functions-window-table">
@@ -14485,7 +14491,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
       <entry>
        <type>double precision</type>
       </entry>
-      <entry>relative rank of the current row: (<function>rank</> - 1) / (total rows - 1)</entry>
+      <entry>relative rank of the current row: (<function>rank</> - 1) / (total partition rows - 1)</entry>
      </row>
 
      <row>
@@ -14498,7 +14504,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
       <entry>
        <type>double precision</type>
       </entry>
-      <entry>relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)</entry>
+      <entry>cumulative distribution: (number of partition rows preceding or peer with current row) / total partition rows</entry>
      </row>
 
      <row>
@@ -14631,9 +14637,10 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
    All of the functions listed in
    <xref linkend="functions-window-table"> depend on the sort ordering
    specified by the <literal>ORDER BY</> clause of the associated window
-   definition.  Rows that are not distinct in the <literal>ORDER BY</>
-   ordering are said to be <firstterm>peers</>; the four ranking functions
-   are defined so that they give the same answer for any two peer rows.
+   definition.  Rows that are not distinct when considering only the
+   <literal>ORDER BY</> columns are said to be <firstterm>peers</>.
+   The four ranking functions (including <function>cume_dist</>) are
+   defined so that they give the same answer for all peer rows.
   </para>
 
   <para>
@@ -14675,6 +14682,14 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
     ordering.)
    </para>
   </note>
+
+  <para>
+   <function>cume_dist</> computes the fraction of partition rows that
+   are less than or equal to the current row and its peers, while
+   <function>percent_rank</> computes the fraction of partition rows that
+   are less than the current row, assuming the current row does not exist
+   in the partition.
+  </para>
 
  </sect1>
 
@@ -15744,7 +15759,7 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
       <row>
        <entry><literal><function>pg_blocking_pids(<type>int</type>)</function></literal></entry>
        <entry><type>int[]</type></entry>
-       <entry>Process ID(s) that are blocking specified server process ID</entry>
+       <entry>Process ID(s) that are blocking specified server process ID from acquiring a lock</entry>
       </row>
 
       <row>
@@ -15788,6 +15803,12 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
        <entry><literal><function>pg_postmaster_start_time()</function></literal></entry>
        <entry><type>timestamp with time zone</type></entry>
        <entry>server start time</entry>
+      </row>
+
+      <row>
+       <entry><literal><function>pg_safe_snapshot_blocking_pids(<type>int</type>)</function></literal></entry>
+       <entry><type>int[]</type></entry>
+       <entry>Process ID(s) that are blocking specified server process ID from acquiring a safe snapshot</entry>
       </row>
 
       <row>
@@ -16064,6 +16085,25 @@ SET search_path TO <replaceable>schema</> <optional>, <replaceable>schema</>, ..
     server started.
    </para>
 
+   <indexterm>
+    <primary>pg_safe_snapshot_blocking_pids</primary>
+   </indexterm>
+
+   <para>
+    <function>pg_safe_snapshot_blocking_pids</function> returns an array of
+    the process IDs of the sessions that are blocking the server process with
+    the specified process ID from acquiring a safe snapshot, or an empty array
+    if there is no such server process or it is not blocked.  A session
+    running a <literal>SERIALIZABLE</literal> transaction blocks
+    a <literal>SERIALIZABLE READ ONLY DEFERRABLE</literal> transaction from
+    acquiring a snapshot until the latter determines that it is safe to avoid
+    taking any predicate locks.  See <xref linkend="xact-serializable"> for
+    more information about serializable and deferrable transactions.  Frequent
+    calls to this function could have some impact on database performance,
+    because it needs access to the predicate lock manager's shared
+    state for a short time.
+   </para>
+   
    <indexterm>
     <primary>version</primary>
    </indexterm>
