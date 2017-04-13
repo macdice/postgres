@@ -1767,8 +1767,7 @@ hash_inner_and_outer(PlannerInfo *root,
 			if (innerrel->partial_pathlist != NIL)
 				cheapest_partial_inner =
 					(Path *) linitial(innerrel->partial_pathlist);
-			if (cheapest_partial_inner != NULL &&
-				!tlist_references_transient_type(cheapest_partial_inner->pathtarget->exprs))
+			if (cheapest_partial_inner != NULL)
 				try_partial_hashjoin_path(root, joinrel,
 										  cheapest_partial_outer,
 										  cheapest_partial_inner,
