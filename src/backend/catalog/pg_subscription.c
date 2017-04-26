@@ -75,7 +75,7 @@ GetSubscription(Oid subid, bool missing_ok)
 							Anum_pg_subscription_subconninfo,
 							&isnull);
 	Assert(!isnull);
-	sub->conninfo = pstrdup(TextDatumGetCString(datum));
+	sub->conninfo = TextDatumGetCString(datum);
 
 	/* Get slotname */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
@@ -84,6 +84,14 @@ GetSubscription(Oid subid, bool missing_ok)
 							&isnull);
 	Assert(!isnull);
 	sub->slotname = pstrdup(NameStr(*DatumGetName(datum)));
+
+	/* Get synccommit */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_subsynccommit,
+							&isnull);
+	Assert(!isnull);
+	sub->synccommit = TextDatumGetCString(datum);
 
 	/* Get publications */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
@@ -207,7 +215,7 @@ textarray_to_stringlist(ArrayType *textarray)
 		return NIL;
 
 	for (i = 0; i < nelems; i++)
-		res = lappend(res, makeString(pstrdup(TextDatumGetCString(elems[i]))));
+		res = lappend(res, makeString(TextDatumGetCString(elems[i])));
 
 	return res;
 }
@@ -395,7 +403,7 @@ RemoveSubscriptionRel(Oid subid, Oid relid)
 /*
  * Get all relations for subscription.
  *
- * Returned list is palloced in current memory context.
+ * Returned list is palloc'ed in current memory context.
  */
 List *
 GetSubscriptionRelations(Oid subid)
@@ -442,7 +450,7 @@ GetSubscriptionRelations(Oid subid)
 /*
  * Get all relations for subscription that are not in a ready state.
  *
- * Returned list is palloced in current memory context.
+ * Returned list is palloc'ed in current memory context.
  */
 List *
 GetSubscriptionNotReadyRelations(Oid subid)
