@@ -50,7 +50,7 @@ static char *recv_password_packet(Port *port);
 
 
 /*----------------------------------------------------------------
- * Password-based authentication methods (password, md5, and scram)
+ * Password-based authentication methods (password, md5, and scram-sha-256)
  *----------------------------------------------------------------
  */
 static int	CheckPasswordAuth(Port *port, char **logdetail);
@@ -620,10 +620,11 @@ sendAuthRequest(Port *port, AuthRequest areq, char *extradata, int extralen)
 	pq_endmessage(&buf);
 
 	/*
-	 * Flush message so client will see it, except for AUTH_REQ_OK, which need
-	 * not be sent until we are ready for queries.
+	 * Flush message so client will see it, except for AUTH_REQ_OK and
+	 * AUTH_REQ_SASL_FIN, which need not be sent until we are ready for
+	 * queries.
 	 */
-	if (areq != AUTH_REQ_OK)
+	if (areq != AUTH_REQ_OK && areq != AUTH_REQ_SASL_FIN)
 		pq_flush();
 
 	CHECK_FOR_INTERRUPTS();
@@ -756,10 +757,10 @@ CheckPWChallengeAuth(Port *port, char **logdetail)
 	 * If the user does not exist, or has no password, we still go through the
 	 * motions of authentication, to avoid revealing to the client that the
 	 * user didn't exist.  If 'md5' is allowed, we choose whether to use 'md5'
-	 * or 'scram' authentication based on current password_encryption setting.
-	 * The idea is that most genuine users probably have a password of that
-	 * type, if we pretend that this user had a password of that type, too, it
-	 * "blends in" best.
+	 * or 'scram-sha-256' authentication based on current password_encryption
+	 * setting.  The idea is that most genuine users probably have a password
+	 * of that type, if we pretend that this user had a password of that type,
+	 * too, it "blends in" best.
 	 *
 	 * If the user had a password, but it was expired, we'll use the details
 	 * of the expired password for the authentication, but report it as
@@ -772,9 +773,9 @@ CheckPWChallengeAuth(Port *port, char **logdetail)
 
 	/*
 	 * If 'md5' authentication is allowed, decide whether to perform 'md5' or
-	 * 'scram' authentication based on the type of password the user has.  If
-	 * it's an MD5 hash, we must do MD5 authentication, and if it's a SCRAM
-	 * verifier, we must do SCRAM authentication.  If it's stored in
+	 * 'scram-sha-256' authentication based on the type of password the user
+	 * has.  If it's an MD5 hash, we must do MD5 authentication, and if it's
+	 * a SCRAM verifier, we must do SCRAM authentication.  If it's stored in
 	 * plaintext, we could do either one, so we opt for the more secure
 	 * mechanism, SCRAM.
 	 *
@@ -850,7 +851,10 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	void	   *scram_opaq;
 	char	   *output = NULL;
 	int			outputlen = 0;
+	char	   *input;
+	int			inputlen;
 	int			result;
+	bool		initial;
 
 	/*
 	 * SASL auth is not supported for protocol versions before 3, because it
@@ -866,12 +870,17 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 				 errmsg("SASL authentication is not supported in protocol version 2")));
 
 	/*
-	 * Send first the authentication request to user.
+	 * Send the SASL authentication request to user.  It includes the list of
+	 * authentication mechanisms (which is trivial, because we only support
+	 * SCRAM-SHA-256 at the moment).  The extra "\0" is for an empty string to
+	 * terminate the list.
 	 */
-	sendAuthRequest(port, AUTH_REQ_SASL, SCRAM_SHA256_NAME,
-					strlen(SCRAM_SHA256_NAME) + 1);
+	sendAuthRequest(port, AUTH_REQ_SASL, SCRAM_SHA256_NAME "\0",
+					strlen(SCRAM_SHA256_NAME) + 2);
 
 	/*
+	 * Initialize the status tracker for message exchanges.
+	 *
 	 * If the user doesn't exist, or doesn't have a valid password, or it's
 	 * expired, we still go through the motions of SASL authentication, but
 	 * tell the authentication method that the authentication is "doomed".
@@ -880,8 +889,6 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	 * This is because we don't want to reveal to an attacker what usernames
 	 * are valid, nor which users have a valid password.
 	 */
-
-	/* Initialize the status tracker for message exchanges */
 	scram_opaq = pg_be_scram_init(port->user_name, shadow_pass);
 
 	/*
@@ -890,6 +897,7 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	 * from the client.  All messages from client to server are password
 	 * packets (type 'p').
 	 */
+	initial = true;
 	do
 	{
 		pq_startmsgread();
@@ -918,27 +926,73 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 			return STATUS_ERROR;
 		}
 
-		elog(DEBUG4, "Processing received SASL token of length %d", buf.len);
+		elog(DEBUG4, "Processing received SASL response of length %d", buf.len);
+
+		/*
+		 * The first SASLInitialResponse message is different from the others.
+		 * It indicates which SASL mechanism the client selected, and contains
+		 * an optional Initial Client Response payload.  The subsequent
+		 * SASLResponse messages contain just the SASL payload.
+		 */
+		if (initial)
+		{
+			const char *selected_mech;
+
+			/*
+			 * We only support SCRAM-SHA-256 at the moment, so anything else
+			 * is an error.
+			 */
+			selected_mech = pq_getmsgrawstring(&buf);
+			if (strcmp(selected_mech, SCRAM_SHA256_NAME) != 0)
+				ereport(COMMERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("client selected an invalid SASL authentication mechanism")));
+
+			inputlen = pq_getmsgint(&buf, 4);
+			if (inputlen == -1)
+				input = NULL;
+			else
+				input = (char *) pq_getmsgbytes(&buf, inputlen);
+
+			initial = false;
+		}
+		else
+		{
+			inputlen = buf.len;
+			input = (char *) pq_getmsgbytes(&buf, buf.len);
+		}
+		pq_getmsgend(&buf);
+
+		/*
+		 * The StringInfo guarantees that there's a \0 byte after the
+		 * response.
+		 */
+		Assert(input == NULL || input[inputlen] == '\0');
 
 		/*
 		 * we pass 'logdetail' as NULL when doing a mock authentication,
 		 * because we should already have a better error message in that case
 		 */
-		result = pg_be_scram_exchange(scram_opaq, buf.data, buf.len,
+		result = pg_be_scram_exchange(scram_opaq, input, inputlen,
 									  &output, &outputlen,
 									  logdetail);
 
 		/* input buffer no longer used */
 		pfree(buf.data);
 
-		if (outputlen > 0)
+		if (output)
 		{
 			/*
 			 * Negotiation generated data to be sent to the client.
 			 */
-			elog(DEBUG4, "sending SASL response token of length %u", outputlen);
+			elog(DEBUG4, "sending SASL challenge of length %u", outputlen);
 
-			sendAuthRequest(port, AUTH_REQ_SASL_CONT, output, outputlen);
+			if (result == SASL_EXCHANGE_SUCCESS)
+				sendAuthRequest(port, AUTH_REQ_SASL_FIN, output, outputlen);
+			else
+				sendAuthRequest(port, AUTH_REQ_SASL_CONT, output, outputlen);
+
+			pfree(output);
 		}
 	} while (result == SASL_EXCHANGE_CONTINUE);
 
