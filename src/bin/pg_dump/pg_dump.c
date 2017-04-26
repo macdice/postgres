@@ -342,7 +342,6 @@ main(int argc, char **argv)
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"if-exists", no_argument, &dopt.if_exists, 1},
-		{"include-subscriptions", no_argument, &dopt.include_subscriptions, 1},
 		{"inserts", no_argument, &dopt.dump_inserts, 1},
 		{"lock-wait-timeout", required_argument, NULL, 2},
 		{"no-tablespaces", no_argument, &dopt.outputNoTablespaces, 1},
@@ -354,7 +353,6 @@ main(int argc, char **argv)
 		{"strict-names", no_argument, &strict_names, 1},
 		{"use-set-session-authorization", no_argument, &dopt.use_setsessauth, 1},
 		{"no-security-labels", no_argument, &dopt.no_security_labels, 1},
-		{"no-subscription-connect", no_argument, &dopt.no_subscription_connect, 1},
 		{"no-synchronized-snapshots", no_argument, &dopt.no_synchronized_snapshots, 1},
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 		{"no-sync", no_argument, NULL, 7},
@@ -868,7 +866,6 @@ main(int argc, char **argv)
 	ropt->include_everything = dopt.include_everything;
 	ropt->enable_row_security = dopt.enable_row_security;
 	ropt->sequence_data = dopt.sequence_data;
-	ropt->include_subscriptions = dopt.include_subscriptions;
 	ropt->binary_upgrade = dopt.binary_upgrade;
 
 	if (compressLevel == -1)
@@ -951,10 +948,8 @@ help(const char *progname)
 			 "                               access to)\n"));
 	printf(_("  --exclude-table-data=TABLE   do NOT dump data for the named table(s)\n"));
 	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
-	printf(_("  --include-subscriptions      dump logical replication subscriptions\n"));
 	printf(_("  --inserts                    dump data as INSERT commands, rather than COPY\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
-	printf(_("  --no-subscription-connect    dump subscriptions so they don't connect on restore\n"));
 	printf(_("  --no-synchronized-snapshots  do not use synchronized snapshots in parallel jobs\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
 	printf(_("  --no-unlogged-table-data     do not dump unlogged table data\n"));
@@ -3461,18 +3456,22 @@ dumpPublication(Archive *fout, PublicationInfo *pubinfo)
 {
 	PQExpBuffer delq;
 	PQExpBuffer query;
+	PQExpBuffer labelq;
 
 	if (!(pubinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
 		return;
 
 	delq = createPQExpBuffer();
 	query = createPQExpBuffer();
+	labelq = createPQExpBuffer();
 
 	appendPQExpBuffer(delq, "DROP PUBLICATION %s;\n",
 					  fmtId(pubinfo->dobj.name));
 
 	appendPQExpBuffer(query, "CREATE PUBLICATION %s",
 					  fmtId(pubinfo->dobj.name));
+
+	appendPQExpBuffer(labelq, "PUBLICATION %s", fmtId(pubinfo->dobj.name));
 
 	if (pubinfo->puballtables)
 		appendPQExpBufferStr(query, " FOR ALL TABLES");
@@ -3504,6 +3503,16 @@ dumpPublication(Archive *fout, PublicationInfo *pubinfo)
 				 query->data, delq->data, NULL,
 				 NULL, 0,
 				 NULL, NULL);
+
+	if (pubinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, labelq->data,
+					NULL, pubinfo->rolname,
+					pubinfo->dobj.catId, 0, pubinfo->dobj.dumpId);
+
+	if (pubinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+		dumpSecLabel(fout, labelq->data,
+					 NULL, pubinfo->rolname,
+					 pubinfo->dobj.catId, 0, pubinfo->dobj.dumpId);
 
 	destroyPQExpBuffer(delq);
 	destroyPQExpBuffer(query);
@@ -3618,7 +3627,7 @@ dumpPublicationTable(Archive *fout, PublicationRelInfo *pubrinfo)
 
 	query = createPQExpBuffer();
 
-	appendPQExpBuffer(query, "ALTER PUBLICATION %s ADD TABLE",
+	appendPQExpBuffer(query, "ALTER PUBLICATION %s ADD TABLE ONLY",
 					  fmtId(pubrinfo->pubname));
 	appendPQExpBuffer(query, " %s;",
 					  fmtId(tbinfo->dobj.name));
@@ -3641,6 +3650,22 @@ dumpPublicationTable(Archive *fout, PublicationRelInfo *pubrinfo)
 	destroyPQExpBuffer(query);
 }
 
+/*
+ * Is the currently connected user a superuser?
+ */
+static bool
+is_superuser(Archive *fout)
+{
+	ArchiveHandle *AH = (ArchiveHandle *) fout;
+	const char *val;
+
+	val = PQparameterStatus(AH->connection, "is_superuser");
+
+	if (val && strcmp(val, "on") == 0)
+		return true;
+
+	return false;
+}
 
 /*
  * getSubscriptions
@@ -3649,7 +3674,6 @@ dumpPublicationTable(Archive *fout, PublicationRelInfo *pubrinfo)
 void
 getSubscriptions(Archive *fout)
 {
-	DumpOptions *dopt = fout->dopt;
 	PQExpBuffer query;
 	PGresult   *res;
 	SubscriptionInfo *subinfo;
@@ -3657,15 +3681,31 @@ getSubscriptions(Archive *fout)
 	int			i_oid;
 	int			i_subname;
 	int			i_rolname;
-	int			i_subenabled;
 	int			i_subconninfo;
 	int			i_subslotname;
+	int			i_subsynccommit;
 	int			i_subpublications;
 	int			i,
 				ntups;
 
-	if (!dopt->include_subscriptions || fout->remoteVersion < 100000)
+	if (fout->remoteVersion < 100000)
 		return;
+
+	if (!is_superuser(fout))
+	{
+		int n;
+
+		res = ExecuteSqlQuery(fout,
+							  "SELECT count(*) FROM pg_subscription "
+							  "WHERE subdbid = (SELECT oid FROM pg_catalog.pg_database"
+							  "                 WHERE datname = current_database())",
+							  PGRES_TUPLES_OK);
+		n = atoi(PQgetvalue(res, 0, 0));
+		if (n > 0)
+			write_msg(NULL, "WARNING: subscriptions not dumped because current user is not a superuser\n");
+		PQclear(res);
+		return;
+	}
 
 	query = createPQExpBuffer();
 
@@ -3674,8 +3714,9 @@ getSubscriptions(Archive *fout)
 	/* Get the subscriptions in current database. */
 	appendPQExpBuffer(query,
 					  "SELECT s.tableoid, s.oid, s.subname,"
-					  "(%s s.subowner) AS rolname, s.subenabled, "
-					  " s.subconninfo, s.subslotname, s.subpublications "
+					  "(%s s.subowner) AS rolname, "
+					  " s.subconninfo, s.subslotname, s.subsynccommit, "
+					  " s.subpublications "
 					  "FROM pg_catalog.pg_subscription s "
 					  "WHERE s.subdbid = (SELECT oid FROM pg_catalog.pg_database"
 					  "                   WHERE datname = current_database())",
@@ -3688,9 +3729,9 @@ getSubscriptions(Archive *fout)
 	i_oid = PQfnumber(res, "oid");
 	i_subname = PQfnumber(res, "subname");
 	i_rolname = PQfnumber(res, "rolname");
-	i_subenabled = PQfnumber(res, "subenabled");
 	i_subconninfo = PQfnumber(res, "subconninfo");
 	i_subslotname = PQfnumber(res, "subslotname");
+	i_subsynccommit = PQfnumber(res, "subsynccommit");
 	i_subpublications = PQfnumber(res, "subpublications");
 
 	subinfo = pg_malloc(ntups * sizeof(SubscriptionInfo));
@@ -3704,16 +3745,19 @@ getSubscriptions(Archive *fout)
 		AssignDumpId(&subinfo[i].dobj);
 		subinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_subname));
 		subinfo[i].rolname = pg_strdup(PQgetvalue(res, i, i_rolname));
-		subinfo[i].subenabled =
-			(strcmp(PQgetvalue(res, i, i_subenabled), "t") == 0);
 		subinfo[i].subconninfo = pg_strdup(PQgetvalue(res, i, i_subconninfo));
 		subinfo[i].subslotname = pg_strdup(PQgetvalue(res, i, i_subslotname));
+		subinfo[i].subsynccommit =
+			pg_strdup(PQgetvalue(res, i, i_subsynccommit));
 		subinfo[i].subpublications =
 			pg_strdup(PQgetvalue(res, i, i_subpublications));
 
 		if (strlen(subinfo[i].rolname) == 0)
 			write_msg(NULL, "WARNING: owner of subscription \"%s\" appears to be invalid\n",
 					  subinfo[i].dobj.name);
+
+		/* Decide whether we want to dump it */
+		selectDumpableObject(&(subinfo[i].dobj), fout);
 	}
 	PQclear(res);
 
@@ -3727,19 +3771,20 @@ getSubscriptions(Archive *fout)
 static void
 dumpSubscription(Archive *fout, SubscriptionInfo *subinfo)
 {
-	DumpOptions *dopt = fout->dopt;
 	PQExpBuffer delq;
 	PQExpBuffer query;
+	PQExpBuffer labelq;
 	PQExpBuffer publications;
 	char	  **pubnames = NULL;
 	int			npubnames = 0;
 	int			i;
 
-	if (dopt->dataOnly)
+	if (!(subinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
 		return;
 
 	delq = createPQExpBuffer();
 	query = createPQExpBuffer();
+	labelq = createPQExpBuffer();
 
 	appendPQExpBuffer(delq, "DROP SUBSCRIPTION %s;\n",
 					  fmtId(subinfo->dobj.name));
@@ -3768,20 +3813,15 @@ dumpSubscription(Archive *fout, SubscriptionInfo *subinfo)
 		appendPQExpBufferStr(publications, fmtId(pubnames[i]));
 	}
 
-	appendPQExpBuffer(query, " PUBLICATION %s WITH (", publications->data);
-
-	if (subinfo->subenabled)
-		appendPQExpBufferStr(query, "ENABLED");
-	else
-		appendPQExpBufferStr(query, "DISABLED");
-
-	appendPQExpBufferStr(query, ", SLOT NAME = ");
+	appendPQExpBuffer(query, " PUBLICATION %s WITH (NOCONNECT, SLOT NAME = ", publications->data);
 	appendStringLiteralAH(query, subinfo->subslotname, fout);
 
-	if (dopt->no_subscription_connect)
-		appendPQExpBufferStr(query, ", NOCONNECT");
+	if (strcmp(subinfo->subsynccommit, "off") != 0)
+		appendPQExpBuffer(query, ", SYNCHRONOUS_COMMIT = %s", fmtId(subinfo->subsynccommit));
 
 	appendPQExpBufferStr(query, ");\n");
+
+	appendPQExpBuffer(labelq, "SUBSCRIPTION %s", fmtId(subinfo->dobj.name));
 
 	ArchiveEntry(fout, subinfo->dobj.catId, subinfo->dobj.dumpId,
 				 subinfo->dobj.name,
@@ -3792,6 +3832,16 @@ dumpSubscription(Archive *fout, SubscriptionInfo *subinfo)
 				 query->data, delq->data, NULL,
 				 NULL, 0,
 				 NULL, NULL);
+
+	if (subinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, labelq->data,
+					NULL, subinfo->rolname,
+					subinfo->dobj.catId, 0, subinfo->dobj.dumpId);
+
+	if (subinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+		dumpSecLabel(fout, labelq->data,
+					 NULL, subinfo->rolname,
+					 subinfo->dobj.catId, 0, subinfo->dobj.dumpId);
 
 	destroyPQExpBuffer(publications);
 	if (pubnames)
@@ -6613,8 +6663,8 @@ getExtendedStatistics(Archive *fout, TableInfo tblinfo[], int numTables)
 	int				ntups;
 	int				i_tableoid;
 	int				i_oid;
-	int				i_staname;
-	int				i_stadef;
+	int				i_stxname;
+	int				i_stxdef;
 
 	/* Extended statistics were new in v10 */
 	if (fout->remoteVersion < 100000)
@@ -6626,9 +6676,14 @@ getExtendedStatistics(Archive *fout, TableInfo tblinfo[], int numTables)
 	{
 		TableInfo  *tbinfo = &tblinfo[i];
 
-		/* Only plain tables and materialized views can have extended statistics. */
+		/*
+		 * Only plain tables, materialized views, foreign tables and
+		 * partitioned tables can have extended statistics.
+		 */
 		if (tbinfo->relkind != RELKIND_RELATION &&
-			tbinfo->relkind != RELKIND_MATVIEW)
+			tbinfo->relkind != RELKIND_MATVIEW &&
+			tbinfo->relkind != RELKIND_FOREIGN_TABLE &&
+			tbinfo->relkind != RELKIND_PARTITIONED_TABLE)
 			continue;
 
 		/*
@@ -6652,11 +6707,11 @@ getExtendedStatistics(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "SELECT "
 							"tableoid, "
 							"oid, "
-							"staname, "
-						  "pg_catalog.pg_get_statisticsextdef(oid) AS stadef "
+							"stxname, "
+						  "pg_catalog.pg_get_statisticsextdef(oid) AS stxdef "
 						  "FROM pg_statistic_ext "
-						  "WHERE starelid = '%u' "
-						  "ORDER BY staname", tbinfo->dobj.catId.oid);
+						  "WHERE stxrelid = '%u' "
+						  "ORDER BY stxname", tbinfo->dobj.catId.oid);
 
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -6664,8 +6719,8 @@ getExtendedStatistics(Archive *fout, TableInfo tblinfo[], int numTables)
 
 		i_tableoid = PQfnumber(res, "tableoid");
 		i_oid = PQfnumber(res, "oid");
-		i_staname = PQfnumber(res, "staname");
-		i_stadef = PQfnumber(res, "stadef");
+		i_stxname = PQfnumber(res, "stxname");
+		i_stxdef = PQfnumber(res, "stxdef");
 
 		statsextinfo = (StatsExtInfo *) pg_malloc(ntups * sizeof(StatsExtInfo));
 
@@ -6675,10 +6730,10 @@ getExtendedStatistics(Archive *fout, TableInfo tblinfo[], int numTables)
 			statsextinfo[j].dobj.catId.tableoid = atooid(PQgetvalue(res, j, i_tableoid));
 			statsextinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
 			AssignDumpId(&statsextinfo[j].dobj);
-			statsextinfo[j].dobj.name = pg_strdup(PQgetvalue(res, j, i_staname));
+			statsextinfo[j].dobj.name = pg_strdup(PQgetvalue(res, j, i_stxname));
 			statsextinfo[j].dobj.namespace = tbinfo->dobj.namespace;
 			statsextinfo[j].statsexttable = tbinfo;
-			statsextinfo[j].statsextdef = pg_strdup(PQgetvalue(res, j, i_stadef));
+			statsextinfo[j].statsextdef = pg_strdup(PQgetvalue(res, j, i_stxdef));
 		}
 
 		PQclear(res);
@@ -13943,12 +13998,12 @@ dumpTSConfig(Archive *fout, TSConfigInfo *cfginfo)
 
 	resetPQExpBuffer(query);
 	appendPQExpBuffer(query,
-					  "SELECT \n"
-					  "  ( SELECT alias FROM pg_catalog.ts_token_type('%u'::pg_catalog.oid) AS t \n"
-					  "    WHERE t.tokid = m.maptokentype ) AS tokenname, \n"
-					  "  m.mapdict::pg_catalog.regdictionary AS dictname \n"
-					  "FROM pg_catalog.pg_ts_config_map AS m \n"
-					  "WHERE m.mapcfg = '%u' \n"
+					  "SELECT\n"
+					  "  ( SELECT alias FROM pg_catalog.ts_token_type('%u'::pg_catalog.oid) AS t\n"
+					  "    WHERE t.tokid = m.maptokentype ) AS tokenname,\n"
+					  "  m.mapdict::pg_catalog.regdictionary AS dictname\n"
+					  "FROM pg_catalog.pg_ts_config_map AS m\n"
+					  "WHERE m.mapcfg = '%u'\n"
 					  "ORDER BY m.mapcfg, m.maptokentype, m.mapseqno",
 					  cfginfo->cfgparser, cfginfo->dobj.catId.oid);
 
