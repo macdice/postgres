@@ -33,12 +33,12 @@
  *		 When the desired state appears it will compare its position in the
  *		 stream with the SYNCWAIT position and based on that changes the
  *		 state to based on following rules:
- *		  - if the apply is in front of the sync in the wal stream the new
+ *		  - if the apply is in front of the sync in the WAL stream the new
  *			state is set to CATCHUP and apply loops until the sync process
  *			catches up to the same LSN as apply
- *		  - if the sync is in front of the apply in the wal stream the new
+ *		  - if the sync is in front of the apply in the WAL stream the new
  *			state is set to SYNCDONE
- *		  - if both apply and sync are at the same position in the wal stream
+ *		  - if both apply and sync are at the same position in the WAL stream
  *			the state of the table is set to READY
  *	   - If the state was set to CATCHUP sync will read the stream and
  *		 apply changes until it catches up to the specified stream
@@ -93,6 +93,8 @@
 
 #include "commands/copy.h"
 
+#include "parser/parse_relation.h"
+
 #include "replication/logicallauncher.h"
 #include "replication/logicalrelation.h"
 #include "replication/walreceiver.h"
@@ -114,9 +116,15 @@ StringInfo	copybuf = NULL;
 static void pg_attribute_noreturn()
 finish_sync_worker(void)
 {
-	/* Commit any outstanding transaction. */
+	/*
+	 * Commit any outstanding transaction. This is the usual case, unless
+	 * there was nothing to do for the table.
+	 */
 	if (IsTransactionState())
+	{
 		CommitTransactionCommand();
+		pgstat_report_stat(false);
+	}
 
 	/* And flush all writes. */
 	XLogFlush(GetXLogWriteRecPtr());
@@ -552,8 +560,9 @@ fetch_remote_table_info(char *nspname, char *relname,
 	/* First fetch Oid and replica identity. */
 	initStringInfo(&cmd);
 	appendStringInfo(&cmd, "SELECT c.oid, c.relreplident"
-						   "  FROM pg_catalog.pg_class c,"
-						   "       pg_catalog.pg_namespace n"
+						   "  FROM pg_catalog.pg_class c"
+						   "  INNER JOIN pg_catalog.pg_namespace n"
+						   "        ON (c.relnamespace = n.oid)"
 						   " WHERE n.nspname = %s"
 						   "   AND c.relname = %s"
 						   "   AND c.relkind = 'r'",
@@ -612,7 +621,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
 	{
 		lrel->attnames[natt] =
-			pstrdup(TextDatumGetCString(slot_getattr(slot, 1, &isnull)));
+			TextDatumGetCString(slot_getattr(slot, 1, &isnull));
 		Assert(!isnull);
 		lrel->atttyps[natt] = DatumGetObjectId(slot_getattr(slot, 2, &isnull));
 		Assert(!isnull);
@@ -648,6 +657,7 @@ copy_table(Relation rel)
 	StringInfoData		cmd;
 	CopyState	cstate;
 	List	   *attnamelist;
+	ParseState *pstate;
 
 	/* Get the publisher relation info. */
 	fetch_remote_table_info(get_namespace_name(RelationGetNamespace(rel)),
@@ -674,9 +684,11 @@ copy_table(Relation rel)
 
 	copybuf = makeStringInfo();
 
-	/* Create CopyState for ingestion of the data from publisher. */
+	pstate = make_parsestate(NULL);
+	addRangeTableEntryForRelation(pstate, rel, NULL, false, false);
+
 	attnamelist = make_copy_attnamelist(relmapentry);
-	cstate = BeginCopyFrom(NULL, rel, NULL, false, copy_read_data, attnamelist, NIL);
+	cstate = BeginCopyFrom(pstate, rel, NULL, false, copy_read_data, attnamelist, NIL);
 
 	/* Do the copy */
 	(void) CopyFrom(cstate);
@@ -687,24 +699,27 @@ copy_table(Relation rel)
 /*
  * Start syncing the table in the sync worker.
  *
- * The returned slot name is palloced in current memory context.
+ * The returned slot name is palloc'ed in current memory context.
  */
 char *
 LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 {
 	char		   *slotname;
 	char		   *err;
+	char		relstate;
+	XLogRecPtr	relstate_lsn;
 
 	/* Check the state of the table synchronization. */
 	StartTransactionCommand();
-	SpinLockAcquire(&MyLogicalRepWorker->relmutex);
-	MyLogicalRepWorker->relstate =
-		GetSubscriptionRelState(MyLogicalRepWorker->subid,
-								MyLogicalRepWorker->relid,
-								&MyLogicalRepWorker->relstate_lsn,
-								false);
-	SpinLockRelease(&MyLogicalRepWorker->relmutex);
+	relstate = GetSubscriptionRelState(MyLogicalRepWorker->subid,
+									   MyLogicalRepWorker->relid,
+									   &relstate_lsn, false);
 	CommitTransactionCommand();
+
+	SpinLockAcquire(&MyLogicalRepWorker->relmutex);
+	MyLogicalRepWorker->relstate = relstate;
+	MyLogicalRepWorker->relstate_lsn = relstate_lsn;
+	SpinLockRelease(&MyLogicalRepWorker->relmutex);
 
 	/*
 	 * To build a slot name for the sync work, we are limited to NAMEDATALEN -
