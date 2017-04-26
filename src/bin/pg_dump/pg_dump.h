@@ -614,9 +614,9 @@ typedef struct _SubscriptionInfo
 {
 	DumpableObject dobj;
 	char	   *rolname;
-	bool		subenabled;
 	char	   *subconninfo;
 	char	   *subslotname;
+	char	   *subsynccommit;
 	char	   *subpublications;
 } SubscriptionInfo;
 
