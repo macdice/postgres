@@ -43,7 +43,6 @@ my %pgdump_runs = (
 			'--format=custom',
 			"--file=$tempdir/binary_upgrade.dump",
 			'-w',
-			'--include-subscriptions', # XXX Should not be necessary?
 			'--schema-only',
 			'--binary-upgrade',
 			'-d', 'postgres',    # alternative way to specify database
@@ -58,7 +57,6 @@ my %pgdump_runs = (
 			'pg_dump',
 			'--no-sync',
 			"--file=$tempdir/clean.sql",
-			'--include-subscriptions',
 			'-c',
 			'-d', 'postgres',    # alternative way to specify database
 		], },
@@ -67,7 +65,6 @@ my %pgdump_runs = (
 			'pg_dump',
 			'--no-sync',
 			"--file=$tempdir/clean_if_exists.sql",
-			'--include-subscriptions',
 			'-c',
 			'--if-exists',
 			'--encoding=UTF8',    # no-op, just tests that option is accepted
@@ -85,7 +82,6 @@ my %pgdump_runs = (
 			'pg_dump',
 			'--no-sync',
 			"--file=$tempdir/createdb.sql",
-			'--include-subscriptions',
 			'-C',
 			'-R',                 # no-op, just for testing
 			'-v',
@@ -95,7 +91,6 @@ my %pgdump_runs = (
 			'pg_dump',
 			'--no-sync',
 			"--file=$tempdir/data_only.sql",
-			'--include-subscriptions',
 			'-a',
 			'--superuser=test_superuser',
 			'--disable-triggers',
@@ -253,7 +248,6 @@ my %pgdump_runs = (
 	section_pre_data => {
 		dump_cmd => [
 			'pg_dump',            "--file=$tempdir/section_pre_data.sql",
-			'--include-subscriptions',
 			'--section=pre-data', '--no-sync', 'postgres', ], },
 	section_data => {
 		dump_cmd => [
@@ -271,7 +265,7 @@ my %pgdump_runs = (
 	with_oids => {
 		dump_cmd => [
 			'pg_dump',                       '--oids',
-			'--include-subscriptions',       '--no-sync',
+			'--no-sync',
 			"--file=$tempdir/with_oids.sql", 'postgres', ], },);
 
 ###############################################################
@@ -1405,7 +1399,7 @@ my %tests = (
 	# catch-all for ALTER ... OWNER (except LARGE OBJECTs and PUBLICATIONs)
 	'ALTER ... OWNER commands (except LARGE OBJECTs and PUBLICATIONs)' => {
 		all_runs => 0,    # catch-all
-		regexp => qr/^ALTER (?!LARGE OBJECT|PUBLICATION)(.*) OWNER TO .*;/m,
+		regexp => qr/^ALTER (?!LARGE OBJECT|PUBLICATION|SUBSCRIPTION)(.*) OWNER TO .*;/m,
 		like   => {},     # use more-specific options above
 		unlike => {
 			column_inserts           => 1,
@@ -1523,6 +1517,7 @@ my %tests = (
 			only_dump_test_schema  => 1,
 			only_dump_test_table   => 1,
 			role                   => 1,
+			section_post_data       => 1,
 			test_schema_plus_blobs => 1, }, },
 
 	'COMMENT ON EXTENSION plpgsql' => {
@@ -1551,6 +1546,7 @@ my %tests = (
 			only_dump_test_schema  => 1,
 			only_dump_test_table   => 1,
 			role                   => 1,
+			section_post_data       => 1,
 			test_schema_plus_blobs => 1, }, },
 
 	'COMMENT ON TABLE dump_test.test_table' => {
@@ -1582,7 +1578,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			exclude_test_table       => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON COLUMN dump_test.test_table.col1' => {
 		all_runs     => 1,
@@ -1615,7 +1612,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			exclude_test_table       => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON COLUMN dump_test.composite.f1' => {
 		all_runs     => 1,
@@ -1648,7 +1646,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON COLUMN dump_test.test_second_table.col1' => {
 		all_runs     => 1,
@@ -1681,7 +1680,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON COLUMN dump_test.test_second_table.col2' => {
 		all_runs     => 1,
@@ -1714,7 +1714,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON CONVERSION dump_test.test_conversion' => {
 		all_runs     => 1,
@@ -1745,7 +1746,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON COLLATION test0' => {
 		all_runs     => 1,
@@ -1777,6 +1779,7 @@ my %tests = (
 			only_dump_test_schema  => 1,
 			only_dump_test_table   => 1,
 			role                   => 1,
+			section_post_data      => 1,
 			test_schema_plus_blobs => 1, }, },
 
 	'COMMENT ON LARGE OBJECT ...' => {
@@ -1820,6 +1823,74 @@ my %tests = (
 			section_data             => 1,
 			section_post_data        => 1, }, },
 
+	'COMMENT ON PUBLICATION pub1' => {
+		all_runs     => 1,
+		create_order => 55,
+		create_sql   => 'COMMENT ON PUBLICATION pub1
+					   IS \'comment on publication\';',
+		regexp => qr/^COMMENT ON PUBLICATION pub1 IS 'comment on publication';/m,
+		like   => {
+			binary_upgrade           => 1,
+			clean                    => 1,
+			clean_if_exists          => 1,
+			createdb                 => 1,
+			defaults                 => 1,
+			exclude_dump_test_schema => 1,
+			exclude_test_table       => 1,
+			exclude_test_table_data  => 1,
+			no_blobs                 => 1,
+			no_privs                 => 1,
+			no_owner                 => 1,
+			pg_dumpall_dbprivs       => 1,
+			schema_only              => 1,
+			section_post_data        => 1,
+			with_oids                => 1, },
+		unlike => {
+			column_inserts           => 1,
+			data_only                => 1,
+			only_dump_test_table     => 1,
+			only_dump_test_schema    => 1,
+			pg_dumpall_globals       => 1,
+			pg_dumpall_globals_clean => 1,
+			role                     => 1,
+			section_data             => 1,
+			section_pre_data         => 1,
+			test_schema_plus_blobs   => 1, }, },
+
+	'COMMENT ON SUBSCRIPTION sub1' => {
+		all_runs     => 1,
+		create_order => 55,
+		create_sql   => 'COMMENT ON SUBSCRIPTION sub1
+					   IS \'comment on subscription\';',
+		regexp => qr/^COMMENT ON SUBSCRIPTION sub1 IS 'comment on subscription';/m,
+		like   => {
+			binary_upgrade           => 1,
+			clean                    => 1,
+			clean_if_exists          => 1,
+			createdb                 => 1,
+			defaults                 => 1,
+			exclude_dump_test_schema => 1,
+			exclude_test_table       => 1,
+			exclude_test_table_data  => 1,
+			no_blobs                 => 1,
+			no_privs                 => 1,
+			no_owner                 => 1,
+			pg_dumpall_dbprivs       => 1,
+			schema_only              => 1,
+			section_post_data        => 1,
+			with_oids                => 1, },
+		unlike => {
+			column_inserts           => 1,
+			data_only                => 1,
+			only_dump_test_table     => 1,
+			only_dump_test_schema    => 1,
+			pg_dumpall_globals       => 1,
+			pg_dumpall_globals_clean => 1,
+			role                     => 1,
+			section_data             => 1,
+			section_pre_data         => 1,
+			test_schema_plus_blobs   => 1, }, },
+
 	'COMMENT ON TEXT SEARCH CONFIGURATION dump_test.alt_ts_conf1' => {
 		all_runs     => 1,
 		catch_all    => 'COMMENT commands',
@@ -1849,7 +1920,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON TEXT SEARCH DICTIONARY dump_test.alt_ts_dict1' => {
 		all_runs     => 1,
@@ -1880,7 +1952,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON TEXT SEARCH PARSER dump_test.alt_ts_prs1' => {
 		all_runs     => 1,
@@ -1911,7 +1984,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON TEXT SEARCH TEMPLATE dump_test.alt_ts_temp1' => {
 		all_runs     => 1,
@@ -1942,7 +2016,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON TYPE dump_test.planets - ENUM' => {
 		all_runs     => 1,
@@ -1973,7 +2048,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON TYPE dump_test.textrange - RANGE' => {
 		all_runs     => 1,
@@ -2004,7 +2080,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table    => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON TYPE dump_test.int42 - Regular' => {
 		all_runs     => 1,
@@ -2035,7 +2112,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'COMMENT ON TYPE dump_test.undefined - Undefined' => {
 		all_runs     => 1,
@@ -2066,7 +2144,8 @@ my %tests = (
 			data_only                => 1,
 			exclude_dump_test_schema => 1,
 			only_dump_test_table     => 1,
-			role                     => 1, }, },
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	# catch-all for COMMENTs
 	'COMMENT commands' => {
@@ -2076,8 +2155,7 @@ my %tests = (
 		unlike   => {
 			pg_dumpall_globals       => 1,
 			pg_dumpall_globals_clean => 1,
-			section_data             => 1,
-			section_post_data        => 1, }, },
+			section_data             => 1, }, },
 
 	'COPY test_table' => {
 		all_runs     => 1,
@@ -4309,34 +4387,34 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 		create_order => 50,
 		create_sql   => 'CREATE SUBSCRIPTION sub1
 						 CONNECTION \'dbname=doesnotexist\' PUBLICATION pub1
-						 WITH (DISABLED, NOCONNECT);',
+						 WITH (NOCONNECT);',
 		regexp       => qr/^
-			\QCREATE SUBSCRIPTION sub1 CONNECTION 'dbname=doesnotexist' PUBLICATION pub1 WITH (DISABLED, SLOT NAME = 'sub1');\E
+			\QCREATE SUBSCRIPTION sub1 CONNECTION 'dbname=doesnotexist' PUBLICATION pub1 WITH (NOCONNECT, SLOT NAME = 'sub1');\E
 			/xm,
 		like => {
 			binary_upgrade           => 1,
 			clean                    => 1,
 			clean_if_exists          => 1,
 			createdb                 => 1,
-			with_oids                => 1, },
-		unlike => {
 			defaults                 => 1,
 			exclude_test_table_data  => 1,
 			exclude_dump_test_schema => 1,
 			exclude_test_table       => 1,
-			section_pre_data         => 1,
 			no_blobs                 => 1,
 			no_privs                 => 1,
 			no_owner                 => 1,
+			pg_dumpall_dbprivs       => 1,
+			schema_only              => 1,
+			section_post_data        => 1,
+			with_oids                => 1, },
+		unlike => {
+			section_pre_data         => 1,
 			only_dump_test_schema    => 1,
 			only_dump_test_table     => 1,
-			pg_dumpall_dbprivs       => 1,
 			pg_dumpall_globals       => 1,
 			pg_dumpall_globals_clean => 1,
-			schema_only              => 1, # XXX Should be like?
 			role                     => 1,
-			section_pre_data         => 1, # XXX Should be like?
-			section_post_data        => 1,
+			section_pre_data         => 1,
 			test_schema_plus_blobs   => 1, }, },
 
 	'ALTER PUBLICATION pub1 ADD TABLE test_table' => {
@@ -4345,7 +4423,7 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 		create_sql =>
 		  'ALTER PUBLICATION pub1 ADD TABLE dump_test.test_table;',
 		regexp => qr/^
-			\QALTER PUBLICATION pub1 ADD TABLE test_table;\E
+			\QALTER PUBLICATION pub1 ADD TABLE ONLY test_table;\E
 			/xm,
 		like => {
 			binary_upgrade          => 1,
@@ -4379,7 +4457,7 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 		create_sql =>
 		  'ALTER PUBLICATION pub1 ADD TABLE dump_test.test_second_table;',
 		regexp => qr/^
-			\QALTER PUBLICATION pub1 ADD TABLE test_second_table;\E
+			\QALTER PUBLICATION pub1 ADD TABLE ONLY test_second_table;\E
 			/xm,
 		like => {
 			binary_upgrade          => 1,

@@ -12,6 +12,8 @@
 #ifndef WORKER_INTERNAL_H
 #define WORKER_INTERNAL_H
 
+#include <signal.h>
+
 #include "access/xlogdefs.h"
 #include "catalog/pg_subscription.h"
 #include "datatype/timestamp.h"
@@ -19,6 +21,15 @@
 
 typedef struct LogicalRepWorker
 {
+	/* Time at which this worker was launched. */
+	TimestampTz	launch_time;
+
+	/* Indicates if this slot is used or free. */
+	bool	in_use;
+
+	/* Increased everytime the slot is taken by new worker. */
+	uint16	generation;
+
 	/* Pointer to proc array. NULL if not running. */
 	PGPROC *proc;
 
