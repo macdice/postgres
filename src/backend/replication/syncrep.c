@@ -53,6 +53,10 @@
  * in the list. All the standbys appearing in the list are considered as
  * candidates for quorum synchronous standbys.
  *
+ * If neither FIRST nor ANY is specified, FIRST is used as the method.
+ * This is for backward compatibility with 9.6 or before where only a
+ * priority-based sync replication was supported.
+ *
  * Before the standbys chosen from synchronous_standby_names can
  * become the synchronous standbys they must have caught up with
  * the primary; that may take some time. Once caught up,
@@ -629,6 +633,7 @@ SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr, XLogRecPtr *flushPtr,
 		i++;
 	}
 
+	/* Sort each array in descending order */
 	qsort(write_array, len, sizeof(XLogRecPtr), cmp_lsn);
 	qsort(flush_array, len, sizeof(XLogRecPtr), cmp_lsn);
 	qsort(apply_array, len, sizeof(XLogRecPtr), cmp_lsn);
@@ -946,7 +951,14 @@ SyncRepGetStandbyPriority(void)
 		standby_name += strlen(standby_name) + 1;
 	}
 
-	return (found ? priority : 0);
+	if (!found)
+		return 0;
+
+	/*
+	 * In quorum-based sync replication, all the standbys in the list
+	 * have the same priority, one.
+	 */
+	return (SyncRepConfig->syncrep_method == SYNC_REP_PRIORITY) ? priority : 1;
 }
 
 /*

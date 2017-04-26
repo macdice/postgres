@@ -35,7 +35,6 @@ typedef struct ParallelContext
 	SubTransactionId subid;
 	int			nworkers;
 	int			nworkers_launched;
-	parallel_worker_main_type entrypoint;
 	char	   *library_name;
 	char	   *function_name;
 	ErrorContextCallback *error_context_stack;
@@ -67,8 +66,7 @@ extern bool InitializingParallelWorker;
 #define PARALLEL_KEY_EXECUTOR_NODE_NTH(node_id, n) \
 	(AssertMacro((n) <= 0xffff), ((uint64) (n)) << 32 | (node_id))
 
-extern ParallelContext *CreateParallelContext(parallel_worker_main_type entrypoint, int nworkers);
-extern ParallelContext *CreateParallelContextForExternalFunction(char *library_name, char *function_name, int nworkers);
+extern ParallelContext *CreateParallelContext(const char *library_name, const char *function_name, int nworkers);
 extern void InitializeParallelDSM(ParallelContext *pcxt);
 extern void ReinitializeParallelDSM(ParallelContext *pcxt);
 extern void LaunchParallelWorkers(ParallelContext *pcxt);
