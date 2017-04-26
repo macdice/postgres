@@ -26,6 +26,7 @@ CREATE SCHEMA pub_test;
 CREATE TABLE testpub_tbl1 (id serial primary key, data text);
 CREATE TABLE pub_test.testpub_nopk (foo int, bar int);
 CREATE VIEW testpub_view AS SELECT 1;
+CREATE TABLE testpub_parted (a int) PARTITION BY LIST (a);
 
 CREATE PUBLICATION testpub_foralltables FOR ALL TABLES WITH (nopublish delete, nopublish update);
 ALTER PUBLICATION testpub_foralltables WITH (publish update);
@@ -44,6 +45,16 @@ SELECT pubname, puballtables FROM pg_publication WHERE pubname = 'testpub_forall
 DROP TABLE testpub_tbl2;
 DROP PUBLICATION testpub_foralltables;
 
+CREATE TABLE testpub_tbl3 (a int);
+CREATE TABLE testpub_tbl3a (b text) INHERITS (testpub_tbl3);
+CREATE PUBLICATION testpub3 FOR TABLE testpub_tbl3;
+CREATE PUBLICATION testpub4 FOR TABLE ONLY testpub_tbl3;
+\dRp+ testpub3
+\dRp+ testpub4
+
+DROP TABLE testpub_tbl3, testpub_tbl3a;
+DROP PUBLICATION testpub3, testpub4;
+
 -- fail - view
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1, pub_test.testpub_nopk;
@@ -56,6 +67,8 @@ CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1;
 
 -- fail - view
 ALTER PUBLICATION testpub_default ADD TABLE testpub_view;
+-- fail - partitioned table
+ALTER PUBLICATION testpub_fortbl ADD TABLE testpub_parted;
 
 ALTER PUBLICATION testpub_default ADD TABLE testpub_tbl1;
 ALTER PUBLICATION testpub_default SET TABLE testpub_tbl1;
@@ -94,6 +107,7 @@ DROP PUBLICATION testpub2;
 SET ROLE regress_publication_user;
 REVOKE CREATE ON DATABASE regression FROM regress_publication_user2;
 
+DROP TABLE testpub_parted;
 DROP VIEW testpub_view;
 DROP TABLE testpub_tbl1;
 

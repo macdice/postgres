@@ -462,6 +462,7 @@ apply_handle_commit(StringInfo s)
 	/* Process any tables that are being synchronized in parallel. */
 	process_syncing_tables(commit_data.end_lsn);
 
+	pgstat_report_stat(false);
 	pgstat_report_activity(STATE_IDLE, NULL);
 }
 
@@ -1416,6 +1417,10 @@ reread_subscription(void)
 
 	MemoryContextSwitchTo(oldctx);
 
+	/* Change synchronous commit according to the user's wishes */
+	SetConfigOption("synchronous_commit", MySubscription->synccommit,
+					PGC_BACKEND, PGC_S_OVERRIDE);
+
 	if (started_tx)
 		CommitTransactionCommand();
 
@@ -1436,7 +1441,7 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 void
 ApplyWorkerMain(Datum main_arg)
 {
-	int				worker_slot = DatumGetObjectId(main_arg);
+	int				worker_slot = DatumGetInt32(main_arg);
 	MemoryContext	oldctx;
 	char			originname[NAMEDATALEN];
 	XLogRecPtr		origin_startpos;
@@ -1484,6 +1489,10 @@ ApplyWorkerMain(Datum main_arg)
 	MySubscription = GetSubscription(MyLogicalRepWorker->subid, false);
 	MySubscriptionValid = true;
 	MemoryContextSwitchTo(oldctx);
+
+	/* Setup synchronous commit according to the user's wishes */
+	SetConfigOption("synchronous_commit", MySubscription->synccommit,
+					PGC_BACKEND, PGC_S_OVERRIDE);
 
 	if (!MySubscription->enabled)
 	{
