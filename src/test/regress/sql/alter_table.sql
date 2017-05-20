@@ -307,6 +307,21 @@ ALTER TABLE tmp7 ADD CONSTRAINT identity CHECK (b = boo(b));
 ALTER TABLE tmp3 ADD CONSTRAINT IDENTITY check (b = boo(b)) NOT VALID;
 ALTER TABLE tmp3 VALIDATE CONSTRAINT identity;
 
+-- A NO INHERIT constraint should not be looked for in children during VALIDATE CONSTRAINT
+create table parent_noinh_convalid (a int);
+create table child_noinh_convalid () inherits (parent_noinh_convalid);
+insert into parent_noinh_convalid values (1);
+insert into child_noinh_convalid values (1);
+alter table parent_noinh_convalid add constraint check_a_is_2 check (a = 2) no inherit not valid;
+-- fail, because of the row in parent
+alter table parent_noinh_convalid validate constraint check_a_is_2;
+delete from only parent_noinh_convalid;
+-- ok (parent itself contains no violating rows)
+alter table parent_noinh_convalid validate constraint check_a_is_2;
+select convalidated from pg_constraint where conrelid = 'parent_noinh_convalid'::regclass and conname = 'check_a_is_2';
+-- cleanup
+drop table parent_noinh_convalid, child_noinh_convalid;
+
 -- Try (and fail) to create constraint from tmp5(a) to tmp4(a) - unique constraint on
 -- tmp4 is a,b
 
@@ -1771,6 +1786,24 @@ SELECT col_description('comment_test'::regclass, 1) as comment;
 SELECT indexrelid::regclass::text as index, obj_description(indexrelid, 'pg_class') as comment FROM pg_index where indrelid = 'comment_test'::regclass ORDER BY 1, 2;
 SELECT conname as constraint, obj_description(oid, 'pg_constraint') as comment FROM pg_constraint where conrelid = 'comment_test'::regclass ORDER BY 1, 2;
 
+-- Check compatibility for foreign keys and comments. This is done
+-- separately as rebuilding the column type of the parent leads
+-- to an error and would reduce the test scope.
+CREATE TABLE comment_test_child (
+  id text CONSTRAINT comment_test_child_fk REFERENCES comment_test);
+CREATE INDEX comment_test_child_fk ON comment_test_child(id);
+COMMENT ON COLUMN comment_test_child.id IS 'Column ''id'' on comment_test_child';
+COMMENT ON INDEX comment_test_child_fk IS 'Index backing the FOREIGN KEY of comment_test_child';
+COMMENT ON CONSTRAINT comment_test_child_fk ON comment_test_child IS 'FOREIGN KEY constraint of comment_test_child';
+
+-- Change column type of parent
+ALTER TABLE comment_test ALTER COLUMN id SET DATA TYPE text;
+ALTER TABLE comment_test ALTER COLUMN id SET DATA TYPE int USING id::integer;
+
+-- Comments should be intact
+SELECT col_description('comment_test_child'::regclass, 1) as comment;
+SELECT indexrelid::regclass::text as index, obj_description(indexrelid, 'pg_class') as comment FROM pg_index where indrelid = 'comment_test_child'::regclass ORDER BY 1, 2;
+SELECT conname as constraint, obj_description(oid, 'pg_constraint') as comment FROM pg_constraint where conrelid = 'comment_test_child'::regclass ORDER BY 1, 2;
 
 -- Check that we map relation oids to filenodes and back correctly.  Only
 -- display bad mappings so the test output doesn't change all the time.  A
@@ -1913,14 +1946,6 @@ ALTER TABLE partitioned DROP COLUMN a;
 ALTER TABLE partitioned ALTER COLUMN a TYPE char(5);
 ALTER TABLE partitioned DROP COLUMN b;
 ALTER TABLE partitioned ALTER COLUMN b TYPE char(5);
-
--- cannot drop NOT NULL on columns in the range partition key
-ALTER TABLE partitioned ALTER COLUMN a DROP NOT NULL;
-
--- it's fine however to drop one on the list partition key column
-CREATE TABLE list_partitioned (a int not null) partition by list (a);
-ALTER TABLE list_partitioned ALTER a DROP NOT NULL;
-DROP TABLE list_partitioned;
 
 -- partitioned table cannot participate in regular inheritance
 CREATE TABLE nonpartitioned (

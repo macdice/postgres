@@ -20,12 +20,12 @@ our (@ISA, @EXPORT_OK);
 my $insttype;
 my @client_contribs = ('oid2name', 'pgbench', 'vacuumlo');
 my @client_program_files = (
-	'clusterdb',     'createdb',       'createuser',
-	'dropdb',        'dropuser',       'ecpg',
-	'libecpg',       'libecpg_compat', 'libpgtypes', 'libpq',
-	'pg_basebackup', 'pg_config',      'pg_dump',    'pg_dumpall',
-	'pg_isready',    'pg_receivewal', 'pg_recvlogical', 'pg_restore',
-	'psql', 'reindexdb',     'vacuumdb',       @client_contribs);
+	'clusterdb',      'createdb',   'createuser',    'dropdb',
+	'dropuser',       'ecpg',       'libecpg',       'libecpg_compat',
+	'libpgtypes',     'libpq',      'pg_basebackup', 'pg_config',
+	'pg_dump',        'pg_dumpall', 'pg_isready',    'pg_receivewal',
+	'pg_recvlogical', 'pg_restore', 'psql',          'reindexdb',
+	'vacuumdb',       @client_contribs);
 
 sub lcopy
 {
@@ -380,13 +380,20 @@ sub GenerateTimezoneFiles
 	my $conf   = shift;
 	my $mf     = read_file("src/timezone/Makefile");
 	$mf =~ s{\\\r?\n}{}g;
+
 	$mf =~ /^TZDATA\s*:?=\s*(.*)$/m
 	  || die "Could not find TZDATA line in timezone makefile\n";
 	my @tzfiles = split /\s+/, $1;
 
+	$mf =~ /^POSIXRULES\s*:?=\s*(.*)$/m
+	  || die "Could not find POSIXRULES line in timezone makefile\n";
+	my $posixrules = $1;
+	$posixrules =~ s/\s+//g;
+
 	print "Generating timezone files...";
 
-	my @args = ("$conf/zic/zic", '-d', "$target/share/timezone");
+	my @args =
+	  ("$conf/zic/zic", '-d', "$target/share/timezone", '-p', "$posixrules");
 	foreach (@tzfiles)
 	{
 		my $tzfile = $_;

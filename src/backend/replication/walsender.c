@@ -24,11 +24,14 @@
  * are treated as not a crash but approximately normal termination;
  * the walsender will exit quickly without sending any more XLOG records.
  *
- * If the server is shut down, postmaster sends us SIGUSR2 after all
- * regular backends have exited and the shutdown checkpoint has been written.
- * This instructs walsender to send any outstanding WAL, including the
- * shutdown checkpoint record, wait for it to be replicated to the standby,
- * and then exit.
+ * If the server is shut down, postmaster sends us SIGUSR2 after all regular
+ * backends have exited. This causes the walsender to switch to the "stopping"
+ * state. In this state, the walsender will reject any replication command
+ * that may generate WAL activity. The checkpointer begins the shutdown
+ * checkpoint once all walsenders are confirmed as stopping. When the shutdown
+ * checkpoint finishes, the postmaster sends us SIGINT. This instructs
+ * walsender to send any outstanding WAL, including the shutdown checkpoint
+ * record, wait for it to be replicated to the standby, and then exit.
  *
  *
  * Portions Copyright (c) 2010-2017, PostgreSQL Global Development Group
@@ -177,23 +180,24 @@ static bool WalSndCaughtUp = false;
 
 /* Flags set by signal handlers for later service in main loop */
 static volatile sig_atomic_t got_SIGHUP = false;
-static volatile sig_atomic_t walsender_ready_to_stop = false;
+static volatile sig_atomic_t got_SIGINT = false;
+static volatile sig_atomic_t got_SIGUSR2 = false;
 
 /*
- * This is set while we are streaming. When not set, SIGUSR2 signal will be
+ * This is set while we are streaming. When not set, SIGINT signal will be
  * handled like SIGTERM. When set, the main loop is responsible for checking
- * walsender_ready_to_stop and terminating when it's set (after streaming any
- * remaining WAL).
+ * got_SIGINT and terminating when it's set (after streaming any remaining
+ * WAL).
  */
 static volatile sig_atomic_t replication_active = false;
 
 static LogicalDecodingContext *logical_decoding_ctx = NULL;
 static XLogRecPtr logical_startptr = InvalidXLogRecPtr;
 
-/* A sample associating a log position with the time it was written. */
+/* A sample associating a WAL location with the time it was written. */
 typedef struct
 {
-	XLogRecPtr lsn;
+	XLogRecPtr	lsn;
 	TimestampTz time;
 } WalTimeSample;
 
@@ -203,16 +207,17 @@ typedef struct
 /* A mechanism for tracking replication lag. */
 static struct
 {
-	XLogRecPtr last_lsn;
+	XLogRecPtr	last_lsn;
 	WalTimeSample buffer[LAG_TRACKER_BUFFER_SIZE];
-	int write_head;
-	int read_heads[NUM_SYNC_REP_WAIT_MODE];
+	int			write_head;
+	int			read_heads[NUM_SYNC_REP_WAIT_MODE];
 	WalTimeSample last_read[NUM_SYNC_REP_WAIT_MODE];
-} LagTracker;
+}	LagTracker;
 
 /* Signal handlers */
 static void WalSndSigHupHandler(SIGNAL_ARGS);
 static void WalSndXLogSendHandler(SIGNAL_ARGS);
+static void WalSndSwitchStopping(SIGNAL_ARGS);
 static void WalSndLastCycleHandler(SIGNAL_ARGS);
 
 /* Prototypes for private functions */
@@ -240,7 +245,9 @@ static void WalSndCheckTimeOut(TimestampTz now);
 static long WalSndComputeSleeptime(TimestampTz now);
 static void WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
+static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid);
 static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
+static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
 static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
@@ -299,11 +306,14 @@ WalSndErrorCleanup(void)
 	ReplicationSlotCleanup();
 
 	replication_active = false;
-	if (walsender_ready_to_stop)
+	if (got_SIGINT)
 		proc_exit(0);
 
 	/* Revert back to startup state */
 	WalSndSetState(WALSNDSTATE_STARTUP);
+
+	if (got_SIGUSR2)
+		WalSndSetState(WALSNDSTATE_STOPPING);
 }
 
 /*
@@ -330,7 +340,7 @@ static void
 IdentifySystem(void)
 {
 	char		sysid[32];
-	char		xpos[MAXFNAMELEN];
+	char		xloc[MAXFNAMELEN];
 	XLogRecPtr	logptr;
 	char	   *dbname = NULL;
 	DestReceiver *dest;
@@ -357,7 +367,7 @@ IdentifySystem(void)
 	else
 		logptr = GetFlushRecPtr();
 
-	snprintf(xpos, sizeof(xpos), "%X/%X", (uint32) (logptr >> 32), (uint32) logptr);
+	snprintf(xloc, sizeof(xloc), "%X/%X", (uint32) (logptr >> 32), (uint32) logptr);
 
 	if (MyDatabaseId != InvalidOid)
 	{
@@ -396,8 +406,8 @@ IdentifySystem(void)
 	/* column 2: timeline */
 	values[1] = Int32GetDatum(ThisTimeLineID);
 
-	/* column 3: xlog position */
-	values[2] = CStringGetTextDatum(xpos);
+	/* column 3: wal location */
+	values[2] = CStringGetTextDatum(xloc);
 
 	/* column 4: database name, or NULL if none */
 	if (dbname)
@@ -520,7 +530,7 @@ StartReplication(StartReplicationCmd *cmd)
 	if (ThisTimeLineID == 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("IDENTIFY_SYSTEM has not been run before START_REPLICATION")));
+		errmsg("IDENTIFY_SYSTEM has not been run before START_REPLICATION")));
 
 	/*
 	 * We assume here that we're logging enough information in the WAL for
@@ -570,8 +580,8 @@ StartReplication(StartReplicationCmd *cmd)
 			sendTimeLineIsHistoric = true;
 
 			/*
-			 * Check that the timeline the client requested exists, and
-			 * the requested start location is on that timeline.
+			 * Check that the timeline the client requested exists, and the
+			 * requested start location is on that timeline.
 			 */
 			timeLineHistory = readTimeLineHistory(ThisTimeLineID);
 			switchpoint = tliSwitchPoint(cmd->timeline, timeLineHistory,
@@ -589,8 +599,8 @@ StartReplication(StartReplicationCmd *cmd)
 			 * request to start replication from the beginning of the WAL
 			 * segment that contains switchpoint, but on the new timeline, so
 			 * that it doesn't end up with a partial segment. If you ask for
-			 * too old a starting point, you'll get an error later when we fail
-			 * to find the requested WAL segment in pg_wal.
+			 * too old a starting point, you'll get an error later when we
+			 * fail to find the requested WAL segment in pg_wal.
 			 *
 			 * XXX: we could be more strict here and only allow a startpoint
 			 * that's older than the switchpoint, if it's still in the same
@@ -676,7 +686,7 @@ StartReplication(StartReplicationCmd *cmd)
 		WalSndLoop(XLogSendPhysical);
 
 		replication_active = false;
-		if (walsender_ready_to_stop)
+		if (got_SIGINT)
 			proc_exit(0);
 		WalSndSetState(WALSNDSTATE_STARTUP);
 
@@ -707,9 +717,9 @@ StartReplication(StartReplicationCmd *cmd)
 		MemSet(nulls, false, sizeof(nulls));
 
 		/*
-		 * Need a tuple descriptor representing two columns.
-		 * int8 may seem like a surprising data type for this, but in theory
-		 * int4 would not be wide enough for this, as TimeLineID is unsigned.
+		 * Need a tuple descriptor representing two columns. int8 may seem
+		 * like a surprising data type for this, but in theory int4 would not
+		 * be wide enough for this, as TimeLineID is unsigned.
 		 */
 		tupdesc = CreateTemplateTupleDesc(2, false);
 		TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "next_tli",
@@ -785,7 +795,7 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 	bool		reserve_wal_given = false;
 
 	/* Parse options */
-	foreach (lc, cmd->options)
+	foreach(lc, cmd->options)
 	{
 		DefElem    *defel = (DefElem *) lfirst(lc);
 
@@ -832,7 +842,7 @@ static void
 CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 {
 	const char *snapshot_name = NULL;
-	char		xpos[MAXFNAMELEN];
+	char		xloc[MAXFNAMELEN];
 	char	   *slot_name;
 	bool		reserve_wal = false;
 	CRSSnapshotAction snapshot_action = CRS_EXPORT_SNAPSHOT;
@@ -873,6 +883,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	if (cmd->kind == REPLICATION_KIND_LOGICAL)
 	{
 		LogicalDecodingContext *ctx;
+		bool		need_full_snapshot = false;
 
 		/*
 		 * Do options check early so that we can bail before calling the
@@ -884,6 +895,8 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 				ereport(ERROR,
 						(errmsg("CREATE_REPLICATION_SLOT ... EXPORT_SNAPSHOT "
 								"must not be called inside a transaction")));
+
+			need_full_snapshot = true;
 		}
 		else if (snapshot_action == CRS_USE_SNAPSHOT)
 		{
@@ -906,11 +919,14 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 				ereport(ERROR,
 						(errmsg("CREATE_REPLICATION_SLOT ... USE_SNAPSHOT "
 								"must not be called in a subtransaction")));
+
+			need_full_snapshot = true;
 		}
 
-		ctx = CreateInitDecodingContext(cmd->plugin, NIL,
+		ctx = CreateInitDecodingContext(cmd->plugin, NIL, need_full_snapshot,
 										logical_read_xlog_page,
-										WalSndPrepareWrite, WalSndWriteData);
+										WalSndPrepareWrite, WalSndWriteData,
+										WalSndUpdateProgress);
 
 		/*
 		 * Signal that we don't need the timeout mechanism. We're just
@@ -959,7 +975,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 			ReplicationSlotSave();
 	}
 
-	snprintf(xpos, sizeof(xpos), "%X/%X",
+	snprintf(xloc, sizeof(xloc), "%X/%X",
 			 (uint32) (MyReplicationSlot->data.confirmed_flush >> 32),
 			 (uint32) MyReplicationSlot->data.confirmed_flush);
 
@@ -992,7 +1008,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	values[0] = CStringGetTextDatum(slot_name);
 
 	/* consistent wal location */
-	values[1] = CStringGetTextDatum(xpos);
+	values[1] = CStringGetTextDatum(xloc);
 
 	/* snapshot name, or NULL if none */
 	if (snapshot_name != NULL)
@@ -1048,7 +1064,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	{
 		ereport(LOG,
 				(errmsg("terminating walsender process after promotion")));
-		walsender_ready_to_stop = true;
+		got_SIGINT = true;
 	}
 
 	WalSndSetState(WALSNDSTATE_CATCHUP);
@@ -1064,10 +1080,11 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	 * Initialize position to the last ack'ed one, then the xlog records begin
 	 * to be shipped from that position.
 	 */
-	logical_decoding_ctx = CreateDecodingContext(
-											   cmd->startpoint, cmd->options,
+	logical_decoding_ctx = CreateDecodingContext(cmd->startpoint, cmd->options,
 												 logical_read_xlog_page,
-										WalSndPrepareWrite, WalSndWriteData);
+												 WalSndPrepareWrite,
+												 WalSndWriteData,
+												 WalSndUpdateProgress);
 
 	/* Start reading WAL from the oldest required WAL. */
 	logical_startptr = MyReplicationSlot->data.restart_lsn;
@@ -1098,7 +1115,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	ReplicationSlotRelease();
 
 	replication_active = false;
-	if (walsender_ready_to_stop)
+	if (got_SIGINT)
 		proc_exit(0);
 	WalSndSetState(WALSNDSTATE_STARTUP);
 
@@ -1227,6 +1244,30 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 }
 
 /*
+ * LogicalDecodingContext 'progress_update' callback.
+ *
+ * Write the current position to the log tracker (see XLogSendPhysical).
+ */
+static void
+WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid)
+{
+	static TimestampTz sendTime = 0;
+	TimestampTz now = GetCurrentTimestamp();
+
+	/*
+	 * Track lag no more than once per WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS to
+	 * avoid flooding the lag tracker when we commit frequently.
+	 */
+#define WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS	1000
+	if (!TimestampDifferenceExceeds(sendTime, now,
+									WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS))
+		return;
+
+	LagTrackerWrite(lsn, now);
+	sendTime = now;
+}
+
+/*
  * Wait till WAL < loc is flushed to disk so it can be safely read.
  */
 static XLogRecPtr
@@ -1286,6 +1327,14 @@ WalSndWaitForWal(XLogRecPtr loc)
 			RecentFlushPtr = GetXLogReplayRecPtr(NULL);
 
 		/*
+		 * If postmaster asked us to switch to the stopping state, do so.
+		 * Shutdown is in progress and this will allow the checkpointer to
+		 * move on with the shutdown checkpoint.
+		 */
+		if (got_SIGUSR2)
+			WalSndSetState(WALSNDSTATE_STOPPING);
+
+		/*
 		 * If postmaster asked us to stop, don't wait here anymore. This will
 		 * cause the xlogreader to return without reading a full record, which
 		 * is the fastest way to reach the mainloop which then can quit.
@@ -1294,7 +1343,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 		 * RecentFlushPtr, so we can send all remaining data before shutting
 		 * down.
 		 */
-		if (walsender_ready_to_stop)
+		if (got_SIGINT)
 			break;
 
 		/*
@@ -1369,6 +1418,22 @@ exec_replication_command(const char *cmd_string)
 	MemoryContext old_context;
 
 	/*
+	 * If WAL sender has been told that shutdown is getting close, switch its
+	 * status accordingly to handle the next replication commands correctly.
+	 */
+	if (got_SIGUSR2)
+		WalSndSetState(WALSNDSTATE_STOPPING);
+
+	/*
+	 * Throw error if in stopping mode.  We need prevent commands that could
+	 * generate WAL while the shutdown checkpoint is being written.  To be
+	 * safe, we just prohibit all new commands.
+	 */
+	if (MyWalSnd->state == WALSNDSTATE_STOPPING)
+		ereport(ERROR,
+				(errmsg("cannot execute new commands while WAL sender is in stopping mode")));
+
+	/*
 	 * CREATE_REPLICATION_SLOT ... LOGICAL exports a snapshot until the next
 	 * command arrives. Clean up the old stuff if there's anything.
 	 */
@@ -1409,8 +1474,8 @@ exec_replication_command(const char *cmd_string)
 		SnapBuildClearExportedSnapshot();
 
 	/*
-	 * For aborted transactions, don't allow anything except pure SQL,
-	 * the exec_simple_query() will handle it correctly.
+	 * For aborted transactions, don't allow anything except pure SQL, the
+	 * exec_simple_query() will handle it correctly.
 	 */
 	if (IsAbortedTransactionBlockState() && !IsA(cmd_node, SQLCmd))
 		ereport(ERROR,
@@ -1664,7 +1729,7 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 }
 
 /*
- * Regular reply from standby advising of WAL positions on standby server.
+ * Regular reply from standby advising of WAL locations on standby server.
  */
 static void
 ProcessStandbyReplyMessage(void)
@@ -1679,7 +1744,7 @@ ProcessStandbyReplyMessage(void)
 	bool		clearLagTimes;
 	TimestampTz now;
 
-	static bool	fullyAppliedLastTime = false;
+	static bool fullyAppliedLastTime = false;
 
 	/* the caller already consumed the msgtype byte */
 	writePtr = pq_getmsgint64(&reply_message);
@@ -1827,7 +1892,7 @@ TransactionIdInRecentPast(TransactionId xid, uint32 epoch)
 	}
 
 	if (!TransactionIdPrecedesOrEquals(xid, nextXid))
-		return false;				/* epoch OK, but it's wrapped around */
+		return false;			/* epoch OK, but it's wrapped around */
 
 	return true;
 }
@@ -1909,8 +1974,8 @@ ProcessStandbyHSFeedbackMessage(void)
 	 *
 	 * If we're using a replication slot we reserve the xmin via that,
 	 * otherwise via the walsender's PGXACT entry. We can only track the
-	 * catalog xmin separately when using a slot, so we store the least
-	 * of the two provided when not using a slot.
+	 * catalog xmin separately when using a slot, so we store the least of the
+	 * two provided when not using a slot.
 	 *
 	 * XXX: It might make sense to generalize the ephemeral slot concept and
 	 * always use the slot mechanism to handle the feedback xmin.
@@ -2090,13 +2155,20 @@ WalSndLoop(WalSndSendDataCallback send_data)
 			}
 
 			/*
-			 * When SIGUSR2 arrives, we send any outstanding logs up to the
+			 * At the reception of SIGUSR2, switch the WAL sender to the
+			 * stopping state.
+			 */
+			if (got_SIGUSR2)
+				WalSndSetState(WALSNDSTATE_STOPPING);
+
+			/*
+			 * When SIGINT arrives, we send any outstanding logs up to the
 			 * shutdown checkpoint record (i.e., the latest record), wait for
 			 * them to be replicated to the standby, and exit. This may be a
 			 * normal termination at shutdown, or a promotion, the walsender
 			 * is not sure which.
 			 */
-			if (walsender_ready_to_stop)
+			if (got_SIGINT)
 				WalSndDone(send_data);
 		}
 
@@ -2507,7 +2579,7 @@ XLogSendPhysical(void)
 
 	/*
 	 * Record the current system time as an approximation of the time at which
-	 * this WAL position was written for the purposes of lag tracking.
+	 * this WAL location was written for the purposes of lag tracking.
 	 *
 	 * In theory we could make XLogFlush() record a time in shmem whenever WAL
 	 * is flushed and we could get that time as well as the LSN when we call
@@ -2516,18 +2588,18 @@ XLogSendPhysical(void)
 	 * it seems good enough to capture the time here.  We should reach this
 	 * after XLogFlush() runs WalSndWakeupProcessRequests(), and although that
 	 * may take some time, we read the WAL flush pointer and take the time
-	 * very close to together here so that we'll get a later position if it
-	 * is still moving.
+	 * very close to together here so that we'll get a later position if it is
+	 * still moving.
 	 *
 	 * Because LagTrackerWriter ignores samples when the LSN hasn't advanced,
 	 * this gives us a cheap approximation for the WAL flush time for this
 	 * LSN.
 	 *
 	 * Note that the LSN is not necessarily the LSN for the data contained in
-	 * the present message; it's the end of the WAL, which might be
-	 * further ahead.  All the lag tracking machinery cares about is finding
-	 * out when that arbitrary LSN is eventually reported as written, flushed
-	 * and applied, so that it can measure the elapsed time.
+	 * the present message; it's the end of the WAL, which might be further
+	 * ahead.  All the lag tracking machinery cares about is finding out when
+	 * that arbitrary LSN is eventually reported as written, flushed and
+	 * applied, so that it can measure the elapsed time.
 	 */
 	LagTrackerWrite(SendRqstPtr, GetCurrentTimestamp());
 
@@ -2686,9 +2758,9 @@ XLogSendLogical(void)
 	if (record != NULL)
 	{
 		/*
-		 * Note the lack of any call to LagTrackerWrite() which is the responsibility
-		 * of the logical decoding plugin. Response messages are handled normally,
-		 * so this responsibility does not extend to needing to call LagTrackerRead().
+		 * Note the lack of any call to LagTrackerWrite() which is handled by
+		 * WalSndUpdateProgress which is called by output plugin through
+		 * logical decoding write api.
 		 */
 		LogicalDecodingProcessRecord(logical_decoding_ctx, logical_decoding_ctx->reader);
 
@@ -2733,9 +2805,8 @@ WalSndDone(WalSndSendDataCallback send_data)
 
 	/*
 	 * To figure out whether all WAL has successfully been replicated, check
-	 * flush location if valid, write otherwise. Tools like pg_receivewal
-	 * will usually (unless in synchronous mode) return an invalid flush
-	 * location.
+	 * flush location if valid, write otherwise. Tools like pg_receivewal will
+	 * usually (unless in synchronous mode) return an invalid flush location.
 	 */
 	replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
 		MyWalSnd->write : MyWalSnd->flush;
@@ -2836,7 +2907,23 @@ WalSndXLogSendHandler(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-/* SIGUSR2: set flag to do a last cycle and shut down afterwards */
+/* SIGUSR2: set flag to switch to stopping state */
+static void
+WalSndSwitchStopping(SIGNAL_ARGS)
+{
+	int			save_errno = errno;
+
+	got_SIGUSR2 = true;
+	SetLatch(MyLatch);
+
+	errno = save_errno;
+}
+
+/*
+ * SIGINT: set flag to do a last cycle and shut down afterwards. The WAL
+ * sender should already have been switched to WALSNDSTATE_STOPPING at
+ * this point.
+ */
 static void
 WalSndLastCycleHandler(SIGNAL_ARGS)
 {
@@ -2851,7 +2938,7 @@ WalSndLastCycleHandler(SIGNAL_ARGS)
 	if (!replication_active)
 		kill(MyProcPid, SIGTERM);
 
-	walsender_ready_to_stop = true;
+	got_SIGINT = true;
 	SetLatch(MyLatch);
 
 	errno = save_errno;
@@ -2864,14 +2951,14 @@ WalSndSignals(void)
 	/* Set up signal handlers */
 	pqsignal(SIGHUP, WalSndSigHupHandler);		/* set flag to read config
 												 * file */
-	pqsignal(SIGINT, SIG_IGN);	/* not used */
+	pqsignal(SIGINT, WalSndLastCycleHandler);	/* request a last cycle and
+												 * shutdown */
 	pqsignal(SIGTERM, die);		/* request shutdown */
 	pqsignal(SIGQUIT, quickdie);	/* hard crash time */
 	InitializeTimeouts();		/* establishes SIGALRM handler */
 	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR1, WalSndXLogSendHandler);	/* request WAL sending */
-	pqsignal(SIGUSR2, WalSndLastCycleHandler);	/* request a last cycle and
-												 * shutdown */
+	pqsignal(SIGUSR2, WalSndSwitchStopping);	/* switch to stopping state */
 
 	/* Reset some signals that are accepted by postmaster but not here */
 	pqsignal(SIGCHLD, SIG_DFL);
@@ -2949,6 +3036,50 @@ WalSndWakeup(void)
 	}
 }
 
+/*
+ * Wait that all the WAL senders have reached the stopping state. This is
+ * used by the checkpointer to control when shutdown checkpoints can
+ * safely begin.
+ */
+void
+WalSndWaitStopping(void)
+{
+	for (;;)
+	{
+		int			i;
+		bool		all_stopped = true;
+
+		for (i = 0; i < max_wal_senders; i++)
+		{
+			WalSndState state;
+			WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
+
+			SpinLockAcquire(&walsnd->mutex);
+
+			if (walsnd->pid == 0)
+			{
+				SpinLockRelease(&walsnd->mutex);
+				continue;
+			}
+
+			state = walsnd->state;
+			SpinLockRelease(&walsnd->mutex);
+
+			if (state != WALSNDSTATE_STOPPING)
+			{
+				all_stopped = false;
+				break;
+			}
+		}
+
+		/* safe to leave if confirmation is done for all WAL senders */
+		if (all_stopped)
+			return;
+
+		pg_usleep(10000L);		/* wait for 10 msec */
+	}
+}
+
 /* Set state for current walsender (only called in walsender) */
 void
 WalSndSetState(WalSndState state)
@@ -2982,6 +3113,8 @@ WalSndGetStateString(WalSndState state)
 			return "catchup";
 		case WALSNDSTATE_STREAMING:
 			return "streaming";
+		case WALSNDSTATE_STOPPING:
+			return "stopping";
 	}
 	return "UNKNOWN";
 }
@@ -2989,7 +3122,7 @@ WalSndGetStateString(WalSndState state)
 static Interval *
 offset_to_interval(TimeOffset offset)
 {
-	Interval *result = palloc(sizeof(Interval));
+	Interval   *result = palloc(sizeof(Interval));
 
 	result->month = 0;
 	result->day = 0;
@@ -3219,17 +3352,16 @@ WalSndKeepaliveIfNecessary(TimestampTz now)
 
 /*
  * Record the end of the WAL and the time it was flushed locally, so that
- * LagTrackerRead can compute the elapsed time (lag) when this WAL position is
+ * LagTrackerRead can compute the elapsed time (lag) when this WAL location is
  * eventually reported to have been written, flushed and applied by the
  * standby in a reply message.
- * Exported to allow logical decoding plugins to call this when they choose.
  */
-void
+static void
 LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time)
 {
-	bool buffer_full;
-	int new_write_head;
-	int i;
+	bool		buffer_full;
+	int			new_write_head;
+	int			i;
 
 	if (!am_walsender)
 		return;
@@ -3277,7 +3409,7 @@ LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time)
 }
 
 /*
- * Find out how much time has elapsed between the moment WAL position 'lsn'
+ * Find out how much time has elapsed between the moment WAL location 'lsn'
  * (or the highest known earlier LSN) was flushed locally and the time 'now'.
  * We have a separate read head for each of the reported LSN locations we
  * receive in replies from standby; 'head' controls which read head is
@@ -3315,16 +3447,16 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 		/*
 		 * We didn't cross a time.  If there is a future sample that we
 		 * haven't reached yet, and we've already reached at least one sample,
-		 * let's interpolate the local flushed time.  This is mainly useful for
-		 * reporting a completely stuck apply position as having increasing
-		 * lag, since otherwise we'd have to wait for it to eventually start
-		 * moving again and cross one of our samples before we can show the
-		 * lag increasing.
+		 * let's interpolate the local flushed time.  This is mainly useful
+		 * for reporting a completely stuck apply position as having
+		 * increasing lag, since otherwise we'd have to wait for it to
+		 * eventually start moving again and cross one of our samples before
+		 * we can show the lag increasing.
 		 */
 		if (LagTracker.read_heads[head] != LagTracker.write_head &&
 			LagTracker.last_read[head].time != 0)
 		{
-			double fraction;
+			double		fraction;
 			WalTimeSample prev = LagTracker.last_read[head];
 			WalTimeSample next = LagTracker.buffer[LagTracker.read_heads[head]];
 
