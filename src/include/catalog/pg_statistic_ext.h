@@ -30,11 +30,13 @@
 
 CATALOG(pg_statistic_ext,3381)
 {
-	/* These fields form the unique key for the entry: */
 	Oid			stxrelid;		/* relation containing attributes */
-	NameData	stxname;		/* statistics name */
-	Oid			stxnamespace;	/* OID of namespace containing this statistics */
-	Oid			stxowner;		/* statistics owner */
+
+	/* These two fields form the unique key for the entry: */
+	NameData	stxname;		/* statistics object name */
+	Oid			stxnamespace;	/* OID of statistics object's namespace */
+
+	Oid			stxowner;		/* statistics object's owner */
 
 	/*
 	 * variable-length fields start here, but we allow direct access to
@@ -43,8 +45,8 @@ CATALOG(pg_statistic_ext,3381)
 	int2vector	stxkeys;		/* array of column keys */
 
 #ifdef CATALOG_VARLEN
-	char		stxkind[1] BKI_FORCE_NOT_NULL;		/* statistic types
-													 * requested to build */
+	char		stxkind[1] BKI_FORCE_NOT_NULL;	/* statistic types requested
+												 * to build */
 	pg_ndistinct stxndistinct;	/* ndistinct coefficients (serialized) */
 	pg_dependencies stxdependencies;	/* dependencies (serialized) */
 #endif

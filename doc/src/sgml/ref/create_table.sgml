@@ -35,7 +35,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 
 CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="PARAMETER">table_name</replaceable>
     OF <replaceable class="PARAMETER">type_name</replaceable> [ (
-  { <replaceable class="PARAMETER">column_name</replaceable> WITH OPTIONS [ <replaceable class="PARAMETER">column_constraint</replaceable> [ ... ] ]
+  { <replaceable class="PARAMETER">column_name</replaceable> [ WITH OPTIONS ] [ <replaceable class="PARAMETER">column_constraint</replaceable> [ ... ] ]
     | <replaceable>table_constraint</replaceable> }
     [, ... ]
 ) ]
@@ -46,7 +46,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 
 CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="PARAMETER">table_name</replaceable>
     PARTITION OF <replaceable class="PARAMETER">parent_table</replaceable> [ (
-  { <replaceable class="PARAMETER">column_name</replaceable> [ <replaceable class="PARAMETER">column_constraint</replaceable> [ ... ] ]
+  { <replaceable class="PARAMETER">column_name</replaceable> [ WITH OPTIONS ] [ <replaceable class="PARAMETER">column_constraint</replaceable> [ ... ] ]
     | <replaceable>table_constraint</replaceable> }
     [, ... ]
 ) ] FOR VALUES <replaceable class="PARAMETER">partition_bound_spec</replaceable>
@@ -452,11 +452,6 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
       <literal>PRIMARY KEY</literal>, <literal>EXCLUDE</literal>, or
       <literal>FOREIGN KEY</literal> constraints; however, you can define
       these constraints on individual partitions.
-     </para>
-
-     <para>
-      When using range partitioning, a <literal>NOT NULL</literal> constraint
-      is added to each non-expression column in the partition key.
      </para>
 
     </listitem>

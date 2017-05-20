@@ -27,13 +27,16 @@
  * to avoid forcing to include proc.h when including procarray.h. So if you modify
  * PROC_XXX flags, you need to modify these flags.
  */
-#define		PROCARRAY_VACUUM_FLAG			0x02	/* currently running lazy vacuum */
-#define		PROCARRAY_ANALYZE_FLAG			0x04	/* currently running analyze */
-#define		PROCARRAY_LOGICAL_DECODING_FLAG	0x10	/* currently doing logical
-													 * decoding outside xact */
+#define		PROCARRAY_VACUUM_FLAG			0x02		/* currently running
+														 * lazy vacuum */
+#define		PROCARRAY_ANALYZE_FLAG			0x04		/* currently running
+														 * analyze */
+#define		PROCARRAY_LOGICAL_DECODING_FLAG 0x10		/* currently doing
+														 * logical decoding
+														 * outside xact */
 
-#define		PROCARRAY_SLOTS_XMIN			0x20	/* replication slot xmin,
-													 * catalog_xmin */
+#define		PROCARRAY_SLOTS_XMIN			0x20		/* replication slot
+														 * xmin, catalog_xmin */
 /*
  * Only flags in PROCARRAY_PROC_FLAGS_MASK are considered when matching
  * PGXACT->vacuumFlags. Other flags are used for different purposes and
@@ -88,7 +91,7 @@ extern bool TransactionIdIsInProgress(TransactionId xid);
 extern bool TransactionIdIsActive(TransactionId xid);
 extern TransactionId GetOldestXmin(Relation rel, int flags);
 extern TransactionId GetOldestActiveTransactionId(void);
-extern TransactionId GetOldestSafeDecodingTransactionId(void);
+extern TransactionId GetOldestSafeDecodingTransactionId(bool catalogOnly);
 
 extern VirtualTransactionId *GetVirtualXIDsDelayingChkpt(int *nvxids);
 extern bool HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids, int nvxids);

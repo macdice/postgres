@@ -712,7 +712,7 @@ static const struct object_type_map
 	},
 	/* OBJECT_STATISTIC_EXT */
 	{
-		"statistics", OBJECT_STATISTIC_EXT
+		"statistics object", OBJECT_STATISTIC_EXT
 	}
 };
 
@@ -854,7 +854,7 @@ get_object_address(ObjectType objtype, Node *object,
 
 					objlist = castNode(List, object);
 					domaddr = get_object_address_type(OBJECT_DOMAIN,
-													  linitial_node(TypeName, objlist),
+											linitial_node(TypeName, objlist),
 													  missing_ok);
 					constrname = strVal(lsecond(objlist));
 
@@ -878,7 +878,7 @@ get_object_address(ObjectType objtype, Node *object,
 			case OBJECT_PUBLICATION:
 			case OBJECT_SUBSCRIPTION:
 				address = get_object_address_unqualified(objtype,
-														 (Value *) object, missing_ok);
+											   (Value *) object, missing_ok);
 				break;
 			case OBJECT_TYPE:
 			case OBJECT_DOMAIN:
@@ -993,8 +993,8 @@ get_object_address(ObjectType objtype, Node *object,
 				break;
 			case OBJECT_STATISTIC_EXT:
 				address.classId = StatisticExtRelationId;
-				address.objectId = get_statistics_oid(castNode(List, object),
-													  missing_ok);
+				address.objectId = get_statistics_object_oid(castNode(List, object),
+															 missing_ok);
 				address.objectSubId = 0;
 				break;
 			default:
@@ -1345,7 +1345,7 @@ get_object_address_relobject(ObjectType objtype, List *object,
 		if (relation != NULL)
 			heap_close(relation, AccessShareLock);
 
-		relation = NULL;	/* department of accident prevention */
+		relation = NULL;		/* department of accident prevention */
 		return address;
 	}
 
@@ -1762,7 +1762,7 @@ get_object_address_publication_rel(List *object,
 
 	relname = linitial(object);
 	relation = relation_openrv_extended(makeRangeVarFromNameList(relname),
-										 AccessShareLock, missing_ok);
+										AccessShareLock, missing_ok);
 	if (!relation)
 		return address;
 
@@ -2138,7 +2138,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			if (list_length(name) != 1)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					  errmsg("name list length must be exactly %d", 1)));
+						 errmsg("name list length must be exactly %d", 1)));
 			objnode = linitial(name);
 			break;
 		case OBJECT_TYPE:
@@ -2166,18 +2166,18 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_FUNCTION:
 		case OBJECT_AGGREGATE:
 		case OBJECT_OPERATOR:
-		{
-			ObjectWithArgs *owa = makeNode(ObjectWithArgs);
+			{
+				ObjectWithArgs *owa = makeNode(ObjectWithArgs);
 
-			owa->objname = name;
-			owa->objargs = args;
-			objnode = (Node *) owa;
-			break;
-		}
+				owa->objname = name;
+				owa->objargs = args;
+				objnode = (Node *) owa;
+				break;
+			}
 		case OBJECT_LARGEOBJECT:
 			/* already handled above */
 			break;
-		/* no default, to let compiler warn about missing case */
+			/* no default, to let compiler warn about missing case */
 	}
 
 	if (objnode == NULL)
@@ -2398,7 +2398,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 						 errmsg("must be superuser")));
 			break;
 		case OBJECT_STATISTIC_EXT:
-			if (!pg_statistics_ownercheck(address.objectId, roleid))
+			if (!pg_statistics_object_ownercheck(address.objectId, roleid))
 				aclcheck_error_type(ACLCHECK_NOT_OWNER, address.objectId);
 			break;
 		default:
@@ -2869,6 +2869,21 @@ getObjectDescription(const ObjectAddress *object)
 			getOpFamilyDescription(&buffer, object->objectId);
 			break;
 
+		case OCLASS_AM:
+			{
+				HeapTuple	tup;
+
+				tup = SearchSysCache1(AMOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+					elog(ERROR, "cache lookup failed for access method %u",
+						 object->objectId);
+				appendStringInfo(&buffer, _("access method %s"),
+							 NameStr(((Form_pg_am) GETSTRUCT(tup))->amname));
+				ReleaseSysCache(tup);
+				break;
+			}
+
 		case OCLASS_AMOP:
 			{
 				Relation	amopDesc;
@@ -3004,27 +3019,6 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
-		case OCLASS_TRANSFORM:
-			{
-				HeapTuple	trfTup;
-				Form_pg_transform trfForm;
-
-				trfTup = SearchSysCache1(TRFOID,
-										 ObjectIdGetDatum(object->objectId));
-				if (!HeapTupleIsValid(trfTup))
-					elog(ERROR, "could not find tuple for transform %u",
-						 object->objectId);
-
-				trfForm = (Form_pg_transform) GETSTRUCT(trfTup);
-
-				appendStringInfo(&buffer, _("transform for %s language %s"),
-								 format_type_be(trfForm->trftype),
-								 get_language_name(trfForm->trflang, false));
-
-				ReleaseSysCache(trfTup);
-				break;
-			}
-
 		case OCLASS_TRIGGER:
 			{
 				Relation	trigDesc;
@@ -3069,6 +3063,26 @@ getObjectDescription(const ObjectAddress *object)
 					elog(ERROR, "cache lookup failed for namespace %u",
 						 object->objectId);
 				appendStringInfo(&buffer, _("schema %s"), nspname);
+				break;
+			}
+
+		case OCLASS_STATISTIC_EXT:
+			{
+				HeapTuple	stxTup;
+				Form_pg_statistic_ext stxForm;
+
+				stxTup = SearchSysCache1(STATEXTOID,
+										 ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(stxTup))
+					elog(ERROR, "could not find tuple for statistics object %u",
+						 object->objectId);
+
+				stxForm = (Form_pg_statistic_ext) GETSTRUCT(stxTup);
+
+				appendStringInfo(&buffer, _("statistics object %s"),
+								 NameStr(stxForm->stxname));
+
+				ReleaseSysCache(stxTup);
 				break;
 			}
 
@@ -3345,21 +3359,6 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
-		case OCLASS_AM:
-			{
-				HeapTuple	tup;
-
-				tup = SearchSysCache1(AMOID,
-									  ObjectIdGetDatum(object->objectId));
-				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "cache lookup failed for access method %u",
-						 object->objectId);
-				appendStringInfo(&buffer, _("access method %s"),
-							 NameStr(((Form_pg_am) GETSTRUCT(tup))->amname));
-				ReleaseSysCache(tup);
-				break;
-			}
-
 		case OCLASS_PUBLICATION:
 			{
 				appendStringInfo(&buffer, _("publication %s"),
@@ -3371,7 +3370,7 @@ getObjectDescription(const ObjectAddress *object)
 			{
 				HeapTuple	tup;
 				char	   *pubname;
-				Form_pg_publication_rel	prform;
+				Form_pg_publication_rel prform;
 
 				tup = SearchSysCache1(PUBLICATIONREL,
 									  ObjectIdGetDatum(object->objectId));
@@ -3395,12 +3394,31 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
-		default:
-			appendStringInfo(&buffer, "unrecognized object %u %u %d",
-							 object->classId,
-							 object->objectId,
-							 object->objectSubId);
-			break;
+		case OCLASS_TRANSFORM:
+			{
+				HeapTuple	trfTup;
+				Form_pg_transform trfForm;
+
+				trfTup = SearchSysCache1(TRFOID,
+										 ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(trfTup))
+					elog(ERROR, "could not find tuple for transform %u",
+						 object->objectId);
+
+				trfForm = (Form_pg_transform) GETSTRUCT(trfTup);
+
+				appendStringInfo(&buffer, _("transform for %s language %s"),
+								 format_type_be(trfForm->trftype),
+								 get_language_name(trfForm->trflang, false));
+
+				ReleaseSysCache(trfTup);
+				break;
+			}
+
+			/*
+			 * There's intentionally no default: case here; we want the
+			 * compiler to warn if a new OCLASS hasn't been handled above.
+			 */
 	}
 
 	return buffer.data;
@@ -3797,6 +3815,10 @@ getObjectTypeDescription(const ObjectAddress *object)
 			appendStringInfoString(&buffer, "operator family");
 			break;
 
+		case OCLASS_AM:
+			appendStringInfoString(&buffer, "access method");
+			break;
+
 		case OCLASS_AMOP:
 			appendStringInfoString(&buffer, "operator of access method");
 			break;
@@ -3815,6 +3837,10 @@ getObjectTypeDescription(const ObjectAddress *object)
 
 		case OCLASS_SCHEMA:
 			appendStringInfoString(&buffer, "schema");
+			break;
+
+		case OCLASS_STATISTIC_EXT:
+			appendStringInfoString(&buffer, "statistics object");
 			break;
 
 		case OCLASS_TSPARSER:
@@ -3873,14 +3899,6 @@ getObjectTypeDescription(const ObjectAddress *object)
 			appendStringInfoString(&buffer, "policy");
 			break;
 
-		case OCLASS_TRANSFORM:
-			appendStringInfoString(&buffer, "transform");
-			break;
-
-		case OCLASS_AM:
-			appendStringInfoString(&buffer, "access method");
-			break;
-
 		case OCLASS_PUBLICATION:
 			appendStringInfoString(&buffer, "publication");
 			break;
@@ -3893,13 +3911,14 @@ getObjectTypeDescription(const ObjectAddress *object)
 			appendStringInfoString(&buffer, "subscription");
 			break;
 
-		case OCLASS_STATISTIC_EXT:
-			appendStringInfoString(&buffer, "statistics");
+		case OCLASS_TRANSFORM:
+			appendStringInfoString(&buffer, "transform");
 			break;
 
-		default:
-			appendStringInfo(&buffer, "unrecognized %u", object->classId);
-			break;
+			/*
+			 * There's intentionally no default: case here; we want the
+			 * compiler to warn if a new OCLASS hasn't been handled above.
+			 */
 	}
 
 	return buffer.data;
@@ -4315,6 +4334,20 @@ getObjectIdentityParts(const ObjectAddress *object,
 			getOpFamilyIdentity(&buffer, object->objectId, objname);
 			break;
 
+		case OCLASS_AM:
+			{
+				char	   *amname;
+
+				amname = get_am_name(object->objectId);
+				if (!amname)
+					elog(ERROR, "cache lookup failed for access method %u",
+						 object->objectId);
+				appendStringInfoString(&buffer, quote_identifier(amname));
+				if (objname)
+					*objname = list_make1(amname);
+			}
+			break;
+
 		case OCLASS_AMOP:
 			{
 				Relation	amopDesc;
@@ -4475,32 +4508,6 @@ getObjectIdentityParts(const ObjectAddress *object,
 				break;
 			}
 
-		case OCLASS_POLICY:
-			{
-				Relation	polDesc;
-				HeapTuple	tup;
-				Form_pg_policy policy;
-
-				polDesc = heap_open(PolicyRelationId, AccessShareLock);
-
-				tup = get_catalog_object_by_oid(polDesc, object->objectId);
-
-				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "could not find tuple for policy %u",
-						 object->objectId);
-
-				policy = (Form_pg_policy) GETSTRUCT(tup);
-
-				appendStringInfo(&buffer, "%s on ",
-								 quote_identifier(NameStr(policy->polname)));
-				getRelationIdentity(&buffer, policy->polrelid, objname);
-				if (objname)
-					*objname = lappend(*objname, pstrdup(NameStr(policy->polname)));
-
-				heap_close(polDesc, AccessShareLock);
-				break;
-			}
-
 		case OCLASS_SCHEMA:
 			{
 				char	   *nspname;
@@ -4515,6 +4522,29 @@ getObjectIdentityParts(const ObjectAddress *object,
 					*objname = list_make1(nspname);
 				break;
 			}
+
+		case OCLASS_STATISTIC_EXT:
+			{
+				HeapTuple	tup;
+				Form_pg_statistic_ext formStatistic;
+				char	   *schema;
+
+				tup = SearchSysCache1(STATEXTOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+					elog(ERROR, "cache lookup failed for statistics object %u",
+						 object->objectId);
+				formStatistic = (Form_pg_statistic_ext) GETSTRUCT(tup);
+				schema = get_namespace_name_or_temp(formStatistic->stxnamespace);
+				appendStringInfoString(&buffer,
+									   quote_qualified_identifier(schema,
+										   NameStr(formStatistic->stxname)));
+				if (objname)
+					*objname = list_make2(schema,
+								   pstrdup(NameStr(formStatistic->stxname)));
+				ReleaseSysCache(tup);
+			}
+			break;
 
 		case OCLASS_TSPARSER:
 			{
@@ -4824,53 +4854,31 @@ getObjectIdentityParts(const ObjectAddress *object,
 				break;
 			}
 
-		case OCLASS_TRANSFORM:
+		case OCLASS_POLICY:
 			{
-				Relation	transformDesc;
+				Relation	polDesc;
 				HeapTuple	tup;
-				Form_pg_transform transform;
-				char	   *transformLang;
-				char	   *transformType;
+				Form_pg_policy policy;
 
-				transformDesc = heap_open(TransformRelationId, AccessShareLock);
+				polDesc = heap_open(PolicyRelationId, AccessShareLock);
 
-				tup = get_catalog_object_by_oid(transformDesc, object->objectId);
+				tup = get_catalog_object_by_oid(polDesc, object->objectId);
 
 				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "could not find tuple for transform %u",
+					elog(ERROR, "could not find tuple for policy %u",
 						 object->objectId);
 
-				transform = (Form_pg_transform) GETSTRUCT(tup);
+				policy = (Form_pg_policy) GETSTRUCT(tup);
 
-				transformType = format_type_be_qualified(transform->trftype);
-				transformLang = get_language_name(transform->trflang, false);
-
-				appendStringInfo(&buffer, "for %s on language %s",
-								 transformType,
-								 transformLang);
+				appendStringInfo(&buffer, "%s on ",
+								 quote_identifier(NameStr(policy->polname)));
+				getRelationIdentity(&buffer, policy->polrelid, objname);
 				if (objname)
-				{
-					*objname = list_make1(transformType);
-					*objargs = list_make1(pstrdup(transformLang));
-				}
+					*objname = lappend(*objname, pstrdup(NameStr(policy->polname)));
 
-				heap_close(transformDesc, AccessShareLock);
+				heap_close(polDesc, AccessShareLock);
+				break;
 			}
-			break;
-
-		case OCLASS_AM:
-			{
-				char	   *amname;
-
-				amname = get_am_name(object->objectId);
-				if (!amname)
-					elog(ERROR, "cache lookup failed for access method %u",
-						 object->objectId);
-				appendStringInfoString(&buffer, quote_identifier(amname));
-				if (objname)
-					*objname = list_make1(amname);
-			}
-			break;
 
 		case OCLASS_PUBLICATION:
 			{
@@ -4888,7 +4896,7 @@ getObjectIdentityParts(const ObjectAddress *object,
 			{
 				HeapTuple	tup;
 				char	   *pubname;
-				Form_pg_publication_rel	prform;
+				Form_pg_publication_rel prform;
 
 				tup = SearchSysCache1(PUBLICATIONREL,
 									  ObjectIdGetDatum(object->objectId));
@@ -4924,35 +4932,44 @@ getObjectIdentityParts(const ObjectAddress *object,
 				break;
 			}
 
-		case OCLASS_STATISTIC_EXT:
+		case OCLASS_TRANSFORM:
 			{
+				Relation	transformDesc;
 				HeapTuple	tup;
-				Form_pg_statistic_ext formStatistic;
-				char	   *schema;
+				Form_pg_transform transform;
+				char	   *transformLang;
+				char	   *transformType;
 
-				tup = SearchSysCache1(STATEXTOID,
-									  ObjectIdGetDatum(object->objectId));
+				transformDesc = heap_open(TransformRelationId, AccessShareLock);
+
+				tup = get_catalog_object_by_oid(transformDesc, object->objectId);
+
 				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "cache lookup failed for statistics %u",
+					elog(ERROR, "could not find tuple for transform %u",
 						 object->objectId);
-				formStatistic = (Form_pg_statistic_ext) GETSTRUCT(tup);
-				schema = get_namespace_name_or_temp(formStatistic->stxnamespace);
-				appendStringInfoString(&buffer,
-									   quote_qualified_identifier(schema,
-										   NameStr(formStatistic->stxname)));
+
+				transform = (Form_pg_transform) GETSTRUCT(tup);
+
+				transformType = format_type_be_qualified(transform->trftype);
+				transformLang = get_language_name(transform->trflang, false);
+
+				appendStringInfo(&buffer, "for %s on language %s",
+								 transformType,
+								 transformLang);
 				if (objname)
-					*objname = list_make2(schema,
-								   pstrdup(NameStr(formStatistic->stxname)));
-				ReleaseSysCache(tup);
+				{
+					*objname = list_make1(transformType);
+					*objargs = list_make1(pstrdup(transformLang));
+				}
+
+				heap_close(transformDesc, AccessShareLock);
 			}
 			break;
 
-		default:
-			appendStringInfo(&buffer, "unrecognized object %u %u %d",
-							 object->classId,
-							 object->objectId,
-							 object->objectSubId);
-			break;
+			/*
+			 * There's intentionally no default: case here; we want the
+			 * compiler to warn if a new OCLASS hasn't been handled above.
+			 */
 	}
 
 	/*
@@ -4995,8 +5012,8 @@ getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **object)
 
 	if (object)
 		*object = list_make3(pstrdup(NameStr(amForm->amname)),
-							  pstrdup(schema),
-							  pstrdup(NameStr(opfForm->opfname)));
+							 pstrdup(schema),
+							 pstrdup(NameStr(opfForm->opfname)));
 
 	ReleaseSysCache(amTup);
 	ReleaseSysCache(opfTup);

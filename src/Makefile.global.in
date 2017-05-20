@@ -339,8 +339,8 @@ PROVE = @PROVE@
 # There are common routines in src/test/perl, and some test suites have
 # extra perl modules in their own directory.
 PG_PROVE_FLAGS = -I $(top_srcdir)/src/test/perl/ -I $(srcdir)
-# For more info, add to your make line: PROVE_FLAGS='--verbose'
-PROVE_FLAGS =
+# User-supplied prove flags such as --verbose can be provided in PROVE_FLAGS.
+
 
 # prepend to path if already set, else just set it
 define add_to_path
@@ -573,7 +573,7 @@ pg_isolation_regress_check = \
     $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
 pg_isolation_regress_installcheck = \
     $(top_builddir)/src/test/isolation/pg_isolation_regress \
-    --inputdir=$(srcdir) \
+    --inputdir=$(srcdir) --outputdir=output_iso \
     --bindir='$(bindir)' \
     $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
 

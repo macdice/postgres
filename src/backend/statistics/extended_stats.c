@@ -3,7 +3,7 @@
  * extended_stats.c
  *	  POSTGRES extended statistics
  *
- * Generic code supporting statistic objects created via CREATE STATISTICS.
+ * Generic code supporting statistics objects created via CREATE STATISTICS.
  *
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
@@ -35,15 +35,16 @@
 
 
 /*
- * Used internally to refer to an individual pg_statistic_ext entry.
+ * Used internally to refer to an individual statistics object, i.e.,
+ * a pg_statistic_ext entry.
  */
 typedef struct StatExtEntry
 {
-	Oid			statOid;	/* OID of pg_statistic_ext entry */
-	char	   *schema;		/* statistics schema */
-	char	   *name;		/* statistics name */
-	Bitmapset  *columns;	/* attribute numbers covered by the statistics */
-	List	   *types;		/* 'char' list of enabled statistic kinds */
+	Oid			statOid;		/* OID of pg_statistic_ext entry */
+	char	   *schema;			/* statistics object's schema */
+	char	   *name;			/* statistics object's name */
+	Bitmapset  *columns;		/* attribute numbers covered by the object */
+	List	   *types;			/* 'char' list of enabled statistic kinds */
 } StatExtEntry;
 
 
@@ -59,8 +60,8 @@ static void statext_store(Relation pg_stext, Oid relid,
  * Compute requested extended stats, using the rows sampled for the plain
  * (single-column) stats.
  *
- * This fetches a list of stats from pg_statistic_ext, computes the stats
- * and serializes them back into the catalog (as bytea values).
+ * This fetches a list of stats types from pg_statistic_ext, computes the
+ * requested stats, and serializes them back into the catalog.
  */
 void
 BuildRelationExtStatistics(Relation onerel, double totalrows,
@@ -82,15 +83,15 @@ BuildRelationExtStatistics(Relation onerel, double totalrows,
 
 	foreach(lc, stats)
 	{
-		StatExtEntry   *stat = (StatExtEntry *) lfirst(lc);
-		MVNDistinct	   *ndistinct = NULL;
+		StatExtEntry *stat = (StatExtEntry *) lfirst(lc);
+		MVNDistinct *ndistinct = NULL;
 		MVDependencies *dependencies = NULL;
-		VacAttrStats  **stats;
-		ListCell	   *lc2;
+		VacAttrStats **stats;
+		ListCell   *lc2;
 
 		/*
-		 * Check if we can build these stats based on the column analyzed.
-		 * If not, report this fact (except in autovacuum) and move on.
+		 * Check if we can build these stats based on the column analyzed. If
+		 * not, report this fact (except in autovacuum) and move on.
 		 */
 		stats = lookup_var_attr_stats(onerel, stat->columns,
 									  natts, vacattrstats);
@@ -98,7 +99,7 @@ BuildRelationExtStatistics(Relation onerel, double totalrows,
 		{
 			ereport(WARNING,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					 errmsg("extended statistics \"%s.%s\" could not be collected for relation %s.%s",
+					 errmsg("statistics object \"%s.%s\" could not be computed for relation \"%s.%s\"",
 							stat->schema, stat->name,
 							get_namespace_name(onerel->rd_rel->relnamespace),
 							RelationGetRelationName(onerel)),
@@ -110,10 +111,10 @@ BuildRelationExtStatistics(Relation onerel, double totalrows,
 		Assert(bms_num_members(stat->columns) >= 2 &&
 			   bms_num_members(stat->columns) <= STATS_MAX_DIMENSIONS);
 
-		/* compute statistic of each type */
+		/* compute statistic of each requested type */
 		foreach(lc2, stat->types)
 		{
-			char	t = (char) lfirst_int(lc2);
+			char		t = (char) lfirst_int(lc2);
 
 			if (t == STATS_EXT_NDISTINCT)
 				ndistinct = statext_ndistinct_build(totalrows, numrows, rows,
@@ -140,7 +141,7 @@ BuildRelationExtStatistics(Relation onerel, double totalrows,
 bool
 statext_is_kind_built(HeapTuple htup, char type)
 {
-	AttrNumber  attnum;
+	AttrNumber	attnum;
 
 	switch (type)
 	{
@@ -160,18 +161,18 @@ statext_is_kind_built(HeapTuple htup, char type)
 }
 
 /*
- * Return a list (of StatExtEntry) of statistics for the given relation.
+ * Return a list (of StatExtEntry) of statistics objects for the given relation.
  */
 static List *
 fetch_statentries_for_relation(Relation pg_statext, Oid relid)
 {
 	SysScanDesc scan;
 	ScanKeyData skey;
-	HeapTuple   htup;
-	List       *result = NIL;
+	HeapTuple	htup;
+	List	   *result = NIL;
 
 	/*
-	 * Prepare to scan pg_statistic_ext for entries having indrelid = this
+	 * Prepare to scan pg_statistic_ext for entries having stxrelid = this
 	 * rel.
 	 */
 	ScanKeyInit(&skey,
@@ -249,7 +250,7 @@ lookup_var_attr_stats(Relation rel, Bitmapset *attrs,
 	/* lookup VacAttrStats info for the requested columns (same attnum) */
 	while ((x = bms_next_member(attrs, x)) >= 0)
 	{
-		int		j;
+		int			j;
 
 		stats[i] = NULL;
 		for (j = 0; j < nvacatts; j++)
@@ -272,10 +273,10 @@ lookup_var_attr_stats(Relation rel, Bitmapset *attrs,
 			return NULL;
 		}
 
-		 /*
-		  * Sanity check that the column is not dropped - stats should have
-		  * been removed in this case.
-		  */
+		/*
+		 * Sanity check that the column is not dropped - stats should have
+		 * been removed in this case.
+		 */
 		Assert(!stats[i]->attr->attisdropped);
 
 		i++;
@@ -329,7 +330,7 @@ statext_store(Relation pg_stext, Oid statOid,
 	/* there should already be a pg_statistic_ext tuple */
 	oldtup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statOid));
 	if (!HeapTupleIsValid(oldtup))
-		elog(ERROR, "cache lookup failed for extended statistics %u", statOid);
+		elog(ERROR, "cache lookup failed for statistics object %u", statOid);
 
 	/* replace it */
 	stup = heap_modify_tuple(oldtup,
@@ -366,7 +367,7 @@ multi_sort_init(int ndims)
 void
 multi_sort_add_dimension(MultiSortSupport mss, int sortdim, Oid oper)
 {
-	SortSupport		ssup = &mss->ssup[sortdim];
+	SortSupport ssup = &mss->ssup[sortdim];
 
 	ssup->ssup_cxt = CurrentMemoryContext;
 	ssup->ssup_collation = DEFAULT_COLLATION_OID;
@@ -433,7 +434,7 @@ multi_sort_compare_dims(int start, int end,
 
 /*
  * has_stats_of_kind
- *		Check that the list contains statistic of a given kind
+ *		Check whether the list contains statistic of a given kind
  */
 bool
 has_stats_of_kind(List *stats, char requiredkind)
@@ -458,11 +459,12 @@ has_stats_of_kind(List *stats, char requiredkind)
  *		there's no match.
  *
  * The current selection criteria is very simple - we choose the statistics
- * referencing the most attributes with the least keys.
+ * object referencing the most of the requested attributes, breaking ties
+ * in favor of objects with fewer keys overall.
  *
- * XXX if multiple statistics exists of the same size matching the same number
- * of keys, then the statistics which are chosen depend on the order that they
- * appear in the stats list. Perhaps this needs to be more definitive.
+ * XXX if multiple statistics objects tie on both criteria, then which object
+ * is chosen depends on the order that they appear in the stats list. Perhaps
+ * further tiebreakers are needed.
  */
 StatisticExtInfo *
 choose_best_statistics(List *stats, Bitmapset *attnums, char requiredkind)
@@ -479,7 +481,7 @@ choose_best_statistics(List *stats, Bitmapset *attnums, char requiredkind)
 		int			numkeys;
 		Bitmapset  *matched;
 
-		/* skip statistics that are not the correct type */
+		/* skip statistics that are not of the correct type */
 		if (info->kind != requiredkind)
 			continue;
 
@@ -495,9 +497,9 @@ choose_best_statistics(List *stats, Bitmapset *attnums, char requiredkind)
 		numkeys = bms_num_members(info->keys);
 
 		/*
-		 * Use these statistics when it increases the number of matched
-		 * clauses or when it matches the same number of attributes but these
-		 * stats have fewer keys than any previous match.
+		 * Use this object when it increases the number of matched clauses or
+		 * when it matches the same number of attributes but these stats have
+		 * fewer keys than any previous match.
 		 */
 		if (num_matched > best_num_matched ||
 			(num_matched == best_num_matched && numkeys < best_match_keys))

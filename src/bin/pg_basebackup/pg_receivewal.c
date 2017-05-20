@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * pg_receivewal.c - receive streaming transaction log data and write it
+ * pg_receivewal.c - receive streaming WAL data and write it
  *					  to a local file.
  *
  * Author: Magnus Hagander <magnus@hagander.net>
@@ -59,30 +59,30 @@ static bool stop_streaming(XLogRecPtr segendpos, uint32 timeline,
 	}
 
 /* Routines to evaluate segment file format */
-#define IsCompressXLogFileName(fname)    \
-	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz") &&	\
+#define IsCompressXLogFileName(fname)	 \
+	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz") && \
 	 strspn(fname, "0123456789ABCDEF") == XLOG_FNAME_LEN &&		\
 	 strcmp((fname) + XLOG_FNAME_LEN, ".gz") == 0)
-#define IsPartialCompressXLogFileName(fname)    \
-	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz.partial") &&	\
+#define IsPartialCompressXLogFileName(fname)	\
+	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz.partial") && \
 	 strspn(fname, "0123456789ABCDEF") == XLOG_FNAME_LEN &&		\
 	 strcmp((fname) + XLOG_FNAME_LEN, ".gz.partial") == 0)
 
 static void
 usage(void)
 {
-	printf(_("%s receives PostgreSQL streaming transaction logs.\n\n"),
+	printf(_("%s receives PostgreSQL streaming write-ahead logs.\n\n"),
 		   progname);
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]...\n"), progname);
 	printf(_("\nOptions:\n"));
-	printf(_("  -D, --directory=DIR    receive transaction log files into this directory\n"));
+	printf(_("  -D, --directory=DIR    receive write-ahead log files into this directory\n"));
 	printf(_("      --if-not-exists    do not error if slot already exists when creating a slot\n"));
 	printf(_("  -n, --no-loop          do not loop on connection lost\n"));
 	printf(_("  -s, --status-interval=SECS\n"
 			 "                         time between status packets sent to server (default: %d)\n"), (standby_message_timeout / 1000));
 	printf(_("  -S, --slot=SLOTNAME    replication slot to use\n"));
-	printf(_("      --synchronous      flush transaction log immediately after writing\n"));
+	printf(_("      --synchronous      flush write-ahead log immediately after writing\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -Z, --compress=0-9     compress logs with given compression level\n"));
@@ -234,12 +234,12 @@ FindStreamingStart(uint32 *tli)
 		/*
 		 * Check that the segment has the right size, if it's supposed to be
 		 * completed.  For non-compressed segments just check the on-disk size
-		 * and see if it matches a completed segment.
-		 * For compressed segments, look at the last 4 bytes of the compressed
-		 * file, which is where the uncompressed size is located for gz files
-		 * with a size lower than 4GB, and then compare it to the size of a
-		 * completed segment. The 4 last bytes correspond to the ISIZE member
-		 * according to http://www.zlib.org/rfc-gzip.html.
+		 * and see if it matches a completed segment. For compressed segments,
+		 * look at the last 4 bytes of the compressed file, which is where the
+		 * uncompressed size is located for gz files with a size lower than
+		 * 4GB, and then compare it to the size of a completed segment. The 4
+		 * last bytes correspond to the ISIZE member according to
+		 * http://www.zlib.org/rfc-gzip.html.
 		 */
 		if (!ispartial && !iscompress)
 		{
@@ -264,10 +264,10 @@ FindStreamingStart(uint32 *tli)
 		}
 		else if (!ispartial && iscompress)
 		{
-			int		fd;
-			char	buf[4];
-			int		bytes_out;
-			char	fullpath[MAXPGPATH * 2];
+			int			fd;
+			char		buf[4];
+			int			bytes_out;
+			char		fullpath[MAXPGPATH * 2];
 
 			snprintf(fullpath, sizeof(fullpath), "%s/%s", basedir, dirent->d_name);
 
@@ -278,7 +278,7 @@ FindStreamingStart(uint32 *tli)
 						progname, fullpath, strerror(errno));
 				disconnect_and_exit(1);
 			}
-			if (lseek(fd, (off_t)(-4), SEEK_END) < 0)
+			if (lseek(fd, (off_t) (-4), SEEK_END) < 0)
 			{
 				fprintf(stderr, _("%s: could not seek compressed file \"%s\": %s\n"),
 						progname, fullpath, strerror(errno));
@@ -293,7 +293,7 @@ FindStreamingStart(uint32 *tli)
 
 			close(fd);
 			bytes_out = (buf[3] << 24) | (buf[2] << 16) |
-						(buf[1] << 8) | buf[0];
+				(buf[1] << 8) | buf[0];
 
 			if (bytes_out != XLOG_SEG_SIZE)
 			{
@@ -409,6 +409,7 @@ StreamLog(void)
 				stream.timeline);
 
 	stream.stream_stop = stop_streaming;
+	stream.stop_socket = PGINVALID_SOCKET;
 	stream.standby_message_timeout = standby_message_timeout;
 	stream.synchronous = synchronous;
 	stream.do_sync = true;

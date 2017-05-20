@@ -12,8 +12,8 @@
 #ifndef LOGICALLAUNCHER_H
 #define LOGICALLAUNCHER_H
 
-extern int max_logical_replication_workers;
-extern int max_sync_workers_per_subscription;
+extern int	max_logical_replication_workers;
+extern int	max_sync_workers_per_subscription;
 
 extern void ApplyLauncherRegister(void);
 extern void ApplyLauncherMain(Datum main_arg);
@@ -22,6 +22,6 @@ extern Size ApplyLauncherShmemSize(void);
 extern void ApplyLauncherShmemInit(void);
 
 extern void ApplyLauncherWakeupAtCommit(void);
-extern void AtCommit_ApplyLauncher(void);
+extern void AtEOXact_ApplyLauncher(bool isCommit);
 
 #endif   /* LOGICALLAUNCHER_H */

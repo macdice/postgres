@@ -115,7 +115,7 @@ TransactionId *ParallelCurrentXids;
  * globally accessible, so can be set from anywhere in the code that requires
  * recording flags.
  */
-int  MyXactFlags;
+int			MyXactFlags;
 
 /*
  *	transaction states - transaction state from server perspective
@@ -559,7 +559,7 @@ AssignTransactionId(TransactionState s)
 		XactTopTransactionId = s->transactionId;
 
 	if (isSubXact)
-		SubTransSetParent(s->transactionId, s->parent->transactionId, false);
+		SubTransSetParent(s->transactionId, s->parent->transactionId);
 
 	/*
 	 * If it's a top-level transaction, the predicate locking system needs to
@@ -2138,7 +2138,7 @@ CommitTransaction(void)
 	AtEOXact_HashTables(true);
 	AtEOXact_PgStat(true);
 	AtEOXact_Snapshot(true, false);
-	AtCommit_ApplyLauncher();
+	AtEOXact_ApplyLauncher(true);
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2612,6 +2612,7 @@ AbortTransaction(void)
 		AtEOXact_ComboCid();
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false);
+		AtEOXact_ApplyLauncher(false);
 		pgstat_report_xact_timestamp(0);
 	}
 
@@ -2640,7 +2641,8 @@ CleanupTransaction(void)
 	 * do abort cleanup processing
 	 */
 	AtCleanup_Portals();		/* now safe to release portal memory */
-	AtEOXact_Snapshot(false, true); /* and release the transaction's snapshots */
+	AtEOXact_Snapshot(false, true);		/* and release the transaction's
+										 * snapshots */
 
 	CurrentResourceOwner = NULL;	/* and resource owner */
 	if (TopTransactionResourceOwner)
@@ -5645,8 +5647,8 @@ xact_redo(XLogReaderState *record)
 	else if (info == XLOG_XACT_PREPARE)
 	{
 		/*
-		 * Store xid and start/end pointers of the WAL record in
-		 * TwoPhaseState gxact entry.
+		 * Store xid and start/end pointers of the WAL record in TwoPhaseState
+		 * gxact entry.
 		 */
 		PrepareRedoAdd(XLogRecGetData(record),
 					   record->ReadRecPtr,
