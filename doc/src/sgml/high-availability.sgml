@@ -138,7 +138,7 @@ protocol to make nodes agree on a serializable transactional order.
   </varlistentry>
 
   <varlistentry>
-   <term>Transaction Log Shipping</term>
+   <term>Write-Ahead Log Shipping</term>
    <listitem>
 
     <para>
@@ -289,7 +289,7 @@ protocol to make nodes agree on a serializable transactional order.
      <entry>Feature</entry>
      <entry>Shared Disk Failover</entry>
      <entry>File System Replication</entry>
-     <entry>Transaction Log Shipping</entry>
+     <entry>Write-Ahead Log Shipping</entry>
      <entry>Trigger-Based Master-Standby Replication</entry>
      <entry>Statement-Based Replication Middleware</entry>
      <entry>Asynchronous Multimaster Replication</entry>
@@ -850,9 +850,9 @@ primary_conninfo = 'host=192.168.1.50 port=5432 user=foo password=foopass'
      of WAL records generated in the primary, but not yet applied in the
      standby. You can calculate this lag by comparing the current WAL write
      location on the primary with the last WAL location received by the
-     standby. They can be retrieved using
-     <function>pg_current_wal_location</> on the primary and the
-     <function>pg_last_wal_receive_location</> on the standby,
+     standby. These locations can be retrieved using
+     <function>pg_current_wal_lsn</> on the primary and
+     <function>pg_last_wal_receive_lsn</> on the standby,
      respectively (see <xref linkend="functions-admin-backup-table"> and
      <xref linkend="functions-recovery-info-table"> for details).
      The last WAL receive location in the standby is also displayed in the
@@ -863,10 +863,10 @@ primary_conninfo = 'host=192.168.1.50 port=5432 user=foo password=foopass'
      You can retrieve a list of WAL sender processes via the
      <link linkend="monitoring-stats-views-table">
      <literal>pg_stat_replication</></link> view. Large differences between
-     <function>pg_current_wal_location</> and <literal>sent_location</> field
+     <function>pg_current_wal_lsn</> and the view's <literal>sent_lsn</> field
      might indicate that the master server is under heavy load, while
-     differences between <literal>sent_location</> and
-     <function>pg_last_wal_receive_location</> on the standby might indicate
+     differences between <literal>sent_lsn</> and
+     <function>pg_last_wal_receive_lsn</> on the standby might indicate
      network delay, or that the standby is under heavy load.
     </para>
    </sect3>
@@ -927,8 +927,8 @@ primary_conninfo = 'host=192.168.1.50 port=5432 user=foo password=foopass'
      You can create a replication slot like this:
 <programlisting>
 postgres=# SELECT * FROM pg_create_physical_replication_slot('node_a_slot');
-  slot_name  | wal_position
--------------+---------------
+  slot_name  | lsn
+-------------+-----
  node_a_slot |
 
 postgres=# SELECT * FROM pg_replication_slots;
@@ -1036,7 +1036,7 @@ primary_slot_name = 'node_a_slot'
    <para>
     When requesting synchronous replication, each commit of a
     write transaction will wait until confirmation is
-    received that the commit has been written to the transaction log on disk
+    received that the commit has been written to the write-ahead log on disk
     of both the primary and standby server. The only possibility that data
     can be lost is if both the primary and the standby suffer crashes at the
     same time. This can provide a much higher level of durability, though only
@@ -2057,8 +2057,8 @@ if (!triggered)
    <title>Administrator's Overview</title>
 
    <para>
-    If <varname>hot_standby</> is turned <literal>on</> in
-    <filename>postgresql.conf</> and there is a <filename>recovery.conf</>
+    If <varname>hot_standby</> is <literal>on</> in <filename>postgresql.conf</>
+    (the default value) and there is a <filename>recovery.conf</>
     file present, the server will run in Hot Standby mode.
     However, it may take some time for Hot Standby connections to be allowed,
     because the server will not accept connections until it has completed

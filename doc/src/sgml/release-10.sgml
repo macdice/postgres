@@ -4,11 +4,10 @@
  <sect1 id="release-10">
   <title>Release 10</title>
 
-  <note>
-   <title>Release Date</title>
-   <simpara>2017-09-XX</simpara>
-   <simpara>CURRENT AS OF 2017-04-22</simpara>
-  </note>
+  <formalpara>
+   <title>Release date:</title>
+   <para>2017-09-XX (CURRENT AS OF 2017-05-14)</para>
+  </formalpara>
 
   <sect2>
    <title>Overview</title>
@@ -129,6 +128,17 @@
 
     <listitem>
      <!--
+     Author: Tom Lane <tgl@sss.pgh.pa.us> 2017-05-11 [d10c626de] Rename
+     WAL-related functions and views to use "lsn" not
+     -->
+     <para>
+      Rename <acronym>WAL</>-related functions and views to use <literal>lsn</>
+      instead of <literal>location</> (David Rowley)
+     </para>
+    </listitem>
+
+    <listitem>
+     <!--
      Author: Andres Freund <andres@anarazel.de>
      2017-01-18 [69f4b9c85] Move targetlist SRF handling from expression evaluation 
      Author: Tom Lane <tgl@sss.pgh.pa.us>
@@ -179,6 +189,28 @@
     <para>
      Previously some <application>pg_ctl</> actions didn't wait for
      completion, and required the use of <option>-w</> to do so.
+    </para>
+    </listitem>
+
+    <listitem>
+     <!--
+     Author: Heikki Linnakangas <heikki.linnakangas@iki.fi>
+     2017-05-08 [eb61136dc] Remove support for password_encryption='off' / 'plain'.
+     -->
+    <para>
+     Remove the ability to store unencrypted passwords on the server
+     (Heikki Linnakangas)
+    </para>
+
+    <para>
+     The server-side variable <xref linkend="guc-password-encryption">
+     no longer supports <literal>off</> or <literal>plain</>.
+     The <literal>UNENCRYPTED</> option is no longer supported for
+     <command>CREATE/ALTER USER ... PASSSWORD</>.  Similarly, the
+     <option>--unencrypted</> has been removed from <command>createuser</>.
+     The default for <option>password_encryption</> is still
+     <literal>md5</>, and users migrating passwords from older systems
+     will have them stored encrypted by default in this release.
     </para>
     </listitem>
 
@@ -419,6 +451,16 @@
       <listitem>
        <!--
        Author: Robert Haas <rhaas@postgresql.org>
+       2017-02-14 [5e6d8d2bb] Allow parallel workers to execute subplans.
+       -->
+       <para>
+        Allow non-correlated subqueries to be run in parallel (Amit Kapila)
+       </para>
+      </listitem>
+
+      <listitem>
+       <!--
+       Author: Robert Haas <rhaas@postgresql.org>
        2017-03-09 [355d3993c] Add a Gather Merge executor node.
        -->
        <para>
@@ -448,13 +490,13 @@
        <para>
         Add <acronym>GUC</> <xref linkend="guc-max-parallel-workers">
         to limit the number of worker processes that can be used for
-        parallelism (Julien Rouhaud)
+        query parallelism (Julien Rouhaud)
        </para>
 
        <para>
         This can be set lower than <xref
         linkend="guc-max-worker-processes"> to reserve worker processes
-        for non-parallel purposes.
+        for purposes other than parallel queries.
        </para>
       </listitem>
 
@@ -466,22 +508,6 @@
      <title>Indexes</title>
 
      <itemizedlist>
-
-      <listitem>
-       <!--
-       Author: Andrew Dunstan <andrew@dunslane.net>
-       2017-03-31 [e306df7f9] Full Text Search support for <type>JSON</> and <type>JSONB</>
-       -->
-       <para>
-        Add full text search support for <type>JSON</> and <type>JSONB</>
-        (Dmitry Dolgov)
-       </para>
-
-       <para>
-        This is accessed via <function>ts_headline()</> and
-        <function>to_tsvector</>. RIGHT SECTION?
-       </para>
-      </listitem>
 
       <listitem>
        <!--
@@ -515,12 +541,14 @@
        2017-04-01 [7526e1022] BRIN auto-summarization
        -->
        <para>
-        Cause <acronym>BRIN</> index summarization to happen more
-        aggressively (&Aacute;lvaro Herrera)
+        Add option to allow <acronym>BRIN</> index summarization to happen
+        more aggressively (&Aacute;lvaro Herrera)
        </para>
 
        <para>
-        Specifically, summarize the previous page range when a new page
+        Specifically, a new <link linkend="SQL-ALTERINDEX"><command>CREATE
+        INDEX</></> option allows auto-summarizion of the
+        previous <acronym>BRIN</> page range when a new page
         range is created.
        </para>
       </listitem>
@@ -531,14 +559,40 @@
        2017-04-01 [c655899ba] BRIN de-summarization
        -->
        <para>
-        Add function <function>brin_desummarize_range()</> to remove
-        <acronym>BRIN</> summarization of a specified range (&Aacute;lvaro
+        Add functions to remove and re-add <acronym>BRIN</>
+        summarization for <acronym>BRIN</> index ranges (&Aacute;lvaro
         Herrera)
        </para>
 
        <para>
-        This allows future <acronym>BRIN</> index summarization to be
-        more compact.  CLARIFY
+        New <acronym>SQL</> function <link
+        linkend="functions-admin-index-table"><function>brin_summarize_range()</></>
+        updates <acronym>BRIN</> index summarization for a specified
+        range and <function>brin_desummarize_range()</> removes it.
+        This is helpful to update summarization of a range that is now
+        smaller due to <command>UPDATE</>s and <command>DELETE</>s.
+       </para>
+      </listitem>
+
+      <listitem>
+       <!--
+       Author: Alvaro Herrera <alvherre@alvh.no-ip.org>
+       2017-04-06 [7e534adcd] Fix BRIN cost estimation
+       -->
+       <para>
+        Improve accuracy in determining if a <acronym>BRIN</> index scan
+        is beneficial (David Rowley, Emre Hasegeli)
+       </para>
+      </listitem>
+
+      <listitem>
+       <!--
+       Author: Tom Lane <tgl@sss.pgh.pa.us>
+       2016-09-09 [b1328d78f] Invent PageIndexTupleOverwrite, and teach BRIN and GiST
+       -->
+       <para>
+        Allow faster <acronym>GiST</> inserts and updates by reusing
+        index space more efficiently (Andrey Borodin)
        </para>
       </listitem>
 
@@ -552,7 +606,11 @@
        <listitem>
         <!--
         Author: Robert Haas <rhaas@postgresql.org>
+        2017-02-27 [30df93f69] hash: Refactor overflow page allocation.
+        Author: Robert Haas <rhaas@postgresql.org>
         2017-03-14 [c11453ce0] hash: Add write-ahead logging support.
+        Author: Robert Haas <rhaas@postgresql.org>
+        2017-02-27 [b0f18cb77] hash: Refactor bucket squeeze code.
         -->
         <para>
          Add write-ahead logging support to hash indexes (Amit Kapila)
@@ -584,10 +642,6 @@
 
        <listitem>
         <!--
-        Author: Robert Haas <rhaas@postgresql.org>
-        2017-02-27 [b0f18cb77] hash: Refactor bucket squeeze code.
-        Author: Robert Haas <rhaas@postgresql.org>
-        2017-02-27 [30df93f69] hash: Refactor overflow page allocation.
         Author: Robert Haas <rhaas@postgresql.org>
         2017-04-03 [ea69a0dea] Expand hash indexes more gradually.
         -->
@@ -665,7 +719,7 @@
        <para>
         The new settings are <xref
         linkend="guc-max-pred-locks-per-relation"> and
-       <varname>max_pred_locks_per_page</>.
+        <xref linkend="guc-max-pred-locks-per-page">.
        </para>
       </listitem>
 
@@ -686,8 +740,9 @@
        2017-04-05 [2686ee1b7] Collect and use multi-column dependency stats
        -->
       <para>
-       Add the ability to compute a correlation ratio and the number of
-       distinct values on several columns (Tomas Vondra, David Rowley)
+       Add multi-column optimizer statistics to compute the correlation
+       ratio and number of distinct values (Tomas Vondra, David Rowley,
+       &Aacute;lvaro Herrera)
       </para>
 
       <para>
@@ -830,19 +885,9 @@
       <listitem>
        <!--
        Author: Peter Eisentraut <peter_e@gmx.net>
-       2016-11-18 [67dc4ccbb] Add pg_sequences view
-       -->
-       <para>
-        Add <link
-        linkend="view-pg-sequences"><structname>pg_sequences</></> view
-        to show all sequences (Peter Eisentraut)
-       </para>
-      </listitem>
-
-      <listitem>
-       <!--
-       Author: Peter Eisentraut <peter_e@gmx.net>
        2016-12-20 [1753b1b02] Add pg_sequence system catalog
+       Author: Peter Eisentraut <peter_e@gmx.net>
+       2016-11-18 [67dc4ccbb] Add pg_sequences view
        -->
        <para>
         Create a <link
@@ -851,9 +896,11 @@
        </para>
 
        <para>
-        Sequence metadata includes start, increment, etc, which is now
-        transactional.  Sequence counters are still stored in separate
-        heap relations.
+        Sequence metadata includes start, increment, etc,
+        which is now transactional.  Sequence counters are
+        still stored in separate heap relations.  Also add <link
+        linkend="view-pg-sequences"><structname>pg_sequences</></> view
+        to show all sequences.
        </para>
       </listitem>
 
@@ -869,8 +916,8 @@
        </para>
 
        <para>
-        By default planning and execution time are display by
-        <command>EXPLAIN ANALYZE</> and are not display in other cases.
+        By default planning and execution time are displayed by
+        <command>EXPLAIN ANALYZE</> and are not displayed in other cases.
         The new <command>EXPLAIN</> option <literal>SUMMARY</> allows
         explicit control of this.
        </para>
@@ -1134,7 +1181,7 @@
       </para>
 
        <para>
-        This proves better security than the existing <literal>md5</>
+        This provides better security than the existing <literal>md5</>
         negotiation and storage method.
        </para>
       </listitem>
@@ -1205,8 +1252,8 @@
        2017-01-04 [6667d9a6d] Re-allow SSL passphrase prompt at server start, but not 
        -->
        <para>
-        Allow <acronym>SSL</> configuration to be updated at
-        <literal>SIGHUP</> (Andreas Karlsson, Tom Lane)
+        Allow <acronym>SSL</> configuration to be updated during
+        configuration reload (Andreas Karlsson, Tom Lane)
        </para>
 
        <para>
@@ -1284,23 +1331,6 @@
        </para>
       </listitem>
 
-      <listitem>
-       <!--
-       Author: Robert Haas <rhaas@postgresql.org>
-       2016-11-21 [a734fd5d1] autovacuum: Drop orphan temp tables more quickly but wit
-       Author: Tom Lane <tgl@sss.pgh.pa.us>
-       2016-11-27 [dafa0848d] Code review for early drop of orphaned temp relations in
-       -->
-       <para>
-        Remove orphaned temporary tables more aggressively (Robert Haas,
-        Tom Lane)
-       </para>
-
-       <para>
-        Previously such tables were removed only when necessary. SECTION?
-       </para>
-      </listitem>
-
      </itemizedlist>
 
      <sect5>
@@ -1343,8 +1373,14 @@
         2017-04-05 [00b6b6feb] Allow \-\-with-wal-segsize=n up to n=1024MB
         -->
         <para>
-         Increase the maximum configurable <acronym>WAL</> size to 1
-         gigabyte (Beena Emerson)
+         Increase the maximum configurable <acronym>WAL</> segment size
+         to one gigabyte (Beena Emerson)
+        </para>
+
+        <para>
+         Larger <acronym>WAL</> segment sizes allows for fewer
+         <xref linkend="guc-archive-command"> invocations and fewer
+         <acronym>WAL</> files to manage.
         </para>
        </listitem>
 
@@ -1405,17 +1441,19 @@
      <listitem>
       <!--
       Author: Magnus Hagander <magnus@hagander.net>
-      2017-01-14 [f6d6d2920] Change default values for backup and replication paramet
+      2017-01-14 [f6d6d2920] Change default values for backup and replication parameters
+      2017-05-02 [34fc6167] Change hot_standby default value to 'on' 
       -->
       <para>
        Reduce configuration necessary to perform streaming backup and
-       replication (Magnus Hagander)
+       replication (Magnus Hagander, Dang Minh Huong)
       </para>
 
       <para>
        Specifically, defaults were changed for <xref
        linkend="guc-wal-level">, <xref linkend="guc-max-wal-senders">,
-       and <xref linkend="guc-max-replication-slots">.
+       <xref linkend="guc-max-replication-slots">, and <xref
+       linkend="guc-hot-standby">.
       </para>
      </listitem>
 
@@ -1535,6 +1573,19 @@
     <title>Queries</title>
 
     <itemizedlist>
+
+     <listitem>
+      <!--
+      Author: Alvaro Herrera <alvherre@alvh.no-ip.org>
+      2017-03-08 [fcec6caaf] Support XMLTABLE query expression
+      -->
+      <para>
+       Add <link
+       linkend="functions-xml-processing-xmltable"><function>XMLTABLE</></>
+       function that converts <type>XML</>-formatted data into a row set
+       (Pavel Stehule, &Aacute;lvaro Herrera)
+      </para>
+     </listitem>
 
      <listitem>
       <!--
@@ -1734,10 +1785,13 @@
       <!--
       Author: Fujii Masao <fujii@postgresql.org>
       2017-03-25 [70adf2fbe] Make VACUUM VERBOSE report the number of skipped frozen 
+      Author: Simon Riggs <simon@2ndQuadrant.com>
+      2017-03-03 [9eb344faf] Allow vacuums to report oldestxmin
       -->
       <para>
-       Have <link linkend="SQL-VACUUM"><command>VACUUM VERBOSE</></>
-       report the number of skipped frozen pages (Masahiko Sawada)
+       Have <link linkend="SQL-VACUUM"><command>VACUUM VERBOSE</></> report
+       the number of skipped frozen pages and oldest xmin (Masahiko
+       Sawada, Simon Riggs)
       </para>
 
       <para>
@@ -1753,7 +1807,7 @@
       -->
       <para>
        Improve speed of <command>VACUUM</>'s removal of trailing empty
-       heap pages (Alvaro Herrera)
+       heap pages (Claudio Freire, &Aacute;lvaro Herrera)
       </para>
 
       <para>
@@ -1785,6 +1839,22 @@
     <title>Data Types</title>
 
     <itemizedlist>
+
+      <listitem>
+       <!--
+       Author: Andrew Dunstan <andrew@dunslane.net>
+       2017-03-31 [e306df7f9] Full Text Search support for <type>JSON</> and <type>JSONB</>
+       -->
+       <para>
+        Add full text search support for <type>JSON</> and <type>JSONB</>
+        (Dmitry Dolgov)
+       </para>
+
+       <para>
+        This is accessed via <function>ts_headline()</> and
+        <function>to_tsvector</>.
+       </para>
+      </listitem>
 
      <listitem>
       <!--
@@ -1830,7 +1900,7 @@
       </para>
 
       <para>
-       This uses the syntax <link linkend="SQL-ALTERTABLE"><command>ALTER
+       This uses the syntax <link linkend="SQL-ALTERTYPE"><command>ALTER
        TYPE ... RENAME VALUE</></>.
       </para>
      </listitem>
@@ -1899,23 +1969,6 @@
       <para>
        Similar to <function>regexp_matches()</>, but only returns results
        from the first match so it is easier use for simple cases.
-      </para>
-     </listitem>
-
-     <listitem>
-      <!--
-      Author: Alvaro Herrera <alvherre@alvh.no-ip.org>
-      2017-03-08 [fcec6caaf] Support XMLTABLE query expression
-      -->
-      <para>
-       Add support for converting <type>XML</>-formatted data into a row
-       set (Pavel Stehule, &Aacute;lvaro Herrera)
-      </para>
-
-      <para>
-       This is done by referencing the new <link
-       linkend="functions-xml-processing-xmltable"><function>XMLTABLE</></>
-       function.
       </para>
      </listitem>
 
@@ -2181,6 +2234,26 @@
 
      <listitem>
       <!--
+      Author: Heikki Linnakangas <heikki.linnakangas@iki.fi>
+      2017-05-03 [8f8b9be51] Add PQencryptPasswordConn function to libpq, use it in p
+      -->
+      <para>
+       Add function <link
+       linkend="libpq-pqencryptpasswordconn"><function>PQencryptPasswordConn()</></>
+       to allow creation of more types of encrypted passwords on the
+       client-side (Michael Paquier, Heikki Linnakangas)
+      </para>
+
+      <para>
+       Previously only <literal>MD5</> passwords could be created using <link
+       linkend="libpq-pqencryptpassword"><function>PQencryptPassword()</></>.
+       This new function can also create <link
+       linkend="auth-pg-hba-conf"><literal>SCRAM-SHA-256</></> passwords.
+      </para>
+     </listitem>
+
+     <listitem>
+      <!--
       Author: Tom Lane <tgl@sss.pgh.pa.us>
       2016-08-16 [a7b5573d6] Remove separate version numbering for ecpg preprocessor.
       -->
@@ -2210,6 +2283,10 @@
        <!--
        Author: Tom Lane <tgl@sss.pgh.pa.us>
        2017-03-30 [e984ef586] Support \if ... \elif ... \else ... \endif in psql scrip
+       Author: Tom Lane <tgl@sss.pgh.pa.us>
+       2017-04-02 [5dbc5da11] Fix behavior of psql's \p to agree with \g, \w, etc.
+       Author: Tom Lane <tgl@sss.pgh.pa.us>
+       2017-04-02 [68dba97a4] Document psql's behavior of recalling the previously exe
        -->
        <para>
         Add conditional branch support to <application>psql</> (Corey
@@ -2286,24 +2363,6 @@
         default value, rather than a zero-length string and undefined.
         Also have \set always display values for <literal>FETCH_COUNT</>,
         <literal>HISTSIZE</>, and <literal>IGNOREEOF</>.
-       </para>
-      </listitem>
-
-      <listitem>
-       <!--
-       Author: Tom Lane <tgl@sss.pgh.pa.us>
-       2017-04-02 [5dbc5da11] Fix behavior of psql's \p to agree with \g, \w, etc.
-       Author: Tom Lane <tgl@sss.pgh.pa.us>
-       2017-04-02 [68dba97a4] Document psql's behavior of recalling the previously exe
-       -->
-       <para>
-        Fix <application>psql</> \p to always print what would be executed
-        by \g or \w (Daniel V&eacute;rit&eacute;)
-       </para>
-
-       <para>
-        Previously \p didn't properly print the reverted-to command after
-        a buffer contents reset.  CLARIFY?
        </para>
       </listitem>
 
@@ -2512,7 +2571,7 @@
        2016-12-21 [ecbdc4c55] Forbid invalid combination of options in pg_basebackup.
        -->
        <para>
-        Allow <application>pg_basebackup</> to stream transaction log in
+        Allow <application>pg_basebackup</> to stream write-ahead log in
         tar mode (Magnus Hagander)
        </para>
 
@@ -2551,7 +2610,7 @@
        </para>
 
        <para>
-        Also add <option>-nosync</> option to disable fsync.
+        Also add <option>--nosync</> option to disable fsync.
        </para>
       </listitem>   
 
@@ -2596,7 +2655,7 @@
        2016-10-19 [0be22457d] pg_ctl: Add long options for -w and -W
        -->
        <para>
-        Add log options for <application>pg_ctl</> wait (<option>--wait</>)
+        Add long options for <application>pg_ctl</> wait (<option>--wait</>)
         and no-wait (<option>--no-wait</>) (Vik Fearing)
        </para>
       </listitem>
@@ -2843,6 +2902,8 @@
       <!--
       Author: Robert Haas <rhaas@postgresql.org>
       2016-10-21 [7012b132d] postgres_fdw: Push down aggregates to remote servers.
+      Author: Peter Eisentraut <peter_e@gmx.net>
+      2017-04-24 [332bec1e6] postgres_fdw: Fix join push down with extensions
       -->
       <para>
        Push aggregates to foreign data wrapper servers, where possible
@@ -2854,7 +2915,8 @@
        from the foreign data wrapper server, and offloads
        aggregate computation from the requesting server.  The <link
        linkend="postgres-fdw"><application>postgres_fdw</></> is able to
-       perform this optimization.
+       perform this optimization.  There are also improvements in
+       pushing down joins involving extensions.
       </para>
      </listitem>
 

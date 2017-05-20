@@ -1448,24 +1448,32 @@ str_numth(char *dest, char *num, int type)
  *****************************************************************************/
 
 #ifdef USE_ICU
+
+typedef int32_t (*ICU_Convert_Func) (UChar *dest, int32_t destCapacity,
+										 const UChar *src, int32_t srcLength,
+												 const char *locale,
+												 UErrorCode *pErrorCode);
+
 static int32_t
-icu_convert_case(int32_t (*func)(UChar *, int32_t, const UChar *, int32_t, const char *, UErrorCode *),
-				 pg_locale_t mylocale, UChar **buff_dest, UChar *buff_source, int32_t len_source)
+icu_convert_case(ICU_Convert_Func func, pg_locale_t mylocale,
+				 UChar **buff_dest, UChar *buff_source, int32_t len_source)
 {
 	UErrorCode	status;
 	int32_t		len_dest;
 
-	len_dest = len_source;  /* try first with same length */
+	len_dest = len_source;		/* try first with same length */
 	*buff_dest = palloc(len_dest * sizeof(**buff_dest));
 	status = U_ZERO_ERROR;
-	len_dest = func(*buff_dest, len_dest, buff_source, len_source, mylocale->info.icu.locale, &status);
+	len_dest = func(*buff_dest, len_dest, buff_source, len_source,
+					mylocale->info.icu.locale, &status);
 	if (status == U_BUFFER_OVERFLOW_ERROR)
 	{
 		/* try again with adjusted length */
-		pfree(buff_dest);
-		buff_dest = palloc(len_dest * sizeof(**buff_dest));
+		pfree(*buff_dest);
+		*buff_dest = palloc(len_dest * sizeof(**buff_dest));
 		status = U_ZERO_ERROR;
-		len_dest = func(*buff_dest, len_dest, buff_source, len_source, mylocale->info.icu.locale, &status);
+		len_dest = func(*buff_dest, len_dest, buff_source, len_source,
+						mylocale->info.icu.locale, &status);
 	}
 	if (U_FAILURE(status))
 		ereport(ERROR,
@@ -1479,9 +1487,11 @@ u_strToTitle_default_BI(UChar *dest, int32_t destCapacity,
 						const char *locale,
 						UErrorCode *pErrorCode)
 {
-	return u_strToTitle(dest, destCapacity, src, srcLength, NULL, locale, pErrorCode);
+	return u_strToTitle(dest, destCapacity, src, srcLength,
+						NULL, locale, pErrorCode);
 }
-#endif
+
+#endif   /* USE_ICU */
 
 /*
  * If the system provides the needed functions for wide-character manipulation
@@ -1548,7 +1558,8 @@ str_tolower(const char *buff, size_t nbytes, Oid collid)
 			UChar	   *buff_conv;
 
 			len_uchar = icu_to_uchar(&buff_uchar, buff, nbytes);
-			len_conv = icu_convert_case(u_strToLower, mylocale, &buff_conv, buff_uchar, len_uchar);
+			len_conv = icu_convert_case(u_strToLower, mylocale,
+										&buff_conv, buff_uchar, len_uchar);
 			icu_from_uchar(&result, buff_conv, len_conv);
 		}
 		else
@@ -1581,7 +1592,10 @@ str_tolower(const char *buff, size_t nbytes, Oid collid)
 						workspace[curr_char] = towlower(workspace[curr_char]);
 				}
 
-				/* Make result large enough; case change might change number of bytes */
+				/*
+				 * Make result large enough; case change might change number
+				 * of bytes
+				 */
 				result_size = curr_char * pg_database_encoding_max_length() + 1;
 				result = palloc(result_size);
 
@@ -1596,11 +1610,11 @@ str_tolower(const char *buff, size_t nbytes, Oid collid)
 				result = pnstrdup(buff, nbytes);
 
 				/*
-				 * Note: we assume that tolower_l() will not be so broken as to need
-				 * an isupper_l() guard test.  When using the default collation, we
-				 * apply the traditional Postgres behavior that forces ASCII-style
-				 * treatment of I/i, but in non-default collations you get exactly
-				 * what the collation says.
+				 * Note: we assume that tolower_l() will not be so broken as
+				 * to need an isupper_l() guard test.  When using the default
+				 * collation, we apply the traditional Postgres behavior that
+				 * forces ASCII-style treatment of I/i, but in non-default
+				 * collations you get exactly what the collation says.
 				 */
 				for (p = result; *p; p++)
 				{
@@ -1661,12 +1675,14 @@ str_toupper(const char *buff, size_t nbytes, Oid collid)
 #ifdef USE_ICU
 		if (mylocale && mylocale->provider == COLLPROVIDER_ICU)
 		{
-			int32_t		len_uchar, len_conv;
+			int32_t		len_uchar,
+						len_conv;
 			UChar	   *buff_uchar;
 			UChar	   *buff_conv;
 
 			len_uchar = icu_to_uchar(&buff_uchar, buff, nbytes);
-			len_conv = icu_convert_case(u_strToUpper, mylocale, &buff_conv, buff_uchar, len_uchar);
+			len_conv = icu_convert_case(u_strToUpper, mylocale,
+										&buff_conv, buff_uchar, len_uchar);
 			icu_from_uchar(&result, buff_conv, len_conv);
 		}
 		else
@@ -1699,7 +1715,10 @@ str_toupper(const char *buff, size_t nbytes, Oid collid)
 						workspace[curr_char] = towupper(workspace[curr_char]);
 				}
 
-				/* Make result large enough; case change might change number of bytes */
+				/*
+				 * Make result large enough; case change might change number
+				 * of bytes
+				 */
 				result_size = curr_char * pg_database_encoding_max_length() + 1;
 				result = palloc(result_size);
 
@@ -1714,11 +1733,11 @@ str_toupper(const char *buff, size_t nbytes, Oid collid)
 				result = pnstrdup(buff, nbytes);
 
 				/*
-				 * Note: we assume that toupper_l() will not be so broken as to need
-				 * an islower_l() guard test.  When using the default collation, we
-				 * apply the traditional Postgres behavior that forces ASCII-style
-				 * treatment of I/i, but in non-default collations you get exactly
-				 * what the collation says.
+				 * Note: we assume that toupper_l() will not be so broken as
+				 * to need an islower_l() guard test.  When using the default
+				 * collation, we apply the traditional Postgres behavior that
+				 * forces ASCII-style treatment of I/i, but in non-default
+				 * collations you get exactly what the collation says.
 				 */
 				for (p = result; *p; p++)
 				{
@@ -1780,12 +1799,14 @@ str_initcap(const char *buff, size_t nbytes, Oid collid)
 #ifdef USE_ICU
 		if (mylocale && mylocale->provider == COLLPROVIDER_ICU)
 		{
-			int32_t		len_uchar, len_conv;
+			int32_t		len_uchar,
+						len_conv;
 			UChar	   *buff_uchar;
 			UChar	   *buff_conv;
 
 			len_uchar = icu_to_uchar(&buff_uchar, buff, nbytes);
-			len_conv = icu_convert_case(u_strToTitle_default_BI, mylocale, &buff_conv, buff_uchar, len_uchar);
+			len_conv = icu_convert_case(u_strToTitle_default_BI, mylocale,
+										&buff_conv, buff_uchar, len_uchar);
 			icu_from_uchar(&result, buff_conv, len_conv);
 		}
 		else
@@ -1830,7 +1851,10 @@ str_initcap(const char *buff, size_t nbytes, Oid collid)
 					}
 				}
 
-				/* Make result large enough; case change might change number of bytes */
+				/*
+				 * Make result large enough; case change might change number
+				 * of bytes
+				 */
 				result_size = curr_char * pg_database_encoding_max_length() + 1;
 				result = palloc(result_size);
 
@@ -1845,11 +1869,11 @@ str_initcap(const char *buff, size_t nbytes, Oid collid)
 				result = pnstrdup(buff, nbytes);
 
 				/*
-				 * Note: we assume that toupper_l()/tolower_l() will not be so broken
-				 * as to need guard tests.  When using the default collation, we apply
-				 * the traditional Postgres behavior that forces ASCII-style treatment
-				 * of I/i, but in non-default collations you get exactly what the
-				 * collation says.
+				 * Note: we assume that toupper_l()/tolower_l() will not be so
+				 * broken as to need guard tests.  When using the default
+				 * collation, we apply the traditional Postgres behavior that
+				 * forces ASCII-style treatment of I/i, but in non-default
+				 * collations you get exactly what the collation says.
 				 */
 				for (p = result; *p; p++)
 				{

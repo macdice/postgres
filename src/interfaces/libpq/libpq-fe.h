@@ -65,8 +65,8 @@ typedef enum
 	CONNECTION_NEEDED,			/* Internal state: connect() needed */
 	CONNECTION_CHECK_WRITABLE,	/* Check if we could make a writable
 								 * connection. */
-	CONNECTION_CONSUME			/* Wait for any pending message and
-								 * consume them. */
+	CONNECTION_CONSUME			/* Wait for any pending message and consume
+								 * them. */
 } ConnStatusType;
 
 typedef enum
@@ -597,6 +597,7 @@ extern int	PQenv2encoding(void);
 /* === in fe-auth.c === */
 
 extern char *PQencryptPassword(const char *passwd, const char *user);
+extern char *PQencryptPasswordConn(PGconn *conn, const char *passwd, const char *user, const char *algorithm);
 
 /* === in encnames.c === */
 

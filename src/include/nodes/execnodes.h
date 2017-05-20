@@ -422,6 +422,16 @@ typedef struct EState
 	int			es_num_result_relations;		/* length of array */
 	ResultRelInfo *es_result_relation_info;		/* currently active array elt */
 
+	/*
+	 * Info about the target partitioned target table root(s) for
+	 * update/delete queries.  They required only to fire any per-statement
+	 * triggers defined on the table.  It exists separately from
+	 * es_result_relations, because partitioned tables don't appear in the
+	 * plan tree for the update/delete cases.
+	 */
+	ResultRelInfo *es_root_result_relations;	/* array of ResultRelInfos */
+	int			es_num_root_result_relations;	/* length of the array */
+
 	/* Stuff used for firing triggers: */
 	List	   *es_trig_target_relations;		/* trigger-only ResultRelInfos */
 	TupleTableSlot *es_trig_tuple_slot; /* for trigger output tuples */
@@ -432,7 +442,7 @@ typedef struct EState
 	ParamListInfo es_param_list_info;	/* values of external params */
 	ParamExecData *es_param_exec_vals;	/* values of internal params */
 
-	QueryEnvironment *es_queryEnv;	/* query environment */
+	QueryEnvironment *es_queryEnv;		/* query environment */
 
 	/* Other working state: */
 	MemoryContext es_query_cxt; /* per-query context in which EState lives */
@@ -475,7 +485,7 @@ typedef struct EState
 	bool	   *es_epqScanDone; /* true if EPQ tuple has been fetched */
 
 	/* The per-query shared memory area to use for parallel execution. */
-	struct dsa_area   *es_query_dsa;
+	struct dsa_area *es_query_dsa;
 } EState;
 
 
@@ -914,6 +924,8 @@ typedef struct ModifyTableState
 	int			mt_nplans;		/* number of plans in the array */
 	int			mt_whichplan;	/* which one is being executed (0..n-1) */
 	ResultRelInfo *resultRelInfo;		/* per-subplan target relations */
+	ResultRelInfo *rootResultRelInfo;	/* root target relation (partitioned
+										 * table root) */
 	List	  **mt_arowmarks;	/* per-subplan ExecAuxRowMark lists */
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
 	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
@@ -926,14 +938,13 @@ typedef struct ModifyTableState
 	TupleTableSlot *mt_conflproj;		/* CONFLICT ... SET ... projection
 										 * target */
 	struct PartitionDispatchData **mt_partition_dispatch_info;
-										/* Tuple-routing support info */
-	int				mt_num_dispatch;	/* Number of entries in the above
-										 * array */
-	int				mt_num_partitions;	/* Number of members in the
-										 * following arrays */
-	ResultRelInfo  *mt_partitions;	/* Per partition result relation */
+	/* Tuple-routing support info */
+	int			mt_num_dispatch;	/* Number of entries in the above array */
+	int			mt_num_partitions;		/* Number of members in the following
+										 * arrays */
+	ResultRelInfo *mt_partitions;		/* Per partition result relation */
 	TupleConversionMap **mt_partition_tupconv_maps;
-									/* Per partition tuple conversion map */
+	/* Per partition tuple conversion map */
 	TupleTableSlot *mt_partition_tuple_slot;
 } ModifyTableState;
 

@@ -38,12 +38,12 @@ typedef struct HeadlineJsonState
 	HeadlineParsedText *prs;
 	TSConfigCacheEntry *cfg;
 	TSParserCacheEntry *prsobj;
-	TSQuery				query;
-	List				*prsoptions;
-	bool				transformed;
+	TSQuery		query;
+	List	   *prsoptions;
+	bool		transformed;
 } HeadlineJsonState;
 
-static text * headline_json_value(void *_state, char *elem_value, int elem_len);
+static text *headline_json_value(void *_state, char *elem_value, int elem_len);
 
 static void
 tt_setup_firstcall(FuncCallContext *funcctx, Oid prsid)
@@ -303,6 +303,7 @@ ts_parse_byname(PG_FUNCTION_ARGS)
 Datum
 ts_headline_byid_opt(PG_FUNCTION_ARGS)
 {
+	Oid			tsconfig = PG_GETARG_OID(0);
 	text	   *in = PG_GETARG_TEXT_PP(1);
 	TSQuery		query = PG_GETARG_TSQUERY(2);
 	text	   *opt = (PG_NARGS() > 3 && PG_GETARG_POINTER(3)) ? PG_GETARG_TEXT_PP(3) : NULL;
@@ -312,7 +313,7 @@ ts_headline_byid_opt(PG_FUNCTION_ARGS)
 	TSConfigCacheEntry *cfg;
 	TSParserCacheEntry *prsobj;
 
-	cfg = lookup_ts_config_cache(PG_GETARG_OID(0));
+	cfg = lookup_ts_config_cache(tsconfig);
 	prsobj = lookup_ts_parser_cache(cfg->prsId);
 
 	if (!OidIsValid(prsobj->headlineOid))
@@ -381,11 +382,12 @@ ts_headline_opt(PG_FUNCTION_ARGS)
 Datum
 ts_headline_jsonb_byid_opt(PG_FUNCTION_ARGS)
 {
-	Jsonb			*out, *jb = PG_GETARG_JSONB(1);
-	TSQuery			query = PG_GETARG_TSQUERY(2);
-	text			*opt = (PG_NARGS() > 3 && PG_GETARG_POINTER(3)) ? PG_GETARG_TEXT_P(3) : NULL;
+	Oid			tsconfig = PG_GETARG_OID(0);
+	Jsonb	   *jb = PG_GETARG_JSONB(1);
+	TSQuery		query = PG_GETARG_TSQUERY(2);
+	text	   *opt = (PG_NARGS() > 3 && PG_GETARG_POINTER(3)) ? PG_GETARG_TEXT_P(3) : NULL;
+	Jsonb	   *out;
 	JsonTransformStringValuesAction action = (JsonTransformStringValuesAction) headline_json_value;
-
 	HeadlineParsedText prs;
 	HeadlineJsonState *state = palloc0(sizeof(HeadlineJsonState));
 
@@ -394,7 +396,7 @@ ts_headline_jsonb_byid_opt(PG_FUNCTION_ARGS)
 	prs.words = (HeadlineWordEntry *) palloc(sizeof(HeadlineWordEntry) * prs.lenwords);
 
 	state->prs = &prs;
-	state->cfg = lookup_ts_config_cache(PG_GETARG_OID(0));
+	state->cfg = lookup_ts_config_cache(tsconfig);
 	state->prsobj = lookup_ts_parser_cache(state->cfg->prsId);
 	state->query = query;
 	if (opt)
@@ -456,10 +458,11 @@ ts_headline_jsonb_opt(PG_FUNCTION_ARGS)
 Datum
 ts_headline_json_byid_opt(PG_FUNCTION_ARGS)
 {
-	text				*json = PG_GETARG_TEXT_P(1);
-	TSQuery				query = PG_GETARG_TSQUERY(2);
-	text				*opt = (PG_NARGS() > 3 && PG_GETARG_POINTER(3)) ? PG_GETARG_TEXT_P(3) : NULL;
-	text				*out;
+	Oid			tsconfig = PG_GETARG_OID(0);
+	text	   *json = PG_GETARG_TEXT_P(1);
+	TSQuery		query = PG_GETARG_TSQUERY(2);
+	text	   *opt = (PG_NARGS() > 3 && PG_GETARG_POINTER(3)) ? PG_GETARG_TEXT_P(3) : NULL;
+	text	   *out;
 	JsonTransformStringValuesAction action = (JsonTransformStringValuesAction) headline_json_value;
 
 	HeadlineParsedText prs;
@@ -470,7 +473,7 @@ ts_headline_json_byid_opt(PG_FUNCTION_ARGS)
 	prs.words = (HeadlineWordEntry *) palloc(sizeof(HeadlineWordEntry) * prs.lenwords);
 
 	state->prs = &prs;
-	state->cfg = lookup_ts_config_cache(PG_GETARG_OID(0));
+	state->cfg = lookup_ts_config_cache(tsconfig);
 	state->prsobj = lookup_ts_parser_cache(state->cfg->prsId);
 	state->query = query;
 	if (opt)
@@ -540,8 +543,8 @@ headline_json_value(void *_state, char *elem_value, int elem_len)
 	HeadlineParsedText *prs = state->prs;
 	TSConfigCacheEntry *cfg = state->cfg;
 	TSParserCacheEntry *prsobj = state->prsobj;
-	TSQuery	query = state->query;
-	List *prsoptions = state->prsoptions;
+	TSQuery		query = state->query;
+	List	   *prsoptions = state->prsoptions;
 
 	prs->curwords = 0;
 	hlparsetext(cfg->cfgId, prs, query, elem_value, elem_len);
