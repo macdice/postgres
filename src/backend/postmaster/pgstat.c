@@ -93,6 +93,9 @@
 #define PGSTAT_POLL_LOOP_COUNT	(PGSTAT_MAX_WAIT_TIME / PGSTAT_RETRY_DELAY)
 #define PGSTAT_INQ_LOOP_COUNT	(PGSTAT_INQ_INTERVAL / PGSTAT_RETRY_DELAY)
 
+/* Minimum receive buffer size for the collector's socket. */
+#define PGSTAT_MIN_RCVBUF		(100 * 1024)
+
 
 /* ----------
  * The initial size hints for the hash tables used in the collector.
@@ -174,12 +177,12 @@ typedef struct TabStatusArray
 static TabStatusArray *pgStatTabList = NULL;
 
 /*
- * pgStatTabHash entry
+ * pgStatTabHash entry: map from relation OID to PgStat_TableStatus pointer
  */
 typedef struct TabStatHashEntry
 {
-	Oid t_id;
-	PgStat_TableStatus* tsa_entry;
+	Oid			t_id;
+	PgStat_TableStatus *tsa_entry;
 } TabStatHashEntry;
 
 /*
@@ -574,6 +577,35 @@ retry2:
 		goto startup_failed;
 	}
 
+	/*
+	 * Try to ensure that the socket's receive buffer is at least
+	 * PGSTAT_MIN_RCVBUF bytes, so that it won't easily overflow and lose
+	 * data.  Use of UDP protocol means that we are willing to lose data under
+	 * heavy load, but we don't want it to happen just because of ridiculously
+	 * small default buffer sizes (such as 8KB on older Windows versions).
+	 */
+	{
+		int			old_rcvbuf;
+		int			new_rcvbuf;
+		ACCEPT_TYPE_ARG3 rcvbufsize = sizeof(old_rcvbuf);
+
+		if (getsockopt(pgStatSock, SOL_SOCKET, SO_RCVBUF,
+					   (char *) &old_rcvbuf, &rcvbufsize) < 0)
+		{
+			elog(LOG, "getsockopt(SO_RCVBUF) failed: %m");
+			/* if we can't get existing size, always try to set it */
+			old_rcvbuf = 0;
+		}
+
+		new_rcvbuf = PGSTAT_MIN_RCVBUF;
+		if (old_rcvbuf < new_rcvbuf)
+		{
+			if (setsockopt(pgStatSock, SOL_SOCKET, SO_RCVBUF,
+						   (char *) &new_rcvbuf, sizeof(new_rcvbuf)) < 0)
+				elog(LOG, "setsockopt(SO_RCVBUF) failed: %m");
+		}
+	}
+
 	pg_freeaddrinfo_all(hints.ai_family, addrs);
 
 	return;
@@ -806,6 +838,17 @@ pgstat_report_stat(bool force)
 	last_report = now;
 
 	/*
+	 * Destroy pgStatTabHash before we start invalidating PgStat_TableEntry
+	 * entries it points to.  (Should we fail partway through the loop below,
+	 * it's okay to have removed the hashtable already --- the only
+	 * consequence is we'd get multiple entries for the same table in the
+	 * pgStatTabList, and that's safe.)
+	 */
+	if (pgStatTabHash)
+		hash_destroy(pgStatTabHash);
+	pgStatTabHash = NULL;
+
+	/*
 	 * Scan through the TabStatusArray struct(s) to find tables that actually
 	 * have counts, and build messages to send.  We have to separate shared
 	 * relations from regular ones because the databaseid field in the message
@@ -854,14 +897,6 @@ pgstat_report_stat(bool force)
 			   tsa->tsa_used * sizeof(PgStat_TableStatus));
 		tsa->tsa_used = 0;
 	}
-
-	/*
-	 * pgStatTabHash is outdated on this point so we have to clean it,
-	 * hash_destroy() will remove hash memory context, allocated in
-	 * make_sure_stat_tab_initialized()
-	 */
-	hash_destroy(pgStatTabHash);
-	pgStatTabHash = NULL;
 
 	/*
 	 * Send partial messages.  Make sure that any pending xact commit/abort
@@ -1708,87 +1743,85 @@ pgstat_initstats(Relation rel)
 }
 
 /*
- * Make sure pgStatTabList and pgStatTabHash are initialized.
- */
-static void
-make_sure_stat_tab_initialized()
-{
-	HASHCTL			ctl;
-	MemoryContext	new_ctx;
-
-	if(!pgStatTabList)
-	{
-		/* This is first time procedure is called */
-		pgStatTabList = (TabStatusArray *) MemoryContextAllocZero(TopMemoryContext,
-												sizeof(TabStatusArray));
-	}
-
-	if(pgStatTabHash)
-		return;
-
-	/* Hash table was freed or never existed.  */
-
-	new_ctx = AllocSetContextCreate(
-		TopMemoryContext,
-		"PGStatLookupHashTableContext",
-		ALLOCSET_DEFAULT_SIZES);
-
-	memset(&ctl, 0, sizeof(ctl));
-	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(TabStatHashEntry);
-	ctl.hcxt = new_ctx;
-
-	pgStatTabHash = hash_create("pgstat t_id to tsa_entry lookup hash table",
-		TABSTAT_QUANTUM, &ctl, HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
-}
-
-/*
  * get_tabstat_entry - find or create a PgStat_TableStatus entry for rel
  */
 static PgStat_TableStatus *
 get_tabstat_entry(Oid rel_id, bool isshared)
 {
-	TabStatHashEntry* hash_entry;
+	TabStatHashEntry *hash_entry;
 	PgStat_TableStatus *entry;
 	TabStatusArray *tsa;
-	bool found;
+	bool		found;
 
-	make_sure_stat_tab_initialized();
+	/*
+	 * Create hash table if we don't have it already.
+	 */
+	if (pgStatTabHash == NULL)
+	{
+		HASHCTL		ctl;
+
+		memset(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(Oid);
+		ctl.entrysize = sizeof(TabStatHashEntry);
+
+		pgStatTabHash = hash_create("pgstat TabStatusArray lookup hash table",
+									TABSTAT_QUANTUM,
+									&ctl,
+									HASH_ELEM | HASH_BLOBS);
+	}
 
 	/*
 	 * Find an entry or create a new one.
 	 */
 	hash_entry = hash_search(pgStatTabHash, &rel_id, HASH_ENTER, &found);
-	if(found)
+	if (!found)
+	{
+		/* initialize new entry with null pointer */
+		hash_entry->tsa_entry = NULL;
+	}
+
+	/*
+	 * If entry is already valid, we're done.
+	 */
+	if (hash_entry->tsa_entry)
 		return hash_entry->tsa_entry;
 
 	/*
-	 * `hash_entry` was just created and now we have to fill it.
-	 * First make sure there is a free space in a last element of pgStatTabList.
+	 * Locate the first pgStatTabList entry with free space, making a new list
+	 * entry if needed.  Note that we could get an OOM failure here, but if so
+	 * we have left the hashtable and the list in a consistent state.
 	 */
-	tsa = pgStatTabList;
-	while(tsa->tsa_used == TABSTAT_QUANTUM)
+	if (pgStatTabList == NULL)
 	{
-		if(tsa->tsa_next == NULL)
-		{
-			tsa->tsa_next = (TabStatusArray *) MemoryContextAllocZero(TopMemoryContext,
-														sizeof(TabStatusArray));
-		}
+		/* Set up first pgStatTabList entry */
+		pgStatTabList = (TabStatusArray *)
+			MemoryContextAllocZero(TopMemoryContext,
+								   sizeof(TabStatusArray));
+	}
 
+	tsa = pgStatTabList;
+	while (tsa->tsa_used >= TABSTAT_QUANTUM)
+	{
+		if (tsa->tsa_next == NULL)
+			tsa->tsa_next = (TabStatusArray *)
+				MemoryContextAllocZero(TopMemoryContext,
+									   sizeof(TabStatusArray));
 		tsa = tsa->tsa_next;
 	}
 
 	/*
-	 * Add an entry.
+	 * Allocate a PgStat_TableStatus entry within this list entry.  We assume
+	 * the entry was already zeroed, either at creation or after last use.
 	 */
 	entry = &tsa->tsa_entries[tsa->tsa_used++];
 	entry->t_id = rel_id;
 	entry->t_shared = isshared;
 
 	/*
-	 * Add a corresponding entry to pgStatTabHash.
+	 * Now we can fill the entry in pgStatTabHash.
 	 */
 	hash_entry->tsa_entry = entry;
+
 	return entry;
 }
 
@@ -1796,22 +1829,25 @@ get_tabstat_entry(Oid rel_id, bool isshared)
  * find_tabstat_entry - find any existing PgStat_TableStatus entry for rel
  *
  * If no entry, return NULL, don't create a new one
+ *
+ * Note: if we got an error in the most recent execution of pgstat_report_stat,
+ * it's possible that an entry exists but there's no hashtable entry for it.
+ * That's okay, we'll treat this case as "doesn't exist".
  */
 PgStat_TableStatus *
 find_tabstat_entry(Oid rel_id)
 {
-	TabStatHashEntry* hash_entry;
+	TabStatHashEntry *hash_entry;
 
-	/*
-	 * There are no entries at all.
-	 */
-	if(!pgStatTabHash)
+	/* If hashtable doesn't exist, there are no entries at all */
+	if (!pgStatTabHash)
 		return NULL;
 
 	hash_entry = hash_search(pgStatTabHash, &rel_id, HASH_FIND, NULL);
-	if(!hash_entry)
+	if (!hash_entry)
 		return NULL;
 
+	/* Note that this step could also return NULL, but that's correct */
 	return hash_entry->tsa_entry;
 }
 
@@ -2836,7 +2872,7 @@ pgstat_bestart(void)
 				break;
 			default:
 				elog(FATAL, "unrecognized process type: %d",
-					(int) MyAuxProcType);
+					 (int) MyAuxProcType);
 				proc_exit(1);
 		}
 	}
@@ -2855,8 +2891,8 @@ pgstat_bestart(void)
 
 	/* We have userid for client-backends, wal-sender and bgworker processes */
 	if (beentry->st_backendType == B_BACKEND
-			|| beentry->st_backendType == B_WAL_SENDER
-			|| beentry->st_backendType == B_BG_WORKER)
+		|| beentry->st_backendType == B_WAL_SENDER
+		|| beentry->st_backendType == B_BG_WORKER)
 		beentry->st_userid = GetSessionUserId();
 	else
 		beentry->st_userid = InvalidOid;
@@ -3373,14 +3409,14 @@ pgstat_get_wait_event(uint32 wait_event_info)
 			break;
 		case PG_WAIT_ACTIVITY:
 			{
-				WaitEventActivity	w = (WaitEventActivity) wait_event_info;
+				WaitEventActivity w = (WaitEventActivity) wait_event_info;
 
 				event_name = pgstat_get_wait_activity(w);
 				break;
 			}
 		case PG_WAIT_CLIENT:
 			{
-				WaitEventClient	w = (WaitEventClient) wait_event_info;
+				WaitEventClient w = (WaitEventClient) wait_event_info;
 
 				event_name = pgstat_get_wait_client(w);
 				break;
@@ -3390,14 +3426,14 @@ pgstat_get_wait_event(uint32 wait_event_info)
 			break;
 		case PG_WAIT_IPC:
 			{
-				WaitEventIPC	w = (WaitEventIPC) wait_event_info;
+				WaitEventIPC w = (WaitEventIPC) wait_event_info;
 
 				event_name = pgstat_get_wait_ipc(w);
 				break;
 			}
 		case PG_WAIT_TIMEOUT:
 			{
-				WaitEventTimeout	w = (WaitEventTimeout) wait_event_info;
+				WaitEventTimeout w = (WaitEventTimeout) wait_event_info;
 
 				event_name = pgstat_get_wait_timeout(w);
 				break;
@@ -3472,7 +3508,7 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_LOGICAL_APPLY_MAIN:
 			event_name = "LogicalApplyMain";
 			break;
-		/* no default case, so that compiler will warn */
+			/* no default case, so that compiler will warn */
 	}
 
 	return event_name;
@@ -3512,7 +3548,7 @@ pgstat_get_wait_client(WaitEventClient w)
 		case WAIT_EVENT_WAL_SENDER_WRITE_DATA:
 			event_name = "WalSenderWriteData";
 			break;
-		/* no default case, so that compiler will warn */
+			/* no default case, so that compiler will warn */
 	}
 
 	return event_name;
@@ -3576,7 +3612,7 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_LOGICAL_SYNC_STATE_CHANGE:
 			event_name = "LogicalSyncStateChange";
 			break;
-		/* no default case, so that compiler will warn */
+			/* no default case, so that compiler will warn */
 	}
 
 	return event_name;
@@ -3604,7 +3640,7 @@ pgstat_get_wait_timeout(WaitEventTimeout w)
 		case WAIT_EVENT_RECOVERY_APPLY_DELAY:
 			event_name = "RecoveryApplyDelay";
 			break;
-		/* no default case, so that compiler will warn */
+			/* no default case, so that compiler will warn */
 	}
 
 	return event_name;
@@ -4025,6 +4061,7 @@ pgstat_get_backend_desc(BackendType backendType)
 
 	return backendDesc;
 }
+
 /* ------------------------------------------------------------
  * Local support functions follow
  * ------------------------------------------------------------
@@ -4369,7 +4406,7 @@ PgstatCollectorMain(int argc, char *argv[])
 		wr = WaitLatchOrSocket(MyLatch,
 		WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_SOCKET_READABLE | WL_TIMEOUT,
 							   pgStatSock,
-							   2 * 1000L /* msec */,
+							   2 * 1000L /* msec */ ,
 							   WAIT_EVENT_PGSTAT_MAIN);
 #endif
 

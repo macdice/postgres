@@ -1125,8 +1125,10 @@ doDeletion(const ObjectAddress *object, int flags)
 						heap_drop_with_catalog(object->objectId);
 				}
 
-				/* for a sequence, in addition to dropping the heap, also
-				 * delete pg_sequence tuple */
+				/*
+				 * for a sequence, in addition to dropping the heap, also
+				 * delete pg_sequence tuple
+				 */
 				if (relKind == RELKIND_SEQUENCE)
 					DeleteSequenceTuple(object->objectId);
 				break;
@@ -1204,6 +1206,10 @@ doDeletion(const ObjectAddress *object, int flags)
 			RemoveSchemaById(object->objectId);
 			break;
 
+		case OCLASS_STATISTIC_EXT:
+			RemoveStatisticsById(object->objectId);
+			break;
+
 		case OCLASS_TSPARSER:
 			RemoveTSParserById(object->objectId);
 			break;
@@ -1265,13 +1271,20 @@ doDeletion(const ObjectAddress *object, int flags)
 			DropTransformById(object->objectId);
 			break;
 
-		case OCLASS_STATISTIC_EXT:
-			RemoveStatisticsById(object->objectId);
+			/*
+			 * These global object types are not supported here.
+			 */
+		case OCLASS_ROLE:
+		case OCLASS_DATABASE:
+		case OCLASS_TBLSPACE:
+		case OCLASS_SUBSCRIPTION:
+			elog(ERROR, "global objects cannot be deleted by doDeletion");
 			break;
 
-		default:
-			elog(ERROR, "unrecognized object class: %u",
-				 object->classId);
+			/*
+			 * There's intentionally no default: case here; we want the
+			 * compiler to warn if a new OCLASS hasn't been handled above.
+			 */
 	}
 }
 
@@ -1931,7 +1944,7 @@ find_expr_references_walker(Node *node,
 	}
 	else if (IsA(node, NextValueExpr))
 	{
-		NextValueExpr  *nve = (NextValueExpr *) node;
+		NextValueExpr *nve = (NextValueExpr *) node;
 
 		add_object_address(OCLASS_CLASS, nve->seqid, 0,
 						   context->addrs);

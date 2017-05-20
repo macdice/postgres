@@ -26,17 +26,13 @@
  * is in "raw" number of bytes, the actual nonces sent over the wire are
  * encoded using only ASCII-printable characters.
  */
-#define SCRAM_RAW_NONCE_LEN			10
+#define SCRAM_RAW_NONCE_LEN			18
 
 /* length of salt when generating new verifiers */
-#define SCRAM_SALT_LEN				10
+#define SCRAM_DEFAULT_SALT_LEN		12
 
 /* default number of iterations when generating verifier */
-#define SCRAM_ITERATIONS_DEFAULT	4096
-
-/* Base name of keys used for proof generation */
-#define SCRAM_SERVER_KEY_NAME "Server Key"
-#define SCRAM_CLIENT_KEY_NAME "Client Key"
+#define SCRAM_DEFAULT_ITERATIONS	4096
 
 /*
  * Context data for HMAC used in SCRAM authentication.
@@ -51,9 +47,13 @@ extern void scram_HMAC_init(scram_HMAC_ctx *ctx, const uint8 *key, int keylen);
 extern void scram_HMAC_update(scram_HMAC_ctx *ctx, const char *str, int slen);
 extern void scram_HMAC_final(uint8 *result, scram_HMAC_ctx *ctx);
 
+extern void scram_SaltedPassword(const char *password, const char *salt,
+					 int saltlen, int iterations, uint8 *result);
 extern void scram_H(const uint8 *str, int len, uint8 *result);
-extern void scram_ClientOrServerKey(const char *password, const char *salt,
-						int saltlen, int iterations,
-						const char *keystr, uint8 *result);
+extern void scram_ClientKey(const uint8 *salted_password, uint8 *result);
+extern void scram_ServerKey(const uint8 *salted_password, uint8 *result);
+
+extern char *scram_build_verifier(const char *salt, int saltlen, int iterations,
+					 const char *password);
 
 #endif   /* SCRAM_COMMON_H */

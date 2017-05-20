@@ -53,7 +53,7 @@
  * Information about bounds of a partitioned relation
  *
  * A list partition datum that is known to be NULL is never put into the
- * datums array. Instead, it is tracked using has_null and null_index fields.
+ * datums array. Instead, it is tracked using the null_index field.
  *
  * In the case of range partitioning, ndatums will typically be far less than
  * 2 * nparts, because a partition's upper bound and the next partition's lower
@@ -86,11 +86,11 @@ typedef struct PartitionBoundInfoData
 	int		   *indexes;		/* Partition indexes; one entry per member of
 								 * the datums array (plus one if range
 								 * partitioned table) */
-	bool		has_null;		/* Is there a null-accepting partition? false
-								 * for range partitioned tables */
 	int			null_index;		/* Index of the null-accepting partition; -1
-								 * for range partitioned tables */
+								 * if there isn't one */
 } PartitionBoundInfoData;
+
+#define partition_bound_accepts_nulls(bi) ((bi)->null_index != -1)
 
 /*
  * When qsort'ing partition bounds after reading from the catalog, each bound
@@ -118,10 +118,18 @@ static int32 qsort_partition_list_value_cmp(const void *a, const void *b,
 static int32 qsort_partition_rbound_cmp(const void *a, const void *b,
 						   void *arg);
 
-static List *get_qual_for_list(PartitionKey key, PartitionBoundSpec *spec);
-static List *get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec);
 static Oid get_partition_operator(PartitionKey key, int col,
 					   StrategyNumber strategy, bool *need_relabel);
+static Expr *make_partition_op_expr(PartitionKey key, int keynum,
+					   uint16 strategy, Expr *arg1, Expr *arg2);
+static void get_range_key_properties(PartitionKey key, int keynum,
+						 PartitionRangeDatum *ldatum,
+						 PartitionRangeDatum *udatum,
+						 ListCell **partexprs_item,
+						 Expr **keyCol,
+						 Const **lower_val, Const **upper_val);
+static List *get_qual_for_list(PartitionKey key, PartitionBoundSpec *spec);
+static List *get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec);
 static List *generate_partition_qual(Relation rel);
 
 static PartitionRangeBound *make_one_range_bound(PartitionKey key, int index,
@@ -165,7 +173,6 @@ RelationBuildPartitionDesc(Relation rel)
 
 	/* List partitioning specific */
 	PartitionListValue **all_values = NULL;
-	bool		found_null = false;
 	int			null_index = -1;
 
 	/* Range partitioning specific */
@@ -237,7 +244,6 @@ RelationBuildPartitionDesc(Relation rel)
 			 * Create a unified list of non-null values across all partitions.
 			 */
 			i = 0;
-			found_null = false;
 			null_index = -1;
 			foreach(cell, boundspecs)
 			{
@@ -266,9 +272,8 @@ RelationBuildPartitionDesc(Relation rel)
 						 * instead for the code further down below where we
 						 * construct the actual relcache struct.
 						 */
-						if (found_null)
+						if (null_index != -1)
 							elog(ERROR, "found null more than once");
-						found_null = true;
 						null_index = i;
 					}
 
@@ -458,7 +463,6 @@ RelationBuildPartitionDesc(Relation rel)
 		{
 			case PARTITION_STRATEGY_LIST:
 				{
-					boundinfo->has_null = found_null;
 					boundinfo->indexes = (int *) palloc(ndatums * sizeof(int));
 
 					/*
@@ -490,20 +494,18 @@ RelationBuildPartitionDesc(Relation rel)
 					 * accepts only null and hence not covered in the above
 					 * loop which only handled non-null values.
 					 */
-					if (found_null)
+					if (null_index != -1)
 					{
 						Assert(null_index >= 0);
 						if (mapping[null_index] == -1)
 							mapping[null_index] = next_index++;
+						boundinfo->null_index = mapping[null_index];
 					}
+					else
+						boundinfo->null_index = -1;
 
 					/* All partition must now have a valid mapping */
 					Assert(next_index == nparts);
-
-					if (found_null)
-						boundinfo->null_index = mapping[null_index];
-					else
-						boundinfo->null_index = -1;
 					break;
 				}
 
@@ -603,9 +605,6 @@ partition_bounds_equal(PartitionKey key,
 	if (b1->ndatums != b2->ndatums)
 		return false;
 
-	if (b1->has_null != b2->has_null)
-		return false;
-
 	if (b1->null_index != b2->null_index)
 		return false;
 
@@ -688,7 +687,8 @@ check_new_partition_bound(char *relname, Relation parent, Node *bound)
 
 					Assert(boundinfo &&
 						   boundinfo->strategy == PARTITION_STRATEGY_LIST &&
-						   (boundinfo->ndatums > 0 || boundinfo->has_null));
+						   (boundinfo->ndatums > 0 ||
+							partition_bound_accepts_nulls(boundinfo)));
 
 					foreach(cell, spec->listdatums)
 					{
@@ -709,7 +709,7 @@ check_new_partition_bound(char *relname, Relation parent, Node *bound)
 								break;
 							}
 						}
-						else if (boundinfo->has_null)
+						else if (partition_bound_accepts_nulls(boundinfo))
 						{
 							overlap = true;
 							with = boundinfo->null_index;
@@ -969,6 +969,35 @@ RelationGetPartitionQual(Relation rel)
 }
 
 /*
+ * get_partition_qual_relid
+ *
+ * Returns an expression tree describing the passed-in relation's partition
+ * constraint.
+ */
+Expr *
+get_partition_qual_relid(Oid relid)
+{
+	Relation	rel = heap_open(relid, AccessShareLock);
+	Expr	   *result = NULL;
+	List	   *and_args;
+
+	/* Do the work only if this relation is a partition. */
+	if (rel->rd_rel->relispartition)
+	{
+		and_args = generate_partition_qual(rel);
+		if (list_length(and_args) > 1)
+			result = makeBoolExpr(AND_EXPR, and_args, -1);
+		else
+			result = linitial(and_args);
+	}
+
+	/* Keep the lock. */
+	heap_close(rel, NoLock);
+
+	return result;
+}
+
+/*
  * Append OIDs of rel's partitions to the list 'partoids' and for each OID,
  * append pointer rel to the list 'parents'.
  */
@@ -988,7 +1017,7 @@ RelationGetPartitionQual(Relation rel)
  *		Returns information necessary to route tuples down a partition tree
  *
  * All the partitions will be locked with lockmode, unless it is NoLock.
- * A list of the OIDs of all the leaf partition of rel is returned in
+ * A list of the OIDs of all the leaf partitions of rel is returned in
  * *leaf_part_oids.
  */
 PartitionDispatch *
@@ -1012,9 +1041,9 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 	 *
 	 * Cannot use find_all_inheritors() here, because then the order of OIDs
 	 * in parted_rels list would be unknown, which does not help, because we
-	 * we assign indexes within individual PartitionDispatch in an order that
-	 * is predetermined (determined by the order of OIDs in individual
-	 * partition descriptors).
+	 * assign indexes within individual PartitionDispatch in an order that is
+	 * predetermined (determined by the order of OIDs in individual partition
+	 * descriptors).
 	 */
 	*num_parted = 1;
 	parted_rels = list_make1(rel);
@@ -1146,6 +1175,123 @@ RelationGetPartitionDispatchInfo(Relation rel, int lockmode,
 /* Module-local functions */
 
 /*
+ * get_partition_operator
+ *
+ * Return oid of the operator of given strategy for a given partition key
+ * column.
+ */
+static Oid
+get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
+					   bool *need_relabel)
+{
+	Oid			operoid;
+
+	/*
+	 * First check if there exists an operator of the given strategy, with
+	 * this column's type as both its lefttype and righttype, in the
+	 * partitioning operator family specified for the column.
+	 */
+	operoid = get_opfamily_member(key->partopfamily[col],
+								  key->parttypid[col],
+								  key->parttypid[col],
+								  strategy);
+
+	/*
+	 * If one doesn't exist, we must resort to using an operator in the same
+	 * opreator family but with the operator class declared input type.  It is
+	 * OK to do so, because the column's type is known to be binary-coercible
+	 * with the operator class input type (otherwise, the operator class in
+	 * question would not have been accepted as the partitioning operator
+	 * class).  We must however inform the caller to wrap the non-Const
+	 * expression with a RelabelType node to denote the implicit coercion. It
+	 * ensures that the resulting expression structurally matches similarly
+	 * processed expressions within the optimizer.
+	 */
+	if (!OidIsValid(operoid))
+	{
+		operoid = get_opfamily_member(key->partopfamily[col],
+									  key->partopcintype[col],
+									  key->partopcintype[col],
+									  strategy);
+		*need_relabel = true;
+	}
+	else
+		*need_relabel = false;
+
+	if (!OidIsValid(operoid))
+		elog(ERROR, "could not find operator for partitioning");
+
+	return operoid;
+}
+
+/*
+ * make_partition_op_expr
+ *		Returns an Expr for the given partition key column with arg1 and
+ *		arg2 as its leftop and rightop, respectively
+ */
+static Expr *
+make_partition_op_expr(PartitionKey key, int keynum,
+					   uint16 strategy, Expr *arg1, Expr *arg2)
+{
+	Oid			operoid;
+	bool		need_relabel = false;
+	Expr	   *result = NULL;
+
+	/* Get the correct btree operator for this partitioning column */
+	operoid = get_partition_operator(key, keynum, strategy, &need_relabel);
+
+	/*
+	 * Chosen operator may be such that the non-Const operand needs to be
+	 * coerced, so apply the same; see the comment in
+	 * get_partition_operator().
+	 */
+	if (!IsA(arg1, Const) &&
+		(need_relabel ||
+		 key->partcollation[keynum] != key->parttypcoll[keynum]))
+		arg1 = (Expr *) makeRelabelType(arg1,
+										key->partopcintype[keynum],
+										-1,
+										key->partcollation[keynum],
+										COERCE_EXPLICIT_CAST);
+
+	/* Generate the actual expression */
+	switch (key->strategy)
+	{
+		case PARTITION_STRATEGY_LIST:
+			{
+				ScalarArrayOpExpr *saopexpr;
+
+				/* Build leftop = ANY (rightop) */
+				saopexpr = makeNode(ScalarArrayOpExpr);
+				saopexpr->opno = operoid;
+				saopexpr->opfuncid = get_opcode(operoid);
+				saopexpr->useOr = true;
+				saopexpr->inputcollid = key->partcollation[keynum];
+				saopexpr->args = list_make2(arg1, arg2);
+				saopexpr->location = -1;
+
+				result = (Expr *) saopexpr;
+				break;
+			}
+
+		case PARTITION_STRATEGY_RANGE:
+			result = make_opclause(operoid,
+								   BOOLOID,
+								   false,
+								   arg1, arg2,
+								   InvalidOid,
+								   key->partcollation[keynum]);
+			break;
+
+		default:
+			elog(ERROR, "invalid partitioning strategy");
+			break;
+	}
+
+	return result;
+}
+
+/*
  * get_qual_for_list
  *
  * Returns a list of expressions to use as a list partition's constraint.
@@ -1155,14 +1301,12 @@ get_qual_for_list(PartitionKey key, PartitionBoundSpec *spec)
 {
 	List	   *result;
 	ArrayExpr  *arr;
-	ScalarArrayOpExpr *opexpr;
+	Expr	   *opexpr;
 	ListCell   *cell,
 			   *prev,
 			   *next;
 	Expr	   *keyCol;
-	Oid			operoid;
-	bool		need_relabel,
-				list_has_null = false;
+	bool		list_has_null = false;
 	NullTest   *nulltest1 = NULL,
 			   *nulltest2 = NULL;
 
@@ -1233,24 +1377,9 @@ get_qual_for_list(PartitionKey key, PartitionBoundSpec *spec)
 	arr->multidims = false;
 	arr->location = -1;
 
-	/* Get the correct btree equality operator */
-	operoid = get_partition_operator(key, 0, BTEqualStrategyNumber,
-									 &need_relabel);
-	if (need_relabel || key->partcollation[0] != key->parttypcoll[0])
-		keyCol = (Expr *) makeRelabelType(keyCol,
-										  key->partopcintype[0],
-										  -1,
-										  key->partcollation[0],
-										  COERCE_EXPLICIT_CAST);
-
-	/* Build leftop = ANY (rightop) */
-	opexpr = makeNode(ScalarArrayOpExpr);
-	opexpr->opno = operoid;
-	opexpr->opfuncid = get_opcode(operoid);
-	opexpr->useOr = true;
-	opexpr->inputcollid = key->partcollation[0];
-	opexpr->args = list_make2(keyCol, arr);
-	opexpr->location = -1;
+	/* Generate the main expression, i.e., keyCol = ANY (arr) */
+	opexpr = make_partition_op_expr(key, 0, BTEqualStrategyNumber,
+									keyCol, (Expr *) arr);
 
 	if (nulltest1)
 		result = list_make2(nulltest1, opexpr);
@@ -1268,9 +1397,91 @@ get_qual_for_list(PartitionKey key, PartitionBoundSpec *spec)
 }
 
 /*
+ * get_range_key_properties
+ *		Returns range partition key information for a given column
+ *
+ * On return, *partexprs_item points to the cell containing the next
+ * expression in the key->partexprs list, or NULL.
+ */
+static void
+get_range_key_properties(PartitionKey key, int keynum,
+						 PartitionRangeDatum *ldatum,
+						 PartitionRangeDatum *udatum,
+						 ListCell **partexprs_item,
+						 Expr **keyCol,
+						 Const **lower_val, Const **upper_val)
+{
+	/* Partition key expression for this column */
+	if (key->partattrs[keynum] != 0)
+	{
+		*keyCol = (Expr *) makeVar(1,
+								   key->partattrs[keynum],
+								   key->parttypid[keynum],
+								   key->parttypmod[keynum],
+								   key->parttypcoll[keynum],
+								   0);
+	}
+	else
+	{
+		*keyCol = copyObject(lfirst(*partexprs_item));
+		*partexprs_item = lnext(*partexprs_item);
+	}
+
+	if (!ldatum->infinite)
+		*lower_val = (Const *) ldatum->value;
+	else
+		*lower_val = NULL;
+
+	if (!udatum->infinite)
+		*upper_val = (Const *) udatum->value;
+	else
+		*upper_val = NULL;
+}
+
+/*
  * get_qual_for_range
  *
- * Get a list of OpExpr's to use as a range partition's constraint.
+ * Get a list of expressions to use as a range partition's constraint.
+ * If there are multiple expressions, they are to be considered implicitly
+ * ANDed.
+ *
+ * For a multi-column range partition key, say (a, b, c), with (al, bl, cl)
+ * as the lower bound tuple and (au, bu, cu) as the upper bound tuple, we
+ * generate an expression tree of the following form:
+ *
+ *  (a IS NOT NULL) and (b IS NOT NULL) and (c IS NOT NULL)
+ *		AND
+ *	(a > al OR (a = al AND b > bl) OR (a = al AND b = bl AND c >= cl))
+ *		AND
+ *	(a < au OR (a = au AND b < bu) OR (a = au AND b = bu AND c < cu))
+ *
+ * It is often the case that a prefix of lower and upper bound tuples contains
+ * the same values, for example, (al = au), in which case, we will emit an
+ * expression tree of the following form:
+ *
+ *  (a IS NOT NULL) and (b IS NOT NULL) and (c IS NOT NULL)
+ *		AND
+ *	(a = al)
+ *		AND
+ *	(b > bl OR (b = bl AND c >= cl))
+ *		AND
+ *	(b < bu) OR (b = bu AND c < cu))
+ *
+ * If cu happens to be UNBOUNDED, we need not emit any expression for it, so
+ * the last line would be:
+ *
+ *	(b < bu) OR (b = bu), which is simplified to (b <= bu)
+ *
+ * In most common cases with only one partition column, say a, the following
+ * expression tree will be generated: a IS NOT NULL AND a >= al AND a < au
+ *
+ * If all values of both lower and upper bounds are UNBOUNDED, the partition
+ * does not really have a constraint, except the IS NOT NULL constraint for
+ * partition keys.
+ *
+ * If we end up with an empty result list, we append return a single-member
+ * list containing a constant-true expression in that case, because callers
+ * expect a non-empty list.
  */
 static List *
 get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec)
@@ -1278,33 +1489,38 @@ get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec)
 	List	   *result = NIL;
 	ListCell   *cell1,
 			   *cell2,
-			   *partexprs_item;
-	int			i;
+			   *partexprs_item,
+			   *partexprs_item_saved;
+	int			i,
+				j;
+	PartitionRangeDatum *ldatum,
+			   *udatum;
+	Expr	   *keyCol;
+	Const	   *lower_val,
+			   *upper_val;
+	NullTest   *nulltest;
+	List	   *lower_or_arms,
+			   *upper_or_arms;
+	int			num_or_arms,
+				current_or_arm;
+	ListCell   *lower_or_start_datum,
+			   *upper_or_start_datum;
+	bool		need_next_lower_arm,
+				need_next_upper_arm;
+
+	lower_or_start_datum = list_head(spec->lowerdatums);
+	upper_or_start_datum = list_head(spec->upperdatums);
+	num_or_arms = key->partnatts;
 
 	/*
-	 * Iterate over columns of the key, emitting an OpExpr for each using the
-	 * corresponding lower and upper datums as constant operands.
+	 * A range-partitioned table does not currently allow partition keys to
+	 * be null, so emit an IS NOT NULL expression for each key column.
 	 */
-	i = 0;
 	partexprs_item = list_head(key->partexprs);
-	forboth(cell1, spec->lowerdatums, cell2, spec->upperdatums)
+	for (i = 0; i < key->partnatts; i++)
 	{
-		PartitionRangeDatum *ldatum = lfirst(cell1),
-				   *udatum = lfirst(cell2);
 		Expr	   *keyCol;
-		Const	   *lower_val = NULL,
-				   *upper_val = NULL;
-		EState	   *estate;
-		MemoryContext oldcxt;
-		Expr	   *test_expr;
-		ExprState  *test_exprstate;
-		Datum		test_result;
-		bool		isNull;
-		bool		need_relabel = false;
-		Oid			operoid;
-		NullTest   *nulltest;
 
-		/* Left operand */
 		if (key->partattrs[i] != 0)
 		{
 			keyCol = (Expr *) makeVar(1,
@@ -1316,201 +1532,234 @@ get_qual_for_range(PartitionKey key, PartitionBoundSpec *spec)
 		}
 		else
 		{
+			if (partexprs_item == NULL)
+				elog(ERROR, "wrong number of partition key expressions");
 			keyCol = copyObject(lfirst(partexprs_item));
 			partexprs_item = lnext(partexprs_item);
 		}
 
-		/*
-		 * Emit a IS NOT NULL expression for non-Var keys, because whereas
-		 * simple attributes are covered by NOT NULL constraints, expression
-		 * keys are still nullable which is not acceptable in case of range
-		 * partitioning.
-		 */
-		if (!IsA(keyCol, Var))
-		{
-			nulltest = makeNode(NullTest);
-			nulltest->arg = keyCol;
-			nulltest->nulltesttype = IS_NOT_NULL;
-			nulltest->argisrow = false;
-			nulltest->location = -1;
-			result = lappend(result, nulltest);
-		}
+		nulltest = makeNode(NullTest);
+		nulltest->arg = keyCol;
+		nulltest->nulltesttype = IS_NOT_NULL;
+		nulltest->argisrow = false;
+		nulltest->location = -1;
+		result = lappend(result, nulltest);
+	}
+
+	/*
+	 * Iterate over the key columns and check if the corresponding lower and
+	 * upper datums are equal using the btree equality operator for the
+	 * column's type.  If equal, we emit single keyCol = common_value
+	 * expression.  Starting from the first column for which the corresponding
+	 * lower and upper bound datums are not equal, we generate OR expressions
+	 * as shown in the function's header comment.
+	 */
+	i = 0;
+	partexprs_item = list_head(key->partexprs);
+	partexprs_item_saved = partexprs_item;		/* placate compiler */
+	forboth(cell1, spec->lowerdatums, cell2, spec->upperdatums)
+	{
+		EState	   *estate;
+		MemoryContext oldcxt;
+		Expr	   *test_expr;
+		ExprState  *test_exprstate;
+		Datum		test_result;
+		bool		isNull;
+
+		ldatum = lfirst(cell1);
+		udatum = lfirst(cell2);
 
 		/*
-		 * Stop at this column if either of lower or upper datum is infinite,
-		 * but do emit an OpExpr for the non-infinite datum.
+		 * Since get_range_key_properties() modifies partexprs_item, and we
+		 * might need to start over from the previous expression in the later
+		 * part of this functiom, save away the current value.
 		 */
-		if (!ldatum->infinite)
-			lower_val = (Const *) ldatum->value;
-		if (!udatum->infinite)
-			upper_val = (Const *) udatum->value;
+		partexprs_item_saved = partexprs_item;
+
+		get_range_key_properties(key, i, ldatum, udatum,
+								 &partexprs_item,
+								 &keyCol,
+								 &lower_val, &upper_val);
 
 		/*
-		 * If lower_val and upper_val are both finite and happen to be equal,
-		 * emit only (keyCol = lower_val) for this column, because all rows in
-		 * this partition could only ever contain this value (ie, lower_val)
-		 * in the current partitioning column.  We must consider further
-		 * columns because the above condition does not fully constrain the
-		 * rows of this partition.
+		 * If either or both of lower_val and upper_val is NULL, they are
+		 * unequal, because being NULL means the column is unbounded in the
+		 * respective direction.
 		 */
-		if (lower_val && upper_val)
-		{
-			/* Get the correct btree equality operator for the test */
-			operoid = get_partition_operator(key, i, BTEqualStrategyNumber,
-											 &need_relabel);
+		if (!lower_val || !upper_val)
+			break;
 
-			/* Create the test expression */
-			estate = CreateExecutorState();
-			oldcxt = MemoryContextSwitchTo(estate->es_query_cxt);
-			test_expr = make_opclause(operoid,
-									  BOOLOID,
-									  false,
-									  (Expr *) lower_val,
-									  (Expr *) upper_val,
-									  InvalidOid,
-									  key->partcollation[i]);
-			fix_opfuncids((Node *) test_expr);
-			test_exprstate = ExecInitExpr(test_expr, NULL);
-			test_result = ExecEvalExprSwitchContext(test_exprstate,
+		/* Create the test expression */
+		estate = CreateExecutorState();
+		oldcxt = MemoryContextSwitchTo(estate->es_query_cxt);
+		test_expr = make_partition_op_expr(key, i, BTEqualStrategyNumber,
+										   (Expr *) lower_val,
+										   (Expr *) upper_val);
+		fix_opfuncids((Node *) test_expr);
+		test_exprstate = ExecInitExpr(test_expr, NULL);
+		test_result = ExecEvalExprSwitchContext(test_exprstate,
 											  GetPerTupleExprContext(estate),
-													&isNull);
-			MemoryContextSwitchTo(oldcxt);
-			FreeExecutorState(estate);
+												&isNull);
+		MemoryContextSwitchTo(oldcxt);
+		FreeExecutorState(estate);
 
-			if (DatumGetBool(test_result))
+		/* If not equal, go generate the OR expressions */
+		if (!DatumGetBool(test_result))
+			break;
+
+		/*
+		 * The bounds for the last key column can't be equal, because such a
+		 * range partition would never be allowed to be defined (it would have
+		 * an empty range otherwise).
+		 */
+		if (i == key->partnatts - 1)
+			elog(ERROR, "invalid range bound specification");
+
+		/* Equal, so generate keyCol = lower_val expression */
+		result = lappend(result,
+						 make_partition_op_expr(key, i, BTEqualStrategyNumber,
+												keyCol, (Expr *) lower_val));
+
+		i++;
+	}
+
+	/* First pair of lower_val and upper_val that are not equal. */
+	lower_or_start_datum = cell1;
+	upper_or_start_datum = cell2;
+
+	/* OR will have as many arms as there are key columns left. */
+	num_or_arms = key->partnatts - i;
+	current_or_arm = 0;
+	lower_or_arms = upper_or_arms = NIL;
+	need_next_lower_arm = need_next_upper_arm = true;
+	while (current_or_arm < num_or_arms)
+	{
+		List	   *lower_or_arm_args = NIL,
+				   *upper_or_arm_args = NIL;
+
+		j = i;
+		partexprs_item = partexprs_item_saved;
+
+		for_both_cell(cell1, lower_or_start_datum, cell2, upper_or_start_datum)
+		{
+			PartitionRangeDatum *ldatum_next = NULL,
+					   *udatum_next = NULL;
+
+			ldatum = lfirst(cell1);
+			if (lnext(cell1))
+				ldatum_next = lfirst(lnext(cell1));
+			udatum = lfirst(cell2);
+			if (lnext(cell2))
+				udatum_next = lfirst(lnext(cell2));
+			get_range_key_properties(key, j, ldatum, udatum,
+									 &partexprs_item,
+									 &keyCol,
+									 &lower_val, &upper_val);
+
+			if (need_next_lower_arm && lower_val)
 			{
-				/* This can never be, but it's better to make sure */
-				if (i == key->partnatts - 1)
-					elog(ERROR, "invalid range bound specification");
+				uint16		strategy;
 
-				if (need_relabel || key->partcollation[i] != key->parttypcoll[i])
-					keyCol = (Expr *) makeRelabelType(keyCol,
-													  key->partopcintype[i],
-													  -1,
-													  key->partcollation[i],
-													  COERCE_EXPLICIT_CAST);
-				result = lappend(result,
-								 make_opclause(operoid,
-											   BOOLOID,
-											   false,
-											   keyCol,
-											   (Expr *) lower_val,
-											   InvalidOid,
-											   key->partcollation[i]));
+				/*
+				 * For the non-last columns of this arm, use the EQ operator.
+				 * For the last or the last finite-valued column, use GE.
+				 */
+				if (j - i < current_or_arm)
+					strategy = BTEqualStrategyNumber;
+				else if ((ldatum_next && ldatum_next->infinite) ||
+						 j == key->partnatts - 1)
+					strategy = BTGreaterEqualStrategyNumber;
+				else
+					strategy = BTGreaterStrategyNumber;
 
-				/* Go over to consider the next column. */
-				i++;
-				continue;
+				lower_or_arm_args = lappend(lower_or_arm_args,
+											make_partition_op_expr(key, j,
+																   strategy,
+																   keyCol,
+														(Expr *) lower_val));
+			}
+
+			if (need_next_upper_arm && upper_val)
+			{
+				uint16		strategy;
+
+				/*
+				 * For the non-last columns of this arm, use the EQ operator.
+				 * For the last finite-valued column, use LE.
+				 */
+				if (j - i < current_or_arm)
+					strategy = BTEqualStrategyNumber;
+				else if (udatum_next && udatum_next->infinite)
+					strategy = BTLessEqualStrategyNumber;
+				else
+					strategy = BTLessStrategyNumber;
+
+				upper_or_arm_args = lappend(upper_or_arm_args,
+											make_partition_op_expr(key, j,
+																   strategy,
+																   keyCol,
+														(Expr *) upper_val));
+
+			}
+
+			/*
+			 * Did we generate enough of OR's arguments?  First arm considers
+			 * the first of the remaining columns, second arm considers first
+			 * two of the remaining columns, and so on.
+			 */
+			++j;
+			if (j - i > current_or_arm)
+			{
+				/*
+				 * We need not emit the next arm if the new column that will
+				 * be considered is unbounded.
+				 */
+				need_next_lower_arm = ldatum_next && !ldatum_next->infinite;
+				need_next_upper_arm = udatum_next && !udatum_next->infinite;
+				break;
 			}
 		}
 
-		/*
-		 * We can say here that lower_val != upper_val.  Emit expressions
-		 * (keyCol >= lower_val) and (keyCol < upper_val), then stop.
-		 */
-		if (lower_val)
-		{
-			operoid = get_partition_operator(key, i,
-											 BTGreaterEqualStrategyNumber,
-											 &need_relabel);
+		if (lower_or_arm_args != NIL)
+			lower_or_arms = lappend(lower_or_arms,
+									list_length(lower_or_arm_args) > 1
+							  ? makeBoolExpr(AND_EXPR, lower_or_arm_args, -1)
+									: linitial(lower_or_arm_args));
 
-			if (need_relabel || key->partcollation[i] != key->parttypcoll[i])
-				keyCol = (Expr *) makeRelabelType(keyCol,
-												  key->partopcintype[i],
-												  -1,
-												  key->partcollation[i],
-												  COERCE_EXPLICIT_CAST);
-			result = lappend(result,
-							 make_opclause(operoid,
-										   BOOLOID,
-										   false,
-										   keyCol,
-										   (Expr *) lower_val,
-										   InvalidOid,
-										   key->partcollation[i]));
-		}
+		if (upper_or_arm_args != NIL)
+			upper_or_arms = lappend(upper_or_arms,
+									list_length(upper_or_arm_args) > 1
+							  ? makeBoolExpr(AND_EXPR, upper_or_arm_args, -1)
+									: linitial(upper_or_arm_args));
 
-		if (upper_val)
-		{
-			operoid = get_partition_operator(key, i,
-											 BTLessStrategyNumber,
-											 &need_relabel);
+		/* If no work to do in the next iteration, break away. */
+		if (!need_next_lower_arm && !need_next_upper_arm)
+			break;
 
-			if (need_relabel || key->partcollation[i] != key->parttypcoll[i])
-				keyCol = (Expr *) makeRelabelType(keyCol,
-												  key->partopcintype[i],
-												  -1,
-												  key->partcollation[i],
-												  COERCE_EXPLICIT_CAST);
-
-			result = lappend(result,
-							 make_opclause(operoid,
-										   BOOLOID,
-										   false,
-										   keyCol,
-										   (Expr *) upper_val,
-										   InvalidOid,
-										   key->partcollation[i]));
-		}
-
-		/*
-		 * We can stop at this column, because we would not have checked the
-		 * next column when routing a given row into this partition.
-		 */
-		break;
+		++current_or_arm;
 	}
+
+	/*
+	 * Generate the OR expressions for each of lower and upper bounds (if
+	 * required), and append to the list of implicitly ANDed list of
+	 * expressions.
+	 */
+	if (lower_or_arms != NIL)
+		result = lappend(result,
+						 list_length(lower_or_arms) > 1
+						 ? makeBoolExpr(OR_EXPR, lower_or_arms, -1)
+						 : linitial(lower_or_arms));
+	if (upper_or_arms != NIL)
+		result = lappend(result,
+						 list_length(upper_or_arms) > 1
+						 ? makeBoolExpr(OR_EXPR, upper_or_arms, -1)
+						 : linitial(upper_or_arms));
+
+	/* As noted above, caller expects the list to be non-empty. */
+	if (result == NULL)
+		result = list_make1(makeBoolConst(true, false));
 
 	return result;
-}
-
-/*
- * get_partition_operator
- *
- * Return oid of the operator of given strategy for a given partition key
- * column.
- */
-static Oid
-get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
-					   bool *need_relabel)
-{
-	Oid			operoid;
-
-	/*
-	 * First check if there exists an operator of the given strategy, with
-	 * this column's type as both its lefttype and righttype, in the
-	 * partitioning operator family specified for the column.
-	 */
-	operoid = get_opfamily_member(key->partopfamily[col],
-								  key->parttypid[col],
-								  key->parttypid[col],
-								  strategy);
-
-	/*
-	 * If one doesn't exist, we must resort to using an operator in the same
-	 * opreator family but with the operator class declared input type.  It is
-	 * OK to do so, because the column's type is known to be binary-coercible
-	 * with the operator class input type (otherwise, the operator class in
-	 * question would not have been accepted as the partitioning operator
-	 * class).  We must however inform the caller to wrap the non-Const
-	 * expression with a RelabelType node to denote the implicit coercion. It
-	 * ensures that the resulting expression structurally matches similarly
-	 * processed expressions within the optimizer.
-	 */
-	if (!OidIsValid(operoid))
-	{
-		operoid = get_opfamily_member(key->partopfamily[col],
-									  key->partopcintype[col],
-									  key->partopcintype[col],
-									  strategy);
-		*need_relabel = true;
-	}
-	else
-		*need_relabel = false;
-
-	if (!OidIsValid(operoid))
-		elog(ERROR, "could not find operator for partitioning");
-
-	return operoid;
 }
 
 /*
@@ -1705,7 +1954,8 @@ get_partition_for_tuple(PartitionDispatch *pd,
 		{
 			*failed_at = parent;
 			*failed_slot = slot;
-			return -1;
+			result = -1;
+			goto error_exit;
 		}
 
 		/*
@@ -1721,12 +1971,21 @@ get_partition_for_tuple(PartitionDispatch *pd,
 
 		if (key->strategy == PARTITION_STRATEGY_RANGE)
 		{
-			/* Disallow nulls in the range partition key of the tuple */
+			/*
+			 * Since we cannot route tuples with NULL partition keys through
+			 * a range-partitioned table, simply return that no partition
+			 * exists
+			 */
 			for (i = 0; i < key->partnatts; i++)
+			{
 				if (isnull[i])
-					ereport(ERROR,
-							(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
-						errmsg("range partition key of row contains null")));
+				{
+					*failed_at = parent;
+					*failed_slot = slot;
+					result = -1;
+					goto error_exit;
+				}
+			}
 		}
 
 		/*
@@ -1734,7 +1993,7 @@ get_partition_for_tuple(PartitionDispatch *pd,
 		 * partition exists.
 		 */
 		cur_index = -1;
-		if (isnull[0] && partdesc->boundinfo->has_null)
+		if (isnull[0] && partition_bound_accepts_nulls(partdesc->boundinfo))
 			cur_index = partdesc->boundinfo->null_index;
 		else if (!isnull[0])
 		{
@@ -1789,6 +2048,7 @@ get_partition_for_tuple(PartitionDispatch *pd,
 			parent = pd[-parent->indexes[cur_index]];
 	}
 
+error_exit:
 	ecxt->ecxt_scantuple = ecxt_scantuple_old;
 	return result;
 }

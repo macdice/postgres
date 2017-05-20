@@ -410,11 +410,6 @@ CREATE TABLE partitioned (
 -- check relkind
 SELECT relkind FROM pg_class WHERE relname = 'partitioned';
 
--- check that range partition key columns are marked NOT NULL
-SELECT attname, attnotnull FROM pg_attribute
-  WHERE attrelid = 'partitioned'::regclass AND attnum > 0
-  ORDER BY attnum;
-
 -- prevent a function referenced in partition key from being dropped
 DROP FUNCTION plusone(int);
 
@@ -472,6 +467,11 @@ CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES FROM ('a') TO ('z', 
 
 -- cannot specify null values in range bounds
 CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES FROM (null) TO (unbounded);
+
+-- cannot specify finite values after UNBOUNDED has been specified
+CREATE TABLE range_parted_multicol (a int, b int, c int) PARTITION BY RANGE (a, b, c);
+CREATE TABLE fail_part PARTITION OF range_parted_multicol FOR VALUES FROM (1, UNBOUNDED, 1) TO (UNBOUNDED, 1, 1);
+DROP TABLE range_parted_multicol;
 
 -- check if compatible with the specified parent
 
@@ -569,6 +569,15 @@ SELECT attname, attislocal, attinhcount FROM pg_attribute
   ORDER BY attnum;
 
 -- able to specify column default, column constraint, and table constraint
+
+-- first check the "column specified more than once" error
+CREATE TABLE part_b PARTITION OF parted (
+	b NOT NULL,
+	b DEFAULT 1,
+	b CHECK (b >= 0),
+	CONSTRAINT check_a CHECK (length(a) > 0)
+) FOR VALUES IN ('b');
+
 CREATE TABLE part_b PARTITION OF parted (
 	b NOT NULL DEFAULT 1 CHECK (b >= 0),
 	CONSTRAINT check_a CHECK (length(a) > 0)
@@ -578,22 +587,38 @@ SELECT conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'part_b'::reg
 
 -- specify PARTITION BY for a partition
 CREATE TABLE fail_part_col_not_found PARTITION OF parted FOR VALUES IN ('c') PARTITION BY RANGE (c);
-CREATE TABLE part_c PARTITION OF parted FOR VALUES IN ('c') PARTITION BY RANGE ((b));
+CREATE TABLE part_c PARTITION OF parted (b WITH OPTIONS NOT NULL DEFAULT 0) FOR VALUES IN ('c') PARTITION BY RANGE ((b));
 
 -- create a level-2 partition
 CREATE TABLE part_c_1_10 PARTITION OF part_c FOR VALUES FROM (1) TO (10);
 
 -- Partition bound in describe output
-\d part_b
+\d+ part_b
 
 -- Both partition bound and partition key in describe output
-\d part_c
+\d+ part_c
+
+-- a level-2 partition's constraint will include the parent's expressions
+\d+ part_c_1_10
 
 -- Show partition count in the parent's describe output
 -- Tempted to include \d+ output listing partitions with bound info but
 -- output could vary depending on the order in which partition oids are
 -- returned.
 \d parted
+
+-- check that we get the expected partition constraints
+CREATE TABLE range_parted4 (a int, b int, c int) PARTITION BY RANGE (abs(a), abs(b), c);
+CREATE TABLE unbounded_range_part PARTITION OF range_parted4 FOR VALUES FROM (UNBOUNDED, UNBOUNDED, UNBOUNDED) TO (UNBOUNDED, UNBOUNDED, UNBOUNDED);
+\d+ unbounded_range_part
+DROP TABLE unbounded_range_part;
+CREATE TABLE range_parted4_1 PARTITION OF range_parted4 FOR VALUES FROM (UNBOUNDED, UNBOUNDED, UNBOUNDED) TO (1, UNBOUNDED, UNBOUNDED);
+\d+ range_parted4_1
+CREATE TABLE range_parted4_2 PARTITION OF range_parted4 FOR VALUES FROM (3, 4, 5) TO (6, 7, UNBOUNDED);
+\d+ range_parted4_2
+CREATE TABLE range_parted4_3 PARTITION OF range_parted4 FOR VALUES FROM (6, 8, UNBOUNDED) TO (9, UNBOUNDED, UNBOUNDED);
+\d+ range_parted4_3
+DROP TABLE range_parted4;
 
 -- cleanup
 DROP TABLE parted, list_parted, range_parted, list_parted2, range_parted2, range_parted3;
