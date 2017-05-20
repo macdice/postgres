@@ -46,7 +46,7 @@ extern bool StandbyTransactionIdIsPrepared(TransactionId xid);
 
 extern TransactionId PrescanPreparedTransactions(TransactionId **xids_p,
 							int *nxids_p);
-extern void StandbyRecoverPreparedTransactions(bool overwriteOK);
+extern void StandbyRecoverPreparedTransactions(void);
 extern void RecoverPreparedTransactions(void);
 
 extern void CheckPointTwoPhase(XLogRecPtr redo_horizon);
@@ -54,7 +54,7 @@ extern void CheckPointTwoPhase(XLogRecPtr redo_horizon);
 extern void FinishPreparedTransaction(const char *gid, bool isCommit);
 
 extern void PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
-						   XLogRecPtr end_lsn);
+			   XLogRecPtr end_lsn);
 extern void PrepareRedoRemove(TransactionId xid, bool giveWarning);
 extern void restoreTwoPhaseData(void);
 #endif   /* TWOPHASE_H */

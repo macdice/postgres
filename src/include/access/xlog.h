@@ -1,7 +1,7 @@
 /*
  * xlog.h
  *
- * PostgreSQL transaction log manager
+ * PostgreSQL write-ahead log manager
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -221,8 +221,8 @@ extern CheckpointStatsData CheckpointStats;
 struct XLogRecData;
 
 extern XLogRecPtr XLogInsertRecord(struct XLogRecData *rdata,
-								   XLogRecPtr fpw_lsn,
-								   uint8 flags);
+				 XLogRecPtr fpw_lsn,
+				 uint8 flags);
 extern void XLogFlush(XLogRecPtr RecPtr);
 extern bool XLogBackgroundFlush(void);
 extern bool XLogNeedsFlush(XLogRecPtr RecPtr);

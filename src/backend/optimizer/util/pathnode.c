@@ -1216,7 +1216,7 @@ create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
 	pathnode->path.parallel_workers = parallel_workers;
 	pathnode->path.pathkeys = NIL;		/* result is always considered
 										 * unsorted */
-	pathnode->partitioned_rels = partitioned_rels;
+	pathnode->partitioned_rels = list_copy(partitioned_rels);
 	pathnode->subpaths = subpaths;
 
 	/*
@@ -1276,7 +1276,7 @@ create_merge_append_path(PlannerInfo *root,
 	pathnode->path.parallel_safe = rel->consider_parallel;
 	pathnode->path.parallel_workers = 0;
 	pathnode->path.pathkeys = pathkeys;
-	pathnode->partitioned_rels = partitioned_rels;
+	pathnode->partitioned_rels = list_copy(partitioned_rels);
 	pathnode->subpaths = subpaths;
 
 	/*
@@ -1642,8 +1642,8 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 						 Relids required_outer, double *rows)
 {
 	GatherMergePath *pathnode = makeNode(GatherMergePath);
-	Cost			 input_startup_cost = 0;
-	Cost			 input_total_cost = 0;
+	Cost		input_startup_cost = 0;
+	Cost		input_total_cost = 0;
 
 	Assert(subpath->parallel_safe);
 	Assert(pathkeys);
@@ -1669,7 +1669,7 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	else
 	{
 		/* We'll need to insert a Sort node, so include cost for that */
-		Path		sort_path;		/* dummy for result of cost_sort */
+		Path		sort_path;	/* dummy for result of cost_sort */
 
 		cost_sort(&sort_path,
 				  root,
@@ -3238,7 +3238,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->operation = operation;
 	pathnode->canSetTag = canSetTag;
 	pathnode->nominalRelation = nominalRelation;
-	pathnode->partitioned_rels = partitioned_rels;
+	pathnode->partitioned_rels = list_copy(partitioned_rels);
 	pathnode->resultRelations = resultRelations;
 	pathnode->subpaths = subpaths;
 	pathnode->subroots = subroots;

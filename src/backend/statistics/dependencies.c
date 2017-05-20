@@ -44,7 +44,7 @@ typedef struct DependencyGeneratorData
 	int			current;		/* next dependency to return (index) */
 	AttrNumber	ndependencies;	/* number of dependencies generated */
 	AttrNumber *dependencies;	/* array of pre-generated dependencies	*/
-}	DependencyGeneratorData;
+} DependencyGeneratorData;
 
 typedef DependencyGeneratorData *DependencyGenerator;
 
@@ -61,7 +61,7 @@ static bool dependency_is_fully_matched(MVDependency *dependency,
 static bool dependency_implies_attribute(MVDependency *dependency,
 							 AttrNumber attnum);
 static bool dependency_is_compatible_clause(Node *clause, Index relid,
-							 AttrNumber *attnum);
+								AttrNumber *attnum);
 static MVDependency *find_strongest_dependency(StatisticExtInfo *stats,
 						  MVDependencies *dependencies,
 						  Bitmapset *attnums);
@@ -342,8 +342,8 @@ dependency_degree(int numrows, HeapTuple *rows, int k, AttrNumber *dependency,
  * detects functional dependencies between groups of columns
  *
  * Generates all possible subsets of columns (variations) and computes
- * the degree of validity for each one. For example with a statistic on
- * three columns (a,b,c) there are 9 possible dependencies
+ * the degree of validity for each one. For example when creating statistics
+ * on three columns (a,b,c) there are 9 possible dependencies
  *
  *	   two columns			  three columns
  *	   -----------			  -------------
@@ -383,8 +383,8 @@ statext_dependencies_build(int numrows, HeapTuple *rows, Bitmapset *attrs,
 	/*
 	 * We'll try build functional dependencies starting from the smallest ones
 	 * covering just 2 columns, to the largest ones, covering all columns
-	 * included in the statistics. We start from the smallest ones because we
-	 * want to be able to skip already implied ones.
+	 * included in the statistics object.  We start from the smallest ones
+	 * because we want to be able to skip already implied ones.
 	 */
 	for (k = 2; k <= numattrs; k++)
 	{
@@ -409,7 +409,7 @@ statext_dependencies_build(int numrows, HeapTuple *rows, Bitmapset *attrs,
 				continue;
 
 			d = (MVDependency *) palloc0(offsetof(MVDependency, attributes)
-										 + k * sizeof(AttrNumber));
+										 +k * sizeof(AttrNumber));
 
 			/* copy the dependency (and keep the indexes into stxkeys) */
 			d->degree = degree;
@@ -431,7 +431,7 @@ statext_dependencies_build(int numrows, HeapTuple *rows, Bitmapset *attrs,
 			dependencies->ndeps++;
 			dependencies = (MVDependencies *) repalloc(dependencies,
 											   offsetof(MVDependencies, deps)
-							   + dependencies->ndeps * sizeof(MVDependency));
+								+dependencies->ndeps * sizeof(MVDependency));
 
 			dependencies->deps[dependencies->ndeps - 1] = d;
 		}
@@ -451,7 +451,7 @@ statext_dependencies_build(int numrows, HeapTuple *rows, Bitmapset *attrs,
  * Serialize list of dependencies into a bytea value.
  */
 bytea *
-statext_dependencies_serialize(MVDependencies * dependencies)
+statext_dependencies_serialize(MVDependencies *dependencies)
 {
 	int			i;
 	bytea	   *output;
@@ -552,7 +552,7 @@ statext_dependencies_deserialize(bytea *data)
 
 	/* allocate space for the MCV items */
 	dependencies = repalloc(dependencies, offsetof(MVDependencies, deps)
-							+ (dependencies->ndeps * sizeof(MVDependency *)));
+							+(dependencies->ndeps * sizeof(MVDependency *)));
 
 	for (i = 0; i < dependencies->ndeps; i++)
 	{
@@ -573,7 +573,7 @@ statext_dependencies_deserialize(bytea *data)
 
 		/* now that we know the number of attributes, allocate the dependency */
 		d = (MVDependency *) palloc0(offsetof(MVDependency, attributes)
-									 + (k * sizeof(AttrNumber)));
+									 +(k * sizeof(AttrNumber)));
 
 		d->degree = degree;
 		d->nattributes = k;
@@ -600,7 +600,7 @@ statext_dependencies_deserialize(bytea *data)
  *		attributes (assuming the clauses are suitable equality clauses)
  */
 static bool
-dependency_is_fully_matched(MVDependency * dependency, Bitmapset *attnums)
+dependency_is_fully_matched(MVDependency *dependency, Bitmapset *attnums)
 {
 	int			j;
 
@@ -624,7 +624,7 @@ dependency_is_fully_matched(MVDependency * dependency, Bitmapset *attnums)
  *		check that the attnum matches is implied by the functional dependency
  */
 static bool
-dependency_implies_attribute(MVDependency * dependency, AttrNumber attnum)
+dependency_implies_attribute(MVDependency *dependency, AttrNumber attnum)
 {
 	if (attnum == dependency->attributes[dependency->nattributes - 1])
 		return true;
@@ -641,19 +641,13 @@ staext_dependencies_load(Oid mvoid)
 {
 	bool		isnull;
 	Datum		deps;
-
-	/*
-	 * Prepare to scan pg_statistic_ext for entries having indrelid = this
-	 * rel.
-	 */
 	HeapTuple	htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(mvoid));
 
 	if (!HeapTupleIsValid(htup))
-		elog(ERROR, "cache lookup failed for extended statistics %u", mvoid);
+		elog(ERROR, "cache lookup failed for statistics object %u", mvoid);
 
 	deps = SysCacheGetAttr(STATEXTOID, htup,
 						   Anum_pg_statistic_ext_stxdependencies, &isnull);
-
 	Assert(!isnull);
 
 	ReleaseSysCache(htup);
@@ -687,16 +681,14 @@ pg_dependencies_in(PG_FUNCTION_ARGS)
 Datum
 pg_dependencies_out(PG_FUNCTION_ARGS)
 {
+	bytea	   *data = PG_GETARG_BYTEA_PP(0);
+	MVDependencies *dependencies = statext_dependencies_deserialize(data);
 	int			i,
 				j;
 	StringInfoData str;
 
-	bytea	   *data = PG_GETARG_BYTEA_PP(0);
-
-	MVDependencies *dependencies = statext_dependencies_deserialize(data);
-
 	initStringInfo(&str);
-	appendStringInfoChar(&str, '[');
+	appendStringInfoChar(&str, '{');
 
 	for (i = 0; i < dependencies->ndeps; i++)
 	{
@@ -705,7 +697,7 @@ pg_dependencies_out(PG_FUNCTION_ARGS)
 		if (i > 0)
 			appendStringInfoString(&str, ", ");
 
-		appendStringInfoChar(&str, '{');
+		appendStringInfoChar(&str, '"');
 		for (j = 0; j < dependency->nattributes; j++)
 		{
 			if (j == dependency->nattributes - 1)
@@ -715,11 +707,10 @@ pg_dependencies_out(PG_FUNCTION_ARGS)
 
 			appendStringInfo(&str, "%d", dependency->attributes[j]);
 		}
-		appendStringInfo(&str, " : %f", dependency->degree);
-		appendStringInfoChar(&str, '}');
+		appendStringInfo(&str, "\": %f", dependency->degree);
 	}
 
-	appendStringInfoChar(&str, ']');
+	appendStringInfoChar(&str, '}');
 
 	PG_RETURN_CSTRING(str.data);
 }
@@ -849,7 +840,7 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
  * (see the comment in dependencies_clauselist_selectivity).
  */
 static MVDependency *
-find_strongest_dependency(StatisticExtInfo * stats, MVDependencies * dependencies,
+find_strongest_dependency(StatisticExtInfo *stats, MVDependencies *dependencies,
 						  Bitmapset *attnums)
 {
 	int			i;
@@ -984,7 +975,7 @@ dependencies_clauselist_selectivity(PlannerInfo *root,
 		return 1.0;
 	}
 
-	/* find the best suited statistics for these attnums */
+	/* find the best suited statistics object for these attnums */
 	stat = choose_best_statistics(rel->statlist, clauses_attnums,
 								  STATS_EXT_DEPENDENCIES);
 
@@ -995,7 +986,7 @@ dependencies_clauselist_selectivity(PlannerInfo *root,
 		return 1.0;
 	}
 
-	/* load the dependency items stored in the statistics */
+	/* load the dependency items stored in the statistics object */
 	dependencies = staext_dependencies_load(stat->statOid);
 
 	/*

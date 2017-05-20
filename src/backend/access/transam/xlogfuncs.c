@@ -2,7 +2,7 @@
  *
  * xlogfuncs.c
  *
- * PostgreSQL transaction log manager user interface functions
+ * PostgreSQL write-ahead log manager user interface functions
  *
  * This file contains WAL control and information functions.
  *
@@ -156,7 +156,8 @@ pg_stop_backup(PG_FUNCTION_ARGS)
 	 * Exclusive backups were typically started in a different connection, so
 	 * don't try to verify that status of backup is set to
 	 * SESSION_BACKUP_EXCLUSIVE in this function. Actual verification that an
-	 * exclusive backup is in fact running is handled inside do_pg_stop_backup.
+	 * exclusive backup is in fact running is handled inside
+	 * do_pg_stop_backup.
 	 */
 	stoppoint = do_pg_stop_backup(NULL, true, NULL);
 
@@ -351,7 +352,7 @@ pg_create_restore_point(PG_FUNCTION_ARGS)
  * to the kernel, but is not necessarily synced to disk.
  */
 Datum
-pg_current_wal_location(PG_FUNCTION_ARGS)
+pg_current_wal_lsn(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	current_recptr;
 
@@ -372,7 +373,7 @@ pg_current_wal_location(PG_FUNCTION_ARGS)
  * This function is mostly for debugging purposes.
  */
 Datum
-pg_current_wal_insert_location(PG_FUNCTION_ARGS)
+pg_current_wal_insert_lsn(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	current_recptr;
 
@@ -393,7 +394,7 @@ pg_current_wal_insert_location(PG_FUNCTION_ARGS)
  * This function is mostly for debugging purposes.
  */
 Datum
-pg_current_wal_flush_location(PG_FUNCTION_ARGS)
+pg_current_wal_flush_lsn(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	current_recptr;
 
@@ -415,7 +416,7 @@ pg_current_wal_flush_location(PG_FUNCTION_ARGS)
  * and synced to disk by walreceiver.
  */
 Datum
-pg_last_wal_receive_location(PG_FUNCTION_ARGS)
+pg_last_wal_receive_lsn(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	recptr;
 
@@ -434,7 +435,7 @@ pg_last_wal_receive_location(PG_FUNCTION_ARGS)
  * connections during recovery.
  */
 Datum
-pg_last_wal_replay_location(PG_FUNCTION_ARGS)
+pg_last_wal_replay_lsn(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	recptr;
 
@@ -527,7 +528,7 @@ pg_walfile_name(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("recovery is in progress"),
-		 errhint("pg_walfile_name() cannot be executed during recovery.")));
+		  errhint("pg_walfile_name() cannot be executed during recovery.")));
 
 	XLByteToPrevSeg(locationpoint, xlogsegno);
 	XLogFileName(xlogfilename, ThisTimeLineID, xlogsegno);
@@ -621,7 +622,7 @@ pg_is_in_recovery(PG_FUNCTION_ARGS)
  * Compute the difference in bytes between two WAL locations.
  */
 Datum
-pg_wal_location_diff(PG_FUNCTION_ARGS)
+pg_wal_lsn_diff(PG_FUNCTION_ARGS)
 {
 	Datum		result;
 
