@@ -363,7 +363,7 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 						 char **snamespace_p, char **sname_p)
 {
 	ListCell   *option;
-	DefElem	   *nameEl = NULL;
+	DefElem    *nameEl = NULL;
 	Oid			snamespaceid;
 	char	   *snamespace;
 	char	   *sname;
@@ -378,12 +378,12 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 	 * used by pg_dump.  Else, generate a name.
 	 *
 	 * Although we use ChooseRelationName, it's not guaranteed that the
-	 * selected sequence name won't conflict; given sufficiently long
-	 * field names, two different serial columns in the same table could
-	 * be assigned the same sequence name, and we'd not notice since we
-	 * aren't creating the sequence quite yet.  In practice this seems
-	 * quite unlikely to be a problem, especially since few people would
-	 * need two serial columns in one table.
+	 * selected sequence name won't conflict; given sufficiently long field
+	 * names, two different serial columns in the same table could be assigned
+	 * the same sequence name, and we'd not notice since we aren't creating
+	 * the sequence quite yet.  In practice this seems quite unlikely to be a
+	 * problem, especially since few people would need two serial columns in
+	 * one table.
 	 */
 
 	foreach(option, seqoptions)
@@ -402,7 +402,8 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 
 	if (nameEl)
 	{
-		RangeVar *rv = makeRangeVarFromNameList(castNode(List, nameEl->arg));
+		RangeVar   *rv = makeRangeVarFromNameList(castNode(List, nameEl->arg));
+
 		snamespace = rv->schemaname;
 		sname = rv->relname;
 		seqoptions = list_delete_ptr(seqoptions, nameEl);
@@ -429,14 +430,14 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 					cxt->relation->relname, column->colname)));
 
 	/*
-	 * Build a CREATE SEQUENCE command to create the sequence object, and
-	 * add it to the list of things to be done before this CREATE/ALTER
-	 * TABLE.
+	 * Build a CREATE SEQUENCE command to create the sequence object, and add
+	 * it to the list of things to be done before this CREATE/ALTER TABLE.
 	 */
 	seqstmt = makeNode(CreateSeqStmt);
 	seqstmt->for_identity = for_identity;
 	seqstmt->sequence = makeRangeVar(snamespace, sname, -1);
 	seqstmt->options = seqoptions;
+
 	/*
 	 * If a sequence data type was specified, add it to the options.  Prepend
 	 * to the list rather than append; in case a user supplied their own AS
@@ -448,11 +449,11 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 								 seqstmt->options);
 
 	/*
-	 * If this is ALTER ADD COLUMN, make sure the sequence will be owned
-	 * by the table's owner.  The current user might be someone else
-	 * (perhaps a superuser, or someone who's only a member of the owning
-	 * role), but the SEQUENCE OWNED BY mechanisms will bleat unless table
-	 * and sequence have exactly the same owning role.
+	 * If this is ALTER ADD COLUMN, make sure the sequence will be owned by
+	 * the table's owner.  The current user might be someone else (perhaps a
+	 * superuser, or someone who's only a member of the owning role), but the
+	 * SEQUENCE OWNED BY mechanisms will bleat unless table and sequence have
+	 * exactly the same owning role.
 	 */
 	if (cxt->rel)
 		seqstmt->ownerId = cxt->rel->rd_rel->relowner;
@@ -462,9 +463,9 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 	cxt->blist = lappend(cxt->blist, seqstmt);
 
 	/*
-	 * Build an ALTER SEQUENCE ... OWNED BY command to mark the sequence
-	 * as owned by this column, and add it to the list of things to be
-	 * done after this CREATE/ALTER TABLE.
+	 * Build an ALTER SEQUENCE ... OWNED BY command to mark the sequence as
+	 * owned by this column, and add it to the list of things to be done after
+	 * this CREATE/ALTER TABLE.
 	 */
 	altseqstmt = makeNode(AlterSeqStmt);
 	altseqstmt->sequence = makeRangeVar(snamespace, sname, -1);
@@ -647,31 +648,31 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 				break;
 
 			case CONSTR_IDENTITY:
-			{
-				Type		ctype;
-				Oid			typeOid;
+				{
+					Type		ctype;
+					Oid			typeOid;
 
-				ctype = typenameType(cxt->pstate, column->typeName, NULL);
-				typeOid = HeapTupleGetOid(ctype);
-				ReleaseSysCache(ctype);
+					ctype = typenameType(cxt->pstate, column->typeName, NULL);
+					typeOid = HeapTupleGetOid(ctype);
+					ReleaseSysCache(ctype);
 
-				if (saw_identity)
-					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("multiple identity specifications for column \"%s\" of table \"%s\"",
+					if (saw_identity)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("multiple identity specifications for column \"%s\" of table \"%s\"",
 									column->colname, cxt->relation->relname),
-							 parser_errposition(cxt->pstate,
-												constraint->location)));
+								 parser_errposition(cxt->pstate,
+													constraint->location)));
 
-				generateSerialExtraStmts(cxt, column,
-										 typeOid, constraint->options, true,
-										 NULL, NULL);
+					generateSerialExtraStmts(cxt, column,
+										  typeOid, constraint->options, true,
+											 NULL, NULL);
 
-				column->identity = constraint->generated_when;
-				saw_identity = true;
-				column->is_not_null = TRUE;
-				break;
-			}
+					column->identity = constraint->generated_when;
+					saw_identity = true;
+					column->is_not_null = TRUE;
+					break;
+				}
 
 			case CONSTR_CHECK:
 				cxt->ckconstraints = lappend(cxt->ckconstraints, constraint);
@@ -983,6 +984,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		def->is_local = true;
 		def->is_not_null = attribute->attnotnull;
 		def->is_from_type = false;
+		def->is_from_parent = false;
 		def->storage = 0;
 		def->raw_default = NULL;
 		def->cooked_default = NULL;
@@ -1035,7 +1037,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		if (attribute->attidentity &&
 			(table_like_clause->options & CREATE_TABLE_LIKE_IDENTITY))
 		{
-			Oid         seq_relid;
+			Oid			seq_relid;
 			List	   *seq_options;
 
 			/*
@@ -1066,7 +1068,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 
 			stmt->objtype = OBJECT_COLUMN;
 			stmt->object = (Node *) list_make3(makeString(cxt->relation->schemaname),
-											   makeString(cxt->relation->relname),
+										  makeString(cxt->relation->relname),
 											   makeString(def->colname));
 			stmt->comment = comment;
 
@@ -1131,7 +1133,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 
 				stmt->objtype = OBJECT_TABCONSTRAINT;
 				stmt->object = (Node *) list_make3(makeString(cxt->relation->schemaname),
-												   makeString(cxt->relation->relname),
+										  makeString(cxt->relation->relname),
 												   makeString(n->conname));
 				stmt->comment = comment;
 
@@ -1221,6 +1223,7 @@ transformOfType(CreateStmtContext *cxt, TypeName *ofTypename)
 		n->is_local = true;
 		n->is_not_null = false;
 		n->is_from_type = true;
+		n->is_from_parent = false;
 		n->storage = 0;
 		n->raw_default = NULL;
 		n->cooked_default = NULL;
@@ -2764,7 +2767,11 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 					 * change the data type of the sequence.
 					 */
 					attnum = get_attnum(relid, cmd->name);
-					/* if attribute not found, something will error about it later */
+
+					/*
+					 * if attribute not found, something will error about it
+					 * later
+					 */
 					if (attnum != InvalidAttrNumber && get_attidentity(relid, attnum))
 					{
 						Oid			seq_relid = getOwnedSequence(relid, attnum);
@@ -2772,7 +2779,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 						AlterSeqStmt *altseqstmt = makeNode(AlterSeqStmt);
 
 						altseqstmt->sequence = makeRangeVar(get_namespace_name(get_rel_namespace(seq_relid)),
-															get_rel_name(seq_relid),
+													 get_rel_name(seq_relid),
 															-1);
 						altseqstmt->options = list_make1(makeDefElem("as", (Node *) makeTypeNameFromOid(typeOid, -1), -1));
 						altseqstmt->for_identity = true;
@@ -2785,8 +2792,8 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 
 			case AT_AddIdentity:
 				{
-					Constraint  *def = castNode(Constraint, cmd->def);
-					ColumnDef *newdef = makeNode(ColumnDef);
+					Constraint *def = castNode(Constraint, cmd->def);
+					ColumnDef  *newdef = makeNode(ColumnDef);
 					AttrNumber	attnum;
 
 					newdef->colname = cmd->name;
@@ -2794,7 +2801,11 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 					cmd->def = (Node *) newdef;
 
 					attnum = get_attnum(relid, cmd->name);
-					/* if attribute not found, something will error about it later */
+
+					/*
+					 * if attribute not found, something will error about it
+					 * later
+					 */
 					if (attnum != InvalidAttrNumber)
 						generateSerialExtraStmts(&cxt, newdef,
 												 get_atttype(relid, attnum),
@@ -2823,7 +2834,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 					 */
 					foreach(lc, castNode(List, cmd->def))
 					{
-						DefElem	   *def = lfirst_node(DefElem, lc);
+						DefElem    *def = lfirst_node(DefElem, lc);
 
 						if (strcmp(def->defname, "generated") == 0)
 							newdef = lappend(newdef, def);
@@ -2844,7 +2855,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 							seqstmt = makeNode(AlterSeqStmt);
 							seq_relid = linitial_oid(seqlist);
 							seqstmt->sequence = makeRangeVar(get_namespace_name(get_rel_namespace(seq_relid)),
-															 get_rel_name(seq_relid), -1);
+												get_rel_name(seq_relid), -1);
 							seqstmt->options = newseqopts;
 							seqstmt->for_identity = true;
 							seqstmt->missing_ok = false;
@@ -2852,8 +2863,11 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 							cxt.alist = lappend(cxt.alist, seqstmt);
 						}
 					}
-					/* If column was not found or was not an identity column, we
-					 * just let the ALTER TABLE command error out later. */
+
+					/*
+					 * If column was not found or was not an identity column,
+					 * we just let the ALTER TABLE command error out later.
+					 */
 
 					cmd->def = (Node *) newdef;
 					newcmds = lappend(newcmds, cmd);
@@ -3356,6 +3370,7 @@ transformPartitionBound(ParseState *pstate, Relation parent, Node *bound)
 		int			i,
 					j;
 		char	   *colname;
+		bool		seen_unbounded;
 
 		if (spec->strategy != PARTITION_STRATEGY_RANGE)
 			ereport(ERROR,
@@ -3373,6 +3388,39 @@ transformPartitionBound(ParseState *pstate, Relation parent, Node *bound)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					 errmsg("TO must specify exactly one value per partitioning column")));
+
+		/*
+		 * Check that no finite value follows a UNBOUNDED literal in either of
+		 * lower and upper bound lists.
+		 */
+		seen_unbounded = false;
+		foreach(cell1, spec->lowerdatums)
+		{
+			PartitionRangeDatum *ldatum;
+
+			ldatum = (PartitionRangeDatum *) lfirst(cell1);
+			if (ldatum->infinite)
+				seen_unbounded = true;
+			else if (seen_unbounded)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+					   errmsg("cannot specify finite value after UNBOUNDED"),
+				 parser_errposition(pstate, exprLocation((Node *) ldatum))));
+		}
+		seen_unbounded = false;
+		foreach(cell1, spec->upperdatums)
+		{
+			PartitionRangeDatum *rdatum;
+
+			rdatum = (PartitionRangeDatum *) lfirst(cell1);
+			if (rdatum->infinite)
+				seen_unbounded = true;
+			else if (seen_unbounded)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+					   errmsg("cannot specify finite value after UNBOUNDED"),
+				 parser_errposition(pstate, exprLocation((Node *) rdatum))));
+		}
 
 		i = j = 0;
 		result_spec->lowerdatums = result_spec->upperdatums = NIL;

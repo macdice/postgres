@@ -91,6 +91,7 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_NODE_FIELD(rtable);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_NODE_FIELD(nonleafResultRelations);
+	COPY_NODE_FIELD(rootResultRelations);
 	COPY_NODE_FIELD(subplans);
 	COPY_BITMAPSET_FIELD(rewindPlanIDs);
 	COPY_NODE_FIELD(rowMarks);
@@ -205,6 +206,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(partitioned_rels);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_SCALAR_FIELD(resultRelIndex);
+	COPY_SCALAR_FIELD(rootResultRelIndex);
 	COPY_NODE_FIELD(plans);
 	COPY_NODE_FIELD(withCheckOptionLists);
 	COPY_NODE_FIELD(returningLists);
@@ -371,7 +373,7 @@ _copyGather(const Gather *from)
 static GatherMerge *
 _copyGatherMerge(const GatherMerge *from)
 {
-	GatherMerge	   *newnode = makeNode(GatherMerge);
+	GatherMerge *newnode = makeNode(GatherMerge);
 
 	/*
 	 * copy node superclass fields
@@ -689,7 +691,7 @@ _copyCteScan(const CteScan *from)
 static NamedTuplestoreScan *
 _copyNamedTuplestoreScan(const NamedTuplestoreScan *from)
 {
-	NamedTuplestoreScan    *newnode = makeNode(NamedTuplestoreScan);
+	NamedTuplestoreScan *newnode = makeNode(NamedTuplestoreScan);
 
 	/*
 	 * copy node superclass fields
@@ -1050,8 +1052,6 @@ _copyHash(const Hash *from)
 	COPY_SCALAR_FIELD(skewTable);
 	COPY_SCALAR_FIELD(skewColumn);
 	COPY_SCALAR_FIELD(skewInherit);
-	COPY_SCALAR_FIELD(skewColType);
-	COPY_SCALAR_FIELD(skewColTypmod);
 	COPY_SCALAR_FIELD(rows_total);
 
 	return newnode;
@@ -2805,6 +2805,7 @@ _copyColumnDef(const ColumnDef *from)
 	COPY_SCALAR_FIELD(is_local);
 	COPY_SCALAR_FIELD(is_not_null);
 	COPY_SCALAR_FIELD(is_from_type);
+	COPY_SCALAR_FIELD(is_from_parent);
 	COPY_SCALAR_FIELD(storage);
 	COPY_NODE_FIELD(raw_default);
 	COPY_NODE_FIELD(cooked_default);
@@ -3387,9 +3388,9 @@ _copyCreateStatsStmt(const CreateStatsStmt *from)
 	CreateStatsStmt *newnode = makeNode(CreateStatsStmt);
 
 	COPY_NODE_FIELD(defnames);
-	COPY_NODE_FIELD(relation);
-	COPY_NODE_FIELD(keys);
-	COPY_NODE_FIELD(options);
+	COPY_NODE_FIELD(stat_types);
+	COPY_NODE_FIELD(exprs);
+	COPY_NODE_FIELD(relations);
 	COPY_SCALAR_FIELD(if_not_exists);
 
 	return newnode;
@@ -4535,8 +4536,8 @@ _copyDropSubscriptionStmt(const DropSubscriptionStmt *from)
 	DropSubscriptionStmt *newnode = makeNode(DropSubscriptionStmt);
 
 	COPY_STRING_FIELD(subname);
-	COPY_SCALAR_FIELD(drop_slot);
 	COPY_SCALAR_FIELD(missing_ok);
+	COPY_SCALAR_FIELD(behavior);
 
 	return newnode;
 }

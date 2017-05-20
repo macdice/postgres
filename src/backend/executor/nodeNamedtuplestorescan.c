@@ -107,7 +107,7 @@ ExecInitNamedTuplestoreScan(NamedTuplestoreScan *node, EState *estate, int eflag
 	scanstate->relation = (Tuplestorestate *) enr->reldata;
 	scanstate->tupdesc = ENRMetadataGetTupDesc(&(enr->md));
 	scanstate->readptr =
-		tuplestore_alloc_read_pointer(scanstate->relation, 0);
+		tuplestore_alloc_read_pointer(scanstate->relation, EXEC_FLAG_REWIND);
 
 	/*
 	 * The new read pointer copies its position from read pointer 0, which
@@ -117,6 +117,7 @@ ExecInitNamedTuplestoreScan(NamedTuplestoreScan *node, EState *estate, int eflag
 
 	/*
 	 * XXX: Should we add a function to free that read pointer when done?
+	 *
 	 * This was attempted, but it did not improve performance or memory usage
 	 * in any tested cases.
 	 */

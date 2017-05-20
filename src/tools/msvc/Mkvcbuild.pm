@@ -35,8 +35,7 @@ my @contrib_uselibpq = ('dblink', 'oid2name', 'postgres_fdw', 'vacuumlo');
 my @contrib_uselibpgport   = ('oid2name', 'pg_standby', 'vacuumlo');
 my @contrib_uselibpgcommon = ('oid2name', 'pg_standby', 'vacuumlo');
 my $contrib_extralibs      = undef;
-my $contrib_extraincludes =
-  { 'dblink' => ['src/backend'] };
+my $contrib_extraincludes = { 'dblink' => ['src/backend'] };
 my $contrib_extrasource = {
 	'cube' => [ 'contrib/cube/cubescan.l', 'contrib/cube/cubeparse.y' ],
 	'seg'  => [ 'contrib/seg/segscan.l',   'contrib/seg/segparse.y' ], };
@@ -54,11 +53,11 @@ my @frontend_uselibpq = ('pg_ctl', 'pg_upgrade', 'pgbench', 'psql', 'initdb');
 my @frontend_uselibpgport = (
 	'pg_archivecleanup', 'pg_test_fsync',
 	'pg_test_timing',    'pg_upgrade',
-	'pg_waldump',       'pgbench');
+	'pg_waldump',        'pgbench');
 my @frontend_uselibpgcommon = (
 	'pg_archivecleanup', 'pg_test_fsync',
 	'pg_test_timing',    'pg_upgrade',
-	'pg_waldump',       'pgbench');
+	'pg_waldump',        'pgbench');
 my $frontend_extralibs = {
 	'initdb'     => ['ws2_32.lib'],
 	'pg_restore' => ['ws2_32.lib'],
@@ -72,7 +71,7 @@ my $frontend_extrasource = {
 	'pgbench' =>
 	  [ 'src/bin/pgbench/exprscan.l', 'src/bin/pgbench/exprparse.y' ] };
 my @frontend_excludes = (
-	'pgevent',     'pg_basebackup', 'pg_rewind', 'pg_dump',
+	'pgevent',    'pg_basebackup', 'pg_rewind', 'pg_dump',
 	'pg_waldump', 'scripts');
 
 sub mkvcbuild
@@ -204,20 +203,24 @@ sub mkvcbuild
 
 	if ($solution->{options}->{tcl})
 	{
+		my $found = 0;
 		my $pltcl =
 		  $solution->AddProject('pltcl', 'dll', 'PLs', 'src/pl/tcl');
 		$pltcl->AddIncludeDir($solution->{options}->{tcl} . '/include');
 		$pltcl->AddReference($postgres);
-		if (-e $solution->{options}->{tcl} . '/lib/tcl85.lib')
+
+		for my $tclver (qw(86t 85 84))
 		{
-			$pltcl->AddLibrary(
-				$solution->{options}->{tcl} . '/lib/tcl85.lib');
+			my $tcllib = $solution->{options}->{tcl} . "/lib/tcl$tclver.lib";
+			if (-e $tcllib)
+			{
+				$pltcl->AddLibrary($tcllib);
+				$found = 1;
+				last;
+			}
 		}
-		else
-		{
-			$pltcl->AddLibrary(
-				$solution->{options}->{tcl} . '/lib/tcl84.lib');
-		}
+		die "Unable to find $solution->{options}->{tcl}/lib/tcl<version>.lib"
+		  unless $found;
 	}
 
 	$libpq = $solution->AddProject('libpq', 'dll', 'interfaces',
@@ -251,6 +254,10 @@ sub mkvcbuild
 		'src/backend/replication/libpqwalreceiver');
 	$libpqwalreceiver->AddIncludeDir('src/interfaces/libpq');
 	$libpqwalreceiver->AddReference($postgres, $libpq);
+
+	my $pgoutput = $solution->AddProject('pgoutput', 'dll', '',
+		'src/backend/replication/pgoutput');
+	$pgoutput->AddReference($postgres);
 
 	my $pgtypes = $solution->AddProject(
 		'libpgtypes', 'dll',
@@ -495,12 +502,14 @@ sub mkvcbuild
 			'hstore_plpython' . $pymajorver, 'contrib/hstore_plpython',
 			'plpython' . $pymajorver,        'src/pl/plpython',
 			'hstore',                        'contrib/hstore');
-		$hstore_plpython->AddDefine('PLPYTHON_LIBNAME="plpython' . $pymajorver . '"');
+		$hstore_plpython->AddDefine(
+			'PLPYTHON_LIBNAME="plpython' . $pymajorver . '"');
 		my $ltree_plpython = AddTransformModule(
 			'ltree_plpython' . $pymajorver, 'contrib/ltree_plpython',
 			'plpython' . $pymajorver,       'src/pl/plpython',
 			'ltree',                        'contrib/ltree');
-		$ltree_plpython->AddDefine('PLPYTHON_LIBNAME="plpython' . $pymajorver . '"');
+		$ltree_plpython->AddDefine(
+			'PLPYTHON_LIBNAME="plpython' . $pymajorver . '"');
 	}
 
 	if ($solution->{options}->{perl})
@@ -577,15 +586,15 @@ sub mkvcbuild
 		$plperl->AddReference($postgres);
 		my $perl_path = $solution->{options}->{perl} . '\lib\CORE\perl*.lib';
 		my @perl_libs =
-		  grep { /perl\d+.lib$/ }
-		  glob($perl_path);
+		  grep { /perl\d+.lib$/ } glob($perl_path);
 		if (@perl_libs == 1)
 		{
 			$plperl->AddLibrary($perl_libs[0]);
 		}
 		else
 		{
-			die "could not identify perl library version matching pattern $perl_path\n";
+			die
+"could not identify perl library version matching pattern $perl_path\n";
 		}
 
 		# Add transform module dependent on plperl

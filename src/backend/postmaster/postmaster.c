@@ -1251,7 +1251,7 @@ PostmasterMain(int argc, char *argv[])
 		ereport(LOG,
 				(errcode_for_file_access(),
 				 errmsg("could not remove file \"%s\": %m",
-					LOG_METAINFO_DATAFILE)));
+						LOG_METAINFO_DATAFILE)));
 
 	/*
 	 * If enabled, start up syslogger collection subprocess
@@ -2918,7 +2918,7 @@ reaper(SIGNAL_ARGS)
 				 * Waken walsenders for the last time. No regular backends
 				 * should be around anymore.
 				 */
-				SignalChildren(SIGUSR2);
+				SignalChildren(SIGINT);
 
 				pmState = PM_SHUTDOWN_2;
 
@@ -3071,7 +3071,7 @@ CleanupBackgroundWorker(int pid,
 						int exitstatus) /* child's exit status */
 {
 	char		namebuf[MAXPGPATH];
-	slist_mutable_iter	iter;
+	slist_mutable_iter iter;
 
 	slist_foreach_modify(iter, &BackgroundWorkerList)
 	{
@@ -3147,7 +3147,7 @@ CleanupBackgroundWorker(int pid,
 		rw->rw_backend = NULL;
 		rw->rw_pid = 0;
 		rw->rw_child_slot = 0;
-		ReportBackgroundWorkerExit(&iter);	/* report child death */
+		ReportBackgroundWorkerExit(&iter);		/* report child death */
 
 		LogChildExit(EXIT_STATUS_0(exitstatus) ? DEBUG1 : LOG,
 					 namebuf, pid, exitstatus);
@@ -3656,7 +3656,9 @@ PostmasterStateMachine(void)
 				/*
 				 * If we get here, we are proceeding with normal shutdown. All
 				 * the regular children are gone, and it's time to tell the
-				 * checkpointer to do a shutdown checkpoint.
+				 * checkpointer to do a shutdown checkpoint. All WAL senders
+				 * are told to switch to a stopping state so that the shutdown
+				 * checkpoint can go ahead.
 				 */
 				Assert(Shutdown > NoShutdown);
 				/* Start the checkpointer if not running */
@@ -3665,6 +3667,7 @@ PostmasterStateMachine(void)
 				/* And tell it to shut down */
 				if (CheckpointerPID != 0)
 				{
+					SignalSomeChildren(SIGUSR2, BACKEND_TYPE_WALSND);
 					signal_child(CheckpointerPID, SIGUSR2);
 					pmState = PM_SHUTDOWN;
 				}
@@ -5033,7 +5036,7 @@ sigusr1_handler(SIGNAL_ARGS)
 	{
 		/*
 		 * Send SIGUSR1 to archiver process, to wake it up and begin archiving
-		 * next transaction log file.
+		 * next WAL file.
 		 */
 		signal_child(PgArchPID, SIGUSR1);
 	}
@@ -5146,11 +5149,12 @@ RandomCancelKey(int32 *cancel_key)
 #ifdef HAVE_STRONG_RANDOM
 	return pg_strong_random((char *) cancel_key, sizeof(int32));
 #else
+
 	/*
 	 * If built with --disable-strong-random, use plain old erand48.
 	 *
-	 * We cannot use pg_backend_random() in postmaster, because it stores
-	 * its state in shared memory.
+	 * We cannot use pg_backend_random() in postmaster, because it stores its
+	 * state in shared memory.
 	 */
 	static unsigned short seed[3];
 
@@ -5345,10 +5349,10 @@ StartAutovacuumWorker(void)
 	if (canAcceptConnections() == CAC_OK)
 	{
 		/*
-		 * Compute the cancel key that will be assigned to this session.
-		 * We probably don't need cancel keys for autovac workers, but
-		 * we'd better have something random in the field to prevent
-		 * unfriendly people from sending cancels to them.
+		 * Compute the cancel key that will be assigned to this session. We
+		 * probably don't need cancel keys for autovac workers, but we'd
+		 * better have something random in the field to prevent unfriendly
+		 * people from sending cancels to them.
 		 */
 		if (!RandomCancelKey(&MyCancelKey))
 		{

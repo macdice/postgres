@@ -943,7 +943,7 @@ ProcArrayApplyXidAssignment(TransactionId topxid,
 	 * have attempted to SubTransSetParent().
 	 */
 	for (i = 0; i < nsubxids; i++)
-		SubTransSetParent(subxids[i], topxid, false);
+		SubTransSetParent(subxids[i], topxid);
 
 	/* KnownAssignedXids isn't maintained yet, so we're done for now */
 	if (standbyState == STANDBY_INITIALIZED)
@@ -2151,7 +2151,7 @@ GetOldestActiveTransactionId(void)
  * that the caller will immediately use the xid to peg the xmin horizon.
  */
 TransactionId
-GetOldestSafeDecodingTransactionId(void)
+GetOldestSafeDecodingTransactionId(bool catalogOnly)
 {
 	ProcArrayStruct *arrayP = procArray;
 	TransactionId oldestSafeXid;
@@ -2174,9 +2174,17 @@ GetOldestSafeDecodingTransactionId(void)
 	/*
 	 * If there's already a slot pegging the xmin horizon, we can start with
 	 * that value, it's guaranteed to be safe since it's computed by this
-	 * routine initially and has been enforced since.
+	 * routine initially and has been enforced since.  We can always use the
+	 * slot's general xmin horizon, but the catalog horizon is only usable
+	 * when we only catalog data is going to be looked at.
 	 */
-	if (TransactionIdIsValid(procArray->replication_slot_catalog_xmin) &&
+	if (TransactionIdIsValid(procArray->replication_slot_xmin) &&
+		TransactionIdPrecedes(procArray->replication_slot_xmin,
+							  oldestSafeXid))
+		oldestSafeXid = procArray->replication_slot_xmin;
+
+	if (catalogOnly &&
+		TransactionIdIsValid(procArray->replication_slot_catalog_xmin) &&
 		TransactionIdPrecedes(procArray->replication_slot_catalog_xmin,
 							  oldestSafeXid))
 		oldestSafeXid = procArray->replication_slot_catalog_xmin;

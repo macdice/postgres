@@ -1328,19 +1328,29 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 static void
 fireBSTriggers(ModifyTableState *node)
 {
+	ResultRelInfo *resultRelInfo = node->resultRelInfo;
+
+	/*
+	 * If the node modifies a partitioned table, we must fire its triggers.
+	 * Note that in that case, node->resultRelInfo points to the first leaf
+	 * partition, not the root table.
+	 */
+	if (node->rootResultRelInfo != NULL)
+		resultRelInfo = node->rootResultRelInfo;
+
 	switch (node->operation)
 	{
 		case CMD_INSERT:
-			ExecBSInsertTriggers(node->ps.state, node->resultRelInfo);
+			ExecBSInsertTriggers(node->ps.state, resultRelInfo);
 			if (node->mt_onconflict == ONCONFLICT_UPDATE)
 				ExecBSUpdateTriggers(node->ps.state,
-									 node->resultRelInfo);
+									 resultRelInfo);
 			break;
 		case CMD_UPDATE:
-			ExecBSUpdateTriggers(node->ps.state, node->resultRelInfo);
+			ExecBSUpdateTriggers(node->ps.state, resultRelInfo);
 			break;
 		case CMD_DELETE:
-			ExecBSDeleteTriggers(node->ps.state, node->resultRelInfo);
+			ExecBSDeleteTriggers(node->ps.state, resultRelInfo);
 			break;
 		default:
 			elog(ERROR, "unknown operation");
@@ -1354,19 +1364,29 @@ fireBSTriggers(ModifyTableState *node)
 static void
 fireASTriggers(ModifyTableState *node)
 {
+	ResultRelInfo *resultRelInfo = node->resultRelInfo;
+
+	/*
+	 * If the node modifies a partitioned table, we must fire its triggers.
+	 * Note that in that case, node->resultRelInfo points to the first leaf
+	 * partition, not the root table.
+	 */
+	if (node->rootResultRelInfo != NULL)
+		resultRelInfo = node->rootResultRelInfo;
+
 	switch (node->operation)
 	{
 		case CMD_INSERT:
 			if (node->mt_onconflict == ONCONFLICT_UPDATE)
 				ExecASUpdateTriggers(node->ps.state,
-									 node->resultRelInfo);
-			ExecASInsertTriggers(node->ps.state, node->resultRelInfo);
+									 resultRelInfo);
+			ExecASInsertTriggers(node->ps.state, resultRelInfo);
 			break;
 		case CMD_UPDATE:
-			ExecASUpdateTriggers(node->ps.state, node->resultRelInfo);
+			ExecASUpdateTriggers(node->ps.state, resultRelInfo);
 			break;
 		case CMD_DELETE:
-			ExecASDeleteTriggers(node->ps.state, node->resultRelInfo);
+			ExecASDeleteTriggers(node->ps.state, resultRelInfo);
 			break;
 		default:
 			elog(ERROR, "unknown operation");
@@ -1652,6 +1672,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	mtstate->mt_plans = (PlanState **) palloc0(sizeof(PlanState *) * nplans);
 	mtstate->resultRelInfo = estate->es_result_relations + node->resultRelIndex;
+
+	/* If modifying a partitioned table, initialize the root table info */
+	if (node->rootResultRelIndex >= 0)
+		mtstate->rootResultRelInfo = estate->es_root_result_relations +
+			node->rootResultRelIndex;
+
 	mtstate->mt_arowmarks = (List **) palloc0(sizeof(List *) * nplans);
 	mtstate->mt_nplans = nplans;
 	mtstate->mt_onconflict = node->onConflictAction;
@@ -1727,12 +1753,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	/* The root table RT index is at the head of the partitioned_rels list */
 	if (node->partitioned_rels)
 	{
-		Index	root_rti;
-		Oid		root_oid;
+		Index		root_rti;
+		Oid			root_oid;
 
 		root_rti = linitial_int(node->partitioned_rels);
 		root_oid = getrelid(root_rti, estate->es_range_table);
-		rel = heap_open(root_oid, NoLock);	/* locked by InitPlan */
+		rel = heap_open(root_oid, NoLock);		/* locked by InitPlan */
 	}
 	else
 		rel = mtstate->resultRelInfo->ri_RelationDesc;
@@ -1789,15 +1815,15 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	}
 
 	/*
-	 * Build WITH CHECK OPTION constraints for each leaf partition rel.
-	 * Note that we didn't build the withCheckOptionList for each partition
-	 * within the planner, but simple translation of the varattnos for each
-	 * partition will suffice.  This only occurs for the INSERT case;
-	 * UPDATE/DELETE cases are handled above.
+	 * Build WITH CHECK OPTION constraints for each leaf partition rel. Note
+	 * that we didn't build the withCheckOptionList for each partition within
+	 * the planner, but simple translation of the varattnos for each partition
+	 * will suffice.  This only occurs for the INSERT case; UPDATE/DELETE
+	 * cases are handled above.
 	 */
 	if (node->withCheckOptionLists != NIL && mtstate->mt_num_partitions > 0)
 	{
-		List		*wcoList;
+		List	   *wcoList;
 
 		Assert(operation == CMD_INSERT);
 		resultRelInfo = mtstate->mt_partitions;
