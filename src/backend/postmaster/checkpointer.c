@@ -558,7 +558,7 @@ CheckpointerMain(void)
 
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   cur_timeout * 1000L /* convert to ms */,
+					   cur_timeout * 1000L /* convert to ms */ ,
 					   WAIT_EVENT_CHECKPOINTER_MAIN);
 
 		/*
@@ -611,7 +611,8 @@ CheckArchiveTimeout(void)
 	{
 		/*
 		 * Switch segment only when "important" WAL has been logged since the
-		 * last segment switch.
+		 * last segment switch (last_switch_lsn points to end of segment
+		 * switch occurred in).
 		 */
 		if (GetLastImportantRecPtr() > last_switch_lsn)
 		{
@@ -625,9 +626,8 @@ CheckArchiveTimeout(void)
 			 * assume nothing happened.
 			 */
 			if ((switchpoint % XLogSegSize) != 0)
-				ereport(DEBUG1,
-						(errmsg("transaction log switch forced (archive_timeout=%d)",
-								XLogArchiveTimeout)));
+				elog(DEBUG1, "write-ahead log switch forced (archive_timeout=%d)",
+					 XLogArchiveTimeout);
 		}
 
 		/*

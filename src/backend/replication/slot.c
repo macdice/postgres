@@ -398,6 +398,22 @@ ReplicationSlotRelease(void)
 		SpinLockRelease(&slot->mutex);
 	}
 
+
+	/*
+	 * If slot needed to temporarily restrain both data and catalog xmin to
+	 * create the catalog snapshot, remove that temporary constraint.
+	 * Snapshots can only be exported while the initial snapshot is still
+	 * acquired.
+	 */
+	if (!TransactionIdIsValid(slot->data.xmin) &&
+		TransactionIdIsValid(slot->effective_xmin))
+	{
+		SpinLockAcquire(&slot->mutex);
+		slot->effective_xmin = InvalidTransactionId;
+		SpinLockRelease(&slot->mutex);
+		ReplicationSlotsComputeRequiredXmin(false);
+	}
+
 	MyReplicationSlot = NULL;
 
 	/* might not have been set when we've been a plain slot */
@@ -486,8 +502,8 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	/*
 	 * Rename the slot directory on disk, so that we'll no longer recognize
 	 * this as a valid slot.  Note that if this fails, we've got to mark the
-	 * slot inactive before bailing out.  If we're dropping an ephemeral or
-	 * a temporary slot, we better never fail hard as the caller won't expect
+	 * slot inactive before bailing out.  If we're dropping an ephemeral or a
+	 * temporary slot, we better never fail hard as the caller won't expect
 	 * the slot to survive and this might get called during error handling.
 	 */
 	if (rename(path, tmppath) == 0)
@@ -612,6 +628,9 @@ ReplicationSlotPersist(void)
 
 /*
  * Compute the oldest xmin across all slots and store it in the ProcArray.
+ *
+ * If already_locked is true, ProcArrayLock has already been acquired
+ * exclusively.
  */
 void
 ReplicationSlotsComputeRequiredXmin(bool already_locked)
@@ -622,8 +641,7 @@ ReplicationSlotsComputeRequiredXmin(bool already_locked)
 
 	Assert(ReplicationSlotCtl != NULL);
 
-	if (!already_locked)
-		LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
 
 	for (i = 0; i < max_replication_slots; i++)
 	{
@@ -652,8 +670,7 @@ ReplicationSlotsComputeRequiredXmin(bool already_locked)
 			agg_catalog_xmin = effective_catalog_xmin;
 	}
 
-	if (!already_locked)
-		LWLockRelease(ReplicationSlotControlLock);
+	LWLockRelease(ReplicationSlotControlLock);
 
 	ProcArraySetReplicationSlotXmin(agg_xmin, agg_catalog_xmin, already_locked);
 }
@@ -822,8 +839,8 @@ restart:
 	for (i = 0; i < max_replication_slots; i++)
 	{
 		ReplicationSlot *s;
-		char *slotname;
-		int active_pid;
+		char	   *slotname;
+		int			active_pid;
 
 		s = &ReplicationSlotCtl->replication_slots[i];
 

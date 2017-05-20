@@ -73,7 +73,7 @@ check_publication_add_relation(Relation targetrel)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("\"%s\" is a system table",
 						RelationGetRelationName(targetrel)),
-				 errdetail("System tables cannot be added to publications.")));
+			   errdetail("System tables cannot be added to publications.")));
 
 	/* UNLOGGED and TEMP relations cannot be part of publication. */
 	if (!RelationNeedsWAL(targetrel))
@@ -81,7 +81,7 @@ check_publication_add_relation(Relation targetrel)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("table \"%s\" cannot be replicated",
 						RelationGetRelationName(targetrel)),
-				 errdetail("Temporary and unlogged relations cannot be replicated.")));
+		errdetail("Temporary and unlogged relations cannot be replicated.")));
 }
 
 /*
@@ -90,6 +90,11 @@ check_publication_add_relation(Relation targetrel)
  *
  * Does same checks as the above, but does not need relation to be opened
  * and also does not throw errors.
+ *
+ * Note this also excludes all tables with relid < FirstNormalObjectId,
+ * ie all tables created during initdb.  This mainly affects the preinstalled
+ * information_schema.  (IsCatalogClass() only checks for these inside
+ * pg_catalog and toast schemas.)
  */
 static bool
 is_publishable_class(Oid relid, Form_pg_class reltuple)
@@ -97,12 +102,6 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 	return reltuple->relkind == RELKIND_RELATION &&
 		!IsCatalogClass(relid, reltuple) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
-		/*
-		 * Also exclude any tables created as part of initdb. This mainly
-		 * affects the preinstalled information_schema.
-		 * Note that IsCatalogClass() only checks for these inside pg_catalog
-		 * and toast schemas.
-		 */
 		relid >= FirstNormalObjectId;
 }
 
@@ -120,8 +119,8 @@ publication_add_relation(Oid pubid, Relation targetrel,
 	Oid			relid = RelationGetRelid(targetrel);
 	Oid			prrelid;
 	Publication *pub = GetPublication(pubid);
-	ObjectAddress	myself,
-					referenced;
+	ObjectAddress myself,
+				referenced;
 
 	rel = heap_open(PublicationRelRelationId, RowExclusiveLock);
 
@@ -140,8 +139,8 @@ publication_add_relation(Oid pubid, Relation targetrel,
 
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("relation \"%s\" is already member of publication \"%s\"",
-						RelationGetRelationName(targetrel), pub->name)));
+			errmsg("relation \"%s\" is already member of publication \"%s\"",
+				   RelationGetRelationName(targetrel), pub->name)));
 	}
 
 	check_publication_add_relation(targetrel);
@@ -187,9 +186,9 @@ publication_add_relation(Oid pubid, Relation targetrel,
 List *
 GetRelationPublications(Oid relid)
 {
-	List		   *result = NIL;
-	CatCList	   *pubrellist;
-	int				i;
+	List	   *result = NIL;
+	CatCList   *pubrellist;
+	int			i;
 
 	/* Find all publications associated with the relation. */
 	pubrellist = SearchSysCacheList1(PUBLICATIONRELMAP,
@@ -216,11 +215,11 @@ GetRelationPublications(Oid relid)
 List *
 GetPublicationRelations(Oid pubid)
 {
-	List		   *result;
-	Relation		pubrelsrel;
-	ScanKeyData		scankey;
-	SysScanDesc		scan;
-	HeapTuple		tup;
+	List	   *result;
+	Relation	pubrelsrel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tup;
 
 	/* Find all publications associated with the relation. */
 	pubrelsrel = heap_open(PublicationRelRelationId, AccessShareLock);
@@ -236,7 +235,7 @@ GetPublicationRelations(Oid pubid)
 	result = NIL;
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
-		Form_pg_publication_rel		pubrel;
+		Form_pg_publication_rel pubrel;
 
 		pubrel = (Form_pg_publication_rel) GETSTRUCT(tup);
 
@@ -255,11 +254,11 @@ GetPublicationRelations(Oid pubid)
 List *
 GetAllTablesPublications(void)
 {
-	List		   *result;
-	Relation		rel;
-	ScanKeyData		scankey;
-	SysScanDesc		scan;
-	HeapTuple		tup;
+	List	   *result;
+	Relation	rel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tup;
 
 	/* Find all publications that are marked as for all tables. */
 	rel = heap_open(PublicationRelationId, AccessShareLock);
@@ -305,8 +304,8 @@ GetAllTablesPublicationRelations(void)
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
-		Oid				relid = HeapTupleGetOid(tuple);
-		Form_pg_class	relForm = (Form_pg_class) GETSTRUCT(tuple);
+		Oid			relid = HeapTupleGetOid(tuple);
+		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
 
 		if (is_publishable_class(relid, relForm))
 			result = lappend_oid(result, relid);
@@ -326,9 +325,9 @@ GetAllTablesPublicationRelations(void)
 Publication *
 GetPublication(Oid pubid)
 {
-	HeapTuple		tup;
-	Publication	   *pub;
-	Form_pg_publication	pubform;
+	HeapTuple	tup;
+	Publication *pub;
+	Form_pg_publication pubform;
 
 	tup = SearchSysCache1(PUBLICATIONOID, ObjectIdGetDatum(pubid));
 
@@ -398,9 +397,9 @@ get_publication_oid(const char *pubname, bool missing_ok)
 char *
 get_publication_name(Oid pubid)
 {
-	HeapTuple		tup;
-	char		   *pubname;
-	Form_pg_publication	pubform;
+	HeapTuple	tup;
+	char	   *pubname;
+	Form_pg_publication pubform;
 
 	tup = SearchSysCache1(PUBLICATIONOID, ObjectIdGetDatum(pubid));
 
@@ -422,10 +421,10 @@ Datum
 pg_get_publication_tables(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
-	char		   *pubname = text_to_cstring(PG_GETARG_TEXT_PP(0));
-	Publication	   *publication;
-	List		   *tables;
-	ListCell	  **lcp;
+	char	   *pubname = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	Publication *publication;
+	List	   *tables;
+	ListCell  **lcp;
 
 	/* stuff done only on the first call of the function */
 	if (SRF_IS_FIRSTCALL())
@@ -456,7 +455,7 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 
 	while (*lcp != NULL)
 	{
-		Oid		relid = lfirst_oid(*lcp);
+		Oid			relid = lfirst_oid(*lcp);
 
 		*lcp = lnext(*lcp);
 		SRF_RETURN_NEXT(funcctx, ObjectIdGetDatum(relid));
