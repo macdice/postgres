@@ -724,10 +724,10 @@ CREATE VIEW pg_stat_replication AS
             S.backend_start,
             S.backend_xmin,
             W.state,
-            W.sent_location,
-            W.write_location,
-            W.flush_location,
-            W.replay_location,
+            W.sent_lsn,
+            W.write_lsn,
+            W.flush_lsn,
+            W.replay_lsn,
             W.write_lag,
             W.flush_lag,
             W.replay_lag,
@@ -910,11 +910,11 @@ CREATE VIEW pg_user_mappings AS
         ELSE
             A.rolname
         END AS usename,
-        CASE WHEN pg_has_role(S.srvowner, 'USAGE') OR has_server_privilege(S.oid, 'USAGE') THEN
-            U.umoptions
-        ELSE
-            NULL
-        END AS umoptions
+        CASE WHEN (U.umuser <> 0 AND A.rolname = current_user)
+                    OR (U.umuser = 0 AND pg_has_role(S.srvowner, 'USAGE'))
+                    OR (SELECT rolsuper FROM pg_authid WHERE rolname = current_user)
+                    THEN U.umoptions
+                 ELSE NULL END AS umoptions
     FROM pg_user_mapping U
         JOIN pg_foreign_server S ON (U.umserver = S.oid)
         LEFT JOIN pg_authid A ON (A.oid = U.umuser);
@@ -1033,7 +1033,7 @@ CREATE OR REPLACE FUNCTION
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_get_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT location pg_lsn, OUT xid xid, OUT data text)
+    OUT lsn pg_lsn, OUT xid xid, OUT data text)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000
@@ -1041,7 +1041,7 @@ AS 'pg_logical_slot_get_changes';
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_peek_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT location pg_lsn, OUT xid xid, OUT data text)
+    OUT lsn pg_lsn, OUT xid xid, OUT data text)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000
@@ -1049,7 +1049,7 @@ AS 'pg_logical_slot_peek_changes';
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_get_binary_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT location pg_lsn, OUT xid xid, OUT data bytea)
+    OUT lsn pg_lsn, OUT xid xid, OUT data bytea)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000
@@ -1057,7 +1057,7 @@ AS 'pg_logical_slot_get_binary_changes';
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_peek_binary_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT location pg_lsn, OUT xid xid, OUT data bytea)
+    OUT lsn pg_lsn, OUT xid xid, OUT data bytea)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000
@@ -1066,7 +1066,7 @@ AS 'pg_logical_slot_peek_binary_changes';
 CREATE OR REPLACE FUNCTION pg_create_physical_replication_slot(
     IN slot_name name, IN immediately_reserve boolean DEFAULT false,
     IN temporary boolean DEFAULT false,
-    OUT slot_name name, OUT wal_position pg_lsn)
+    OUT slot_name name, OUT lsn pg_lsn)
 RETURNS RECORD
 LANGUAGE INTERNAL
 STRICT VOLATILE
@@ -1075,7 +1075,7 @@ AS 'pg_create_physical_replication_slot';
 CREATE OR REPLACE FUNCTION pg_create_logical_replication_slot(
     IN slot_name name, IN plugin name,
     IN temporary boolean DEFAULT false,
-    OUT slot_name text, OUT wal_position pg_lsn)
+    OUT slot_name text, OUT lsn pg_lsn)
 RETURNS RECORD
 LANGUAGE INTERNAL
 STRICT VOLATILE

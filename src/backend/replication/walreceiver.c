@@ -1090,7 +1090,7 @@ XLogWalRcvFlush(bool dying)
 }
 
 /*
- * Send reply message to primary, indicating our current XLOG positions, oldest
+ * Send reply message to primary, indicating our current WAL locations, oldest
  * xmin and the current time.
  *
  * If 'force' is not set, the message is only sent if enough time has
@@ -1125,7 +1125,7 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	 * We can compare the write and flush positions to the last message we
 	 * sent without taking any lock, but the apply position requires a spin
 	 * lock, so we don't check that unless something else has changed or 10
-	 * seconds have passed.  This means that the apply log position will
+	 * seconds have passed.  This means that the apply WAL location will
 	 * appear, from the master's point of view, to lag slightly, but since
 	 * this is only for reporting purposes and only on idle systems, that's
 	 * probably OK.
@@ -1176,9 +1176,12 @@ XLogWalRcvSendHSFeedback(bool immed)
 {
 	TimestampTz now;
 	TransactionId nextXid;
-	uint32		xmin_epoch, catalog_xmin_epoch;
-	TransactionId xmin, catalog_xmin;
+	uint32		xmin_epoch,
+				catalog_xmin_epoch;
+	TransactionId xmin,
+				catalog_xmin;
 	static TimestampTz sendTime = 0;
+
 	/* initially true so we always send at least one feedback message */
 	static bool master_has_standby_xmin = true;
 
@@ -1211,8 +1214,8 @@ XLogWalRcvSendHSFeedback(bool immed)
 	 *
 	 * Bailing out here also ensures that we don't send feedback until we've
 	 * read our own replication slot state, so we don't tell the master to
-	 * discard needed xmin or catalog_xmin from any slots that may exist
-	 * on this replica.
+	 * discard needed xmin or catalog_xmin from any slots that may exist on
+	 * this replica.
 	 */
 	if (!HotStandbyActive())
 		return;
@@ -1232,7 +1235,7 @@ XLogWalRcvSendHSFeedback(bool immed)
 		 * excludes the catalog_xmin.
 		 */
 		xmin = GetOldestXmin(NULL,
-							 PROCARRAY_FLAGS_DEFAULT|PROCARRAY_SLOTS_XMIN);
+							 PROCARRAY_FLAGS_DEFAULT | PROCARRAY_SLOTS_XMIN);
 
 		ProcArrayGetReplicationSlotXmin(&slot_xmin, &catalog_xmin);
 
@@ -1253,9 +1256,9 @@ XLogWalRcvSendHSFeedback(bool immed)
 	GetNextXidAndEpoch(&nextXid, &xmin_epoch);
 	catalog_xmin_epoch = xmin_epoch;
 	if (nextXid < xmin)
-		xmin_epoch --;
+		xmin_epoch--;
 	if (nextXid < catalog_xmin)
-		catalog_xmin_epoch --;
+		catalog_xmin_epoch--;
 
 	elog(DEBUG2, "sending hot standby feedback xmin %u epoch %u catalog_xmin %u catalog_xmin_epoch %u",
 		 xmin, xmin_epoch, catalog_xmin, catalog_xmin_epoch);

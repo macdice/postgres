@@ -24,6 +24,7 @@
 #include "access/sysattr.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/partition.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_authid.h"
@@ -318,7 +319,7 @@ static char *pg_get_indexdef_worker(Oid indexrelid, int colno,
 					   const Oid *excludeOps,
 					   bool attrsOnly, bool showTblSpc,
 					   int prettyFlags, bool missing_ok);
-static char *pg_get_statisticsext_worker(Oid statextid, bool missing_ok);
+static char *pg_get_statisticsobj_worker(Oid statextid, bool missing_ok);
 static char *pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 						 bool attrsOnly, bool missing_ok);
 static char *pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
@@ -1424,16 +1425,16 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 }
 
 /*
- * pg_get_statisticsextdef
+ * pg_get_statisticsobjdef
  *		Get the definition of an extended statistics object
  */
 Datum
-pg_get_statisticsextdef(PG_FUNCTION_ARGS)
+pg_get_statisticsobjdef(PG_FUNCTION_ARGS)
 {
 	Oid			statextid = PG_GETARG_OID(0);
 	char	   *res;
 
-	res = pg_get_statisticsext_worker(statextid, true);
+	res = pg_get_statisticsobj_worker(statextid, true);
 
 	if (res == NULL)
 		PG_RETURN_NULL();
@@ -1445,9 +1446,9 @@ pg_get_statisticsextdef(PG_FUNCTION_ARGS)
  * Internal workhorse to decompile an extended statistics object.
  */
 static char *
-pg_get_statisticsext_worker(Oid statextid, bool missing_ok)
+pg_get_statisticsobj_worker(Oid statextid, bool missing_ok)
 {
-	Form_pg_statistic_ext	statextrec;
+	Form_pg_statistic_ext statextrec;
 	HeapTuple	statexttup;
 	StringInfoData buf;
 	int			colno;
@@ -1466,7 +1467,7 @@ pg_get_statisticsext_worker(Oid statextid, bool missing_ok)
 	{
 		if (missing_ok)
 			return NULL;
-		elog(ERROR, "cache lookup failed for extended statistics %u", statextid);
+		elog(ERROR, "cache lookup failed for statistics object %u", statextid);
 	}
 
 	statextrec = (Form_pg_statistic_ext) GETSTRUCT(statexttup);
@@ -1476,11 +1477,10 @@ pg_get_statisticsext_worker(Oid statextid, bool missing_ok)
 	nsp = get_namespace_name(statextrec->stxnamespace);
 	appendStringInfo(&buf, "CREATE STATISTICS %s",
 					 quote_qualified_identifier(nsp,
-												NameStr(statextrec->stxname)));
+											  NameStr(statextrec->stxname)));
 
 	/*
-	 * Lookup the stxkind column so that we know how to handle the WITH
-	 * clause.
+	 * Decode the stxkind column so that we know which stats types to print.
 	 */
 	datum = SysCacheGetAttr(STATEXTOID, statexttup,
 							Anum_pg_statistic_ext_stxkind, &isnull);
@@ -1504,24 +1504,23 @@ pg_get_statisticsext_worker(Oid statextid, bool missing_ok)
 	}
 
 	/*
-	 * If any option is disabled, then we'll need to append a WITH clause to
-	 * show which options are enabled.  We omit the WITH clause on purpose
+	 * If any option is disabled, then we'll need to append the types clause
+	 * to show which options are enabled.  We omit the types clause on purpose
 	 * when all options are enabled, so a pg_dump/pg_restore will create all
 	 * statistics types on a newer postgres version, if the statistics had all
 	 * options enabled on the original version.
 	 */
 	if (!ndistinct_enabled || !dependencies_enabled)
 	{
-		appendStringInfoString(&buf, " WITH (");
+		appendStringInfoString(&buf, " (");
 		if (ndistinct_enabled)
 			appendStringInfoString(&buf, "ndistinct");
 		else if (dependencies_enabled)
 			appendStringInfoString(&buf, "dependencies");
-
 		appendStringInfoChar(&buf, ')');
 	}
 
-	appendStringInfoString(&buf, " ON (");
+	appendStringInfoString(&buf, " ON ");
 
 	for (colno = 0; colno < statextrec->stxkeys.dim1; colno++)
 	{
@@ -1536,7 +1535,7 @@ pg_get_statisticsext_worker(Oid statextid, bool missing_ok)
 		appendStringInfoString(&buf, quote_identifier(attname));
 	}
 
-	appendStringInfo(&buf, ") FROM %s",
+	appendStringInfo(&buf, " FROM %s",
 					 generate_relation_name(statextrec->stxrelid, NIL));
 
 	ReleaseSysCache(statexttup);
@@ -1726,6 +1725,37 @@ pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 	ReleaseSysCache(tuple);
 
 	return buf.data;
+}
+
+/*
+ * pg_get_partition_constraintdef
+ *
+ * Returns partition constraint expression as a string for the input relation
+ */
+Datum
+pg_get_partition_constraintdef(PG_FUNCTION_ARGS)
+{
+	Oid			relationId = PG_GETARG_OID(0);
+	Expr	   *constr_expr;
+	int			prettyFlags;
+	List	   *context;
+	char	   *consrc;
+
+	constr_expr = get_partition_qual_relid(relationId);
+
+	/* Quick exit if not a partition */
+	if (constr_expr == NULL)
+		PG_RETURN_NULL();
+
+	/*
+	 * Deparse and return the constraint expression.
+	 */
+	prettyFlags = PRETTYFLAG_INDENT;
+	context = deparse_context_for(get_relation_name(relationId), relationId);
+	consrc = deparse_expression_pretty((Node *) constr_expr, context, false,
+									   false, prettyFlags, 0);
+
+	PG_RETURN_TEXT_P(string_to_text(consrc));
 }
 
 /*

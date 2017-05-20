@@ -1137,10 +1137,9 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 	FirstSnapshotSet = false;
 
 	/*
-	 * During normal commit processing, we call
-	 * ProcArrayEndTransaction() to reset the PgXact->xmin. That call
-	 * happens prior to the call to AtEOXact_Snapshot(), so we need
-	 * not touch xmin here at all.
+	 * During normal commit processing, we call ProcArrayEndTransaction() to
+	 * reset the PgXact->xmin. That call happens prior to the call to
+	 * AtEOXact_Snapshot(), so we need not touch xmin here at all.
 	 */
 	if (resetXmin)
 		SnapshotResetXmin();
@@ -2039,14 +2038,6 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.whenTaken = snapshot->whenTaken;
 	serialized_snapshot.lsn = snapshot->lsn;
 
-	/*
-	 * Ignore the SubXID array if it has overflowed, unless the snapshot was
-	 * taken during recovey - in that case, top-level XIDs are in subxip as
-	 * well, and we mustn't lose them.
-	 */
-	if (serialized_snapshot.suboverflowed && !snapshot->takenDuringRecovery)
-		serialized_snapshot.subxcnt = 0;
-
 	/* Copy struct to possibly-unaligned buffer */
 	memcpy(start_address,
 		   &serialized_snapshot, sizeof(SerializedSnapshotData));
@@ -2063,6 +2054,9 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	 * snapshot taken during recovery; all the top-level XIDs are in subxip as
 	 * well in that case, so we mustn't lose them.
 	 */
+	if (serialized_snapshot.suboverflowed && !snapshot->takenDuringRecovery)
+		serialized_snapshot.subxcnt = 0;
+
 	if (serialized_snapshot.subxcnt > 0)
 	{
 		Size		subxipoff = sizeof(SerializedSnapshotData) +

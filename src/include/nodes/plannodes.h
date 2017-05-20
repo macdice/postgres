@@ -65,8 +65,18 @@ typedef struct PlannedStmt
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
 
-	/* rtable indexes of non-leaf target relations for INSERT/UPDATE/DELETE */
+	/*
+	 * rtable indexes of non-leaf target relations for UPDATE/DELETE on all
+	 * the partitioned table mentioned in the query.
+	 */
 	List	   *nonleafResultRelations;
+
+	/*
+	 * rtable indexes of root target relations for UPDATE/DELETE; this list
+	 * maintains a subset of the RT indexes in nonleafResultRelations,
+	 * indicating the roots of the respective partition hierarchies.
+	 */
+	List	   *rootResultRelations;
 
 	List	   *subplans;		/* Plan trees for SubPlan expressions; note
 								 * that some could be NULL */
@@ -211,6 +221,7 @@ typedef struct ModifyTable
 	List	   *partitioned_rels;
 	List	   *resultRelations;	/* integer list of RT indexes */
 	int			resultRelIndex; /* index of first resultRel in plan's list */
+	int			rootResultRelIndex;		/* index of the partitioned table root */
 	List	   *plans;			/* plan(s) producing source data */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
 	List	   *returningLists; /* per-target-table RETURNING tlists */
@@ -847,8 +858,7 @@ typedef struct GatherMerge
  *
  * If the executor is supposed to try to apply skew join optimization, then
  * skewTable/skewColumn/skewInherit identify the outer relation's join key
- * column, from which the relevant MCV statistics can be fetched.  Also, its
- * type information is provided to save a lookup.
+ * column, from which the relevant MCV statistics can be fetched.
  * ----------------
  */
 typedef struct Hash
@@ -857,8 +867,6 @@ typedef struct Hash
 	Oid			skewTable;		/* outer join key's table OID, or InvalidOid */
 	AttrNumber	skewColumn;		/* outer join key's column #, or zero */
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */
-	Oid			skewColType;	/* datatype of the outer key column */
-	int32		skewColTypmod;	/* typmod of the outer key column */
 	/* all other info is in the parent HashJoin node */
 } Hash;
 

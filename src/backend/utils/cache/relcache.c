@@ -3858,13 +3858,20 @@ RelationCacheInitializePhase3(void)
 		}
 
 		/*
-		 * Reload partition key and descriptor for a partitioned table.
+		 * Reload the partition key and descriptor for a partitioned table.
 		 */
-		if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+			relation->rd_partkey == NULL)
 		{
 			RelationBuildPartitionKey(relation);
 			Assert(relation->rd_partkey != NULL);
 
+			restart = true;
+		}
+
+		if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+			relation->rd_partdesc == NULL)
+		{
 			RelationBuildPartitionDesc(relation);
 			Assert(relation->rd_partdesc != NULL);
 
@@ -4455,7 +4462,7 @@ RelationGetIndexList(Relation relation)
 
 /*
  * RelationGetStatExtList
- *		get a list of OIDs of extended statistics on this relation
+ *		get a list of OIDs of statistics objects on this relation
  *
  * The statistics list is created only if someone requests it, in a way
  * similar to RelationGetIndexList().  We scan pg_statistic_ext to find
@@ -4463,7 +4470,7 @@ RelationGetIndexList(Relation relation)
  * won't have to compute it again.  Note that shared cache inval of a
  * relcache entry will delete the old list and set rd_statvalid to 0,
  * so that we must recompute the statistics list on next request.  This
- * handles creation or deletion of a statistic.
+ * handles creation or deletion of a statistics object.
  *
  * The returned list is guaranteed to be sorted in order by OID, although
  * this is not currently needed.
@@ -4497,7 +4504,10 @@ RelationGetStatExtList(Relation relation)
 	 */
 	result = NIL;
 
-	/* Prepare to scan pg_statistic_ext for entries having stxrelid = this rel. */
+	/*
+	 * Prepare to scan pg_statistic_ext for entries having stxrelid = this
+	 * rel.
+	 */
 	ScanKeyInit(&skey,
 				Anum_pg_statistic_ext_stxrelid,
 				BTEqualStrategyNumber, F_OIDEQ,
@@ -4596,9 +4606,10 @@ RelationSetIndexList(Relation relation, List *indexIds, Oid oidIndex)
 	list_free(relation->rd_indexlist);
 	relation->rd_indexlist = indexIds;
 	relation->rd_oidindex = oidIndex;
+
 	/*
-	 * For the moment, assume the target rel hasn't got a pk or replica
-	 * index. We'll load them on demand in the API that wraps access to them.
+	 * For the moment, assume the target rel hasn't got a pk or replica index.
+	 * We'll load them on demand in the API that wraps access to them.
 	 */
 	relation->rd_pkindex = InvalidOid;
 	relation->rd_replidindex = InvalidOid;
@@ -5162,7 +5173,7 @@ GetRelationPublicationActions(Relation relation)
 {
 	List	   *puboids;
 	ListCell   *lc;
-	MemoryContext		oldcxt;
+	MemoryContext oldcxt;
 	PublicationActions *pubactions = palloc0(sizeof(PublicationActions));
 
 	if (relation->rd_pubactions)
@@ -5193,8 +5204,8 @@ GetRelationPublicationActions(Relation relation)
 		ReleaseSysCache(tup);
 
 		/*
-		 * If we know everything is replicated, there is no point to check
-		 * for other publications.
+		 * If we know everything is replicated, there is no point to check for
+		 * other publications.
 		 */
 		if (pubactions->pubinsert && pubactions->pubupdate &&
 			pubactions->pubdelete)
@@ -5608,6 +5619,7 @@ load_relcache_init_file(bool shared)
 		rel->rd_rsdesc = NULL;
 		rel->rd_partkeycxt = NULL;
 		rel->rd_partkey = NULL;
+		rel->rd_pdcxt = NULL;
 		rel->rd_partdesc = NULL;
 		rel->rd_partcheck = NIL;
 		rel->rd_indexprs = NIL;

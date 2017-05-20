@@ -54,8 +54,8 @@ static const char *modulename = gettext_noop("archiver");
 
 
 static ArchiveHandle *_allocAH(const char *FileSpec, const ArchiveFormat fmt,
-	 const int compression, bool dosync, ArchiveMode mode,
-	 SetupWorkerPtrType setupWorkerPtr);
+		 const int compression, bool dosync, ArchiveMode mode,
+		 SetupWorkerPtrType setupWorkerPtr);
 static void _getObjectDescription(PQExpBuffer buf, TocEntry *te,
 					  ArchiveHandle *AH);
 static void _printTocEntry(ArchiveHandle *AH, TocEntry *te, bool isData, bool acl_pass);
@@ -166,7 +166,9 @@ dumpOptionsFromRestoreOptions(RestoreOptions *ropt)
 
 	dopt->disable_dollar_quoting = ropt->disable_dollar_quoting;
 	dopt->dump_inserts = ropt->dump_inserts;
+	dopt->no_publications = ropt->no_publications;
 	dopt->no_security_labels = ropt->no_security_labels;
+	dopt->no_subscriptions = ropt->no_subscriptions;
 	dopt->lockWaitTimeout = ropt->lockWaitTimeout;
 	dopt->include_everything = ropt->include_everything;
 	dopt->enable_row_security = ropt->enable_row_security;
@@ -358,7 +360,7 @@ RestoreArchive(Archive *AHX)
 	 * Make sure we won't need (de)compression we haven't got
 	 */
 #ifndef HAVE_LIBZ
-	if (AH->compression != 0 && AH->PrintTocDataPtr !=NULL)
+	if (AH->compression != 0 && AH->PrintTocDataPtr != NULL)
 	{
 		for (te = AH->toc->next; te != AH->toc; te = te->next)
 		{
@@ -822,7 +824,7 @@ restore_toc_entry(ArchiveHandle *AH, TocEntry *te, bool is_parallel)
 			/*
 			 * If we can output the data, then restore it.
 			 */
-			if (AH->PrintTocDataPtr !=NULL)
+			if (AH->PrintTocDataPtr != NULL)
 			{
 				_printTocEntry(AH, te, true, false);
 
@@ -1080,7 +1082,7 @@ ArchiveEntry(Archive *AHX,
 
 	newToc->formatData = NULL;
 
-	if (AH->ArchiveEntryPtr !=NULL)
+	if (AH->ArchiveEntryPtr != NULL)
 		(*AH->ArchiveEntryPtr) (AH, newToc);
 }
 
@@ -1710,7 +1712,7 @@ ahwrite(const void *ptr, size_t size, size_t nmemb, ArchiveHandle *AH)
 	else if (AH->gzOut)
 		bytes_written = GZWRITE(ptr, size, nmemb, AH->OF);
 	else if (AH->CustomOutPtr)
-		bytes_written = AH->CustomOutPtr (AH, ptr, size * nmemb);
+		bytes_written = AH->CustomOutPtr(AH, ptr, size * nmemb);
 
 	else
 	{
@@ -2446,7 +2448,7 @@ void
 WriteDataChunksForTocEntry(ArchiveHandle *AH, TocEntry *te)
 {
 	StartDataPtrType startPtr;
-	EndDataPtrType	endPtr;
+	EndDataPtrType endPtr;
 
 	AH->currToc = te;
 
@@ -2791,8 +2793,16 @@ _tocEntryRequired(TocEntry *te, teSection curSection, RestoreOptions *ropt)
 	if (ropt->aclsSkip && _tocEntryIsACL(te))
 		return 0;
 
+	/* If it's a publication, maybe ignore it */
+	if (ropt->no_publications && strcmp(te->desc, "PUBLICATION") == 0)
+		return 0;
+
 	/* If it's security labels, maybe ignore it */
 	if (ropt->no_security_labels && strcmp(te->desc, "SECURITY LABEL") == 0)
+		return 0;
+
+	/* If it's a subcription, maybe ignore it */
+	if (ropt->no_subscriptions && strcmp(te->desc, "SUBSCRIPTION") == 0)
 		return 0;
 
 	/* Ignore it if section is not to be dumped/restored */
@@ -3465,7 +3475,7 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, bool isData, bool acl_pass)
 		}
 		ahprintf(AH, "\n");
 
-		if (AH->PrintExtraTocPtr !=NULL)
+		if (AH->PrintExtraTocPtr != NULL)
 			(*AH->PrintExtraTocPtr) (AH, te);
 		ahprintf(AH, "--\n\n");
 	}

@@ -1349,9 +1349,9 @@ static bool
 _equalCreateStatsStmt(const CreateStatsStmt *a, const CreateStatsStmt *b)
 {
 	COMPARE_NODE_FIELD(defnames);
-	COMPARE_NODE_FIELD(relation);
-	COMPARE_NODE_FIELD(keys);
-	COMPARE_NODE_FIELD(options);
+	COMPARE_NODE_FIELD(stat_types);
+	COMPARE_NODE_FIELD(exprs);
+	COMPARE_NODE_FIELD(relations);
 	COMPARE_SCALAR_FIELD(if_not_exists);
 
 	return true;
@@ -2246,8 +2246,8 @@ _equalDropSubscriptionStmt(const DropSubscriptionStmt *a,
 						   const DropSubscriptionStmt *b)
 {
 	COMPARE_STRING_FIELD(subname);
-	COMPARE_SCALAR_FIELD(drop_slot);
 	COMPARE_SCALAR_FIELD(missing_ok);
+	COMPARE_SCALAR_FIELD(behavior);
 
 	return true;
 }
@@ -2540,6 +2540,7 @@ _equalColumnDef(const ColumnDef *a, const ColumnDef *b)
 	COMPARE_SCALAR_FIELD(is_local);
 	COMPARE_SCALAR_FIELD(is_not_null);
 	COMPARE_SCALAR_FIELD(is_from_type);
+	COMPARE_SCALAR_FIELD(is_from_parent);
 	COMPARE_SCALAR_FIELD(storage);
 	COMPARE_NODE_FIELD(raw_default);
 	COMPARE_NODE_FIELD(cooked_default);

@@ -151,7 +151,7 @@ static bool check_log_destination(char **newval, void **extra, GucSource source)
 static void assign_log_destination(const char *newval, void *extra);
 
 static bool check_wal_consistency_checking(char **newval, void **extra,
-	GucSource source);
+							   GucSource source);
 static void assign_wal_consistency_checking(const char *newval, void *extra);
 
 #ifdef HAVE_SYSLOG
@@ -405,20 +405,16 @@ static const struct config_enum_entry force_parallel_mode_options[] = {
 
 /*
  * password_encryption used to be a boolean, so accept all the likely
- * variants of "on" and "off", too.
+ * variants of "on", too. "off" used to store passwords in plaintext,
+ * but we don't support that anymore.
  */
 static const struct config_enum_entry password_encryption_options[] = {
-	{"plain", PASSWORD_TYPE_PLAINTEXT, false},
 	{"md5", PASSWORD_TYPE_MD5, false},
 	{"scram-sha-256", PASSWORD_TYPE_SCRAM_SHA_256, false},
-	{"off", PASSWORD_TYPE_PLAINTEXT, false},
-	{"on", PASSWORD_TYPE_MD5, false},
+	{"on", PASSWORD_TYPE_MD5, true},
 	{"true", PASSWORD_TYPE_MD5, true},
-	{"false", PASSWORD_TYPE_PLAINTEXT, true},
 	{"yes", PASSWORD_TYPE_MD5, true},
-	{"no", PASSWORD_TYPE_PLAINTEXT, true},
 	{"1", PASSWORD_TYPE_MD5, true},
-	{"0", PASSWORD_TYPE_PLAINTEXT, true},
 	{NULL, 0, false}
 };
 
@@ -1571,7 +1567,7 @@ static struct config_bool ConfigureNamesBool[] =
 			NULL
 		},
 		&EnableHotStandby,
-		false,
+		true,
 		NULL, NULL, NULL
 	},
 
@@ -2216,7 +2212,7 @@ static struct config_int ConfigureNamesInt[] =
 		{"max_pred_locks_per_page", PGC_SIGHUP, LOCK_MANAGEMENT,
 			gettext_noop("Sets the maximum number of predicate-locked tuples per page."),
 			gettext_noop("If more than this number of tuples on the same page are locked "
-						 "by a connection, those locks are replaced by a page level lock.")
+			"by a connection, those locks are replaced by a page level lock.")
 		},
 		&max_predicate_locks_per_page,
 		2, 0, INT_MAX,
@@ -2263,7 +2259,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_MB
 		},
 		&min_wal_size_mb,
-		5 * (XLOG_SEG_SIZE/ (1024 * 1024)), 2, MAX_KILOBYTES,
+		5 * (XLOG_SEG_SIZE / (1024 * 1024)), 2, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
 
@@ -2274,7 +2270,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_MB
 		},
 		&max_wal_size_mb,
-		64 * (XLOG_SEG_SIZE/ (1024 * 1024)), 2, MAX_KILOBYTES,
+		64 * (XLOG_SEG_SIZE / (1024 * 1024)), 2, MAX_KILOBYTES,
 		NULL, assign_max_wal_size, NULL
 	},
 
@@ -2456,7 +2452,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&bgwriter_lru_maxpages,
-		100, 0, INT_MAX / 2, /* Same upper limit as shared_buffers */
+		100, 0, INT_MAX / 2,	/* Same upper limit as shared_buffers */
 		NULL, NULL, NULL
 	},
 
@@ -6718,7 +6714,7 @@ GetConfigOption(const char *name, bool missing_ok, bool restrict_superuser)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser or a member of pg_read_all_settings to examine \"%s\"",
-				 name)));
+						name)));
 
 	switch (record->vartype)
 	{
@@ -6768,7 +6764,7 @@ GetConfigOptionResetString(const char *name)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser or a member of pg_read_all_settings to examine \"%s\"",
-				 name)));
+						name)));
 
 	switch (record->vartype)
 	{
@@ -8060,7 +8056,7 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser or a member of pg_read_all_settings to examine \"%s\"",
-				 name)));
+						name)));
 
 	if (varname)
 		*varname = record->name;
@@ -8087,7 +8083,7 @@ GetConfigOptionByNum(int varnum, const char **values, bool *noshow)
 	{
 		if ((conf->flags & GUC_NO_SHOW_ALL) ||
 			((conf->flags & GUC_SUPERUSER_ONLY) &&
-			!is_member_of_role(GetUserId(), DEFAULT_ROLE_READ_ALL_SETTINGS)))
+			 !is_member_of_role(GetUserId(), DEFAULT_ROLE_READ_ALL_SETTINGS)))
 			*noshow = true;
 		else
 			*noshow = false;
