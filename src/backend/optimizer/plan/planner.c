@@ -73,9 +73,9 @@ create_upper_paths_hook_type create_upper_paths_hook = NULL;
 #define EXPRKIND_QUAL				0
 #define EXPRKIND_TARGET				1
 #define EXPRKIND_RTFUNC				2
-#define EXPRKIND_RTFUNC_LATERAL 	3
+#define EXPRKIND_RTFUNC_LATERAL		3
 #define EXPRKIND_VALUES				4
-#define EXPRKIND_VALUES_LATERAL 	5
+#define EXPRKIND_VALUES_LATERAL		5
 #define EXPRKIND_LIMIT				6
 #define EXPRKIND_APPINFO			7
 #define EXPRKIND_PHV				8
@@ -240,6 +240,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	glob->finalrowmarks = NIL;
 	glob->resultRelations = NIL;
 	glob->nonleafResultRelations = NIL;
+	glob->rootResultRelations = NIL;
 	glob->relationOids = NIL;
 	glob->invalItems = NIL;
 	glob->nParamExec = 0;
@@ -408,6 +409,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	Assert(glob->finalrowmarks == NIL);
 	Assert(glob->resultRelations == NIL);
 	Assert(glob->nonleafResultRelations == NIL);
+	Assert(glob->rootResultRelations == NIL);
 	top_plan = set_plan_references(root, top_plan);
 	/* ... and the subplans (both regular subplans and initplans) */
 	Assert(list_length(glob->subplans) == list_length(glob->subroots));
@@ -434,6 +436,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	result->rtable = glob->finalrtable;
 	result->resultRelations = glob->resultRelations;
 	result->nonleafResultRelations = glob->nonleafResultRelations;
+	result->rootResultRelations = glob->rootResultRelations;
 	result->subplans = glob->subplans;
 	result->rewindPlanIDs = glob->rewindPlanIDs;
 	result->rowMarks = glob->finalrowmarks;
@@ -1038,7 +1041,7 @@ inheritance_planner(PlannerInfo *root)
 	ListCell   *lc;
 	Index		rti;
 	RangeTblEntry *parent_rte;
-	List		  *partitioned_rels = NIL;
+	List	   *partitioned_rels = NIL;
 
 	Assert(parse->commandType != CMD_INSERT);
 
@@ -1099,10 +1102,10 @@ inheritance_planner(PlannerInfo *root)
 	/*
 	 * If the parent RTE is a partitioned table, we should use that as the
 	 * nominal relation, because the RTEs added for partitioned tables
-	 * (including the root parent) as child members of the inheritance set
-	 * do not appear anywhere else in the plan.  The situation is exactly
-	 * the opposite in the case of non-partitioned inheritance parent as
-	 * described below.
+	 * (including the root parent) as child members of the inheritance set do
+	 * not appear anywhere else in the plan.  The situation is exactly the
+	 * opposite in the case of non-partitioned inheritance parent as described
+	 * below.
 	 */
 	parent_rte = rt_fetch(parentRTindex, root->parse->rtable);
 	if (parent_rte->relkind == RELKIND_PARTITIONED_TABLE)
@@ -1275,9 +1278,9 @@ inheritance_planner(PlannerInfo *root)
 		 * is used elsewhere in the plan, so using the original parent RTE
 		 * would give rise to confusing use of multiple aliases in EXPLAIN
 		 * output for what the user will think is the "same" table.  OTOH,
-		 * it's not a problem in the partitioned inheritance case, because
-		 * the duplicate child RTE added for the parent does not appear
-		 * anywhere else in the plan tree.
+		 * it's not a problem in the partitioned inheritance case, because the
+		 * duplicate child RTE added for the parent does not appear anywhere
+		 * else in the plan tree.
 		 */
 		if (nominalRelation < 0)
 			nominalRelation = appinfo->child_relid;
@@ -3361,7 +3364,7 @@ get_number_of_groups(PlannerInfo *root,
 			ListCell   *lc;
 			ListCell   *lc2;
 
-			Assert(gd);  /* keep Coverity happy */
+			Assert(gd);			/* keep Coverity happy */
 
 			dNumGroups = 0;
 
@@ -4333,8 +4336,8 @@ consider_groupingsets_paths(PlannerInfo *root,
 			/*
 			 * We treat this as a knapsack problem: the knapsack capacity
 			 * represents work_mem, the item weights are the estimated memory
-			 * usage of the hashtables needed to implement a single rollup, and
-			 * we really ought to use the cost saving as the item value;
+			 * usage of the hashtables needed to implement a single rollup,
+			 * and we really ought to use the cost saving as the item value;
 			 * however, currently the costs assigned to sort nodes don't
 			 * reflect the comparison costs well, and so we treat all items as
 			 * of equal value (each rollup we hash instead saves us one sort).
@@ -6069,7 +6072,7 @@ get_partitioned_child_rels(PlannerInfo *root, Index rti)
 
 	foreach(l, root->pcinfo_list)
 	{
-		PartitionedChildRelInfo	*pc = lfirst(l);
+		PartitionedChildRelInfo *pc = lfirst(l);
 
 		if (pc->parent_relid == rti)
 		{

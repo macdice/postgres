@@ -111,7 +111,7 @@ typedef struct CopyStateData
 	List	   *attnumlist;		/* integer list of attnums to copy */
 	char	   *filename;		/* filename, or NULL for STDIN/STDOUT */
 	bool		is_program;		/* is 'filename' a program to popen? */
-	copy_data_source_cb	data_source_cb;		/* function for reading data*/
+	copy_data_source_cb data_source_cb; /* function for reading data */
 	bool		binary;			/* binary format? */
 	bool		oids;			/* include OIDs? */
 	bool		freeze;			/* freeze rows on loading? */
@@ -394,7 +394,7 @@ ReceiveCopyBegin(CopyState cstate)
 			pq_sendint(&buf, format, 2);		/* per-column formats */
 		pq_endmessage(&buf);
 		cstate->copy_dest = COPY_NEW_FE;
-		cstate->fe_msgbuf = makeLongStringInfo();
+		cstate->fe_msgbuf = makeStringInfo();
 	}
 	else
 	{
@@ -532,7 +532,7 @@ CopySendEndOfRow(CopyState cstate)
 			(void) pq_putmessage('d', fe_msgbuf->data, fe_msgbuf->len);
 			break;
 		case COPY_CALLBACK:
-			Assert(false); /* Not yet supported. */
+			Assert(false);		/* Not yet supported. */
 			break;
 	}
 
@@ -1954,7 +1954,7 @@ CopyTo(CopyState cstate)
 	cstate->null_print_client = cstate->null_print;		/* default */
 
 	/* We use fe_msgbuf as a per-row buffer regardless of copy_dest */
-	cstate->fe_msgbuf = makeLongStringInfo();
+	cstate->fe_msgbuf = makeStringInfo();
 
 	/* Get info about the columns we need to process. */
 	cstate->out_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
@@ -2773,6 +2773,9 @@ CopyFrom(CopyState cstate)
 		ExecDropSingleTupleTableSlot(cstate->partition_tuple_slot);
 	}
 
+	/* Close any trigger target relations */
+	ExecCleanUpTriggerState(estate);
+
 	FreeExecutorState(estate);
 
 	/*
@@ -2909,8 +2912,8 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->cur_attval = NULL;
 
 	/* Set up variables to avoid per-attribute overhead. */
-	initLongStringInfo(&cstate->attribute_buf);
-	initLongStringInfo(&cstate->line_buf);
+	initStringInfo(&cstate->attribute_buf);
+	initStringInfo(&cstate->line_buf);
 	cstate->line_buf_converted = false;
 	cstate->raw_buf = (char *) palloc(RAW_BUF_SIZE + 1);
 	cstate->raw_buf_index = cstate->raw_buf_len = 0;

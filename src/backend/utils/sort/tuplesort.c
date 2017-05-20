@@ -2102,9 +2102,9 @@ tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
  * NULL value in leading attribute will set abbreviated value to zeroed
  * representation, which caller may rely on in abbreviated inequality check.
  *
- * If copy is true, the slot receives a copied tuple that'll that will stay
- * valid regardless of future manipulations of the tuplesort's state.  Memory
- * is owned by the caller.  If copy is false, the slot will just receive a
+ * If copy is true, the slot receives a copied tuple that will stay valid
+ * regardless of future manipulations of the tuplesort's state.  Memory is
+ * owned by the caller.  If copy is false, the slot will just receive a
  * pointer to a tuple held within the tuplesort, which is more efficient, but
  * only safe for callers that are prepared to have any subsequent manipulation
  * of the tuplesort's state invalidate slot contents.
@@ -2327,8 +2327,8 @@ tuplesort_merge_order(int64 allowedMem)
 	 * which in turn can cause the same sort to need more runs, which makes
 	 * merging slower even if it can still be done in a single pass.  Also,
 	 * high order merges are quite slow due to CPU cache effects; it can be
-	 * faster to pay the I/O cost of a polyphase merge than to perform a single
-	 * merge pass across many hundreds of tapes.
+	 * faster to pay the I/O cost of a polyphase merge than to perform a
+	 * single merge pass across many hundreds of tapes.
 	 */
 	mOrder = Max(mOrder, MINORDER);
 	mOrder = Min(mOrder, MAXORDER);
