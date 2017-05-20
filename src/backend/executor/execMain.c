@@ -861,17 +861,52 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 
 		/*
 		 * In the partitioned result relation case, lock the non-leaf result
-		 * relations too.  We don't however need ResultRelInfos for them.
+		 * relations too.  A subset of these are the roots of respective
+		 * partitioned tables, for which we also allocate ResulRelInfos.
 		 */
+		estate->es_root_result_relations = NULL;
+		estate->es_num_root_result_relations = 0;
 		if (plannedstmt->nonleafResultRelations)
 		{
+			int			num_roots = list_length(plannedstmt->rootResultRelations);
+
+			/*
+			 * Firstly, build ResultRelInfos for all the partitioned table
+			 * roots, because we will need them to fire the statement-level
+			 * triggers, if any.
+			 */
+			resultRelInfos = (ResultRelInfo *)
+				palloc(num_roots * sizeof(ResultRelInfo));
+			resultRelInfo = resultRelInfos;
+			foreach(l, plannedstmt->rootResultRelations)
+			{
+				Index		resultRelIndex = lfirst_int(l);
+				Oid			resultRelOid;
+				Relation	resultRelDesc;
+
+				resultRelOid = getrelid(resultRelIndex, rangeTable);
+				resultRelDesc = heap_open(resultRelOid, RowExclusiveLock);
+				InitResultRelInfo(resultRelInfo,
+								  resultRelDesc,
+								  lfirst_int(l),
+								  NULL,
+								  estate->es_instrument);
+				resultRelInfo++;
+			}
+
+			estate->es_root_result_relations = resultRelInfos;
+			estate->es_num_root_result_relations = num_roots;
+
+			/* Simply lock the rest of them. */
 			foreach(l, plannedstmt->nonleafResultRelations)
 			{
-				Index		resultRelationIndex = lfirst_int(l);
-				Oid			resultRelationOid;
+				Index		resultRelIndex = lfirst_int(l);
 
-				resultRelationOid = getrelid(resultRelationIndex, rangeTable);
-				LockRelationOid(resultRelationOid, RowExclusiveLock);
+				/* We locked the roots above. */
+				if (!list_member_int(plannedstmt->rootResultRelations,
+									 resultRelIndex))
+					LockRelationOid(getrelid(resultRelIndex, rangeTable),
+									RowExclusiveLock);
 			}
 		}
 	}
@@ -883,6 +918,8 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		estate->es_result_relations = NULL;
 		estate->es_num_result_relations = 0;
 		estate->es_result_relation_info = NULL;
+		estate->es_root_result_relations = NULL;
+		estate->es_num_root_result_relations = 0;
 	}
 
 	/*
@@ -1303,9 +1340,9 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 
 	/*
 	 * If partition_root has been specified, that means we are building the
-	 * ResultRelationInfo for one of its leaf partitions.  In that case, we
-	 * need *not* initialize the leaf partition's constraint, but rather the
-	 * the partition_root's (if any).  We must do that explicitly like this,
+	 * ResultRelInfo for one of its leaf partitions.  In that case, we need
+	 * *not* initialize the leaf partition's constraint, but rather the
+	 * partition_root's (if any).  We must do that explicitly like this,
 	 * because implicit partition constraints are not inherited like user-
 	 * defined constraints and would fail to be enforced by ExecConstraints()
 	 * after a tuple is routed to a leaf partition.
@@ -1407,6 +1444,24 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 	 */
 
 	return rInfo;
+}
+
+/*
+ * Close any relations that have been opened by ExecGetTriggerResultRel().
+ */
+void
+ExecCleanUpTriggerState(EState *estate)
+{
+	ListCell   *l;
+
+	foreach(l, estate->es_trig_target_relations)
+	{
+		ResultRelInfo *resultRelInfo = (ResultRelInfo *) lfirst(l);
+
+		/* Close indices and then the relation itself */
+		ExecCloseIndices(resultRelInfo);
+		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
+	}
 }
 
 /*
@@ -1565,16 +1620,16 @@ ExecEndPlan(PlanState *planstate, EState *estate)
 		resultRelInfo++;
 	}
 
-	/*
-	 * likewise close any trigger target relations
-	 */
-	foreach(l, estate->es_trig_target_relations)
+	/* Close the root target relation(s). */
+	resultRelInfo = estate->es_root_result_relations;
+	for (i = estate->es_num_root_result_relations; i > 0; i--)
 	{
-		resultRelInfo = (ResultRelInfo *) lfirst(l);
-		/* Close indices and then the relation itself */
-		ExecCloseIndices(resultRelInfo);
 		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
+		resultRelInfo++;
 	}
+
+	/* likewise close any trigger target relations */
+	ExecCleanUpTriggerState(estate);
 
 	/*
 	 * close any relations selected FOR [KEY] UPDATE/SHARE, again keeping
@@ -1864,13 +1919,13 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 				if (resultRelInfo->ri_PartitionRoot)
 				{
 					HeapTuple	tuple = ExecFetchSlotTuple(slot);
-					TupleConversionMap	*map;
+					TupleConversionMap *map;
 
 					rel = resultRelInfo->ri_PartitionRoot;
 					tupdesc = RelationGetDescr(rel);
 					/* a reverse map */
 					map = convert_tuples_by_name(orig_tupdesc, tupdesc,
-								gettext_noop("could not convert row type"));
+								 gettext_noop("could not convert row type"));
 					if (map != NULL)
 					{
 						tuple = do_convert_tuple(tuple, map);
@@ -1911,13 +1966,13 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 			{
 				HeapTuple	tuple = ExecFetchSlotTuple(slot);
 				TupleDesc	old_tupdesc = RelationGetDescr(rel);
-				TupleConversionMap	*map;
+				TupleConversionMap *map;
 
 				rel = resultRelInfo->ri_PartitionRoot;
 				tupdesc = RelationGetDescr(rel);
 				/* a reverse map */
 				map = convert_tuples_by_name(old_tupdesc, tupdesc,
-							gettext_noop("could not convert row type"));
+								 gettext_noop("could not convert row type"));
 				if (map != NULL)
 				{
 					tuple = do_convert_tuple(tuple, map);
@@ -1953,13 +2008,13 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 		{
 			HeapTuple	tuple = ExecFetchSlotTuple(slot);
 			TupleDesc	old_tupdesc = RelationGetDescr(rel);
-			TupleConversionMap	*map;
+			TupleConversionMap *map;
 
 			rel = resultRelInfo->ri_PartitionRoot;
 			tupdesc = RelationGetDescr(rel);
 			/* a reverse map */
 			map = convert_tuples_by_name(old_tupdesc, tupdesc,
-						gettext_noop("could not convert row type"));
+								 gettext_noop("could not convert row type"));
 			if (map != NULL)
 			{
 				tuple = do_convert_tuple(tuple, map);
@@ -3128,14 +3183,7 @@ EvalPlanQualEnd(EPQState *epqstate)
 	ExecResetTupleTable(estate->es_tupleTable, false);
 
 	/* close any trigger target relations attached to this EState */
-	foreach(l, estate->es_trig_target_relations)
-	{
-		ResultRelInfo *resultRelInfo = (ResultRelInfo *) lfirst(l);
-
-		/* Close indices and then the relation itself */
-		ExecCloseIndices(resultRelInfo);
-		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
-	}
+	ExecCleanUpTriggerState(estate);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -3292,7 +3340,7 @@ ExecFindPartition(ResultRelInfo *resultRelInfo, PartitionDispatch *pd,
 				(errcode(ERRCODE_CHECK_VIOLATION),
 				 errmsg("no partition of relation \"%s\" found for row",
 						RelationGetRelationName(failed_rel)),
-			val_desc ? errdetail("Partition key of the failing row contains %s.", val_desc) : 0));
+				 val_desc ? errdetail("Partition key of the failing row contains %s.", val_desc) : 0));
 	}
 
 	return result;
@@ -3311,8 +3359,8 @@ ExecBuildSlotPartitionKeyDescription(Relation rel,
 									 bool *isnull,
 									 int maxfieldlen)
 {
-	StringInfoData	buf;
-	PartitionKey	key = RelationGetPartitionKey(rel);
+	StringInfoData buf;
+	PartitionKey key = RelationGetPartitionKey(rel);
 	int			partnatts = get_partition_natts(key);
 	int			i;
 	Oid			relid = RelationGetRelid(rel);
