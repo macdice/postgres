@@ -21,7 +21,19 @@ language: c
 cache: ccache
 before_install:
   - echo '/tmp/%e-%s-%p.core' | sudo tee /proc/sys/kernel/core_pattern
-script: ./configure --enable-debug --enable-cassert --enable-tap-tests --enable-coverage && make -j4 all contrib && make -C src/test/subscription check
+  - sudo echo "deb http://archive.ubuntu.com/ubuntu xenial main" >> /etc/apt/sources.list/xenial.list
+  - |
+    sudo cat >> /et/apt/preferences.d <<EOF
+    Package: *
+    Pin: release n=xenial
+    Pin-Priority: 1
+    
+    Package: make
+    Pin: release n=xenial
+    Pin-Priority: 500
+    EOF
+  - sudo apt-get update && apt-get install make
+script: ./configure --enable-debug --enable-cassert --enable-tap-tests && make -j4 all contrib && make -Otarget -j3 check-world
 after_failure:
   - for f in ` find . -name regression.diffs ` ; do echo "========= Contents of $f" ; head -1000 $f ; done
   - |
