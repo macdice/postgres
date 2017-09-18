@@ -23,7 +23,7 @@ before_install:
   - echo '/tmp/%e-%s-%p.core' | sudo tee /proc/sys/kernel/core_pattern
   - echo "deb http://archive.ubuntu.com/ubuntu xenial main" | sudo tee /etc/apt/sources.list.d/xenial.list > /dev/null
   - |
-    sudo tee -a /etc/apt/preferences.d > /dev/null <<EOF
+    sudo tee -a /etc/apt/preferences.d/trusty > /dev/null <<EOF
     Package: *
     Pin: release n=xenial
     Pin-Priority: 1
