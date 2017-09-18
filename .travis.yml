@@ -21,7 +21,7 @@ language: c
 cache: ccache
 before_install:
   - echo '/tmp/%e-%s-%p.core' | sudo tee /proc/sys/kernel/core_pattern
-  - sudo echo "deb http://archive.ubuntu.com/ubuntu xenial main" >> /etc/apt/sources.list/xenial.list
+  - sudo echo "deb http://archive.ubuntu.com/ubuntu xenial main" >> /etc/apt/sources.list.d/xenial.list
   - |
     sudo cat >> /et/apt/preferences.d <<EOF
     Package: *
