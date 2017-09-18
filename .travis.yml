@@ -32,7 +32,7 @@ before_install:
     Pin: release n=xenial
     Pin-Priority: 500
     EOF
-  - sudo apt-get update && apt-get install make
+  - sudo apt-get update && sudo apt-get install make
 script: ./configure --enable-debug --enable-cassert --enable-tap-tests && make -j4 all contrib && make -Otarget -j3 check-world
 after_failure:
   - for f in ` find . -name regression.diffs ` ; do echo "========= Contents of $f" ; head -1000 $f ; done
