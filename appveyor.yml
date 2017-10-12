@@ -1,0 +1,29 @@
+# Contents of this file based on:
+#
+# https://www.postgresql.org/message-id/flat/CAEepm%3D16YRw9knaXDBfs-aK%3DZNNKWAeZW%2BKvoSCQJm8uRqfUjg%40mail.gmail.com
+
+#  appveyor.yml
+install:
+  - cinst winflexbison
+  - '"C:\Program Files\Microsoft SDKs\Windows\v7.1\Bin\SetEnv.cmd" /x64'
+
+before_build:
+  - rename c:\ProgramData\chocolatey\bin\win_flex.exe flex.exe
+  - rename c:\ProgramData\chocolatey\bin\win_bison.exe bison.exe
+  - curl -S -O https://gist.githubusercontent.com/adunstan/7f18e5db33bb2d73f69ff8c9337a4e6c/raw/buildsetup.pl
+  - perl buildsetup.pl
+
+build:
+  project: pgsql.sln
+
+before_test:
+  - mkdir C:\projects\postgres\src\test\regress\testtablespace
+
+test_script:
+  - cd src\tools\msvc && vcregress check
+
+on_failure:
+  - perl dumpregr.pl
+
+configuration:
+  - Release
