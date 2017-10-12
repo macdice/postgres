@@ -17,7 +17,7 @@ our $config = {
 	gss       => undef,    # --with-gssapi=<path>
 	icu       => undef,    # --with-icu=<path>
 	nls       => undef,    # --enable-nls=<path>
-	tap_tests => undef,    # --enable-tap-tests
+	tap_tests => 1,        # --enable-tap-tests
 	tcl       => undef,    # --with-tcl=<path>
 	perl      => undef,    # --with-perl
 	python    => undef,    # --with-python=<path>
