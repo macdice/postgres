@@ -747,6 +747,7 @@ generate_nonunion_path(SetOperationStmt *op, PlannerInfo *root,
 										 make_pathkeys_for_sortclauses(root,
 																	   groupList,
 																	   tlist),
+										 0,
 										 -1.0);
 
 	/*
@@ -903,6 +904,7 @@ make_union_unique(SetOperationStmt *op, Path *path, List *tlist,
 										 make_pathkeys_for_sortclauses(root,
 																	   groupList,
 																	   tlist),
+										 0,
 										 -1.0);
 		/* We have to manually jam the right tlist into the path; ick */
 		path->pathtarget = create_pathtarget(root, tlist);

@@ -3864,6 +3864,7 @@ create_grouping_paths(PlannerInfo *root,
 														 grouped_rel,
 														 path,
 														 root->group_pathkeys,
+														 0,
 														 -1.0);
 
 					if (parse->hasAggs)
@@ -3940,11 +3941,14 @@ create_grouping_paths(PlannerInfo *root,
 			{
 				/* Sort the cheapest-total path if it isn't already sorted */
 				if (!is_sorted)
+				{
 					path = (Path *) create_sort_path(root,
 													 grouped_rel,
 													 path,
 													 root->group_pathkeys,
+													 0,
 													 -1.0);
+				}
 
 				/* Now decide what to stick atop it */
 				if (parse->groupingSets)
@@ -4020,6 +4024,7 @@ create_grouping_paths(PlannerInfo *root,
 												 grouped_rel,
 												 path,
 												 root->group_pathkeys,
+												 0,
 												 -1.0);
 
 			if (parse->hasAggs)
@@ -4712,6 +4717,7 @@ create_one_window_path(PlannerInfo *root,
 			path = (Path *) create_sort_path(root, window_rel,
 											 path,
 											 window_pathkeys,
+											 0,
 											 -1.0);
 		}
 
@@ -4876,6 +4882,7 @@ create_distinct_paths(PlannerInfo *root,
 			path = (Path *) create_sort_path(root, distinct_rel,
 											 path,
 											 needed_pathkeys,
+											 0,
 											 -1.0);
 
 		add_path(distinct_rel, (Path *)
@@ -5014,11 +5021,22 @@ create_ordered_paths(PlannerInfo *root,
 		{
 			if (!is_sorted)
 			{
+				int		sorted_prefix = 0;
+
+				/*
+				 * Are some leading attributes sorted correctly, so that we
+				 * could get away with just sorting the suffix?
+				 */
+				if (compare_pathkeys(root->sort_pathkeys, path->pathkeys) ==
+					PATHKEYS_BETTER1)
+					sorted_prefix = list_length(path->pathkeys);
+
 				/* An explicit sort here can take advantage of LIMIT */
 				path = (Path *) create_sort_path(root,
 												 ordered_rel,
 												 path,
 												 root->sort_pathkeys,
+												 sorted_prefix,
 												 limit_tuples);
 			}
 
@@ -5062,6 +5080,7 @@ create_ordered_paths(PlannerInfo *root,
 											 ordered_rel,
 											 cheapest_partial_path,
 											 root->sort_pathkeys,
+											 0,
 											 -1.0);
 
 			total_groups = cheapest_partial_path->rows *

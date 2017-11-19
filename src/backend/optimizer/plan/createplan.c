@@ -237,7 +237,8 @@ static MergeJoin *make_mergejoin(List *tlist,
 			   bool skip_mark_restore);
 static Sort *make_sort(Plan *lefttree, int numCols,
 		  AttrNumber *sortColIdx, Oid *sortOperators,
-		  Oid *collations, bool *nullsFirst);
+		  Oid *collations, bool *nullsFirst,
+		  int sorted_prefix);
 static Plan *prepare_sort_from_pathkeys(Plan *lefttree, List *pathkeys,
 						   Relids relids,
 						   const AttrNumber *reqColIdx,
@@ -251,7 +252,7 @@ static EquivalenceMember *find_ec_member_for_tle(EquivalenceClass *ec,
 					   TargetEntry *tle,
 					   Relids relids);
 static Sort *make_sort_from_pathkeys(Plan *lefttree, List *pathkeys,
-						Relids relids);
+						int sorted_prerix, Relids relids);
 static Sort *make_sort_from_groupcols(List *groupcls,
 						 AttrNumber *grpColIdx,
 						 Plan *lefttree);
@@ -1158,7 +1159,8 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path)
 		{
 			Sort	   *sort = make_sort(subplan, numsortkeys,
 										 sortColIdx, sortOperators,
-										 collations, nullsFirst);
+										 collations, nullsFirst,
+										 0);
 
 			label_sort_with_costsize(root, sort, best_path->limit_tuples);
 			subplan = (Plan *) sort;
@@ -1540,7 +1542,8 @@ create_gather_merge_plan(PlannerInfo *root, GatherMergePath *best_path)
 									 gm_plan->sortColIdx,
 									 gm_plan->sortOperators,
 									 gm_plan->collations,
-									 gm_plan->nullsFirst);
+									 gm_plan->nullsFirst,
+									 0);
 
 	/* Now insert the subplan under GatherMerge. */
 	gm_plan->plan.lefttree = subplan;
@@ -1662,7 +1665,8 @@ create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags)
 	subplan = create_plan_recurse(root, best_path->subpath,
 								  flags | CP_SMALL_TLIST);
 
-	plan = make_sort_from_pathkeys(subplan, best_path->path.pathkeys, NULL);
+	plan = make_sort_from_pathkeys(subplan, best_path->path.pathkeys,
+								   best_path->sorted_prefix, NULL);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -3849,6 +3853,7 @@ create_mergejoin_plan(PlannerInfo *root,
 		Relids		outer_relids = outer_path->parent->relids;
 		Sort	   *sort = make_sort_from_pathkeys(outer_plan,
 												   best_path->outersortkeys,
+												   0,
 												   outer_relids);
 
 		label_sort_with_costsize(root, sort, -1.0);
@@ -3863,6 +3868,7 @@ create_mergejoin_plan(PlannerInfo *root,
 		Relids		inner_relids = inner_path->parent->relids;
 		Sort	   *sort = make_sort_from_pathkeys(inner_plan,
 												   best_path->innersortkeys,
+												   0,
 												   inner_relids);
 
 		label_sort_with_costsize(root, sort, -1.0);
@@ -5506,7 +5512,7 @@ make_mergejoin(List *tlist,
 static Sort *
 make_sort(Plan *lefttree, int numCols,
 		  AttrNumber *sortColIdx, Oid *sortOperators,
-		  Oid *collations, bool *nullsFirst)
+		  Oid *collations, bool *nullsFirst, int sorted_prefix)
 {
 	Sort	   *node = makeNode(Sort);
 	Plan	   *plan = &node->plan;
@@ -5520,6 +5526,7 @@ make_sort(Plan *lefttree, int numCols,
 	node->sortOperators = sortOperators;
 	node->collations = collations;
 	node->nullsFirst = nullsFirst;
+	node->sorted_prefix = sorted_prefix;
 
 	return node;
 }
@@ -5842,10 +5849,12 @@ find_ec_member_for_tle(EquivalenceClass *ec,
  *
  *	  'lefttree' is the node which yields input tuples
  *	  'pathkeys' is the list of pathkeys by which the result is to be sorted
+ *	  'sorted_prefix' is the number of leading columns already sorted correctly
  *	  'relids' is the set of relations required by prepare_sort_from_pathkeys()
  */
 static Sort *
-make_sort_from_pathkeys(Plan *lefttree, List *pathkeys, Relids relids)
+make_sort_from_pathkeys(Plan *lefttree, List *pathkeys, int sorted_prefix,
+						Relids relids)
 {
 	int			numsortkeys;
 	AttrNumber *sortColIdx;
@@ -5867,7 +5876,7 @@ make_sort_from_pathkeys(Plan *lefttree, List *pathkeys, Relids relids)
 	/* Now build the Sort node */
 	return make_sort(lefttree, numsortkeys,
 					 sortColIdx, sortOperators,
-					 collations, nullsFirst);
+					 collations, nullsFirst, sorted_prefix);
 }
 
 /*
@@ -5910,7 +5919,7 @@ make_sort_from_sortclauses(List *sortcls, Plan *lefttree)
 
 	return make_sort(lefttree, numsortkeys,
 					 sortColIdx, sortOperators,
-					 collations, nullsFirst);
+					 collations, nullsFirst, 0);
 }
 
 /*
@@ -5964,7 +5973,7 @@ make_sort_from_groupcols(List *groupcls,
 
 	return make_sort(lefttree, numsortkeys,
 					 sortColIdx, sortOperators,
-					 collations, nullsFirst);
+					 collations, nullsFirst, 0);
 }
 
 static Material *

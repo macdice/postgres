@@ -1503,6 +1503,7 @@ typedef struct ProjectSetPath
 typedef struct SortPath
 {
 	Path		path;
+	int			sorted_prefix;
 	Path	   *subpath;		/* path representing input source */
 } SortPath;
 

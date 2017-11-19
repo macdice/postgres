@@ -2533,6 +2533,7 @@ create_set_projection_path(PlannerInfo *root,
  * 'rel' is the parent relation associated with the result
  * 'subpath' is the path representing the source of data
  * 'pathkeys' represents the desired sort order
+ * 'sorted_prefix' is the number of leading keys that are already sorted
  * 'limit_tuples' is the estimated bound on the number of output tuples,
  *		or -1 if no LIMIT or couldn't estimate
  */
@@ -2541,6 +2542,7 @@ create_sort_path(PlannerInfo *root,
 				 RelOptInfo *rel,
 				 Path *subpath,
 				 List *pathkeys,
+				 int sorted_prefix,
 				 double limit_tuples)
 {
 	SortPath   *pathnode = makeNode(SortPath);
@@ -2556,6 +2558,7 @@ create_sort_path(PlannerInfo *root,
 		subpath->parallel_safe;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.pathkeys = pathkeys;
+	pathnode->sorted_prefix = sorted_prefix;
 
 	pathnode->subpath = subpath;
 

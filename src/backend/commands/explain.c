@@ -1937,10 +1937,13 @@ show_sort_keys(SortState *sortstate, List *ancestors, ExplainState *es)
 {
 	Sort	   *plan = (Sort *) sortstate->ss.ps.plan;
 
-	show_sort_group_keys((PlanState *) sortstate, "Sort Key",
-						 plan->numCols, plan->sortColIdx,
-						 plan->sortOperators, plan->collations,
-						 plan->nullsFirst,
+	show_sort_group_keys((PlanState *) sortstate,
+						 plan->sorted_prefix > 0 ? "Suffix Sort Key" : "Sort Key",
+						 plan->numCols - plan->sorted_prefix,
+						 plan->sortColIdx + plan->sorted_prefix,
+						 plan->sortOperators + plan->sorted_prefix,
+						 plan->collations + plan->sorted_prefix,
+						 plan->nullsFirst + plan->sorted_prefix,
 						 ancestors, es);
 }
 

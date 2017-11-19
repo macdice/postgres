@@ -170,6 +170,7 @@ extern SortPath *create_sort_path(PlannerInfo *root,
 				 RelOptInfo *rel,
 				 Path *subpath,
 				 List *pathkeys,
+				 int sorted_prefix,
 				 double limit_tuples);
 extern GroupPath *create_group_path(PlannerInfo *root,
 				  RelOptInfo *rel,

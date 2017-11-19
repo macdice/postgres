@@ -747,6 +747,7 @@ typedef struct Sort
 	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
 	Oid		   *collations;		/* OIDs of collations */
 	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+	int			sorted_prefix;	/* number of leading columns already sorted */
 } Sort;
 
 /* ---------------

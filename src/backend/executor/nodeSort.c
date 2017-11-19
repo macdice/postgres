@@ -21,6 +21,7 @@
 #include "miscadmin.h"
 #include "utils/tuplesort.h"
 
+static bool ExecSortPrefixMatch(SortState *node, TupleTableSlot *a, TupleTableSlot *b);
 
 /* ----------------------------------------------------------------
  *		ExecSort
@@ -44,6 +45,7 @@ ExecSort(PlanState *pstate)
 	ScanDirection dir;
 	Tuplesortstate *tuplesortstate;
 	TupleTableSlot *slot;
+	Sort	   *plannode;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -56,6 +58,105 @@ ExecSort(PlanState *pstate)
 	estate = node->ss.ps.state;
 	dir = estate->es_direction;
 	tuplesortstate = (Tuplesortstate *) node->tuplesortstate;
+	plannode = (Sort *) node->ss.ps.plan;
+
+	/*
+	 * Is the relation already partially sorted, so we can get away with
+	 * sorting on the suffix?
+	 *
+	 * XXX this may belong in a different node, or at least a different
+	 * function...
+	 */
+	if (plannode->sorted_prefix > 0)
+	{
+		PlanState  *outerNode = outerPlanState(node);
+		int			sorted_prefix = plannode->sorted_prefix;
+		TupleTableSlot *result = node->ss.ps.ps_ResultTupleSlot;
+
+		for (;;)
+		{
+			/* Do we have any more sorted tuples to emit? */
+			if (node->tuplesortstate)
+			{
+				slot = node->ss.ps.ps_ResultTupleSlot;
+				tuplesort_gettupleslot(node->tuplesortstate,
+									   ScanDirectionIsForward(estate->es_direction),
+									   false, slot, NULL);
+				if (!TupIsNull(slot))
+					return slot;
+
+				tuplesort_end(node->tuplesortstate);
+				node->tuplesortstate = NULL;
+			}
+
+			/* If first time though, we'll need to load an initial tuple. */
+			if (TupIsNull(node->next_slot))
+			{
+				if (node->pulled_one)
+					return NULL;
+
+				slot = ExecProcNode(outerNode);
+				node->pulled_one = true;
+				if (TupIsNull(slot))
+					return NULL;
+
+				node->next_slot = slot;
+			}
+
+			/*
+			 * Copy the saved tuple to our result slot, because we need to
+			 * pull another tuple.
+			 */
+			ExecCopySlot(result, node->next_slot);
+
+			/*
+			 * Pull the next tuple to see if it has a different prefix so that
+			 * we can avoid sorting in the special case of group size one.
+			 */
+			slot = ExecProcNode(outerNode);
+			if (TupIsNull(slot) || !ExecSortPrefixMatch(node, result, slot))
+			{
+				node->next_slot = slot;
+
+				return result;
+			}
+
+			/* Prepare to sort all tuples with the same prefix. */
+			/* XXX it would be nice to be able to reset and resuse a Tuplesortstate */
+			tuplesortstate =
+				tuplesort_begin_heap(ExecGetResultType(outerNode),
+									 plannode->numCols - sorted_prefix,
+									 plannode->sortColIdx + sorted_prefix,
+									 plannode->sortOperators + sorted_prefix,
+									 plannode->collations + sorted_prefix,
+									 plannode->nullsFirst + sorted_prefix,
+									 work_mem,
+									 node->randomAccess);
+			/* XXX adjust node->bound */
+			if (node->bounded)
+				tuplesort_set_bound(tuplesortstate, node->bound);
+			node->tuplesortstate = (void *) tuplesortstate;
+
+			/* Put the two tuples we already have into the sorter. */
+			tuplesort_puttupleslot(tuplesortstate, result);
+			tuplesort_puttupleslot(tuplesortstate, slot);
+
+			/* Now put all tuples with the same prefix in too. */
+			for (;;)
+			{
+				slot = ExecProcNode(outerNode);
+				if (TupIsNull(slot) ||
+					!ExecSortPrefixMatch(node, result, slot))
+				{
+					/* Remember that we have a tuple with a higher prefix. */
+					node->next_slot = slot;
+					tuplesort_performsort(tuplesortstate);
+					break;
+				}
+				tuplesort_puttupleslot(tuplesortstate, slot);
+			}
+		}
+	}
 
 	/*
 	 * If first time through, read all tuples from outer plan and pass them to
@@ -64,7 +165,6 @@ ExecSort(PlanState *pstate)
 
 	if (!node->sort_Done)
 	{
-		Sort	   *plannode = (Sort *) node->ss.ps.plan;
 		PlanState  *outerNode;
 		TupleDesc	tupDesc;
 
@@ -226,6 +326,25 @@ ExecInitSort(Sort *node, EState *estate, int eflags)
 
 	SO1_printf("ExecInitSort: %s\n",
 			   "sort node initialized");
+
+	if (node->sorted_prefix > 0)
+	{
+		int i;
+
+		sortstate->prefix_sort_key = (SortSupport)
+			palloc0(node->sorted_prefix * sizeof(SortSupportData));
+		for (i = 0; i < node->sorted_prefix; ++i)
+		{
+			SortSupport sortKey = &sortstate->prefix_sort_key[i];
+
+			sortKey->ssup_cxt = CurrentMemoryContext;
+			sortKey->ssup_collation = node->collations[i];
+			sortKey->ssup_nulls_first = node->nullsFirst[i];
+			sortKey->ssup_attno = node->sortColIdx[i];
+			sortKey->abbreviate = false;
+			PrepareSortSupportFromOrderingOp(node->sortOperators[i], sortKey);
+		}
+	}
 
 	return sortstate;
 }
@@ -447,4 +566,32 @@ ExecSortRetrieveInstrumentation(SortState *node)
 	si = palloc(size);
 	memcpy(si, node->shared_info, size);
 	node->shared_info = si;
+}
+
+static bool
+ExecSortPrefixMatch(SortState *node, TupleTableSlot *a, TupleTableSlot *b)
+{
+	int i;
+	Sort *plannode = (Sort *) node->ss.ps.plan;
+
+	for (i = 0; i < plannode->sorted_prefix; ++i)
+	{
+		Datum datum1;
+		Datum datum2;
+		bool isnull1;
+		bool isnull2;
+		int result;
+
+		datum1 = slot_getattr(a, plannode->sortColIdx[i], &isnull1);
+		datum2 = slot_getattr(b, plannode->sortColIdx[i], &isnull2);
+
+		result = ApplySortComparator(datum1, isnull1,
+									 datum2, isnull2,
+									 &node->prefix_sort_key[i]);
+
+		if (result != 0)
+			return false;
+	}
+
+	return true;
 }

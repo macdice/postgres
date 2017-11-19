@@ -1487,10 +1487,6 @@ right_merge_direction(PlannerInfo *root, PathKey *pathkey)
  * pathkeys_useful_for_ordering
  *		Count the number of pathkeys that are useful for meeting the
  *		query's requested output ordering.
- *
- * Unlike merge pathkeys, this is an all-or-nothing affair: it does us
- * no good to order by just the first key(s) of the requested ordering.
- * So the result is always either 0 or list_length(root->query_pathkeys).
  */
 static int
 pathkeys_useful_for_ordering(PlannerInfo *root, List *pathkeys)
@@ -1501,13 +1497,19 @@ pathkeys_useful_for_ordering(PlannerInfo *root, List *pathkeys)
 	if (pathkeys == NIL)
 		return 0;				/* unordered path */
 
-	if (pathkeys_contained_in(root->query_pathkeys, pathkeys))
+	switch (compare_pathkeys(root->query_pathkeys, pathkeys))
 	{
+	case PATHKEYS_DIFFERENT:
+		/* Path ordering not useful */
+		return 0;
+	case PATHKEYS_BETTER1:
+		/* It's useful, though we'll still need to sort */
+		return list_length(pathkeys);
+	case PATHKEYS_BETTER2:
+	case PATHKEYS_EQUAL:
 		/* It's useful ... or at least the first N keys are */
 		return list_length(root->query_pathkeys);
 	}
-
-	return 0;					/* path ordering not useful */
 }
 
 /*
