@@ -147,8 +147,8 @@
 #endif
 
 /* GCC, Sunpro and XLC support always_inline via __attribute__ */
-#if defined(__GNUC__)
-#define pg_attribute_always_inline __attribute__((always_inline))
+#if (defined(__GNUC__) && __GNUC__ > 3) || defined(__SUNPRO_C) || defined(__IBMC__)
+#define pg_attribute_always_inline __attribute__((always_inline)) inline
 /* msvc via a special keyword */
 #elif defined(_MSC_VER)
 #define pg_attribute_always_inline __forceinline
