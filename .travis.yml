@@ -9,6 +9,7 @@ addons:
       - libpython-dev
       - tcl-dev
       - libldap2-dev
+      - slapd
       - libssl-dev
       - libicu-dev
       - docbook
