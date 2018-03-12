@@ -25,45 +25,6 @@
 #include "storage/proc.h"
 #include "postmaster/undoloop.h"
 
-DiscardXact	*UndoDiscardInfo = NULL;
-
-/*
- * UndoDiscardShmemSize
- *		Compute shared memory space needed for undolog discard information.
- */
-Size
-UndoDiscardShmemSize(void)
-{
-	Size		size = 0;
-
-	size = add_size(size, mul_size(MaxBackends, sizeof(DiscardXact)));
-
-	return size;
-}
-
-/*
- * Initialize the undo discard shared memory structure.
- */
-void
-UndoDiscardShmemInit(void)
-{
-	bool	found;
-	int		i;
-
-	UndoDiscardInfo = (DiscardXact *)
-		ShmemInitStruct("UndoDiscardInfo", UndoDiscardShmemSize(), &found);
-
-	for (i = 0; i < MaxBackends; i++)
-	{
-		UndoDiscardInfo[i].xidepoch = 0;
-		UndoDiscardInfo[i].xid = InvalidTransactionId;
-		UndoDiscardInfo[i].undo_recptr = InvalidUndoRecPtr;
-
-		/* Initialize. */
-		LWLockInitialize(&UndoDiscardInfo[i].mutex, LWTRANCHE_UNDODISCARD);
-	}
-}
-
 /*
  * Discard the undo for the log
  *
@@ -73,20 +34,50 @@ UndoDiscardShmemInit(void)
  * log slot. We set the hibernate flag if we do not have any undo logs, this
  * flag is passed to the undo worker wherein it determines if system is idle
  * and it should sleep for sometime.
+ *
+ * Return the oldest xid remaining in this undo log (which should be >= xmin,
+ * since we'll discard everything older).  Return InvalidTransactionId if the
+ * undo log is empty.
  */
-static void
-UndoDiscardOneLog(DiscardXact *discard, TransactionId xmin, bool *hibernate)
+static TransactionId
+UndoDiscardOneLog(UndoLogControl *log, TransactionId xmin, bool *hibernate)
 {
 	UndoRecPtr	undo_recptr, next_urecptr, from_urecptr, next_insert;
 	UnpackedUndoRecord	*uur;
 	bool	need_discard = false;
 	uint16 uur_prevlen;
-	UndoLogNumber logno = UndoRecPtrGetLogNo(discard->undo_recptr);
 	TransactionId	undoxid;
 	TransactionId	latest_discardxid = InvalidTransactionId;
 	uint32	epoch;
-	undo_recptr = discard->undo_recptr;
 
+	/*
+	 * Check if there is anything for us to do in this undo log.  If not, we
+	 * can return early.  We hold a lock because otherwise we can't safely
+	 * read log->meta.insert.
+	 */
+	LWLockAcquire(&log->mutex, LW_SHARED);
+	if (log->meta.discard == log->meta.insert)
+	{
+		LWLockRelease(&log->mutex);
+		return InvalidTransactionId;
+	}
+	if (!TransactionIdPrecedes(log->oldest_xid, xmin))
+	{
+		TransactionId xid = log->oldest_xid;
+		LWLockRelease(&log->mutex);
+		return xid;
+	}
+	undo_recptr = MakeUndoRecPtr(log->logno, log->meta.discard);
+	LWLockRelease(&log->mutex);
+
+	/*
+	 * TODO: Currently we are assuming that nothing else could advance the
+	 * discard pointer after the above check.  If that ceases to be true (for
+	 * example if a foreground process or another background worker could do
+	 * it) we'll have to review this.
+	 */
+
+	/* Loop until we run out of discardable transactions. */
 	do
 	{
 		bool isCommitted;
@@ -134,9 +125,9 @@ UndoDiscardOneLog(DiscardXact *discard, TransactionId xmin, bool *hibernate)
 			}
 			else
 			{
-				uur_prevlen = UndoLogGetPrevLen(logno);
+				uur_prevlen = UndoLogGetPrevLen(log->logno);
 				Assert(uur_prevlen != 0);
-				next_insert = UndoLogGetNextInsertPtr(logno, undoxid);
+				next_insert = UndoLogGetNextInsertPtr(log->logno, undoxid);
 				if (!UndoRecPtrIsValid(next_insert))
 				{
 					UndoRecordRelease(uur);
@@ -173,7 +164,6 @@ UndoDiscardOneLog(DiscardXact *discard, TransactionId xmin, bool *hibernate)
 			 */
 			if (TransactionIdPrecedes(undoxid, xmin))
 			{
-				UndoLogNumber logno = UndoRecPtrGetLogNo(discard->undo_recptr);
 				UndoRecPtr	next_insert = InvalidUndoRecPtr;
 
 				/*
@@ -181,7 +171,7 @@ UndoDiscardOneLog(DiscardXact *discard, TransactionId xmin, bool *hibernate)
 				 * returns invalid pointer that means there is new transaction
 				 * has started for this undolog.
 				 */
-				next_insert = UndoLogGetNextInsertPtr(logno, undoxid);
+				next_insert = UndoLogGetNextInsertPtr(log->logno, undoxid);
 
 				if (!UndoRecPtrIsValid(next_insert))
 					continue;
@@ -193,13 +183,10 @@ UndoDiscardOneLog(DiscardXact *discard, TransactionId xmin, bool *hibernate)
 				undoxid = InvalidTransactionId;
 			}
 
-			LWLockAcquire(&discard->mutex, LW_EXCLUSIVE);
-
-			discard->xid = undoxid;
-			discard->xidepoch = epoch;
-			discard->undo_recptr = undo_recptr;
-
-			LWLockRelease(&discard->mutex);
+			LWLockAcquire(&log->discard_lock, LW_EXCLUSIVE);
+			log->oldest_xid = undoxid;
+			log->oldest_xidepoch = epoch;
+			LWLockRelease(&log->discard_lock);
 
 			if (need_discard)
 				UndoLogDiscard(undo_recptr, latest_discardxid);
@@ -220,6 +207,8 @@ UndoDiscardOneLog(DiscardXact *discard, TransactionId xmin, bool *hibernate)
 		need_discard = true;
 
 	} while (true);
+
+	return undoxid;
 }
 
 /*
@@ -235,48 +224,24 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 {
 	TransactionId	oldestXidHavingUndo = oldestXmin;
 	uint64			epoch = GetEpochForXid(oldestXmin);
-	uint64			oldestXidWithEpoch;
-	UndoLogNumber logno = -1;
-	Oid spcNode = InvalidOid;
+	UndoLogControl *log = NULL;
 
-	oldestXidWithEpoch = MakeEpochXid(epoch, oldestXidHavingUndo);
-	while (UndoLogNextActiveLog (&logno, &spcNode))
+	/*
+	 * TODO: Ideally we'd arrange undo logs so that we can efficiently find
+	 * those with oldest_xid < oldestXmin, but for now we'll just scan all of
+	 * them.
+	 */
+	while ((log = UndoLogNext(log)))
 	{
-		UndoRecPtr	urp;
+		TransactionId oldest_xid;
 
-		/*
-		 * If the first xid of the undo log is smaller than the xmin the try
-		 * to discard the undo log.
-		 */
-		if (TransactionIdPrecedes(UndoDiscardInfo[logno].xid, oldestXmin))
+		oldest_xid = UndoDiscardOneLog(log, oldestXmin, hibernate);
+
+		if (TransactionIdIsValid(oldest_xid) &&
+			TransactionIdPrecedes(oldest_xid, oldestXidHavingUndo))
 		{
-			/*
-			 * If the XID in the discard entry is invalid then start scanning from
-			 * the first valid undorecord in the log.
-			 */
-			if (!TransactionIdIsValid(UndoDiscardInfo[logno].xid))
-			{
-				urp = UndoLogGetFirstValidRecord(logno);
-
-				if (!UndoRecPtrIsValid(urp))
-					continue;
-
-				LWLockAcquire(&UndoDiscardInfo[logno].mutex, LW_SHARED);
-				UndoDiscardInfo[logno].undo_recptr = urp;
-				LWLockRelease(&UndoDiscardInfo[logno].mutex);
-			}
-
-			/* Process the undo log. */
-			UndoDiscardOneLog(&UndoDiscardInfo[logno], oldestXmin, hibernate);
-		}
-
-		/* Update the correct value for oldestXidHavingUndo. */
-		if (TransactionIdIsValid(UndoDiscardInfo[logno].xid) &&
-			TransactionIdPrecedes(UndoDiscardInfo[logno].xid, oldestXidHavingUndo))
-		{
-			oldestXidHavingUndo = UndoDiscardInfo[logno].xid;
-			epoch = UndoDiscardInfo[logno].xidepoch;
-			oldestXidWithEpoch = MakeEpochXid(epoch, oldestXidHavingUndo);
+			oldestXidHavingUndo = oldest_xid;
+			epoch = GetEpochForXid(oldest_xid);
 		}
 	}
 
@@ -286,5 +251,6 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 	 * XXX In future if multiple worker can perform discard then we may need
 	 * to use compare and swap for updating the shared memory value.
 	 */
-	pg_atomic_write_u64(&ProcGlobal->oldestXidWithEpochHavingUndo, oldestXidWithEpoch);
+	pg_atomic_write_u64(&ProcGlobal->oldestXidWithEpochHavingUndo,
+						MakeEpochXid(epoch, oldestXidHavingUndo));
 }
