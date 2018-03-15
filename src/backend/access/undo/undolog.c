@@ -2066,3 +2066,12 @@ prepare_to_modify_undo_log(UndoLogControl *log)
 		}
 	}
 }
+
+/*
+ * For assertions only.
+ */
+bool
+AmAttachedToUndoLog(UndoLogControl *log)
+{
+	return MyUndoLogState.log == log;
+}

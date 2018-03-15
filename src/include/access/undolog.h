@@ -196,6 +196,7 @@ typedef struct UndoLogControl
 
 	TransactionId	oldest_xid;		/* cache of oldest transaction's xid */
 	uint32		oldest_xidepoch;
+	TransactionId prev_xid;			/* last xid to write to this log */
 	LWLock		discard_lock;		/* prevents discarding while reading */
 
 	UndoLogNumber next_free;		/* protected by UndoLogLock */
@@ -229,6 +230,7 @@ extern void CheckPointUndoLogs(XLogRecPtr checkPointRedo,
 
 extern UndoLogControl *UndoLogGet(UndoLogNumber logno);
 extern UndoLogControl *UndoLogNext(UndoLogControl *log);
+extern bool AmAttachedToUndoLog(UndoLogControl *log);
 
 #endif
 
