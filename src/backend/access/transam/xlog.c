@@ -7385,8 +7385,11 @@ StartupXLOG(void)
 	if (InRecovery)
 	{
 		ResetUnloggedRelations(UNLOGGED_RELATION_INIT);
-		ResetUnloggedUndoLogs();
+		ResetUndoLogs(UNDO_UNLOGGED);
 	}
+
+	/* Always reset temporary undo logs. */
+	ResetUndoLogs(UNDO_TEMP);
 
 	/*
 	 * We don't need the latch anymore. It's not strictly necessary to disown
