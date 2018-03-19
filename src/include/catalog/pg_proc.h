@@ -5583,7 +5583,7 @@ DESCR("hash partition CHECK constraint");
 #define PROPARALLEL_UNSAFE		'u' /* banned while in parallel mode */
 
 /* undo logs */
-DATA(insert OID = 3449 ( pg_stat_get_undo_logs PGNSP PGUID 12 1 10 0 0 f f f f f t s r 0 0 2249 "" "{26,26,25,25,25,28,23}" "{o,o,o,o,o,o,o}" "{log_number,tablespace,discard,insert,end,xid,pid}" _null_ _null_ pg_stat_get_undo_logs _null_ _null_ _null_ ));
+DATA(insert OID = 3449 ( pg_stat_get_undo_logs PGNSP PGUID 12 1 10 0 0 f f f f f t s r 0 0 2249 "" "{26,25,25,25,25,25,28,23}" "{o,o,o,o,o,o,o,o}" "{log_number,persistence,tablespace,discard,insert,end,xid,pid}" _null_ _null_ pg_stat_get_undo_logs _null_ _null_ _null_ ));
 DESCR("list undo logs");
 
 /*

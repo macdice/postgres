@@ -671,7 +671,9 @@ reacquire_buffer:
 	else
 		undorecord.uur_payload.len = 0;
 
-	urecptr = PrepareUndoInsert(&undorecord, UNDO_PERSISTENT, InvalidTransactionId);
+	urecptr = PrepareUndoInsert(&undorecord,
+								UndoPersistenceForRelation(relation),
+								InvalidTransactionId);
 
 	/* NO EREPORT(ERROR) from here till changes are logged */
 	START_CRIT_SECTION();
@@ -1257,7 +1259,9 @@ zheap_tuple_updated:
 						   (char *) zheaptup.t_data,
 						   zheaptup.t_len);
 
-	urecptr = PrepareUndoInsert(&undorecord, UNDO_PERSISTENT, InvalidTransactionId);
+	urecptr = PrepareUndoInsert(&undorecord,
+								UndoPersistenceForRelation(relation),
+								InvalidTransactionId);
 
 	START_CRIT_SECTION();
 
@@ -1986,7 +1990,9 @@ zheap_tuple_updated:
 							   (char *) oldtup.t_data,
 							   SizeofZHeapTupleHeader);
 
-		urecptr = PrepareUndoInsert(&undorecord, UNDO_PERSISTENT, InvalidTransactionId);
+		urecptr = PrepareUndoInsert(&undorecord,
+									UndoPersistenceForRelation(relation),
+									InvalidTransactionId);
 
 		/* Compute the new xid and infomask to store into the tuple. */
 		compute_new_xid_infomask(&oldtup, buffer, save_tup_xid,
@@ -2163,7 +2169,9 @@ reacquire_buffer:
 	if (use_inplace_update)
 	{
 		undorecord.uur_type = UNDO_INPLACE_UPDATE;
-		urecptr = PrepareUndoInsert(&undorecord, UNDO_PERSISTENT, InvalidTransactionId);
+		urecptr = PrepareUndoInsert(&undorecord,
+									UndoPersistenceForRelation(relation),
+									InvalidTransactionId);
 	}
 	else
 	{
@@ -2174,7 +2182,9 @@ reacquire_buffer:
 		 * the value to ensure that the required space is reserved in undo.
 		 */
 		undorecord.uur_payload.len = sizeof(ItemPointerData);
-		urecptr = PrepareUndoInsert(&undorecord, UNDO_PERSISTENT, InvalidTransactionId);
+		urecptr = PrepareUndoInsert(&undorecord,
+									UndoPersistenceForRelation(relation),
+									InvalidTransactionId);
 
 		initStringInfo(&undorecord.uur_payload);
 		/* Make more room for tuple location if needed */
@@ -2200,7 +2210,9 @@ reacquire_buffer:
 		new_undorecord.uur_payload.len = 0;
 		new_undorecord.uur_tuple.len = 0;
 
-		new_urecptr = PrepareUndoInsert(&new_undorecord, UNDO_PERSISTENT, InvalidTransactionId);
+		new_urecptr = PrepareUndoInsert(&new_undorecord,
+										UndoPersistenceForRelation(relation),
+										InvalidTransactionId);
 	}
 
 	/* Compute the new xid and infomask to store into the tuple. */
@@ -3962,7 +3974,9 @@ zheap_lock_tuple_guts(Relation rel, Buffer buf, ZHeapTuple zhtup,
 						   (char *) &mode,
 						   sizeof(LockTupleMode));
 
-	urecptr = PrepareUndoInsert(&undorecord, UNDO_PERSISTENT, InvalidTransactionId);
+	urecptr = PrepareUndoInsert(&undorecord,
+								UndoPersistenceForRelation(rel),
+								InvalidTransactionId);
 
 
 	START_CRIT_SECTION();
@@ -7895,7 +7909,9 @@ reacquire_buffer:
 			undorecord[i].uur_payload.len = 2 * sizeof(OffsetNumber);
 			undorecord[i].uur_payload.data = (char *)palloc(2 * sizeof(OffsetNumber));
 
-			urecptr = PrepareUndoInsert(&undorecord[i], UNDO_PERSISTENT, InvalidTransactionId);
+			urecptr = PrepareUndoInsert(&undorecord[i],
+										UndoPersistenceForRelation(relation),
+										InvalidTransactionId);
 		}
 		Assert(UndoRecPtrIsValid(urecptr));
 		elog(DEBUG1, "Undo record prepared: %d for Block Number: %d",
