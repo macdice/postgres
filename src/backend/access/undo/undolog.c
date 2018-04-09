@@ -310,29 +310,6 @@ UndoLogNext(UndoLogControl *log)
 }
 
 /*
- * Get an instantaneous snapshot of the range of segments that might be dirty,
- * for checkpointing purposes.
- *
- * XXX Currently this claims that the current segment is dirty, whether or not
- * it's actually been written to recently.  Could do better.
- */
-void
-UndoLogGetDirtySegmentRange(UndoLogNumber logno,
-							int *low_segno, int *high_segno)
-{
-	/* TODO write me */
-}
-
-/*
- * Record that all segments up to 'segno' have been flushed to disk.
- */
-void
-UndoLogSetHighestSyncedSegment(UndoLogNumber logno, int segno)
-{
-	/* TODO write me */
-}
-
-/*
  * Check if an undo log position has been discarded.  'point' must be an undo
  * log pointer that was allocated at some point in the past, otherwise the
  * result is undefined.
