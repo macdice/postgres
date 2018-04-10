@@ -349,7 +349,7 @@ BackgroundWriterMain(void)
 		 * normal operation.
 		 */
 		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   WL_LATCH_SET | WL_TIMEOUT,
 					   BgWriterDelay /* ms */ , WAIT_EVENT_BGWRITER_MAIN);
 
 		/*
@@ -376,19 +376,12 @@ BackgroundWriterMain(void)
 			StrategyNotifyBgWriter(MyProc->pgprocno);
 			/* Sleep ... */
 			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+						   WL_LATCH_SET | WL_TIMEOUT,
 						   BgWriterDelay * HIBERNATE_FACTOR,
 						   WAIT_EVENT_BGWRITER_HIBERNATE);
 			/* Reset the notification request in case we timed out */
 			StrategyNotifyBgWriter(-1);
 		}
-
-		/*
-		 * Emergency bailout if postmaster has died.  This is to avoid the
-		 * necessity for manual cleanup of all postmaster children.
-		 */
-		if (rc & WL_POSTMASTER_DEATH)
-			exit(1);
 
 		prev_hibernate = can_hibernate;
 	}

@@ -92,6 +92,12 @@ struct WaitEventSet
 	Latch	   *latch;
 	int			latch_pos;
 
+	/*
+	 * If the client explicitly asks for WL_POSTMASTER_DEATH, then we'll
+	 * return it.  If otherwise we'll exit automatically.
+	 */
+	bool		exit_on_postmaster_death;
+
 #if defined(WAIT_USE_EPOLL)
 	int			epoll_fd;
 	/* epoll_wait returns events in a user provided arrays, allocate once */
@@ -523,6 +529,9 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	char	   *data;
 	Size		sz = 0;
 
+	/* Allow for the implicit WL_POSTMASTER_DEATH event. */
+	++nevents;
+
 	/*
 	 * Use MAXALIGN size/alignment to guarantee that later uses of memory are
 	 * aligned correctly. E.g. epoll_event might need 8 byte alignment on some
@@ -590,6 +599,13 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	set->handles[0] = pgwin32_signal_event;
 	StaticAssertStmt(WSA_INVALID_EVENT == NULL, "");
 #endif
+
+	/*
+	 * Set up the default behavior for postmaster death.  The caller can
+	 * override this by explicitly adding a WL_POSTMASTER_DEATH event.
+	 */
+	AddWaitEventToSet(set, WL_POSTMASTER_DEATH, -1, NULL, NULL);
+	set->exit_on_postmaster_death = true;
 
 	return set;
 }
@@ -670,6 +686,17 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 
 	/* not enough space */
 	Assert(set->nevents < set->nevents_space);
+
+	/*
+	 * If the caller explicitly asks for notification of postmaster death,
+	 * then we don't need to do anything because we already installed one.
+	 * We just need to disable the immediate exit behavior.
+	 */
+	if (events == WL_POSTMASTER_DEATH && set->nevents > 0)
+	{
+		set->exit_on_postmaster_death = false;
+		return 0;
+	}
 
 	if (latch)
 	{
@@ -926,6 +953,7 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	instr_time	start_time;
 	instr_time	cur_time;
 	long		cur_timeout = -1;
+	int			i;
 
 	Assert(nevents > 0);
 
@@ -986,7 +1014,6 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 			occurred_events->user_data =
 				set->events[set->latch_pos].user_data;
 			occurred_events->events = WL_LATCH_SET;
-			occurred_events++;
 			returned_events++;
 
 			break;
@@ -1020,6 +1047,19 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 #endif
 
 	pgstat_report_wait_end();
+
+	/*
+	 * Exit immediately if the postmaster died and the caller did not ask to
+	 * handle that event.
+	 */
+	if (set->exit_on_postmaster_death)
+	{
+		for (i = 0; i < returned_events; ++i)
+		{
+			if (occurred_events[i].events == WL_POSTMASTER_DEATH)
+				exit(1);
+		}
+	}
 
 	return returned_events;
 }

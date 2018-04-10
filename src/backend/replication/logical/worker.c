@@ -1254,14 +1254,9 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 			wait_time = NAPTIME_PER_CYCLE;
 
 		rc = WaitLatchOrSocket(MyLatch,
-							   WL_SOCKET_READABLE | WL_LATCH_SET |
-							   WL_TIMEOUT | WL_POSTMASTER_DEATH,
+							   WL_SOCKET_READABLE | WL_LATCH_SET | WL_TIMEOUT,
 							   fd, wait_time,
 							   WAIT_EVENT_LOGICAL_APPLY_MAIN);
-
-		/* Emergency bailout if postmaster has died */
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
 
 		if (rc & WL_LATCH_SET)
 		{

@@ -96,6 +96,8 @@ extern ssize_t secure_raw_write(Port *port, const void *ptr, size_t len);
 extern bool ssl_loaded_verify_locations;
 
 extern WaitEventSet *FeBeWaitSet;
+extern int FeBeWaitSetSocketPos;
+extern int FeBeWaitSetLatchPos;
 
 /* GUCs */
 extern char *SSLCipherSuites;

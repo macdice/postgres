@@ -632,7 +632,6 @@ AutoVacLauncherMain(int argc, char *argv[])
 		struct timeval nap;
 		TimestampTz current_time = 0;
 		bool		can_launch;
-		int			rc;
 
 		/*
 		 * This loop is a bit different from the normal use of WaitLatch,
@@ -648,22 +647,15 @@ AutoVacLauncherMain(int argc, char *argv[])
 		 * Wait until naptime expires or we get some type of signal (all the
 		 * signal handlers will wake us by calling SetLatch).
 		 */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   (nap.tv_sec * 1000L) + (nap.tv_usec / 1000L),
-					   WAIT_EVENT_AUTOVACUUM_MAIN);
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT,
+				  (nap.tv_sec * 1000L) + (nap.tv_usec / 1000L),
+				  WAIT_EVENT_AUTOVACUUM_MAIN);
 
 		ResetLatch(MyLatch);
 
 		/* Process sinval catchup interrupts that happened while sleeping */
 		ProcessCatchupInterrupt();
-
-		/*
-		 * Emergency bailout if postmaster has died.  This is to avoid the
-		 * necessity for manual cleanup of all postmaster children.
-		 */
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
 
 		/* the normal shutdown case */
 		if (got_SIGTERM)
