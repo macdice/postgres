@@ -1624,8 +1624,12 @@ ExecuteTruncate(TruncateStmt *stmt)
 			 * as the relfilenode value. The old storage file is scheduled for
 			 * deletion at commit.
 			 */
-			RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
-									  RecentXmin, minmulti);
+			if (RelationStorageIsZHeap(rel))
+				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
+										  InvalidTransactionId, InvalidMultiXactId);
+			else
+				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
+										  RecentXmin, minmulti);
 			if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 				heap_create_init_fork(rel);
 
@@ -1638,8 +1642,12 @@ ExecuteTruncate(TruncateStmt *stmt)
 			if (OidIsValid(toast_relid))
 			{
 				rel = relation_open(toast_relid, AccessExclusiveLock);
-				RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
-										  RecentXmin, minmulti);
+				if (RelationStorageIsZHeap(rel))
+					RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
+											  InvalidTransactionId, InvalidMultiXactId);
+				else
+					RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
+											  RecentXmin, minmulti);
 				if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 					heap_create_init_fork(rel);
 				heap_close(rel, NoLock);
