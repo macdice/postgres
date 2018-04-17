@@ -23,6 +23,9 @@
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
 
+#if defined(HAVE_PR_SET_PDEATHSIG)
+#include <sys/prctl.h>
+#endif
 
 /*
  * The postmaster is signaled by its children by sending SIGUSR1.  The
@@ -71,6 +74,28 @@ struct PMSignalData
 
 NON_EXEC_STATIC volatile PMSignalData *PMSignalState = NULL;
 
+#ifdef USE_POSTMASTER_DEATH_SIGNAL
+sig_atomic_t postmaster_possibly_dead = false;
+
+static void
+postmaster_death_handler(int signo)
+{
+	postmaster_possibly_dead = true;
+}
+
+/*
+ * The available signals depends on the OS and architecture.  SIGUSR1 and
+ * SIGUSR2 are already used for other things, so choose another one.
+ */
+#if defined(SIGINFO)
+#define POSTMASTER_DEATH_SIGNAL SIGINFO
+#elif defined(SIGPWR)
+#define POSTMASTER_DEATH_SIGNAL SIGPWR
+#else
+#error "cannot find a signal to use for postmaster death"
+#endif
+
+#endif
 
 /*
  * PMSignalShmemSize
@@ -269,7 +294,7 @@ MarkPostmasterChildInactive(void)
  * PostmasterIsAlive - check whether postmaster process is still alive
  */
 bool
-PostmasterIsAlive(void)
+PostmasterIsAliveInternal(void)
 {
 #ifndef WIN32
 	char		c;
@@ -290,4 +315,32 @@ PostmasterIsAlive(void)
 #else							/* WIN32 */
 	return (WaitForSingleObject(PostmasterHandle, 0) == WAIT_TIMEOUT);
 #endif							/* WIN32 */
+}
+
+/*
+ * PostmasterDeathSignalInit - request signal on postmaster death if possible
+ */
+void
+PostmasterDeathSignalInit(void)
+{
+#ifdef USE_POSTMASTER_DEATH_SIGNAL
+	int signum;
+
+	/* Register our signal handler. */
+	signum = POSTMASTER_DEATH_SIGNAL;
+	pqsignal(signum, postmaster_death_handler);
+
+	/* Request a signal on parent exit. */
+#ifdef HAVE_PR_SET_PDEATHSIG
+	if (prctl(PR_SET_PDEATHSIG, signum) < 0)
+		elog(ERROR, "could not request parent death signal: %m");
+#endif
+
+	/*
+	 * Just in case the parent was gone already and we missed it, we'd
+	 * better check the slow way.
+	 */
+	if (!PostmasterIsAliveInternal())
+		postmaster_possibly_dead = true;
+#endif
 }

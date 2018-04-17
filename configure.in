@@ -1023,6 +1023,28 @@ program to use during the build.])
 fi
 
 #
+# Signals to detect parent process death
+#
+AC_MSG_CHECKING([for parent death signal support])
+
+# Linux has prctl(PR_SET_PDEATHSIG, ...)
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([
+#include <sys/prctl.h>
+], [
+#ifndef PR_SET_PDEATHSIG
+#error PR_SET_PDEATHSIG not defined
+#endif
+])], [HAVE_PR_SET_PDEATHSIG=1])
+
+if test x"$HAVE_PR_SET_PDEATHSIG" = "x1"; then
+  AC_MSG_RESULT(PR_SET_PDEATHSIG)
+  AC_DEFINE(HAVE_PR_SET_PDEATHSIG, 1,
+            [Define to 1 if the system supports PR_SET_PDEATHSIG])
+else
+  AC_MSG_RESULT(no)
+fi
+
+#
 # Pthreads
 #
 # For each platform, we need to know about any special compile and link

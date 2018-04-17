@@ -9718,6 +9718,46 @@ program to use during the build." "$LINENO" 5
 fi
 
 #
+# Signals to detect parent process death
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for parent death signal support" >&5
+$as_echo_n "checking for parent death signal support... " >&6; }
+
+# Linux has prctl(PR_SET_PDEATHSIG, ...)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <sys/prctl.h>
+
+int
+main ()
+{
+
+#ifndef PR_SET_PDEATHSIG
+#error PR_SET_PDEATHSIG not defined
+#endif
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  HAVE_PR_SET_PDEATHSIG=1
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+
+if test x"$HAVE_PR_SET_PDEATHSIG" = "x1"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: PR_SET_PDEATHSIG" >&5
+$as_echo "PR_SET_PDEATHSIG" >&6; }
+
+$as_echo "#define HAVE_PR_SET_PDEATHSIG 1" >>confdefs.h
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+#
 # Pthreads
 #
 # For each platform, we need to know about any special compile and link

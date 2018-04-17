@@ -428,6 +428,9 @@
 /* Define to 1 if the assembler supports PPC's LWARX mutex hint bit. */
 #undef HAVE_PPC_LWARX_MUTEX_HINT
 
+/* Define to 1 if the system supports PR_SET_PDEATHSIG */
+#undef HAVE_PR_SET_PDEATHSIG
+
 /* Define to 1 if you have the `pstat' function. */
 #undef HAVE_PSTAT
 

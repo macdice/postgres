@@ -51,6 +51,21 @@ extern bool IsPostmasterChildWalSender(int slot);
 extern void MarkPostmasterChildActive(void);
 extern void MarkPostmasterChildInactive(void);
 extern void MarkPostmasterChildWalSender(void);
-extern bool PostmasterIsAlive(void);
+extern bool PostmasterIsAliveInternal(void);
+extern void PostmasterDeathSignalInit(void);
+
+#ifdef USE_POSTMASTER_DEATH_SIGNAL
+extern sig_atomic_t postmaster_possibly_dead;
+#endif
+
+static inline bool
+PostmasterIsAlive(void)
+{
+#ifdef USE_POSTMASTER_DEATH_SIGNAL
+	if (likely(!postmaster_possibly_dead))
+		return true;
+#endif
+	return PostmasterIsAliveInternal();
+}
 
 #endif							/* PMSIGNAL_H */

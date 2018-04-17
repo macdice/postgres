@@ -1155,6 +1155,17 @@ extern int	fdatasync(int fildes);
 #define NON_EXEC_STATIC static
 #endif
 
+/*
+ * Do we have a way to ask for a signal on parent death?  Build with
+ * NO_POSTMASTER_DEATH_SIGNAL defined to inhibit the use of death signals on
+ * platforms that support it, for testing purposes.
+ */
+#ifndef NO_POSTMASTER_DEATH_SIGNAL
+#if defined(HAVE_PR_SET_PDEATHSIG)
+#define USE_POSTMASTER_DEATH_SIGNAL
+#endif
+#endif
+
 /* /port compatibility functions */
 #include "port.h"
 
