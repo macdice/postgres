@@ -1161,7 +1161,7 @@ extern int	fdatasync(int fildes);
  * platforms that support it, for testing purposes.
  */
 #ifndef NO_POSTMASTER_DEATH_SIGNAL
-#if defined(HAVE_PR_SET_PDEATHSIG)
+#if defined(HAVE_PR_SET_PDEATHSIG) || defined(HAVE_PROC_PDEATHSIG_CTL)
 #define USE_POSTMASTER_DEATH_SIGNAL
 #endif
 #endif

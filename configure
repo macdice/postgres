@@ -9746,11 +9746,40 @@ if ac_fn_c_try_compile "$LINENO"; then :
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
+# FreeBSD 12.0 has procctl(..., PROC_PDEATHSIG_CTL, ...)
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <sys/procctl.h>
+
+int
+main ()
+{
+
+#ifndef PROC_PDEATHSIG_CTL
+#error PROC_PDEATHSIG_CTL not defined
+#endif
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  HAVE_PROC_PDEATHSIG_CTL=1
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+
 if test x"$HAVE_PR_SET_PDEATHSIG" = "x1"; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: PR_SET_PDEATHSIG" >&5
 $as_echo "PR_SET_PDEATHSIG" >&6; }
 
 $as_echo "#define HAVE_PR_SET_PDEATHSIG 1" >>confdefs.h
+
+elif test x"$HAVE_PROC_PDEATHSIG_CTL" = "x1"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: PROC_PDEATHSIG_CTL" >&5
+$as_echo "PROC_PDEATHSIG_CTL" >&6; }
+
+$as_echo "#define HAVE_PROC_PDEATHSIG_CTL 1" >>confdefs.h
 
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5

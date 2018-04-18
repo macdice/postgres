@@ -1036,10 +1036,23 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([
 #endif
 ])], [HAVE_PR_SET_PDEATHSIG=1])
 
+# FreeBSD 12.0 has procctl(..., PROC_PDEATHSIG_CTL, ...)
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([
+#include <sys/procctl.h>
+], [
+#ifndef PROC_PDEATHSIG_CTL
+#error PROC_PDEATHSIG_CTL not defined
+#endif
+])], [HAVE_PROC_PDEATHSIG_CTL=1])
+
 if test x"$HAVE_PR_SET_PDEATHSIG" = "x1"; then
   AC_MSG_RESULT(PR_SET_PDEATHSIG)
   AC_DEFINE(HAVE_PR_SET_PDEATHSIG, 1,
             [Define to 1 if the system supports PR_SET_PDEATHSIG])
+elif test x"$HAVE_PROC_PDEATHSIG_CTL" = "x1"; then
+  AC_MSG_RESULT(PROC_PDEATHSIG_CTL)
+  AC_DEFINE(HAVE_PROC_PDEATHSIG_CTL, 1,
+            [Define to 1 if the system supports PROC_PDEATHSIG_CTL])
 else
   AC_MSG_RESULT(no)
 fi

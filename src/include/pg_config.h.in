@@ -428,6 +428,9 @@
 /* Define to 1 if the assembler supports PPC's LWARX mutex hint bit. */
 #undef HAVE_PPC_LWARX_MUTEX_HINT
 
+/* Define to 1 if the system supports PROC_PDEATHSIG_CTL */
+#undef HAVE_PROC_PDEATHSIG_CTL
+
 /* Define to 1 if the system supports PR_SET_PDEATHSIG */
 #undef HAVE_PR_SET_PDEATHSIG
 

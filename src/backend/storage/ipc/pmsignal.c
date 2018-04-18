@@ -27,6 +27,10 @@
 #include <sys/prctl.h>
 #endif
 
+#if defined(HAVE_PROC_PDEATHSIG_CTL)
+#include <sys/procctl.h>
+#endif
+
 /*
  * The postmaster is signaled by its children by sending SIGUSR1.  The
  * specific reason is communicated via flags in shared memory.  We keep
@@ -333,6 +337,9 @@ PostmasterDeathSignalInit(void)
 	/* Request a signal on parent exit. */
 #ifdef HAVE_PR_SET_PDEATHSIG
 	if (prctl(PR_SET_PDEATHSIG, signum) < 0)
+		elog(ERROR, "could not request parent death signal: %m");
+#elif defined(HAVE_PROC_PDEATHSIG_CTL)
+	if (procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &signum) < 0)
 		elog(ERROR, "could not request parent death signal: %m");
 #endif
 
