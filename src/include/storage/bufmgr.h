@@ -59,6 +59,7 @@ extern int	bgwriter_lru_maxpages;
 extern double bgwriter_lru_multiplier;
 extern bool track_io_timing;
 extern int	target_prefetch_pages;
+extern int	exclusive_caching;
 
 extern int	checkpoint_flush_after;
 extern int	backend_flush_after;
@@ -87,6 +88,12 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 #define BUFFER_LOCK_UNLOCK		0
 #define BUFFER_LOCK_SHARE		1
 #define BUFFER_LOCK_EXCLUSIVE	2
+
+/* Exclusive caching seetings. */
+#define EXCLUSIVE_CACHING_OFF	0
+#define EXCLUSIVE_CACHING_PREFETCH	1
+#define EXCLUSIVE_CACHING_WRITE	2
+#define EXCLUSIVE_CACHING_CLEAN	3
 
 /*
  * These routines are beaten on quite heavily, hence the macroization.

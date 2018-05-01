@@ -51,6 +51,8 @@ typedef struct f_smgr
 								  BlockNumber blocknum);
 	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
 							  BlockNumber blocknum, char *buffer);
+	void		(*smgr_unread) (SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum, char *buffer);
 	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
 							   BlockNumber blocknum, char *buffer, bool skipFsync);
 	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
@@ -68,7 +70,7 @@ typedef struct f_smgr
 static const f_smgr smgrsw[] = {
 	/* magnetic disk */
 	{mdinit, NULL, mdclose, mdcreate, mdexists, mdunlink, mdextend,
-		mdprefetch, mdread, mdwrite, mdwriteback, mdnblocks, mdtruncate,
+		mdprefetch, mdread, mdunread, mdwrite, mdwriteback, mdnblocks, mdtruncate,
 		mdimmedsync, mdpreckpt, mdsync, mdpostckpt
 	}
 };
@@ -626,6 +628,13 @@ smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 char *buffer)
 {
 	smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
+}
+
+void
+smgrunread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		   char *buffer)
+{
+	smgrsw[reln->smgr_which].smgr_unread(reln, forknum, blocknum, buffer);
 }
 
 /*

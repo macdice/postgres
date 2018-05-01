@@ -172,6 +172,7 @@ static bool check_stage_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_canonical_path(char **newval, void **extra, GucSource source);
 static bool check_timezone_abbreviations(char **newval, void **extra, GucSource source);
+static bool check_exclusive_caching(int *newval, void **extra, GucSource source);
 static void assign_timezone_abbreviations(const char *newval, void *extra);
 static void pg_timezone_abbrev_initialize(void);
 static const char *show_archive_command(void);
@@ -425,6 +426,14 @@ static const struct config_enum_entry password_encryption_options[] = {
 	{"true", PASSWORD_TYPE_MD5, true},
 	{"yes", PASSWORD_TYPE_MD5, true},
 	{"1", PASSWORD_TYPE_MD5, true},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry exclusive_caching_options[] = {
+	{"off", EXCLUSIVE_CACHING_OFF, false},
+	{"prefetch", EXCLUSIVE_CACHING_PREFETCH, false},
+	{"write", EXCLUSIVE_CACHING_WRITE, false},
+	{"clean", EXCLUSIVE_CACHING_CLEAN, false},
 	{NULL, 0, false}
 };
 
@@ -4108,6 +4117,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		&dynamic_shared_memory_type,
 		DEFAULT_DYNAMIC_SHARED_MEMORY_TYPE, dynamic_shared_memory_options,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"exclusive_caching", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Enables experimental strategies for minimizing double buffering."),
+			NULL
+		},
+		&exclusive_caching,
+		EXCLUSIVE_CACHING_OFF, exclusive_caching_options,
+		check_exclusive_caching, NULL, NULL
 	},
 
 	{
@@ -10453,6 +10472,21 @@ check_temp_buffers(int *newval, void **extra, GucSource source)
 	{
 		GUC_check_errdetail("\"temp_buffers\" cannot be changed after any temporary tables have been accessed in the session.");
 		return false;
+	}
+	return true;
+}
+
+static bool
+check_exclusive_caching(int *newval, void **extra, GucSource source)
+{
+	if (*newval == EXCLUSIVE_CACHING_CLEAN)
+	{
+#if defined(HAVE_POSIX_FADVISE) && defined(POSIX_FADV_CLEAN)
+	return true;
+#else
+	GUC_check_errdetail("\"exclusive_caching\" cannot be set to \"clean\" on this build.");
+	return false;
+#endif
 	}
 	return true;
 }

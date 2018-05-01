@@ -110,6 +110,7 @@ int			bgwriter_lru_maxpages = 100;
 double		bgwriter_lru_multiplier = 2.0;
 bool		track_io_timing = false;
 int			effective_io_concurrency = 0;
+int			exclusive_caching = EXCLUSIVE_CACHING_OFF;
 
 /*
  * GUC variables about triggering kernel writeback for buffers written; OS
@@ -1147,6 +1148,35 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 														 smgr->smgr_rnode.node.spcNode,
 														 smgr->smgr_rnode.node.dbNode,
 														 smgr->smgr_rnode.node.relNode);
+			}
+			else
+			{
+				/*
+				 * Someone else has locked the buffer, so give it up and loop
+				 * back to get another one.
+				 */
+				UnpinBuffer(buf, true);
+				continue;
+			}
+		}
+		else if ((oldFlags & BM_TAG_VALID) &&
+				 exclusive_caching != EXCLUSIVE_CACHING_OFF)
+		{
+			/*
+			 * It's clean.  Exclusive caching is enabled, meaning that we want
+			 * to try to avoid keeping blocks in both our buffer pool and the
+			 * kernel's at the same time.  Since we're kicking this one out,
+			 * try to arrange for the kernel to cache it.
+			 */
+			SMgrRelation reln = smgropen(buf->tag.rnode, InvalidBackendId);
+
+			if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
+										 LW_SHARED))
+			{
+				/* io_in_progress_lock? */
+				smgrunread(reln, buf->tag.forkNum, buf->tag.blockNum,
+						   BufHdrGetBlock(buf));
+				LWLockRelease(BufferDescriptorGetContentLock(buf));
 			}
 			else
 			{

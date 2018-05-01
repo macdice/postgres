@@ -789,6 +789,49 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 							blocknum, FilePathName(v->mdfd_vfd),
 							nbytes, BLCKSZ)));
 	}
+
+#if HAVE_POSIX_FADVISE
+	if (exclusive_caching != EXCLUSIVE_CACHING_OFF)
+	{
+		if (posix_fadvise(FileGetRawDesc(v->mdfd_vfd), seekpos, BLCKSZ, POSIX_FADV_DONTNEED) < 0)
+			ereport(WARNING,
+					(errcode_for_file_access(),
+					 errmsg("could not pass caching hint to kernel: %m")));
+	}
+#endif
+}
+
+void
+mdunread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		 char *buffer)
+{
+	MdfdVec    *v;
+
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+	switch (exclusive_caching)
+	{
+	case EXCLUSIVE_CACHING_PREFETCH:
+		mdprefetch(reln, forknum, blocknum);
+		break;
+	case EXCLUSIVE_CACHING_CLEAN:
+#ifdef POSIX_FADV_CLEAN
+	{
+		off_t		seekpos;
+
+		seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+		if (posix_fadvise(FileGetRawDesc(v->mdfd_vfd), seekpos, BLCKSZ, POSIX_FADV_CLEAN) < 0)
+			ereport(WARNING,
+					(errcode_for_file_access(),
+					 errmsg("could not pass caching hint to kernel: %m")));
+	}
+		/* FALL THROUGH */
+#endif
+	case EXCLUSIVE_CACHING_WRITE:
+		mdwrite(reln, forknum, blocknum, buffer, true);
+		break;
+	}
 }
 
 /*
