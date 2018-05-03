@@ -24,6 +24,7 @@
 
 #include "libpq/pqsignal.h"
 #include "port/pg_crc32c.h"
+#include "utils/elog.h"
 
 
 static sigjmp_buf illegal_instruction_jump;
@@ -46,10 +47,17 @@ pg_crc32c_armv8_available(void)
 
 	pqsignal(SIGILL, illegal_instruction_handler);
 	if (sigsetjmp(illegal_instruction_jump, 1) == 0)
-		result = (pg_comp_crc32c_armv8(0, &data, sizeof(data)) == 0xdd439b0d);
+	{
+		if (pg_comp_crc32c_armv8(0, &data, sizeof(data)) !=
+			pg_comp_crc32c_sb8(0, &data, sizeof(data)))
+			elog(ERROR, "crc32 hardware and software results disagree");
+		result = true;
+	}
 	else
 		result = false;
 	pqsignal(SIGILL, SIG_DFL);
+
+	elog(DEBUG1, "using armv8 crc2 hardware = %d", result);
 
 	return result;
 }
