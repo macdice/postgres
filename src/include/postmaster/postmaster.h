@@ -44,6 +44,11 @@ extern int	postmaster_alive_fds[2];
 #define POSTMASTER_FD_OWN		1	/* kept open by postmaster only */
 #endif
 
+#define FSYNC_FD_SUBMIT			0
+#define FSYNC_FD_PROCESS		1
+
+extern int	fsync_fds[2];
+
 extern PGDLLIMPORT const char *progname;
 
 extern void PostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();

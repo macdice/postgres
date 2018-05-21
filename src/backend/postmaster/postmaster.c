@@ -70,6 +70,7 @@
 #include <time.h>
 #include <sys/wait.h>
 #include <ctype.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -434,6 +435,7 @@ static pid_t StartChildProcess(AuxProcType type);
 static void StartAutovacuumWorker(void);
 static void MaybeStartWalReceiver(void);
 static void InitPostmasterDeathWatchHandle(void);
+static void InitFsyncFdSocketPair(void);
 
 /*
  * Archiver is allowed to start up at the current postmaster state?
@@ -526,6 +528,7 @@ typedef struct
 #else
 	int			postmaster_alive_fds[2];
 	int			syslogPipe[2];
+	int			fsync_fds[2];
 #endif
 	char		my_exec_path[MAXPGPATH];
 	char		pkglib_path[MAXPGPATH];
@@ -567,6 +570,8 @@ int			postmaster_alive_fds[2] = {-1, -1};
 /* Process handle of postmaster used for the same purpose on Windows */
 HANDLE		PostmasterHandle;
 #endif
+
+int			fsync_fds[2] = {-1, -1};
 
 /*
  * Postmaster main entry point
@@ -1194,6 +1199,11 @@ PostmasterMain(int argc, char *argv[])
 	 * wake up from sleep on postmaster death.
 	 */
 	InitPostmasterDeathWatchHandle();
+
+	/*
+	 * Initialize socket pair used to transport file descriptors over.
+	 */
+	InitFsyncFdSocketPair();
 
 #ifdef WIN32
 
@@ -6063,6 +6073,7 @@ save_backend_variables(BackendParameters *param, Port *port,
 #else
 	memcpy(&param->postmaster_alive_fds, &postmaster_alive_fds,
 		   sizeof(postmaster_alive_fds));
+	memcpy(&param->fsync_fds, &fsync_fds, sizeof(fsync_fds));
 #endif
 
 	memcpy(&param->syslogPipe, &syslogPipe, sizeof(syslogPipe));
@@ -6292,6 +6303,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 #else
 	memcpy(&postmaster_alive_fds, &param->postmaster_alive_fds,
 		   sizeof(postmaster_alive_fds));
+	memcpy(&fsync_fds, &param->fsync_fds, sizeof(fsync_fds));
 #endif
 
 	memcpy(&syslogPipe, &param->syslogPipe, sizeof(syslogPipe));
@@ -6467,4 +6479,45 @@ InitPostmasterDeathWatchHandle(void)
 				(errmsg_internal("could not duplicate postmaster handle: error code %lu",
 								 GetLastError())));
 #endif							/* WIN32 */
+}
+
+/* Create socket used for requesting fsyncs by checkpointer */
+static void
+InitFsyncFdSocketPair(void)
+{
+	Assert(MyProcPid == PostmasterPid);
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fsync_fds) < 0)
+		ereport(FATAL,
+				(errcode_for_file_access(),
+				 errmsg_internal("could not create fsync sockets: %m")));
+
+	/*
+	 * Set O_NONBLOCK on both fds.
+	 */
+	if (fcntl(fsync_fds[FSYNC_FD_PROCESS], F_SETFL, O_NONBLOCK) == -1)
+		ereport(FATAL,
+				(errcode_for_socket_access(),
+				 errmsg_internal("could not set fsync process socket to nonblocking mode: %m")));
+#ifndef EXEC_BACKEND
+	if (fcntl(fsync_fds[FSYNC_FD_PROCESS], F_SETFD, FD_CLOEXEC) == -1)
+		ereport(FATAL,
+				(errcode_for_socket_access(),
+				 errmsg_internal("could not set fsync process socket to close-on-exec mode: %m")));
+#endif
+
+	if (fcntl(fsync_fds[FSYNC_FD_SUBMIT], F_SETFL, O_NONBLOCK) == -1)
+		ereport(FATAL,
+				(errcode_for_socket_access(),
+				 errmsg_internal("could not set fsync submit socket to nonblocking mode: %m")));
+#ifndef EXEC_BACKEND
+	if (fcntl(fsync_fds[FSYNC_FD_SUBMIT], F_SETFD, FD_CLOEXEC) == -1)
+		ereport(FATAL,
+				(errcode_for_socket_access(),
+				 errmsg_internal("could not set fsync submit socket to close-on-exec mode: %m")));
+#endif
+
+	/*
+	 * FIXME: do DuplicateHandle dance for windows - can that work
+	 * trivially?
+	 */
 }
