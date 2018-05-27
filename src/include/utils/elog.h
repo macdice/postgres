@@ -70,6 +70,21 @@
 /* SQLSTATE codes for errors are defined in a separate file */
 #include "utils/errcodes.h"
 
+/*
+ * Provide a way to prevent "errno" from being accidentally used inside an
+ * ereport() invocation.  Since we know that some operating systems define it
+ * as something involving a function call, we'll put a local variable of the
+ * same name in the local scope to prevent compilation.
+ */
+#if defined(errno) && defined(__linux__)
+#define pg_prevent_errno_in_scope() int __errno_location pg_attribute_unused()
+#elif defined(errno) && (defined(__darwin__) || defined(__freebsd__))
+#define pg_prevent_errno_in_scope() int __error pg_attribute_unused()
+#elif defined(WIN32)
+#define pg_prevent_errno_in_scope() int GetLastError
+#else
+#define pg_prevent_errno_in_scope()
+#endif
 
 /*----------
  * New-style error reporting API: to be used in this way:
@@ -103,6 +118,7 @@
 #ifdef HAVE__BUILTIN_CONSTANT_P
 #define ereport_domain(elevel, domain, rest)	\
 	do { \
+		pg_prevent_errno_in_scope(); \
 		if (errstart(elevel, __FILE__, __LINE__, PG_FUNCNAME_MACRO, domain)) \
 			errfinish rest; \
 		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
@@ -198,6 +214,7 @@ extern int	getinternalerrposition(void);
 #ifdef HAVE__BUILTIN_CONSTANT_P
 #define elog(elevel, ...)  \
 	do { \
+		pg_prevent_errno_in_scope(); \
 		elog_start(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
 		elog_finish(elevel, __VA_ARGS__); \
 		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
