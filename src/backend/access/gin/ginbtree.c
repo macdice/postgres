@@ -181,7 +181,7 @@ ginStepRight(Buffer buffer, Relation index, int lockmode)
 	/* Sanity check that the page we stepped to is of similar kind. */
 	page = BufferGetPage(nextbuffer);
 	if (isLeaf != GinPageIsLeaf(page) || isData != GinPageIsData(page))
-		elog(ERROR, "right sibling of GIN page is of different type");
+		elog(ERROR, "right sibling of GIN page is of different type %d", GetLastError());
 
 	/*
 	 * Given the proper lock sequence above, we should never land on a deleted
