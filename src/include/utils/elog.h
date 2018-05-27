@@ -82,10 +82,8 @@
 #define pg_prevent_errno_in_scope() int __error pg_attribute_unused()
 #elif defined(_MSC_VER) && (_MSC_VER >= 1500)
 #define pg_prevent_errno_in_scope() \
-__pragma(warning(push)) \
-__pragma(warning(disable: 4101)) \
-int GetLastError; \
-__pragma(warning(pop))
+__pragma(warning(suppress:4101)) \
+int GetLastError
 #else
 #define pg_prevent_errno_in_scope()
 #endif
