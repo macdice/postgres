@@ -80,8 +80,12 @@
 #define pg_prevent_errno_in_scope() int __errno_location pg_attribute_unused()
 #elif defined(errno) && (defined(__darwin__) || defined(__freebsd__))
 #define pg_prevent_errno_in_scope() int __error pg_attribute_unused()
-#elif defined(WIN32)
-#define pg_prevent_errno_in_scope() int GetLastError
+#elif defined(_MSC_VER) && (_MSC_VER >= 1500)
+#define pg_prevent_errno_in_scope() \
+__pragma(warning(push)) \
+__pragma(warning(disable: 4101)) \
+int GetLastError; \
+__pragma(warning(pop))
 #else
 #define pg_prevent_errno_in_scope()
 #endif
