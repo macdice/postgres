@@ -148,8 +148,10 @@ extern void SyncDataDirectory(void);
 #define PG_TEMP_FILES_DIR "pgsql_tmp"
 #define PG_TEMP_FILE_PREFIX "pgsql_tmp"
 
+#ifndef WIN32
 /* XXX; This should probably go elsewhere */
 ssize_t pg_uds_send_with_fd(int sock, void *buf, ssize_t buflen, int fd);
 ssize_t pg_uds_recv_with_fd(int sock, void *buf, ssize_t bufsize, int *fd);
+#endif
 
 #endif							/* FD_H */

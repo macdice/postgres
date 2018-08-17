@@ -188,6 +188,11 @@ static void ReqCheckpointHandler(SIGNAL_ARGS);
 static void chkpt_sigusr1_handler(SIGNAL_ARGS);
 static void ReqShutdownHandler(SIGNAL_ARGS);
 
+#ifdef WIN32
+/* State used to track in-progress asynchronous fsync pipe reads. */
+static OVERLAPPED absorb_overlapped;
+static HANDLE *absorb_read_in_progress;
+#endif
 
 /*
  * Main entry point for checkpointer process
@@ -200,6 +205,7 @@ CheckpointerMain(void)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext checkpointer_context;
+	WaitEventSet *wes;
 
 	CheckpointerShmem->checkpointer_pid = MyProcPid;
 
@@ -340,6 +346,21 @@ CheckpointerMain(void)
 	 */
 	ProcGlobal->checkpointerLatch = &MyProc->procLatch;
 
+	/* Create reusable WaitEventSet. */
+	wes = CreateWaitEventSet(TopMemoryContext, 3);
+	AddWaitEventToSet(wes, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL,
+					  NULL);
+	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+#ifndef WIN32
+	AddWaitEventToSet(wes, WL_SOCKET_READABLE, fsync_fds[FSYNC_FD_PROCESS],
+					  NULL, NULL);
+#else
+	absorb_overlapped.hEvent = CreateEvent(NULL, TRUE, TRUE,
+										   "fsync pipe read completion");
+	AddWaitEventToSet(wes, WL_WIN32_HANDLE, PGINVALID_SOCKET, NULL,
+					  &absorb_overlapped.hEvent);
+#endif
+
 	/*
 	 * Loop forever
 	 */
@@ -351,6 +372,7 @@ CheckpointerMain(void)
 		int			elapsed_secs;
 		int			cur_timeout;
 		int			rc;
+		WaitEvent	event;
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
@@ -551,17 +573,14 @@ CheckpointerMain(void)
 			cur_timeout = Min(cur_timeout, XLogArchiveTimeout - elapsed_secs);
 		}
 
-		rc = WaitLatchOrSocket(MyLatch,
-							   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH | WL_SOCKET_READABLE,
-							   fsync_fds[FSYNC_FD_PROCESS],
-							   cur_timeout * 1000L /* convert to ms */ ,
-							   WAIT_EVENT_CHECKPOINTER_MAIN);
+		rc = WaitEventSetWait(wes, cur_timeout * 1000, &event, 1, 0);
+		Assert(rc > 0);
 
 		/*
 		 * Emergency bailout if postmaster has died.  This is to avoid the
 		 * necessity for manual cleanup of all postmaster children.
 		 */
-		if (rc & WL_POSTMASTER_DEATH)
+		if (event.events == WL_POSTMASTER_DEATH)
 			exit(1);
 	}
 }
@@ -1126,7 +1145,18 @@ ForwardFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno,
 	request.rnode = rnode;
 	request.forknum = forknum;
 	request.segno = segno;
+#ifndef WIN32
 	request.contains_fd = file != -1;
+#else
+	/*
+	 * For now we don't try to send duplicate handles to the checkpointer on
+	 * Windows.  That would be possible, but it's not clear whether it would
+	 * actually serve any useful purpose in that kernel without inside
+	 * knowledge of how it tracks errors.  The file will simply be reopened by
+	 * name when required by the checkpointer.
+	 */
+	request.contains_fd = false;
+#endif
 
 	/*
 	 * Tell the checkpointer the sequence number of the most recent open, so
@@ -1215,13 +1245,18 @@ AbsorbAllFsyncRequests(void)
 static bool
 AbsorbFsyncRequest(bool stop_at_current_cycle)
 {
-	CheckpointerRequest req;
-	int fd;
+	static CheckpointerRequest req;
+	int fd = -1;
+#ifndef WIN32
 	int ret;
+#else
+	DWORD bytes_read;
+#endif
 
 	ReleaseLruFiles();
 
 	START_CRIT_SECTION();
+#ifndef WIN32
 	ret = pg_uds_recv_with_fd(fsync_fds[FSYNC_FD_PROCESS], &req, sizeof(req), &fd);
 	if (ret < 0 && (errno == EWOULDBLOCK || errno == EAGAIN))
 	{
@@ -1230,6 +1265,51 @@ AbsorbFsyncRequest(bool stop_at_current_cycle)
 	}
 	else if (ret < 0)
 		elog(ERROR, "recvmsg failed: %m");
+#else
+	if (!absorb_read_in_progress)
+	{
+		if (!ReadFile(fsyncPipe[FSYNC_FD_PROCESS], &req, sizeof(req), &bytes_read,
+					  &absorb_overlapped))
+		{
+			if (GetLastError() != ERROR_IO_PENDING)
+			{
+				_dosmaperr(GetLastError());
+				elog(ERROR, "can't begin read from fsync pipe: %m");
+			}
+
+			/*
+			 * An asynchronous read has begun.  We'll tell caller to call us
+			 * back when the event indicates completion.
+			 */
+			absorb_read_in_progress = &absorb_overlapped.hEvent;
+			END_CRIT_SECTION();
+			return false;
+		}
+		/* The read completed synchronously.  'req' is now populated. */
+	}
+	if (absorb_read_in_progress)
+	{
+		/* Completed yet? */
+		if (!GetOverlappedResult(fsyncPipe[FSYNC_FD_PROCESS], &absorb_overlapped, &bytes_read,
+								 false))
+		{
+			if (GetLastError() == ERROR_IO_INCOMPLETE)
+			{
+				/* Nope.  Spurious event?  Tell caller to wait some more. */
+				END_CRIT_SECTION();
+				return false;
+			}
+			_dosmaperr(GetLastError());
+			elog(ERROR, "can't complete from fsync pipe: %m");
+		}
+		/* The asynchronous read completed.  'req' is now populated. */
+		absorb_read_in_progress = NULL;
+	}
+
+	/* Check message size. */
+	if (bytes_read != sizeof(req))
+		elog(ERROR, "unexpected short read on fsync pipe");
+#endif
 
 	if (req.contains_fd != (fd != -1))
 	{
@@ -1305,16 +1385,25 @@ CountBackendWrite(void)
 	pg_atomic_fetch_add_u32(&CheckpointerShmem->num_backend_writes, 1);
 }
 
+/*
+ * Send a message to the checkpointer's fsync socket (Unix) or pipe (Windows).
+ * This is essentially a blocking call (there is no CHECK_FOR_INTERRUPTS, and
+ * even if there were it'd be surpressed since callers hold a lock), except
+ * that we don't ignore postmaster death so we need an event loop.
+ *
+ * The code is rather different on Windows, because there we have to do the
+ * write and then wait for it to complete, while on Unix we have to wait until
+ * we can do the write.
+ */
 static void
 SendFsyncRequest(CheckpointerRequest *request, int fd)
 {
+#ifndef WIN32
 	ssize_t ret;
 	int		rc;
 
 	while (true)
 	{
-		CHECK_FOR_INTERRUPTS();
-
 		ret = pg_uds_send_with_fd(fsync_fds[FSYNC_FD_SUBMIT], request, sizeof(*request),
 								  request->contains_fd ? fd : -1);
 
@@ -1341,7 +1430,7 @@ SendFsyncRequest(CheckpointerRequest *request, int fd)
 			 * only for that OS.
 			 */
 
-			/* blocked on write - wait for socket to become readable */
+			/* Blocked on write - wait for socket to become readable */
 			rc = WaitLatchOrSocket(NULL,
 								   WL_SOCKET_WRITEABLE | WL_POSTMASTER_DEATH,
 								   fsync_fds[FSYNC_FD_SUBMIT], -1, 0);
@@ -1351,4 +1440,60 @@ SendFsyncRequest(CheckpointerRequest *request, int fd)
 		else
 			ereport(FATAL, (errmsg("could not send fsync request: %m")));
 	}
+
+#else /* WIN32 */
+	{
+		OVERLAPPED overlapped = {0};
+		DWORD nwritten;
+		int rc;
+
+		overlapped.hEvent = CreateEvent(NULL, TRUE, TRUE, NULL);
+
+		if (!WriteFile(fsyncPipe[FSYNC_FD_SUBMIT], request, sizeof(*request), &nwritten,
+					   &overlapped))
+		{
+			WaitEventSet *wes;
+			WaitEvent event;
+
+			/* Handle unexpected errors. */
+			if (GetLastError() != ERROR_IO_PENDING)
+			{
+				_dosmaperr(GetLastError());
+				CloseHandle(overlapped.hEvent);
+				ereport(FATAL, (errmsg("could not send fsync request: %m")));
+			}
+
+			/* Wait for asynchronous IO to complete. */
+			wes = CreateWaitEventSet(TopMemoryContext, 3);
+			AddWaitEventToSet(wes, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL,
+							  NULL);
+			AddWaitEventToSet(wes, WL_WIN32_HANDLE, PGINVALID_SOCKET, NULL,
+							  &overlapped.hEvent);
+			for (;;)
+			{
+				rc = WaitEventSetWait(wes, -1, &event, 1, 0);
+				Assert(rc > 0);
+				if (event.events == WL_POSTMASTER_DEATH)
+					exit(1);
+				if (event.events == WL_WIN32_HANDLE)
+				{
+					if (!GetOverlappedResult(fsyncPipe[FSYNC_FD_SUBMIT], &overlapped,
+											 &nwritten, FALSE))
+					{
+						_dosmaperr(GetLastError());
+						CloseHandle(overlapped.hEvent);
+						ereport(FATAL, (errmsg("could not get result of sending fsync request: %m")));
+					}
+					if (nwritten > 0)
+						break;
+				}
+			}
+			FreeWaitEventSet(wes);
+		}
+
+		CloseHandle(overlapped.hEvent);
+		if (nwritten != sizeof(*request))
+			elog(FATAL, "unexpected short write to fsync request pipe");
+	}
+#endif
 }

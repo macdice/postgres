@@ -47,7 +47,11 @@ extern int	postmaster_alive_fds[2];
 #define FSYNC_FD_SUBMIT			0
 #define FSYNC_FD_PROCESS		1
 
+#ifndef WIN32
 extern int	fsync_fds[2];
+#else
+extern HANDLE fsyncPipe[2];
+#endif
 
 extern PGDLLIMPORT const char *progname;
 

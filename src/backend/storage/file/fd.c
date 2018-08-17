@@ -3671,6 +3671,8 @@ MakePGDirectory(const char *directoryName)
 	return mkdir(directoryName, pg_dir_create_mode);
 }
 
+#ifndef WIN32
+
 /*
  * Send data over a unix domain socket, optionally (when fd != -1) including a
  * file descriptor.
@@ -3773,3 +3775,5 @@ pg_uds_recv_with_fd(int sock, void *buf, ssize_t bufsize, int *fd)
 
 	return size;
 }
+
+#endif
