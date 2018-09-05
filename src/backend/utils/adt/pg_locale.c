@@ -68,6 +68,10 @@
 #include <unicode/ucnv.h>
 #endif
 
+#ifdef HAVE_GNU_LIBC_VERSION_H
+#include <gnu/libc-version.h>
+#endif
+
 #ifdef WIN32
 /*
  * This Windows file defines StrNCpy. We don't need it here, so we undefine
@@ -1438,6 +1442,15 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 	}
 	else
 #endif
+	if (collprovider == COLLPROVIDER_LIBC)
+	{
+#ifdef HAVE_GNU_LIBC_VERSION_H
+		collversion = gnu_get_libc_version();
+#else
+		collversion = NULL;
+#endif
+	}
+	else
 		collversion = NULL;
 
 	return collversion;

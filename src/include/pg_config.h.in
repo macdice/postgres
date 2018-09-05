@@ -290,6 +290,9 @@
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
+/* Define to 1 if you have the <gnu/libc-version.h> header file. */
+#undef HAVE_GNU_LIBC_VERSION_H
+
 /* Define to 1 if you have the <gssapi/gssapi.h> header file. */
 #undef HAVE_GSSAPI_GSSAPI_H
 
