@@ -50,4 +50,8 @@ extern void ResetUndoBuffers(void);
 extern void PrepareUpdateUndoActionProgress(UndoRecPtr urecptr, int progress);
 extern void UndoRecordUpdateTransInfo(int idx);
 
+extern UnpackedUndoRecord *UndoGetOneRecord(UnpackedUndoRecord *urec,
+											UndoRecPtr urp, RelFileNode rnode,
+											UndoPersistence upersistence);
+
 #endif							/* UNDOINSERT_H */

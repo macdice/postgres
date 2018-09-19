@@ -60,18 +60,18 @@
 
 #include "access/subtrans.h"
 #include "access/transam.h"
-#include "access/xact.h"
-#include "access/xlog.h"
 #include "access/undorecord.h"
 #include "access/undoinsert.h"
 #include "access/undolog_xlog.h"
+#include "access/xact.h"
+#include "access/xlog.h"
 #include "catalog/pg_tablespace.h"
+#include "commands/tablecmds.h"
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "miscadmin.h"
-#include "commands/tablecmds.h"
 
 /*
  * XXX Do we want to support undo tuple size which is more than the BLCKSZ
@@ -160,12 +160,6 @@ static XactUndoRecordInfo xact_urec_info[MAX_XACT_UNDO_INFO];
 static int	xact_urec_info_idx;
 
 /* Prototypes for static functions. */
-static UnpackedUndoRecord *UndoGetOneRecord(UnpackedUndoRecord *urec,
-				 UndoRecPtr urp, RelFileNode rnode,
-				 UndoPersistence persistence);
-static void UndoRecordPrepareTransInfo(UndoRecPtr urecptr,
-						   UndoRecPtr xact_urp,
-						   XLogReaderState *xlog_record);
 static int UndoGetBufferSlot(RelFileNode rnode, BlockNumber blk,
 				  ReadBufferMode rbm,
 				  UndoPersistence persistence);
@@ -828,7 +822,7 @@ InsertPreparedUndo(void)
  * same block.  Caller will be responsible to release the buffer inside urec
  * and set it to invalid if it wishes to fetch the record from another block.
  */
-static UnpackedUndoRecord *
+UnpackedUndoRecord *
 UndoGetOneRecord(UnpackedUndoRecord *urec, UndoRecPtr urp, RelFileNode rnode,
 				 UndoPersistence persistence)
 {

@@ -38,7 +38,7 @@
 
 static bool execute_undo_actions_page(List *luinfo, UndoRecPtr urec_ptr,
 					 Oid reloid, TransactionId xid, BlockNumber blkno,
-					 bool blk_chain_complete, bool norellock, int options);
+					 bool blk_chain_complete, bool norellock);
 static void RollbackHTRemoveEntry(UndoRecPtr start_urec_ptr);
 
 /* This is the hash table to store all the rollabck requests. */
@@ -77,7 +77,6 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 	BlockNumber	prev_block = InvalidBlockNumber;
 	List	   *luinfo = NIL;
 	bool		more_undo;
-	int			options = 0;
 	TransactionId xid = InvalidTransactionId;
 	UndoRecInfo	*urec_info;
 
@@ -125,7 +124,6 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 	{
 		Oid			reloid = InvalidOid;
 		uint16		urec_prevlen;
-		UndoRecPtr	urec_prevurp = InvalidUndoRecPtr;
 		bool		non_page;
 
 		more_undo = true;
@@ -142,8 +140,6 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 		if (uur != NULL && !non_page)
 			reloid = uur->uur_reloid;
 
-		xid = uur->uur_xid;
-
 		if (non_page)
 		{
 			prev_reloid = InvalidOid;
@@ -159,8 +155,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			urec_info->urp = urec_ptr;
 			luinfo = lappend(luinfo, urec_info);
 			execute_undo_actions_page(luinfo, urec_ptr, reloid, xid,
-									  InvalidBlockNumber, false, rellock,
-									  0);
+									  InvalidBlockNumber, false, rellock);
 			pfree(urec_info);
 			urec_info = NULL;
 			list_free(luinfo);
@@ -168,8 +163,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			UndoRecordRelease(uur);
 
 			/* Follow undo chain until to_urecptr. */
-			if (urec_ptr != to_urecptr &&
-				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
+			if (urec_prevlen > 0 && urec_ptr != to_urecptr)
 			{
 				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 				continue;
@@ -196,15 +190,17 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 				luinfo = list_delete_first(luinfo);
 			}
 
-			urec_prevlen = uur->uur_prevlen;
-
 			/* Release the just-fetched record */
 			if (uur != NULL)
+			{
+				urec_prevlen = uur->uur_prevlen;
 				UndoRecordRelease(uur);
+			}
+			else
+				urec_prevlen = 0;
 
 			/* The undo chain must continue till we reach to_urecptr */
-			if (urec_ptr != to_urecptr &&
-				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
+			if (urec_prevlen > 0 && urec_ptr != to_urecptr)
 			{
 				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 				continue;
@@ -229,12 +225,10 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 
 			luinfo = lappend(luinfo, urec_info);
 			urec_prevlen = uur->uur_prevlen;
-			urec_prevurp = uur->uur_prevurp;
 			save_urec_ptr = uur->uur_blkprev;
 
 			/* The undo chain must continue till we reach to_urecptr */
-			if (urec_ptr != to_urecptr &&
-				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
+			if (urec_ptr != to_urecptr && urec_prevlen > 0)
 			{
 				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 				continue;
@@ -258,16 +252,12 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			((!more_undo && nopartial) || !UndoRecPtrIsValid(save_urec_ptr)))
 		{
 			execute_undo_actions_page(luinfo, save_urec_ptr, prev_reloid,
-									  xid, prev_block, true, rellock, options);
-			/* Done with the page so reset the options. */
-			options = 0;
+									  xid, prev_block, true, rellock);
 		}
 		else if (luinfo)
 		{
 			execute_undo_actions_page(luinfo, save_urec_ptr, prev_reloid,
-									  xid, prev_block, false, rellock, options);
-			/* Done with the page so reset the options. */
-			options = 0;
+									  xid, prev_block, false, rellock);
 		}
 
 		/* release the undo records for which action has been replayed */
@@ -302,9 +292,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			 * record in chain.
 			 */
 			urec_prevlen = uur->uur_prevlen;
-			urec_prevurp = uur->uur_prevurp;
-			if (urec_ptr != to_urecptr &&
-				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
+			if (urec_ptr != to_urecptr && urec_prevlen > 0)
 				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 			else
 				break;
@@ -318,7 +306,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 	{
 		execute_undo_actions_page(luinfo, save_urec_ptr, prev_reloid,
 								xid, prev_block, nopartial ? true : false,
-								rellock, options);
+								rellock);
 
 		/* release the undo records for which action has been replayed */
 		while (luinfo)
@@ -435,14 +423,13 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
  *				or for rollback to savepoint, we need not to lock as we already
  *				have the lock on the table. In cases like error or when
  *				rollbacking from the undo worker we need to have proper locks.
- * options	 -  options for executing undo actions.
  *
  *	returns true, if successfully applied the undo actions, otherwise, false.
  */
 static bool
 execute_undo_actions_page(List *luinfo, UndoRecPtr urec_ptr, Oid reloid,
 						  TransactionId xid, BlockNumber blkno,
-						  bool blk_chain_complete, bool rellock, int options)
+						  bool blk_chain_complete, bool rellock)
 {
 	UndoRecInfo *first;
 
@@ -455,8 +442,7 @@ execute_undo_actions_page(List *luinfo, UndoRecPtr urec_ptr, Oid reloid,
 
 	return RmgrTable[first->uur->uur_rmid].rm_undo(luinfo, urec_ptr, reloid,
 												   xid, blkno,
-												   blk_chain_complete, rellock,
-												   options);
+												   blk_chain_complete, rellock);
 }
 
 /*
@@ -500,6 +486,7 @@ PushRollbackReq(UndoRecPtr start_urec_ptr, UndoRecPtr end_urec_ptr, Oid dbid)
 
 	Assert(UndoRecPtrGetLogNo(start_urec_ptr) != UndoRecPtrGetLogNo(end_urec_ptr) ||
 		   start_urec_ptr >= end_urec_ptr);
+
 	/*
 	 * If the location upto which rollback need to be done is not provided,
 	 * then rollback the complete transaction.

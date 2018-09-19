@@ -1471,7 +1471,7 @@ retry:
 		LWLockRelease(oldPartitionLock);
 		/* safety check: should definitely not be our *own* pin */
 		if (GetPrivateRefCount(BufferDescriptorGetBuffer(buf)) > 0)
-			elog(ERROR, "buffer is pinned in InvalidateBuffer");
+			elog(PANIC, "buffer is pinned in InvalidateBuffer");
 		WaitIO(buf);
 		goto retry;
 	}

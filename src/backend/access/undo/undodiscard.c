@@ -14,10 +14,10 @@
 #include "postgres.h"
 
 #include "access/transam.h"
-#include "access/xlog.h"
-#include "access/xact.h"
 #include "access/undolog.h"
 #include "access/undodiscard.h"
+#include "access/xact.h"
+#include "access/xlog.h"
 #include "catalog/pg_tablespace.h"
 #include "miscadmin.h"
 #include "storage/block.h"
@@ -151,6 +151,12 @@ UndoDiscardOneLog(UndoLogControl *log, TransactionId xmin, bool *hibernate)
 			}
 
 			next_urecptr = uur->uur_next;
+
+			/* If staying in the same undo log, we must be going forwards. */
+			Assert(!UndoRecPtrIsValid(next_urecptr) ||
+				   UndoRecPtrGetLogNo(next_urecptr) != UndoRecPtrGetLogNo(undo_recptr) ||
+				   next_urecptr > undo_recptr);
+
 			undoxid = uur->uur_xid;
 			xid = undoxid;
 		}
@@ -321,8 +327,6 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 						 UndoLogControl *log)
 {
 	UndoRecPtr next_urecptr, from_urecptr;
-	uint16	prevlen;
-	UndoLogOffset next_insert;
 	UnpackedUndoRecord *uur;
 	bool refetch = false;
 
@@ -340,7 +344,6 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 		}
 
 		next_urecptr = uur->uur_next;
-		prevlen = UndoLogGetPrevLen(log->logno);
 
 		/*
 		 * If this is the last transaction in the log then calculate the latest
@@ -354,16 +357,14 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 			 * has already started in this log then lets re-fetch the undo
 			 * record.
 			 */
-			next_insert = UndoLogGetNextInsertPtr(log->logno, uur->uur_xid);
-			if (!UndoRecPtrIsValid(next_insert))
+			from_urecptr = UndoLogGetLastRecordPtr(log->logno, uur->uur_xid);
+			if (!UndoRecPtrIsValid(from_urecptr))
 			{
 				if (uur != uur_start)
 					UndoRecordRelease(uur);
 				refetch = true;
 				continue;
 			}
-
-			from_urecptr = UndoGetPrevUndoRecptr(next_insert, prevlen);
 			break;
 		}
 		else if ((UndoRecPtrGetLogNo(next_urecptr) != log->logno) &&
@@ -375,10 +376,9 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 			 * next log has already been executed and we only need to execute
 			 * which are remaining in this log.
 			 */
-			next_insert = UndoLogGetNextInsertPtr(log->logno, uur->uur_xid);
+			from_urecptr = UndoLogGetLastRecordPtr(log->logno, uur->uur_xid);
 
-			Assert(UndoRecPtrIsValid(next_insert));
-			from_urecptr = UndoGetPrevUndoRecptr(next_insert, prevlen);
+			Assert(UndoRecPtrIsValid(from_urecptr));
 			break;
 		}
 		else

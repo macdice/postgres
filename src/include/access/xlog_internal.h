@@ -298,9 +298,8 @@ typedef struct RmgrData
 	void		(*rm_cleanup) (void);
 	void		(*rm_mask) (char *pagedata, BlockNumber blkno);
 	bool		(*rm_undo) (List *luinfo, UndoRecPtr urec_ptr, Oid reloid,
-				    TransactionId xid, BlockNumber blkno,
-				    bool blk_chain_complete, bool rellock,
-				    int options);
+							TransactionId xid, BlockNumber blkno,
+							bool blk_chain_complete, bool rellock);
 	void		(*rm_undo_desc) (StringInfo buf, UnpackedUndoRecord *record);
 } RmgrData;
 

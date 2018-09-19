@@ -1245,6 +1245,34 @@ UndoLogGetNextInsertPtr(UndoLogNumber logno, TransactionId xid)
 }
 
 /*
+ * Get the address of the most recently inserted record.
+ */
+UndoRecPtr
+UndoLogGetLastRecordPtr(UndoLogNumber logno, TransactionId xid)
+{
+	UndoLogControl *log = get_undo_log(logno, false);
+	TransactionId logxid;
+	UndoRecPtr insert;
+	uint16 prevlen;
+
+	LWLockAcquire(&log->mutex, LW_SHARED);
+	insert = log->meta.unlogged.insert;
+	logxid = log->meta.unlogged.xid;
+	prevlen = log->meta.unlogged.prevlen;
+	LWLockRelease(&log->mutex);
+
+	if (TransactionIdIsValid(logxid) &&
+		TransactionIdIsValid(xid) &&
+		!TransactionIdEquals(logxid, xid))
+		return InvalidUndoRecPtr;
+
+	if (prevlen == 0)
+		return InvalidUndoRecPtr;
+
+	return MakeUndoRecPtr(logno, insert - prevlen);
+}
+
+/*
  * Rewind the undo log insert position also set the prevlen in the mata
  */
 void
@@ -1675,7 +1703,7 @@ get_undo_log(UndoLogNumber logno, bool locked)
 			 * that have never existed.
 			 */
 			if (logno >= shared->next_logno)
-				elog(ERROR, "undo log %u hasn't been created yet", logno);
+				elog(PANIC, "undo log %u hasn't been created yet", logno);
 			entry = undologtable_insert(undologtable_cache, logno, &found);
 			entry->number = logno;
 			entry->control = NULL;
