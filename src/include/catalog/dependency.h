@@ -233,8 +233,13 @@ extern void recordDependencyOn(const ObjectAddress *depender,
 				   const ObjectAddress *referenced,
 				   DependencyType behavior);
 
+extern void recordDependencyOnVersion(const ObjectAddress *depender,
+				   const ObjectAddress *referenced, const char *version,
+				   DependencyType behavior);
+
 extern void recordMultipleDependencies(const ObjectAddress *depender,
 						   const ObjectAddress *referenced,
+						   const char *version,
 						   int nreferenced,
 						   DependencyType behavior);
 

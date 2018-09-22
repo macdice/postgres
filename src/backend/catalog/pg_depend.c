@@ -45,7 +45,22 @@ recordDependencyOn(const ObjectAddress *depender,
 				   const ObjectAddress *referenced,
 				   DependencyType behavior)
 {
-	recordMultipleDependencies(depender, referenced, 1, behavior);
+	recordMultipleDependencies(depender, referenced, NULL, 1, behavior);
+}
+
+/*
+ * As recordDependencyOn(), but also capture a version string so that changes
+ * in the referenced object can be detected.  The meaning of the version
+ * string depends on the referenced object.  Currently it is used for
+ * detecting changes in collation versions.
+ */
+void
+recordDependencyOnVersion(const ObjectAddress *depender,
+						  const ObjectAddress *referenced,
+						  const char *version,
+						  DependencyType behavior)
+{
+	recordMultipleDependencies(depender, referenced, version, 1, behavior);
 }
 
 /*
@@ -55,6 +70,7 @@ recordDependencyOn(const ObjectAddress *depender,
 void
 recordMultipleDependencies(const ObjectAddress *depender,
 						   const ObjectAddress *referenced,
+						   const char *version,
 						   int nreferenced,
 						   DependencyType behavior)
 {
@@ -102,9 +118,9 @@ recordMultipleDependencies(const ObjectAddress *depender,
 			values[Anum_pg_depend_refclassid - 1] = ObjectIdGetDatum(referenced->classId);
 			values[Anum_pg_depend_refobjid - 1] = ObjectIdGetDatum(referenced->objectId);
 			values[Anum_pg_depend_refobjsubid - 1] = Int32GetDatum(referenced->objectSubId);
+			values[Anum_pg_depend_refobjversion - 1] = CStringGetDatum(version ? version++ : "");
 
 			values[Anum_pg_depend_deptype - 1] = CharGetDatum((char) behavior);
-
 			tup = heap_form_tuple(dependDesc->rd_att, values, nulls);
 
 			/* fetch index info only when we know we need it */

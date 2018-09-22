@@ -1376,7 +1376,8 @@ recordDependencyOnExpr(const ObjectAddress *depender,
 
 	/* And record 'em */
 	recordMultipleDependencies(depender,
-							   context.addrs->refs, context.addrs->numrefs,
+							   context.addrs->refs, NULL,
+							   context.addrs->numrefs,
 							   behavior);
 
 	free_object_addresses(context.addrs);
@@ -1459,7 +1460,8 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 		/* Record the self-dependencies */
 		if (!ignore_self)
 			recordMultipleDependencies(depender,
-									   self_addrs->refs, self_addrs->numrefs,
+									   self_addrs->refs, NULL,
+									   self_addrs->numrefs,
 									   self_behavior);
 
 		free_object_addresses(self_addrs);
@@ -1467,7 +1469,8 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 
 	/* Record the external dependencies */
 	recordMultipleDependencies(depender,
-							   context.addrs->refs, context.addrs->numrefs,
+							   context.addrs->refs, NULL,
+							   context.addrs->numrefs,
 							   behavior);
 
 	free_object_addresses(context.addrs);
@@ -2390,7 +2393,7 @@ record_object_address_dependencies(const ObjectAddress *depender,
 {
 	eliminate_duplicate_dependencies(referenced);
 	recordMultipleDependencies(depender,
-							   referenced->refs, referenced->numrefs,
+							   referenced->refs, NULL, referenced->numrefs,
 							   behavior);
 }
 
