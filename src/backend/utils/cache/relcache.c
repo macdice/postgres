@@ -1452,6 +1452,10 @@ RelationInitIndexAccessInfo(Relation relation)
 	indcoll = (oidvector *) DatumGetPointer(indcollDatum);
 	memcpy(relation->rd_indcollation, indcoll->values, indnkeyatts * sizeof(Oid));
 
+	/* Warn if any dependent collations' versions have moved. */
+	if (!IsCatalogRelation(relation))
+		index_check_collation_versions(RelationGetRelid(relation));
+
 	/*
 	 * indclass cannot be referenced directly through the C struct, because it
 	 * comes after the variable-width indkey field.  Must extract the datum

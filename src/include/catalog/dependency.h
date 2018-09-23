@@ -227,6 +227,14 @@ extern void record_object_address_dependencies(const ObjectAddress *depender,
 
 extern void free_object_addresses(ObjectAddresses *addrs);
 
+typedef NameData *(*VisitDependentObjectsFun)(const ObjectAddress *otherObject,
+											  const NameData *version,
+											  void *userdata);
+
+extern void visitDependentObjects(const ObjectAddress *object,
+								  VisitDependentObjectsFun callback,
+								  void *userdata);
+
 /* in pg_depend.c */
 
 extern void recordDependencyOn(const ObjectAddress *depender,

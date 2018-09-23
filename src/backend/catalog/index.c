@@ -69,6 +69,7 @@
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_locale.h"
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
 #include "utils/syscache.h"
@@ -1099,11 +1100,16 @@ index_create(Relation heapRelation,
 			if (OidIsValid(collationObjectId[i]) &&
 				collationObjectId[i] != DEFAULT_COLLATION_OID)
 			{
+				NameData version;
+
 				referenced.classId = CollationRelationId;
 				referenced.objectId = collationObjectId[i];
 				referenced.objectSubId = 0;
+				get_collation_version_for_oid(referenced.objectId, &version);
 
-				recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+				recordDependencyOnVersion(&myself, &referenced,
+										  NameStr(version)[0] == '\0' ? NULL : NameStr(version),
+										  DEPENDENCY_NORMAL);
 			}
 		}
 
@@ -1205,6 +1211,74 @@ index_create(Relation heapRelation,
 	index_close(indexRelation, NoLock);
 
 	return indexRelationId;
+}
+
+static NameData *
+index_check_collation_version(const ObjectAddress *otherObject,
+							  const NameData *version,
+							  void *userdata)
+{
+	Oid			relid = *(Oid *) userdata;
+	NameData	current_version;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return NULL;
+
+	/* Compare with the current version. */
+	get_collation_version_for_oid(otherObject->objectId, &current_version);
+	if (strncmp(NameStr(*version),
+				NameStr(current_version),
+				sizeof(NameData)) != 0)
+		ereport(WARNING,
+				(errmsg("index \"%s\" depends on collation %u version \"%s\", but the current version is \"%s\"",
+						get_rel_name(relid),
+						otherObject->objectId,
+						NameStr(*version),
+						NameStr(current_version)),
+				 errdetail("The index may be corrupted due to changes in sort order."),
+				 errhint("REINDEX to avoid the risk of corruption.")));
+
+	return NULL;
+}
+
+void
+index_check_collation_versions(Oid relid)
+{
+	ObjectAddress	object;
+
+	object.classId = RelationRelationId;
+	object.objectId = relid;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_check_collation_version, &relid);
+}
+
+static NameData *
+index_update_collation_version(const ObjectAddress *otherObject,
+							   const NameData *version,
+							   void *userdata)
+{
+	NameData   *current_version = (NameData *) userdata;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return NULL;
+
+	get_collation_version_for_oid(otherObject->objectId, current_version);
+	return current_version;
+}
+
+static void
+index_update_collation_versions(Oid relid)
+{
+	ObjectAddress	object;
+	NameData	current_version;
+
+	object.classId = RelationRelationId;
+	object.objectId = relid;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_update_collation_version,
+						  &current_version);
 }
 
 /*
@@ -3803,6 +3877,9 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	/* Close rels, but keep locks */
 	index_close(iRel, NoLock);
 	heap_close(heapRelation, NoLock);
+
+	/* Record the current versions of all depended-on collations. */
+	index_update_collation_versions(indexId);
 }
 
 /*

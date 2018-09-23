@@ -423,6 +423,63 @@ performMultipleDeletions(const ObjectAddresses *objects,
 }
 
 /*
+ * Call a function for all objects that depend on 'object'.  If the function
+ * returns a non-NULL pointer to a new version string, update the version.
+ */
+void
+visitDependentObjects(const ObjectAddress *object,
+					  VisitDependentObjectsFun callback,
+					  void *userdata)
+{
+	Relation	depRel;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+	HeapTuple	tup;
+	ObjectAddress otherObject;
+
+	ScanKeyInit(&key[0],
+				Anum_pg_depend_classid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(object->classId));
+	ScanKeyInit(&key[1],
+				Anum_pg_depend_objid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(object->objectId));
+	ScanKeyInit(&key[2],
+				Anum_pg_depend_objsubid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(object->objectSubId));
+
+	depRel = heap_open(DependRelationId, RowExclusiveLock);
+	scan = systable_beginscan(depRel, DependDependerIndexId, true,
+							  NULL, 3, key);
+
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(tup);
+		NameData *new_version;
+
+		otherObject.classId = foundDep->refclassid;
+		otherObject.objectId = foundDep->refobjid;
+		otherObject.objectSubId = foundDep->refobjsubid;
+
+		new_version = callback(&otherObject, &foundDep->refobjversion,
+							   userdata);
+		if (new_version)
+		{
+			/* Make a modifyable copy. */
+			tup = heap_copytuple(tup);
+			foundDep = (Form_pg_depend) GETSTRUCT(tup);
+			foundDep->refobjversion = *new_version;
+			CatalogTupleUpdate(depRel, &tup->t_self, tup);
+			heap_freetuple(tup);
+		}
+	}
+	systable_endscan(scan);
+	heap_close(depRel, RowExclusiveLock);
+}
+
+/*
  * findDependentObjects - find all objects that depend on 'object'
  *
  * For every object that depends on the starting object, acquire a deletion

@@ -1443,6 +1443,27 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 	return collversion;
 }
 
+/*
+ * Get provider-specific collation version string given a collatoin OID.
+ */
+void
+get_collation_version_for_oid(Oid oid, NameData *output)
+{
+	HeapTuple	tp;
+	Form_pg_collation collform;
+	const char *version;
+
+	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(oid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for collation %u", oid);
+	collform = (Form_pg_collation) GETSTRUCT(tp);
+	version = get_collation_actual_version(collform->collprovider,
+										   NameStr(collform->collcollate));
+	memset(output, 0, sizeof(NameData));
+	if (version)
+		strncpy(NameStr(*output), version, sizeof(NameData));
+	ReleaseSysCache(tp);
+}
 
 #ifdef USE_ICU
 /*
