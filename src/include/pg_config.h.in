@@ -461,6 +461,9 @@
 /* Have PTHREAD_PRIO_INHERIT. */
 #undef HAVE_PTHREAD_PRIO_INHERIT
 
+/* Define to 1 if you have the `querylocale' function. */
+#undef HAVE_QUERYLOCALE
+
 /* Define to 1 if you have the `random' function. */
 #undef HAVE_RANDOM
 

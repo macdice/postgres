@@ -1446,6 +1446,17 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 	{
 #ifdef HAVE_GNU_LIBC_VERSION_H
 		collversion = gnu_get_libc_version();
+#elif defined(HAVE_QUERYLOCALE) && defined(LC_VERSION_MASK)
+		/* FreeBSD 13 */
+		locale_t loc = newlocale(LC_COLLATE, collcollate, NULL);
+		if (loc)
+			collversion =
+				pstrdup(querylocale(LC_COLLATE_MASK | LC_VERSION_MASK, loc));
+		else
+			ereport(ERROR,,
+					(errmsg("could not load query collation for locale \"%s\"",
+							collcollate)));
+		freelocale(loc);
 #else
 		collversion = NULL;
 #endif
