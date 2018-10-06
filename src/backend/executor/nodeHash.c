@@ -1078,7 +1078,6 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 				dsa_pointer_atomic *buckets;
 				ParallelHashJoinBatch *old_batch0;
 				int			new_nbatch;
-				int			i;
 
 				/* Move the old batch out of the way. */
 				old_batch0 = hashtable->batches[0].shared;
@@ -1153,8 +1152,7 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					buckets = (dsa_pointer_atomic *)
 						dsa_get_address(hashtable->area,
 										hashtable->batches[0].shared->buckets);
-					for (i = 0; i < new_nbuckets; ++i)
-						dsa_pointer_atomic_init(&buckets[i], InvalidDsaPointer);
+					dsa_pointer_atomic_init_array(buckets, new_nbuckets);
 					pstate->nbuckets = new_nbuckets;
 				}
 				else
@@ -1163,8 +1161,7 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					hashtable->batches[0].shared->buckets = old_batch0->buckets;
 					buckets = (dsa_pointer_atomic *)
 						dsa_get_address(hashtable->area, old_batch0->buckets);
-					for (i = 0; i < hashtable->nbuckets; ++i)
-						dsa_pointer_atomic_write(&buckets[i], InvalidDsaPointer);
+					dsa_pointer_atomic_zero_array(buckets, hashtable->nbuckets);
 				}
 
 				/* Move all chunks to the work queue for parallel processing. */
@@ -1490,7 +1487,6 @@ static void
 ExecParallelHashIncreaseNumBuckets(HashJoinTable hashtable)
 {
 	ParallelHashJoinState *pstate = hashtable->parallel_state;
-	int			i;
 	HashMemoryChunk chunk;
 	dsa_pointer chunk_s;
 
@@ -1521,8 +1517,7 @@ ExecParallelHashIncreaseNumBuckets(HashJoinTable hashtable)
 				buckets = (dsa_pointer_atomic *)
 					dsa_get_address(hashtable->area,
 									hashtable->batches[0].shared->buckets);
-				for (i = 0; i < pstate->nbuckets; ++i)
-					dsa_pointer_atomic_init(&buckets[i], InvalidDsaPointer);
+				dsa_pointer_atomic_init_array(buckets, pstate->nbuckets);
 
 				/* Put the chunk list onto the work queue. */
 				pstate->chunk_work_queue = hashtable->batches[0].shared->chunks;
@@ -3041,14 +3036,12 @@ ExecParallelHashTableAlloc(HashJoinTable hashtable, int batchno)
 	ParallelHashJoinBatch *batch = hashtable->batches[batchno].shared;
 	dsa_pointer_atomic *buckets;
 	int			nbuckets = hashtable->parallel_state->nbuckets;
-	int			i;
 
 	batch->buckets =
 		dsa_allocate(hashtable->area, sizeof(dsa_pointer_atomic) * nbuckets);
 	buckets = (dsa_pointer_atomic *)
 		dsa_get_address(hashtable->area, batch->buckets);
-	for (i = 0; i < nbuckets; ++i)
-		dsa_pointer_atomic_init(&buckets[i], InvalidDsaPointer);
+	dsa_pointer_atomic_init_array(buckets, nbuckets);
 }
 
 /*

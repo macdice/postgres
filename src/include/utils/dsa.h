@@ -57,6 +57,8 @@ typedef pg_atomic_uint32 dsa_pointer_atomic;
 #define dsa_pointer_atomic_write pg_atomic_write_u32
 #define dsa_pointer_atomic_fetch_add pg_atomic_fetch_add_u32
 #define dsa_pointer_atomic_compare_exchange pg_atomic_compare_exchange_u32
+#define dsa_pointer_atomic_init_array pg_atomic_init_u32_array
+#define dsa_pointer_atomic_zero_array pg_atomic_zero_u32_array
 #define DSA_POINTER_FORMAT "%08x"
 #else
 typedef uint64 dsa_pointer;
@@ -66,6 +68,8 @@ typedef pg_atomic_uint64 dsa_pointer_atomic;
 #define dsa_pointer_atomic_write pg_atomic_write_u64
 #define dsa_pointer_atomic_fetch_add pg_atomic_fetch_add_u64
 #define dsa_pointer_atomic_compare_exchange pg_atomic_compare_exchange_u64
+#define dsa_pointer_atomic_init_array pg_atomic_init_u64_array
+#define dsa_pointer_atomic_zero_array pg_atomic_zero_u64_array
 #define DSA_POINTER_FORMAT "%016" INT64_MODIFIER "x"
 #endif
 

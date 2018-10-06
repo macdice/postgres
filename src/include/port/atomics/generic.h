@@ -399,3 +399,69 @@ pg_atomic_sub_fetch_u64_impl(volatile pg_atomic_uint64 *ptr, int64 sub_)
 	return pg_atomic_fetch_sub_u64_impl(ptr, sub_) - sub_;
 }
 #endif
+
+#ifndef PG_HAVE_ATOMIC_U32_SIMULATION
+
+static inline void
+pg_atomic_zero_u32_array_impl(volatile pg_atomic_uint32 *ptr, size_t len)
+{
+	Assert(sizeof(*ptr) == sizeof(uint32));
+	memset((void *) ptr, 0, sizeof(*ptr) * len);
+}
+
+static inline void
+pg_atomic_init_u32_array_impl(volatile pg_atomic_uint32 *ptr, size_t len)
+{
+	pg_atomic_zero_u32_array_impl(ptr, len);
+}
+
+#else
+
+static inline void
+pg_atomic_zero_u32_array_impl(volatile pg_atomic_uint32 *ptr, size_t len)
+{
+	for (size_t i = 0; i < len; ++i)
+		pg_atomic_write_u32_impl(&ptr[i], 0);
+}
+
+static inline void
+pg_atomic_init_u32_array_impl(volatile pg_atomic_uint32 *ptr, size_t len)
+{
+	for (size_t i = 0; i < len; ++i)
+		pg_atomic_init_u32_impl(&ptr[i], 0);
+}
+
+#endif
+
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+
+static inline void
+pg_atomic_zero_u64_array_impl(volatile pg_atomic_uint64 *ptr, size_t len)
+{
+	Assert(sizeof(*ptr) == sizeof(uint64));
+	memset((void *) ptr, 0, sizeof(*ptr) * len);
+}
+
+static inline void
+pg_atomic_init_u64_array_impl(volatile pg_atomic_uint64 *ptr, size_t len)
+{
+	pg_atomic_zero_u64_array_impl(ptr, len);
+}
+
+#else
+
+static inline void
+pg_atomic_zero_u64_array_impl(volatile pg_atomic_uint64 *ptr, size_t len)
+{
+	for (size_t i = 0; i < len; ++i)
+		pg_atomic_write_u64_impl(&ptr[i], 0);
+}
+
+static inline void
+pg_atomic_init_u64_array_impl(volatile pg_atomic_uint64 *ptr, size_t len)
+{
+	for (size_t i = 0; i < len; ++i)
+		pg_atomic_init_u64_impl(&ptr[i], 0);
+}
+
+#endif

@@ -522,6 +522,50 @@ pg_atomic_sub_fetch_u64(volatile pg_atomic_uint64 *ptr, int64 sub_)
 	return pg_atomic_sub_fetch_u64_impl(ptr, sub_);
 }
 
+/*
+ * pg_atomic_init_u32_array - write zero to all elements in array.
+ *
+ * No barrier semantics.
+ */
+static inline void
+pg_atomic_zero_u32_array(volatile pg_atomic_uint32 *ptr, size_t len)
+{
+	pg_atomic_zero_u32_array_impl(ptr, len);
+}
+
+/*
+ * pg_atomic_init_u64_array - initialize array.
+ *
+ * No barrier semantics.
+ */
+static inline void
+pg_atomic_init_u32_array(volatile pg_atomic_uint32 *ptr, size_t len)
+{
+	pg_atomic_init_u32_array_impl(ptr, len);
+}
+
+/*
+ * pg_atomic_zero_u64_array - write zero to all elements in array.
+ *
+ * No barrier semantics.
+ */
+static inline void
+pg_atomic_zero_u64_array(volatile pg_atomic_uint64 *ptr, size_t len)
+{
+	pg_atomic_zero_u64_array_impl(ptr, len);
+}
+
+/*
+ * pg_atomic_init_u64_array - initialize array.
+ *
+ * No barrier semantics.
+ */
+static inline void
+pg_atomic_init_u64_array(volatile pg_atomic_uint64 *ptr, size_t len)
+{
+	pg_atomic_init_u64_array_impl(ptr, len);
+}
+
 #undef INSIDE_ATOMICS_H
 
 #endif							/* ATOMICS_H */
