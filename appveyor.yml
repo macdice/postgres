@@ -20,3 +20,6 @@ on_failure:
 
 configuration:
   - Release
+
+artifacts:
+ - path: Release
