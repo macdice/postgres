@@ -1,6 +1,6 @@
 sudo: required
 env:
-  - PG_TEST_EXTRA=ssl ldap kerberos
+  - PG_TEST_EXTRA="ssl ldap kerberos"
 addons:
   apt:
     packages:
