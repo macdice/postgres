@@ -52,12 +52,32 @@ typedef enum
 	HUGE_PAGES_TRY
 }			HugePagesType;
 
+/* Possible values for shared_memory_type */
+typedef enum
+{
+	SHMEM_TYPE_WINDOWS,
+	SHMEM_TYPE_SYSV,
+	SHMEM_TYPE_MMAP
+}			PGShmemType;
+
+/* GUC variables */
+extern int shared_memory_type;
+extern int huge_pages;
+
 #ifndef WIN32
 extern unsigned long UsedShmemSegID;
 #else
 extern HANDLE UsedShmemSegID;
 #endif
 extern void *UsedShmemSegAddr;
+
+#if !defined(WIN32) && !defined(EXEC_BACKEND)
+#define DEFAULT_SHARED_MEMORY_TYPE SHMEM_TYPE_MMAP
+#elif !defined(WIN32)
+#define DEFAULT_SHARED_MEMORY_TYPE SHMEM_TYPE_SYSV
+#else
+#define DEFAULT_SHARED_MEMORY_TYPE SHMEM_TYPE_WINDOWS
+#endif
 
 #ifdef EXEC_BACKEND
 extern void PGSharedMemoryReAttach(void);
