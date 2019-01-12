@@ -26,6 +26,24 @@
 #define SV_DEFINE
 #include "lib/simplevector.h"
 
+#define SV_PREFIX nodep_vector
+#define SV_ELEMENT_TYPE Node *
+#define SV_SCOPE static inline
+#define SV_EQ(a, b) ((*a) == (*b))
+#define SV_DECLARE
+#define SV_DEFINE
+#include "lib/simplevector.h"
+
+/* Convenience accessors for arrays of Node pointers. */
+#define nodep_vector_nth(type, vec, n) \
+	(castNode(type, *nodep_vector_at(vec, n)))
+#define nodep_vector_push_back(vec, p) \
+	do \
+	{ \
+		Node *p2 = (Node *) p; \
+		nodep_vector_append(vec, &p2); \
+	} while (0)
+
 /* bool.c */
 extern bool parse_bool(const char *value, bool *result);
 extern bool parse_bool_with_len(const char *value, size_t len, bool *result);

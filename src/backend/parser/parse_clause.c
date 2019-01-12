@@ -1460,10 +1460,10 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		*top_rti = j->rtindex;
 
 		/* make a matching link to the JoinExpr for later use */
-		for (k = list_length(pstate->p_joinexprs) + 1; k < j->rtindex; k++)
-			pstate->p_joinexprs = lappend(pstate->p_joinexprs, NULL);
-		pstate->p_joinexprs = lappend(pstate->p_joinexprs, j);
-		Assert(list_length(pstate->p_joinexprs) == j->rtindex);
+		for (k = nodep_vector_size(&pstate->p_joinexprs) + 1; k < j->rtindex; k++)
+			nodep_vector_push_back(&pstate->p_joinexprs, NULL);
+		nodep_vector_push_back(&pstate->p_joinexprs, j);
+		Assert(nodep_vector_size(&pstate->p_joinexprs) == j->rtindex);
 
 		/*
 		 * Prepare returned namespace list.  If the JOIN has an alias then it

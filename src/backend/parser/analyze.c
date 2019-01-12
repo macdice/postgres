@@ -594,7 +594,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 		 * the target column's type, which we handle below.
 		 */
 		sub_pstate->p_rtable = sub_rtable;
-		sub_pstate->p_joinexprs = NIL;	/* sub_rtable has no joins */
+		nodep_vector_clear(&sub_pstate->p_joinexprs);	/* sub_rtable has no joins */
 		sub_pstate->p_namespace = sub_namespace;
 		sub_pstate->p_resolve_unknowns = false;
 

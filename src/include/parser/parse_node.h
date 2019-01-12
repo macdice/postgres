@@ -15,6 +15,7 @@
 #define PARSE_NODE_H
 
 #include "nodes/parsenodes.h"
+#include "utils/builtins.h"
 #include "utils/queryenvironment.h"
 #include "utils/relcache.h"
 
@@ -172,7 +173,7 @@ struct ParseState
 	struct ParseState *parentParseState;	/* stack link */
 	const char *p_sourcetext;	/* source text, or NULL if not available */
 	List	   *p_rtable;		/* range table so far */
-	List	   *p_joinexprs;	/* JoinExprs for RTE_JOIN p_rtable entries */
+	nodep_vector p_joinexprs;	/* JoinExprs for RTE_JOIN p_rtable entries */
 	List	   *p_joinlist;		/* join items so far (will become FromExpr
 								 * node's fromlist) */
 	List	   *p_namespace;	/* currently-referenceable RTEs (List of
