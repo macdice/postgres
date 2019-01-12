@@ -60,6 +60,7 @@
 #define SV_POP_BACK SV_MAKE_NAME(pop_back)
 #define SV_SWAP SV_MAKE_NAME(swap)
 #define SV_ASSIGN SV_MAKE_NAME(assign)
+#define SV_AT SV_MAKE_NAME(at)
 
 #ifdef SV_EQ
 #define SV_FIND SV_MAKE_NAME(find)
@@ -103,8 +104,8 @@ SV_SCOPE uint32 SV_SIZE(const SV_TYPE *vec);
 SV_SCOPE void SV_RESIZE(SV_TYPE *vec, uint32 size);
 SV_SCOPE uint32 SV_CAPACITY(SV_TYPE *vec);
 SV_SCOPE void SV_RESERVE(SV_TYPE *vec, uint32 capacity);
-SV_SCOPE void SV_APPEND(SV_TYPE *vec, const SV_ELEMENT_TYPE *value);
-SV_SCOPE void SV_APPEND_N(SV_TYPE *vec, const SV_ELEMENT_TYPE *values,
+SV_SCOPE void SV_APPEND(SV_TYPE *vec, SV_ELEMENT_TYPE const *value);
+SV_SCOPE void SV_APPEND_N(SV_TYPE *vec, SV_ELEMENT_TYPE const *values,
 						  uint32 size);
 SV_SCOPE void SV_INSERT(SV_TYPE *vec,
 						SV_ELEMENT_TYPE *position,
@@ -121,10 +122,11 @@ SV_SCOPE SV_ELEMENT_TYPE *SV_BEGIN(SV_TYPE *vec);
 SV_SCOPE SV_ELEMENT_TYPE *SV_END(SV_TYPE *vec);
 SV_SCOPE SV_ELEMENT_TYPE *SV_BACK(SV_TYPE *vec);
 SV_SCOPE void SV_POP_BACK(SV_TYPE *vec);
+SV_SCOPE SV_ELEMENT_TYPE *SV_AT(SV_TYPE *vec, uint32 n);
 
 #ifdef SV_EQ
 SV_SCOPE SV_ELEMENT_TYPE *SV_FIND(SV_TYPE *vec, const SV_ELEMENT_TYPE *value);
-bool V_EQUALS(const SV_TYPE *a, const SV_TYPE *b);
+SV_SCOPE bool SV_EQUALS(const SV_TYPE *a, const SV_TYPE *b);
 #endif
 
 #endif
@@ -291,7 +293,7 @@ SV_RESERVE(SV_TYPE *vec, uint32 capacity)
  * Append a value to the end of a vector.
  */
 SV_SCOPE void
-SV_APPEND(SV_TYPE *vec, const SV_ELEMENT_TYPE *value)
+SV_APPEND(SV_TYPE *vec, SV_ELEMENT_TYPE const *value)
 {
 	SV_APPEND_N(vec, value, 1);
 }
@@ -300,7 +302,7 @@ SV_APPEND(SV_TYPE *vec, const SV_ELEMENT_TYPE *value)
  * Append N values to the end of a vector.
  */
 SV_SCOPE void
-SV_APPEND_N(SV_TYPE *vec, const SV_ELEMENT_TYPE *values, uint32 n)
+SV_APPEND_N(SV_TYPE *vec, SV_ELEMENT_TYPE const *values, uint32 n)
 {
 	uint32		size = SV_SIZE(vec);
 
@@ -400,19 +402,19 @@ SV_END(SV_TYPE *vec)
 /*
  * Get a const pointer to the first element, if there is one.
  */
-SV_SCOPE const SV_ELEMENT_TYPE *
+SV_SCOPE SV_ELEMENT_TYPE const *
 SV_CBEGIN(const SV_TYPE *vec)
 {
-	return SV_DATA((SV_TYPE *) vec);
+	return (SV_ELEMENT_TYPE const *) SV_DATA((SV_TYPE *) vec);
 }
 
 /*
  * Get a pointer to the element past the last element.
  */
-SV_SCOPE SV_ELEMENT_TYPE *
+SV_SCOPE SV_ELEMENT_TYPE const *
 SV_CEND(const SV_TYPE *vec)
 {
-	return SV_DATA((SV_TYPE *) vec) + SV_SIZE(vec);
+	return (SV_ELEMENT_TYPE const *) SV_DATA((SV_TYPE *) vec) + SV_SIZE(vec);
 }
 
 /*
@@ -423,6 +425,16 @@ SV_BACK(SV_TYPE *vec)
 {
 	Assert(!SV_EMPTY(vec));
 	return SV_DATA(vec) + SV_SIZE(vec) - 1;
+}
+
+/*
+ * Get a pointer to element n.
+ */
+SV_SCOPE SV_ELEMENT_TYPE *
+SV_AT(SV_TYPE *vec, uint32 n)
+{
+	Assert(n < SV_SIZE(vec));
+	return SV_DATA(vec) + n;
 }
 
 /*
@@ -452,7 +464,7 @@ SV_SWAP(SV_TYPE *a, SV_TYPE *b)
  * Assign the values of one vector to another.
  */
 SV_SCOPE void
-SV_ASSIGN(SV_TYPE *dest, const SV_TYPE *src)
+SV_ASSIGN(SV_TYPE *dest, SV_TYPE const *src)
 {
 	SV_CLEAR(dest);
 	SV_APPEND_N(dest, SV_CBEGIN(src), SV_SIZE(src));
@@ -482,11 +494,11 @@ SV_FIND(SV_TYPE *vec, const SV_ELEMENT_TYPE *value)
  * Check if two vectors how the same values.
  */
 SV_SCOPE bool
-SV_EQUALS(const SV_TYPE *a, const SV_TYPE *b)
+SV_EQUALS(SV_TYPE const *a, SV_TYPE const *b)
 {
-	const SV_ELEMENT_TYPE *begin;
-	const SV_ELEMENT_TYPE *end;
-	const SV_ELEMENT_TYPE *other;
+	SV_ELEMENT_TYPE const *begin;
+	SV_ELEMENT_TYPE const *end;
+	SV_ELEMENT_TYPE const *other;
 
 	if (SV_SIZE(a) != SV_SIZE(b))
 		return false;
@@ -516,6 +528,7 @@ SV_EQUALS(const SV_TYPE *a, const SV_TYPE *b)
 #undef SV_DECLARE
 #undef SV_DEFINE
 #undef SV_DESTROY
+#undef SV_ELEMENT_TYPE
 #undef SV_EMPTY
 #undef SV_END
 #undef SV_ERASE
@@ -528,6 +541,7 @@ SV_EQUALS(const SV_TYPE *a, const SV_TYPE *b)
 #undef SV_MAKE_NAME_
 #undef SV_MAKE_PREFIX
 #undef SV_POP_BACK
+#undef SV_PREFIX
 #undef SV_RESERVE
 #undef SV_RESET
 #undef SV_RESIZE
