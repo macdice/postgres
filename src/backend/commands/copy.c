@@ -1533,7 +1533,7 @@ BeginCopy(ParseState *pstate,
 			 * make any guarantees of that in the planner, so check the whole
 			 * list and make sure we find the original relation.
 			 */
-			if (!list_member_oid(plan->relationOids, queryRelId))
+			if (!oid_vector_find(&plan->relationOids, &queryRelId))
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("relation referenced by COPY statement has changed")));

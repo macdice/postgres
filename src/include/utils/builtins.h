@@ -18,6 +18,13 @@
 #include "nodes/nodes.h"
 #include "utils/fmgrprotos.h"
 
+#define SV_PREFIX oid_vector
+#define SV_ELEMENT_TYPE Oid
+#define SV_SCOPE static inline
+#define SV_EQ(a, b) ((*a) == (*b))
+#define SV_DECLARE
+#define SV_DEFINE
+#include "lib/simplevector.h"
 
 /* bool.c */
 extern bool parse_bool(const char *value, bool *result);
@@ -56,6 +63,9 @@ extern uint64 pg_strtouint64(const char *str, char **endptr, int base);
 extern oidvector *buildoidvector(const Oid *oids, int n);
 extern Oid	oidparse(Node *node);
 extern int	oid_cmp(const void *p1, const void *p2);
+
+/* readfuncs.c */
+extern void readOidVector(oid_vector *vec);
 
 /* regexp.c */
 extern char *regexp_fixed_prefix(text *text_re, bool case_insensitive,

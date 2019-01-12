@@ -61,6 +61,10 @@
 		memcpy(newnode->fldname, from->fldname, _size); \
 	} while (0)
 
+/* Copy a field that is an oid_vector */
+#define COPY_OID_VECTOR_FIELD(fldname) \
+	oid_vector_assign(&newnode->fldname, &from->fldname)
+
 /* Copy a parse location field (for Copy, this is same as scalar case) */
 #define COPY_LOCATION_FIELD(fldname) \
 	(newnode->fldname = from->fldname)
@@ -95,7 +99,7 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_NODE_FIELD(subplans);
 	COPY_BITMAPSET_FIELD(rewindPlanIDs);
 	COPY_NODE_FIELD(rowMarks);
-	COPY_NODE_FIELD(relationOids);
+	COPY_OID_VECTOR_FIELD(relationOids);
 	COPY_NODE_FIELD(invalItems);
 	COPY_NODE_FIELD(paramExecTypes);
 	COPY_NODE_FIELD(utilityStmt);

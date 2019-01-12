@@ -307,7 +307,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	glob->finalrowmarks = NIL;
 	glob->resultRelations = NIL;
 	glob->rootResultRelations = NIL;
-	glob->relationOids = NIL;
+	oid_vector_init(&glob->relationOids);
 	glob->invalItems = NIL;
 	glob->paramExecTypes = NIL;
 	glob->lastPHId = 0;
@@ -5966,7 +5966,7 @@ expression_planner(Expr *expr)
  */
 Expr *
 expression_planner_with_deps(Expr *expr,
-							 List **relationOids,
+							 oid_vector *relationOids,
 							 List **invalItems)
 {
 	Node	   *result;
@@ -5976,7 +5976,7 @@ expression_planner_with_deps(Expr *expr,
 	/* Make up dummy planner state so we can use setrefs machinery */
 	MemSet(&glob, 0, sizeof(glob));
 	glob.type = T_PlannerGlobal;
-	glob.relationOids = NIL;
+	oid_vector_init(&glob.relationOids);
 	glob.invalItems = NIL;
 
 	MemSet(&root, 0, sizeof(root));
@@ -5999,7 +5999,7 @@ expression_planner_with_deps(Expr *expr,
 	 */
 	(void) extract_query_dependencies_walker(result, &root);
 
-	*relationOids = glob.relationOids;
+	oid_vector_assign(relationOids, &glob.relationOids);
 	*invalItems = glob.invalItems;
 
 	return (Expr *) result;

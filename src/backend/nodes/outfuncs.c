@@ -138,6 +138,16 @@ static void outChar(StringInfo str, char c);
 			appendStringInfo(str, " %s", booltostr(node->fldname[i])); \
 	} while(0)
 
+#define WRITE_OID_VECTOR_FIELD(fldname) \
+	do { \
+		int len = oid_vector_size(&node->fldname); \
+		const Oid *data = oid_vector_cbegin(&node->fldname); \
+		appendStringInfoString(str, " :" CppAsString(fldname) " "); \
+		appendStringInfo(str, " %d", len); \
+		for (int i = 0; i < len; i++) \
+			appendStringInfo(str, " %u", data[i]); \
+	} while(0)
+
 
 #define booltostr(x)  ((x) ? "true" : "false")
 
@@ -313,7 +323,7 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_NODE_FIELD(subplans);
 	WRITE_BITMAPSET_FIELD(rewindPlanIDs);
 	WRITE_NODE_FIELD(rowMarks);
-	WRITE_NODE_FIELD(relationOids);
+	WRITE_OID_VECTOR_FIELD(relationOids);
 	WRITE_NODE_FIELD(invalItems);
 	WRITE_NODE_FIELD(paramExecTypes);
 	WRITE_NODE_FIELD(utilityStmt);
@@ -2158,7 +2168,7 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_NODE_FIELD(finalrowmarks);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(rootResultRelations);
-	WRITE_NODE_FIELD(relationOids);
+	WRITE_OID_VECTOR_FIELD(relationOids);
 	WRITE_NODE_FIELD(invalItems);
 	WRITE_NODE_FIELD(paramExecTypes);
 	WRITE_UINT_FIELD(lastPHId);

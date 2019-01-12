@@ -56,7 +56,7 @@ extern Path *get_cheapest_fractional_path(RelOptInfo *rel,
 
 extern Expr *expression_planner(Expr *expr);
 extern Expr *expression_planner_with_deps(Expr *expr,
-							 List **relationOids,
+							 oid_vector *relationOids,
 							 List **invalItems);
 
 extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);

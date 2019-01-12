@@ -424,7 +424,7 @@ add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte)
 	 * but it would probably cost more cycles than it would save.
 	 */
 	if (newrte->rtekind == RTE_RELATION)
-		glob->relationOids = lappend_oid(glob->relationOids, newrte->relid);
+		oid_vector_append(&glob->relationOids, &newrte->relid);
 }
 
 /*
@@ -1417,9 +1417,11 @@ fix_expr_common(PlannerInfo *root, Node *node)
 
 		/* Check for regclass reference */
 		if (ISREGCLASSCONST(con))
-			root->glob->relationOids =
-				lappend_oid(root->glob->relationOids,
-							DatumGetObjectId(con->constvalue));
+		{
+			Oid oid = DatumGetObjectId(con->constvalue);
+
+			oid_vector_append(&root->glob->relationOids, &oid);
+		}
 	}
 	else if (IsA(node, GroupingFunc))
 	{
@@ -2631,7 +2633,7 @@ record_plan_type_dependency(PlannerInfo *root, Oid typid)
  */
 void
 extract_query_dependencies(Node *query,
-						   List **relationOids,
+						   oid_vector *relationOids,
 						   List **invalItems,
 						   bool *hasRowSecurity)
 {
@@ -2641,7 +2643,7 @@ extract_query_dependencies(Node *query,
 	/* Make up dummy planner state so we can use this module's machinery */
 	MemSet(&glob, 0, sizeof(glob));
 	glob.type = T_PlannerGlobal;
-	glob.relationOids = NIL;
+	oid_vector_init(&glob.relationOids);
 	glob.invalItems = NIL;
 	/* Hack: we use glob.dependsOnRole to collect hasRowSecurity flags */
 	glob.dependsOnRole = false;
@@ -2652,7 +2654,7 @@ extract_query_dependencies(Node *query,
 
 	(void) extract_query_dependencies_walker(query, &root);
 
-	*relationOids = glob.relationOids;
+	oid_vector_assign(relationOids, &glob.relationOids);
 	*invalItems = glob.invalItems;
 	*hasRowSecurity = glob.dependsOnRole;
 }
@@ -2697,13 +2699,10 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 			RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
 
 			if (rte->rtekind == RTE_RELATION)
-				context->glob->relationOids =
-					lappend_oid(context->glob->relationOids, rte->relid);
+				oid_vector_append(&context->glob->relationOids, &rte->relid);
 			else if (rte->rtekind == RTE_NAMEDTUPLESTORE &&
 					 OidIsValid(rte->relid))
-				context->glob->relationOids =
-					lappend_oid(context->glob->relationOids,
-								rte->relid);
+				oid_vector_append(&context->glob->relationOids, &rte->relid);
 		}
 
 		/* And recurse into the query's subexpressions */

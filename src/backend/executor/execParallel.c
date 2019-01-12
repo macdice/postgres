@@ -203,7 +203,7 @@ ExecSerializePlan(Plan *plan, EState *estate)
 
 	pstmt->rewindPlanIDs = NULL;
 	pstmt->rowMarks = NIL;
-	pstmt->relationOids = NIL;
+	oid_vector_init(&pstmt->relationOids);
 	pstmt->invalItems = NIL;	/* workers can't replan anyway... */
 	pstmt->paramExecTypes = estate->es_plannedstmt->paramExecTypes;
 	pstmt->utilityStmt = NULL;

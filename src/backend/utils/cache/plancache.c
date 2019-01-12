@@ -206,7 +206,7 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 	plansource->resultDesc = NULL;
 	plansource->context = source_context;
 	plansource->query_list = NIL;
-	plansource->relationOids = NIL;
+	oid_vector_init(&plansource->relationOids);
 	plansource->invalItems = NIL;
 	plansource->search_path = NULL;
 	plansource->query_context = NULL;
@@ -273,7 +273,7 @@ CreateOneShotCachedPlan(RawStmt *raw_parse_tree,
 	plansource->resultDesc = NULL;
 	plansource->context = CurrentMemoryContext;
 	plansource->query_list = NIL;
-	plansource->relationOids = NIL;
+	oid_vector_init(&plansource->relationOids);
 	plansource->invalItems = NIL;
 	plansource->search_path = NULL;
 	plansource->query_context = NULL;
@@ -633,7 +633,7 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
 	 */
 	plansource->is_valid = false;
 	plansource->query_list = NIL;
-	plansource->relationOids = NIL;
+	oid_vector_reset(&plansource->relationOids);
 	plansource->invalItems = NIL;
 	plansource->search_path = NULL;
 
@@ -1379,7 +1379,7 @@ CopyCachedPlan(CachedPlanSource *plansource)
 											  ALLOCSET_START_SMALL_SIZES);
 	MemoryContextSwitchTo(querytree_context);
 	newsource->query_list = copyObject(plansource->query_list);
-	newsource->relationOids = copyObject(plansource->relationOids);
+	oid_vector_assign(&newsource->relationOids, &plansource->relationOids);
 	newsource->invalItems = copyObject(plansource->invalItems);
 	if (plansource->search_path)
 		newsource->search_path = CopyOverrideSearchPath(plansource->search_path);
@@ -1468,7 +1468,7 @@ CachedExpression *
 GetCachedExpression(Node *expr)
 {
 	CachedExpression *cexpr;
-	List	   *relationOids;
+	oid_vector	relationOids;
 	List	   *invalItems;
 	MemoryContext cexpr_context;
 	MemoryContext oldcxt;
@@ -1497,7 +1497,7 @@ GetCachedExpression(Node *expr)
 	cexpr->magic = CACHEDEXPR_MAGIC;
 	cexpr->expr = copyObject(expr);
 	cexpr->is_valid = true;
-	cexpr->relationOids = copyObject(relationOids);
+	oid_vector_assign(&cexpr->relationOids, &relationOids);
 	cexpr->invalItems = copyObject(invalItems);
 	cexpr->context = cexpr_context;
 
@@ -1786,8 +1786,8 @@ PlanCacheRelCallback(Datum arg, Oid relid)
 		/*
 		 * Check the dependency list for the rewritten querytree.
 		 */
-		if ((relid == InvalidOid) ? plansource->relationOids != NIL :
-			list_member_oid(plansource->relationOids, relid))
+		if ((relid == InvalidOid) ? !oid_vector_empty(&plansource->relationOids) :
+			oid_vector_find(&plansource->relationOids, &relid) != NULL)
 		{
 			/* Invalidate the querytree and generic plan */
 			plansource->is_valid = false;
@@ -1809,8 +1809,8 @@ PlanCacheRelCallback(Datum arg, Oid relid)
 
 				if (plannedstmt->commandType == CMD_UTILITY)
 					continue;	/* Ignore utility statements */
-				if ((relid == InvalidOid) ? plannedstmt->relationOids != NIL :
-					list_member_oid(plannedstmt->relationOids, relid))
+				if ((relid == InvalidOid) ? !oid_vector_empty(&plannedstmt->relationOids) :
+					oid_vector_find(&plannedstmt->relationOids, &relid) != NULL)
 				{
 					/* Invalidate the generic plan only */
 					plansource->gplan->is_valid = false;
@@ -1832,8 +1832,8 @@ PlanCacheRelCallback(Datum arg, Oid relid)
 		if (!cexpr->is_valid)
 			continue;
 
-		if ((relid == InvalidOid) ? cexpr->relationOids != NIL :
-			list_member_oid(cexpr->relationOids, relid))
+		if ((relid == InvalidOid) ? !oid_vector_empty(&cexpr->relationOids) :
+			oid_vector_find(&cexpr->relationOids, &relid) != NULL)
 		{
 			cexpr->is_valid = false;
 		}

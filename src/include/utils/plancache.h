@@ -18,6 +18,7 @@
 #include "access/tupdesc.h"
 #include "lib/ilist.h"
 #include "nodes/params.h"
+#include "utils/builtins.h"
 #include "utils/queryenvironment.h"
 
 /* Forward declaration, to avoid including parsenodes.h here */
@@ -106,7 +107,7 @@ typedef struct CachedPlanSource
 	MemoryContext context;		/* memory context holding all above */
 	/* These fields describe the current analyzed-and-rewritten query tree: */
 	List	   *query_list;		/* list of Query nodes, or NIL if not valid */
-	List	   *relationOids;	/* OIDs of relations the queries depend on */
+	oid_vector	relationOids;	/* OIDs of relations the queries depend on */
 	List	   *invalItems;		/* other dependencies, as PlanInvalItems */
 	struct OverrideSearchPath *search_path; /* search_path used for parsing
 											 * and planning */
@@ -174,7 +175,7 @@ typedef struct CachedExpression
 	Node	   *expr;			/* planned form of expression */
 	bool		is_valid;		/* is the expression still valid? */
 	/* remaining fields should be treated as private to plancache.c: */
-	List	   *relationOids;	/* OIDs of relations the expr depends on */
+	oid_vector	relationOids;	/* OIDs of relations the expr depends on */
 	List	   *invalItems;		/* other dependencies, as PlanInvalItems */
 	MemoryContext context;		/* context containing this CachedExpression */
 	dlist_node	node;			/* link in global list of CachedExpressions */

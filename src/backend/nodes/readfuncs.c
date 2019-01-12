@@ -171,6 +171,11 @@
 	token = pg_strtok(&length);		/* skip :fldname */ \
 	local_node->fldname = readBoolCols(len);
 
+/* Read an oid vector */
+#define READ_OID_VECTOR_FIELD(fldname) \
+	token = pg_strtok(&length);		/* skip :fldname */ \
+	readOidVector(&local_node->fldname);
+
 /* Routine exit */
 #define READ_DONE() \
 	return local_node
@@ -1509,7 +1514,7 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(subplans);
 	READ_BITMAPSET_FIELD(rewindPlanIDs);
 	READ_NODE_FIELD(rowMarks);
-	READ_NODE_FIELD(relationOids);
+	READ_OID_VECTOR_FIELD(relationOids);
 	READ_NODE_FIELD(invalItems);
 	READ_NODE_FIELD(paramExecTypes);
 	READ_NODE_FIELD(utilityStmt);
@@ -2959,4 +2964,28 @@ readBoolCols(int numCols)
 	}
 
 	return bool_vals;
+}
+
+/*
+ * readOidVector
+ */
+void
+readOidVector(oid_vector *vec)
+{
+	int			tokenLength,
+				len,
+				i;
+	const char *token;
+	Oid			val;
+
+	token = pg_strtok(&tokenLength);
+	len = atoi(token);
+
+	oid_vector_reset(vec);
+	for (i = 0; i < len; i++)
+	{
+		token = pg_strtok(&tokenLength);
+		val = atooid(token);
+		oid_vector_append(vec, &val);
+	}
 }

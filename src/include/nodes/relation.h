@@ -20,6 +20,7 @@
 #include "nodes/params.h"
 #include "nodes/parsenodes.h"
 #include "storage/block.h"
+#include "utils/builtins.h"
 
 
 /*
@@ -123,7 +124,7 @@ typedef struct PlannerGlobal
 
 	List	   *rootResultRelations;	/* "flat" list of integer RT indexes */
 
-	List	   *relationOids;	/* OIDs of relations the plan depends on */
+	oid_vector	relationOids;	/* OIDs of relations the plan depends on */
 
 	List	   *invalItems;		/* other dependencies, as PlanInvalItems */
 

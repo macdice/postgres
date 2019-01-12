@@ -20,6 +20,7 @@
 #include "nodes/bitmapset.h"
 #include "nodes/lockoptions.h"
 #include "nodes/primnodes.h"
+#include "utils/builtins.h"
 
 
 /* ----------------------------------------------------------------
@@ -81,7 +82,7 @@ typedef struct PlannedStmt
 
 	List	   *rowMarks;		/* a list of PlanRowMark's */
 
-	List	   *relationOids;	/* OIDs of relations the plan depends on */
+	oid_vector	relationOids;	/* OIDs of relations the plan depends on */
 
 	List	   *invalItems;		/* other dependencies, as PlanInvalItems */
 
