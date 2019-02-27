@@ -50,6 +50,7 @@
 #include "storage/proc.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
+#include "storage/sync.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/fmgroids.h"
@@ -554,6 +555,7 @@ BaseInit(void)
 
 	/* Do local initialization of file, storage and buffer managers */
 	InitFileAccess();
+	InitSync();
 	smgrinit();
 	InitBufferPoolAccess();
 }

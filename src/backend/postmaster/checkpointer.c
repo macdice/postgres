@@ -108,11 +108,37 @@
  */
 typedef struct
 {
-	RelFileNode rnode;
-	ForkNumber	forknum;
-	BlockNumber segno;			/* see md.c for special values */
-	/* might add a real request-type field later; not needed yet */
+	/*
+	 * To reduce mmemory footprint, we combine the SyncRequestType and the
+	 * SyncRequestHandler by splitting them into 4 bits each and storing them
+	 * in an uint8. The type and handler values account for far fewer than
+	 * 15 entries, so works just fine.
+	 */
+	uint8 sync_type_handler_combo;
+
+	/*
+	 * Currently, sync requests can be satisfied by information available in
+	 * the FileIdentifier. In the future, this can be combined with a
+	 * physical file descriptor or the full path to a file and put inside
+	 * an union.
+	 *
+	 * This value is opaque to sync mechanism and is used to pass to callback
+	 * handlers to retrieve path of the file to sync or to resolve forget
+	 * requests.
+	 */
+	FileTag		ftag;
 } CheckpointerRequest;
+
+/*
+ * Handler occupies the higher 4 bits while type occupies the lower 4 in
+ * the uint8 combo storage.
+ */
+static uint8 sync_request_type_mask = 0x0F;
+static uint8 sync_request_handler_mask = 0xF0;
+
+#define SYNC_TYPE_AND_HANDLER_COMBO(t, h) ((h) << 4 | (t))
+#define SYNC_REQUEST_TYPE_VALUE(v) (sync_request_type_mask & (v))
+#define SYNC_REQUEST_HANDLER_VALUE(v) ((sync_request_handler_mask & (v)) >> 4)
 
 typedef struct
 {
@@ -347,7 +373,7 @@ CheckpointerMain(void)
 		/*
 		 * Process any requests or signals received recently.
 		 */
-		AbsorbFsyncRequests();
+		AbsorbSyncRequests();
 
 		if (got_SIGHUP)
 		{
@@ -676,7 +702,7 @@ CheckpointWriteDelay(int flags, double progress)
 			UpdateSharedMemoryConfig();
 		}
 
-		AbsorbFsyncRequests();
+		AbsorbSyncRequests();
 		absorb_counter = WRITES_PER_ABSORB;
 
 		CheckArchiveTimeout();
@@ -701,7 +727,7 @@ CheckpointWriteDelay(int flags, double progress)
 		 * operations even when we don't sleep, to prevent overflow of the
 		 * fsync request queue.
 		 */
-		AbsorbFsyncRequests();
+		AbsorbSyncRequests();
 		absorb_counter = WRITES_PER_ABSORB;
 	}
 }
@@ -1063,7 +1089,7 @@ RequestCheckpoint(int flags)
 }
 
 /*
- * ForwardFsyncRequest
+ * ForwardSyncRequest
  *		Forward a file-fsync request from a backend to the checkpointer
  *
  * Whenever a backend is compelled to write directly to a relation
@@ -1092,10 +1118,11 @@ RequestCheckpoint(int flags)
  * let the backend know by returning false.
  */
 bool
-ForwardFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
+ForwardSyncRequest(const FileTag *ftag, SyncRequestType type,
+				   SyncRequestHandler handler)
 {
 	CheckpointerRequest *request;
-	bool		too_full;
+	bool				too_full;
 
 	if (!IsUnderPostmaster)
 		return false;			/* probably shouldn't even get here */
@@ -1130,9 +1157,8 @@ ForwardFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 
 	/* OK, insert request */
 	request = &CheckpointerShmem->requests[CheckpointerShmem->num_requests++];
-	request->rnode = rnode;
-	request->forknum = forknum;
-	request->segno = segno;
+	request->sync_type_handler_combo = SYNC_TYPE_AND_HANDLER_COMBO(type, handler);
+	request->ftag = *ftag;
 
 	/* If queue is more than half full, nudge the checkpointer to empty it */
 	too_full = (CheckpointerShmem->num_requests >=
@@ -1169,7 +1195,7 @@ CompactCheckpointerRequestQueue(void)
 	struct CheckpointerSlotMapping
 	{
 		CheckpointerRequest request;
-		int			slot;
+		int					slot;
 	};
 
 	int			n,
@@ -1263,8 +1289,8 @@ CompactCheckpointerRequestQueue(void)
 }
 
 /*
- * AbsorbFsyncRequests
- *		Retrieve queued fsync requests and pass them to local smgr.
+ * AbsorbSyncRequests
+ *		Retrieve queued sync requests and pass them to sync mechanism.
  *
  * This is exported because it must be called during CreateCheckPoint;
  * we have to be sure we have accepted all pending requests just before
@@ -1272,7 +1298,7 @@ CompactCheckpointerRequestQueue(void)
  * non-checkpointer processes, do nothing if not checkpointer.
  */
 void
-AbsorbFsyncRequests(void)
+AbsorbSyncRequests(void)
 {
 	CheckpointerRequest *requests = NULL;
 	CheckpointerRequest *request;
@@ -1314,7 +1340,9 @@ AbsorbFsyncRequests(void)
 	LWLockRelease(CheckpointerCommLock);
 
 	for (request = requests; n > 0; request++, n--)
-		RememberFsyncRequest(request->rnode, request->forknum, request->segno);
+		RememberSyncRequest(&(request->ftag),
+				SYNC_REQUEST_TYPE_VALUE(request->sync_type_handler_combo),
+				SYNC_REQUEST_HANDLER_VALUE(request->sync_type_handler_combo));
 
 	END_CRIT_SECTION();
 

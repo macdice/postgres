@@ -65,6 +65,7 @@
 #include "storage/reinit.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
+#include "storage/sync.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -6986,7 +6987,7 @@ StartupXLOG(void)
 		if (ArchiveRecoveryRequested && IsUnderPostmaster)
 		{
 			PublishStartupProcessInformation();
-			SetForwardFsyncRequests();
+			EnableSyncRequestForwarding();
 			SendPostmasterSignal(PMSIGNAL_RECOVERY_STARTED);
 			bgwriterLaunched = true;
 		}
@@ -8616,7 +8617,7 @@ CreateCheckPoint(int flags)
 	 * the REDO pointer.  Note that smgr must not do anything that'd have to
 	 * be undone if we decide no checkpoint is needed.
 	 */
-	smgrpreckpt();
+	SyncPreCheckpoint();
 
 	/* Begin filling in the checkpoint WAL record */
 	MemSet(&checkPoint, 0, sizeof(checkPoint));
@@ -8912,7 +8913,7 @@ CreateCheckPoint(int flags)
 	/*
 	 * Let smgr do post-checkpoint cleanup (eg, deleting old files).
 	 */
-	smgrpostckpt();
+	SyncPostCheckpoint();
 
 	/*
 	 * Update the average distance between checkpoints if the prior checkpoint
