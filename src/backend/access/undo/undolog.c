@@ -42,6 +42,7 @@
 #include "storage/shmem.h"
 #include "storage/standby.h"
 #include "storage/sync.h"
+#include "storage/undofile.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -103,6 +104,9 @@ static void attach_undo_log(UndoPersistence level, Oid tablespace);
 static void detach_current_undo_log(UndoPersistence level, bool full);
 static void extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end);
 static void undo_log_before_exit(int code, Datum value);
+static void forget_undo_buffers(int logno, UndoLogOffset old_discard,
+								UndoLogOffset new_discard,
+								bool drop_tail);
 static bool choose_undo_tablespace(bool force_detach, Oid *oid);
 
 /*
@@ -1064,6 +1068,16 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	LWLockRelease(&log->mutex);
 
 	/*
+	 * Drop all buffers holding this undo data out of the buffer pool (except
+	 * the last one, if the new location is in the middle of it somewhere), so
+	 * that the contained data doesn't ever touch the disk.  The caller
+	 * promises that this data will not be needed again.  We have to drop the
+	 * buffers from the buffer pool before removing files, otherwise a
+	 * concurrent session might try to write the block to evict the buffer.
+	 */
+	forget_undo_buffers(logno, old_discard, discard, entirely_discarded);
+
+	/*
 	 * Check if we crossed a segment boundary and need to do some synchronous
 	 * filesystem operations.
 	 */
@@ -1114,6 +1128,10 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		while (pointer < new_segno * UndoLogSegmentSize)
 		{
 			char	discard_path[MAXPGPATH];
+
+			/* Tell the checkpointer that the file is going away. */
+			undofile_forget_sync(logno, pointer / UndoLogSegmentSize,
+								 log->meta.tablespace);
 
 			UndoLogSegmentPath(logno, pointer / UndoLogSegmentSize,
 							   log->meta.tablespace, discard_path);
@@ -2084,6 +2102,14 @@ DropUndoLogsInTablespace(Oid tablespace)
 			continue;
 
 		/*
+		 * Make sure no buffers remain.  When that is done by UndoDiscard(),
+		 * the final page is left in shared_buffers because it may contain
+		 * data, or at least be needed again very soon.  Here we need to drop
+		 * even that page from the buffer pool.
+		 */
+		forget_undo_buffers(log->logno, log->meta.discard, log->meta.discard, true);
+
+		/*
 		 * TODO: For now we drop the undo log, meaning that it will never be
 		 * used again.  That wastes the rest of its address space.  Instead,
 		 * we should put it onto a special list of 'offline' undo logs, ready
@@ -2371,6 +2397,33 @@ undolog_xlog_extend(XLogReaderState *record)
 }
 
 /*
+ * Drop all buffers for the given undo log, from the old_discard to up
+ * new_discard.  If drop_tail is true, also drop the buffer that holds
+ * new_discard; this is used when discarding undo logs completely, for example
+ * via DROP TABLESPACE.  If it is false, then the final buffer is not dropped
+ * because it may contain data.
+ *
+ */
+static void
+forget_undo_buffers(int logno, UndoLogOffset old_discard,
+					UndoLogOffset new_discard, bool drop_tail)
+{
+	BlockNumber old_blockno;
+	BlockNumber new_blockno;
+	RelFileNode	rnode;
+
+	UndoRecPtrAssignRelFileNode(rnode, MakeUndoRecPtr(logno, old_discard));
+	old_blockno = old_discard / BLCKSZ;
+	new_blockno = new_discard / BLCKSZ;
+	if (drop_tail)
+		++new_blockno;
+	while (old_blockno < new_blockno)
+	{
+		ForgetBuffer(SMGR_UNDO, rnode, UndoLogForkNum, old_blockno);
+		ForgetLocalBuffer(SMGR_UNDO, rnode, UndoLogForkNum, old_blockno++);
+	}
+}
+/*
  * replay an undo segment discard record
  */
 static void
@@ -2414,6 +2467,10 @@ undolog_xlog_discard(XLogReaderState *record)
 	end = log->meta.end;
 	LWLockRelease(&log->mutex);
 
+	/* Drop buffers before we remove/recycle any files. */
+	forget_undo_buffers(xlrec->logno, discard, xlrec->discard,
+						xlrec->entirely_discarded);
+
 	/* Rewind to the start of the segment. */
 	old_segment_begin = discard - discard % UndoLogSegmentSize;
 	new_segment_begin = xlrec->discard - xlrec->discard % UndoLogSegmentSize;
@@ -2422,6 +2479,11 @@ undolog_xlog_discard(XLogReaderState *record)
 	while (old_segment_begin < new_segment_begin)
 	{
 		char	discard_path[MAXPGPATH];
+
+		/* Tell the checkpointer that the file is going away. */
+		undofile_forget_sync(log->logno,
+							 old_segment_begin / UndoLogSegmentSize,
+							 log->meta.tablespace);
 
 		UndoLogSegmentPath(xlrec->logno, old_segment_begin / UndoLogSegmentSize,
 						   log->meta.tablespace, discard_path);
