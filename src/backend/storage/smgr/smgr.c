@@ -22,6 +22,7 @@
 #include "storage/ipc.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
+#include "storage/undofile.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
@@ -79,6 +80,23 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+	},
+	/* undo logs */
+	{
+		.smgr_init = undofile_init,
+		.smgr_shutdown = undofile_shutdown,
+		.smgr_close = undofile_close,
+		.smgr_create = undofile_create,
+		.smgr_exists = undofile_exists,
+		.smgr_unlink = undofile_unlink,
+		.smgr_extend = undofile_extend,
+		.smgr_prefetch = undofile_prefetch,
+		.smgr_read = undofile_read,
+		.smgr_write = undofile_write,
+		.smgr_writeback = undofile_writeback,
+		.smgr_nblocks = undofile_nblocks,
+		.smgr_truncate = undofile_truncate,
+		.smgr_immedsync = undofile_immedsync,
 	}
 };
 
@@ -96,7 +114,6 @@ static SMgrRelation first_unowned_reln = NULL;
 static void smgrshutdown(int code, Datum arg);
 static void add_to_unowned_list(SMgrRelation reln);
 static void remove_from_unowned_list(SMgrRelation reln);
-
 
 /*
  *	smgrinit(), smgrshutdown() -- Initialize or shut down storage
@@ -178,11 +195,21 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_targblock = InvalidBlockNumber;
 		reln->smgr_fsm_nblocks = InvalidBlockNumber;
 		reln->smgr_vm_nblocks = InvalidBlockNumber;
-		reln->smgr_which = 0;	/* we only have md.c at present */
+
+		/* decide which smgr implementation to use */
+		if (undofile_can_open(rnode))
+			reln->smgr_which = 1;
+		else
+			reln->smgr_which = 0;
 
 		/* mark it not open */
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
+		{
 			reln->md_num_open_segs[forknum] = 0;
+			reln->md_seg_fds[forknum] = NULL;
+		}
+
+		reln->private_data = NULL;
 
 		/* it has no owner yet */
 		add_to_unowned_list(reln);
