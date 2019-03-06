@@ -51,7 +51,8 @@ typedef enum syncrequesttype
  */
 typedef enum syncrequesthandler
 {
-	SYNC_HANDLER_MD = 0		/* md smgr */
+	SYNC_HANDLER_MD = 0,	/* md smgr */
+	SYNC_HANDLER_UNDO = 1	/* undo smgr */
 } SyncRequestHandler;
 
 /*
@@ -68,6 +69,15 @@ typedef struct filetag
 #define INIT_FILETAG(a,xx_rnode,xx_forknum,xx_segno) \
 ( \
 	(a).rnode = (xx_rnode), \
+	(a).forknum = (xx_forknum), \
+	(a).segno = (xx_segno) \
+)
+
+#define INIT_FILETAG2(a,xx_dbnode,xx_spcnode,xx_relnode,xx_forknum,xx_segno) \
+( \
+	(a).rnode.dbNode = (xx_dbnode), \
+	(a).rnode.spcNode = (xx_spcnode), \
+	(a).rnode.relNode = (xx_relnode), \
 	(a).forknum = (xx_forknum), \
 	(a).segno = (xx_segno) \
 )
