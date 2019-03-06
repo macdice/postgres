@@ -31,6 +31,7 @@
 #include "access/transam.h"
 #include "access/tuptoaster.h"
 #include "access/twophase.h"
+#include "access/undolog.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "access/xloginsert.h"
@@ -6712,6 +6713,9 @@ StartupXLOG(void)
 	 */
 	restoreTwoPhaseData();
 
+	/* Recover undo log meta data corresponding to this checkpoint. */
+	StartupUndoLogs(ControlFile->checkPointCopy.redo);
+
 	lastFullPageWrites = checkPoint.fullPageWrites;
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
@@ -8979,6 +8983,7 @@ static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointCLOG();
+	CheckPointUndoLogs(checkPointRedo, ControlFile->checkPointCopy.redo);
 	CheckPointCommitTs();
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
