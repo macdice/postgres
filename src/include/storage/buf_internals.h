@@ -294,6 +294,7 @@ extern BufferDesc *LocalBufferDescriptors;
  */
 typedef struct CkptSortItem
 {
+	SmgrId		smgrid;
 	Oid			tsId;
 	Oid			relNode;
 	ForkNumber	forkNum;

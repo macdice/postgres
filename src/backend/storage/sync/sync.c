@@ -28,6 +28,7 @@
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/md.h"
+#include "storage/undofile.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/inval.h"
@@ -103,6 +104,11 @@ static const f_sync syncsw[] = {
 	{
 		.sync_filepath = mdfilepath,
 		.sync_filetagmatches = mdfiletagmatches
+	},
+	/* undo log segment files */
+	{
+		.sync_filepath = undofile_path,
+		.sync_filetagmatches = NULL
 	}
 };
 
