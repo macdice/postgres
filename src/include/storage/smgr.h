@@ -83,6 +83,7 @@ typedef enum SmgrId
 {
 	SMGR_INVALID = -1,
 	SMGR_MD = 0,		/* md.c */
+	SMGR_UNDO			/* undofile.c */
 } SmgrId;
 
 extern void smgrinit(void);
