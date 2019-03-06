@@ -87,6 +87,7 @@ static const f_smgr smgrsw[] = {
 	{
 		.smgr_init = undofile_init,
 		.smgr_shutdown = undofile_shutdown,
+		.smgr_open = undofile_open,
 		.smgr_close = undofile_close,
 		.smgr_create = undofile_create,
 		.smgr_exists = undofile_exists,
