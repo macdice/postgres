@@ -394,8 +394,14 @@ extractPageInfo(XLogReaderState *record)
 		RelFileNode rnode;
 		ForkNumber	forknum;
 		BlockNumber blkno;
+		SmgrId		smgrid;
 
-		if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+		if (!XLogRecGetBlockTag(record, block_id, &smgrid, &rnode, &forknum,
+								&blkno))
+			continue;
+
+		/* TODO: How should we handle other smgr IDs? */
+		if (smgrid != SMGR_MD)
 			continue;
 
 		/* We only care about the main fork; others are copied in toto */
