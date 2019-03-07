@@ -1373,6 +1373,7 @@ checkXLogConsistency(XLogReaderState *record)
 	ForkNumber	forknum;
 	BlockNumber blkno;
 	int			block_id;
+	SmgrId		smgrid;
 
 	/* Records with no backup blocks have no need for consistency checks. */
 	if (!XLogRecHasAnyBlockRefs(record))
@@ -1385,7 +1386,8 @@ checkXLogConsistency(XLogReaderState *record)
 		Buffer		buf;
 		Page		page;
 
-		if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+		if (!XLogRecGetBlockTag(record, block_id, &smgrid, &rnode, &forknum,
+								&blkno))
 		{
 			/*
 			 * WAL record doesn't contain a block reference with the given id.
@@ -1410,7 +1412,7 @@ checkXLogConsistency(XLogReaderState *record)
 		 * Read the contents from the current buffer and store it in a
 		 * temporary page.
 		 */
-		buf = XLogReadBufferExtended(rnode, forknum, blkno,
+		buf = XLogReadBufferExtended(smgrid, rnode, forknum, blkno,
 									 RBM_NORMAL_NO_LOG);
 		if (!BufferIsValid(buf))
 			continue;

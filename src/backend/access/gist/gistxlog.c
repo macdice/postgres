@@ -220,8 +220,9 @@ gistRedoDeleteRecordGetLatestRemovedXid(XLogReaderState *record)
 	 * InvalidTransactionId to cancel all HS transactions.  That's probably
 	 * overkill, but it's safe, and certainly better than panicking here.
 	 */
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
-	ibuffer = XLogReadBufferExtended(rnode, MAIN_FORKNUM, blkno, RBM_NORMAL);
+	XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &blkno);
+	ibuffer = XLogReadBufferExtended(SMGR_MD, rnode, MAIN_FORKNUM, blkno,
+									 RBM_NORMAL);
 	if (!BufferIsValid(ibuffer))
 		return InvalidTransactionId;
 	LockBuffer(ibuffer, BUFFER_LOCK_EXCLUSIVE);
@@ -245,7 +246,9 @@ gistRedoDeleteRecordGetLatestRemovedXid(XLogReaderState *record)
 		 * Locate the heap page that the index tuple points at
 		 */
 		hblkno = ItemPointerGetBlockNumber(&(itup->t_tid));
-		hbuffer = XLogReadBufferExtended(xlrec->hnode, MAIN_FORKNUM, hblkno, RBM_NORMAL);
+		hbuffer = XLogReadBufferExtended(SMGR_MD, xlrec->hnode,
+										 MAIN_FORKNUM, hblkno,
+										 RBM_NORMAL);
 		if (!BufferIsValid(hbuffer))
 		{
 			UnlockReleaseBuffer(ibuffer);
@@ -340,7 +343,7 @@ gistRedoDeleteRecord(XLogReaderState *record)
 		TransactionId latestRemovedXid = gistRedoDeleteRecordGetLatestRemovedXid(record);
 		RelFileNode rnode;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 
 		ResolveRecoveryConflictWithSnapshot(latestRemovedXid, rnode);
 	}
@@ -425,7 +428,7 @@ gistRedoPageSplitRecord(XLogReaderState *record)
 		BlockNumber blkno;
 		IndexTuple *tuples;
 
-		XLogRecGetBlockTag(record, i + 1, NULL, NULL, &blkno);
+		XLogRecGetBlockTag(record, i + 1, NULL, NULL, NULL, &blkno);
 		if (blkno == GIST_ROOT_BLKNO)
 		{
 			Assert(i == 0);
@@ -460,7 +463,7 @@ gistRedoPageSplitRecord(XLogReaderState *record)
 			{
 				BlockNumber nextblkno;
 
-				XLogRecGetBlockTag(record, i + 2, NULL, NULL, &nextblkno);
+				XLogRecGetBlockTag(record, i + 2, NULL, NULL, NULL, &nextblkno);
 				GistPageGetOpaque(page)->rightlink = nextblkno;
 			}
 			else
