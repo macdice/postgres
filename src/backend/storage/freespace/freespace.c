@@ -338,7 +338,7 @@ XLogRecordPageWithFreeSpace(RelFileNode rnode, BlockNumber heapBlk,
 	else
 	{
 		/* Open the relation at smgr level */
-		SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
+		SMgrRelation smgr = smgropen(SMGR_RELATION, rnode, InvalidBackendId);
 
 		if (smgrexists(smgr, FSM_FORKNUM))
 			write_to_fsm = true;
@@ -361,7 +361,8 @@ XLogRecordPageWithFreeSpace(RelFileNode rnode, BlockNumber heapBlk,
 	blkno = fsm_logical_to_physical(addr);
 
 	/* If the page doesn't exist already, extend */
-	buf = XLogReadBufferExtended(rnode, FSM_FORKNUM, blkno, RBM_ZERO_ON_ERROR);
+	buf = XLogReadBufferExtended(SMGR_RELATION, rnode, FSM_FORKNUM, blkno,
+								 RBM_ZERO_ON_ERROR);
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
 	page = BufferGetPage(buf);

@@ -219,9 +219,9 @@ btree_xlog_split(bool onleft, bool lhighkey, XLogReaderState *record)
 	BlockNumber rightsib;
 	BlockNumber rnext;
 
-	XLogRecGetBlockTag(record, 0, NULL, NULL, &leftsib);
-	XLogRecGetBlockTag(record, 1, NULL, NULL, &rightsib);
-	if (!XLogRecGetBlockTag(record, 2, NULL, NULL, &rnext))
+	XLogRecGetBlockTag(record, 0, NULL, NULL, NULL, &leftsib);
+	XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &rightsib);
+	if (!XLogRecGetBlockTag(record, 2, NULL, NULL, NULL, &rnext))
 		rnext = P_NONE;
 
 	/*
@@ -579,8 +579,9 @@ btree_xlog_delete_get_latestRemovedXid(XLogReaderState *record)
 	 * InvalidTransactionId to cancel all HS transactions.  That's probably
 	 * overkill, but it's safe, and certainly better than panicking here.
 	 */
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
-	ibuffer = XLogReadBufferExtended(rnode, MAIN_FORKNUM, blkno, RBM_NORMAL);
+	XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &blkno);
+	ibuffer = XLogReadBufferExtended(SMGR_RELATION, rnode, MAIN_FORKNUM, blkno,
+									 RBM_NORMAL);
 	if (!BufferIsValid(ibuffer))
 		return InvalidTransactionId;
 	LockBuffer(ibuffer, BT_READ);
@@ -604,7 +605,8 @@ btree_xlog_delete_get_latestRemovedXid(XLogReaderState *record)
 		 * Locate the heap page that the index tuple points at
 		 */
 		hblkno = ItemPointerGetBlockNumber(&(itup->t_tid));
-		hbuffer = XLogReadBufferExtended(xlrec->hnode, MAIN_FORKNUM, hblkno, RBM_NORMAL);
+		hbuffer = XLogReadBufferExtended(SMGR_RELATION, xlrec->hnode,
+										 MAIN_FORKNUM, hblkno, RBM_NORMAL);
 		if (!BufferIsValid(hbuffer))
 		{
 			UnlockReleaseBuffer(ibuffer);
@@ -696,7 +698,7 @@ btree_xlog_delete(XLogReaderState *record)
 		TransactionId latestRemovedXid = btree_xlog_delete_get_latestRemovedXid(record);
 		RelFileNode rnode;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 
 		ResolveRecoveryConflictWithSnapshot(latestRemovedXid, rnode);
 	}

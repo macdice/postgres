@@ -13,7 +13,7 @@
 
 #include "access/xlogreader.h"
 #include "storage/bufmgr.h"
-
+#include "storage/smgr.h"
 
 extern bool XLogHaveInvalidPages(void);
 extern void XLogCheckInvalidPages(void);
@@ -41,8 +41,9 @@ extern XLogRedoAction XLogReadBufferForRedoExtended(XLogReaderState *record,
 							  ReadBufferMode mode, bool get_cleanup_lock,
 							  Buffer *buf);
 
-extern Buffer XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
-					   BlockNumber blkno, ReadBufferMode mode);
+extern Buffer XLogReadBufferExtended(SmgrId smgrid, RelFileNode rnode,
+									 ForkNumber forknum,
+									 BlockNumber blkno, ReadBufferMode mode);
 
 extern Relation CreateFakeRelcacheEntry(RelFileNode rnode);
 extern void FreeFakeRelcacheEntry(Relation fakerel);

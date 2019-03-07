@@ -16,6 +16,7 @@
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/relfilenode.h"
+#include "storage/smgr.h"
 
 /*
  * The minimum size of the WAL construction working area. If you need to
@@ -44,15 +45,16 @@ extern XLogRecPtr XLogInsert(RmgrId rmid, uint8 info);
 extern void XLogEnsureRecordSpace(int nbuffers, int ndatas);
 extern void XLogRegisterData(char *data, int len);
 extern void XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags);
-extern void XLogRegisterBlock(uint8 block_id, RelFileNode *rnode,
-				  ForkNumber forknum, BlockNumber blknum, char *page,
-				  uint8 flags);
+extern void XLogRegisterBlock(uint8 block_id, SmgrId smgrid,
+				  RelFileNode *rnode, ForkNumber forknum, BlockNumber blknum,
+				  char *page, uint8 flags);
 extern void XLogRegisterBufData(uint8 block_id, char *data, int len);
 extern void XLogResetInsertion(void);
 extern bool XLogCheckBufferNeedsBackup(Buffer buffer);
 
-extern XLogRecPtr log_newpage(RelFileNode *rnode, ForkNumber forkNum,
-			BlockNumber blk, char *page, bool page_std);
+extern XLogRecPtr log_newpage(SmgrId smgrid, RelFileNode *rnode,
+							  ForkNumber forkNum, BlockNumber blk,
+							  char *page, bool page_std);
 extern XLogRecPtr log_newpage_buffer(Buffer buffer, bool page_std);
 extern XLogRecPtr XLogSaveBufferForHint(Buffer buffer, bool buffer_std);
 

@@ -52,7 +52,7 @@ hash_xlog_init_meta_page(XLogReaderState *record)
 	 * special handling for init forks as create index operations don't log a
 	 * full page image of the metapage.
 	 */
-	XLogRecGetBlockTag(record, 0, NULL, &forknum, NULL);
+	XLogRecGetBlockTag(record, 0, NULL, NULL, &forknum, NULL);
 	if (forknum == INIT_FORKNUM)
 		FlushOneBuffer(metabuf);
 
@@ -90,7 +90,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 	 * special handling for init forks as create index operations don't log a
 	 * full page image of the metapage.
 	 */
-	XLogRecGetBlockTag(record, 0, NULL, &forknum, NULL);
+	XLogRecGetBlockTag(record, 0, NULL, NULL, &forknum, NULL);
 	if (forknum == INIT_FORKNUM)
 		FlushOneBuffer(bitmapbuf);
 	UnlockReleaseBuffer(bitmapbuf);
@@ -114,7 +114,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(metabuf);
 
-		XLogRecGetBlockTag(record, 1, NULL, &forknum, NULL);
+		XLogRecGetBlockTag(record, 1, NULL, NULL, &forknum, NULL);
 		if (forknum == INIT_FORKNUM)
 			FlushOneBuffer(metabuf);
 	}
@@ -191,8 +191,8 @@ hash_xlog_add_ovfl_page(XLogReaderState *record)
 	Size		datalen PG_USED_FOR_ASSERTS_ONLY;
 	bool		new_bmpage = false;
 
-	XLogRecGetBlockTag(record, 0, NULL, NULL, &rightblk);
-	XLogRecGetBlockTag(record, 1, NULL, NULL, &leftblk);
+	XLogRecGetBlockTag(record, 0, NULL, NULL, NULL, &rightblk);
+	XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &leftblk);
 
 	ovflbuf = XLogInitBufferForRedo(record, 0);
 	Assert(BufferIsValid(ovflbuf));
@@ -1024,8 +1024,9 @@ hash_xlog_vacuum_get_latestRemovedXid(XLogReaderState *record)
 	 * InvalidTransactionId to cancel all HS transactions.  That's probably
 	 * overkill, but it's safe, and certainly better than panicking here.
 	 */
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
-	ibuffer = XLogReadBufferExtended(rnode, MAIN_FORKNUM, blkno, RBM_NORMAL);
+	XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &blkno);
+	ibuffer = XLogReadBufferExtended(SMGR_RELATION, rnode, MAIN_FORKNUM, blkno,
+									 RBM_NORMAL);
 
 	if (!BufferIsValid(ibuffer))
 		return InvalidTransactionId;
@@ -1050,7 +1051,8 @@ hash_xlog_vacuum_get_latestRemovedXid(XLogReaderState *record)
 		 * Locate the heap page that the index tuple points at
 		 */
 		hblkno = ItemPointerGetBlockNumber(&(itup->t_tid));
-		hbuffer = XLogReadBufferExtended(xlrec->hnode, MAIN_FORKNUM,
+		hbuffer = XLogReadBufferExtended(SMGR_RELATION, xlrec->hnode,
+										 MAIN_FORKNUM,
 										 hblkno, RBM_NORMAL);
 
 		if (!BufferIsValid(hbuffer))
@@ -1153,7 +1155,7 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 		hash_xlog_vacuum_get_latestRemovedXid(record);
 		RelFileNode rnode;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 		ResolveRecoveryConflictWithSnapshot(latestRemovedXid, rnode);
 	}
 

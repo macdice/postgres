@@ -335,8 +335,9 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	Page		page;
 	bool		zeromode;
 	bool		willinit;
+	SmgrId		smgrid;
 
-	if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+	if (!XLogRecGetBlockTag(record, block_id, &smgrid, &rnode, &forknum, &blkno))
 	{
 		/* Caller specified a bogus block_id */
 		elog(PANIC, "failed to locate backup block with ID %d", block_id);
@@ -357,7 +358,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	if (XLogRecBlockImageApply(record, block_id))
 	{
 		Assert(XLogRecHasBlockImage(record, block_id));
-		*buf = XLogReadBufferExtended(rnode, forknum, blkno,
+		*buf = XLogReadBufferExtended(smgrid, rnode, forknum, blkno,
 									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK);
 		page = BufferGetPage(*buf);
 		if (!RestoreBlockImage(record, block_id, page))
@@ -387,7 +388,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	}
 	else
 	{
-		*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode);
+		*buf = XLogReadBufferExtended(smgrid, rnode, forknum, blkno, mode);
 		if (BufferIsValid(*buf))
 		{
 			if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
@@ -434,7 +435,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
  * modified.
  */
 Buffer
-XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
+XLogReadBufferExtended(SmgrId smgrid, RelFileNode rnode, ForkNumber forknum,
 					   BlockNumber blkno, ReadBufferMode mode)
 {
 	BlockNumber lastblock;
@@ -444,7 +445,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	Assert(blkno != P_NEW);
 
 	/* Open the relation at smgr level */
-	smgr = smgropen(rnode, InvalidBackendId);
+	smgr = smgropen(smgrid, rnode, InvalidBackendId);
 
 	/*
 	 * Create the target file if it doesn't already exist.  This lets us cope
@@ -461,7 +462,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	if (blkno < lastblock)
 	{
 		/* page exists in file */
-		buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno,
+		buffer = ReadBufferWithoutRelcache(smgrid, rnode, forknum, blkno,
 										   mode, NULL);
 	}
 	else
@@ -486,7 +487,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 					LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 				ReleaseBuffer(buffer);
 			}
-			buffer = ReadBufferWithoutRelcache(rnode, forknum,
+			buffer = ReadBufferWithoutRelcache(smgrid, rnode, forknum,
 											   P_NEW, mode, NULL);
 		}
 		while (BufferGetBlockNumber(buffer) < blkno);
@@ -496,7 +497,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 			if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 				LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 			ReleaseBuffer(buffer);
-			buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno,
+			buffer = ReadBufferWithoutRelcache(smgrid, rnode, forknum, blkno,
 											   mode, NULL);
 		}
 	}

@@ -11449,7 +11449,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	newrnode = rel->rd_node;
 	newrnode.relNode = newrelfilenode;
 	newrnode.spcNode = newTableSpace;
-	dstrel = smgropen(newrnode, rel->rd_backend);
+	dstrel = smgropen(SMGR_RELATION, newrnode, rel->rd_backend);
 
 	RelationOpenSmgr(rel);
 
@@ -11805,7 +11805,8 @@ copy_relation_data(SMgrRelation src, SMgrRelation dst,
 		 * space.
 		 */
 		if (use_wal)
-			log_newpage(&dst->smgr_rnode.node, forkNum, blkno, page, false);
+			log_newpage(SMGR_RELATION, &dst->smgr_rnode.node, forkNum, blkno,
+						page, false);
 
 		PageSetChecksumInplace(page, blkno);
 

@@ -179,7 +179,7 @@ spgbuildempty(Relation index)
 	PageSetChecksumInplace(page, SPGIST_METAPAGE_BLKNO);
 	smgrwrite(index->rd_smgr, INIT_FORKNUM, SPGIST_METAPAGE_BLKNO,
 			  (char *) page, true);
-	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
+	log_newpage(SMGR_RELATION, &index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_METAPAGE_BLKNO, page, true);
 
 	/* Likewise for the root page. */
@@ -188,7 +188,7 @@ spgbuildempty(Relation index)
 	PageSetChecksumInplace(page, SPGIST_ROOT_BLKNO);
 	smgrwrite(index->rd_smgr, INIT_FORKNUM, SPGIST_ROOT_BLKNO,
 			  (char *) page, true);
-	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
+	log_newpage(SMGR_RELATION, &index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_ROOT_BLKNO, page, true);
 
 	/* Likewise for the null-tuples root page. */
@@ -197,7 +197,7 @@ spgbuildempty(Relation index)
 	PageSetChecksumInplace(page, SPGIST_NULL_BLKNO);
 	smgrwrite(index->rd_smgr, INIT_FORKNUM, SPGIST_NULL_BLKNO,
 			  (char *) page, true);
-	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
+	log_newpage(SMGR_RELATION, &index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_NULL_BLKNO, page, true);
 
 	/*

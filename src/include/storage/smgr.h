@@ -78,8 +78,14 @@ typedef SMgrRelationData *SMgrRelation;
 #define SmgrIsTemp(smgr) \
 	RelFileNodeBackendIsTemp((smgr)->smgr_rnode)
 
+typedef enum SmgrId
+{
+	SMGR_INVALID = -1,
+	SMGR_RELATION = 0,	/* md.c */
+} SmgrId;
+
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend);
+extern SMgrRelation smgropen(SmgrId which, RelFileNode rnode, BackendId backend);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrsetowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);
