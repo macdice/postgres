@@ -26,6 +26,7 @@
 #define XLOGREADER_H
 
 #include "access/xlogrecord.h"
+#include "storage/smgr.h"
 
 typedef struct XLogReaderState XLogReaderState;
 
@@ -43,6 +44,7 @@ typedef struct
 	bool		in_use;
 
 	/* Identify the block this refers to */
+	SmgrId		smgrid;
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
@@ -243,7 +245,7 @@ extern bool DecodeXLogRecord(XLogReaderState *state, XLogRecord *record,
 extern bool RestoreBlockImage(XLogReaderState *recoder, uint8 block_id, char *dst);
 extern char *XLogRecGetBlockData(XLogReaderState *record, uint8 block_id, Size *len);
 extern bool XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
-							   RelFileNode *rnode, ForkNumber *forknum,
-							   BlockNumber *blknum);
+							   SmgrId *smgrid, RelFileNode *rnode,
+							   ForkNumber *forknum, BlockNumber *blknum);
 
 #endif							/* XLOGREADER_H */

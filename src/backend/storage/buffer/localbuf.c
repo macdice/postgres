@@ -68,7 +68,8 @@ LocalPrefetchBuffer(SMgrRelation smgr, ForkNumber forkNum,
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
 
-	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
+	INIT_BUFFERTAG(newTag, smgr->smgr_which,
+				   smgr->smgr_rnode.node, forkNum, blockNum);
 
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
@@ -111,7 +112,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	bool		found;
 	uint32		buf_state;
 
-	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
+	INIT_BUFFERTAG(newTag, smgr->smgr_which,
+				   smgr->smgr_rnode.node, forkNum, blockNum);
 
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
@@ -209,7 +211,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 		/* Find smgr relation for buffer */
-		oreln = smgropen(bufHdr->tag.rnode, MyBackendId);
+		oreln = smgropen(bufHdr->tag.smgrid, bufHdr->tag.rnode, MyBackendId);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
