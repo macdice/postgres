@@ -119,7 +119,7 @@ UndoDiscardOneLog(UndoLogControl *log, TransactionId xmin, bool *hibernate)
 					 * prior to undo_recptr, the undo actions are already
 					 * applied.
 					 */
-					if (log->meta.insert > undo_recptr)
+					if (log->meta.unlogged.insert > undo_recptr)
 					{
 						UndoRecordRelease(uur);
 
@@ -157,7 +157,7 @@ UndoDiscardOneLog(UndoLogControl *log, TransactionId xmin, bool *hibernate)
 
 		/* we can discard upto this point. */
 		if (TransactionIdFollowsOrEquals(undoxid, xmin) ||
-			next_urecptr == SpecialUndoRecPtr ||
+			next_urecptr == InvalidUndoRecPtr ||
 			UndoRecPtrGetLogNo(next_urecptr) != log->logno ||
 			log_complete  || pending_abort)
 		{
@@ -347,7 +347,7 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 		 * urec pointer using next insert location of the undo log.  Otherwise,
 		 * calculate using next transaction's start pointer.
 		 */
-		if (uur->uur_next == SpecialUndoRecPtr)
+		if (uur->uur_next == InvalidUndoRecPtr)
 		{
 			/*
 			 * While fetching the next insert location if the new transaction
@@ -363,8 +363,7 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 				continue;
 			}
 
-			from_urecptr = UndoGetPrevUndoRecptr(next_insert, prevlen,
-												 InvalidUndoRecPtr);
+			from_urecptr = UndoGetPrevUndoRecptr(next_insert, prevlen);
 			break;
 		}
 		else if ((UndoRecPtrGetLogNo(next_urecptr) != log->logno) &&
@@ -379,8 +378,7 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 			next_insert = UndoLogGetNextInsertPtr(log->logno, uur->uur_xid);
 
 			Assert(UndoRecPtrIsValid(next_insert));
-			from_urecptr = UndoGetPrevUndoRecptr(next_insert, prevlen,
-												 InvalidUndoRecPtr);
+			from_urecptr = UndoGetPrevUndoRecptr(next_insert, prevlen);
 			break;
 		}
 		else
@@ -399,8 +397,7 @@ FetchLatestUndoPtrForXid(UndoRecPtr urecptr, UnpackedUndoRecord *uur_start,
 			if (UndoRecPtrGetLogNo(next_urecptr) == log->logno)
 			{
 				from_urecptr =
-					UndoGetPrevUndoRecptr(next_urecptr, next_uur->uur_prevlen,
-										  InvalidUndoRecPtr);
+					UndoGetPrevUndoRecptr(next_urecptr, next_uur->uur_prevlen);
 				UndoRecordRelease(next_uur);
 				break;
 			}
@@ -442,6 +439,6 @@ TempUndoDiscard(UndoLogNumber logno)
 	Assert (log->meta.persistence == UNDO_TEMP);
 
 	/* Process the undo log. */
-	UndoLogDiscard(MakeUndoRecPtr(log->logno, log->meta.insert),
+	UndoLogDiscard(MakeUndoRecPtr(log->logno, log->meta.unlogged.insert),
 				   InvalidTransactionId);
 }

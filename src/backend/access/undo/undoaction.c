@@ -171,8 +171,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			if (urec_ptr != to_urecptr &&
 				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
 			{
-				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen,
-												 urec_prevurp);
+				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 				continue;
 			}
 			else
@@ -207,8 +206,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			if (urec_ptr != to_urecptr &&
 				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
 			{
-				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen,
-												 urec_prevurp);
+				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 				continue;
 			}
 			else
@@ -238,8 +236,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			if (urec_ptr != to_urecptr &&
 				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
 			{
-				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen,
-												 urec_prevurp);
+				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 				continue;
 			}
 			else
@@ -308,8 +305,7 @@ execute_undo_actions(UndoRecPtr from_urecptr, UndoRecPtr to_urecptr,
 			urec_prevurp = uur->uur_prevurp;
 			if (urec_ptr != to_urecptr &&
 				(urec_prevlen > 0 || UndoRecPtrIsValid(urec_prevurp)))
-				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen,
-												 urec_prevurp);
+				urec_ptr = UndoGetPrevUndoRecptr(urec_ptr, urec_prevlen);
 			else
 				break;
 		}
