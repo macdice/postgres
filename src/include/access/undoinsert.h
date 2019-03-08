@@ -29,7 +29,8 @@ typedef bool (*SatisfyUndoRecordCallback) (UnpackedUndoRecord *urec,
 										   TransactionId xid);
 
 extern UndoRecPtr PrepareUndoInsert(UnpackedUndoRecord *, TransactionId xid,
-				  UndoPersistence);
+									UndoPersistence upersistence,
+									XLogReaderState *xlog_record);
 extern void InsertPreparedUndo(void);
 
 extern void RegisterUndoLogBuffers(uint8 first_block_id);
