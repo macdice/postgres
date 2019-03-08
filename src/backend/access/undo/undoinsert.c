@@ -166,7 +166,6 @@ static UnpackedUndoRecord *UndoGetOneRecord(UnpackedUndoRecord *urec,
 static void UndoRecordPrepareTransInfo(UndoRecPtr urecptr,
 						   UndoRecPtr xact_urp,
 						   XLogReaderState *xlog_record);
-static void UndoRecordUpdateTransInfo(int idx);
 static int UndoGetBufferSlot(RelFileNode rnode, BlockNumber blk,
 				  ReadBufferMode rbm,
 				  UndoPersistence persistence);
@@ -299,12 +298,61 @@ UndoRecordPrepareTransInfo(UndoRecPtr urecptr, UndoRecPtr xact_urp,
 
 
 /*
+ * Update the progress of the undo record in the transaction header.
+ */
+void
+PrepareUpdateUndoActionProgress(UndoRecPtr urecptr, int progress)
+{
+	Buffer		buffer = InvalidBuffer;
+	BlockNumber	cur_blk;
+	RelFileNode	rnode;
+	UndoLogNumber logno = UndoRecPtrGetLogNo(urecptr);
+	UndoLogControl *log;
+	Page		page;
+	int			already_decoded = 0;
+	int			starting_byte;
+	int			bufidx;
+	int			index = 0;
+
+	log = UndoLogGet(logno, false);
+
+	if (log->meta.persistence == UNDO_TEMP)
+		return;
+
+	UndoRecPtrAssignRelFileNode(rnode, urecptr);
+	cur_blk = UndoRecPtrGetBlockNum(urecptr);
+	starting_byte = UndoRecPtrGetPageOffset(urecptr);
+
+	while (true)
+	{
+		bufidx = UndoGetBufferSlot(rnode, cur_blk,
+								   RBM_NORMAL,
+								   log->meta.persistence);
+
+		xact_urec_info[xact_urec_info_idx].idx_undo_buffers[index++] = bufidx;
+		buffer = undo_buffer[bufidx].buf;
+		page = BufferGetPage(buffer);
+
+		if (UnpackUndoRecord(&xact_urec_info[xact_urec_info_idx].uur, page, starting_byte,
+							 &already_decoded, true))
+			break;
+
+		starting_byte = UndoLogBlockHeaderSize;
+		cur_blk++;
+	}
+
+	xact_urec_info[xact_urec_info_idx].urecptr = urecptr;
+	xact_urec_info[xact_urec_info_idx].uur.uur_progress = progress;
+	xact_urec_info_idx++;
+}
+
+/*
  * Overwrite the first undo record of the previous transaction to update its
  * next pointer.  This will just insert the already prepared record by
  * UndoRecordPrepareTransInfo.  This must be called under the critical section.
  * This will just overwrite the undo header not the data.
  */
-static void
+void
 UndoRecordUpdateTransInfo(int idx)
 {
 	UndoLogNumber logno = UndoRecPtrGetLogNo(xact_urec_info[idx].urecptr);
