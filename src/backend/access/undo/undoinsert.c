@@ -1059,6 +1059,41 @@ UndoRecordRelease(UnpackedUndoRecord *urec)
 }
 
 /*
+ * Return the previous undo record pointer.
+ *
+ * This API can switch to the previous log if the current log is full,
+ * so the caller shouldn't use it where that is not expected.
+ */
+UndoRecPtr
+UndoGetPrevUndoRecptr(UndoRecPtr urp, uint16 prevlen)
+{
+	UndoLogNumber logno = UndoRecPtrGetLogNo(urp);
+	UndoLogOffset offset = UndoRecPtrGetOffset(urp);
+
+	/*
+	 * We have reached to the first undo record of this undo log, so fetch the
+	 * previous undo record of the transaction from the previous log.
+	 */
+	if (offset == UndoLogBlockHeaderSize)
+	{
+		UndoLogControl *prevlog,
+					   *log;
+
+		log = UndoLogGet(logno, false);
+
+		Assert(log->meta.unlogged.prevlogno != InvalidUndoLogNumber);
+
+		/* Fetch the previous log control. */
+		prevlog = UndoLogGet(log->meta.unlogged.prevlogno, false);
+		logno = log->meta.unlogged.prevlogno;
+		offset = prevlog->meta.unlogged.insert;
+	}
+
+	/* calculate the previous undo record pointer */
+	return MakeUndoRecPtr(logno, offset - prevlen);
+}
+
+/*
  * RegisterUndoLogBuffers - Register the undo buffers.
  */
 void

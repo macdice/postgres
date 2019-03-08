@@ -24,6 +24,7 @@
 #include "storage/proc.h"
 #include "storage/shmem.h"
 
+#include "access/transam.h"
 #include "access/undodiscard.h"
 #include "pgstat.h"
 #include "postmaster/discardworker.h"

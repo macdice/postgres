@@ -45,7 +45,7 @@ extern void UndoRecordRelease(UnpackedUndoRecord *urec);
 extern void UndoRecordSetPrevUndoLen(uint16 len);
 extern void UndoSetPrepareSize(UnpackedUndoRecord *undorecords, int nrecords,
 				   TransactionId xid, UndoPersistence upersistence);
-extern UndoRecPtr UndoGetPrevUndoRecptr(UndoRecPtr urp, uint16 prevlen, UndoRecPtr prevurp);
+extern UndoRecPtr UndoGetPrevUndoRecptr(UndoRecPtr urp, uint16 prevlen);
 extern void ResetUndoBuffers(void);
 extern void PrepareUpdateUndoActionProgress(UndoRecPtr urecptr, int progress);
 extern void UndoRecordUpdateTransInfo(int idx);
