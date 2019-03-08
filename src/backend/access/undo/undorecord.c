@@ -292,6 +292,7 @@ UnpackUndoRecord(UnpackedUndoRecord *uur, Page page, int starting_byte,
 	uur->uur_prevxid = work_hdr.urec_prevxid;
 	uur->uur_xid = work_hdr.urec_xid;
 	uur->uur_cid = work_hdr.urec_cid;
+	uur->uur_dbid = work_txn.urec_dbid;
 
 	if ((uur->uur_info & UREC_INFO_RELATION_DETAILS) != 0)
 	{
