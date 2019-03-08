@@ -20,6 +20,17 @@
 #include "storage/buf.h"
 #include "storage/off.h"
 
+typedef enum undorectype
+{
+	UNDO_INSERT,
+	UNDO_MULTI_INSERT,
+	UNDO_DELETE,
+	UNDO_INPLACE_UPDATE,
+	UNDO_UPDATE,
+	UNDO_XID_LOCK_ONLY,
+	UNDO_XID_MULTI_LOCK_ONLY,
+	UNDO_ITEMID_UNUSED
+} undorectype;
 
 /*
  * Every undo record begins with an UndoRecordHeader structure, which is
@@ -30,6 +41,7 @@
  */
 typedef struct UndoRecordHeader
 {
+	RmgrId		urec_rmid;		/* RMGR [XXX:TODO: this creates an alignment hole?] */
 	uint8		urec_type;		/* record type code */
 	uint8		urec_info;		/* flag bits */
 	uint16		urec_prevlen;	/* length of previous record in bytes */
@@ -37,7 +49,7 @@ typedef struct UndoRecordHeader
 
 	/*
 	 * Transaction id that has modified the tuple present in this undo record.
-	 * If this is older than oldestXidWithEpochHavingUndo, then we can
+	 * If this is older than oldestXidHavingUndo, then we can
 	 * consider the tuple in this undo record as visible.
 	 */
 	TransactionId urec_prevxid;
@@ -161,6 +173,7 @@ typedef struct UndoRecordPayload
  */
 typedef struct UnpackedUndoRecord
 {
+	RmgrId		uur_rmid;		/* rmgr ID */
 	uint8		uur_type;		/* record type code */
 	uint8		uur_info;		/* flag bits */
 	uint16		uur_prevlen;	/* length of previous record */

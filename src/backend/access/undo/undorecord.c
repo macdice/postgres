@@ -98,6 +98,7 @@ InsertUndoRecord(UnpackedUndoRecord *uur, Page page,
 	 */
 	if (*already_written == 0)
 	{
+		work_hdr.urec_rmid = uur->uur_rmid;
 		work_hdr.urec_type = uur->uur_type;
 		work_hdr.urec_info = uur->uur_info;
 		work_hdr.urec_prevlen = uur->uur_prevlen;
@@ -122,6 +123,7 @@ InsertUndoRecord(UnpackedUndoRecord *uur, Page page,
 		 * We should have been passed the same record descriptor as before, or
 		 * caller has messed up.
 		 */
+		Assert(work_hdr.urec_rmid == uur->uur_rmid);
 		Assert(work_hdr.urec_type == uur->uur_type);
 		Assert(work_hdr.urec_info == uur->uur_info);
 		Assert(work_hdr.urec_prevlen == uur->uur_prevlen);
@@ -285,6 +287,7 @@ UnpackUndoRecord(UnpackedUndoRecord *uur, Page page, int starting_byte,
 					   &my_bytes_decoded, already_decoded, false))
 		return false;
 
+	uur->uur_rmid = work_hdr.urec_rmid;
 	uur->uur_type = work_hdr.urec_type;
 	uur->uur_info = work_hdr.urec_info;
 	uur->uur_prevlen = work_hdr.urec_prevlen;
