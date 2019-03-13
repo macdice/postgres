@@ -20,6 +20,8 @@
  */
 #include "postgres.h"
 
+#include "access/hash.h"
+#include "access/xact.h"
 #include "jit/jit.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
@@ -556,6 +558,11 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 	}
 	else if (phase == RESOURCE_RELEASE_LOCKS)
 	{
+		/*
+		 * For aborts, we don't want to release the locks immediately if we have
+		 * some pending undo actions to perform.  Instead, we release them after
+		 * applying undo actions.  See ApplyUndoActions.
+		 */
 		if (isTopLevel)
 		{
 			/*
@@ -565,7 +572,8 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 			 */
 			if (owner == TopTransactionResourceOwner)
 			{
-				ProcReleaseLocks(isCommit);
+				if (!CanPerformUndoActions())
+					ProcReleaseLocks(isCommit);
 				ReleasePredicateLocks(isCommit, false);
 			}
 		}
@@ -598,7 +606,7 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 
 			if (isCommit)
 				LockReassignCurrentOwner(locks, nlocks);
-			else
+			else if (!CanPerformUndoActions())
 				LockReleaseCurrentOwner(locks, nlocks);
 		}
 	}

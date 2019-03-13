@@ -428,7 +428,11 @@ extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 				   int xactflags, TransactionId twophase_xid,
 				   const char *twophase_gid);
 extern void xact_redo(XLogReaderState *record);
-extern void XactPerformUndoActionsIfPending(void);
+
+extern void ApplyUndoActions(void);
+extern void SetUndoActionsInfo(void);
+extern void ResetUndoActionsInfo(void);
+extern bool CanPerformUndoActions(void);
 
 /* xactdesc.c */
 extern void xact_desc(StringInfo buf, XLogReaderState *record);
