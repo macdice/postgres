@@ -2061,7 +2061,12 @@ pg_begin_sync(const char *path)
 	i = hash % NUM_SYNC_LOCKS;
 	lock = &MainLWLockArray[SYNC_LOCK_LWLOCK_OFFSET + i];
 
-	/* Acquire and return the lock.  The caller will call pg_end_sync(). */
+	/*
+	 * Acquire and return the lock.  The caller will call pg_end_sync(), or
+	 * panic before that and abort with the lock held.  Either way, no one else
+	 * will be able to try to sync the same file, and thereby miss an error
+	 * that was eaten by the OS.
+	 */
 	LWLockAcquire(&lock->lock, LW_EXCLUSIVE);
 
 	return &lock->lock;
