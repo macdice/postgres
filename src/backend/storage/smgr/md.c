@@ -992,13 +992,16 @@ mdimmedsync(SMgrRelation reln, ForkNumber forknum)
 
 	while (segno > 0)
 	{
+		void	   *cookie;
 		MdfdVec    *v = &reln->md_seg_fds[forknum][segno - 1];
 
+		cookie = pg_begin_sync(FilePathName(v->mdfd_vfd));
 		if (FileSync(v->mdfd_vfd, WAIT_EVENT_DATA_FILE_IMMEDIATE_SYNC) < 0)
 			ereport(data_sync_elevel(ERROR),
 					(errcode_for_file_access(),
 					 errmsg("could not fsync file \"%s\": %m",
 							FilePathName(v->mdfd_vfd))));
+		pg_end_sync(cookie);
 		segno--;
 	}
 }
@@ -1161,6 +1164,7 @@ mdsync(void)
 					MdfdVec    *seg;
 					char	   *path;
 					int			save_errno;
+					void	   *cookie = NULL;
 
 					/*
 					 * Find or create an smgr hash entry for this relation.
@@ -1187,10 +1191,13 @@ mdsync(void)
 
 					INSTR_TIME_SET_CURRENT(sync_start);
 
+					if (seg)
+						cookie = pg_begin_sync(FilePathName(seg->mdfd_vfd));
 					if (seg != NULL &&
 						FileSync(seg->mdfd_vfd, WAIT_EVENT_DATA_FILE_SYNC) >= 0)
 					{
 						/* Success; update statistics about sync timing */
+						pg_end_sync(cookie);
 						INSTR_TIME_SET_CURRENT(sync_end);
 						sync_diff = sync_end;
 						INSTR_TIME_SUBTRACT(sync_diff, sync_start);
@@ -1251,6 +1258,8 @@ mdsync(void)
 								 errmsg("could not fsync file \"%s\" but retrying: %m",
 										path)));
 					pfree(path);
+					if (seg)
+						pg_end_sync(cookie);
 
 					/*
 					 * Absorb incoming requests and check to see if a cancel
@@ -1407,17 +1416,21 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 	}
 	else
 	{
+		void	   *cookie;
+
 		if (ForwardFsyncRequest(reln->smgr_rnode.node, forknum, seg->mdfd_segno))
 			return;				/* passed it off successfully */
 
 		ereport(DEBUG1,
 				(errmsg("could not forward fsync request because request queue is full")));
 
+		cookie = pg_begin_sync(FilePathName(seg->mdfd_vfd));
 		if (FileSync(seg->mdfd_vfd, WAIT_EVENT_DATA_FILE_SYNC) < 0)
 			ereport(data_sync_elevel(ERROR),
 					(errcode_for_file_access(),
 					 errmsg("could not fsync file \"%s\": %m",
 							FilePathName(seg->mdfd_vfd))));
+		pg_end_sync(cookie);
 	}
 }
 

@@ -125,6 +125,9 @@ extern void AtEOSubXact_Files(bool isCommit, SubTransactionId mySubid,
 extern void RemovePgTempFiles(void);
 extern bool looks_like_temp_rel_name(const char *name);
 
+extern void *pg_begin_sync(const char *name);
+extern void pg_end_sync(void *cookie);
+
 extern int	pg_fsync(int fd);
 extern int	pg_fsync_no_writethrough(int fd);
 extern int	pg_fsync_writethrough(int fd);

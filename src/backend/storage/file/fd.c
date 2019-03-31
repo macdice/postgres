@@ -89,6 +89,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
+#include "utils/hashutils.h"
 #include "utils/resowner_private.h"
 
 
@@ -1044,6 +1045,18 @@ LruDelete(File file)
 	vfdP = &VfdCache[file];
 
 	/*
+	 * We try to sync any file we're written to before we close it, unless
+	 * TODO XXX
+	 */
+	if (!data_sync_retry)
+	{
+		if (pg_fsync(vfdP->fd) != 0)
+			ereport(PANIC,
+					(errmsg("could not sync \"%s\" before closing due to vfd pressure: %m",
+							FilePathName(file))));
+	}
+
+	/*
 	 * Close the file.  We aren't expecting this to fail; if it does, better
 	 * to leak the FD than to mess up our internal state.
 	 */
@@ -1723,6 +1736,14 @@ FileClose(File file)
 
 	if (!FileIsNotOpen(file))
 	{
+		if (!data_sync_retry)
+		{
+			if (pg_fsync(vfdP->fd) != 0)
+				ereport(PANIC,
+						(errmsg("could not sync \"%s\" before closing due to explicit close: %m",
+								FilePathName(file))));
+		}
+	
 		/* close the file */
 		if (close(vfdP->fd))
 		{
@@ -2012,6 +2033,50 @@ retry:
 	}
 
 	return returnCode;
+}
+
+/*
+ * We need to close a race where two backends sync the same file, but only
+ * one of them sees a write-back error.  We do this by holding a lock that
+ * covers both the fsync system call and the panic error report.  Return
+ * a cookie that should be passed to pg_end_sync().
+ */
+void *
+pg_begin_sync(const char *path)
+{
+	LWLockPadded *lock;
+	uint32		hash;
+	uint32		i;
+
+	/*
+	 * If fsync() can be meaningfully retried on this platform, then there is
+	 * no error reporting race between other backends and the checkpointer
+	 * that are trying to sync the same file.  They'll both report the error.
+	 */
+	if (data_sync_retry)
+		return NULL;
+
+	/* Find the appropriate lock partition for this path. */
+	hash = hash_any((unsigned char *) path, strlen(path));
+	i = hash % NUM_SYNC_LOCKS;
+	lock = &MainLWLockArray[SYNC_LOCK_LWLOCK_OFFSET + i];
+
+	/* Acquire and return the lock.  The caller will call pg_end_sync(). */
+	LWLockAcquire(&lock->lock, LW_EXCLUSIVE);
+
+	return &lock->lock;
+}
+
+/*
+ * Release the lock, if it was taken by pg_begin_sync().
+ */
+void
+pg_end_sync(void *cookie)
+{
+	LWLock	   *lock = (LWLock *) cookie;
+
+	if (lock)
+		LWLockRelease(lock);
 }
 
 int
