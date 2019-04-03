@@ -42,6 +42,7 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "storage/proc.h"
+#include "storage/sync.h"
 
 /*
  * Defines for CLOG page sizes.  A page is the same BLCKSZ as is used
@@ -692,7 +693,8 @@ CLOGShmemInit(void)
 {
 	ClogCtl->PagePrecedes = CLOGPagePrecedes;
 	SimpleLruInit(ClogCtl, "clog", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
-				  CLogControlLock, "pg_xact", LWTRANCHE_CLOG_BUFFERS);
+				  CLogControlLock, "pg_xact", LWTRANCHE_CLOG_BUFFERS,
+				  SYNC_HANDLER_CLOG);
 }
 
 /*
@@ -1033,4 +1035,13 @@ clog_redo(XLogReaderState *record)
 	}
 	else
 		elog(PANIC, "clog_redo: unknown op code %u", info);
+}
+
+/*
+ * Entrypoint for sync.c to sync clog files.
+ */
+int
+clogsyncfiletag(const FileTag *ftag, char *path)
+{
+	return slrusyncfiletag(ClogCtl, ftag, path);
 }
