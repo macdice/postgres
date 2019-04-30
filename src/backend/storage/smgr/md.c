@@ -28,6 +28,7 @@
 #include "miscadmin.h"
 #include "access/xlogutils.h"
 #include "access/xlog.h"
+#include "commands/tablespace.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"
@@ -195,6 +196,19 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 		return;					/* created and opened already... */
 
 	Assert(reln->md_num_open_segs[forkNum] == 0);
+
+	/*
+	 * We may be using the target table space for the first time in this
+	 * database, so create a per-database subdirectory if needed.
+	 *
+	 * XXX this is a fairly ugly violation of module layering, but this seems
+	 * to be the best place to put the check.  Maybe TablespaceCreateDbspace
+	 * should be here and not in commands/tablespace.c?  But that would imply
+	 * importing a lot of stuff that smgr.c oughtn't know, either.
+	 */
+	TablespaceCreateDbspace(reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							isRedo);
 
 	path = relpath(reln->smgr_rnode, forkNum);
 
