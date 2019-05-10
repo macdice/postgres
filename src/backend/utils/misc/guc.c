@@ -2810,7 +2810,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL,
 		},
 		&max_worker_processes,
-		8, 0, MAX_BACKENDS,
+		12, 0, MAX_BACKENDS,
 		check_max_worker_processes, NULL, NULL
 	},
 
