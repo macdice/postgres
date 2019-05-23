@@ -9,9 +9,6 @@
  * These functions were formerly part of fe-exec.c, but they
  * didn't really belong there.
  *
- * IDENTIFICATION
- *	  src/interfaces/libpq/fe-print.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

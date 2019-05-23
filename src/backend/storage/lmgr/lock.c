@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/storage/lmgr/lock.c
- *
  * NOTES
  *	  A lock table is a shared memory hash table.  When
  *	  a process tries to acquire a lock of a type that conflicts

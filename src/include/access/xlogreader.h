@@ -5,9 +5,6 @@
  *
  * Portions Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/include/access/xlogreader.h
- *
  * NOTES
  *		See the definition of the XLogReaderState struct for instructions on
  *		how to use the XLogReader infrastructure.

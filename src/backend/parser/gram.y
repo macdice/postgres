@@ -10,9 +10,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/parser/gram.y
- *
  * HISTORY
  *	  AUTHOR			DATE			MAJOR EVENT
  *	  Andrew Yu			Sept, 1994		POSTQUEL to SQL conversion

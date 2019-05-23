@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2007-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/test/modules/test_parser/test_parser.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

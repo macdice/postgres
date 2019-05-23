@@ -8,10 +8,6 @@
  *
  * Copyright (c) 2017-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/tools/testint128.c
- *
  *-------------------------------------------------------------------------
  */
 

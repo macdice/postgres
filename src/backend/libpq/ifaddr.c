@@ -6,10 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *
- * IDENTIFICATION
- *	  src/backend/libpq/ifaddr.c
- *
  * This file and the IPV6 implementation were initially provided by
  * Nigel Kukard <nkukard@lbsd.net>, Linux Based Systems Design
  * http://www.lbsd.net.

@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/utils/init/globals.c
- *
  * NOTES
  *	  Globals used all over the place should be declared here and not
  *	  in other modules.

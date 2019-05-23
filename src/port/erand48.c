@@ -27,9 +27,6 @@
  * of any kind. I shall in no event be liable for anything that happens
  * to anyone/anything when using this software.
  *
- * IDENTIFICATION
- *	  src/port/erand48.c
- *
  *-------------------------------------------------------------------------
  */
 

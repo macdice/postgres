@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/sort
 #
-# IDENTIFICATION
-#    src/backend/utils/sort/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/sort

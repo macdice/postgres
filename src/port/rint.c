@@ -5,9 +5,6 @@
  *
  * By Pedro Gimeno Fortea, donated to the public domain
  *
- * IDENTIFICATION
- *	  src/port/rint.c
- *
  *-------------------------------------------------------------------------
  */
 #include "c.h"

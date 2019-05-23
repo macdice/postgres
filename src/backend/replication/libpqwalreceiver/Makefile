@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for src/backend/replication/libpqwalreceiver
 #
-# IDENTIFICATION
-#    src/backend/replication/libpqwalreceiver/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/replication/libpqwalreceiver

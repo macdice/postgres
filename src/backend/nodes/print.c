@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/nodes/print.c
- *
  * HISTORY
  *	  AUTHOR			DATE			MAJOR EVENT
  *	  Andrew Yu			Oct 26, 1994	file creation

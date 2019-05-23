@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for statistics
 #
-# IDENTIFICATION
-#    src/backend/statistics/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/statistics

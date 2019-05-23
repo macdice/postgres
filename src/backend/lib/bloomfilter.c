@@ -26,9 +26,6 @@
  *
  * Copyright (c) 2018-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/lib/bloomfilter.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

@@ -6,9 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  *
  *
- * IDENTIFICATION
- *	  src/port/fls.c
- *
  * This file was taken from FreeBSD to provide an implementation of fls()
  * for platforms that lack it.  Note that the operating system's version may
  * be substantially more efficient than ours, since some platforms have an

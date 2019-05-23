@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/transam
 #
-# IDENTIFICATION
-#    src/backend/access/transam/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/transam

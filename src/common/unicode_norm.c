@@ -6,10 +6,6 @@
  * http://www.unicode.org/reports/tr15/.
  *
  * Portions Copyright (c) 2017-2019, PostgreSQL Global Development Group
- *
- * IDENTIFICATION
- *	  src/common/unicode_norm.c
- *
  *-------------------------------------------------------------------------
  */
 #ifndef FRONTEND

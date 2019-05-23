@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/tcop/postgres.c
- *
  * NOTES
  *	  this is the "main" module of the postgres backend and
  *	  hence the main module of the "traffic cop".

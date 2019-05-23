@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/storage/ipc/shmqueue.c
- *
  * NOTES
  *
  * Package for managing doubly-linked lists in shared memory.

@@ -8,9 +8,6 @@
  *
  * Author: Andreas Pflug <pgadmin@pse-consulting.de>
  *
- * IDENTIFICATION
- *	  src/backend/utils/adt/genfile.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

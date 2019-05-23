@@ -8,9 +8,6 @@
 # Within a configured source tree, you can say "make NO_PGXS=1 all"
 # to build using the surrounding source tree.
 #
-# IDENTIFICATION
-#    src/tutorial/Makefile
-#
 #-------------------------------------------------------------------------
 
 MODULES = complex funcs

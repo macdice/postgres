@@ -9,9 +9,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/utils/hash/hashfn.c
- *
  * NOTES
  *	  It is expected that every bit of a hash function's 32-bit result is
  *	  as random as every other; failure to ensure this is likely to lead

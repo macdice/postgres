@@ -24,9 +24,6 @@
  *
  *	http://archives.postgresql.org/pgsql-bugs/2010-02/msg00187.php
  *
- * IDENTIFICATION
- *	  src/bin/pg_dump/pg_dump.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

@@ -6,10 +6,6 @@
  * Portions Copyright (c) 2011-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *
- * IDENTIFICATION
- *	  contrib/tcn/tcn.c
- *
  *-------------------------------------------------------------------------
  */
 

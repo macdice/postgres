@@ -3,9 +3,6 @@
  * ecpg_keywords.c
  *	  lexical token lookup for reserved words in postgres embedded SQL
  *
- * IDENTIFICATION
- *	  src/interfaces/ecpg/preproc/ecpg_keywords.c
- *
  *-------------------------------------------------------------------------
  */
 

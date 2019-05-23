@@ -12,9 +12,6 @@
 # subdirectories.  Much of the stuff done via Method 1 today should probably
 # be converted to Method 2.
 #
-# IDENTIFICATION
-#    src/backend/port/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/port

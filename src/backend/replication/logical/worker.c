@@ -4,9 +4,6 @@
  *
  * Copyright (c) 2016-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/logical/worker.c
- *
  * NOTES
  *	  This file contains the worker which applies logical changes as they come
  *	  from remote logical replication stream.

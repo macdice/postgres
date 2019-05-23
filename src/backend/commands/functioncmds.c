@@ -9,9 +9,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/commands/functioncmds.c
- *
  * DESCRIPTION
  *	  These routines take the parse tree and pick out the
  *	  appropriate arguments/flags, and pass the results to the

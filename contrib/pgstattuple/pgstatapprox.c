@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2014-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		  contrib/pgstattuple/pgstatapprox.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

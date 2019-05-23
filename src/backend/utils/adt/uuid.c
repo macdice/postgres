@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2007-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/utils/adt/uuid.c
- *
  *-------------------------------------------------------------------------
  */
 

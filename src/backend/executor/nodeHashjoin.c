@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/executor/nodeHashjoin.c
- *
  * PARALLELISM
  *
  * Hash joins can participate in parallel query execution in several ways.  A

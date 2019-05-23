@@ -5,10 +5,6 @@
  *
  * Portions Copyright (c) 2018-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/utils/adt/cryptohashes.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/hash
 #
-# IDENTIFICATION
-#    src/backend/utils/hash/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/hash

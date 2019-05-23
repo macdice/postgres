@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/logical/origin.c
- *
  * NOTES
  *
  * This file provides the following:

@@ -16,9 +16,6 @@
  *
  * Portions Copyright (c) 2012-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/lib/pairingheap.c
- *
  *-------------------------------------------------------------------------
  */
 

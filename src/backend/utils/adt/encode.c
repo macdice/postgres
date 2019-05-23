@@ -5,10 +5,6 @@
  *
  * Copyright (c) 2001-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/utils/adt/encode.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

@@ -51,9 +51,6 @@
  * jsonb_path_ops, EXISTS(path) expressions might be still supported,
  * when statements of 1st kind could be extracted out of their filters.
  *
- * IDENTIFICATION
- *	  src/backend/utils/adt/jsonb_gin.c
- *
  *-------------------------------------------------------------------------
  */
 

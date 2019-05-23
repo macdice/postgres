@@ -7,10 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/heap/heapam_handler.c
- *
- *
  * NOTES
  *	  This files wires up the lower level heapam.c et al routines with the
  *	  tableam abstraction.

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/resowner
 #
-# IDENTIFICATION
-#    src/backend/utils/resowner/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/resowner

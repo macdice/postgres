@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/cache
 #
-# IDENTIFICATION
-#    src/backend/utils/cache/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/cache

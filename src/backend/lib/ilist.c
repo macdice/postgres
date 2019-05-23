@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/lib/ilist.c
- *
  * NOTES
  *	  This file only contains functions that are too big to be considered
  *	  for inlining.  See ilist.h for most of the goodies.

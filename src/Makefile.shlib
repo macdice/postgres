@@ -5,9 +5,6 @@
 #
 # Copyright (c) 1998, Regents of the University of California
 #
-# IDENTIFICATION
-#    src/Makefile.shlib
-#
 #-------------------------------------------------------------------------
 
 # This file should be included by any Postgres module Makefile that

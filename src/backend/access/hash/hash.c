@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/hash/hash.c
- *
  * NOTES
  *	  This file contains only the public interface routines.
  *

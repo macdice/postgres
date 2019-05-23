@@ -10,9 +10,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * IDENTIFICATION
- *	  src/backend/utils/mmgr/aset.c
- *
  * NOTE:
  *	This is a new (Feb. 05, 1999) implementation of the allocation set
  *	routines. AllocSet...() does not use OrderedSet...() any more.

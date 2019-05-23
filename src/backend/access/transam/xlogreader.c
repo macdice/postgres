@@ -5,9 +5,6 @@
  *
  * Portions Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/backend/access/transam/xlogreader.c
- *
  * NOTES
  *		See xlogreader.h for more notes on this facility.
  *

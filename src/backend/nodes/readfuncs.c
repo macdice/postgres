@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/nodes/readfuncs.c
- *
  * NOTES
  *	  Path nodes do not have any readfuncs support, because we never
  *	  have occasion to read them in.  (There was once code here that

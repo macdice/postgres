@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for rewrite
 #
-# IDENTIFICATION
-#    src/backend/rewrite/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/rewrite

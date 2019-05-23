@@ -4,9 +4,6 @@
  *
  *	Implements the basic DB functions used by the archiver.
  *
- * IDENTIFICATION
- *	  src/bin/pg_dump/pg_backup_db.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/init
 #
-# IDENTIFICATION
-#    src/backend/utils/init/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/init

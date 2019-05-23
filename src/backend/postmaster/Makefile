@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for src/backend/postmaster
 #
-# IDENTIFICATION
-#    src/backend/postmaster/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/postmaster

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for storage/lmgr
 #
-# IDENTIFICATION
-#    src/backend/storage/lmgr/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/storage/lmgr

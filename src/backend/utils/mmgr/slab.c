@@ -9,9 +9,6 @@
  *
  * Portions Copyright (c) 2017-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/utils/mmgr/slab.c
- *
  *
  * NOTE:
  *	The constant allocation size allows significant simplification and various

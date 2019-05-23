@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for lib (miscellaneous stuff)
 #
-# IDENTIFICATION
-#    src/backend/lib/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/lib

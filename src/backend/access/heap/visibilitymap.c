@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/heap/visibilitymap.c
- *
  * INTERFACE ROUTINES
  *		visibilitymap_clear  - clear bits for one page in the visibility map
  *		visibilitymap_pin	 - pin a map page for setting a bit

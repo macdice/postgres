@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/table
 #
-# IDENTIFICATION
-#    src/backend/access/table/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/table

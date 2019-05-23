@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/utils/cache/syscache.c
- *
  * NOTES
  *	  These routines allow the parser/planner/executor to perform
  *	  rapid lookups on the contents of the system catalogs.

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for executor
 #
-# IDENTIFICATION
-#    src/backend/executor/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/executor

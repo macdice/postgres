@@ -5,9 +5,6 @@
  *
  * Portions Copyright (c) 2012-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		  contrib/postgres_fdw/postgres_fdw.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

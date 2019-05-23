@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/brin
 #
-# IDENTIFICATION
-#    src/backend/access/brin/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/brin

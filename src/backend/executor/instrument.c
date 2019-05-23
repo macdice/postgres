@@ -6,9 +6,6 @@
  *
  * Copyright (c) 2001-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/executor/instrument.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

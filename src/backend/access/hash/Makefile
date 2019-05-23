@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/hash
 #
-# IDENTIFICATION
-#    src/backend/access/hash/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/hash

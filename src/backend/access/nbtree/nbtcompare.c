@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/nbtree/nbtcompare.c
- *
  * NOTES
  *
  *	These functions are stored in pg_amproc.  For each operator class

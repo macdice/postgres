@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/common/tupdesc.c
- *
  * NOTES
  *	  some of the executor utility code such as "ExecTypeFromTL" should be
  *	  moved here.

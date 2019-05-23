@@ -4,9 +4,6 @@
  *
  * Copyright (c) 2010-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		contrib/auth_delay/auth_delay.c
- *
  * -------------------------------------------------------------------------
  */
 #include "postgres.h"

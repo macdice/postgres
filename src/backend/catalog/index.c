@@ -7,10 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/catalog/index.c
- *
- *
  * INTERFACE ROUTINES
  *		index_create()			- Create a cataloged index relation
  *		index_drop()			- Removes index relation from catalogs

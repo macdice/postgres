@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/common/ip.c
- *
  * This file and the IPV6 implementation were initially provided by
  * Nigel Kukard <nkukard@lbsd.net>, Linux Based Systems Design
  * http://www.lbsd.net.

@@ -3,9 +3,6 @@
 # Makefile
 #    Makefile for src/common/unicode
 #
-# IDENTIFICATION
-#    src/common/unicode/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/common/unicode

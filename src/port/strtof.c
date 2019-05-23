@@ -4,10 +4,6 @@
  *
  * Portions Copyright (c) 2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/port/strtof.c
- *
  *-------------------------------------------------------------------------
  */
 

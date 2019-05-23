@@ -15,9 +15,6 @@
  * any ParamListInfo associated with the query, buffer usage info, and
  * the actual plan to be passed down to the worker.
  *
- * IDENTIFICATION
- *	  src/backend/executor/execParallel.c
- *
  *-------------------------------------------------------------------------
  */
 

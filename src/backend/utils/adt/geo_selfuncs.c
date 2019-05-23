@@ -8,9 +8,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/utils/adt/geo_selfuncs.c
- *
  *	XXX These are totally bogus.  Perhaps someone will make them do
  *	something reasonable, someday.
  *

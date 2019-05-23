@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for storage/freespace
 #
-# IDENTIFICATION
-#    src/backend/storage/freespace/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/storage/freespace

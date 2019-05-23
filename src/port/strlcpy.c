@@ -6,9 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  *
  *
- * IDENTIFICATION
- *	  src/port/strlcpy.c
- *
  * This file was taken from OpenBSD and is used on platforms that don't
  * provide strlcpy().  The OpenBSD copyright terms follow.
  *-------------------------------------------------------------------------

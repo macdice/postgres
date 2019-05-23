@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for optimizer/prep
 #
-# IDENTIFICATION
-#    src/backend/optimizer/prep/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/optimizer/prep

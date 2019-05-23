@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for tcop
 #
-# IDENTIFICATION
-#    src/backend/tcop/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/tcop

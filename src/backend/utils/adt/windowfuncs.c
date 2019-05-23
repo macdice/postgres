@@ -5,10 +5,6 @@
  *
  * Portions Copyright (c) 2000-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/utils/adt/windowfuncs.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

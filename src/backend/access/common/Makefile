@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/common
 #
-# IDENTIFICATION
-#    src/backend/access/common/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/common

@@ -6,10 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *
- * IDENTIFICATION
- *	  src/backend/access/hash/hashfunc.c
- *
  * NOTES
  *	  These functions are stored in pg_amproc.  For each operator class
  *	  defined for hash indexes, they compute the hash value of the argument.

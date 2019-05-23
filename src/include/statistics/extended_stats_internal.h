@@ -6,9 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * IDENTIFICATION
- *	  src/include/statistics/extended_stats_internal.h
- *
  *-------------------------------------------------------------------------
  */
 #ifndef EXTENDED_STATS_INTERNAL_H

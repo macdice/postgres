@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/libpq/be-fsstubs.c
- *
  * NOTES
  *	  This should be moved to a more appropriate place.  It is here
  *	  for lack of a better place.

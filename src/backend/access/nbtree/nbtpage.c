@@ -8,9 +8,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/nbtree/nbtpage.c
- *
  *	NOTES
  *	   Postgres btree pages look like ordinary relation pages.  The opaque
  *	   data at high addresses includes pointers to left and right siblings

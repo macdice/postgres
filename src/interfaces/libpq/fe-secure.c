@@ -10,9 +10,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/interfaces/libpq/fe-secure.c
- *
  * NOTES
  *
  *	  We don't provide informational callbacks here (like

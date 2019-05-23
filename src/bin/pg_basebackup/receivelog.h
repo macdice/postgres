@@ -4,8 +4,6 @@
  *
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		  src/bin/pg_basebackup/receivelog.h
  *-------------------------------------------------------------------------
  */
 

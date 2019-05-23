@@ -2,9 +2,6 @@
 #
 # Makefile
 #    Makefile for the timezone names
-
-# IDENTIFICATION
-#    src/timezone/tznames/Makefile
 #
 #-------------------------------------------------------------------------
 

@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2011-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/port/win32setlocale.c
- *
  *
  * The setlocale() function in Windows is broken in two ways. First, it
  * has a problem with locale names that have a dot in the country name. For

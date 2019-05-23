@@ -5,9 +5,6 @@
  * Information recompiled by Kronuz on November 12, 2004
  * http://www.ismn-international.org
  *
- * IDENTIFICATION
- *	  contrib/isn/ISMN.h
- *
  * M-3452-4680-5 <=> (0)-3452-4680-5 <=> 0345246805 <=> 9790345246805 <=> 979-0-3452-4680-5
  *
  *			   (M counts as 3)

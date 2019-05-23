@@ -4,10 +4,6 @@
  *
  * Information recompiled by Kronuz on August 23, 2006
  * http://www.gs1.org/productssolutions/idkeys/support/prefix_list.html
- *
- * IDENTIFICATION
- *	  contrib/isn/EAN13.h
- *
  */
 
 /* where the digit set begins, and how many of them are in the table */

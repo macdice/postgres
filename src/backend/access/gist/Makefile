@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/gist
 #
-# IDENTIFICATION
-#    src/backend/access/gist/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/gist

@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2018-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *    src/include/lib/bloomfilter.h
- *
  *-------------------------------------------------------------------------
  */
 #ifndef BLOOMFILTER_H

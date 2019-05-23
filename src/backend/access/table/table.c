@@ -7,10 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/table/table.c
- *
- *
  * NOTES
  *	  This file contains table_ routines that implement access to tables (in
  *	  contrast to other relation types like indexes) that are independent of

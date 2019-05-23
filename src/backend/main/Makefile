@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for main
 #
-# IDENTIFICATION
-#    src/backend/main/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/main

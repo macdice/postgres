@@ -11,9 +11,6 @@
  *
  * Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/test/modules/test_shm_mq/worker.c
- *
  * -------------------------------------------------------------------------
  */
 

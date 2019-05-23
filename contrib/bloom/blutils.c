@@ -6,9 +6,6 @@
  * Portions Copyright (c) 2016-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1990-1993, Regents of the University of California
  *
- * IDENTIFICATION
- *	  contrib/bloom/blutils.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

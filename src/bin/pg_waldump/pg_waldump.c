@@ -4,8 +4,6 @@
  *
  * Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		  src/bin/pg_waldump/pg_waldump.c
  *-------------------------------------------------------------------------
  */
 

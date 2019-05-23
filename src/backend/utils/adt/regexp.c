@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/utils/adt/regexp.c
- *
  *		Alistair Crooks added the code for the regex caching
  *		agc - cached the regular expressions used - there's a good chance
  *		that we'll get a hit, so this saves a compile step for every

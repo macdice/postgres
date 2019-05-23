@@ -13,9 +13,6 @@
  *
  * Portions Copyright (c) 1998-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		  src/backend/utils/adt/mac8.c
- *
  *-------------------------------------------------------------------------
  */
 

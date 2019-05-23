@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/logical/message.c
- *
  * NOTES
  *
  * Generic logical messages allow XLOG logging of arbitrary binary blobs that

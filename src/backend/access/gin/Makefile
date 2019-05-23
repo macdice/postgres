@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/gin
 #
-# IDENTIFICATION
-#    src/backend/access/gin/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/gin

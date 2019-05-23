@@ -6,9 +6,6 @@
  *
  * Copyright (c) 2002-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/utils/fmgr/funcapi.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

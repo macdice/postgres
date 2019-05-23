@@ -16,9 +16,6 @@
  *
  * Copyright (c) 2017-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  contrib/amcheck/verify_nbtree.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

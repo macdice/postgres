@@ -14,9 +14,6 @@
  *	  consecutive).  That way, we just have to compare adjacent tuples to
  *	  locate group boundaries.
  *
- * IDENTIFICATION
- *	  src/backend/executor/nodeGroup.c
- *
  *-------------------------------------------------------------------------
  */
 

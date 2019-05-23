@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/index/genam.c
- *
  * NOTES
  *	  many of the old access method routines have been turned into
  *	  macros and moved to genam.h -cim 4/30/91

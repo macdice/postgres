@@ -16,9 +16,6 @@
  *
  * The copyright terms of Ohno's original version (the MIT license) follow.
  *
- * IDENTIFICATION
- *	  src/backend/lib/hyperloglog.c
- *
  *-------------------------------------------------------------------------
  */
 

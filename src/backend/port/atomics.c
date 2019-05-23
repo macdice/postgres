@@ -5,10 +5,6 @@
  *
  * Portions Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/port/atomics.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

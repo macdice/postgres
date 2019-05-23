@@ -6,9 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  *
  *
- * IDENTIFICATION
- *	  src/port/mkdtemp.c
- *
  * This code was taken from NetBSD to provide an implementation for platforms
  * that lack it.  (Among compatibly-licensed implementations, the OpenBSD
  * version better resists denial-of-service attacks.  However, it has a

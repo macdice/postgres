@@ -4,9 +4,6 @@
  *
  * Copyright (c) 2016-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/logical/launcher.c
- *
  * NOTES
  *	  This module contains the logical replication worker launcher which
  *	  uses the background worker infrastructure to start the logical

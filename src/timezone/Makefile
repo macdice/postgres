@@ -2,9 +2,6 @@
 #
 # Makefile
 #    Makefile for the timezone library
-
-# IDENTIFICATION
-#    src/timezone/Makefile
 #
 #-------------------------------------------------------------------------
 

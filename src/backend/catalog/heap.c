@@ -7,10 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/catalog/heap.c
- *
- *
  * INTERFACE ROUTINES
  *		heap_create()			- Create an uncataloged heap relation
  *		heap_create_with_catalog() - Create a cataloged relation

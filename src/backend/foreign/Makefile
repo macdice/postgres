@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for foreign
 #
-# IDENTIFICATION
-#    src/backend/foreign/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/foreign

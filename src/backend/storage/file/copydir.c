@@ -10,9 +10,6 @@
  *	it requires a Window handle which prevents it from working when invoked
  *	as a service.
  *
- * IDENTIFICATION
- *	  src/backend/storage/file/copydir.c
- *
  *-------------------------------------------------------------------------
  */
 

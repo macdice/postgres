@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/nodes/outfuncs.c
- *
  * NOTES
  *	  Every node type that can appear in stored rules' parsetrees *must*
  *	  have an output function defined here (as well as an input function

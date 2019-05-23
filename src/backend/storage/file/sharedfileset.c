@@ -6,9 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * IDENTIFICATION
- *	  src/backend/storage/file/sharedfileset.c
- *
  * SharedFileSets provide a temporary namespace (think directory) so that
  * files can be discovered by name, and a shared ownership semantics so that
  * shared files survive until the last user detaches.

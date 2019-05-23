@@ -7,10 +7,6 @@
  * Copyright (c) 2000-2019, PostgreSQL Global Development Group
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/heap/tuptoaster.c
- *
- *
  * INTERFACE ROUTINES
  *		toast_insert_or_update -
  *			Try to make a given tuple fit into one page by compressing

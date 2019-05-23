@@ -6,9 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * IDENTIFICATION
- *		src/backend/access/transam/twophase.c
- *
  * NOTES
  *		Each global transaction is associated with a global transaction
  *		identifier (GID). The client assigns a GID to a postgres

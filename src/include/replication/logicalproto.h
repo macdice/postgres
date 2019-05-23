@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2015-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/include/replication/logicalproto.h
- *
  *-------------------------------------------------------------------------
  */
 #ifndef LOGICAL_PROTO_H

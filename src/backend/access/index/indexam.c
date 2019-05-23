@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/index/indexam.c
- *
  * INTERFACE ROUTINES
  *		index_open		- open an index relation by relation OID
  *		index_close		- close an index relation

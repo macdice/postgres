@@ -7,10 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/heap/heapam.c
- *
- *
  * INTERFACE ROUTINES
  *		heap_beginscan	- begin relation scan
  *		heap_rescan		- restart a relation scan

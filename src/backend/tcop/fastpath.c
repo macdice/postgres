@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/tcop/fastpath.c
- *
  * NOTES
  *	  This cruft is the server side of PQfn.
  *

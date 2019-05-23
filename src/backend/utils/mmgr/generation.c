@@ -8,9 +8,6 @@
  *
  * Portions Copyright (c) 2017-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/utils/mmgr/generation.c
- *
  *
  *	This memory context is based on the assumption that the chunks are freed
  *	roughly in the same order as they were allocated (FIFO), or in groups with

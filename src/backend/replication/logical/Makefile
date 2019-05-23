@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for src/backend/replication/logical
 #
-# IDENTIFICATION
-#    src/backend/replication/logical/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/replication/logical

@@ -8,9 +8,6 @@
  * from the defaults (obtained from PQconndefaults).
  *
  * Portions Copyright (c) 2012-2019, PostgreSQL Global Development Group
- *
- * IDENTIFICATION
- *		src/interfaces/libpq/test/uri-regress.c
  */
 
 #include "postgres_fe.h"

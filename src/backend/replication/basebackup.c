@@ -5,9 +5,6 @@
  *
  * Portions Copyright (c) 2010-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/basebackup.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

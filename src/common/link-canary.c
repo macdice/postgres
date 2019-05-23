@@ -4,9 +4,6 @@
  *
  * Copyright (c) 2018-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/common/link-canary.c
- *
  *-------------------------------------------------------------------------
  */
 #include "c.h"

@@ -3,9 +3,6 @@
  *		Functions to investigate the content of HASH indexes
  *
  * Copyright (c) 2017-2019, PostgreSQL Global Development Group
- *
- * IDENTIFICATION
- *		contrib/pageinspect/hashfuncs.c
  */
 
 #include "postgres.h"

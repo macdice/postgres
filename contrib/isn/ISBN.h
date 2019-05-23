@@ -6,9 +6,6 @@
  * http://www.isbn-international.org/
  * http://www.isbn.org/
  *
- * IDENTIFICATION
- *	  contrib/isn/ISBN.h
- *
  * 0-393-04002-X => 039304002(X) <=> 039304002 <=> (978)039304002 <=> 978039304002(9) <=> 978-0-393-04002-9
  *
  *

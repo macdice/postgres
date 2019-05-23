@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for storage/smgr
 #
-# IDENTIFICATION
-#    src/backend/storage/smgr/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/storage/smgr

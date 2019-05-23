@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/time
 #
-# IDENTIFICATION
-#    src/backend/utils/time/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/time

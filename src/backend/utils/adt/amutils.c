@@ -5,10 +5,6 @@
  *
  * Copyright (c) 2016-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/utils/adt/amutils.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

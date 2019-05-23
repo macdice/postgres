@@ -65,9 +65,6 @@
  *
  * Portions Copyright (c) 2010-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/syncrep.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

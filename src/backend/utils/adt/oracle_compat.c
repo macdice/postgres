@@ -7,10 +7,6 @@
  *	Author: Edmund Mergl <E.Mergl@bawue.de>
  *	Multibyte enhancement: Tatsuo Ishii <ishii@postgresql.org>
  *
- *
- * IDENTIFICATION
- *	src/backend/utils/adt/oracle_compat.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

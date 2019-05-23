@@ -7,9 +7,6 @@
  * Copyright (c) 2012-2019, PostgreSQL Global Development Group
  *
  *
- * IDENTIFICATION
- *	  src/backend/replication/slot.c
- *
  * NOTES
  *
  * Replication slots are used to keep state about replication streams

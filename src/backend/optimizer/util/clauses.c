@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/optimizer/util/clauses.c
- *
  * HISTORY
  *	  AUTHOR			DATE			MAJOR EVENT
  *	  Andrew Yu			Nov 3, 1994		clause.c and clauses.c combined

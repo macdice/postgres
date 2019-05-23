@@ -5,9 +5,6 @@
  *	 considerably more complex.
  *
  * Copyright (c) 1996-2019, PostgreSQL Global Development Group
- *
- * IDENTIFICATION
- *	  src/backend/postmaster/fork_process.c
  */
 #include "postgres.h"
 #include "postmaster/fork_process.h"

@@ -8,9 +8,6 @@
  *	This is a replacement version of kill for Win32 which sends
  *	signals that the backend can recognize.
  *
- * IDENTIFICATION
- *	  src/port/kill.c
- *
  *-------------------------------------------------------------------------
  */
 

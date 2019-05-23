@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/spgist
 #
-# IDENTIFICATION
-#    src/backend/access/spgist/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/spgist

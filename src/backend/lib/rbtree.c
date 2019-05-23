@@ -19,9 +19,6 @@
  *
  * Copyright (c) 2009-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/lib/rbtree.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

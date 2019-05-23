@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2008-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  contrib/auto_explain/auto_explain.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/test/modules/test_integerset/test_integerset.c
- *
  * -------------------------------------------------------------------------
  */
 #include "postgres.h"

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/fmgr
 #
-# IDENTIFICATION
-#    src/backend/utils/fmgr/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/fmgr

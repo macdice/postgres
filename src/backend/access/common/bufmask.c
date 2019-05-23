@@ -9,9 +9,6 @@
  *
  * Contains common routines required for masking a page.
  *
- * IDENTIFICATION
- *	  src/backend/access/common/bufmask.c
- *
  *-------------------------------------------------------------------------
  */
 

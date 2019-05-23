@@ -3,9 +3,6 @@
 /*
  * This file is in the public domain, so clarified as of
  * 1996-06-05 by Arthur David Olson.
- *
- * IDENTIFICATION
- *	  src/timezone/localtime.c
  */
 
 /*

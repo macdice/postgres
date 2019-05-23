@@ -18,9 +18,6 @@
  *
  * Copyright (c) 2001-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	src/backend/utils/adt/levenshtein.c
- *
  *-------------------------------------------------------------------------
  */
 #define MAX_LEVENSHTEIN_STRLEN		255

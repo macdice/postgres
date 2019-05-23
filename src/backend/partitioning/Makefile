@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for backend/partitioning
 #
-# IDENTIFICATION
-#    src/backend/partitioning/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/partitioning

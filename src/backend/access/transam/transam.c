@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/transam/transam.c
- *
  * NOTES
  *	  This file contains the high level access-method interface to the
  *	  transaction system.

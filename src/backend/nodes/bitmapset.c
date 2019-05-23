@@ -13,9 +13,6 @@
  *
  * Copyright (c) 2003-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/nodes/bitmapset.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

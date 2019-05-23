@@ -4,9 +4,6 @@
  *
  * Copyright (c) 2012-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/logical/logical.c
- *
  * NOTES
  *	  This file coordinates interaction between the various modules that
  *	  together provide logical decoding, primarily by providing so

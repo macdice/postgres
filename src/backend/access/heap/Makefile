@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/heap
 #
-# IDENTIFICATION
-#    src/backend/access/heap/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/heap

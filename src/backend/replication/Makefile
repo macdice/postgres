@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for src/backend/replication
 #
-# IDENTIFICATION
-#    src/backend/replication/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/replication

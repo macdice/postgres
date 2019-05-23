@@ -19,9 +19,6 @@
 #	libpgcommon_srv.a - contains object files without FRONTEND defined,
 #		for use only by the backend
 #
-# IDENTIFICATION
-#    src/common/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/common

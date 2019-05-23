@@ -22,9 +22,6 @@
  * return the results.  Therefore, a plan used with a single-copy Gather
  * node need not be parallel-aware.
  *
- * IDENTIFICATION
- *	  src/backend/executor/nodeGather.c
- *
  *-------------------------------------------------------------------------
  */
 

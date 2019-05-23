@@ -33,9 +33,6 @@
  * Based on the UCB version with the copyright notice appearing above.
  *
  * This is ANSIish only when "multibyte character == plain character".
- *
- * IDENTIFICATION
- *	  src/timezone/strftime.c
  */
 
 #include "postgres.h"

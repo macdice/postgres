@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for libpq subsystem (backend half of libpq interface)
 #
-# IDENTIFICATION
-#    src/backend/libpq/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/libpq

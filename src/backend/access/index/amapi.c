@@ -5,10 +5,6 @@
  *
  * Copyright (c) 2015-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/access/index/amapi.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

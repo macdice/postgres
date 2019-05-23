@@ -5,9 +5,6 @@
  * Information recompiled by Kronuz on November 12, 2004
  * http://www.issn.org/
  *
- * IDENTIFICATION
- *	  contrib/isn/ISSN.h
- *
  * 1144-875X <=> 1144875(X) <=> 1144875 <=> (977)1144875 <=> 9771144875(00) <=> 977114487500(7) <=> 977-1144-875-00-7
  *
  *

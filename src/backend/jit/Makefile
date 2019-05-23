@@ -6,9 +6,6 @@
 # Note that the LLVM JIT provider is recursed into by src/Makefile,
 # not from here.
 #
-# IDENTIFICATION
-#    src/backend/jit/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/jit

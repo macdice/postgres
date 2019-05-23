@@ -3,11 +3,6 @@
  *	  PostgreSQL type definitions for ISNs (ISBN, ISMN, ISSN, EAN13, UPC)
  *
  * No information available for UPC prefixes
- *
- *
- * IDENTIFICATION
- *	  contrib/isn/UPC.h
- *
  */
 
 /* where the digit set begins, and how many of them are in the table */

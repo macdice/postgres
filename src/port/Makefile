@@ -23,9 +23,6 @@
 # files that are conditionally needed as determined by configure's probing.
 # OBJS adds additional object files that are always compiled.
 #
-# IDENTIFICATION
-#    src/port/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/port

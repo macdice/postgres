@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/common/relation.c
- *
  * NOTES
  *	  This file contains relation_ routines that implement access to relations
  *	  (tables, indexes, etc). Support that's specific to subtypes of relations

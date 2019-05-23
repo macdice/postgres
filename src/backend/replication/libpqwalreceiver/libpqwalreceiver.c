@@ -8,10 +8,6 @@
  *
  * Portions Copyright (c) 2010-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/replication/libpqwalreceiver/libpqwalreceiver.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

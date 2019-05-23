@@ -17,9 +17,6 @@
  *
  * Copyright (c) 2017-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/lib/knapsack.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

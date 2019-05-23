@@ -6,9 +6,6 @@
 # Note that this file is recursed into from src/Makefile, not by the
 # parent directory..
 #
-# IDENTIFICATION
-#    src/backend/jit/llvm/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/jit/llvm

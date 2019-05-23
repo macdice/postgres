@@ -4,9 +4,6 @@
  *
  * Copyright (c) 2012-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/logical/tablesync.c
- *
  * NOTES
  *	  This file contains code for initial table data synchronization for
  *	  logical replication.

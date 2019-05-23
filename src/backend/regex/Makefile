@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for backend/regex
 #
-# IDENTIFICATION
-#    src/backend/regex/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/regex

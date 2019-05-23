@@ -8,9 +8,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/port/pqsignal.c
- *
  *	We now assume that all Unix-oid systems have POSIX sigaction(2)
  *	with support for restartable signals (SA_RESTART).  We used to also
  *	support BSD-style signal(2), but there really shouldn't be anything

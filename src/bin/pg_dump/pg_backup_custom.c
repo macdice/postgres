@@ -17,10 +17,6 @@
  *	and any liability will be limited to the time taken to fix any
  *	related bug.
  *
- *
- * IDENTIFICATION
- *		src/bin/pg_dump/pg_backup_custom.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

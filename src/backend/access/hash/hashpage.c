@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/hash/hashpage.c
- *
  * NOTES
  *	  Postgres hash pages look like ordinary relation pages.  The opaque
  *	  data at high addresses includes information about the page including

@@ -4,9 +4,6 @@
  *
  * Portions Copyright (c) 2018-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/common/d2s_intrinsics.h
- *
  * This is a modification of code taken from github.com/ulfjack/ryu under the
  * terms of the Boost license (not the Apache license). The original copyright
  * notice follows:

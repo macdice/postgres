@@ -77,9 +77,6 @@
  *
  * [1] https://en.wikipedia.org/wiki/Barrier_(computer_science)
  *
- * IDENTIFICATION
- *	  src/backend/storage/ipc/barrier.c
- *
  *-------------------------------------------------------------------------
  */
 

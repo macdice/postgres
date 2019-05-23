@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/mmgr
 #
-# IDENTIFICATION
-#    src/backend/utils/mmgr/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/mmgr

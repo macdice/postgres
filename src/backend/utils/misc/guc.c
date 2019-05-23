@@ -9,9 +9,6 @@
  * Copyright (c) 2000-2019, PostgreSQL Global Development Group
  * Written by Peter Eisentraut <peter_e@gmx.net>.
  *
- * IDENTIFICATION
- *	  src/backend/utils/misc/guc.c
- *
  *--------------------------------------------------------------------
  */
 #include "postgres.h"

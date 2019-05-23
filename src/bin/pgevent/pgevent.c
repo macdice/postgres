@@ -4,10 +4,6 @@
  *		Defines the entry point for pgevent dll.
  *		The DLL defines event source for backend
  *
- *
- * IDENTIFICATION
- *	  src/bin/pgevent/pgevent.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

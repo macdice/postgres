@@ -9,9 +9,6 @@
  *	This includes replacement versions of functions that work on
  *	Win32 (NT4 and newer).
  *
- * IDENTIFICATION
- *	  src/port/dirmod.c
- *
  *-------------------------------------------------------------------------
  */
 

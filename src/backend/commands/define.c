@@ -8,9 +8,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/commands/define.c
- *
  * DESCRIPTION
  *	  The "DefineFoo" routines take the parse tree and pick out the
  *	  appropriate arguments/flags, passing the results to the

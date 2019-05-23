@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for storage/file
 #
-# IDENTIFICATION
-#    src/backend/storage/file/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/storage/file

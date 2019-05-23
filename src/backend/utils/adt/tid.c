@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/utils/adt/tid.c
- *
  * NOTES
  *	  input routine largely stolen from boxin().
  *

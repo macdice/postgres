@@ -54,9 +54,6 @@
  * All resources which should cleared by NIFinishBuild() is initialized using
  * tmpalloc() and tmpalloc0().
  *
- * IDENTIFICATION
- *	  src/backend/tsearch/spell.c
- *
  *-------------------------------------------------------------------------
  */
 

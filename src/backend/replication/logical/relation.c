@@ -4,9 +4,6 @@
  *
  * Copyright (c) 2016-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/replication/logical/relation.c
- *
  * NOTES
  *	  This file contains helper functions for logical replication relation
  *	  mapping cache.

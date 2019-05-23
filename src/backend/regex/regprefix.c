@@ -7,9 +7,6 @@
  * Portions Copyright (c) 2012-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1998, 1999 Henry Spencer
  *
- * IDENTIFICATION
- *	  src/backend/regex/regprefix.c
- *
  *-------------------------------------------------------------------------
  */
 

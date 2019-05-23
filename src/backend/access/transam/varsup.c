@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2000-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/access/transam/varsup.c
- *
  *-------------------------------------------------------------------------
  */
 

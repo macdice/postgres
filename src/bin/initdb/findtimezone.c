@@ -5,9 +5,6 @@
  *
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/bin/initdb/findtimezone.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

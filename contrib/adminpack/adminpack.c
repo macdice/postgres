@@ -7,9 +7,6 @@
  *
  * Author: Andreas Pflug <pgadmin@pse-consulting.de>
  *
- * IDENTIFICATION
- *	  contrib/adminpack/adminpack.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

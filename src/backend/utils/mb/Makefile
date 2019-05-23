@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/mb
 #
-# IDENTIFICATION
-#    src/backend/utils/mb/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/mb

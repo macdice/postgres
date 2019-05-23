@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/catalog/storage.c
- *
  * NOTES
  *	  Some of this code used to be in storage/smgr/smgr.c, and the
  *	  function names still reflect that.

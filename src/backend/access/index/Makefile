@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/index
 #
-# IDENTIFICATION
-#    src/backend/access/index/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/index

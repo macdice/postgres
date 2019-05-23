@@ -5,10 +5,6 @@
  *
  * Copyright (c) 2006-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/catalog/pg_enum.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

@@ -3,10 +3,6 @@
  *		Program to test Unicode normalization functions.
  *
  * Portions Copyright (c) 2017-2019, PostgreSQL Global Development Group
- *
- * IDENTIFICATION
- *	  src/common/unicode/norm_test.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

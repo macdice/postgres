@@ -7,9 +7,6 @@
  *
  * Author: Laurenz Albe <laurenz.albe@wien.gv.at>
  *
- * IDENTIFICATION
- *	  contrib/passwordcheck/passwordcheck.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

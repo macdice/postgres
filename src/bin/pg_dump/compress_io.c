@@ -46,9 +46,6 @@
  *	.gz suffix to the filename if so. This allows you to easily handle both
  *	compressed and uncompressed files.
  *
- * IDENTIFICATION
- *	   src/bin/pg_dump/compress_io.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

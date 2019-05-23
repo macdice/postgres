@@ -12,8 +12,6 @@
  *
  * Portions Copyright (c) 2016-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/include/storage/proclist.h
  *-------------------------------------------------------------------------
  */
 #ifndef PROCLIST_H

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for backend/nodes
 #
-# IDENTIFICATION
-#    src/backend/nodes/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/nodes

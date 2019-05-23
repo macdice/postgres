@@ -5,10 +5,6 @@
  *
  * Copyright (c) 2014-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/backend/utils/adt/jsonb_util.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

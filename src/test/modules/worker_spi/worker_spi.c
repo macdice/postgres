@@ -15,9 +15,6 @@
  *
  * Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/test/modules/worker_spi/worker_spi.c
- *
  * -------------------------------------------------------------------------
  */
 #include "postgres.h"

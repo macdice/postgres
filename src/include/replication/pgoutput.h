@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2015-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		pgoutput.h
- *
  *-------------------------------------------------------------------------
  */
 #ifndef PGOUTPUT_H

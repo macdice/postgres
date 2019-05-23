@@ -6,9 +6,6 @@
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * IDENTIFICATION
- *	  src/backend/rewrite/rewriteHandler.c
- *
  * NOTES
  *	  Some of the terms used in this file are of historic nature: "retrieve"
  *	  was the PostQUEL keyword for what today is SELECT. "RIR" stands for

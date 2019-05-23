@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/access/hash/hashovfl.c
- *
  * NOTES
  *	  Overflow pages look like ordinary relation pages.
  *

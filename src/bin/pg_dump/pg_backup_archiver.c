@@ -13,10 +13,6 @@
  *	The author is not responsible for loss or damages that may
  *	result from its use.
  *
- *
- * IDENTIFICATION
- *		src/bin/pg_dump/pg_backup_archiver.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"

@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for storage/large_object
 #
-# IDENTIFICATION
-#    src/backend/storage/large_object/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/storage/large_object

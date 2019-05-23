@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for utils/error
 #
-# IDENTIFICATION
-#    src/backend/utils/error/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/utils/error

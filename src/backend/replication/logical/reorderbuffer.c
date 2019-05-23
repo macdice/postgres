@@ -7,9 +7,6 @@
  * Copyright (c) 2012-2019, PostgreSQL Global Development Group
  *
  *
- * IDENTIFICATION
- *	  src/backend/replication/reorderbuffer.c
- *
  * NOTES
  *	  This module gets handed individual pieces of transactions in the order
  *	  they are written to the WAL and is responsible to reassemble them into

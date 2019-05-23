@@ -11,9 +11,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/storage/lmgr/deadlock.c
- *
  *	Interface:
  *
  *	DeadLockCheck()

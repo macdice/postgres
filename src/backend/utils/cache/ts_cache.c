@@ -19,9 +19,6 @@
  *
  * Copyright (c) 2006-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/utils/cache/ts_cache.c
- *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"

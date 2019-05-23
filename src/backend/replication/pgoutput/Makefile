@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for src/backend/replication/pgoutput
 #
-# IDENTIFICATION
-#    src/backend/replication/pgoutput
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/replication/pgoutput

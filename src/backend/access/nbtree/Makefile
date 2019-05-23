@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for access/nbtree
 #
-# IDENTIFICATION
-#    src/backend/access/nbtree/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/access/nbtree

@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/catalog/pg_operator.c
- *
  * NOTES
  *	  these routines moved here from commands/define.c and somewhat cleaned up.
  *

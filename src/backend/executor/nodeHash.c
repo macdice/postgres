@@ -7,9 +7,6 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
- * IDENTIFICATION
- *	  src/backend/executor/nodeHash.c
- *
  * See note on parallelism in nodeHashjoin.c.
  *
  *-------------------------------------------------------------------------

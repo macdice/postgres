@@ -6,10 +6,6 @@
  *
  * Copyright (c) 1996-2019, PostgreSQL Global Development Group
  *
- *
- * IDENTIFICATION
- *	  src/port/chklocale.c
- *
  *-------------------------------------------------------------------------
  */
 

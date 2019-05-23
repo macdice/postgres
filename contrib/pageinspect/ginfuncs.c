@@ -3,9 +3,6 @@
  *		Functions to investigate the content of GIN indexes
  *
  * Copyright (c) 2014-2019, PostgreSQL Global Development Group
- *
- * IDENTIFICATION
- *		contrib/pageinspect/ginfuncs.c
  */
 #include "postgres.h"
 

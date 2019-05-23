@@ -3,9 +3,6 @@
 # Makefile--
 #    Makefile for backend/commands
 #
-# IDENTIFICATION
-#    src/backend/commands/Makefile
-#
 #-------------------------------------------------------------------------
 
 subdir = src/backend/commands

@@ -55,9 +55,6 @@
  *
  * Copyright (c) 2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	src/backend/utils/adt/jsonpath.c
- *
  *-------------------------------------------------------------------------
  */
 

@@ -5,9 +5,6 @@
  *
  * Portions Copyright (c) 2013-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *		src/bin/pg_waldump/compat.c
- *
  * This file contains client-side implementations for various backend
  * functions that the rm_desc functions in *desc.c files rely on.
  *

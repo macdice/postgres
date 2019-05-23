@@ -5,9 +5,6 @@
  *
  * Copyright (c) 2016-2019, PostgreSQL Global Development Group
  *
- * IDENTIFICATION
- *	  src/backend/jit/llvm/llvmjit.c
- *
  *-------------------------------------------------------------------------
  */
 
