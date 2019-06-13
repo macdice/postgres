@@ -13,6 +13,7 @@
 #ifndef UNDOACCESS_H
 #define UNDOACCESS_H
 
+#include "access/transam.h"
 #include "access/undolog.h"
 #include "access/undorecord.h"
 #include "access/xlogdefs.h"
@@ -93,6 +94,9 @@ typedef struct UndoRecordInsertContext
 	int			nxact_urec_info;	/* Number of previous xact info. */
 } UndoRecordInsertContext;
 
+extern void UndoRecordPrepareApplyProgress(UndoRecordInsertContext *context,
+					UndoRecPtr urecptr, BlockNumber progress);
+extern void UndoRecordUpdateTransInfo(UndoRecordInsertContext *context, int idx);
 extern void BeginUndoRecordInsert(UndoRecordInsertContext *context,
 								  UndoLogCategory category,
 								  int nprepared,
