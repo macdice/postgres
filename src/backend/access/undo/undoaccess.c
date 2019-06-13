@@ -777,7 +777,10 @@ InsertPreparedUndo(UndoRecordInsertContext *context)
 				 * block header.
 				 */
 				if (starting_byte == UndoLogBlockHeaderSize)
-					PageInit(page, BLCKSZ, 0);
+					UndoPageInit(page, BLCKSZ, prepared_undo->urec->uur_info,
+								 ucontext.already_processed,
+								 prepared_undo->urec->uur_tuple.len,
+								 prepared_undo->urec->uur_payload.len);
 
 				/*
 				 * Try to insert the record into the current page. If it
