@@ -847,6 +847,13 @@ InsertPreparedUndo(UndoRecordInsertContext *context)
 			Assert(bufidx < MAX_BUFFER_PER_UNDO);
 		} while (true);
 
+		/*
+		 * Set the current undo location for a transaction.  This is required
+		 * to perform rollback during abort of transaction.
+		 */
+		SetCurrentUndoLocation(prepared_undo->urp,
+							   context->alloc_context.persistence);
+
 		/* Advance the insert pointer past this record. */
 		UndoLogAdvanceFinal(prepared_undo->urp, prepared_undo->size);
 	}
