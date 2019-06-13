@@ -29,7 +29,7 @@ static bool ReadUndoBytes(char *destptr, int readlen,
  /*
   * Compute the header size of the undo record.
   */
-static inline Size
+Size
 UndoRecordHeaderSize(uint8 uur_info)
 {
 	Size	size;
