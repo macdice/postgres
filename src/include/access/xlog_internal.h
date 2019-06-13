@@ -19,10 +19,14 @@
 #ifndef XLOG_INTERNAL_H
 #define XLOG_INTERNAL_H
 
+#include "access/transam.h"
+#include "access/undoaccess.h"
+#include "access/undorecord.h"
 #include "access/xlogdefs.h"
 #include "access/xlogreader.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
+#include "nodes/pg_list.h"
 #include "pgtime.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
@@ -295,9 +299,11 @@ typedef struct RmgrData
 	void		(*rm_startup) (void);
 	void		(*rm_cleanup) (void);
 	void		(*rm_mask) (char *pagedata, BlockNumber blkno);
+	void		(*rm_undo) (int nrecords, UndoRecInfo *records);
+	void		(*rm_undo_desc) (StringInfo buf, UnpackedUndoRecord *record);
 } RmgrData;
 
-extern const RmgrData RmgrTable[];
+extern PGDLLIMPORT const RmgrData RmgrTable[];
 
 /*
  * Exported to support xlog switching from checkpointer
