@@ -92,7 +92,7 @@ typedef struct UndoRecordInsertContext
 } UndoRecordInsertContext;
 
 extern void BeginUndoRecordInsert(UndoRecordInsertContext *context,
-					  UndoPersistence persistence,
+					  UndoLogCategory category,
 					  int nprepared,
 					  XLogReaderState *xlog_record);
 extern UndoRecPtr PrepareUndoInsert(UndoRecordInsertContext *context,
@@ -113,6 +113,6 @@ extern UndoRecInfo *UndoBulkFetchRecord(UndoRecPtr *from_urecptr,
 					bool one_page);
 extern void UndoRecordRelease(UnpackedUndoRecord *urec);
 extern UndoRecPtr UndoGetPrevUndoRecptr(UndoRecPtr urp, Buffer buffer,
-					  UndoPersistence upersistence);
+					  UndoLogCategory category);
 
 #endif							/* UNDOINSERT_H */

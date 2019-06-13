@@ -60,7 +60,7 @@
 /* Prototypes for static functions. */
 static UnpackedUndoRecord *UndoGetOneRecord(UnpackedUndoRecord *urec,
 				 UndoRecPtr urp, RelFileNode rnode,
-				 UndoPersistence persistence,
+											UndoLogCategory category,
 				 Buffer *prevbuf);
 static int UndoRecordPrepareTransInfo(UndoRecordInsertContext *context,
 						   UndoRecPtr xact_urp, int size, int offset);
@@ -72,7 +72,7 @@ static int UndoGetBufferSlot(UndoRecordInsertContext *context,
 				  RelFileNode rnode, BlockNumber blk,
 				  ReadBufferMode rbm);
 static uint16 UndoGetPrevRecordLen(UndoRecPtr urp, Buffer input_buffer,
-					 UndoPersistence upersistence);
+								   UndoLogCategory category);
 
 /*
  * Structure to hold the prepared undo information.
@@ -201,7 +201,7 @@ UndoRecordPrepareUpdateNext(UndoRecordInsertContext *context,
 	 * Temporary undo logs are discarded on transaction commit so we don't
 	 * need to do anything.
 	 */
-	if (UndoRecPtrGetPersistence(xact_urp) == UNDO_TEMP)
+	if (UndoRecPtrGetCategory(xact_urp) == UNDO_TEMP)
 		return;
 
 	slot = UndoLogGetSlot(UndoRecPtrGetLogNo(xact_urp), false);
@@ -212,7 +212,7 @@ UndoRecordPrepareUpdateNext(UndoRecordInsertContext *context,
 	 */
 	LWLockAcquire(&slot->discard_update_lock, LW_SHARED);
 	/* Check if it is already discarded. */
-	if (UndoLogIsDiscarded(xact_urp))
+	if (UndoRecPtrIsDiscarded(xact_urp))
 	{
 		/* Release lock and return. */
 		LWLockRelease(&slot->discard_update_lock);
@@ -332,7 +332,7 @@ UndoGetBufferSlot(UndoRecordInsertContext *context,
 	Buffer		buffer;
 	XLogRedoAction action = BLK_NEEDS_REDO;
 	PreparedUndoBuffer *prepared_buffer;
-	UndoPersistence persistence = context->alloc_context.persistence;
+	UndoLogCategory category = context->alloc_context.category;
 
 	/* Don't do anything, if we already have a buffer pinned for the block. */
 	for (i = 0; i < context->nprepared_undo_buffer; i++)
@@ -378,7 +378,7 @@ UndoGetBufferSlot(UndoRecordInsertContext *context,
 										   blk,
 										   rbm,
 										   NULL,
-										   RelPersistenceForUndoPersistence(persistence));
+										   RelPersistenceForUndoLogCategory(category));
 
 		/* Lock the buffer */
 		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
@@ -416,7 +416,7 @@ UndoGetBufferSlot(UndoRecordInsertContext *context,
  */
 void
 BeginUndoRecordInsert(UndoRecordInsertContext *context,
-					  UndoPersistence persistence,
+					  UndoLogCategory category,
 					  int nprepared,
 					  XLogReaderState *xlog_record)
 {
@@ -427,7 +427,7 @@ BeginUndoRecordInsert(UndoRecordInsertContext *context,
 		elog(ERROR, "at least one undo record should be prepared");
 
 	/* Initialize undo log context. */
-	UndoLogBeginInsert(&context->alloc_context, persistence, xlog_record);
+	UndoLogBeginInsert(&context->alloc_context, category, xlog_record);
 
 	/* Initialize undo insert context. */
 	context->max_prepared_undo = nprepared;
@@ -519,9 +519,11 @@ PrepareUndoInsert(UndoRecordInsertContext *context,
 	{
 		/*
 		 * We'll figure out where the space needs to be allocated by
-		 * inspecting the xlog_record.
+		 * inspecting the xlog_record.  We don't expect to see temporary or
+		 * unlogged undo data here.
 		 */
-		Assert(context->alloc_context.persistence == UNDO_PERMANENT);
+		Assert(context->alloc_context.category != UNDO_TEMP &&
+			   context->alloc_context.category != UNDO_UNLOGGED);
 		urecptr = UndoLogAllocateInRecovery(&context->alloc_context,
 											XidFromFullTransactionId(txid),
 											size,
@@ -556,7 +558,7 @@ PrepareUndoInsert(UndoRecordInsertContext *context,
 
 			/* Fetch length of the last undo record of the previous log. */
 			prevlen = UndoGetPrevRecordLen(prevlog_insert_urp, InvalidBuffer,
-										   context->alloc_context.persistence);
+										   context->alloc_context.category);
 
 			/*
 			 * If the undo log got switched during the transaction then for
@@ -838,7 +840,7 @@ FinishUndoRecordInsert(UndoRecordInsertContext *context)
  */
 static UnpackedUndoRecord *
 UndoGetOneRecord(UnpackedUndoRecord *urec, UndoRecPtr urp, RelFileNode rnode,
-				 UndoPersistence persistence, Buffer *curbuf)
+				 UndoLogCategory category, Buffer *curbuf)
 {
 	Page		page;
 	int			starting_byte = UndoRecPtrGetPageOffset(urp);
@@ -859,7 +861,7 @@ UndoGetOneRecord(UnpackedUndoRecord *urec, UndoRecPtr urp, RelFileNode rnode,
 			buffer = ReadBufferWithoutRelcache(SMGR_UNDO,
 											   rnode, UndoLogForkNum, cur_blk,
 											   RBM_NORMAL, NULL,
-											   RelPersistenceForUndoPersistence(persistence));
+											   RelPersistenceForUndoLogCategory(category));
 
 			/*
 			 * Remember the first buffer where this undo started as next undo
@@ -1025,7 +1027,7 @@ UndoFetchRecord(UndoRecPtr urp, BlockNumber blkno, OffsetNumber offset,
 		 */
 		if (InHotStandby)
 		{
-			if (UndoLogIsDiscarded(urp))
+			if (UndoRecPtrIsDiscarded(urp))
 			{
 				urp = InvalidUndoRecPtr;
 				break;
@@ -1048,7 +1050,7 @@ UndoFetchRecord(UndoRecPtr urp, BlockNumber blkno, OffsetNumber offset,
 		}
 
 		/* Fetch the current undo record. */
-		UndoGetOneRecord(urec, urp, rnode, slot->meta.persistence, &buffer);
+		UndoGetOneRecord(urec, urp, rnode, slot->meta.category, &buffer);
 
 		/* Release the discard lock after fetching the record. */
 		if (!InHotStandby)
@@ -1097,7 +1099,7 @@ UndoFetchRecord(UndoRecPtr urp, BlockNumber blkno, OffsetNumber offset,
 static void
 PrefetchUndoPages(RelFileNode rnode, int prefetch_target, int *prefetch_pages,
 				  BlockNumber to_blkno, BlockNumber from_blkno,
-				  char persistence)
+				  UndoLogCategory category)
 {
 	int			nprefetch;
 	BlockNumber startblock;
@@ -1121,7 +1123,7 @@ PrefetchUndoPages(RelFileNode rnode, int prefetch_target, int *prefetch_pages,
 	{
 		PrefetchBufferWithoutRelcache(SMGR_UNDO, rnode, MAIN_FORKNUM,
 									  startblock++,
-									  RelPersistenceForUndoPersistence(persistence));
+									  category == UNDO_TEMP);
 		(*prefetch_pages)++;
 	}
 }
@@ -1192,7 +1194,7 @@ UndoBulkFetchRecord(UndoRecPtr *from_urecptr, UndoRecPtr to_urecptr,
 	{
 		BlockNumber from_blkno;
 		UndoLogSlot *slot;
-		UndoPersistence persistence;
+		UndoLogCategory category;
 		int			size;
 		int			logno;
 
@@ -1204,7 +1206,7 @@ UndoBulkFetchRecord(UndoRecPtr *from_urecptr, UndoRecPtr to_urecptr,
 				UnlockReleaseBuffer(buffer);
 			return NULL;
 		}
-		persistence = slot->meta.persistence;
+		category = slot->meta.category;
 
 		UndoRecPtrAssignRelFileNode(rnode, urecptr);
 		to_blkno = UndoRecPtrGetBlockNum(to_urecptr);
@@ -1242,7 +1244,7 @@ UndoBulkFetchRecord(UndoRecPtr *from_urecptr, UndoRecPtr to_urecptr,
 		 */
 		if (prefetch_pages < prefetch_target / 2)
 			PrefetchUndoPages(rnode, prefetch_target, &prefetch_pages, to_blkno,
-							  from_blkno, persistence);
+							  from_blkno, category);
 
 		/*
 		 * In one_page mode it's possible that the undo of the transaction
@@ -1256,7 +1258,7 @@ UndoBulkFetchRecord(UndoRecPtr *from_urecptr, UndoRecPtr to_urecptr,
 			/* Refer comments in UndoFetchRecord. */
 			if (InHotStandby)
 			{
-				if (UndoLogIsDiscarded(urecptr))
+				if (UndoRecPtrIsDiscarded(urecptr))
 					break;
 			}
 			else
@@ -1275,13 +1277,13 @@ UndoBulkFetchRecord(UndoRecPtr *from_urecptr, UndoRecPtr to_urecptr,
 			}
 
 			/* Read the undo record. */
-			UndoGetOneRecord(uur, urecptr, rnode, persistence, &buffer);
+			UndoGetOneRecord(uur, urecptr, rnode, category, &buffer);
 
 			/* Release the discard lock after fetching the record. */
 			LWLockRelease(&slot->discard_lock);
 		}
 		else
-			UndoGetOneRecord(uur, urecptr, rnode, persistence, &buffer);
+			UndoGetOneRecord(uur, urecptr, rnode, category, &buffer);
 
 		/*
 		 * As soon as the transaction id is changed we can stop fetching the
@@ -1317,7 +1319,7 @@ UndoBulkFetchRecord(UndoRecPtr *from_urecptr, UndoRecPtr to_urecptr,
 				 uur->uur_info & UREC_INFO_TRANSACTION)
 			urecptr = InvalidUndoRecPtr;
 		else
-			urecptr = UndoGetPrevUndoRecptr(prev_urec_ptr, buffer, persistence);
+			urecptr = UndoGetPrevUndoRecptr(prev_urec_ptr, buffer, category);
 
 		/* We have consumed all elements of the urp_array so expand its size. */
 		if (urp_index >= urp_array_size)
@@ -1421,7 +1423,7 @@ UndoLogBuffersSetLSN(UndoRecordInsertContext *context, XLogRecPtr recptr)
  */
 static uint16
 UndoGetPrevRecordLen(UndoRecPtr urp, Buffer input_buffer,
-					 UndoPersistence upersistence)
+					 UndoLogCategory category)
 {
 	UndoLogOffset page_offset = UndoRecPtrGetPageOffset(urp);
 	BlockNumber cur_blk = UndoRecPtrGetBlockNum(urp);
@@ -1436,7 +1438,7 @@ UndoGetPrevRecordLen(UndoRecPtr urp, Buffer input_buffer,
 
 	/* Get relfilenode. */
 	UndoRecPtrAssignRelFileNode(rnode, urp);
-	persistence = RelPersistenceForUndoPersistence(upersistence);
+	persistence = RelPersistenceForUndoLogCategory(category);
 
 	if (BufferIsValid(buffer))
 	{
@@ -1523,14 +1525,14 @@ UndoGetPrevRecordLen(UndoRecPtr urp, Buffer input_buffer,
  */
 UndoRecPtr
 UndoGetPrevUndoRecptr(UndoRecPtr urp, Buffer buffer,
-					  UndoPersistence upersistence)
+					  UndoLogCategory category)
 {
 	UndoLogNumber logno = UndoRecPtrGetLogNo(urp);
 	UndoLogOffset offset = UndoRecPtrGetOffset(urp);
 	uint16		prevlen;
 
 	/* Read length of the previous undo record. */
-	prevlen = UndoGetPrevRecordLen(urp, buffer, upersistence);
+	prevlen = UndoGetPrevRecordLen(urp, buffer, category);
 
 	/* calculate the previous undo record pointer */
 	return MakeUndoRecPtr(logno, offset - prevlen);
