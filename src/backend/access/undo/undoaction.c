@@ -89,13 +89,13 @@ static void
 UpdateUndoApplyProgress(UndoRecPtr progress_urec_ptr,
 						BlockNumber block_num)
 {
-	UndoPersistence persistence;
+	UndoLogCategory category;
 	UndoRecordInsertContext context = {{0}};
 
-	persistence =
-		UndoLogNumberGetPersistence(UndoRecPtrGetLogNo(progress_urec_ptr));
+	category =
+		UndoLogNumberGetCategory(UndoRecPtrGetLogNo(progress_urec_ptr));
 
-	BeginUndoRecordInsert(&context, persistence, 1, NULL);
+	BeginUndoRecordInsert(&context, category, 1, NULL);
 
 	/*
 	 * Prepare and update the progress of the undo action apply in the
