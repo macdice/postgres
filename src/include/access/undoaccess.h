@@ -111,5 +111,7 @@ extern UndoRecInfo *UndoBulkFetchRecord(UndoRecPtr *from_urecptr,
 extern void UndoRecordRelease(UnpackedUndoRecord *urec);
 extern UndoRecPtr UndoGetPrevUndoRecptr(UndoRecPtr urp, Buffer buffer,
 					  UndoPersistence upersistence);
+extern UndoRecPtr UndoBlockGetFirstUndoRecord(BlockNumber blkno, UndoRecPtr urec_ptr,
+					  UndoPersistence persistence);
 
 #endif							/* UNDOINSERT_H */

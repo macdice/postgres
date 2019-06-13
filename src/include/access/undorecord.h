@@ -235,6 +235,7 @@ typedef struct UndoPackContext
 } UndoPackContext;
 
 extern void UndoRecordSetInfo(UnpackedUndoRecord *uur);
+extern Size UndoRecordHeaderSize(uint8 uur_info);
 extern Size UndoRecordExpectedSize(UnpackedUndoRecord *uur);
 extern Size UnpackedUndoRecordSize(UnpackedUndoRecord *uur);
 extern bool InsertUndoRecord(UnpackedUndoRecord *uur, Page page,
