@@ -137,7 +137,7 @@ typedef int UndoLogNumber;
 	(((uint64) (logno) << UndoLogOffsetBits) | (offset))
 
 /* The number of unusable bytes in the header of each block. */
-#define UndoLogBlockHeaderSize SizeOfPageHeaderData
+#define UndoLogBlockHeaderSize SizeOfUndoPageHeaderData
 
 /* The number of usable bytes we can store per block. */
 #define UndoLogUsableBytesPerPage (BLCKSZ - UndoLogBlockHeaderSize)

@@ -20,7 +20,6 @@
 #include "storage/buf.h"
 #include "storage/off.h"
 
-
 /*
  * Every undo record begins with an UndoRecordHeader structure, which is
  * followed by the additional structures indicated by the contents of
@@ -252,5 +251,6 @@ extern void InsertUndoData(UndoPackContext *ucontext, Page page,
 			   int starting_byte);
 extern void SkipInsertingUndoData(UndoPackContext *ucontext,
 					  int bytes_to_skip);
+extern void mask_undo_page(char *pagedata);
 
 #endif							/* UNDORECORD_H */

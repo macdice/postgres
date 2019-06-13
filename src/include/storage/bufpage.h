@@ -216,6 +216,37 @@ typedef PageHeaderData *PageHeader;
 #define SizeOfPageHeaderData (offsetof(PageHeaderData, pd_linp))
 
 /*
+ * FIXME:  It should be declared in undolog.h ?
+ *
+ * Same as PageHeaderData + some additional information to detect partial
+ * undo record on a undo page.
+ */
+typedef struct UndoPageHeaderData
+{
+	/* XXX LSN is member of *any* block, not only page-organized ones */
+	PageXLogRecPtr pd_lsn;		/* LSN: next byte after last byte of xlog
+								 * record for last change to this page */
+	uint16		pd_checksum;	/* checksum */
+	uint16		pd_flags;		/* flag bits, see below */
+	LocationIndex pd_lower;		/* offset to start of free space */
+	LocationIndex pd_upper;		/* offset to end of free space */
+	LocationIndex pd_special;	/* offset to start of special space */
+	uint16		pd_pagesize_version;
+	/* Fields required for undolog consistency checker */
+	uint8		uur_info;		/* uur_info field of the partial record. */
+	uint16		record_offset;	/* offset of the partial undo record. */
+	uint16		tuple_len;		/* Length of the tuple data in the partial
+								 * record. */
+	uint16		payload_len;	/* Length of the payload data in the partial
+								 * record. */
+} UndoPageHeaderData;
+
+typedef UndoPageHeaderData *UndoPageHeader;
+
+#define SizeOfUndoPageHeaderData (offsetof(UndoPageHeaderData, payload_len) + \
+								  sizeof(uint16))
+
+/*
  * PageIsEmpty
  *		returns true iff no itemid has been allocated on the page
  */
@@ -419,6 +450,9 @@ do { \
 						((is_heap) ? PAI_IS_HEAP : 0))
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
+extern void UndoPageInit(Page page, Size pageSize, uint8 uur_info,
+						 uint16 record_offset, uint16 tuple_len,
+						 uint16 payload_len);
 extern bool PageIsVerified(Page page, BlockNumber blkno);
 extern OffsetNumber PageAddItemExtended(Page page, Item item, Size size,
 										OffsetNumber offsetNumber, int flags);
