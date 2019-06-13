@@ -93,7 +93,7 @@ extern void PrepareUpdateUndoActionProgress(UndoRecordInsertContext *context,
 					UndoRecPtr urecptr, BlockNumber progress);
 extern void UndoRecordUpdateTransInfo(UndoRecordInsertContext *context, int idx);
 extern void BeginUndoRecordInsert(UndoRecordInsertContext *context,
-					  UndoPersistence persistence,
+					  UndoLogCategory category,
 					  int nprepared,
 					  XLogReaderState *xlog_record);
 extern UndoRecPtr PrepareUndoInsert(UndoRecordInsertContext *context,
@@ -114,8 +114,8 @@ extern UndoRecInfo *UndoBulkFetchRecord(UndoRecPtr *from_urecptr,
 					bool one_page);
 extern void UndoRecordRelease(UnpackedUndoRecord *urec);
 extern UndoRecPtr UndoGetPrevUndoRecptr(UndoRecPtr urp, Buffer buffer,
-					  UndoPersistence upersistence);
+					  UndoLogCategory category);
 extern UndoRecPtr UndoBlockGetFirstUndoRecord(BlockNumber blkno, UndoRecPtr urec_ptr,
-					  UndoPersistence persistence);
+					  UndoLogCategory category);
 
 #endif							/* UNDOINSERT_H */
