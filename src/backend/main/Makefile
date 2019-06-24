@@ -12,6 +12,6 @@ subdir = src/backend/main
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
-OBJS = main.o
+OBJS = main.o test.o
 
 include $(top_srcdir)/src/backend/common.mk
