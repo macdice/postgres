@@ -275,6 +275,15 @@ typedef enum
 }			RecoveryTargetAction;
 
 /*
+ * Return values for undo status callback functions.
+ */
+typedef enum UndoStatus
+{
+	UNDO_STATUS_WAIT_XMIN,		/* wait until the xmin passes an xid */
+	UNDO_STATUS_DISCARD			/* the record set should be discarded */
+} UndoStatus;
+
+/*
  * Method table for resource managers.
  *
  * This struct must be kept in sync with the PG_RMGR definition in
@@ -302,6 +311,7 @@ typedef struct RmgrData
 	bool		(*rm_undo) (UndoRecInfo *urp_array, int first_idx, int last_idx,
 							Oid reloid, FullTransactionId full_xid, BlockNumber blkno,
 							bool blk_chain_complete);
+	UndoStatus	(*rm_undo_status) (UnpackedUndoRecord *record, TransactionId *xid);
 	void		(*rm_undo_desc) (StringInfo buf, UnpackedUndoRecord *record);
 } RmgrData;
 
