@@ -10676,4 +10676,9 @@
   proallargtypes => '{oid,text,text,text,text,text,xid,int4,text}', proargmodes => '{o,o,o,o,o,o,o,o,o}',
   proargnames => '{logno,category,tablespace,discard,insert,end,xid,pid,status}', prosrc => 'pg_stat_get_undo_logs' },
 
+# throw-away test code
+{ oid => '5033', descr => 'test_multixact',
+  proname => 'test_multixact', proisstrict => 'f', prorettype => 'void',
+  proargtypes => '_int4', prosrc => 'test_multixact' }
+
 ]

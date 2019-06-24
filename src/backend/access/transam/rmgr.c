@@ -32,6 +32,8 @@
 #include "storage/standby.h"
 #include "utils/relmapper.h"
 
+#include "test.h"
+
 /* must be kept in sync with RmgrData definition in xlog_internal.h */
 #define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,undo,undo_status,undo_desc) \
 	{ name, redo, desc, identify, startup, cleanup, mask, undo, undo_status, undo_desc },
