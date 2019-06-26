@@ -258,11 +258,11 @@ UndoRecordPrepareApplyProgress(UndoRecordInsertContext *context,
 	 * Temporary undo logs are discarded on transaction commit so we don't
 	 * need to do anything.
 	 */
-	if (UndoRecPtrGetPersistence(xact_urp) == UNDO_TEMP)
+	if (UndoRecPtrGetCategory(xact_urp) == UNDO_TEMP)
 		return;
 
 	/* It shouldn't be discarded. */
-	Assert(!UndoLogIsDiscarded(xact_urp));
+	Assert(!UndoRecPtrIsDiscarded(xact_urp));
 
 	/* Compute the offset of the uur_next in the undo record. */
 	offset = SizeOfUndoRecordHeader +
@@ -894,7 +894,7 @@ InsertPreparedUndo(UndoRecordInsertContext *context)
 		 * to perform rollback during abort of transaction.
 		 */
 		SetCurrentUndoLocation(prepared_undo->urp,
-							   context->alloc_context.persistence);
+							   context->alloc_context.category);
 
 		/* Advance the insert pointer past this record. */
 		UndoLogAdvanceFinal(prepared_undo->urp, prepared_undo->size);
@@ -1640,7 +1640,7 @@ UndoGetPrevUndoRecptr(UndoRecPtr urp, Buffer buffer,
  */
 UndoRecPtr
 UndoBlockGetFirstUndoRecord(BlockNumber blkno, UndoRecPtr urec_ptr,
-							UndoPersistence persistence)
+							UndoLogCategory category)
 {
 	Buffer buffer;
 	Page page;
@@ -1660,7 +1660,7 @@ UndoBlockGetFirstUndoRecord(BlockNumber blkno, UndoRecPtr urec_ptr,
 	buffer = ReadBufferWithoutRelcache(SMGR_UNDO,
 									   rnode, UndoLogForkNum, blkno,
 									   RBM_NORMAL, NULL,
-									   RelPersistenceForUndoPersistence(persistence));
+									   RelPersistenceForUndoLogCategory(category));
 
 	LockBuffer(buffer, BUFFER_LOCK_SHARE);
 

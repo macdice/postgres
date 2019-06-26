@@ -198,10 +198,10 @@ typedef struct TransactionStateData
 	bool		chain;			/* start a new block after this one */
 
 	/* start and end undo record location for each persistence level */
-	UndoRecPtr	start_urec_ptr[UndoPersistenceLevels];	/* this is 'to' location */
-	UndoRecPtr	latest_urec_ptr[UndoPersistenceLevels]; /* this is 'from'
+	UndoRecPtr	start_urec_ptr[UndoLogCategories];		/* this is 'to' location */
+	UndoRecPtr	latest_urec_ptr[UndoLogCategories];		/* this is 'from'
 														 * location */
-	bool		undo_req_pushed[UndoPersistenceLevels]; /* undo request pushed
+	bool		undo_req_pushed[UndoLogCategories];		/* undo request pushed
 														 * to worker? */
 	bool		performUndoActions;
 
@@ -1990,7 +1990,7 @@ StartTransaction(void)
 	s->didLogXid = false;
 
 	/* initialize undo record locations for the transaction */
-	for (i = 0; i < UndoPersistenceLevels; i++)
+	for (i = 0; i < UndoLogCategories; i++)
 	{
 		s->start_urec_ptr[i] = InvalidUndoRecPtr;
 		s->latest_urec_ptr[i] = InvalidUndoRecPtr;
@@ -3115,7 +3115,7 @@ CommitTransactionCommand(void)
 				 * for this transaction.  Also set the start_urec_ptr if
 				 * parent start_urec_ptr is not valid.
 				 */
-				for (i = 0; i < UndoPersistenceLevels; i++)
+				for (i = 0; i < UndoLogCategories; i++)
 				{
 					if (UndoRecPtrIsValid(s->latest_urec_ptr[i]))
 						s->parent->latest_urec_ptr[i] = s->latest_urec_ptr[i];
@@ -3458,7 +3458,7 @@ PushUndoRequest()
 	if (IsSubTransaction())
 		return;
 
-	for (per_level = 0; per_level < UndoPersistenceLevels; per_level++)
+	for (per_level = 0; per_level < UndoLogCategories; per_level++)
 	{
 		/*
 		 * We can't push the undo actions for temp table to background
@@ -4377,8 +4377,8 @@ ReleaseSavepoint(const char *name)
 	TransactionState s = CurrentTransactionState;
 	TransactionState target,
 				xact;
-	UndoRecPtr	latest_urec_ptr[UndoPersistenceLevels];
-	UndoRecPtr	start_urec_ptr[UndoPersistenceLevels];
+	UndoRecPtr	latest_urec_ptr[UndoLogCategories];
+	UndoRecPtr	start_urec_ptr[UndoLogCategories];
 	int			i = 0;
 
 	/*
@@ -4488,7 +4488,7 @@ ReleaseSavepoint(const char *name)
 		/*
 		 * Propagate the 'from' and 'to' undo locations to parent transaction.
 		 */
-		for (i = 0; i < UndoPersistenceLevels; i++)
+		for (i = 0; i < UndoLogCategories; i++)
 		{
 			if (!UndoRecPtrIsValid(latest_urec_ptr[i]))
 				latest_urec_ptr[i] = xact->latest_urec_ptr[i];
@@ -4508,7 +4508,7 @@ ReleaseSavepoint(const char *name)
 	 * not skip performing undo for this transaction.  Also set the
 	 * start_urec_ptr if parent start_urec_ptr is not valid.
 	 */
-	for (i = 0; i < UndoPersistenceLevels; i++)
+	for (i = 0; i < UndoLogCategories; i++)
 	{
 		if (UndoRecPtrIsValid(latest_urec_ptr[i]))
 			xact->parent->latest_urec_ptr[i] = latest_urec_ptr[i];
@@ -4755,7 +4755,7 @@ ReleaseCurrentSubTransaction(void)
 	 * latest_urec_ptr so that in case parent transaction get aborted we will
 	 * not skip performing undo for this transaction.
 	 */
-	for (i = 0; i < UndoPersistenceLevels; i++)
+	for (i = 0; i < UndoLogCategories; i++)
 	{
 		if (UndoRecPtrIsValid(s->latest_urec_ptr[i]))
 			s->parent->latest_urec_ptr[i] = s->latest_urec_ptr[i];
@@ -5123,7 +5123,7 @@ StartSubTransaction(void)
 	AfterTriggerBeginSubXact();
 
 	/* initialize undo record locations for the transaction */
-	for (i = 0; i < UndoPersistenceLevels; i++)
+	for (i = 0; i < UndoLogCategories; i++)
 	{
 		s->start_urec_ptr[i] = InvalidUndoRecPtr;
 		s->latest_urec_ptr[i] = InvalidUndoRecPtr;
@@ -6406,7 +6406,7 @@ UndoActionsRequired(void)
 	TransactionState s = CurrentTransactionState;
 	int			i;
 
-	for (i = 0; i < UndoPersistenceLevels; i++)
+	for (i = 0; i < UndoLogCategories; i++)
 	{
 		if (s->latest_urec_ptr[i])
 		{
@@ -6426,7 +6426,7 @@ ResetUndoActionsInfo(void)
 	int			i;
 
 	s->performUndoActions = false;
-	for (i = 0; i < UndoPersistenceLevels; i++)
+	for (i = 0; i < UndoLogCategories; i++)
 	{
 		s->start_urec_ptr[i] = InvalidUndoRecPtr;
 		s->latest_urec_ptr[i] = InvalidUndoRecPtr;
@@ -6461,7 +6461,7 @@ PerformUndoActions(FullTransactionId fxid, Oid dbid, UndoRecPtr *end_urec_ptr,
 	int			per_level;
 	bool		success = true;
 
-	for (per_level = 0; per_level < UndoPersistenceLevels; per_level++)
+	for (per_level = 0; per_level < UndoLogCategories; per_level++)
 	{
 		if (end_urec_ptr[per_level] && !undo_req_pushed[per_level])
 		{
@@ -6534,14 +6534,14 @@ PerformUndoActions(FullTransactionId fxid, Oid dbid, UndoRecPtr *end_urec_ptr,
  * Sets the 'from' and 'to' location for the current transaction.
  */
 void
-SetCurrentUndoLocation(UndoRecPtr urec_ptr, UndoPersistence upersistence)
+SetCurrentUndoLocation(UndoRecPtr urec_ptr, UndoLogCategory category)
 {
 	/*
 	 * Set the start undo record pointer for first undo record in a
 	 * subtransaction.
 	 */
-	if (!UndoRecPtrIsValid(CurrentTransactionState->start_urec_ptr[upersistence]))
-		CurrentTransactionState->start_urec_ptr[upersistence] = urec_ptr;
-	CurrentTransactionState->latest_urec_ptr[upersistence] = urec_ptr;
+	if (!UndoRecPtrIsValid(CurrentTransactionState->start_urec_ptr[category]))
+		CurrentTransactionState->start_urec_ptr[category] = urec_ptr;
+	CurrentTransactionState->latest_urec_ptr[category] = urec_ptr;
 
 }

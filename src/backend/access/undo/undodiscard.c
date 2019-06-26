@@ -15,6 +15,7 @@
 
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "access/xlog_internal.h"
 #include "access/undolog.h"
 #include "access/undodiscard.h"
 #include "access/undorequest.h"
@@ -29,18 +30,10 @@
 #include "utils/resowner.h"
 
 /*
- * Discard the undo for the given log
- *
- * Search the undo log, get the start record for each transaction until we get
- * the transaction with xid >= xmin or an invalid xid.  Then call undolog
- * routine to discard up to that point and update the memory structure for the
- * log slot.  We set the hibernate flag if we do not have any undo data that
- * can be discarded, this flag is passed back to the discard worker wherein it
- * determines if the system is idle and it should sleep for some time.
- *
- * Return the oldest full_xid remaining in this undo log (which should be
- * >= xmin, since we'll discard everything older).  Returns
- * InvalidTransactionId, if the undo log is empty.
+ * Discard as many record sets as we can from the undo log occupying a given
+ * slot, considering the given xmin horizon.  If we encounter a record set
+ * that needs to be rolled back, register a rollback request.  Set *hibernate
+ * to false if work was done.
  */
 static void
 UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
@@ -84,9 +77,12 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 	/* Loop until we run out of discardable transactions in the given log. */
 	do
 	{
+		TransactionId wait_xid = InvalidTransactionId;
 		bool pending_abort = false;
+		bool request_rollback = false;
+		UndoStatus status;
 
-		next_insert = UndoLogGetNextInsertPtr(logno, InvalidTransactionId);
+		next_insert = UndoLogGetNextInsertPtr(logno);
 
 		if (next_insert == undo_recptr)
 		{
@@ -108,26 +104,69 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 
 			if (uur != NULL)
 			{
+				if (UndoRecPtrGetCategory(undo_recptr) == UNDO_SHARED)
+				{
+					/*
+					 * For the "shared" category, we only discard when the
+					 * rm_undo_status callback tells us we can.
+					 */
+					status = RmgrTable[uur->uur_rmid].rm_undo_status(uur, &wait_xid);
+
+					Assert((status == UNDO_STATUS_WAIT_XMIN &&
+							TransactionIdIsValid(wait_xid)) ^
+						   (status == UNDO_STATUS_DISCARD &&
+							!TransactionIdIsValid(wait_xid)));
+				}
+				else
+				{
+					/*
+					 * Otherwise we use the CLOG and xmin to decide whether to
+					 * wait, discard or roll back.
+					 *
+					 * XXX: We've added the transaction-in-progress check to
+					 * avoid xids of in-progress autovacuum as those are not
+					 * computed for oldestxmin calculation.  See
+					 * DiscardWorkerMain.
+					 */
+					if (TransactionIdDidCommit(uur->uur_xid))
+					{
+						/*
+						 * If this record set's xid isn't before the xmin
+						 * horizon, we'll have to wait before we can discard
+						 * it.
+						 */
+						if (TransactionIdFollowsOrEquals(uur->uur_xid, xmin))
+							wait_xid = uur->uur_xid;
+
+					}
+					else if (!TransactionIdIsInProgress(uur->uur_xid) &&
+							 TransactionIdPrecedes(uur->uur_xid, xmin))
+					{
+						/*
+						 * If it hasn't been applied already, then we'll ask
+						 * for it to be applied now.  Otherwise it'll be
+						 * discarded.
+						 */
+						if (!IsXactApplyProgressCompleted(uur->uur_progress))
+							request_rollback = true;
+					}
+					else
+					{
+						/*
+						 * It's either in progress or isn't yet before the
+						 * xmin horizon, so we'll have to wait.
+						 */
+						wait_xid = uur->uur_xid;
+					}
+				}
+
 				/*
 				 * Add the aborted transaction to the rollback request queues.
 				 *
-				 * If the undo actions for the aborted transaction is already
-				 * applied then continue discarding the undo log, otherwise,
-				 * discard till current point and stop processing this undo
-				 * log.
-				 *
 				 * We can ignore the abort for transactions whose
 				 * corresponding database doesn't exist.
-				 *
-				 * XXX: We've added the transaction-in-progress check to avoid
-				 * xids of in-progress autovacuum as those are not computed
-				 * for oldestxmin calculation.  See DiscardWorkerMain.
 				 */
-				if (!TransactionIdDidCommit(uur->uur_xid) &&
-					!TransactionIdIsInProgress(uur->uur_xid) &&
-					TransactionIdPrecedes(uur->uur_xid, xmin) &&
-					!IsXactApplyProgressCompleted(uur->uur_progress) &&
-					dbid_exists(uur->uur_dbid))
+				if (request_rollback && dbid_exists(uur->uur_dbid))
 				{
 					FullTransactionId full_xid;
 
@@ -152,12 +191,11 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 
 		/*
 		 * We can discard upto this point when one of following conditions is
-		 * met: (a) the next transaction is not all-visible. (b) there is no
+		 * met: (a) we need to wait for a transaction first. (b) there is no
 		 * more log to process. (c) the transaction undo in current log is
 		 * finished. (d) there is a pending abort.
 		 */
-		if ((TransactionIdIsValid(undoxid) &&
-			 TransactionIdFollowsOrEquals(undoxid, xmin)) ||
+		if (TransactionIdIsValid(wait_xid) ||
 			next_urecptr == InvalidUndoRecPtr ||
 			log_complete ||
 			UndoRecPtrGetLogNo(next_urecptr) != logno ||
@@ -167,25 +205,14 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 			*hibernate = false;
 
 			/*
-			 * If the transaction id is smaller than the xmin, it means this
-			 * must be the last transaction in this undo log, so we need to
-			 * get the last insert point in this undo log and discard till
-			 * that point.
-			 *
 			 * Also, if the transaction has pending abort, stop discarding
 			 * further.
 			 */
-			if (TransactionIdPrecedes(undoxid, xmin) && !pending_abort)
+			if (!TransactionIdIsValid(wait_xid) && !pending_abort)
 			{
 				UndoRecPtr	next_insert = InvalidUndoRecPtr;
 
-				/*
-				 * If more undo has been inserted since we checked last, then
-				 * we can process that as well.
-				 */
-				next_insert = UndoLogGetNextInsertPtr(logno, undoxid);
-				if (!UndoRecPtrIsValid(next_insert))
-					continue;
+				next_insert = UndoLogGetNextInsertPtr(logno);
 
 				undo_recptr = next_insert;
 				need_discard = true;
@@ -213,13 +240,13 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 			 */
 			if (log_complete)
 			{
-				slot->oldest_xid = InvalidTransactionId;
-				slot->oldest_xidepoch = 0;
+				slot->wait_xmin = InvalidTransactionId;
+				slot->wait_xmin_epoch = 0;
 			}
 			else
 			{
-				slot->oldest_xid = undoxid;
-				slot->oldest_xidepoch = epoch;
+				slot->wait_xmin = undoxid;
+				slot->wait_xmin_epoch = epoch;
 			}
 
 			slot->oldest_data = undo_recptr;
@@ -282,6 +309,10 @@ UndoLogProcess()
 	{
 		UndoRecPtr	undo_recptr;
 		UnpackedUndoRecord	*uur = NULL;
+
+		/* We do not execute shared (non-transactional) undo records. */
+		if (slot->meta.category == UNDO_SHARED)
+			continue;
 
 		/* Start scanning the log from the last discard point. */
 		undo_recptr = UndoLogGetOldestRecord(slot->logno, NULL);
@@ -388,15 +419,15 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 		LWLockRelease(&slot->mutex);
 
 		/* We can't process temporary undo logs. */
-		if (slot->meta.persistence == UNDO_TEMP)
+		if (slot->meta.category == UNDO_TEMP)
 			continue;
 
 		/*
 		 * If the first xid of the undo log is smaller than the xmin the try
 		 * to discard the undo log.
 		 */
-		if (!TransactionIdIsValid(slot->oldest_xid) ||
-			TransactionIdPrecedes(slot->oldest_xid, oldestXmin))
+		if (!TransactionIdIsValid(slot->wait_xmin) ||
+			TransactionIdPrecedes(slot->wait_xmin, oldestXmin))
 		{
 			/* Process the undo log. */
 			UndoDiscardOneLog(slot, oldestXmin, hibernate);
@@ -459,7 +490,7 @@ TempUndoDiscard(UndoLogNumber logno)
 	 * Discard the undo log for temp table only. Ensure that there is
 	 * something to be discarded there.
 	 */
-	Assert (slot->meta.persistence == UNDO_TEMP);
+	Assert (slot->meta.category == UNDO_TEMP);
 
 	/*
 	 * If the log is already discarded, then we are done.  It is important

@@ -936,8 +936,8 @@ typedef struct TwoPhaseFileHeader
 	 * might rollback the prepared transaction after recovery and for that we
 	 * need it's start and end undo locations.
 	 */
-	UndoRecPtr	start_urec_ptr[UndoPersistenceLevels];
-	UndoRecPtr	end_urec_ptr[UndoPersistenceLevels];
+	UndoRecPtr	start_urec_ptr[UndoLogCategories];
+	UndoRecPtr	end_urec_ptr[UndoLogCategories];
 } TwoPhaseFileHeader;
 
 /*
@@ -1485,9 +1485,9 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	RelFileNode *delrels;
 	int			ndelrels;
 	SharedInvalidationMessage *invalmsgs;
-	UndoRecPtr	start_urec_ptr[UndoPersistenceLevels];
-	UndoRecPtr	end_urec_ptr[UndoPersistenceLevels];
-	bool		undo_action_pushed[UndoPersistenceLevels];
+	UndoRecPtr	start_urec_ptr[UndoLogCategories];
+	UndoRecPtr	end_urec_ptr[UndoLogCategories];
+	bool		undo_action_pushed[UndoLogCategories];
 	uint32		epoch;
 	int			i;
 	FullTransactionId full_xid;
@@ -1580,7 +1580,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 		 * important to do this before marking it aborted in clog, see
 		 * comments atop PushUndoRequest for further details.
 		 */
-		for (i = 0; i < UndoPersistenceLevels; i++)
+		for (i = 0; i < UndoLogCategories; i++)
 		{
 			if (end_urec_ptr[i] != InvalidUndoRecPtr && i != UNDO_TEMP)
 			{

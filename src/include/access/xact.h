@@ -436,7 +436,7 @@ extern bool PerformUndoActions(FullTransactionId fxid, Oid dbid,
 				UndoRecPtr *end_urec_ptr, UndoRecPtr *start_urec_ptr,
 				bool *undo_req_pushed, bool isSubTrans);
 extern void SetCurrentUndoLocation(UndoRecPtr urec_ptr,
-				UndoPersistence upersistence);
+				UndoLogCategory category);
 
 /* xactdesc.c */
 extern void xact_desc(StringInfo buf, XLogReaderState *record);

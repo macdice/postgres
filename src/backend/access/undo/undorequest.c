@@ -748,7 +748,7 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 	UndoRecPtr	end_urecptr = InvalidUndoRecPtr;
 	UndoRecPtr	last_log_start_urecptr = InvalidUndoRecPtr;
 	uint64		sz = 0;
-	UndoPersistence persistence;
+	UndoLogCategory category;
 
 	Assert(urecptr != InvalidUndoRecPtr);
 
@@ -778,7 +778,7 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 			slot = UndoLogGetSlot(UndoRecPtrGetLogNo(urecptr), false);
 
 		Assert(slot != NULL);
-		persistence = slot->meta.persistence;
+		category = slot->meta.category;
 
 		/* The corresponding log must be ahead urecptr. */
 		Assert(MakeUndoRecPtr(slot->logno, slot->meta.unlogged.insert) >= urecptr);
@@ -826,7 +826,7 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 			 * set end_urec_ptr to this undo record.
 			 */
 			end_urecptr = UndoBlockGetFirstUndoRecord(uur->uur_progress, urecptr,
-													  persistence);
+													  category);
 
 			/*
 			 * Since rollbacks from this undo log are in-progress, all undo
@@ -854,7 +854,9 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 			 * has already started in this log then lets re-fetch the undo
 			 * record.
 			 */
-			next_insert = UndoLogGetNextInsertPtr(slot->logno, uur->uur_xid);
+			next_insert = UndoLogGetNextInsertPtr(slot->logno);
+
+			/* TODO this can't happen */
 			if (!UndoRecPtrIsValid(next_insert))
 			{
 				UndoRecordRelease(uur);
@@ -871,7 +873,7 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 				next_insert -= UndoLogBlockHeaderSize;
 
 			last_log_start_urecptr = urecptr;
-			end_urecptr = UndoGetPrevUndoRecptr(next_insert, InvalidBuffer, persistence);
+			end_urecptr = UndoGetPrevUndoRecptr(next_insert, InvalidBuffer, category);
 			sz += (end_urecptr - urecptr);
 			Assert(UndoRecPtrIsValid(end_urecptr));
 			break;
@@ -885,7 +887,7 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 		{
 			last_log_start_urecptr = urecptr;
 			end_urecptr =
-				UndoGetPrevUndoRecptr(next_urecptr, InvalidBuffer, persistence);
+				UndoGetPrevUndoRecptr(next_urecptr, InvalidBuffer, category);
 			sz += (end_urecptr - urecptr);
 			Assert(UndoRecPtrIsValid(end_urecptr));
 			break;
@@ -896,15 +898,15 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 		 * it's already discarded.  It means that the undo actions for this
 		 * transaction which are in the next log are already executed.
 		 */
-		if (UndoLogIsDiscarded(next_urecptr))
+		if (UndoRecPtrIsDiscarded(next_urecptr))
 		{
 			UndoLogOffset next_insert;
 
-			next_insert = UndoLogGetNextInsertPtr(slot->logno, uur->uur_xid);
+			next_insert = UndoLogGetNextInsertPtr(slot->logno);
 			Assert(UndoRecPtrIsValid(next_insert));
 
 			last_log_start_urecptr = urecptr;
-			end_urecptr = UndoGetPrevUndoRecptr(next_insert, InvalidBuffer, persistence);
+			end_urecptr = UndoGetPrevUndoRecptr(next_insert, InvalidBuffer, category);
 			sz += (next_insert - urecptr);
 			Assert(UndoRecPtrIsValid(end_urecptr));
 			break;
@@ -918,11 +920,11 @@ FindUndoEndLocationAndSize(UndoRecPtr start_urecptr,
 		{
 			UndoLogOffset next_insert;
 
-			next_insert = UndoLogGetNextInsertPtr(slot->logno, uur->uur_xid);
+			next_insert = UndoLogGetNextInsertPtr(slot->logno);
 			Assert(UndoRecPtrIsValid(next_insert));
 
 			last_log_start_urecptr = urecptr;
-			end_urecptr = UndoGetPrevUndoRecptr(next_insert, InvalidBuffer, persistence);
+			end_urecptr = UndoGetPrevUndoRecptr(next_insert, InvalidBuffer, category);
 			sz += (next_insert - urecptr);
 
 			UndoRecordRelease(uur);
@@ -1064,7 +1066,7 @@ FindUndoStartLocationAndSize(UndoRecPtr *start_urecptr_inout,
 		 * next insert location of the previous log and subtract current
 		 * transaction's start location in the previous log from it.
 		 */
-		next_insert = UndoLogGetNextInsertPtr(slot->logno, uur->uur_xid);
+		next_insert = UndoLogGetNextInsertPtr(slot->logno);
 		Assert(UndoRecPtrIsValid(next_insert));
 
 		sz += (next_insert - urecptr);
