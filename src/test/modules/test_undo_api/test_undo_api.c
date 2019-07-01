@@ -49,7 +49,7 @@ static void
 test_insert_and_fetch()
 {
 	UndoRecordInsertContext context = {{0}};
-	UndoPersistence persistence = UNDO_PERMANENT;
+	UndoLogCategory category = UNDO_PERMANENT;
 	char	data[5000];
 	int		 len = 5000;
 	UnpackedUndoRecord	undorecord = {0};
@@ -78,7 +78,7 @@ test_insert_and_fetch()
 						   (char *) data,
 						   len);
 	/* Prepare undo record. */
-	BeginUndoRecordInsert(&context, persistence, 2, NULL);
+	BeginUndoRecordInsert(&context, category, 2, NULL);
 	undo_ptr = PrepareUndoInsert(&context, &undorecord, InvalidFullTransactionId);
 
 	/* Insert prepared undo record under critical section. */
@@ -110,7 +110,7 @@ test_bulk_fetch()
 {
 	int i;
 	UndoRecordInsertContext context = {{0}};
-	UndoPersistence persistence = UNDO_PERMANENT;
+	UndoLogCategory category = UNDO_PERMANENT;
 	UndoRecInfo	urp_in_array[MAX_UNDO_RECORD];
 	UndoRecInfo *urp_out_array;
 	UnpackedUndoRecord	uur[MAX_UNDO_RECORD] = {{0}};
@@ -132,7 +132,7 @@ test_bulk_fetch()
 	}
 
 	/* Prepare multiple undo records. */
-	BeginUndoRecordInsert(&context, persistence, MAX_UNDO_RECORD, NULL);
+	BeginUndoRecordInsert(&context, category, MAX_UNDO_RECORD, NULL);
 	for (i = 0; i < MAX_UNDO_RECORD; i++)
 	{
 		undo_ptr = PrepareUndoInsert(&context, &uur[i], InvalidFullTransactionId);
