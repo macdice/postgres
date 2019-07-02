@@ -87,6 +87,7 @@ static void forget_undo_buffers(int logno, UndoLogOffset old_discard,
 static bool choose_undo_tablespace(bool force_detach, Oid *oid);
 
 PG_FUNCTION_INFO_V1(pg_stat_get_undo_logs);
+PG_FUNCTION_INFO_V1(pg_force_discard_undo);
 
 /*
  * How many undo logs can be active at a time?  This creates a theoretical
@@ -2377,6 +2378,18 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
+}
+
+Datum
+pg_force_discard_undo(PG_FUNCTION_ARGS)
+{
+	UndoLogNumber logno = PG_GETARG_INT32(0);
+	UndoLogSlot	*slot;
+
+	slot = find_undo_log_slot(
+	elog(NOTICE, "pg_force_discard_undo");
+	
+	return (Datum) 0;	
 }
 
 /*
