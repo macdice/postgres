@@ -87,6 +87,7 @@ static void forget_undo_buffers(int logno, UndoLogOffset old_discard,
 static bool choose_undo_tablespace(bool force_detach, Oid *oid);
 
 PG_FUNCTION_INFO_V1(pg_stat_get_undo_logs);
+PG_FUNCTION_INFO_V1(pg_force_discard_undo);
 
 /*
  * How many undo logs can be active at a time?  This creates a theoretical
@@ -1632,11 +1633,13 @@ free_undo_log_slot(UndoLogSlot *slot)
 	 * hold any one of those locks to prevent the slot from being recycled.
 	 */
 	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
 	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
 	Assert(slot->logno != InvalidUndoLogNumber);
 	slot->logno = InvalidUndoLogNumber;
 	memset(&slot->meta, 0, sizeof(slot->meta));
 	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->discard_lock);
 	LWLockRelease(UndoLogLock);
 }
 
@@ -2375,6 +2378,43 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
+}
+
+/*
+ * Forcibly throw away undo data.  This is an emergency-only procedure
+ * designed to deal with situations where transaction rollback fails
+ * repeatedly for some reason.  The state of the system is undefined after
+ * this (but it's likely to result in uncommitted effects appearing as
+ * committed).
+ */
+Datum
+pg_force_discard_undo(PG_FUNCTION_ARGS)
+{
+	UndoLogNumber logno = PG_GETARG_INT32(0);
+	UndoLogSlot	*slot;
+	UndoLogOffset old_discard;
+	UndoLogOffset new_discard;
+
+	slot = find_undo_log_slot(logno, false);
+
+	if (slot == NULL)
+		elog(ERROR, "undo log not found");
+
+	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	if (slot->meta.logno != logno)
+		elog(ERROR, "undo log not found (slot recycled)");
+	if (slot->meta.status == UNDO_LOG_STATUS_DISCARDED)
+		elog(ERROR, "undo log already entirely discarded");
+	if (TransactionIdIsActive(slot->meta.unlogged.xid))
+		elog(ERROR, "undo log in use by an active transaction");
+	old_discard = slot->meta.discard;
+	new_discard = slot->meta.unlogged.insert;
+	LWLockRelease(&slot->mutex);
+
+	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockRelease(&slot->mutex);
+	
+	return (Datum) 0;	
 }
 
 /*

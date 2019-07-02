@@ -10710,5 +10710,10 @@
   prorettype => 'record', proargtypes => '',
   proallargtypes => '{oid,text,text,text,text,text,xid,int4,text}', proargmodes => '{o,o,o,o,o,o,o,o,o}',
   proargnames => '{logno,category,tablespace,discard,insert,end,xid,pid,status}', prosrc => 'pg_stat_get_undo_logs' },
+{ oid => '5034', descr => 'forcibly discard undo data',
+  prokind => 'p',
+  proname => 'pg_force_discard_undo', provolatile => 'v',
+  proparallel => 'u', prorettype => 'void', proargtypes => 'int4',
+  prosrc => 'pg_force_discard_undo' },
 
 ]
