@@ -119,12 +119,6 @@ palloc(Size size)
 }
 
 void *
-palloc0(Size size)
-{
-	return pg_malloc_internal(size, MCXT_ALLOC_ZERO);
-}
-
-void *
 palloc_extended(Size size, int flags)
 {
 	return pg_malloc_internal(size, flags);

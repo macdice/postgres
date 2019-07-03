@@ -804,82 +804,6 @@ MemoryContextAlloc(MemoryContext context, Size size)
 }
 
 /*
- * MemoryContextAllocZero
- *		Like MemoryContextAlloc, but clears allocated memory
- *
- *	We could just call MemoryContextAlloc then clear the memory, but this
- *	is a very common combination, so we provide the combined operation.
- */
-void *
-MemoryContextAllocZero(MemoryContext context, Size size)
-{
-	void	   *ret;
-
-	AssertArg(MemoryContextIsValid(context));
-	AssertNotInCriticalSection(context);
-
-	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %zu", size);
-
-	context->isReset = false;
-
-	ret = context->methods->alloc(context, size);
-	if (unlikely(ret == NULL))
-	{
-		MemoryContextStats(TopMemoryContext);
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Failed on request of size %zu in memory context \"%s\".",
-						   size, context->name)));
-	}
-
-	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
-
-	MemSetAligned(ret, 0, size);
-
-	return ret;
-}
-
-/*
- * MemoryContextAllocZeroAligned
- *		MemoryContextAllocZero where length is suitable for MemSetLoop
- *
- *	This might seem overly specialized, but it's not because newNode()
- *	is so often called with compile-time-constant sizes.
- */
-void *
-MemoryContextAllocZeroAligned(MemoryContext context, Size size)
-{
-	void	   *ret;
-
-	AssertArg(MemoryContextIsValid(context));
-	AssertNotInCriticalSection(context);
-
-	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %zu", size);
-
-	context->isReset = false;
-
-	ret = context->methods->alloc(context, size);
-	if (unlikely(ret == NULL))
-	{
-		MemoryContextStats(TopMemoryContext);
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Failed on request of size %zu in memory context \"%s\".",
-						   size, context->name)));
-	}
-
-	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
-
-	MemSetLoop(ret, 0, size);
-
-	return ret;
-}
-
-/*
  * MemoryContextAllocExtended
  *		Allocate space within the specified context using the given flags.
  */
@@ -897,7 +821,7 @@ MemoryContextAllocExtended(MemoryContext context, Size size, int flags)
 
 	context->isReset = false;
 
-	ret = context->methods->alloc(context, size);
+	ret = pg_assume_aligned(context->methods->alloc(context, size), sizeof(long));
 	if (unlikely(ret == NULL))
 	{
 		if ((flags & MCXT_ALLOC_NO_OOM) == 0)
@@ -915,7 +839,7 @@ MemoryContextAllocExtended(MemoryContext context, Size size, int flags)
 	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
 
 	if ((flags & MCXT_ALLOC_ZERO) != 0)
-		MemSetAligned(ret, 0, size);
+		memset(ret, 0, size);
 
 	return ret;
 }
@@ -952,39 +876,6 @@ palloc(Size size)
 }
 
 void *
-palloc0(Size size)
-{
-	/* duplicates MemoryContextAllocZero to avoid increased overhead */
-	void	   *ret;
-	MemoryContext context = CurrentMemoryContext;
-
-	AssertArg(MemoryContextIsValid(context));
-	AssertNotInCriticalSection(context);
-
-	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %zu", size);
-
-	context->isReset = false;
-
-	ret = context->methods->alloc(context, size);
-	if (unlikely(ret == NULL))
-	{
-		MemoryContextStats(TopMemoryContext);
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Failed on request of size %zu in memory context \"%s\".",
-						   size, context->name)));
-	}
-
-	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
-
-	MemSetAligned(ret, 0, size);
-
-	return ret;
-}
-
-void *
 palloc_extended(Size size, int flags)
 {
 	/* duplicates MemoryContextAllocExtended to avoid increased overhead */
@@ -1000,7 +891,7 @@ palloc_extended(Size size, int flags)
 
 	context->isReset = false;
 
-	ret = context->methods->alloc(context, size);
+	ret = pg_assume_aligned(context->methods->alloc(context, size), sizeof(long));
 	if (unlikely(ret == NULL))
 	{
 		if ((flags & MCXT_ALLOC_NO_OOM) == 0)
@@ -1018,7 +909,7 @@ palloc_extended(Size size, int flags)
 	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
 
 	if ((flags & MCXT_ALLOC_ZERO) != 0)
-		MemSetAligned(ret, 0, size);
+		MemSet(ret, 0, size);
 
 	return ret;
 }

@@ -68,34 +68,38 @@ extern PGDLLIMPORT MemoryContext CurrentMemoryContext;
 /*
  * Fundamental memory-allocation operations (more are in utils/memutils.h)
  */
-extern void *MemoryContextAlloc(MemoryContext context, Size size);
-extern void *MemoryContextAllocZero(MemoryContext context, Size size);
-extern void *MemoryContextAllocZeroAligned(MemoryContext context, Size size);
+extern void *MemoryContextAlloc(MemoryContext context, Size size) pg_attribute_assume_aligned(sizeof(long));
 extern void *MemoryContextAllocExtended(MemoryContext context,
-										Size size, int flags);
+										Size size, int flags) pg_attribute_assume_aligned(sizeof(long));
 
-extern void *palloc(Size size);
-extern void *palloc0(Size size);
-extern void *palloc_extended(Size size, int flags);
-extern void *repalloc(void *pointer, Size size);
+extern void *palloc(Size size) pg_attribute_assume_aligned(sizeof(long));
+extern void *palloc_extended(Size size, int flags) pg_attribute_assume_aligned(sizeof(long));
+extern void *repalloc(void *pointer, Size size) pg_attribute_assume_aligned(sizeof(long));
 extern void pfree(void *pointer);
 
 /*
- * The result of palloc() is always word-aligned, so we can skip testing
- * alignment of the pointer when deciding which MemSet variant to use.
- * Note that this variant does not offer any advantage, and should not be
- * used, unless its "sz" argument is a compile-time constant; therefore, the
- * issue that it evaluates the argument multiple times isn't a problem in
- * practice.
+ * Inline zeroed-memory functions to give the compiler a chance to inline the
+ * memset().
  */
-#define palloc0fast(sz) \
-	( MemSetTest(0, sz) ? \
-		MemoryContextAllocZeroAligned(CurrentMemoryContext, sz) : \
-		MemoryContextAllocZero(CurrentMemoryContext, sz) )
+static inline void *
+palloc0(Size size)
+{
+	void *memory = palloc(size);
+	memset(memory, 0, size);
+	return memory;
+}
+
+static inline void *
+MemoryContextAllocZero(MemoryContext context, Size size)
+{
+	void *memory = MemoryContextAlloc(context, size);
+	memset(memory, 0, size);
+	return memory;
+}
 
 /* Higher-limit allocators. */
-extern void *MemoryContextAllocHuge(MemoryContext context, Size size);
-extern void *repalloc_huge(void *pointer, Size size);
+extern void *MemoryContextAllocHuge(MemoryContext context, Size size) pg_attribute_assume_aligned(sizeof(long));
+extern void *repalloc_huge(void *pointer, Size size) pg_attribute_assume_aligned(sizeof(long));
 
 /*
  * Although this header file is nominally backend-only, certain frontend

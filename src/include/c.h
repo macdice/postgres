@@ -194,6 +194,18 @@
 #endif
 
 /*
+ * Hint that a function always returns pointers to memory with given alignment,
+ * or that a given pointer has a given alignment.
+ */
+#if defined(__GNUC__) && (GCC_VERSION >= 40900 || defined(__clang__))
+#define pg_attribute_assume_aligned(x) __attribute__((assume_aligned(x)))
+#define pg_assume_aligned(p, x) __builtin_assume_aligned((p), (x))
+#else
+#define pg_attribute_assume_aligned(x)
+#define pg_assume_aligned(p, x) (p)
+#endif
+
+/*
  * Hints to the compiler about the likelihood of a branch. Both likely() and
  * unlikely() return the boolean value of the contained expression.
  *
@@ -924,98 +936,11 @@ extern void ExceptionalCondition(const char *conditionName,
 		} \
 	} while (0)
 
-
-/* Get a bit mask of the bits set in non-long aligned addresses */
-#define LONG_ALIGN_MASK (sizeof(long) - 1)
-
 /*
- * MemSet
- *	Exactly the same as standard library function memset(), but considerably
- *	faster for zeroing small word-aligned structures (such as parsetree nodes).
- *	This has to be a macro because the main point is to avoid function-call
- *	overhead.   However, we have also found that the loop is faster than
- *	native libc memset() on some platforms, even those with assembler
- *	memset() functions.  More research needs to be done, perhaps with
- *	MEMSET_LOOP_LIMIT tests in configure.
+ * Previously we had our own implementation of memset, but now we rely on
+ * the compiler to inline when appropriate with alignment analysis.
  */
-#define MemSet(start, val, len) \
-	do \
-	{ \
-		/* must be void* because we don't know if it is integer aligned yet */ \
-		void   *_vstart = (void *) (start); \
-		int		_val = (val); \
-		Size	_len = (len); \
-\
-		if ((((uintptr_t) _vstart) & LONG_ALIGN_MASK) == 0 && \
-			(_len & LONG_ALIGN_MASK) == 0 && \
-			_val == 0 && \
-			_len <= MEMSET_LOOP_LIMIT && \
-			/* \
-			 *	If MEMSET_LOOP_LIMIT == 0, optimizer should find \
-			 *	the whole "if" false at compile time. \
-			 */ \
-			MEMSET_LOOP_LIMIT != 0) \
-		{ \
-			long *_start = (long *) _vstart; \
-			long *_stop = (long *) ((char *) _start + _len); \
-			while (_start < _stop) \
-				*_start++ = 0; \
-		} \
-		else \
-			memset(_vstart, _val, _len); \
-	} while (0)
-
-/*
- * MemSetAligned is the same as MemSet except it omits the test to see if
- * "start" is word-aligned.  This is okay to use if the caller knows a-priori
- * that the pointer is suitably aligned (typically, because he just got it
- * from palloc(), which always delivers a max-aligned pointer).
- */
-#define MemSetAligned(start, val, len) \
-	do \
-	{ \
-		long   *_start = (long *) (start); \
-		int		_val = (val); \
-		Size	_len = (len); \
-\
-		if ((_len & LONG_ALIGN_MASK) == 0 && \
-			_val == 0 && \
-			_len <= MEMSET_LOOP_LIMIT && \
-			MEMSET_LOOP_LIMIT != 0) \
-		{ \
-			long *_stop = (long *) ((char *) _start + _len); \
-			while (_start < _stop) \
-				*_start++ = 0; \
-		} \
-		else \
-			memset(_start, _val, _len); \
-	} while (0)
-
-
-/*
- * MemSetTest/MemSetLoop are a variant version that allow all the tests in
- * MemSet to be done at compile time in cases where "val" and "len" are
- * constants *and* we know the "start" pointer must be word-aligned.
- * If MemSetTest succeeds, then it is okay to use MemSetLoop, otherwise use
- * MemSetAligned.  Beware of multiple evaluations of the arguments when using
- * this approach.
- */
-#define MemSetTest(val, len) \
-	( ((len) & LONG_ALIGN_MASK) == 0 && \
-	(len) <= MEMSET_LOOP_LIMIT && \
-	MEMSET_LOOP_LIMIT != 0 && \
-	(val) == 0 )
-
-#define MemSetLoop(start, val, len) \
-	do \
-	{ \
-		long * _start = (long *) (start); \
-		long * _stop = (long *) ((char *) _start + (Size) (len)); \
-	\
-		while (_start < _stop) \
-			*_start++ = 0; \
-	} while (0)
-
+#define MemSet(a, b, c) memset((a), (b), (c))
 
 /* ----------------------------------------------------------------
  *				Section 8:	random stuff

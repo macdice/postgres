@@ -508,7 +508,7 @@ AllocSetContextCreateInternal(MemoryContext parent,
 	set->keeper = block;
 
 	/* Finish filling in aset-specific parts of the context header */
-	MemSetAligned(set->freelist, 0, sizeof(set->freelist));
+	MemSet(set->freelist, 0, sizeof(set->freelist));
 
 	set->initBlockSize = initBlockSize;
 	set->maxBlockSize = maxBlockSize;
@@ -575,7 +575,7 @@ AllocSetReset(MemoryContext context)
 #endif
 
 	/* Clear chunk freelists */
-	MemSetAligned(set->freelist, 0, sizeof(set->freelist));
+	MemSet(set->freelist, 0, sizeof(set->freelist));
 
 	block = set->blocks;
 

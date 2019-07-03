@@ -116,7 +116,7 @@ ProcSignalInit(int pss_idx)
 			 MyProcPid, pss_idx);
 
 	/* Clear out any leftover signal reasons */
-	MemSet(slot->pss_signalFlags, 0, NUM_PROCSIGNALS * sizeof(sig_atomic_t));
+	MemSet((void *) slot->pss_signalFlags, 0, NUM_PROCSIGNALS * sizeof(sig_atomic_t));
 
 	/* Mark slot with my PID */
 	slot->pss_pid = MyProcPid;

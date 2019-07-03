@@ -545,7 +545,7 @@ typedef struct Node
 #define newNode(size, tag) \
 ({	Node   *_result; \
 	AssertMacro((size) >= sizeof(Node));		/* need the tag, at least */ \
-	_result = (Node *) palloc0fast(size); \
+	_result = (Node *) palloc0(size); \
 	_result->type = (tag); \
 	_result; \
 })
@@ -562,7 +562,7 @@ extern PGDLLIMPORT Node *newNodeMacroHolder;
 #define newNode(size, tag) \
 ( \
 	AssertMacro((size) >= sizeof(Node)),		/* need the tag, at least */ \
-	newNodeMacroHolder = (Node *) palloc0fast(size), \
+	newNodeMacroHolder = (Node *) palloc0(size), \
 	newNodeMacroHolder->type = (tag), \
 	newNodeMacroHolder \
 )
