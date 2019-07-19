@@ -430,7 +430,7 @@ compute_array_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 			count_item->frequency = 1;
 
 		/* Free memory allocated while detoasting. */
-		if (PointerGetDatum(array) != value)
+		if (array != (ArrayType *) DatumGetPointer(value))
 			pfree(array);
 		pfree(elem_values);
 		pfree(elem_nulls);

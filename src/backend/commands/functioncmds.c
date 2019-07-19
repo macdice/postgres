@@ -449,7 +449,7 @@ interpret_function_parameter_list(ParseState *pstate,
 	{
 		for (i = 0; i < parameterCount; i++)
 		{
-			if (paramNames[i] == PointerGetDatum(NULL))
+			if (!DatumGetPointer(paramNames[i]))
 				paramNames[i] = CStringGetTextDatum("");
 		}
 		*parameterNames = construct_array(paramNames, parameterCount, TEXTOID,
@@ -1372,7 +1372,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 
 		if (a == NULL)
 		{
-			repl_val[Anum_pg_proc_proconfig - 1] = (Datum) 0;
+			repl_val[Anum_pg_proc_proconfig - 1] = NullDatum;
 			repl_null[Anum_pg_proc_proconfig - 1] = true;
 		}
 		else

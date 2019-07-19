@@ -897,8 +897,8 @@ gin_extract_jsonb_query(PG_FUNCTION_ARGS)
 			if (key_nulls[i])
 				continue;
 			entries[j++] = make_text_key(JGINFLAG_KEY,
-										 VARDATA(key_datums[i]),
-										 VARSIZE(key_datums[i]) - VARHDRSZ);
+										 VARDATA(DatumGetPointer(key_datums[i])),
+										 VARSIZE(DatumGetPointer(key_datums[i])) - VARHDRSZ);
 		}
 
 		*nentries = j;
@@ -1402,7 +1402,7 @@ make_scalar_key(const JsonbValue *scalarVal, bool is_key)
 			break;
 		default:
 			elog(ERROR, "unrecognized jsonb scalar type: %d", scalarVal->type);
-			item = 0;			/* keep compiler quiet */
+			item = NullDatum;		/* keep compiler quiet */
 			break;
 	}
 

@@ -107,7 +107,7 @@ BootstrapToastTable(char *relName, Oid toastOid, Oid toastIndexOid)
 						relName)));
 
 	/* create_toast_table does all the work */
-	if (!create_toast_table(rel, toastOid, toastIndexOid, (Datum) 0,
+	if (!create_toast_table(rel, toastOid, toastIndexOid, NullDatum,
 							AccessExclusiveLock, false))
 		elog(ERROR, "\"%s\" does not require a toast table",
 			 relName);
@@ -328,7 +328,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 				 list_make2("chunk_id", "chunk_seq"),
 				 BTREE_AM_OID,
 				 rel->rd_rel->reltablespace,
-				 collationObjectId, classObjectId, coloptions, (Datum) 0,
+				 collationObjectId, classObjectId, coloptions, NullDatum,
 				 INDEX_CREATE_IS_PRIMARY, 0, true, true, NULL);
 
 	table_close(toast_rel, NoLock);

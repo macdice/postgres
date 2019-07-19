@@ -1828,7 +1828,7 @@ plpgsql_build_variable(const char *refname, int lineno, PLpgSQL_type *dtype,
 				/* other fields are left as 0, might be changed by caller */
 
 				/* preset to NULL */
-				var->value = 0;
+				var->value = NullDatum;
 				var->isnull = true;
 				var->freeval = false;
 

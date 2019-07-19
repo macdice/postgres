@@ -107,7 +107,7 @@ pg_start_backup(PG_FUNCTION_ARGS)
 		startpoint = do_pg_start_backup(backupidstr, fast, NULL, label_file,
 										NULL, tblspc_map_file, false, true);
 
-		before_shmem_exit(nonexclusive_base_backup_cleanup, (Datum) 0);
+		before_shmem_exit(nonexclusive_base_backup_cleanup, NullDatum);
 	}
 
 	PG_RETURN_LSN(startpoint);
@@ -249,7 +249,7 @@ pg_stop_backup_v2(PG_FUNCTION_ARGS)
 		 * and tablespace map so they can be written to disk by the caller.
 		 */
 		stoppoint = do_pg_stop_backup(label_file->data, waitforarchive, NULL);
-		cancel_before_shmem_exit(nonexclusive_base_backup_cleanup, (Datum) 0);
+		cancel_before_shmem_exit(nonexclusive_base_backup_cleanup, NullDatum);
 
 		values[1] = CStringGetTextDatum(label_file->data);
 		values[2] = CStringGetTextDatum(tblspc_map_file->data);
@@ -269,7 +269,7 @@ pg_stop_backup_v2(PG_FUNCTION_ARGS)
 	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	tuplestore_donestoring(typstore);
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*
@@ -625,7 +625,7 @@ pg_wal_lsn_diff(PG_FUNCTION_ARGS)
 								 PG_GETARG_DATUM(0),
 								 PG_GETARG_DATUM(1));
 
-	PG_RETURN_NUMERIC(result);
+	PG_RETURN_DATUM(result);
 }
 
 /*

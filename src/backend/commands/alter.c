@@ -223,7 +223,7 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 		Assert(!isnull);
 		ownerId = DatumGetObjectId(datum);
 
-		if (!has_privs_of_role(GetUserId(), DatumGetObjectId(ownerId)))
+		if (!has_privs_of_role(GetUserId(), ownerId))
 			aclcheck_error(ACLCHECK_NOT_OWNER, objtype, old_name);
 
 		/* User must have CREATE privilege on the namespace */
@@ -271,7 +271,7 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 	}
 	else if (classId == SubscriptionRelationId)
 	{
-		if (SearchSysCacheExists2(SUBSCRIPTIONNAME, MyDatabaseId,
+		if (SearchSysCacheExists2(SUBSCRIPTIONNAME, ObjectIdGetDatum(MyDatabaseId),
 								  CStringGetDatum(new_name)))
 			report_name_conflict(classId, new_name);
 

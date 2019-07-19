@@ -2548,7 +2548,7 @@ ri_InitHashTables(void)
 	/* Arrange to flush cache on pg_constraint changes */
 	CacheRegisterSyscacheCallback(CONSTROID,
 								  InvalidateConstraintCacheCallBack,
-								  (Datum) 0);
+								  NullDatum);
 
 	memset(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(RI_QueryKey);

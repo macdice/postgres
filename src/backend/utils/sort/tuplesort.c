@@ -1575,7 +1575,7 @@ tuplesort_putdatum(Tuplesortstate *state, Datum val, bool isNull)
 		 * Set datum1 to zeroed representation for NULLs (to be consistent,
 		 * and to support cheap inequality tests for NULL abbreviated keys).
 		 */
-		stup.datum1 = !isNull ? val : (Datum) 0;
+		stup.datum1 = !isNull ? val : NullDatum;
 		stup.isnull1 = isNull;
 		stup.tuple = NULL;		/* no separate storage */
 		MemoryContextSwitchTo(state->sortcontext);
@@ -4328,7 +4328,7 @@ readtup_datum(Tuplesortstate *state, SortTuple *stup,
 	if (tuplen == 0)
 	{
 		/* it's NULL */
-		stup->datum1 = (Datum) 0;
+		stup->datum1 = NullDatum;
 		stup->isnull1 = true;
 		stup->tuple = NULL;
 	}

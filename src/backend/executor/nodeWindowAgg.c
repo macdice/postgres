@@ -228,7 +228,7 @@ initialize_windowaggregate(WindowAggState *winstate,
 	}
 	peraggstate->transValueIsNull = peraggstate->initValueIsNull;
 	peraggstate->transValueCount = 0;
-	peraggstate->resultValue = (Datum) 0;
+	peraggstate->resultValue = NullDatum;
 	peraggstate->resultValueIsNull = true;
 }
 
@@ -608,7 +608,7 @@ finalize_windowaggregate(WindowAggState *winstate,
 		/* Fill any remaining argument positions with nulls */
 		for (i = 1; i < numFinalArgs; i++)
 		{
-			fcinfo->args[i].value = (Datum) 0;
+			fcinfo->args[i].value = NullDatum;
 			fcinfo->args[i].isnull = true;
 			anynull = true;
 		}
@@ -616,7 +616,7 @@ finalize_windowaggregate(WindowAggState *winstate,
 		if (fcinfo->flinfo->fn_strict && anynull)
 		{
 			/* don't call a strict function with NULL inputs */
-			*result = (Datum) 0;
+			*result = NullDatum;
 			*isnull = true;
 		}
 		else
@@ -894,7 +894,7 @@ eval_windowaggregates(WindowAggState *winstate)
 		{
 			if (!peraggstate->resulttypeByVal)
 				pfree(DatumGetPointer(peraggstate->resultValue));
-			peraggstate->resultValue = (Datum) 0;
+			peraggstate->resultValue = NullDatum;
 			peraggstate->resultValueIsNull = true;
 		}
 	}
@@ -2814,7 +2814,7 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 								  &peraggstate->initValueIsNull);
 
 	if (peraggstate->initValueIsNull)
-		peraggstate->initValue = (Datum) 0;
+		peraggstate->initValue = NullDatum;
 	else
 		peraggstate->initValue = GetAggInitVal(textInitVal,
 											   aggtranstype);
@@ -3203,7 +3203,7 @@ WinGetFuncArgInPartition(WindowObject winobj, int argno,
 		if (isout)
 			*isout = true;
 		*isnull = true;
-		return (Datum) 0;
+		return NullDatum;
 	}
 	else
 	{
@@ -3429,7 +3429,7 @@ out_of_frame:
 	if (isout)
 		*isout = true;
 	*isnull = true;
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*

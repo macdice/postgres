@@ -61,8 +61,8 @@ typedef char GinTernaryValue;
 #define GIN_MAYBE		2		/* don't know if item is present / don't know
 								 * if matches */
 
-#define DatumGetGinTernaryValue(X) ((GinTernaryValue)(X))
-#define GinTernaryValueGetDatum(X) ((Datum)(X))
+#define DatumGetGinTernaryValue(X) (DatumGetInt32(X))
+#define GinTernaryValueGetDatum(X) (Int32GetDatum(X))
 #define PG_RETURN_GIN_TERNARY_VALUE(x) return GinTernaryValueGetDatum(x)
 
 /* GUC parameters */

@@ -997,7 +997,7 @@ cancel_on_dsm_detach(dsm_segment *seg, on_dsm_detach_callback function,
 		dsm_segment_detach_callback *cb;
 
 		cb = slist_container(dsm_segment_detach_callback, node, iter.cur);
-		if (cb->function == function && cb->arg == arg)
+		if (cb->function == function && cb->arg.value == arg.value)
 		{
 			slist_delete_current(&iter);
 			pfree(cb);

@@ -1245,7 +1245,7 @@ build_regexp_match_result(regexp_matches_ctx *matchctx)
 
 		if (so < 0 || eo < 0)
 		{
-			elems[i] = (Datum) 0;
+			elems[i] = NullDatum;
 			nulls[i] = true;
 		}
 		else if (buf)
@@ -1380,7 +1380,7 @@ regexp_split_to_array(PG_FUNCTION_ARGS)
 		splitctx->next_match++;
 	}
 
-	PG_RETURN_ARRAYTYPE_P(makeArrayResult(astate, CurrentMemoryContext));
+	PG_RETURN_DATUM(makeArrayResult(astate, CurrentMemoryContext));
 }
 
 /* This is separate to keep the opr_sanity regression test from complaining */

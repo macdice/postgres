@@ -1006,7 +1006,7 @@ PostmasterMain(int argc, char *argv[])
 	for (i = 0; i < MAXLISTEN; i++)
 		ListenSocket[i] = PGINVALID_SOCKET;
 
-	on_proc_exit(CloseServerPorts, 0);
+	on_proc_exit(CloseServerPorts, NullDatum);
 
 	if (ListenAddresses)
 	{
@@ -1238,7 +1238,7 @@ PostmasterMain(int argc, char *argv[])
 			write_stderr("%s: could not write external PID file \"%s\": %s\n",
 						 progname, external_pid_file, strerror(errno));
 
-		on_proc_exit(unlink_external_pid_file, 0);
+		on_proc_exit(unlink_external_pid_file, NullDatum);
 	}
 
 	/*

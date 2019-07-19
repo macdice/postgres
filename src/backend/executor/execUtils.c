@@ -275,10 +275,10 @@ CreateExprContext(EState *estate)
 	econtext->ecxt_aggvalues = NULL;
 	econtext->ecxt_aggnulls = NULL;
 
-	econtext->caseValue_datum = (Datum) 0;
+	econtext->caseValue_datum = NullDatum;
 	econtext->caseValue_isNull = true;
 
-	econtext->domainValue_datum = (Datum) 0;
+	econtext->domainValue_datum = NullDatum;
 	econtext->domainValue_isNull = true;
 
 	econtext->ecxt_estate = estate;
@@ -344,10 +344,10 @@ CreateStandaloneExprContext(void)
 	econtext->ecxt_aggvalues = NULL;
 	econtext->ecxt_aggnulls = NULL;
 
-	econtext->caseValue_datum = (Datum) 0;
+	econtext->caseValue_datum = NullDatum;
 	econtext->caseValue_isNull = true;
 
-	econtext->domainValue_datum = (Datum) 0;
+	econtext->domainValue_datum = NullDatum;
 	econtext->domainValue_isNull = true;
 
 	econtext->ecxt_estate = NULL;
@@ -912,7 +912,8 @@ UnregisterExprContextCallback(ExprContext *econtext,
 
 	while ((ecxt_callback = *prev_callback) != NULL)
 	{
-		if (ecxt_callback->function == function && ecxt_callback->arg == arg)
+		if (ecxt_callback->function == function &&
+			ecxt_callback->arg.value == arg.value)
 		{
 			*prev_callback = ecxt_callback->next;
 			pfree(ecxt_callback);
@@ -993,7 +994,7 @@ GetAttributeByName(HeapTupleHeader tuple, const char *attname, bool *isNull)
 	{
 		/* Kinda bogus but compatible with old behavior... */
 		*isNull = true;
-		return (Datum) 0;
+		return NullDatum;
 	}
 
 	tupType = HeapTupleHeaderGetTypeId(tuple);
@@ -1056,7 +1057,7 @@ GetAttributeByNum(HeapTupleHeader tuple,
 	{
 		/* Kinda bogus but compatible with old behavior... */
 		*isNull = true;
-		return (Datum) 0;
+		return NullDatum;
 	}
 
 	tupType = HeapTupleHeaderGetTypeId(tuple);

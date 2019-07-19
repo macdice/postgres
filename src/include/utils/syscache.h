@@ -172,45 +172,45 @@ extern bool RelationSupportsSysCache(Oid relid);
  * maximum number of keys.
  */
 #define SearchSysCacheCopy1(cacheId, key1) \
-	SearchSysCacheCopy(cacheId, key1, 0, 0, 0)
+	SearchSysCacheCopy(cacheId, key1, NullDatum, NullDatum, NullDatum)
 #define SearchSysCacheCopy2(cacheId, key1, key2) \
-	SearchSysCacheCopy(cacheId, key1, key2, 0, 0)
+	SearchSysCacheCopy(cacheId, key1, key2, NullDatum, NullDatum)
 #define SearchSysCacheCopy3(cacheId, key1, key2, key3) \
-	SearchSysCacheCopy(cacheId, key1, key2, key3, 0)
+	SearchSysCacheCopy(cacheId, key1, key2, key3, NullDatum)
 #define SearchSysCacheCopy4(cacheId, key1, key2, key3, key4) \
 	SearchSysCacheCopy(cacheId, key1, key2, key3, key4)
 
 #define SearchSysCacheExists1(cacheId, key1) \
-	SearchSysCacheExists(cacheId, key1, 0, 0, 0)
+	SearchSysCacheExists(cacheId, key1, NullDatum, NullDatum, NullDatum)
 #define SearchSysCacheExists2(cacheId, key1, key2) \
-	SearchSysCacheExists(cacheId, key1, key2, 0, 0)
+	SearchSysCacheExists(cacheId, key1, key2, NullDatum, NullDatum)
 #define SearchSysCacheExists3(cacheId, key1, key2, key3) \
-	SearchSysCacheExists(cacheId, key1, key2, key3, 0)
+	SearchSysCacheExists(cacheId, key1, key2, key3, NullDatum)
 #define SearchSysCacheExists4(cacheId, key1, key2, key3, key4) \
 	SearchSysCacheExists(cacheId, key1, key2, key3, key4)
 
 #define GetSysCacheOid1(cacheId, oidcol, key1) \
-	GetSysCacheOid(cacheId, oidcol, key1, 0, 0, 0)
+	GetSysCacheOid(cacheId, oidcol, key1, NullDatum, NullDatum, NullDatum)
 #define GetSysCacheOid2(cacheId, oidcol, key1, key2) \
-	GetSysCacheOid(cacheId, oidcol, key1, key2, 0, 0)
+	GetSysCacheOid(cacheId, oidcol, key1, key2, NullDatum, NullDatum)
 #define GetSysCacheOid3(cacheId, oidcol, key1, key2, key3) \
-	GetSysCacheOid(cacheId, oidcol, key1, key2, key3, 0)
+	GetSysCacheOid(cacheId, oidcol, key1, key2, key3, NullDatum)
 #define GetSysCacheOid4(cacheId, oidcol, key1, key2, key3, key4) \
 	GetSysCacheOid(cacheId, oidcol, key1, key2, key3, key4)
 
 #define GetSysCacheHashValue1(cacheId, key1) \
-	GetSysCacheHashValue(cacheId, key1, 0, 0, 0)
+	GetSysCacheHashValue(cacheId, key1, NullDatum, NullDatum, NullDatum)
 #define GetSysCacheHashValue2(cacheId, key1, key2) \
-	GetSysCacheHashValue(cacheId, key1, key2, 0, 0)
+	GetSysCacheHashValue(cacheId, key1, key2, NullDatum, NullDatum)
 #define GetSysCacheHashValue3(cacheId, key1, key2, key3) \
-	GetSysCacheHashValue(cacheId, key1, key2, key3, 0)
+	GetSysCacheHashValue(cacheId, key1, key2, key3, NullDatum)
 #define GetSysCacheHashValue4(cacheId, key1, key2, key3, key4) \
 	GetSysCacheHashValue(cacheId, key1, key2, key3, key4)
 
 #define SearchSysCacheList1(cacheId, key1) \
-	SearchSysCacheList(cacheId, 1, key1, 0, 0)
+	SearchSysCacheList(cacheId, 1, key1, NullDatum, NullDatum)
 #define SearchSysCacheList2(cacheId, key1, key2) \
-	SearchSysCacheList(cacheId, 2, key1, key2, 0)
+	SearchSysCacheList(cacheId, 2, key1, key2, NullDatum)
 #define SearchSysCacheList3(cacheId, key1, key2, key3) \
 	SearchSysCacheList(cacheId, 3, key1, key2, key3)
 

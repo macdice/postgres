@@ -890,11 +890,11 @@ InsertPgClassTuple(Relation pg_class_desc,
 	values[Anum_pg_class_relrewrite - 1] = ObjectIdGetDatum(rd_rel->relrewrite);
 	values[Anum_pg_class_relfrozenxid - 1] = TransactionIdGetDatum(rd_rel->relfrozenxid);
 	values[Anum_pg_class_relminmxid - 1] = MultiXactIdGetDatum(rd_rel->relminmxid);
-	if (relacl != (Datum) 0)
+	if (DatumGetPointer(relacl))
 		values[Anum_pg_class_relacl - 1] = relacl;
 	else
 		nulls[Anum_pg_class_relacl - 1] = true;
-	if (reloptions != (Datum) 0)
+	if (DatumGetPointer(reloptions))
 		values[Anum_pg_class_reloptions - 1] = reloptions;
 	else
 		nulls[Anum_pg_class_reloptions - 1] = true;
@@ -1657,7 +1657,7 @@ RemoveAttributeById(Oid relid, AttrNumber attnum)
 			valuesAtt[Anum_pg_attribute_atthasmissing - 1] =
 				BoolGetDatum(false);
 			replacesAtt[Anum_pg_attribute_atthasmissing - 1] = true;
-			valuesAtt[Anum_pg_attribute_attmissingval - 1] = (Datum) 0;
+			valuesAtt[Anum_pg_attribute_attmissingval - 1] = NullDatum;
 			nullsAtt[Anum_pg_attribute_attmissingval - 1] = true;
 			replacesAtt[Anum_pg_attribute_attmissingval - 1] = true;
 
@@ -2152,8 +2152,8 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	attrdefOid = GetNewOidWithIndex(adrel, AttrDefaultOidIndexId,
 									Anum_pg_attrdef_oid);
 	values[Anum_pg_attrdef_oid - 1] = ObjectIdGetDatum(attrdefOid);
-	values[Anum_pg_attrdef_adrelid - 1] = RelationGetRelid(rel);
-	values[Anum_pg_attrdef_adnum - 1] = attnum;
+	values[Anum_pg_attrdef_adrelid - 1] = ObjectIdGetDatum(RelationGetRelid(rel));
+	values[Anum_pg_attrdef_adnum - 1] = ObjectIdGetDatum(attnum);
 	values[Anum_pg_attrdef_adbin - 1] = CStringGetTextDatum(adbin);
 
 	tuple = heap_form_tuple(adrel->rd_att, values, nulls);
@@ -2194,13 +2194,13 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 		Datum		valuesAtt[Natts_pg_attribute];
 		bool		nullsAtt[Natts_pg_attribute];
 		bool		replacesAtt[Natts_pg_attribute];
-		Datum		missingval = (Datum) 0;
+		Datum		missingval = NullDatum;
 		bool		missingIsNull = true;
 
 		MemSet(valuesAtt, 0, sizeof(valuesAtt));
 		MemSet(nullsAtt, false, sizeof(nullsAtt));
 		MemSet(replacesAtt, false, sizeof(replacesAtt));
-		valuesAtt[Anum_pg_attribute_atthasdef - 1] = true;
+		valuesAtt[Anum_pg_attribute_atthasdef - 1] = BoolGetDatum(true);
 		replacesAtt[Anum_pg_attribute_atthasdef - 1] = true;
 
 		if (add_column_mode && !attgenerated)
@@ -2220,7 +2220,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 			if (missingIsNull)
 			{
 				/* if the default evaluates to NULL, just store a NULL array */
-				missingval = (Datum) 0;
+				missingval = NullDatum;
 			}
 			else
 			{
@@ -2234,7 +2234,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 															 defAttStruct->attalign));
 			}
 
-			valuesAtt[Anum_pg_attribute_atthasmissing - 1] = !missingIsNull;
+			valuesAtt[Anum_pg_attribute_atthasmissing - 1] = BoolGetDatum(!missingIsNull);
 			replacesAtt[Anum_pg_attribute_atthasmissing - 1] = true;
 			valuesAtt[Anum_pg_attribute_attmissingval - 1] = missingval;
 			replacesAtt[Anum_pg_attribute_attmissingval - 1] = true;
@@ -3440,14 +3440,14 @@ StorePartitionKey(Relation rel,
 		pfree(exprString);
 	}
 	else
-		partexprDatum = (Datum) 0;
+		partexprDatum = NullDatum;
 
 	pg_partitioned_table = table_open(PartitionedRelationId, RowExclusiveLock);
 
 	MemSet(nulls, false, sizeof(nulls));
 
 	/* Only this can ever be NULL */
-	if (!partexprDatum)
+	if (!DatumGetBool(partexprDatum))
 		nulls[Anum_pg_partitioned_table_partexprs - 1] = true;
 
 	values[Anum_pg_partitioned_table_partrelid - 1] = ObjectIdGetDatum(RelationGetRelid(rel));

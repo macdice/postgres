@@ -98,5 +98,5 @@ pg_config(PG_FUNCTION_ARGS)
 	rsinfo->setDesc = tupdesc;
 	MemoryContextSwitchTo(oldcontext);
 
-	return (Datum) 0;
+	return NullDatum;
 }

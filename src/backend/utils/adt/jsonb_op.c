@@ -64,8 +64,8 @@ jsonb_exists_any(PG_FUNCTION_ARGS)
 			continue;
 
 		strVal.type = jbvString;
-		strVal.val.string.val = VARDATA(key_datums[i]);
-		strVal.val.string.len = VARSIZE(key_datums[i]) - VARHDRSZ;
+		strVal.val.string.val = VARDATA(DatumGetPointer(key_datums[i]));
+		strVal.val.string.len = VARSIZE(DatumGetPointer(key_datums[i])) - VARHDRSZ;
 
 		if (findJsonbValueFromContainer(&jb->root,
 										JB_FOBJECT | JB_FARRAY,
@@ -97,8 +97,8 @@ jsonb_exists_all(PG_FUNCTION_ARGS)
 			continue;
 
 		strVal.type = jbvString;
-		strVal.val.string.val = VARDATA(key_datums[i]);
-		strVal.val.string.len = VARSIZE(key_datums[i]) - VARHDRSZ;
+		strVal.val.string.val = VARDATA(DatumGetPointer(key_datums[i]));
+		strVal.val.string.len = VARSIZE(DatumGetPointer(key_datums[i])) - VARHDRSZ;
 
 		if (findJsonbValueFromContainer(&jb->root,
 										JB_FOBJECT | JB_FARRAY,

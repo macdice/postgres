@@ -364,7 +364,22 @@ typedef struct
  * convert between a Datum and the appropriate C type.
  */
 
-typedef uintptr_t Datum;
+//typedef uintptr_t Datum;
+
+#ifndef PG_DATUM_DEFINED
+#define PG_DATUM_DEFINED
+typedef struct Datum
+{
+	uintptr_t value;
+} Datum;
+#endif
+
+static inline Datum MakeDatum(uintptr_t value)
+{
+	Datum v;
+	v.value = value;
+	return v;
+}
 
 /*
  * A NullableDatum is used in places where both a Datum and its nullness needs
@@ -390,7 +405,7 @@ typedef struct NullableDatum
  * Note: any nonzero value will be considered true.
  */
 
-#define DatumGetBool(X) ((bool) ((X) != 0))
+#define DatumGetBool(X) ((bool) ((X).value != 0))
 
 /*
  * BoolGetDatum
@@ -399,161 +414,163 @@ typedef struct NullableDatum
  * Note: any nonzero value will be considered true.
  */
 
-#define BoolGetDatum(X) ((Datum) ((X) ? 1 : 0))
+#define BoolGetDatum(X) (MakeDatum((X) ? 1 : 0))
 
 /*
  * DatumGetChar
  *		Returns character value of a datum.
  */
 
-#define DatumGetChar(X) ((char) (X))
+#define DatumGetChar(X) ((char) (X).value)
 
 /*
  * CharGetDatum
  *		Returns datum representation for a character.
  */
 
-#define CharGetDatum(X) ((Datum) (X))
+#define CharGetDatum(X) (MakeDatum(X))
 
 /*
  * Int8GetDatum
  *		Returns datum representation for an 8-bit integer.
  */
 
-#define Int8GetDatum(X) ((Datum) (X))
+#define Int8GetDatum(X) ((Datum) (X).value)
 
 /*
  * DatumGetUInt8
  *		Returns 8-bit unsigned integer value of a datum.
  */
 
-#define DatumGetUInt8(X) ((uint8) (X))
+#define DatumGetUInt8(X) ((uint8) (X).value)
 
 /*
  * UInt8GetDatum
  *		Returns datum representation for an 8-bit unsigned integer.
  */
 
-#define UInt8GetDatum(X) ((Datum) (X))
+#define UInt8GetDatum(X) ((Datum) (X).value)
 
 /*
  * DatumGetInt16
  *		Returns 16-bit integer value of a datum.
  */
 
-#define DatumGetInt16(X) ((int16) (X))
+#define DatumGetInt16(X) ((int16) (X).value)
 
 /*
  * Int16GetDatum
  *		Returns datum representation for a 16-bit integer.
  */
 
-#define Int16GetDatum(X) ((Datum) (X))
+#define Int16GetDatum(X) (MakeDatum(X))
 
 /*
  * DatumGetUInt16
  *		Returns 16-bit unsigned integer value of a datum.
  */
 
-#define DatumGetUInt16(X) ((uint16) (X))
+#define DatumGetUInt16(X) ((uint16) (X).value)
 
 /*
  * UInt16GetDatum
  *		Returns datum representation for a 16-bit unsigned integer.
  */
 
-#define UInt16GetDatum(X) ((Datum) (X))
+#define UInt16GetDatum(X) (MakeDatum(X))
 
 /*
  * DatumGetInt32
  *		Returns 32-bit integer value of a datum.
  */
 
-#define DatumGetInt32(X) ((int32) (X))
+#define DatumGetInt32(X) ((int32) (X).value)
 
 /*
  * Int32GetDatum
  *		Returns datum representation for a 32-bit integer.
  */
 
-#define Int32GetDatum(X) ((Datum) (X))
+#define Int32GetDatum(X) (MakeDatum(X))
 
 /*
  * DatumGetUInt32
  *		Returns 32-bit unsigned integer value of a datum.
  */
 
-#define DatumGetUInt32(X) ((uint32) (X))
+#define DatumGetUInt32(X) ((uint32) (X).value)
 
 /*
  * UInt32GetDatum
  *		Returns datum representation for a 32-bit unsigned integer.
  */
 
-#define UInt32GetDatum(X) ((Datum) (X))
+#define UInt32GetDatum(X) (MakeDatum(X))
 
 /*
  * DatumGetObjectId
  *		Returns object identifier value of a datum.
  */
 
-#define DatumGetObjectId(X) ((Oid) (X))
+#define DatumGetObjectId(X) ((Oid) (X).value)
 
 /*
  * ObjectIdGetDatum
  *		Returns datum representation for an object identifier.
  */
 
-#define ObjectIdGetDatum(X) ((Datum) (X))
+#define ObjectIdGetDatum(X) (MakeDatum(X))
 
 /*
  * DatumGetTransactionId
  *		Returns transaction identifier value of a datum.
  */
 
-#define DatumGetTransactionId(X) ((TransactionId) (X))
+#define DatumGetTransactionId(X) ((TransactionId) (X).value)
 
 /*
  * TransactionIdGetDatum
  *		Returns datum representation for a transaction identifier.
  */
 
-#define TransactionIdGetDatum(X) ((Datum) (X))
+#define TransactionIdGetDatum(X) (MakeDatum(X))
 
 /*
  * MultiXactIdGetDatum
  *		Returns datum representation for a multixact identifier.
  */
 
-#define MultiXactIdGetDatum(X) ((Datum) (X))
+#define MultiXactIdGetDatum(X) (MakeDatum(X))
 
 /*
  * DatumGetCommandId
  *		Returns command identifier value of a datum.
  */
 
-#define DatumGetCommandId(X) ((CommandId) (X))
+#define DatumGetCommandId(X) ((CommandId) (X).value)
 
 /*
  * CommandIdGetDatum
  *		Returns datum representation for a command identifier.
  */
 
-#define CommandIdGetDatum(X) ((Datum) (X))
+#define CommandIdGetDatum(X) (MakeDatum(X))
 
 /*
  * DatumGetPointer
  *		Returns pointer value of a datum.
  */
 
-#define DatumGetPointer(X) ((Pointer) (X))
+#define DatumGetPointer(X) ((Pointer) (X).value)
 
 /*
  * PointerGetDatum
  *		Returns datum representation for a pointer.
  */
 
-#define PointerGetDatum(X) ((Datum) (X))
+#define PointerGetDatum(X) (MakeDatum((uint64_t) (X)))
+
+#define NullDatum PointerGetDatum(NULL)
 
 /*
  * DatumGetCString
@@ -602,7 +619,7 @@ typedef struct NullableDatum
  */
 
 #ifdef USE_FLOAT8_BYVAL
-#define DatumGetInt64(X) ((int64) (X))
+#define DatumGetInt64(X) ((int64) (X).value)
 #else
 #define DatumGetInt64(X) (* ((int64 *) DatumGetPointer(X)))
 #endif
@@ -616,7 +633,7 @@ typedef struct NullableDatum
  */
 
 #ifdef USE_FLOAT8_BYVAL
-#define Int64GetDatum(X) ((Datum) (X))
+#define Int64GetDatum(X) (MakeDatum(X))
 #else
 extern Datum Int64GetDatum(int64 X);
 #endif
@@ -629,7 +646,7 @@ extern Datum Int64GetDatum(int64 X);
  */
 
 #ifdef USE_FLOAT8_BYVAL
-#define DatumGetUInt64(X) ((uint64) (X))
+#define DatumGetUInt64(X) ((uint64) (X).value)
 #else
 #define DatumGetUInt64(X) (* ((uint64 *) DatumGetPointer(X)))
 #endif
@@ -643,9 +660,9 @@ extern Datum Int64GetDatum(int64 X);
  */
 
 #ifdef USE_FLOAT8_BYVAL
-#define UInt64GetDatum(X) ((Datum) (X))
+#define UInt64GetDatum(X) (MakeDatum(X))
 #else
-#define UInt64GetDatum(X) Int64GetDatum((int64) (X))
+#define UInt64GetDatum(X) Int64GetDatum((int64) (X).value)
 #endif
 
 /*

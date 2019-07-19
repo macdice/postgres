@@ -284,9 +284,9 @@ uuid_fast_cmp(Datum x, Datum y, SortSupport ssup)
 static int
 uuid_cmp_abbrev(Datum x, Datum y, SortSupport ssup)
 {
-	if (x > y)
+	if (x.value > y.value)
 		return 1;
-	else if (x == y)
+	else if (x.value == y.value)
 		return 0;
 	else
 		return -1;
@@ -379,9 +379,9 @@ uuid_abbrev_convert(Datum original, SortSupport ssup)
 		uint32		tmp;
 
 #if SIZEOF_DATUM == 8
-		tmp = (uint32) res ^ (uint32) ((uint64) res >> 32);
+		tmp = (uint32) res.value ^ (uint32) ((uint64) res.value >> 32);
 #else							/* SIZEOF_DATUM != 8 */
-		tmp = (uint32) res;
+		tmp = (uint32) res.value;
 #endif
 
 		addHyperLogLog(&uss->abbr_card, DatumGetUInt32(hash_uint32(tmp)));
@@ -395,7 +395,7 @@ uuid_abbrev_convert(Datum original, SortSupport ssup)
 	 * the comparator would have to call memcmp() with a pair of pointers to
 	 * the first byte of each abbreviated key, which is slower.
 	 */
-	res = DatumBigEndianToNative(res);
+	res = UInt32GetDatum(DatumBigEndianToNative(res.value));
 
 	return res;
 }

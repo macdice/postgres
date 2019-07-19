@@ -1201,7 +1201,7 @@ pg_cursor(PG_FUNCTION_ARGS)
 	rsinfo->setResult = tupstore;
 	rsinfo->setDesc = tupdesc;
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 bool

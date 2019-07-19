@@ -336,10 +336,10 @@ lookup_type_cache(Oid type_id, int flags)
 									&ctl, HASH_ELEM | HASH_BLOBS);
 
 		/* Also set up callbacks for SI invalidations */
-		CacheRegisterRelcacheCallback(TypeCacheRelCallback, (Datum) 0);
-		CacheRegisterSyscacheCallback(CLAOID, TypeCacheOpcCallback, (Datum) 0);
-		CacheRegisterSyscacheCallback(CONSTROID, TypeCacheConstrCallback, (Datum) 0);
-		CacheRegisterSyscacheCallback(TYPEOID, TypeCacheConstrCallback, (Datum) 0);
+		CacheRegisterRelcacheCallback(TypeCacheRelCallback, NullDatum);
+		CacheRegisterSyscacheCallback(CLAOID, TypeCacheOpcCallback, NullDatum);
+		CacheRegisterSyscacheCallback(CONSTROID, TypeCacheConstrCallback, NullDatum);
+		CacheRegisterSyscacheCallback(TYPEOID, TypeCacheConstrCallback, NullDatum);
 
 		/* Also make sure CacheMemoryContext exists */
 		if (!CacheMemoryContext)
@@ -1996,7 +1996,7 @@ SharedRecordTypmodRegistryInit(SharedRecordTypmodRegistry *registry,
 	 * the memory, the leader process will use a shared registry until it
 	 * exits.
 	 */
-	on_dsm_detach(segment, shared_record_typmod_registry_detach, (Datum) 0);
+	on_dsm_detach(segment, shared_record_typmod_registry_detach, NullDatum);
 }
 
 /*

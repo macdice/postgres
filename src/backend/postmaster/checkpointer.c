@@ -377,7 +377,7 @@ CheckpointerMain(void)
 			 */
 			ExitOnAnyError = true;
 			/* Close down the database */
-			ShutdownXLOG(0, 0);
+			ShutdownXLOG(0, NullDatum);
 			/* Normal exit from the checkpointer is here */
 			proc_exit(0);		/* done */
 		}

@@ -716,7 +716,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/*
 	 * Parse and validate reloptions, if any.
 	 */
-	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
+	reloptions = transformRelOptions(NullDatum, stmt->options, NULL, validnsps,
 									 true, false);
 
 	if (relkind == RELKIND_VIEW)
@@ -4209,7 +4209,7 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode)
 			  tab->relkind == RELKIND_PARTITIONED_TABLE) &&
 			 tab->partition_constraint == NULL) ||
 			tab->relkind == RELKIND_MATVIEW)
-			AlterTableCreateToastTable(tab->relid, (Datum) 0, lockmode);
+			AlterTableCreateToastTable(tab->relid, NullDatum, lockmode);
 	}
 }
 
@@ -6827,7 +6827,7 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 	/* Generate new proposed attoptions (text array) */
 	datum = SysCacheGetAttr(ATTNAME, tuple, Anum_pg_attribute_attoptions,
 							&isnull);
-	newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
+	newOptions = transformRelOptions(isnull ? NullDatum : datum,
 									 castNode(List, options), NULL, NULL,
 									 false, isReset);
 	/* Validate new options */
@@ -6836,7 +6836,7 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 	/* Build new tuple. */
 	memset(repl_null, false, sizeof(repl_null));
 	memset(repl_repl, false, sizeof(repl_repl));
-	if (newOptions != (Datum) 0)
+	if (DatumGetPointer(newOptions))
 		repl_val[Anum_pg_attribute_attoptions - 1] = newOptions;
 	else
 		repl_null[Anum_pg_attribute_attoptions - 1] = true;
@@ -8488,7 +8488,7 @@ CloneFkReferenced(Relation parentRel, Relation partitionRel)
 		Oid			conffeqop[INDEX_MAX_KEYS];
 		Constraint *fkconstraint;
 
-		tuple = SearchSysCache1(CONSTROID, constrOid);
+		tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(constrOid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for constraint %u", constrOid);
 		constrForm = (Form_pg_constraint) GETSTRUCT(tuple);
@@ -8633,7 +8633,7 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 					referenced;
 		ListCell   *cell;
 
-		tuple = SearchSysCache1(CONSTROID, parentConstrOid);
+		tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(parentConstrOid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for constraint %u",
 				 parentConstrOid);
@@ -11514,7 +11514,7 @@ ATExecAlterColumnGenericOptions(Relation rel,
 
 	/* First, determine FDW validator associated to the foreign table. */
 	ftrel = table_open(ForeignTableRelationId, AccessShareLock);
-	tuple = SearchSysCache1(FOREIGNTABLEREL, rel->rd_id);
+	tuple = SearchSysCache1(FOREIGNTABLEREL, ObjectIdGetDatum(rel->rd_id));
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -12081,7 +12081,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		 * If we're supposed to replace the reloptions list, we just pretend
 		 * there were none before.
 		 */
-		datum = (Datum) 0;
+		datum = NullDatum;
 		isnull = true;
 	}
 	else
@@ -12092,7 +12092,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	}
 
 	/* Generate new proposed reloptions (text array) */
-	newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
+	newOptions = transformRelOptions(isnull ? NullDatum : datum,
 									 defList, NULL, validnsps, false,
 									 operation == AT_ResetRelOptions);
 
@@ -12161,7 +12161,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	memset(repl_null, false, sizeof(repl_null));
 	memset(repl_repl, false, sizeof(repl_repl));
 
-	if (newOptions != (Datum) 0)
+	if (DatumGetPointer(newOptions))
 		repl_val[Anum_pg_class_reloptions - 1] = newOptions;
 	else
 		repl_null[Anum_pg_class_reloptions - 1] = true;
@@ -12198,7 +12198,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			 * If we're supposed to replace the reloptions list, we just
 			 * pretend there were none before.
 			 */
-			datum = (Datum) 0;
+			datum = NullDatum;
 			isnull = true;
 		}
 		else
@@ -12208,7 +12208,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 									&isnull);
 		}
 
-		newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
+		newOptions = transformRelOptions(isnull ? NullDatum : datum,
 										 defList, "toast", validnsps, false,
 										 operation == AT_ResetRelOptions);
 
@@ -12218,7 +12218,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		memset(repl_null, false, sizeof(repl_null));
 		memset(repl_repl, false, sizeof(repl_repl));
 
-		if (newOptions != (Datum) 0)
+		if (DatumGetPointer(newOptions))
 			repl_val[Anum_pg_class_reloptions - 1] = newOptions;
 		else
 			repl_null[Anum_pg_class_reloptions - 1] = true;
@@ -13965,7 +13965,7 @@ ATExecGenericOptions(Relation rel, List *options)
 
 	ftrel = table_open(ForeignTableRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCacheCopy1(FOREIGNTABLEREL, rel->rd_id);
+	tuple = SearchSysCacheCopy1(FOREIGNTABLEREL, ObjectIdGetDatum(rel->rd_id));
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -16065,7 +16065,7 @@ ATExecDetachPartition(Relation rel, RangeVar *name)
 	memset(new_val, 0, sizeof(new_val));
 	memset(new_null, false, sizeof(new_null));
 	memset(new_repl, false, sizeof(new_repl));
-	new_val[Anum_pg_class_relpartbound - 1] = (Datum) 0;
+	new_val[Anum_pg_class_relpartbound - 1] = NullDatum;
 	new_null[Anum_pg_class_relpartbound - 1] = true;
 	new_repl[Anum_pg_class_relpartbound - 1] = true;
 	newtuple = heap_modify_tuple(tuple, RelationGetDescr(classRel),

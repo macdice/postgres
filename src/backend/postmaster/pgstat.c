@@ -1228,7 +1228,7 @@ pgstat_collect_oids(Oid catalogid, AttrNumber anum_oid)
 		Oid			thisoid;
 		bool		isnull;
 
-		thisoid = heap_getattr(tup, anum_oid, RelationGetDescr(rel), &isnull);
+		thisoid = DatumGetObjectId(heap_getattr(tup, anum_oid, RelationGetDescr(rel), &isnull));
 		Assert(!isnull);
 
 		CHECK_FOR_INTERRUPTS();
@@ -2837,7 +2837,7 @@ pgstat_initialize(void)
 	}
 
 	/* Set up a process-exit hook to clean up */
-	on_shmem_exit(pgstat_beshutdown_hook, 0);
+	on_shmem_exit(pgstat_beshutdown_hook, NullDatum);
 }
 
 /* ----------

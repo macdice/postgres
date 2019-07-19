@@ -343,7 +343,7 @@ makeNullConst(Oid consttype, int32 consttypmod, Oid constcollid)
 					 consttypmod,
 					 constcollid,
 					 (int) typLen,
-					 (Datum) 0,
+					 NullDatum,
 					 true,
 					 typByVal);
 }

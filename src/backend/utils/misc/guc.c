@@ -9547,7 +9547,7 @@ show_all_file_settings(PG_FUNCTION_ARGS)
 
 	tuplestore_donestoring(tupstore);
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 static char *

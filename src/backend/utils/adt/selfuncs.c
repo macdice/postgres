@@ -4986,8 +4986,8 @@ static bool
 get_variable_range(PlannerInfo *root, VariableStatData *vardata, Oid sortop,
 				   Datum *min, Datum *max)
 {
-	Datum		tmin = 0;
-	Datum		tmax = 0;
+	Datum		tmin = NullDatum;
+	Datum		tmax = NullDatum;
 	bool		have_data = false;
 	int16		typLen;
 	bool		typByVal;
@@ -5221,7 +5221,7 @@ get_actual_variable_range(PlannerInfo *root, VariableStatData *vardata,
 								   InvalidOid,	/* no strategy subtype */
 								   InvalidOid,	/* no collation */
 								   InvalidOid,	/* no reg proc for this */
-								   (Datum) 0);	/* constant */
+								   NullDatum);	/* constant */
 
 			/* If min is requested ... */
 			if (min)

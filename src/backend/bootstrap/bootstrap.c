@@ -418,7 +418,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		pgstat_bestart();
 
 		/* register a before-shutdown callback for LWLock cleanup */
-		before_shmem_exit(ShutdownAuxiliaryProcess, 0);
+		before_shmem_exit(ShutdownAuxiliaryProcess, NullDatum);
 	}
 
 	/*

@@ -93,7 +93,7 @@ array_iter_next(array_iter *it, bool *isnull, int i,
 		if (it->bitmapptr && (*(it->bitmapptr) & it->bitmask) == 0)
 		{
 			*isnull = true;
-			ret = (Datum) 0;
+			ret = NullDatum;
 		}
 		else
 		{

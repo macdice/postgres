@@ -497,7 +497,7 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 	{
 		*nentries = 1;
 		entries = (Datum *) palloc(sizeof(Datum));
-		entries[0] = (Datum) 0;
+		entries[0] = NullDatum;
 		*categories = (GinNullCategory *) palloc(sizeof(GinNullCategory));
 		(*categories)[0] = GIN_CAT_NULL_ITEM;
 		return entries;
@@ -519,7 +519,7 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 	{
 		*nentries = 1;
 		entries = (Datum *) palloc(sizeof(Datum));
-		entries[0] = (Datum) 0;
+		entries[0] = NullDatum;
 		*categories = (GinNullCategory *) palloc(sizeof(GinNullCategory));
 		(*categories)[0] = GIN_CAT_EMPTY_ITEM;
 		return entries;

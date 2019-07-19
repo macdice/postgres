@@ -58,7 +58,7 @@ pq_redirect_to_shm_mq(dsm_segment *seg, shm_mq_handle *mqh)
 	pq_mq_handle = mqh;
 	whereToSendOutput = DestRemote;
 	FrontendProtocol = PG_PROTOCOL_LATEST;
-	on_dsm_detach(seg, pq_cleanup_redirect_to_shm_mq, (Datum) 0);
+	on_dsm_detach(seg, pq_cleanup_redirect_to_shm_mq, NullDatum);
 }
 
 /*

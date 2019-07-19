@@ -874,7 +874,7 @@ rewriteTargetListIU(List *targetList,
 												  -1,
 												  att_tup->attcollation,
 												  att_tup->attlen,
-												  (Datum) 0,
+												  NullDatum,
 												  true, /* isnull */
 												  att_tup->attbyval);
 					/* this is to catch a NOT NULL domain constraint */
@@ -1398,7 +1398,7 @@ rewriteValuesRTE(Query *parsetree, RangeTblEntry *rte, int rti,
 												  -1,
 												  att_tup->attcollation,
 												  att_tup->attlen,
-												  (Datum) 0,
+												  NullDatum,
 												  true, /* isnull */
 												  att_tup->attbyval);
 					/* this is to catch a NOT NULL domain constraint */

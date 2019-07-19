@@ -1062,7 +1062,7 @@ replorigin_session_setup(RepOriginId node)
 
 	if (!registered_cleanup)
 	{
-		on_shmem_exit(ReplicationOriginExitCleanup, 0);
+		on_shmem_exit(ReplicationOriginExitCleanup, NullDatum);
 		registered_cleanup = true;
 	}
 
@@ -1563,5 +1563,5 @@ pg_show_replication_origin_status(PG_FUNCTION_ARGS)
 
 #undef REPLICATION_ORIGIN_PROGRESS_COLS
 
-	return (Datum) 0;
+	return NullDatum;
 }

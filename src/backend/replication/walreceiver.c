@@ -243,7 +243,7 @@ WalReceiverMain(void)
 	SpinLockRelease(&walrcv->mutex);
 
 	/* Arrange to clean up at walreceiver exit */
-	on_shmem_exit(WalRcvDie, 0);
+	on_shmem_exit(WalRcvDie, NullDatum);
 
 	/* Properly accept or ignore signals the postmaster might send us */
 	pqsignal(SIGHUP, WalRcvSigHupHandler);	/* set flag to read config file */

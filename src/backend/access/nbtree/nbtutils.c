@@ -136,7 +136,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 			arg = index_getattr(itup, i + 1, itupdesc, &null);
 		else
 		{
-			arg = (Datum) 0;
+			arg = NullDatum;
 			null = true;
 		}
 		flags = (null ? SK_ISNULL : 0) | (indoption[i] << SK_BT_INDOPTION_SHIFT);

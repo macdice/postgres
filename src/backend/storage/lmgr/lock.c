@@ -508,7 +508,6 @@ proclock_hash(const void *key, Size keysize)
 {
 	const PROCLOCKTAG *proclocktag = (const PROCLOCKTAG *) key;
 	uint32		lockhash;
-	Datum		procptr;
 
 	Assert(keysize == sizeof(PROCLOCKTAG));
 
@@ -522,8 +521,7 @@ proclock_hash(const void *key, Size keysize)
 	 * don't care if we lose high-order bits of the address; use an
 	 * intermediate variable to suppress cast-pointer-to-int warnings.
 	 */
-	procptr = PointerGetDatum(proclocktag->myProc);
-	lockhash ^= ((uint32) procptr) << LOG2_NUM_LOCK_PARTITIONS;
+	lockhash ^= ((uint32) proclocktag->myProc) << LOG2_NUM_LOCK_PARTITIONS;
 
 	return lockhash;
 }
@@ -538,13 +536,11 @@ static inline uint32
 ProcLockHashCode(const PROCLOCKTAG *proclocktag, uint32 hashcode)
 {
 	uint32		lockhash = hashcode;
-	Datum		procptr;
 
 	/*
 	 * This must match proclock_hash()!
 	 */
-	procptr = PointerGetDatum(proclocktag->myProc);
-	lockhash ^= ((uint32) procptr) << LOG2_NUM_LOCK_PARTITIONS;
+	lockhash ^= ((uint32) proclocktag->myProc) << LOG2_NUM_LOCK_PARTITIONS;
 
 	return lockhash;
 }

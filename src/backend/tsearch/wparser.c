@@ -63,7 +63,7 @@ tt_setup_firstcall(FuncCallContext *funcctx, Oid prsid)
 	st->cur = 0;
 	/* lextype takes one dummy argument */
 	st->list = (LexDescr *) DatumGetPointer(OidFunctionCall1(prs->lextypeOid,
-															 (Datum) 0));
+															 NullDatum));
 	funcctx->user_fctx = (void *) st;
 
 	tupdesc = CreateTemplateTupleDesc(3);
@@ -107,7 +107,7 @@ tt_process_call(FuncCallContext *funcctx)
 	if (st->list)
 		pfree(st->list);
 	pfree(st);
-	return (Datum) 0;
+	return NullDatum;
 }
 
 Datum
@@ -124,7 +124,7 @@ ts_token_type_byid(PG_FUNCTION_ARGS)
 
 	funcctx = SRF_PERCALL_SETUP();
 
-	if ((result = tt_process_call(funcctx)) != (Datum) 0)
+	if (DatumGetPointer(result = tt_process_call(funcctx)))
 		SRF_RETURN_NEXT(funcctx, result);
 	SRF_RETURN_DONE(funcctx);
 }
@@ -147,7 +147,7 @@ ts_token_type_byname(PG_FUNCTION_ARGS)
 
 	funcctx = SRF_PERCALL_SETUP();
 
-	if ((result = tt_process_call(funcctx)) != (Datum) 0)
+	if (DatumGetPointer(result = tt_process_call(funcctx)))
 		SRF_RETURN_NEXT(funcctx, result);
 	SRF_RETURN_DONE(funcctx);
 }
@@ -251,7 +251,7 @@ prs_process_call(FuncCallContext *funcctx)
 			pfree(st->list);
 		pfree(st);
 	}
-	return (Datum) 0;
+	return NullDatum;
 }
 
 Datum
@@ -271,7 +271,7 @@ ts_parse_byid(PG_FUNCTION_ARGS)
 
 	funcctx = SRF_PERCALL_SETUP();
 
-	if ((result = prs_process_call(funcctx)) != (Datum) 0)
+	if (DatumGetPointer(result = prs_process_call(funcctx)))
 		SRF_RETURN_NEXT(funcctx, result);
 	SRF_RETURN_DONE(funcctx);
 }
@@ -295,7 +295,7 @@ ts_parse_byname(PG_FUNCTION_ARGS)
 
 	funcctx = SRF_PERCALL_SETUP();
 
-	if ((result = prs_process_call(funcctx)) != (Datum) 0)
+	if (DatumGetPointer(result = prs_process_call(funcctx)))
 		SRF_RETURN_NEXT(funcctx, result);
 	SRF_RETURN_DONE(funcctx);
 }

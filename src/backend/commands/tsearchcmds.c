@@ -1095,10 +1095,10 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 			memset(mapvalues, 0, sizeof(mapvalues));
 			memset(mapnulls, false, sizeof(mapnulls));
 
-			mapvalues[Anum_pg_ts_config_map_mapcfg - 1] = cfgOid;
-			mapvalues[Anum_pg_ts_config_map_maptokentype - 1] = cfgmap->maptokentype;
-			mapvalues[Anum_pg_ts_config_map_mapseqno - 1] = cfgmap->mapseqno;
-			mapvalues[Anum_pg_ts_config_map_mapdict - 1] = cfgmap->mapdict;
+			mapvalues[Anum_pg_ts_config_map_mapcfg - 1] = ObjectIdGetDatum(cfgOid);
+			mapvalues[Anum_pg_ts_config_map_maptokentype - 1] = ObjectIdGetDatum(cfgmap->maptokentype);
+			mapvalues[Anum_pg_ts_config_map_mapseqno - 1] = ObjectIdGetDatum(cfgmap->mapseqno);
+			mapvalues[Anum_pg_ts_config_map_mapdict - 1] = ObjectIdGetDatum(cfgmap->mapdict);
 
 			newmaptup = heap_form_tuple(mapRel->rd_att, mapvalues, mapnulls);
 
@@ -1244,7 +1244,7 @@ getTokenTypes(Oid prsId, List *tokennames)
 
 	/* lextype takes one dummy argument */
 	list = (LexDescr *) DatumGetPointer(OidFunctionCall1(prs->lextypeOid,
-														 (Datum) 0));
+														 NullDatum));
 
 	i = 0;
 	foreach(tn, tokennames)

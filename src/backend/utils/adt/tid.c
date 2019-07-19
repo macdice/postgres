@@ -346,7 +346,7 @@ currtid_for_view(Relation viewrel, ItemPointer tid)
 		}
 	}
 	elog(ERROR, "currtid cannot handle this view");
-	return (Datum) 0;
+	return NullDatum;
 }
 
 Datum

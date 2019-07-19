@@ -481,7 +481,7 @@ logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple)
 			pq_sendbyte(out, 'n');	/* null column */
 			continue;
 		}
-		else if (att->attlen == -1 && VARATT_IS_EXTERNAL_ONDISK(values[i]))
+		else if (att->attlen == -1 && VARATT_IS_EXTERNAL_ONDISK(DatumGetPointer(values[i])))
 		{
 			pq_sendbyte(out, 'u');	/* unchanged toast column */
 			continue;

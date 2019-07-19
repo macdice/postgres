@@ -509,7 +509,7 @@ toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
 
 			if (toast_isnull[i])
 				continue;
-			else if (VARATT_IS_EXTERNAL_ONDISK(PointerGetDatum(value)))
+			else if (VARATT_IS_EXTERNAL_ONDISK(DatumGetPointer(value)))
 				toast_delete_datum(rel, value, is_speculative);
 		}
 	}
@@ -1484,7 +1484,7 @@ toast_save_datum(Relation rel, Datum value,
 	int			num_indexes;
 	int			validIndex;
 
-	Assert(!VARATT_IS_EXTERNAL(value));
+	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
 
 	/*
 	 * Open the toast relation and its indexes.  We can use the index to check

@@ -269,7 +269,7 @@ typedef SpGistInnerTupleData *SpGistInnerTuple;
 							 ((s)->attPrefixType.attbyval ? \
 							  *(Datum *) _SGITDATA(x) : \
 							  PointerGetDatum(_SGITDATA(x))) \
-							 : (Datum) 0)
+							 : NullDatum)
 #define SGITNODEPTR(x)		((SpGistNodeTuple) (_SGITDATA(x) + (x)->prefixSize))
 
 /* Macro for iterating through the nodes of an inner tuple */

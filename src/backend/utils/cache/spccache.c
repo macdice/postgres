@@ -93,7 +93,7 @@ InitializeTableSpaceCache(void)
 	/* Watch for invalidation events. */
 	CacheRegisterSyscacheCallback(TABLESPACEOID,
 								  InvalidateTableSpaceCacheCallback,
-								  (Datum) 0);
+								  NullDatum);
 }
 
 /*

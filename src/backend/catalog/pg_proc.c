@@ -135,7 +135,7 @@ ProcedureCreate(const char *procedureName,
 	/* note: the above is correct, we do NOT count output arguments */
 
 	/* Deconstruct array inputs */
-	if (allParameterTypes != PointerGetDatum(NULL))
+	if (DatumGetPointer(allParameterTypes))
 	{
 		/*
 		 * We expect the array to be a 1-D OID array; verify that. We don't
@@ -160,7 +160,7 @@ ProcedureCreate(const char *procedureName,
 		allParams = parameterTypes->values;
 	}
 
-	if (parameterModes != PointerGetDatum(NULL))
+	if (DatumGetPointer(parameterModes))
 	{
 		/*
 		 * We expect the array to be a 1-D CHAR array; verify that. We don't
@@ -201,7 +201,7 @@ ProcedureCreate(const char *procedureName,
 		}
 	}
 
-	if (allParameterTypes != PointerGetDatum(NULL))
+	if (DatumGetPointer(allParameterTypes))
 	{
 		for (i = 0; i < allParamCount; i++)
 		{
@@ -308,7 +308,7 @@ ProcedureCreate(const char *procedureName,
 	for (i = 0; i < Natts_pg_proc; ++i)
 	{
 		nulls[i] = false;
-		values[i] = (Datum) 0;
+		values[i] = NullDatum;
 		replaces[i] = true;
 	}
 
@@ -332,15 +332,15 @@ ProcedureCreate(const char *procedureName,
 	values[Anum_pg_proc_pronargdefaults - 1] = UInt16GetDatum(list_length(parameterDefaults));
 	values[Anum_pg_proc_prorettype - 1] = ObjectIdGetDatum(returnType);
 	values[Anum_pg_proc_proargtypes - 1] = PointerGetDatum(parameterTypes);
-	if (allParameterTypes != PointerGetDatum(NULL))
+	if (DatumGetPointer(allParameterTypes))
 		values[Anum_pg_proc_proallargtypes - 1] = allParameterTypes;
 	else
 		nulls[Anum_pg_proc_proallargtypes - 1] = true;
-	if (parameterModes != PointerGetDatum(NULL))
+	if (DatumGetPointer(parameterModes))
 		values[Anum_pg_proc_proargmodes - 1] = parameterModes;
 	else
 		nulls[Anum_pg_proc_proargmodes - 1] = true;
-	if (parameterNames != PointerGetDatum(NULL))
+	if (DatumGetPointer(parameterNames))
 		values[Anum_pg_proc_proargnames - 1] = parameterNames;
 	else
 		nulls[Anum_pg_proc_proargnames - 1] = true;
@@ -348,7 +348,7 @@ ProcedureCreate(const char *procedureName,
 		values[Anum_pg_proc_proargdefaults - 1] = CStringGetTextDatum(nodeToString(parameterDefaults));
 	else
 		nulls[Anum_pg_proc_proargdefaults - 1] = true;
-	if (trftypes != PointerGetDatum(NULL))
+	if (DatumGetPointer(trftypes))
 		values[Anum_pg_proc_protrftypes - 1] = trftypes;
 	else
 		nulls[Anum_pg_proc_protrftypes - 1] = true;
@@ -357,7 +357,7 @@ ProcedureCreate(const char *procedureName,
 		values[Anum_pg_proc_probin - 1] = CStringGetTextDatum(probin);
 	else
 		nulls[Anum_pg_proc_probin - 1] = true;
-	if (proconfig != PointerGetDatum(NULL))
+	if (DatumGetPointer(proconfig))
 		values[Anum_pg_proc_proconfig - 1] = proconfig;
 	else
 		nulls[Anum_pg_proc_proconfig - 1] = true;
@@ -1169,6 +1169,6 @@ oid_array_to_list(Datum datum)
 					  sizeof(Oid), true, 'i',
 					  &values, NULL, &nelems);
 	for (i = 0; i < nelems; i++)
-		result = lappend_oid(result, values[i]);
+		result = lappend_oid(result, DatumGetObjectId(values[i]));
 	return result;
 }

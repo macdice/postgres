@@ -716,8 +716,8 @@ partition_bounds_equal(int partnatts, int16 *parttyplen, bool *parttypbyval,
 		 * at b1->datums[i][0] and b1->datums[i][1] position respectively.
 		 */
 		for (i = 0; i < b1->ndatums; i++)
-			Assert((b1->datums[i][0] == b2->datums[i][0] &&
-					b1->datums[i][1] == b2->datums[i][1]));
+			Assert((b1->datums[i][0].value == b2->datums[i][0].value &&
+					b1->datums[i][1].value == b2->datums[i][1].value));
 #endif
 	}
 	else
@@ -2322,7 +2322,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 			bool		isnull;
 			PartitionBoundSpec *bspec;
 
-			tuple = SearchSysCache1(RELOID, inhrelid);
+			tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(inhrelid));
 			if (!HeapTupleIsValid(tuple))
 				elog(ERROR, "cache lookup failed for relation %u", inhrelid);
 

@@ -569,7 +569,7 @@ make_const(ParseState *pstate, Value *value, int location)
 							-1,
 							InvalidOid,
 							-2,
-							(Datum) 0,
+							NullDatum,
 							true,
 							false);
 			con->location = location;

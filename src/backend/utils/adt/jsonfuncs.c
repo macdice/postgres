@@ -1457,8 +1457,8 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 		{
 			jbvp = findJsonbValueFromContainerLen(container,
 												  JB_FOBJECT,
-												  VARDATA(pathtext[i]),
-												  VARSIZE(pathtext[i]) - VARHDRSZ);
+												  VARDATA(DatumGetPointer(pathtext[i])),
+												  VARSIZE(DatumGetPointer(pathtext[i])) - VARHDRSZ);
 		}
 		else if (have_array)
 		{
@@ -1756,7 +1756,7 @@ each_worker_jsonb(FunctionCallInfo fcinfo, const char *funcname, bool as_text)
 				{
 					/* a json null is an sql null in text mode */
 					nulls[1] = true;
-					values[1] = (Datum) NULL;
+					values[1] = NullDatum;
 				}
 				else
 				{
@@ -1914,7 +1914,7 @@ each_object_field_end(void *state, char *fname, bool isnull)
 	if (isnull && _state->normalize_results)
 	{
 		nulls[1] = true;
-		values[1] = (Datum) 0;
+		values[1] = NullDatum;
 	}
 	else if (_state->next_scalar)
 	{
@@ -2066,7 +2066,7 @@ elements_worker_jsonb(FunctionCallInfo fcinfo, const char *funcname,
 				{
 					/* a json null is an sql null in text mode */
 					nulls[0] = true;
-					values[0] = (Datum) NULL;
+					values[0] = NullDatum;
 				}
 				else
 				{
@@ -2228,7 +2228,7 @@ elements_array_element_end(void *state, bool isnull)
 	if (isnull && _state->normalize_results)
 	{
 		nulls[0] = true;
-		values[0] = (Datum) NULL;
+		values[0] = NullDatum;
 	}
 	else if (_state->next_scalar)
 	{
@@ -2761,7 +2761,7 @@ populate_composite(CompositeIOData *io,
 	update_cached_tupdesc(io, mcxt);
 
 	if (isnull)
-		result = (Datum) 0;
+		result = NullDatum;
 	else
 	{
 		HeapTupleHeader tuple;
@@ -2882,7 +2882,7 @@ populate_domain(DomainIOData *io,
 	Datum		res;
 
 	if (isnull)
-		res = (Datum) 0;
+		res = NullDatum;
 	else
 	{
 		res = populate_record_field(io->base_io,
@@ -3021,7 +3021,7 @@ populate_record_field(ColumnIOData *col,
 	if (*isnull &&
 		typcat != TYPECAT_DOMAIN &&
 		typcat != TYPECAT_COMPOSITE_DOMAIN)
-		return (Datum) 0;
+		return NullDatum;
 
 	switch (typcat)
 	{
@@ -3046,7 +3046,7 @@ populate_record_field(ColumnIOData *col,
 
 		default:
 			elog(ERROR, "unrecognized type category '%c'", typcat);
-			return (Datum) 0;
+			return NullDatum;
 	}
 }
 
@@ -3152,7 +3152,7 @@ populate_record(TupleDesc tupdesc,
 	{
 		for (i = 0; i < ncolumns; ++i)
 		{
-			values[i] = (Datum) 0;
+			values[i] = NullDatum;
 			nulls[i] = true;
 		}
 	}
@@ -3189,7 +3189,7 @@ populate_record(TupleDesc tupdesc,
 										  att->atttypmod,
 										  colname,
 										  mcxt,
-										  nulls[i] ? (Datum) 0 : values[i],
+										  nulls[i] ? NullDatum : values[i],
 										  &field,
 										  &nulls[i]);
 	}
@@ -4322,8 +4322,8 @@ jsonb_delete_array(PG_FUNCTION_ARGS)
 				if (keys_nulls[i])
 					continue;
 
-				keyptr = VARDATA_ANY(keys_elems[i]);
-				keylen = VARSIZE_ANY_EXHDR(keys_elems[i]);
+				keyptr = VARDATA_ANY(DatumGetPointer(keys_elems[i]));
+				keylen = VARSIZE_ANY_EXHDR(DatumGetPointer(keys_elems[i]));
 				if (keylen == v.val.string.len &&
 					memcmp(keyptr, v.val.string.val, keylen) == 0)
 				{
@@ -4751,8 +4751,8 @@ setPathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 		JsonbValue	newkey;
 
 		newkey.type = jbvString;
-		newkey.val.string.len = VARSIZE_ANY_EXHDR(path_elems[level]);
-		newkey.val.string.val = VARDATA_ANY(path_elems[level]);
+		newkey.val.string.len = VARSIZE_ANY_EXHDR(DatumGetPointer(path_elems[level]));
+		newkey.val.string.val = VARDATA_ANY(DatumGetPointer(path_elems[level]));
 
 		(void) pushJsonbValue(st, WJB_KEY, &newkey);
 		addJsonbToParseState(st, newval);
@@ -4765,8 +4765,8 @@ setPathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 		Assert(r == WJB_KEY);
 
 		if (!done &&
-			k.val.string.len == VARSIZE_ANY_EXHDR(path_elems[level]) &&
-			memcmp(k.val.string.val, VARDATA_ANY(path_elems[level]),
+			k.val.string.len == VARSIZE_ANY_EXHDR(DatumGetPointer(path_elems[level])) &&
+			memcmp(k.val.string.val, VARDATA_ANY(DatumGetPointer(path_elems[level])),
 				   k.val.string.len) == 0)
 		{
 			if (level == path_len - 1)
@@ -4805,8 +4805,8 @@ setPathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 				JsonbValue	newkey;
 
 				newkey.type = jbvString;
-				newkey.val.string.len = VARSIZE_ANY_EXHDR(path_elems[level]);
-				newkey.val.string.val = VARDATA_ANY(path_elems[level]);
+				newkey.val.string.len = VARSIZE_ANY_EXHDR(DatumGetPointer(path_elems[level]));
+				newkey.val.string.val = VARDATA_ANY(DatumGetPointer(path_elems[level]));
 
 				(void) pushJsonbValue(st, WJB_KEY, &newkey);
 				addJsonbToParseState(st, newval);

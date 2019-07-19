@@ -79,7 +79,7 @@ gtsvectorin(PG_FUNCTION_ARGS)
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("gtsvector_in not implemented")));
-	PG_RETURN_DATUM(0);
+	PG_RETURN_DATUM(NullDatum);
 }
 
 #define SINGOUTSTR	"%d true bits, %d false bits"
@@ -91,7 +91,7 @@ static int	outbuf_maxlen = 0;
 Datum
 gtsvectorout(PG_FUNCTION_ARGS)
 {
-	SignTSVector *key = (SignTSVector *) PG_DETOAST_DATUM(PG_GETARG_POINTER(0));
+	SignTSVector *key = (SignTSVector *) PG_GETARG_VARLENA_P(0);
 	char	   *outbuf;
 
 	if (outbuf_maxlen == 0)

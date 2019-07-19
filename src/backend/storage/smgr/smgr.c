@@ -118,7 +118,7 @@ smgrinit(void)
 	}
 
 	/* register the shutdown proc */
-	on_proc_exit(smgrshutdown, 0);
+	on_proc_exit(smgrshutdown, NullDatum);
 }
 
 /*

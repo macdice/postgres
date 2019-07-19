@@ -346,11 +346,11 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	nulls[Anum_pg_tablespace_spcacl - 1] = true;
 
 	/* Generate new proposed spcoptions (text array) */
-	newOptions = transformRelOptions((Datum) 0,
+	newOptions = transformRelOptions(NullDatum,
 									 stmt->options,
 									 NULL, NULL, false, false);
 	(void) tablespace_reloptions(newOptions, true);
-	if (newOptions != (Datum) 0)
+	if (DatumGetPointer(newOptions))
 		values[Anum_pg_tablespace_spcoptions - 1] = newOptions;
 	else
 		nulls[Anum_pg_tablespace_spcoptions - 1] = true;
@@ -1048,7 +1048,7 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 	/* Generate new proposed spcoptions (text array) */
 	datum = heap_getattr(tup, Anum_pg_tablespace_spcoptions,
 						 RelationGetDescr(rel), &isnull);
-	newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
+	newOptions = transformRelOptions(isnull ? NullDatum : datum,
 									 stmt->options, NULL, NULL, false,
 									 stmt->isReset);
 	(void) tablespace_reloptions(newOptions, true);
@@ -1056,7 +1056,7 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 	/* Build new tuple. */
 	memset(repl_null, false, sizeof(repl_null));
 	memset(repl_repl, false, sizeof(repl_repl));
-	if (newOptions != (Datum) 0)
+	if (DatumGetPointer(newOptions))
 		repl_val[Anum_pg_tablespace_spcoptions - 1] = newOptions;
 	else
 		repl_null[Anum_pg_tablespace_spcoptions - 1] = true;

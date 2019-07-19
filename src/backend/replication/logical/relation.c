@@ -112,7 +112,7 @@ logicalrep_relmap_init(void)
 
 	/* Watch for invalidation events. */
 	CacheRegisterRelcacheCallback(logicalrep_relmap_invalidate_cb,
-								  (Datum) 0);
+								  NullDatum);
 }
 
 /*

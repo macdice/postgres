@@ -112,7 +112,7 @@ array_append(PG_FUNCTION_ARGS)
 	eah = fetch_array_arg_replace_nulls(fcinfo, 0);
 	isNull = PG_ARGISNULL(1);
 	if (isNull)
-		newelem = (Datum) 0;
+		newelem = NullDatum;
 	else
 		newelem = PG_GETARG_DATUM(1);
 
@@ -164,7 +164,7 @@ array_prepend(PG_FUNCTION_ARGS)
 
 	isNull = PG_ARGISNULL(0);
 	if (isNull)
-		newelem = (Datum) 0;
+		newelem = NullDatum;
 	else
 		newelem = PG_GETARG_DATUM(0);
 	eah = fetch_array_arg_replace_nulls(fcinfo, 1);
@@ -198,7 +198,7 @@ array_prepend(PG_FUNCTION_ARGS)
 							   -1, my_extra->typlen, my_extra->typbyval, my_extra->typalign);
 
 	/* Readjust result's LB to match the input's, as expected for prepend */
-	Assert(result == EOHPGetRWDatum(&eah->hdr));
+	Assert(result.value == EOHPGetRWDatum(&eah->hdr).value);
 	if (eah->ndims == 1)
 	{
 		/* This is ok whether we've deconstructed or not */
@@ -482,7 +482,7 @@ array_agg_transfn(PG_FUNCTION_ARGS)
 	else
 		state = (ArrayBuildState *) PG_GETARG_POINTER(0);
 
-	elem = PG_ARGISNULL(1) ? (Datum) 0 : PG_GETARG_DATUM(1);
+	elem = PG_ARGISNULL(1) ? NullDatum : PG_GETARG_DATUM(1);
 
 	state = accumArrayResult(state,
 							 elem,
@@ -666,7 +666,7 @@ array_position_common(FunctionCallInfo fcinfo)
 		/* fast return when the array doesn't have nulls */
 		if (!array_contains_nulls(array))
 			PG_RETURN_NULL();
-		searched_element = (Datum) 0;
+		searched_element = NullDatum;
 		null_search = true;
 	}
 	else
@@ -820,7 +820,7 @@ array_positions(PG_FUNCTION_ARGS)
 		/* fast return when the array doesn't have nulls */
 		if (!array_contains_nulls(array))
 			PG_RETURN_DATUM(makeArrayResult(astate, CurrentMemoryContext));
-		searched_element = (Datum) 0;
+		searched_element = NullDatum;
 		null_search = true;
 	}
 	else

@@ -1853,7 +1853,7 @@ exec_bind_message(StringInfo input_message)
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("unsupported format code: %d",
 								pformat)));
-				pval = 0;		/* keep compiler quiet */
+				pval = NullDatum;		/* keep compiler quiet */
 			}
 
 			/* Restore message buffer contents */
@@ -3922,7 +3922,7 @@ PostgresMain(int argc, char *argv[],
 	 * sure Log_disconnections has its final value.
 	 */
 	if (IsUnderPostmaster && Log_disconnections)
-		on_proc_exit(log_disconnections, 0);
+		on_proc_exit(log_disconnections, NullDatum);
 
 	/* Perform initialization specific to a WAL sender process. */
 	if (am_walsender)

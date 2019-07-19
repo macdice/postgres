@@ -732,7 +732,7 @@ percentile_disc_multi_final(PG_FUNCTION_ARGS)
 	Datum	   *result_datum;
 	bool	   *result_isnull;
 	int64		rownum = 0;
-	Datum		val = (Datum) 0;
+	Datum		val = NullDatum;
 	bool		isnull = true;
 	int			i;
 
@@ -783,7 +783,7 @@ percentile_disc_multi_final(PG_FUNCTION_ARGS)
 		if (pct_info[i].first_row > 0)
 			break;
 
-		result_datum[idx] = (Datum) 0;
+		result_datum[idx] = NullDatum;
 		result_isnull[idx] = true;
 	}
 
@@ -853,8 +853,8 @@ percentile_cont_multi_final_common(FunctionCallInfo fcinfo,
 	Datum	   *result_datum;
 	bool	   *result_isnull;
 	int64		rownum = 0;
-	Datum		first_val = (Datum) 0;
-	Datum		second_val = (Datum) 0;
+	Datum		first_val = NullDatum;
+	Datum		second_val = NullDatum;
 	bool		isnull;
 	int			i;
 
@@ -907,7 +907,7 @@ percentile_cont_multi_final_common(FunctionCallInfo fcinfo,
 		if (pct_info[i].first_row > 0)
 			break;
 
-		result_datum[idx] = (Datum) 0;
+		result_datum[idx] = NullDatum;
 		result_isnull[idx] = true;
 	}
 
@@ -1029,14 +1029,14 @@ mode_final(PG_FUNCTION_ARGS)
 	OSAPerGroupState *osastate;
 	Datum		val;
 	bool		isnull;
-	Datum		mode_val = (Datum) 0;
+	Datum		mode_val = NullDatum;
 	int64		mode_freq = 0;
-	Datum		last_val = (Datum) 0;
+	Datum		last_val = NullDatum;
 	int64		last_val_freq = 0;
 	bool		last_val_is_mode = false;
 	FmgrInfo   *equalfn;
-	Datum		abbrev_val = (Datum) 0;
-	Datum		last_abbrev_val = (Datum) 0;
+	Datum		abbrev_val = NullDatum;
+	Datum		last_abbrev_val = NullDatum;
 	bool		shouldfree;
 
 	Assert(AggCheckCallContext(fcinfo, NULL) == AGG_CONTEXT_AGGREGATE);
@@ -1083,7 +1083,7 @@ mode_final(PG_FUNCTION_ARGS)
 			last_val_is_mode = true;
 			last_abbrev_val = abbrev_val;
 		}
-		else if (abbrev_val == last_abbrev_val &&
+		else if (abbrev_val.value == last_abbrev_val.value &&
 				 DatumGetBool(FunctionCall2Coll(equalfn, PG_GET_COLLATION(), val, last_val)))
 		{
 			/* value equal to previous value, count it */
@@ -1294,8 +1294,8 @@ hypothetical_dense_rank_final(PG_FUNCTION_ARGS)
 	int64		duplicate_count = 0;
 	OSAPerGroupState *osastate;
 	int			numDistinctCols;
-	Datum		abbrevVal = (Datum) 0;
-	Datum		abbrevOld = (Datum) 0;
+	Datum		abbrevVal = NullDatum;
+	Datum		abbrevOld = NullDatum;
 	TupleTableSlot *slot;
 	TupleTableSlot *extraslot;
 	TupleTableSlot *slot2;
@@ -1397,7 +1397,7 @@ hypothetical_dense_rank_final(PG_FUNCTION_ARGS)
 		econtext->ecxt_innertuple = slot2;
 
 		if (!TupIsNull(slot2) &&
-			abbrevVal == abbrevOld &&
+			abbrevVal.value == abbrevOld.value &&
 			ExecQualAndReset(compareTuple, econtext))
 			duplicate_count++;
 

@@ -1382,7 +1382,8 @@ gist_point_consistent(PG_FUNCTION_ARGS)
 														  PointerGetDatum(entry),
 														  PolygonPGetDatum(query),
 														  Int16GetDatum(RTOverlapStrategyNumber),
-														  0, PointerGetDatum(recheck)));
+														  ObjectIdGetDatum(InvalidOid),
+														  PointerGetDatum(recheck)));
 
 				if (GIST_LEAF(entry) && result)
 				{
@@ -1411,7 +1412,8 @@ gist_point_consistent(PG_FUNCTION_ARGS)
 														  PointerGetDatum(entry),
 														  CirclePGetDatum(query),
 														  Int16GetDatum(RTOverlapStrategyNumber),
-														  0, PointerGetDatum(recheck)));
+														  ObjectIdGetDatum(InvalidOid),
+														  PointerGetDatum(recheck)));
 
 				if (GIST_LEAF(entry) && result)
 				{

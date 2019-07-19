@@ -202,7 +202,7 @@ pq_init(void)
 	DoingCopyOut = false;
 
 	/* set up process-exit hook to close the socket */
-	on_proc_exit(socket_close, 0);
+	on_proc_exit(socket_close, NullDatum);
 
 	/*
 	 * In backends (as soon as forked) we operate the underlying socket in

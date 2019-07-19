@@ -800,7 +800,7 @@ InitFileAccess(void)
 	SizeVfdCache = 1;
 
 	/* register proc-exit hook to ensure temp files are dropped at exit */
-	on_proc_exit(AtProcExit_Files, 0);
+	on_proc_exit(AtProcExit_Files, NullDatum);
 }
 
 /*

@@ -1534,7 +1534,7 @@ InputFunctionCall(FmgrInfo *flinfo, char *str, Oid typioparam, int32 typmod)
 	Datum		result;
 
 	if (str == NULL && flinfo->fn_strict)
-		return (Datum) 0;		/* just return null result */
+		return NullDatum;		/* just return null result */
 
 	InitFunctionCallInfoData(*fcinfo, flinfo, 3, InvalidOid, NULL, NULL);
 
@@ -1593,7 +1593,7 @@ ReceiveFunctionCall(FmgrInfo *flinfo, StringInfo buf,
 	Datum		result;
 
 	if (buf == NULL && flinfo->fn_strict)
-		return (Datum) 0;		/* just return null result */
+		return NullDatum;		/* just return null result */
 
 	InitFunctionCallInfoData(*fcinfo, flinfo, 3, InvalidOid, NULL, NULL);
 

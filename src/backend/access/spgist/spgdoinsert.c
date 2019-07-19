@@ -861,7 +861,7 @@ doPickSplit(Relation index, SpGistState *state,
 		for (i = 0; i < in.nTuples; i++)
 		{
 			newLeafs[i] = spgFormLeafTuple(state, heapPtrs + i,
-										   (Datum) 0,
+										   NullDatum,
 										   true);
 			totalLeafSizes += newLeafs[i]->size + sizeof(ItemIdData);
 		}
@@ -903,7 +903,7 @@ doPickSplit(Relation index, SpGistState *state,
 	 */
 	for (i = 0; i < out.nNodes; i++)
 	{
-		Datum		label = (Datum) 0;
+		Datum		label = NullDatum;
 		bool		labelisnull = (out.nodeLabels == NULL);
 
 		if (!labelisnull)
@@ -1726,7 +1726,7 @@ spgSplitNodeAction(Relation index, SpGistState *state,
 
 	for (i = 0; i < out->result.splitTuple.prefixNNodes; i++)
 	{
-		Datum		label = (Datum) 0;
+		Datum		label = NullDatum;
 		bool		labelisnull;
 
 		labelisnull = (out->result.splitTuple.prefixNodeLabels == NULL);
@@ -1937,7 +1937,7 @@ spgdoinsert(Relation index, SpGistState *state,
 		}
 	}
 	else
-		leafDatum = (Datum) 0;
+		leafDatum = NullDatum;
 
 	/*
 	 * Compute space needed for a leaf tuple containing the given datum.

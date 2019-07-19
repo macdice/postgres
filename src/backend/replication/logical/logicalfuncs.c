@@ -364,7 +364,7 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 	}
 	PG_END_TRY();
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*

@@ -312,7 +312,7 @@
  * intermediate variable to suppress cast-pointer-to-int warnings.
  */
 #define PredicateLockHashCodeFromTargetHashCode(predicatelocktag, targethash) \
-	((targethash) ^ ((uint32) PointerGetDatum((predicatelocktag)->myXact)) \
+	((targethash) ^ ((uint32) (predicatelocktag)->myXact) \
 	 << LOG2_NUM_PREDICATELOCK_PARTITIONS)
 
 

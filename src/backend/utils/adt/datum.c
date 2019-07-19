@@ -230,7 +230,7 @@ datumIsEqual(Datum value1, Datum value2, bool typByVal, int typLen)
 		 * inside the "Datum".  We assume instead that any given datatype is
 		 * consistent about how it fills extraneous bits in the Datum.
 		 */
-		res = (value1 == value2);
+		res = (value1.value == value2.value);
 	}
 	else
 	{
@@ -288,15 +288,15 @@ datum_image_eq(Datum value1, Datum value2, bool typByVal, int typLen)
 							 len1 - VARHDRSZ) == 0);
 
 			/* Only free memory if it's a copy made here. */
-			if ((Pointer) arg1val != (Pointer) value1)
+			if ((Pointer) arg1val != (Pointer) value1.value)
 				pfree(arg1val);
-			if ((Pointer) arg2val != (Pointer) value2)
+			if ((Pointer) arg2val != (Pointer) value2.value)
 				pfree(arg2val);
 		}
 	}
 	else if (typByVal)
 	{
-		result = (value1 == value2);
+		result = (value1.value == value2.value);
 	}
 	else
 	{
@@ -438,7 +438,7 @@ datumRestore(char **start_address, bool *isnull)
 	if (header == -2)
 	{
 		*isnull = true;
-		return (Datum) 0;
+		return NullDatum;
 	}
 
 	/* OK, datum is not null. */

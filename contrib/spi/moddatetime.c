@@ -115,7 +115,7 @@ moddatetime(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_TRIGGERED_ACTION_EXCEPTION),
 				 errmsg("attribute \"%s\" of \"%s\" must be type TIMESTAMP or TIMESTAMPTZ",
 						args[0], relname)));
-		newdt = (Datum) 0;		/* keep compiler quiet */
+		newdt = NullDatum;		/* keep compiler quiet */
 	}
 	newdtnull = false;
 

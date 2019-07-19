@@ -2212,7 +2212,7 @@ AlterDomainDefault(List *names, Node *defaultRaw)
 	checkDomainOwner(tup);
 
 	/* Setup new tuple */
-	MemSet(new_record, (Datum) 0, sizeof(new_record));
+	MemSet(new_record, 0, sizeof(new_record));
 	MemSet(new_record_nulls, false, sizeof(new_record_nulls));
 	MemSet(new_record_repl, false, sizeof(new_record_repl));
 

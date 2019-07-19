@@ -1535,7 +1535,7 @@ jsonb_agg_transfn(PG_FUNCTION_ARGS)
 
 	/* turn the argument into jsonb in the normal function context */
 
-	val = PG_ARGISNULL(1) ? (Datum) 0 : PG_GETARG_DATUM(1);
+	val = PG_ARGISNULL(1) ? NullDatum : PG_GETARG_DATUM(1);
 
 	memset(&elem, 0, sizeof(JsonbInState));
 
@@ -1715,7 +1715,7 @@ jsonb_object_agg_transfn(PG_FUNCTION_ARGS)
 
 	jbkey = JsonbValueToJsonb(elem.res);
 
-	val = PG_ARGISNULL(2) ? (Datum) 0 : PG_GETARG_DATUM(2);
+	val = PG_ARGISNULL(2) ? NullDatum : PG_GETARG_DATUM(2);
 
 	memset(&elem, 0, sizeof(JsonbInState));
 

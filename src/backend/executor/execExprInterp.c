@@ -726,7 +726,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			}
 			else if (*op->d.boolexpr.anynull)
 			{
-				*op->resvalue = (Datum) 0;
+				*op->resvalue = NullDatum;
 				*op->resnull = true;
 			}
 			else
@@ -793,7 +793,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			}
 			else if (*op->d.boolexpr.anynull)
 			{
-				*op->resvalue = (Datum) 0;
+				*op->resvalue = NullDatum;
 				*op->resnull = true;
 			}
 			else
@@ -1183,7 +1183,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 				/* if the arguments are equal return null */
 				if (!fcinfo->isnull && DatumGetBool(result))
 				{
-					*op->resvalue = (Datum) 0;
+					*op->resvalue = NullDatum;
 					*op->resnull = true;
 
 					EEO_NEXT();
@@ -2043,7 +2043,7 @@ ExecJustAssignInnerVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	 */
 	outslot->tts_values[resultnum] =
 		slot_getattr(inslot, attnum, &outslot->tts_isnull[resultnum]);
-	return 0;
+	return NullDatum;
 }
 
 /* Evaluate outer Var and assign to appropriate column of result tuple */
@@ -2061,7 +2061,7 @@ ExecJustAssignOuterVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	/* See comments in ExecJustAssignInnerVar */
 	outslot->tts_values[resultnum] =
 		slot_getattr(inslot, attnum, &outslot->tts_isnull[resultnum]);
-	return 0;
+	return NullDatum;
 }
 
 /* Evaluate scan Var and assign to appropriate column of result tuple */
@@ -2079,7 +2079,7 @@ ExecJustAssignScanVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	/* See comments in ExecJustAssignInnerVar */
 	outslot->tts_values[resultnum] =
 		slot_getattr(inslot, attnum, &outslot->tts_isnull[resultnum]);
-	return 0;
+	return NullDatum;
 }
 
 /* Evaluate CASE_TESTVAL and apply a strict function to it */
@@ -2110,7 +2110,7 @@ ExecJustApplyFuncToCase(ExprState *state, ExprContext *econtext, bool *isnull)
 		if (args[argno].isnull)
 		{
 			*isnull = true;
-			return (Datum) 0;
+			return NullDatum;
 		}
 	}
 	fcinfo->isnull = false;
@@ -3139,7 +3139,7 @@ ExecEvalSubscriptingRefOld(ExprState *state, ExprEvalStep *op)
 	if (*op->resnull)
 	{
 		/* whole array is null, so any element or slice is too */
-		sbsrefstate->prevvalue = (Datum) 0;
+		sbsrefstate->prevvalue = NullDatum;
 		sbsrefstate->prevnull = true;
 	}
 	else if (sbsrefstate->numlower == 0)
@@ -3429,7 +3429,7 @@ ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op)
 		/* Get array element, checking for NULL */
 		if (bitmap && (*bitmap & bitmask) == 0)
 		{
-			fcinfo->args[1].value = (Datum) 0;
+			fcinfo->args[1].value = NullDatum;
 			fcinfo->args[1].isnull = true;
 		}
 		else
@@ -3445,7 +3445,7 @@ ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op)
 		if (fcinfo->args[1].isnull && strictfunc)
 		{
 			fcinfo->isnull = true;
-			thisresult = (Datum) 0;
+			thisresult = NullDatum;
 		}
 		else
 		{
@@ -3536,7 +3536,7 @@ ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op)
 	int			i;
 
 	*op->resnull = true;		/* until we get a result */
-	*op->resvalue = (Datum) 0;
+	*op->resvalue = NullDatum;
 
 	switch (xexpr->op)
 	{

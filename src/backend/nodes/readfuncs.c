@@ -2847,7 +2847,7 @@ readDatum(bool typbyval)
 	{
 		if (length > (Size) sizeof(Datum))
 			elog(ERROR, "byval datum but length = %zu", length);
-		res = (Datum) 0;
+		res = NullDatum;
 		s = (char *) (&res);
 		for (i = 0; i < (Size) sizeof(Datum); i++)
 		{
@@ -2856,7 +2856,7 @@ readDatum(bool typbyval)
 		}
 	}
 	else if (length <= 0)
-		res = (Datum) NULL;
+		res = NullDatum;
 	else
 	{
 		s = (char *) palloc(length);

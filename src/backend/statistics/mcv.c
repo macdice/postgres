@@ -766,7 +766,7 @@ statext_mcv_serialize(MCVList *mcvlist, VacAttrStats **stats)
 				values[dim][i] = PointerGetDatum(PG_DETOAST_DATUM(values[dim][i]));
 
 				/* serialized length (uint32 length + data) */
-				len = VARSIZE_ANY_EXHDR(values[dim][i]);
+				len = VARSIZE_ANY_EXHDR(DatumGetPointer(values[dim][i]));
 				info[dim].nbytes += sizeof(uint32);	/* length */
 				info[dim].nbytes += len;			/* value (no header) */
 
@@ -1186,7 +1186,7 @@ statext_mcv_deserialize(bytea *data)
 			/* for by-val types we simply copy data into the mapping */
 			for (i = 0; i < info[dim].nvalues; i++)
 			{
-				Datum		v = 0;
+				Datum		v = NullDatum;
 
 				memcpy(&v, ptr, info[dim].typlen);
 				ptr += info[dim].typlen;
@@ -1430,15 +1430,15 @@ pg_stats_ext_mcvlist_items(PG_FUNCTION_ARGS)
 			}
 			else
 				astate_values = accumArrayResult(astate_values,
-								  (Datum) 0,
+								  NullDatum,
 								  true,
 								  TEXTOID,
 								  CurrentMemoryContext);
 		}
 
 		values[0] = Int32GetDatum(funcctx->call_cntr);
-		values[1] = PointerGetDatum(makeArrayResult(astate_values, CurrentMemoryContext));
-		values[2] = PointerGetDatum(makeArrayResult(astate_nulls, CurrentMemoryContext));
+		values[1] = makeArrayResult(astate_values, CurrentMemoryContext);
+		values[2] = makeArrayResult(astate_nulls, CurrentMemoryContext);
 		values[3] = Float8GetDatum(item->frequency);
 		values[4] = Float8GetDatum(item->base_frequency);
 

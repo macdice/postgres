@@ -3901,7 +3901,7 @@ pg_class_aclmask(Oid table_oid, Oid roleid,
 				acl = acldefault(OBJECT_TABLE, ownerId);
 				break;
 		}
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -3955,7 +3955,7 @@ pg_database_aclmask(Oid db_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_DATABASE, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4009,7 +4009,7 @@ pg_proc_aclmask(Oid proc_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_FUNCTION, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4063,7 +4063,7 @@ pg_language_aclmask(Oid lang_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_LANGUAGE, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4143,7 +4143,7 @@ pg_largeobject_aclmask_snapshot(Oid lobj_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_LARGEOBJECT, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4227,7 +4227,7 @@ pg_namespace_aclmask(Oid nsp_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_SCHEMA, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4283,7 +4283,7 @@ pg_tablespace_aclmask(Oid spc_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_TABLESPACE, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4345,7 +4345,7 @@ pg_foreign_data_wrapper_aclmask(Oid fdw_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_FDW, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4407,7 +4407,7 @@ pg_foreign_server_aclmask(Oid srv_oid, Oid roleid,
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_FOREIGN_SERVER, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{
@@ -4484,7 +4484,7 @@ pg_type_aclmask(Oid type_oid, Oid roleid, AclMode mask, AclMaskHow how)
 	{
 		/* No ACL, so build default ACL */
 		acl = acldefault(OBJECT_TYPE, ownerId);
-		aclDatum = (Datum) 0;
+		aclDatum = NullDatum;
 	}
 	else
 	{

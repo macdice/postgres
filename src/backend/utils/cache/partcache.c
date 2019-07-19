@@ -336,7 +336,7 @@ generate_partition_qual(Relation rel)
 						   AccessShareLock);
 
 	/* Get pg_class.relpartbound */
-	tuple = SearchSysCache1(RELOID, RelationGetRelid(rel));
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(RelationGetRelid(rel)));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u",
 			 RelationGetRelid(rel));

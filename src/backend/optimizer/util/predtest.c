@@ -1991,7 +1991,7 @@ lookup_proof_cache(Oid pred_op, Oid clause_op, bool refute_it)
 		/* Arrange to flush cache on pg_amop changes */
 		CacheRegisterSyscacheCallback(AMOPOPID,
 									  InvalidateOprProofCacheCallBack,
-									  (Datum) 0);
+									  NullDatum);
 	}
 
 	key.pred_op = pred_op;

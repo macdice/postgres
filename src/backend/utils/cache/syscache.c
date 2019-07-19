@@ -1244,9 +1244,9 @@ GetSysCacheOid(int cacheId,
 	tuple = SearchSysCache(cacheId, key1, key2, key3, key4);
 	if (!HeapTupleIsValid(tuple))
 		return InvalidOid;
-	result = heap_getattr(tuple, oidcol,
+	result = DatumGetObjectId(heap_getattr(tuple, oidcol,
 						  SysCache[cacheId]->cc_tupdesc,
-						  &isNull);
+						  &isNull));
 	Assert(!isNull);			/* columns used as oids should never be NULL */
 	ReleaseSysCache(tuple);
 	return result;

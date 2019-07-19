@@ -313,7 +313,7 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		if (database == InvalidOid)
 			nulls[i++] = true;
 		else
-			values[i++] = database;
+			values[i++] = ObjectIdGetDatum(database);
 
 		values[i++] = BoolGetDatum(persistency == RS_TEMPORARY);
 		values[i++] = BoolGetDatum(active_pid != 0);
@@ -349,7 +349,7 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 
 	tuplestore_donestoring(tupstore);
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*

@@ -137,7 +137,7 @@ tts_virtual_getsysattr(TupleTableSlot *slot, int attnum, bool *isnull)
 {
 	elog(ERROR, "virtual tuple table slot does not have system attributes");
 
-	return 0;					/* silence compiler warnings */
+	return NullDatum;				/* silence compiler warnings */
 }
 
 /*
@@ -498,7 +498,7 @@ tts_minimal_getsysattr(TupleTableSlot *slot, int attnum, bool *isnull)
 {
 	elog(ERROR, "minimal tuple table slot does not have system attributes");
 
-	return 0;					/* silence compiler warnings */
+	return NullDatum;					/* silence compiler warnings */
 }
 
 static void
@@ -929,7 +929,7 @@ slot_deform_heap_tuple(TupleTableSlot *slot, HeapTuple tuple, uint32 *offp,
 
 		if (hasnulls && att_isnull(attnum, bp))
 		{
-			values[attnum] = (Datum) 0;
+			values[attnum] = NullDatum;
 			isnull[attnum] = true;
 			slow = true;		/* can't use attcacheoff anymore */
 			continue;
@@ -2141,7 +2141,7 @@ BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values)
 		else
 		{
 			/* Handle dropped attributes by setting to NULL */
-			dvalues[i] = (Datum) 0;
+			dvalues[i] = NullDatum;
 			nulls[i] = true;
 		}
 	}

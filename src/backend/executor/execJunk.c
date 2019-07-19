@@ -301,7 +301,7 @@ ExecFilterJunk(JunkFilter *junkfilter, TupleTableSlot *slot)
 
 		if (j == 0)
 		{
-			values[i] = (Datum) 0;
+			values[i] = NullDatum;
 			isnull[i] = true;
 		}
 		else

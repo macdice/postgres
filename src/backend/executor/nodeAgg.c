@@ -708,14 +708,14 @@ process_ordered_aggregate_single(AggState *aggstate,
 								 AggStatePerTrans pertrans,
 								 AggStatePerGroup pergroupstate)
 {
-	Datum		oldVal = (Datum) 0;
+	Datum		oldVal = NullDatum;
 	bool		oldIsNull = true;
 	bool		haveOldVal = false;
 	MemoryContext workcontext = aggstate->tmpcontext->ecxt_per_tuple_memory;
 	MemoryContext oldContext;
 	bool		isDistinct = (pertrans->numDistinctCols > 0);
-	Datum		newAbbrevVal = (Datum) 0;
-	Datum		oldAbbrevVal = (Datum) 0;
+	Datum		newAbbrevVal = NullDatum;
+	Datum		oldAbbrevVal = NullDatum;
 	FunctionCallInfo fcinfo = pertrans->transfn_fcinfo;
 	Datum	   *newVal;
 	bool	   *isNull;
@@ -751,7 +751,7 @@ process_ordered_aggregate_single(AggState *aggstate,
 			haveOldVal &&
 			((oldIsNull && *isNull) ||
 			 (!oldIsNull && !*isNull &&
-			  oldAbbrevVal == newAbbrevVal &&
+			  oldAbbrevVal.value == newAbbrevVal.value &&
 			  DatumGetBool(FunctionCall2Coll(&pertrans->equalfnOne,
 											 pertrans->aggCollation,
 											 oldVal, *newVal)))))
@@ -806,8 +806,8 @@ process_ordered_aggregate_multi(AggState *aggstate,
 	TupleTableSlot *slot2 = pertrans->uniqslot;
 	int			numTransInputs = pertrans->numTransInputs;
 	int			numDistinctCols = pertrans->numDistinctCols;
-	Datum		newAbbrevVal = (Datum) 0;
-	Datum		oldAbbrevVal = (Datum) 0;
+	Datum		newAbbrevVal = NullDatum;
+	Datum		oldAbbrevVal = NullDatum;
 	bool		haveOldValue = false;
 	TupleTableSlot *save = aggstate->tmpcontext->ecxt_outertuple;
 	int			i;
@@ -828,7 +828,7 @@ process_ordered_aggregate_multi(AggState *aggstate,
 
 		if (numDistinctCols == 0 ||
 			!haveOldValue ||
-			newAbbrevVal != oldAbbrevVal ||
+			newAbbrevVal.value != oldAbbrevVal.value ||
 			!ExecQual(pertrans->equalfnMulti, tmpcontext))
 		{
 			/*
@@ -948,7 +948,7 @@ finalize_aggregate(AggState *aggstate,
 		/* Fill any remaining argument positions with nulls */
 		for (; i < numFinalArgs; i++)
 		{
-			fcinfo->args[i].value = (Datum) 0;
+			fcinfo->args[i].value = NullDatum;
 			fcinfo->args[i].isnull = true;
 			anynull = true;
 		}
@@ -956,7 +956,7 @@ finalize_aggregate(AggState *aggstate,
 		if (fcinfo->flinfo->fn_strict && anynull)
 		{
 			/* don't call a strict function with NULL inputs */
-			*resultVal = (Datum) 0;
+			*resultVal = NullDatum;
 			*resultIsNull = true;
 		}
 		else
@@ -1012,7 +1012,7 @@ finalize_partialaggregate(AggState *aggstate,
 		/* Don't call a strict serialization function with NULL input. */
 		if (pertrans->serialfn.fn_strict && pergroupstate->transValueIsNull)
 		{
-			*resultVal = (Datum) 0;
+			*resultVal = NullDatum;
 			*resultIsNull = true;
 		}
 		else
@@ -2761,7 +2761,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 									  Anum_pg_aggregate_agginitval,
 									  &initValueIsNull);
 		if (initValueIsNull)
-			initValue = (Datum) 0;
+			initValue = NullDatum;
 		else
 			initValue = GetAggInitVal(textInitVal, aggtranstype);
 
@@ -3713,5 +3713,5 @@ aggregate_dummy(PG_FUNCTION_ARGS)
 {
 	elog(ERROR, "aggregate function %u called as normal function",
 		 fcinfo->flinfo->fn_oid);
-	return (Datum) 0;			/* keep compiler quiet */
+	return NullDatum;			/* keep compiler quiet */
 }

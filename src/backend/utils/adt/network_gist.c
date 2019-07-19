@@ -565,7 +565,7 @@ inet_gist_compress(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			gistentryinit(*retval, (Datum) 0,
+			gistentryinit(*retval, NullDatum,
 						  entry->rel, entry->page,
 						  entry->offset, false);
 		}

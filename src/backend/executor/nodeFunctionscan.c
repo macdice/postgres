@@ -197,7 +197,7 @@ FunctionNext(FunctionScanState *node)
 			 */
 			for (i = 0; i < fs->colcount; i++)
 			{
-				scanslot->tts_values[att] = (Datum) 0;
+				scanslot->tts_values[att] = NullDatum;
 				scanslot->tts_isnull[att] = true;
 				att++;
 			}

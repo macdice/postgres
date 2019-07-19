@@ -549,7 +549,7 @@ deflist_to_tuplestore(ReturnSetInfo *rsinfo, List *options)
 		}
 		else
 		{
-			values[1] = (Datum) 0;
+			values[1] = NullDatum;
 			nulls[1] = true;
 		}
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -574,7 +574,7 @@ pg_options_to_table(PG_FUNCTION_ARGS)
 	deflist_to_tuplestore((ReturnSetInfo *) fcinfo->resultinfo,
 						  untransformRelOptions(array));
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 

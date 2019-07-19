@@ -729,7 +729,7 @@ struct MinimalTupleData
 		att_isnull((attnum)-1, (tup)->t_data->t_bits) ?				\
 		(															\
 			(*(isnull) = true),										\
-			(Datum)NULL												\
+			NullDatum												\
 		)															\
 		:															\
 		(															\

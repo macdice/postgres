@@ -1270,7 +1270,7 @@ ParallelWorkerMain(Datum main_arg)
 	/* Arrange to signal the leader if we exit. */
 	ParallelMasterPid = fps->parallel_master_pid;
 	ParallelMasterBackendId = fps->parallel_master_backend_id;
-	on_shmem_exit(ParallelWorkerShutdown, (Datum) 0);
+	on_shmem_exit(ParallelWorkerShutdown, Int32GetDatum(0));
 
 	/*
 	 * Now we can find and attach to the error queue provided for us.  That's

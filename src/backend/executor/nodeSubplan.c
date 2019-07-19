@@ -259,7 +259,7 @@ ExecScanSubPlan(SubPlanState *node,
 			prm->execPlan = node;
 		}
 		*isNull = true;
-		return (Datum) 0;
+		return NullDatum;
 	}
 
 	/* Initialize ArrayBuildStateAny in caller's context, if needed */
@@ -456,7 +456,7 @@ ExecScanSubPlan(SubPlanState *node,
 		if (subLinkType == EXPR_SUBLINK ||
 			subLinkType == ROWCOMPARE_SUBLINK)
 		{
-			result = (Datum) 0;
+			result = NullDatum;
 			*isNull = true;
 		}
 	}
@@ -1184,7 +1184,7 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 		 * to avoid leaking memory across repeated calls, we have to remember
 		 * the latest value, much as for curTuple above.
 		 */
-		if (node->curArray != PointerGetDatum(NULL))
+		if (DatumGetPointer(node->curArray))
 			pfree(DatumGetPointer(node->curArray));
 		node->curArray = makeArrayResultAny(astate,
 											econtext->ecxt_per_query_memory,
@@ -1214,7 +1214,7 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 				ParamExecData *prm = &(econtext->ecxt_param_exec_vals[paramid]);
 
 				prm->execPlan = NULL;
-				prm->value = (Datum) 0;
+				prm->value = NullDatum;
 				prm->isnull = true;
 			}
 		}

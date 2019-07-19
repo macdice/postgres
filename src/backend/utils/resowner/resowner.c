@@ -243,7 +243,7 @@ ResourceArrayEnlarge(ResourceArray *resarr)
 		 */
 		for (i = 0; i < oldcap; i++)
 		{
-			if (olditemsarr[i] != resarr->invalidval)
+			if (olditemsarr[i].value != resarr->invalidval.value)
 				ResourceArrayAdd(resarr, olditemsarr[i]);
 		}
 
@@ -264,7 +264,7 @@ ResourceArrayAdd(ResourceArray *resarr, Datum value)
 {
 	uint32		idx;
 
-	Assert(value != resarr->invalidval);
+	Assert(value.value != resarr->invalidval.value);
 	Assert(resarr->nitems < resarr->maxitems);
 
 	if (RESARRAY_IS_ARRAY(resarr))
@@ -280,7 +280,7 @@ ResourceArrayAdd(ResourceArray *resarr, Datum value)
 		idx = DatumGetUInt32(hash_any((void *) &value, sizeof(value))) & mask;
 		for (;;)
 		{
-			if (resarr->itemsarr[idx] == resarr->invalidval)
+			if (resarr->itemsarr[idx].value == resarr->invalidval.value)
 				break;
 			idx = (idx + 1) & mask;
 		}
@@ -304,13 +304,13 @@ ResourceArrayRemove(ResourceArray *resarr, Datum value)
 				idx,
 				lastidx = resarr->lastidx;
 
-	Assert(value != resarr->invalidval);
+	Assert(value.value != resarr->invalidval.value);
 
 	/* Search through all items, but try lastidx first. */
 	if (RESARRAY_IS_ARRAY(resarr))
 	{
 		if (lastidx < resarr->nitems &&
-			resarr->itemsarr[lastidx] == value)
+			resarr->itemsarr[lastidx].value == value.value)
 		{
 			resarr->itemsarr[lastidx] = resarr->itemsarr[resarr->nitems - 1];
 			resarr->nitems--;
@@ -320,7 +320,7 @@ ResourceArrayRemove(ResourceArray *resarr, Datum value)
 		}
 		for (i = 0; i < resarr->nitems; i++)
 		{
-			if (resarr->itemsarr[i] == value)
+			if (resarr->itemsarr[i].value == value.value)
 			{
 				resarr->itemsarr[i] = resarr->itemsarr[resarr->nitems - 1];
 				resarr->nitems--;
@@ -335,7 +335,7 @@ ResourceArrayRemove(ResourceArray *resarr, Datum value)
 		uint32		mask = resarr->capacity - 1;
 
 		if (lastidx < resarr->capacity &&
-			resarr->itemsarr[lastidx] == value)
+			resarr->itemsarr[lastidx].value == value.value)
 		{
 			resarr->itemsarr[lastidx] = resarr->invalidval;
 			resarr->nitems--;
@@ -344,7 +344,7 @@ ResourceArrayRemove(ResourceArray *resarr, Datum value)
 		idx = DatumGetUInt32(hash_any((void *) &value, sizeof(value))) & mask;
 		for (i = 0; i < resarr->capacity; i++)
 		{
-			if (resarr->itemsarr[idx] == value)
+			if (resarr->itemsarr[idx].value == value.value)
 			{
 				resarr->itemsarr[idx] = resarr->invalidval;
 				resarr->nitems--;
@@ -385,7 +385,7 @@ ResourceArrayGetAny(ResourceArray *resarr, Datum *value)
 		for (;;)
 		{
 			resarr->lastidx &= mask;
-			if (resarr->itemsarr[resarr->lastidx] != resarr->invalidval)
+			if (resarr->itemsarr[resarr->lastidx].value != resarr->invalidval.value)
 				break;
 			resarr->lastidx++;
 		}
@@ -549,7 +549,7 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 		/* Ditto for JIT contexts */
 		while (ResourceArrayGetAny(&(owner->jitarr), &foundres))
 		{
-			JitContext *context = (JitContext *) PointerGetDatum(foundres);
+			JitContext *context = (JitContext *) DatumGetPointer(foundres);
 
 			jit_release_context(context);
 		}
@@ -842,7 +842,7 @@ CreateAuxProcessResourceOwner(void)
 	 * Register a shmem-exit callback for cleanup of aux-process resource
 	 * owner.  (This needs to run after, e.g., ShutdownXLOG.)
 	 */
-	on_shmem_exit(ReleaseAuxProcessResourcesCallback, 0);
+	on_shmem_exit(ReleaseAuxProcessResourcesCallback, NullDatum);
 
 }
 

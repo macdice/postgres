@@ -982,7 +982,7 @@ get_func_input_arg_names(Datum proargnames, Datum proargmodes,
 	int			i;
 
 	/* Do nothing if null proargnames */
-	if (proargnames == PointerGetDatum(NULL))
+	if (!DatumGetPointer(proargnames))
 	{
 		*arg_names = NULL;
 		return 0;
@@ -1000,7 +1000,7 @@ get_func_input_arg_names(Datum proargnames, Datum proargmodes,
 		elog(ERROR, "proargnames is not a 1-D text array");
 	deconstruct_array(arr, TEXTOID, -1, false, 'i',
 					  &argnames, NULL, &numargs);
-	if (proargmodes != PointerGetDatum(NULL))
+	if (DatumGetPointer(proargmodes))
 	{
 		arr = DatumGetArrayTypeP(proargmodes);	/* ensure not toasted */
 		if (ARR_NDIM(arr) != 1 ||
@@ -1226,8 +1226,7 @@ build_function_result_tupdesc_d(char prokind,
 	int			i;
 
 	/* Can't have output args if columns are null */
-	if (proallargtypes == PointerGetDatum(NULL) ||
-		proargmodes == PointerGetDatum(NULL))
+	if (!DatumGetPointer(proallargtypes) || !DatumGetPointer(proargmodes))
 		return NULL;
 
 	/*
@@ -1250,7 +1249,7 @@ build_function_result_tupdesc_d(char prokind,
 		ARR_ELEMTYPE(arr) != CHAROID)
 		elog(ERROR, "proargmodes is not a 1-D char array");
 	argmodes = (char *) ARR_DATA_PTR(arr);
-	if (proargnames != PointerGetDatum(NULL))
+	if (DatumGetPointer(proargnames))
 	{
 		arr = DatumGetArrayTypeP(proargnames);	/* ensure not toasted */
 		if (ARR_NDIM(arr) != 1 ||
@@ -1531,7 +1530,7 @@ extract_variadic_args(FunctionCallInfo fcinfo, int variadic_start,
 				types_res[i] = TEXTOID;
 
 				if (PG_ARGISNULL(i + variadic_start))
-					args_res[i] = (Datum) 0;
+					args_res[i] = NullDatum;
 				else
 					args_res[i] =
 						CStringGetTextDatum(PG_GETARG_POINTER(i + variadic_start));

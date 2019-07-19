@@ -188,7 +188,7 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 		else
 		{
 			/* set up hidden entry */
-			queryKey = (Datum) 0;
+			queryKey = NullDatum;
 			switch (searchMode)
 			{
 				case GIN_SEARCH_MODE_INCLUDE_EMPTY:
@@ -382,7 +382,7 @@ ginNewScanKey(IndexScanDesc scan)
 		hasNullQuery = true;
 		ginFillScanKey(so, FirstOffsetNumber,
 					   InvalidStrategy, GIN_SEARCH_MODE_EVERYTHING,
-					   (Datum) 0, 0,
+					   NullDatum, 0,
 					   NULL, NULL, NULL, NULL);
 	}
 

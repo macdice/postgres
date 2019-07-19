@@ -417,7 +417,7 @@ spg_range_quad_inner_consistent(PG_FUNCTION_ARGS)
 		/* This node has a centroid. Fetch it. */
 		centroid = DatumGetRangeTypeP(in->prefixDatum);
 		typcache = range_get_typcache(fcinfo,
-									  RangeTypeGetOid(DatumGetRangeTypeP(centroid)));
+									  RangeTypeGetOid(centroid));
 		range_deserialize(typcache, centroid, &centroidLower, &centroidUpper,
 						  &centroidEmpty);
 
@@ -558,7 +558,7 @@ spg_range_quad_inner_consistent(PG_FUNCTION_ARGS)
 					 */
 					if (in->traversalValue)
 					{
-						prevCentroid = DatumGetRangeTypeP(in->traversalValue);
+						prevCentroid = in->traversalValue;
 						range_deserialize(typcache, prevCentroid,
 										  &prevLower, &prevUpper, &prevEmpty);
 					}
@@ -760,7 +760,7 @@ spg_range_quad_inner_consistent(PG_FUNCTION_ARGS)
 				 * because it's range
 				 */
 				previousCentroid = datumCopy(in->prefixDatum, false, -1);
-				out->traversalValues[out->nNodes] = (void *) previousCentroid;
+				out->traversalValues[out->nNodes] = DatumGetPointer(previousCentroid);
 			}
 			out->nodeNumbers[out->nNodes] = i - 1;
 			out->nNodes++;

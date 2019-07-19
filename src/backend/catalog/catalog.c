@@ -542,5 +542,5 @@ pg_nextoid(PG_FUNCTION_ARGS)
 	table_close(rel, RowExclusiveLock);
 	index_close(idx, RowExclusiveLock);
 
-	return newoid;
+	PG_RETURN_OID(newoid);
 }

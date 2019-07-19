@@ -4000,7 +4000,7 @@ AtEOXact_Namespace(bool isCommit, bool parallel)
 	if (myTempNamespaceSubID != InvalidSubTransactionId && !parallel)
 	{
 		if (isCommit)
-			before_shmem_exit(RemoveTempRelationsCallback, 0);
+			before_shmem_exit(RemoveTempRelationsCallback, NullDatum);
 		else
 		{
 			myTempNamespace = InvalidOid;
@@ -4260,7 +4260,7 @@ InitializeSearchPath(void)
 		 */
 		CacheRegisterSyscacheCallback(NAMESPACEOID,
 									  NamespaceCallback,
-									  (Datum) 0);
+									  NullDatum);
 		/* Force search path to be recomputed on next use */
 		baseSearchPathValid = false;
 	}

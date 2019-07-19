@@ -500,19 +500,19 @@ AlterOperator(AlterOperatorStmt *stmt)
 	/* Update the tuple */
 	for (i = 0; i < Natts_pg_operator; ++i)
 	{
-		values[i] = (Datum) 0;
+		values[i] = NullDatum;
 		replaces[i] = false;
 		nulls[i] = false;
 	}
 	if (updateRestriction)
 	{
 		replaces[Anum_pg_operator_oprrest - 1] = true;
-		values[Anum_pg_operator_oprrest - 1] = restrictionOid;
+		values[Anum_pg_operator_oprrest - 1] = ObjectIdGetDatum(restrictionOid);
 	}
 	if (updateJoin)
 	{
 		replaces[Anum_pg_operator_oprjoin - 1] = true;
-		values[Anum_pg_operator_oprjoin - 1] = joinOid;
+		values[Anum_pg_operator_oprjoin - 1] = ObjectIdGetDatum(joinOid);
 	}
 
 	tup = heap_modify_tuple(tup, RelationGetDescr(catalog),

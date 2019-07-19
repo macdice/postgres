@@ -261,7 +261,7 @@ plpgsql_call_handler(PG_FUNCTION_ARGS)
 		{
 			plpgsql_exec_event_trigger(func,
 									   (EventTriggerData *) fcinfo->context);
-			retval = (Datum) 0;
+			retval = NullDatum;
 		}
 		else
 			retval = plpgsql_exec_function(func, fcinfo, NULL, !nonatomic);

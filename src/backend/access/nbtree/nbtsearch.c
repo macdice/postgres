@@ -899,7 +899,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 										   InvalidOid,
 										   InvalidOid,
 										   InvalidOid,
-										   (Datum) 0);
+										   NullDatum);
 				}
 
 				/*

@@ -254,7 +254,7 @@ perform_base_backup(basebackup_options *opt)
 	 * do_pg_stop_backup() should be inside the error cleanup block!
 	 */
 
-	PG_ENSURE_ERROR_CLEANUP(base_backup_cleanup, (Datum) 0);
+	PG_ENSURE_ERROR_CLEANUP(base_backup_cleanup, NullDatum);
 	{
 		ListCell   *lc;
 		tablespaceinfo *ti;
@@ -363,7 +363,7 @@ perform_base_backup(basebackup_options *opt)
 
 		endptr = do_pg_stop_backup(labelfile->data, !opt->nowait, &endtli);
 	}
-	PG_END_ENSURE_ERROR_CLEANUP(base_backup_cleanup, (Datum) 0);
+	PG_END_ENSURE_ERROR_CLEANUP(base_backup_cleanup, NullDatum);
 
 
 	if (opt->includewal)

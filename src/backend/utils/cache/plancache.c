@@ -126,14 +126,14 @@ int			plan_cache_mode;
 void
 InitPlanCache(void)
 {
-	CacheRegisterRelcacheCallback(PlanCacheRelCallback, (Datum) 0);
-	CacheRegisterSyscacheCallback(PROCOID, PlanCacheObjectCallback, (Datum) 0);
-	CacheRegisterSyscacheCallback(TYPEOID, PlanCacheObjectCallback, (Datum) 0);
-	CacheRegisterSyscacheCallback(NAMESPACEOID, PlanCacheSysCallback, (Datum) 0);
-	CacheRegisterSyscacheCallback(OPEROID, PlanCacheSysCallback, (Datum) 0);
-	CacheRegisterSyscacheCallback(AMOPOPID, PlanCacheSysCallback, (Datum) 0);
-	CacheRegisterSyscacheCallback(FOREIGNSERVEROID, PlanCacheSysCallback, (Datum) 0);
-	CacheRegisterSyscacheCallback(FOREIGNDATAWRAPPEROID, PlanCacheSysCallback, (Datum) 0);
+	CacheRegisterRelcacheCallback(PlanCacheRelCallback, NullDatum);
+	CacheRegisterSyscacheCallback(PROCOID, PlanCacheObjectCallback, NullDatum);
+	CacheRegisterSyscacheCallback(TYPEOID, PlanCacheObjectCallback, NullDatum);
+	CacheRegisterSyscacheCallback(NAMESPACEOID, PlanCacheSysCallback, NullDatum);
+	CacheRegisterSyscacheCallback(OPEROID, PlanCacheSysCallback, NullDatum);
+	CacheRegisterSyscacheCallback(AMOPOPID, PlanCacheSysCallback, NullDatum);
+	CacheRegisterSyscacheCallback(FOREIGNSERVEROID, PlanCacheSysCallback, NullDatum);
+	CacheRegisterSyscacheCallback(FOREIGNDATAWRAPPEROID, PlanCacheSysCallback, NullDatum);
 }
 
 /*

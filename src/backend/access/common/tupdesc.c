@@ -576,10 +576,10 @@ hashTupleDesc(TupleDesc desc)
 	uint32		s;
 	int			i;
 
-	s = hash_combine(0, hash_uint32(desc->natts));
-	s = hash_combine(s, hash_uint32(desc->tdtypeid));
+	s = hash_combine(0, DatumGetUInt32(hash_uint32(desc->natts)));
+	s = hash_combine(s, DatumGetUInt32(hash_uint32(desc->tdtypeid)));
 	for (i = 0; i < desc->natts; ++i)
-		s = hash_combine(s, hash_uint32(TupleDescAttr(desc, i)->atttypid));
+		s = hash_combine(s, DatumGetUInt32(hash_uint32(TupleDescAttr(desc, i)->atttypid)));
 
 	return s;
 }

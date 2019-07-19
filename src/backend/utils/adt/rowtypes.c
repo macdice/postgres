@@ -168,7 +168,7 @@ record_in(PG_FUNCTION_ARGS)
 		/* Ignore dropped columns in datatype, but fill with nulls */
 		if (att->attisdropped)
 		{
-			values[i] = (Datum) 0;
+			values[i] = NullDatum;
 			nulls[i] = true;
 			continue;
 		}
@@ -546,7 +546,7 @@ record_recv(PG_FUNCTION_ARGS)
 		/* Ignore dropped columns in datatype, but fill with nulls */
 		if (att->attisdropped)
 		{
-			values[i] = (Datum) 0;
+			values[i] = NullDatum;
 			nulls[i] = true;
 			continue;
 		}
@@ -1461,15 +1461,15 @@ record_image_cmp(FunctionCallInfo fcinfo)
 				if ((cmpresult == 0) && (len1 != len2))
 					cmpresult = (len1 < len2) ? -1 : 1;
 
-				if ((Pointer) arg1val != (Pointer) values1[i1])
+				if ((Pointer) arg1val != DatumGetPointer(values1[i1]))
 					pfree(arg1val);
-				if ((Pointer) arg2val != (Pointer) values2[i2])
+				if ((Pointer) arg2val != DatumGetPointer(values2[i2]))
 					pfree(arg2val);
 			}
 			else if (att1->attbyval)
 			{
-				if (values1[i1] != values2[i2])
-					cmpresult = (values1[i1] < values2[i2]) ? -1 : 1;
+				if (values1[i1].value != values2[i2].value)
+					cmpresult = (values1[i1].value < values2[i2].value) ? -1 : 1;
 			}
 			else
 			{

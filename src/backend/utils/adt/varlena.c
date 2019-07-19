@@ -663,13 +663,13 @@ text_length(Datum str)
 {
 	/* fastpath when max encoding length is one */
 	if (pg_database_encoding_max_length() == 1)
-		PG_RETURN_INT32(toast_raw_datum_size(str) - VARHDRSZ);
+		return toast_raw_datum_size(str) - VARHDRSZ;
 	else
 	{
 		text	   *t = DatumGetTextPP(str);
 
-		PG_RETURN_INT32(pg_mbstrlen_with_len(VARDATA_ANY(t),
-											 VARSIZE_ANY_EXHDR(t)));
+		return pg_mbstrlen_with_len(VARDATA_ANY(t),
+									VARSIZE_ANY_EXHDR(t));
 	}
 }
 
@@ -2133,9 +2133,9 @@ varstrfastcmp_c(Datum x, Datum y, SortSupport ssup)
 		result = (len1 < len2) ? -1 : 1;
 
 	/* We can't afford to leak memory here. */
-	if (PointerGetDatum(arg1) != x)
+	if (PointerGetDatum(arg1).value != x.value)
 		pfree(arg1);
-	if (PointerGetDatum(arg2) != y)
+	if (PointerGetDatum(arg2).value != y.value)
 		pfree(arg2);
 
 	return result;
@@ -2170,9 +2170,9 @@ bpcharfastcmp_c(Datum x, Datum y, SortSupport ssup)
 		result = (len1 < len2) ? -1 : 1;
 
 	/* We can't afford to leak memory here. */
-	if (PointerGetDatum(arg1) != x)
+	if (PointerGetDatum(arg1).value != x.value)
 		pfree(arg1);
-	if (PointerGetDatum(arg2) != y)
+	if (PointerGetDatum(arg2).value != y.value)
 		pfree(arg2);
 
 	return result;
@@ -2213,9 +2213,9 @@ varlenafastcmp_locale(Datum x, Datum y, SortSupport ssup)
 	result = varstrfastcmp_locale(a1p, len1, a2p, len2, ssup);
 
 	/* We can't afford to leak memory here. */
-	if (PointerGetDatum(arg1) != x)
+	if (PointerGetDatum(arg1).value != x.value)
 		pfree(arg1);
-	if (PointerGetDatum(arg2) != y)
+	if (PointerGetDatum(arg2).value != y.value)
 		pfree(arg2);
 
 	return result;
@@ -2400,9 +2400,9 @@ varstrcmp_abbrev(Datum x, Datum y, SortSupport ssup)
 	 * authoritatively, for the same reason that there is a strcoll()
 	 * tie-breaker call to strcmp() in varstr_cmp().
 	 */
-	if (x > y)
+	if (x.value > y.value)
 		return 1;
-	else if (x == y)
+	else if (x.value == y.value)
 		return 0;
 	else
 		return -1;
@@ -2619,8 +2619,8 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 		uint32		lohalf,
 					hihalf;
 
-		lohalf = (uint32) res;
-		hihalf = (uint32) (res >> 32);
+		lohalf = DatumGetUInt32(res);
+		hihalf = (uint32) (DatumGetUInt64(res) >> 32);
 		hash = DatumGetUInt32(hash_uint32(lohalf ^ hihalf));
 	}
 #else							/* SIZEOF_DATUM != 8 */
@@ -2641,10 +2641,10 @@ done:
 	 * the comparator would have to call memcmp() with a pair of pointers to
 	 * the first byte of each abbreviated key, which is slower.
 	 */
-	res = DatumBigEndianToNative(res);
+	res = UInt32GetDatum(DatumBigEndianToNative(res.value));
 
 	/* Don't leak memory here */
-	if (PointerGetDatum(authoritative) != original)
+	if (PointerGetDatum(authoritative).value != original.value)
 		pfree(authoritative);
 
 	return res;
@@ -4840,8 +4840,7 @@ text_to_array_internal(PG_FUNCTION_ARGS)
 		}
 	}
 
-	PG_RETURN_ARRAYTYPE_P(makeArrayResult(astate,
-										  CurrentMemoryContext));
+	PG_RETURN_DATUM(makeArrayResult(astate, CurrentMemoryContext));
 }
 
 /*

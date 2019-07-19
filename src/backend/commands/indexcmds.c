@@ -773,7 +773,7 @@ DefineIndex(Oid relationId,
 	/*
 	 * Parse AM-specific options, convert to text array form, validate.
 	 */
-	reloptions = transformRelOptions((Datum) 0, stmt->options,
+	reloptions = transformRelOptions(NullDatum, stmt->options,
 									 NULL, NULL, false, false);
 
 	(void) index_reloptions(amoptions, reloptions, true);

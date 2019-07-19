@@ -206,7 +206,7 @@ range_recv(PG_FUNCTION_ARGS)
 		pfree(bound_buf.data);
 	}
 	else
-		lower.val = (Datum) 0;
+		lower.val = NullDatum;
 
 	if (RANGE_HAS_UBOUND(flags))
 	{
@@ -224,7 +224,7 @@ range_recv(PG_FUNCTION_ARGS)
 		pfree(bound_buf.data);
 	}
 	else
-		upper.val = (Datum) 0;
+		upper.val = NullDatum;
 
 	pq_getmsgend(buf);
 
@@ -270,8 +270,8 @@ range_send(PG_FUNCTION_ARGS)
 	{
 		Datum		bound = PointerGetDatum(SendFunctionCall(&cache->proc,
 															 lower.val));
-		uint32		bound_len = VARSIZE(bound) - VARHDRSZ;
-		char	   *bound_data = VARDATA(bound);
+		uint32		bound_len = VARSIZE(DatumGetPointer(bound)) - VARHDRSZ;
+		char	   *bound_data = VARDATA(DatumGetPointer(bound));
 
 		pq_sendint32(buf, bound_len);
 		pq_sendbytes(buf, bound_data, bound_len);
@@ -281,8 +281,8 @@ range_send(PG_FUNCTION_ARGS)
 	{
 		Datum		bound = PointerGetDatum(SendFunctionCall(&cache->proc,
 															 upper.val));
-		uint32		bound_len = VARSIZE(bound) - VARHDRSZ;
-		char	   *bound_data = VARDATA(bound);
+		uint32		bound_len = VARSIZE(DatumGetPointer(bound)) - VARHDRSZ;
+		char	   *bound_data = VARDATA(DatumGetPointer(bound));
 
 		pq_sendint32(buf, bound_len);
 		pq_sendbytes(buf, bound_data, bound_len);
@@ -370,12 +370,12 @@ range_constructor2(PG_FUNCTION_ARGS)
 
 	typcache = range_get_typcache(fcinfo, rngtypid);
 
-	lower.val = PG_ARGISNULL(0) ? (Datum) 0 : arg1;
+	lower.val = PG_ARGISNULL(0) ? NullDatum : arg1;
 	lower.infinite = PG_ARGISNULL(0);
 	lower.inclusive = true;
 	lower.lower = true;
 
-	upper.val = PG_ARGISNULL(1) ? (Datum) 0 : arg2;
+	upper.val = PG_ARGISNULL(1) ? NullDatum : arg2;
 	upper.infinite = PG_ARGISNULL(1);
 	upper.inclusive = false;
 	upper.lower = false;
@@ -407,12 +407,12 @@ range_constructor3(PG_FUNCTION_ARGS)
 
 	flags = range_parse_flags(text_to_cstring(PG_GETARG_TEXT_PP(2)));
 
-	lower.val = PG_ARGISNULL(0) ? (Datum) 0 : arg1;
+	lower.val = PG_ARGISNULL(0) ? NullDatum : arg1;
 	lower.infinite = PG_ARGISNULL(0);
 	lower.inclusive = (flags & RANGE_LB_INC) != 0;
 	lower.lower = true;
 
-	upper.val = PG_ARGISNULL(1) ? (Datum) 0 : arg2;
+	upper.val = PG_ARGISNULL(1) ? NullDatum : arg2;
 	upper.infinite = PG_ARGISNULL(1);
 	upper.inclusive = (flags & RANGE_UB_INC) != 0;
 	upper.lower = false;
@@ -1047,8 +1047,8 @@ range_union_internal(TypeCacheEntry *typcache, RangeType *r1, RangeType *r2,
 		return r1;
 
 	if (strict &&
-		!DatumGetBool(range_overlaps_internal(typcache, r1, r2)) &&
-		!DatumGetBool(range_adjacent_internal(typcache, r1, r2)))
+		!range_overlaps_internal(typcache, r1, r2) &&
+		!range_adjacent_internal(typcache, r1, r2))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("result of range union would not be contiguous")));
@@ -1187,7 +1187,7 @@ range_cmp(PG_FUNCTION_ARGS)
 Datum
 range_lt(PG_FUNCTION_ARGS)
 {
-	int			cmp = range_cmp(fcinfo);
+	int			cmp = DatumGetInt32(range_cmp(fcinfo));
 
 	PG_RETURN_BOOL(cmp < 0);
 }
@@ -1195,7 +1195,7 @@ range_lt(PG_FUNCTION_ARGS)
 Datum
 range_le(PG_FUNCTION_ARGS)
 {
-	int			cmp = range_cmp(fcinfo);
+	int			cmp = DatumGetInt32(range_cmp(fcinfo));
 
 	PG_RETURN_BOOL(cmp <= 0);
 }
@@ -1203,7 +1203,7 @@ range_le(PG_FUNCTION_ARGS)
 Datum
 range_ge(PG_FUNCTION_ARGS)
 {
-	int			cmp = range_cmp(fcinfo);
+	int			cmp = DatumGetInt32(range_cmp(fcinfo));
 
 	PG_RETURN_BOOL(cmp >= 0);
 }
@@ -1211,7 +1211,7 @@ range_ge(PG_FUNCTION_ARGS)
 Datum
 range_gt(PG_FUNCTION_ARGS)
 {
-	int			cmp = range_cmp(fcinfo);
+	int			cmp = DatumGetInt32(range_cmp(fcinfo));
 
 	PG_RETURN_BOOL(cmp > 0);
 }
@@ -1273,7 +1273,7 @@ hash_range(PG_FUNCTION_ARGS)
 		upper_hash = 0;
 
 	/* Merge hashes of flags and bounds */
-	result = hash_uint32((uint32) flags);
+	result = DatumGetUInt32(hash_uint32((uint32) flags));
 	result ^= lower_hash;
 	result = (result << 1) | (result >> 31);
 	result ^= upper_hash;
@@ -1729,7 +1729,7 @@ range_deserialize(TypeCacheEntry *typcache, RangeType *range,
 		ptr = (Pointer) att_addlength_pointer(ptr, typlen, ptr);
 	}
 	else
-		lbound = (Datum) 0;
+		lbound = NullDatum;
 
 	/* fetch upper bound, if any */
 	if (RANGE_HAS_UBOUND(flags))
@@ -1739,7 +1739,7 @@ range_deserialize(TypeCacheEntry *typcache, RangeType *range,
 		/* no need for att_addlength_pointer */
 	}
 	else
-		ubound = (Datum) 0;
+		ubound = NullDatum;
 
 	/* emit results */
 
@@ -1946,12 +1946,12 @@ make_empty_range(TypeCacheEntry *typcache)
 	RangeBound	lower;
 	RangeBound	upper;
 
-	lower.val = (Datum) 0;
+	lower.val = NullDatum;
 	lower.infinite = false;
 	lower.inclusive = false;
 	lower.lower = true;
 
-	upper.val = (Datum) 0;
+	upper.val = NullDatum;
 	upper.infinite = false;
 	upper.inclusive = false;
 	upper.lower = false;

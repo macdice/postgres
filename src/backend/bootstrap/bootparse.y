@@ -253,7 +253,7 @@ Boot_CreateStmt:
 													  shared_relation,
 													  mapped_relation,
 													  ONCOMMIT_NOOP,
-													  (Datum) 0,
+													  NullDatum,
 													  false,
 													  true,
 													  false,

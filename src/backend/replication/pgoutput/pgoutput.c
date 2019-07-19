@@ -197,7 +197,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 		publications_valid = false;
 		CacheRegisterSyscacheCallback(PUBLICATIONOID,
 									  publication_invalidation_cb,
-									  (Datum) 0);
+									  NullDatum);
 
 		/* Initialize relation schema cache. */
 		init_rel_sync_cache(CacheMemoryContext);
@@ -517,10 +517,10 @@ init_rel_sync_cache(MemoryContext cachectx)
 
 	Assert(RelationSyncCache != NULL);
 
-	CacheRegisterRelcacheCallback(rel_sync_cache_relation_cb, (Datum) 0);
+	CacheRegisterRelcacheCallback(rel_sync_cache_relation_cb, NullDatum);
 	CacheRegisterSyscacheCallback(PUBLICATIONRELMAP,
 								  rel_sync_cache_publication_cb,
-								  (Datum) 0);
+								  NullDatum);
 }
 
 /*

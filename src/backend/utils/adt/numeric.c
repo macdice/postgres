@@ -356,12 +356,12 @@ typedef struct NumericSumAccum
  */
 #define NUMERIC_ABBREV_BITS (SIZEOF_DATUM * BITS_PER_BYTE)
 #if SIZEOF_DATUM == 8
-#define NumericAbbrevGetDatum(X) ((Datum) (X))
-#define DatumGetNumericAbbrev(X) ((int64) (X))
+#define NumericAbbrevGetDatum(X) (MakeDatum(X))
+#define DatumGetNumericAbbrev(X) ((int64) (X).value)
 #define NUMERIC_ABBREV_NAN		 NumericAbbrevGetDatum(PG_INT64_MIN)
 #else
-#define NumericAbbrevGetDatum(X) ((Datum) (X))
-#define DatumGetNumericAbbrev(X) ((int32) (X))
+#define NumericAbbrevGetDatum(X) (MakeDatum(X))
+#define DatumGetNumericAbbrev(X) ((int32) (X).value)
 #define NUMERIC_ABBREV_NAN		 NumericAbbrevGetDatum(PG_INT32_MIN)
 #endif
 
@@ -2326,7 +2326,7 @@ hash_numeric(PG_FUNCTION_ARGS)
 						  hash_len * sizeof(NumericDigit));
 
 	/* Mix in the weight, via XOR */
-	result = digit_hash ^ weight;
+	result = UInt32GetDatum(DatumGetUInt32(digit_hash) ^ weight);
 
 	PG_RETURN_DATUM(result);
 }

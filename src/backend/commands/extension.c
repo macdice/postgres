@@ -1796,12 +1796,12 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 	values[Anum_pg_extension_extrelocatable - 1] = BoolGetDatum(relocatable);
 	values[Anum_pg_extension_extversion - 1] = CStringGetTextDatum(extVersion);
 
-	if (extConfig == PointerGetDatum(NULL))
+	if (!DatumGetPointer(extConfig))
 		nulls[Anum_pg_extension_extconfig - 1] = true;
 	else
 		values[Anum_pg_extension_extconfig - 1] = extConfig;
 
-	if (extCondition == PointerGetDatum(NULL))
+	if (!DatumGetPointer(extCondition))
 		nulls[Anum_pg_extension_extcondition - 1] = true;
 	else
 		values[Anum_pg_extension_extcondition - 1] = extCondition;
@@ -2002,7 +2002,7 @@ pg_available_extensions(PG_FUNCTION_ARGS)
 	/* clean up and return the tuplestore */
 	tuplestore_donestoring(tupstore);
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*
@@ -2094,7 +2094,7 @@ pg_available_extension_versions(PG_FUNCTION_ARGS)
 	/* clean up and return the tuplestore */
 	tuplestore_donestoring(tupstore);
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*
@@ -2338,7 +2338,7 @@ pg_extension_update_paths(PG_FUNCTION_ARGS)
 	/* clean up and return the tuplestore */
 	tuplestore_donestoring(tupstore);
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*

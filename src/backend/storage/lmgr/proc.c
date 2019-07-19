@@ -460,7 +460,7 @@ InitProcess(void)
 	/*
 	 * Arrange to clean up at backend exit.
 	 */
-	on_shmem_exit(ProcKill, 0);
+	on_shmem_exit(ProcKill, NullDatum);
 
 	/*
 	 * Now that we have a PGPROC, we could try to acquire locks, so initialize
@@ -490,7 +490,7 @@ InitProcessPhase2(void)
 	/*
 	 * Arrange to clean that up at backend exit.
 	 */
-	on_shmem_exit(RemoveProcFromArray, 0);
+	on_shmem_exit(RemoveProcFromArray, NullDatum);
 }
 
 /*

@@ -392,7 +392,7 @@ cancel_before_shmem_exit(pg_on_exit_callback function, Datum arg)
 	if (before_shmem_exit_index > 0 &&
 		before_shmem_exit_list[before_shmem_exit_index - 1].function
 		== function &&
-		before_shmem_exit_list[before_shmem_exit_index - 1].arg == arg)
+		before_shmem_exit_list[before_shmem_exit_index - 1].arg.value == arg.value)
 		--before_shmem_exit_index;
 }
 

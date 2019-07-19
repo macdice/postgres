@@ -574,7 +574,7 @@ UpdateIndexRelation(Oid indexoid,
 		pfree(exprsString);
 	}
 	else
-		exprsDatum = (Datum) 0;
+		exprsDatum = NullDatum;
 
 	/*
 	 * Convert the index predicate (if any) to a text datum.  Note we convert
@@ -589,7 +589,7 @@ UpdateIndexRelation(Oid indexoid,
 		pfree(predString);
 	}
 	else
-		predDatum = (Datum) 0;
+		predDatum = NullDatum;
 
 	/*
 	 * open the system catalog index relation
@@ -620,10 +620,10 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indclass - 1] = PointerGetDatum(indclass);
 	values[Anum_pg_index_indoption - 1] = PointerGetDatum(indoption);
 	values[Anum_pg_index_indexprs - 1] = exprsDatum;
-	if (exprsDatum == (Datum) 0)
+	if (!DatumGetPointer(exprsDatum))
 		nulls[Anum_pg_index_indexprs - 1] = true;
 	values[Anum_pg_index_indpred - 1] = predDatum;
-	if (predDatum == (Datum) 0)
+	if (!DatumGetPointer(predDatum))
 		nulls[Anum_pg_index_indpred - 1] = true;
 
 	tuple = heap_form_tuple(RelationGetDescr(pg_index), values, nulls);
@@ -916,7 +916,7 @@ index_create(Relation heapRelation,
 	 */
 	InsertPgClassTuple(pg_class, indexRelation,
 					   RelationGetRelid(indexRelation),
-					   (Datum) 0,
+					   NullDatum,
 					   reloptions);
 
 	/* done with pg_class */
@@ -1229,7 +1229,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char
 	indcoloptions = (int2vector *) DatumGetPointer(colOptionDatum);
 
 	/* Fetch options of index if any */
-	classTuple = SearchSysCache1(RELOID, oldIndexId);
+	classTuple = SearchSysCache1(RELOID, ObjectIdGetDatum(oldIndexId));
 	if (!HeapTupleIsValid(classTuple))
 		elog(ERROR, "cache lookup failed for relation %u", oldIndexId);
 	optionDatum = SysCacheGetAttr(RELOID, classTuple,
@@ -1508,7 +1508,7 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 		ScanKeyData skey[3];
 		SysScanDesc sd;
 		HeapTuple	tuple;
-		Datum		values[Natts_pg_description] = {0};
+		Datum		values[Natts_pg_description] = {NullDatum};
 		bool		nulls[Natts_pg_description] = {0};
 		bool		replaces[Natts_pg_description] = {0};
 

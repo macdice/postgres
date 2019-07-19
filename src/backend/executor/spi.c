@@ -1034,7 +1034,7 @@ SPI_getbinval(HeapTuple tuple, TupleDesc tupdesc, int fnumber, bool *isnull)
 	{
 		SPI_result = SPI_ERROR_NOATTRIBUTE;
 		*isnull = true;
-		return (Datum) NULL;
+		return NullDatum;
 	}
 
 	return heap_getattr(tuple, fnumber, tupdesc, isnull);

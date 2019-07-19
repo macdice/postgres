@@ -1257,7 +1257,7 @@ fmgr_sql(PG_FUNCTION_ARGS)
 			rsi->isDone = ExprEndResult;
 
 			fcinfo->isnull = true;
-			result = (Datum) 0;
+			result = NullDatum;
 
 			/* Deregister shutdown callback, if we made one */
 			if (fcache->shutdown_reg)
@@ -1283,7 +1283,7 @@ fmgr_sql(PG_FUNCTION_ARGS)
 				rsi->setDesc = CreateTupleDescCopy(fcache->junkFilter->jf_cleanTupType);
 
 			fcinfo->isnull = true;
-			result = (Datum) 0;
+			result = NullDatum;
 
 			/* Deregister shutdown callback, if we made one */
 			if (fcache->shutdown_reg)
@@ -1310,7 +1310,7 @@ fmgr_sql(PG_FUNCTION_ARGS)
 			else
 			{
 				fcinfo->isnull = true;
-				result = (Datum) 0;
+				result = NullDatum;
 			}
 		}
 		else
@@ -1318,7 +1318,7 @@ fmgr_sql(PG_FUNCTION_ARGS)
 			/* Should only get here for VOID functions and procedures */
 			Assert(fcache->rettype == VOIDOID);
 			fcinfo->isnull = true;
-			result = (Datum) 0;
+			result = NullDatum;
 		}
 
 		/* Clear the tuplestore, but keep it for next time */
@@ -1836,7 +1836,7 @@ check_sql_fn_retval(Oid func_id, Oid rettype, List *queryTreeList,
 												   -1,
 												   InvalidOid,
 												   sizeof(int32),
-												   (Datum) 0,
+												   NullDatum,
 												   true,	/* isnull */
 												   true /* byval */ );
 					newtlist = lappend(newtlist,
@@ -1898,7 +1898,7 @@ check_sql_fn_retval(Oid func_id, Oid rettype, List *queryTreeList,
 											   -1,
 											   InvalidOid,
 											   sizeof(int32),
-											   (Datum) 0,
+											   NullDatum,
 											   true,	/* isnull */
 											   true /* byval */ );
 				newtlist = lappend(newtlist,

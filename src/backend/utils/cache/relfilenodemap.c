@@ -128,7 +128,7 @@ InitializeRelfilenodeMap(void)
 
 	/* Watch for invalidation events. */
 	CacheRegisterRelcacheCallback(RelfilenodeMapInvalidateCallback,
-								  (Datum) 0);
+								  NullDatum);
 }
 
 /*

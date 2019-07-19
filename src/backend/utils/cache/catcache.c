@@ -140,7 +140,7 @@ namehashfast(Datum datum)
 {
 	char	   *key = NameStr(*DatumGetName(datum));
 
-	return hash_any((unsigned char *) key, strlen(key));
+	return DatumGetUInt32(hash_any((unsigned char *) key, strlen(key)));
 }
 
 static bool
@@ -318,10 +318,10 @@ CatalogCacheComputeHashValue(CatCache *cache, int nkeys,
 static uint32
 CatalogCacheComputeTupleHashValue(CatCache *cache, int nkeys, HeapTuple tuple)
 {
-	Datum		v1 = 0,
-				v2 = 0,
-				v3 = 0,
-				v4 = 0;
+	Datum		v1 = NullDatum,
+				v2 = NullDatum,
+				v3 = NullDatum,
+				v4 = NullDatum;
 	bool		isNull = false;
 	int		   *cc_keyno = cache->cc_keyno;
 	TupleDesc	cc_tupdesc = cache->cc_tupdesc;
@@ -1164,7 +1164,7 @@ HeapTuple
 SearchCatCache1(CatCache *cache,
 				Datum v1)
 {
-	return SearchCatCacheInternal(cache, 1, v1, 0, 0, 0);
+	return SearchCatCacheInternal(cache, 1, v1, NullDatum, NullDatum, NullDatum);
 }
 
 
@@ -1172,7 +1172,7 @@ HeapTuple
 SearchCatCache2(CatCache *cache,
 				Datum v1, Datum v2)
 {
-	return SearchCatCacheInternal(cache, 2, v1, v2, 0, 0);
+	return SearchCatCacheInternal(cache, 2, v1, v2, NullDatum, NullDatum);
 }
 
 
@@ -1180,7 +1180,7 @@ HeapTuple
 SearchCatCache3(CatCache *cache,
 				Datum v1, Datum v2, Datum v3)
 {
-	return SearchCatCacheInternal(cache, 3, v1, v2, v3, 0);
+	return SearchCatCacheInternal(cache, 3, v1, v2, v3, NullDatum);
 }
 
 
@@ -1509,7 +1509,7 @@ SearchCatCacheList(CatCache *cache,
 				   Datum v2,
 				   Datum v3)
 {
-	Datum		v4 = 0;			/* dummy last-column value */
+	Datum		v4 = NullDatum;		/* dummy last-column value */
 	Datum		arguments[CATCACHE_MAXKEYS];
 	uint32		lHashValue;
 	dlist_iter	iter;

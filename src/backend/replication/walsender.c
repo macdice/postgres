@@ -2331,7 +2331,7 @@ InitWalSenderSlot(void)
 	Assert(MyWalSnd != NULL);
 
 	/* Arrange to clean up at walsender exit */
-	on_shmem_exit(WalSndKill, 0);
+	on_shmem_exit(WalSndKill, NullDatum);
 }
 
 /* Destroy the per-walsender data structure for this walsender process */
@@ -3394,7 +3394,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 	/* clean up and return the tuplestore */
 	tuplestore_donestoring(tupstore);
 
-	return (Datum) 0;
+	return NullDatum;
 }
 
 /*

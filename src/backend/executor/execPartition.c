@@ -1472,7 +1472,7 @@ adjust_partition_tlist(List *tlist, TupleConversionMap *map)
 							 -1,
 							 InvalidOid,
 							 sizeof(int32),
-							 (Datum) 0,
+							 NullDatum,
 							 true,	/* isnull */
 							 true /* byval */ );
 			tle = makeTargetEntry((Expr *) expr,

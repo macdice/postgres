@@ -672,7 +672,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		/* Reset CurrentResourceOwner to nothing for the moment */
 		CurrentResourceOwner = NULL;
 
-		on_shmem_exit(ShutdownXLOG, 0);
+		on_shmem_exit(ShutdownXLOG, NullDatum);
 	}
 
 	/*
@@ -706,7 +706,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	 * transaction --- if we fail during the initialization transaction, as is
 	 * entirely possible, we need the AbortTransaction call to clean up.
 	 */
-	before_shmem_exit(ShutdownPostgres, 0);
+	before_shmem_exit(ShutdownPostgres, NullDatum);
 
 	/* The autovacuum launcher is done here */
 	if (IsAutoVacuumLauncherProcess())

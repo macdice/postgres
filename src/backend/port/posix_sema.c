@@ -217,7 +217,7 @@ PGReserveSemaphores(int maxSemas, int port)
 	maxSems = maxSemas;
 	nextSemKey = port * 1000;
 
-	on_shmem_exit(ReleaseSemaphores, 0);
+	on_shmem_exit(ReleaseSemaphores, NullDatum);
 }
 
 /*

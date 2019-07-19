@@ -188,7 +188,7 @@ gistMakeUnionItVec(GISTSTATE *giststate, IndexTuple *itvec, int len,
 		/* If this column was all NULLs, the union is NULL */
 		if (evec->n == 0)
 		{
-			attr[i] = (Datum) 0;
+			attr[i] = NullDatum;
 			isnull[i] = true;
 		}
 		else
@@ -249,7 +249,7 @@ gistMakeUnionKey(GISTSTATE *giststate, int attno,
 	if (isnull1 && isnull2)
 	{
 		*dstisnull = true;
-		*dst = (Datum) 0;
+		*dst = NullDatum;
 	}
 	else
 	{
@@ -568,7 +568,7 @@ gistdentryinit(GISTSTATE *giststate, int nkey, GISTENTRY *e,
 						  dep->leafkey);
 	}
 	else
-		gistentryinit(*e, (Datum) 0, r, pg, o, l);
+		gistentryinit(*e, NullDatum, r, pg, o, l);
 }
 
 IndexTuple
@@ -585,7 +585,7 @@ gistFormTuple(GISTSTATE *giststate, Relation r,
 	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(r); i++)
 	{
 		if (isnull[i])
-			compatt[i] = (Datum) 0;
+			compatt[i] = NullDatum;
 		else
 		{
 			GISTENTRY	centry;
@@ -613,7 +613,7 @@ gistFormTuple(GISTSTATE *giststate, Relation r,
 		for (; i < r->rd_att->natts; i++)
 		{
 			if (isnull[i])
-				compatt[i] = (Datum) 0;
+				compatt[i] = NullDatum;
 			else
 				compatt[i] = attdata[i];
 		}
@@ -674,7 +674,7 @@ gistFetchTuple(GISTSTATE *giststate, Relation r, IndexTuple tuple)
 			if (!isnull[i])
 				fetchatt[i] = gistFetchAtt(giststate, i, datum, r);
 			else
-				fetchatt[i] = (Datum) 0;
+				fetchatt[i] = NullDatum;
 		}
 		else if (giststate->compressFn[i].fn_oid == InvalidOid)
 		{
@@ -685,7 +685,7 @@ gistFetchTuple(GISTSTATE *giststate, Relation r, IndexTuple tuple)
 			if (!isnull[i])
 				fetchatt[i] = datum;
 			else
-				fetchatt[i] = (Datum) 0;
+				fetchatt[i] = NullDatum;
 		}
 		else
 		{
@@ -695,7 +695,7 @@ gistFetchTuple(GISTSTATE *giststate, Relation r, IndexTuple tuple)
 			 * in this column, and we can replace it with a NULL.
 			 */
 			isnull[i] = true;
-			fetchatt[i] = (Datum) 0;
+			fetchatt[i] = NullDatum;
 		}
 	}
 

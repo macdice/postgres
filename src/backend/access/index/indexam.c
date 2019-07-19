@@ -859,7 +859,7 @@ index_store_float8_orderby_distances(IndexScanDesc scan, Oid *orderByTypes,
 
 		for (i = 0; i < scan->numberOfOrderBys; i++)
 		{
-			scan->xs_orderbyvals[i] = (Datum) 0;
+			scan->xs_orderbyvals[i] = NullDatum;
 			scan->xs_orderbynulls[i] = true;
 		}
 

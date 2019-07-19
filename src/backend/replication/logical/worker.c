@@ -351,7 +351,7 @@ slot_store_cstrings(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 			 * values (missing values should be later filled using
 			 * slot_fill_defaults).
 			 */
-			slot->tts_values[i] = (Datum) 0;
+			slot->tts_values[i] = NullDatum;
 			slot->tts_isnull[i] = true;
 		}
 	}
@@ -420,7 +420,7 @@ slot_modify_cstrings(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 		}
 		else
 		{
-			slot->tts_values[i] = (Datum) 0;
+			slot->tts_values[i] = NullDatum;
 			slot->tts_isnull[i] = true;
 		}
 	}
@@ -1637,7 +1637,7 @@ ApplyWorkerMain(Datum main_arg)
 	/* Keep us informed about subscription changes. */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
 								  subscription_change_cb,
-								  (Datum) 0);
+								  NullDatum);
 
 	if (am_tablesync_worker())
 		ereport(LOG,
@@ -1717,7 +1717,7 @@ ApplyWorkerMain(Datum main_arg)
 	 */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONRELMAP,
 								  invalidate_syncing_table_states,
-								  (Datum) 0);
+								  NullDatum);
 
 	/* Build logical replication streaming options. */
 	options.logical = true;

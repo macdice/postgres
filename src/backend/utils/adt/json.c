@@ -1985,7 +1985,7 @@ json_agg_transfn(PG_FUNCTION_ARGS)
 	/* fast path for NULLs */
 	if (PG_ARGISNULL(1))
 	{
-		datum_to_json((Datum) 0, true, state->str, JSONTYPE_NULL,
+		datum_to_json(NullDatum, true, state->str, JSONTYPE_NULL,
 					  InvalidOid, false);
 		PG_RETURN_POINTER(state);
 	}
@@ -2117,7 +2117,7 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 	appendStringInfoString(state->str, " : ");
 
 	if (PG_ARGISNULL(2))
-		arg = (Datum) 0;
+		arg = NullDatum;
 	else
 		arg = PG_GETARG_DATUM(2);
 

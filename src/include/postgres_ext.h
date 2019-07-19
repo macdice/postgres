@@ -24,6 +24,7 @@
 #define POSTGRES_EXT_H
 
 #include "pg_config_ext.h"
+#include <stdint.h>
 
 /*
  * Object ID is a fundamental type in Postgres.
@@ -46,6 +47,14 @@ typedef unsigned int Oid;
 /* Define a signed 64-bit integer type for use in client API declarations. */
 typedef PG_INT64_TYPE pg_int64;
 
+/* TODO: bleugh */
+#ifndef PG_DATUM_DEFINED
+#define PG_DATUM_DEFINED
+typedef struct Datum
+{
+	uintptr_t value;
+} Datum;
+#endif
 
 /*
  * Identifiers of error message fields.  Kept here to keep common

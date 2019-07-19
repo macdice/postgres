@@ -794,7 +794,7 @@ compute_index_stats(Relation onerel, double totalrows,
 
 					if (isnull[attnum - 1])
 					{
-						exprvals[tcnt] = (Datum) 0;
+						exprvals[tcnt] = NullDatum;
 						exprnulls[tcnt] = true;
 					}
 					else
@@ -1486,7 +1486,7 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 			else
 			{
 				nulls[i] = true;
-				values[i++] = (Datum) 0;
+				values[i++] = NullDatum;
 			}
 		}
 		i = Anum_pg_statistic_stavalues1 - 1;
@@ -1507,7 +1507,7 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 			else
 			{
 				nulls[i] = true;
-				values[i++] = (Datum) 0;
+				values[i++] = NullDatum;
 			}
 		}
 

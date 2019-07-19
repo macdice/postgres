@@ -670,7 +670,7 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, char relpersistence,
 	reloptions = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_reloptions,
 								 &isNull);
 	if (isNull)
-		reloptions = (Datum) 0;
+		reloptions = NullDatum;
 
 	if (relpersistence == RELPERSISTENCE_TEMP)
 		namespaceid = LookupCreationNamespace("pg_temp");
@@ -743,7 +743,7 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, char relpersistence,
 		reloptions = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_reloptions,
 									 &isNull);
 		if (isNull)
-			reloptions = (Datum) 0;
+			reloptions = NullDatum;
 
 		NewHeapCreateToastTable(OIDNewHeap, reloptions, lockmode);
 

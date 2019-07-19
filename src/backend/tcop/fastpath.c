@@ -368,7 +368,7 @@ HandleFunctionRequest(StringInfo msgBuf)
 	else
 	{
 		fcinfo->isnull = true;
-		retval = (Datum) 0;
+		retval = NullDatum;
 	}
 
 	/* ensure we do at least one CHECK_FOR_INTERRUPTS per function call */
