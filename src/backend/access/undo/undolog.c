@@ -391,7 +391,7 @@ allocate_empty_undo_segment(UndoLogNumber logno, Oid tablespace,
 
 		/* Try creating the undo directory for this tablespace. */
 		UndoLogDirectory(tablespace, undo_path);
-		if (mkdir(undo_path, S_IRWXU) != 0 && errno != EEXIST)
+		if (MakePGDirectory(undo_path) != 0 && errno != EEXIST)
 		{
 			char	   *parentdir;
 
@@ -414,7 +414,7 @@ allocate_empty_undo_segment(UndoLogNumber logno, Oid tablespace,
 			get_parent_directory(parentdir);
 			get_parent_directory(parentdir);
 			/* Can't create parent and it doesn't already exist? */
-			if (mkdir(parentdir, S_IRWXU) < 0 && errno != EEXIST)
+			if (MakePGDirectory(parentdir) < 0 && errno != EEXIST)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not create directory \"%s\": %m",
@@ -425,14 +425,14 @@ allocate_empty_undo_segment(UndoLogNumber logno, Oid tablespace,
 			parentdir = pstrdup(undo_path);
 			get_parent_directory(parentdir);
 			/* Can't create parent and it doesn't already exist? */
-			if (mkdir(parentdir, S_IRWXU) < 0 && errno != EEXIST)
+			if (MakePGDirectory(parentdir) < 0 && errno != EEXIST)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not create directory \"%s\": %m",
 								parentdir)));
 			pfree(parentdir);
 
-			if (mkdir(undo_path, S_IRWXU) != 0 && errno != EEXIST)
+			if (MakePGDirectory(undo_path) != 0 && errno != EEXIST)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not create directory \"%s\": %m",
