@@ -461,7 +461,10 @@ allocate_empty_undo_segment(UndoLogNumber logno, Oid tablespace,
 		size += written;
 	}
 
-	/* Flush the contents of the file to disk before the next checkpoint. */
+	/*
+	 * Ask the checkpointer to flush the contents of the file to disk before
+	 * the next checkpoint.
+	 */
 	undofile_request_sync(logno, end / UndoLogSegmentSize, tablespace);
 
 	CloseTransientFile(fd);
@@ -479,6 +482,12 @@ UndoLogNewSegment(UndoLogNumber logno, Oid tablespace, int segno)
 {
 	Assert(InRecovery);
 	allocate_empty_undo_segment(logno, tablespace, segno * UndoLogSegmentSize);
+
+	/*
+	 * Ask the checkpointer to flush the new directory entry before next
+	 * checkpoint.
+	 */
+	undofile_request_sync_dir(tablespace);
 }
 
 /*
@@ -494,9 +503,15 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 
 	/* TODO review interlocking */
 
+	/* You can't extend an undo log that doesn't exist */
 	Assert(slot != NULL);
+	/* The current and new end poins must be on a segment boundary */
 	Assert(slot->meta.end % UndoLogSegmentSize == 0);
 	Assert(new_end % UndoLogSegmentSize == 0);
+	/*
+	 * You can only extend undo logs that you're currently attached to, or in
+	 * recovery.
+	 */
 	Assert(InRecovery ||
 		   CurrentSession->attached_undo_slots[slot->meta.category] == slot);
 
@@ -512,7 +527,10 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 		end += UndoLogSegmentSize;
 	}
 
-	/* Flush the directory entries before next checkpoint. */
+	/*
+	 * Ask the checkpointer to flush the directory entries before next
+	 * checkpoint.
+	 */
 	undofile_request_sync_dir(slot->meta.tablespace);
 
 	/*
@@ -527,15 +545,13 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 	if (!InRecovery)
 	{
 		xl_undolog_extend xlrec;
-		XLogRecPtr	ptr;
 
 		xlrec.logno = logno;
 		xlrec.end = end;
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-		ptr = XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_EXTEND);
-		XLogFlush(ptr);
+		XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_EXTEND);
 	}
 
 	/*
@@ -2584,7 +2600,10 @@ undolog_xlog_discard(XLogReaderState *record)
 		end += UndoLogSegmentSize;
 	}
 
-	/* Flush the directory entries before next checkpoint. */
+	/*
+	 * Ask the checkpointer to flush the directory entries before next
+	 * checkpoint.
+	 */
 	undofile_request_sync_dir(slot->meta.tablespace);
 
 	/* Update shmem. */

@@ -31,12 +31,18 @@ typedef struct xl_undolog_create
 	UndoLogCategory category;
 } xl_undolog_create;
 
+#define SizeOfUndologCreate \
+	(offsetof(xl_undolog_create, category) + sizeof(UndoLogCategory))
+
 /* Extend an undo log by adding a new segment. */
 typedef struct xl_undolog_extend
 {
 	UndoLogNumber logno;
 	UndoLogOffset end;
 } xl_undolog_extend;
+
+#define SizeOfUndologExtend \
+	(offsetof(xl_undolog_extend, end) + sizeof(UndoLogOffset))
 
 /* Discard space, and possibly destroy or recycle undo log segments. */
 typedef struct xl_undolog_discard
@@ -48,6 +54,9 @@ typedef struct xl_undolog_discard
 	bool		  entirely_discarded;
 } xl_undolog_discard;
 
+#define SizeOfUndologDiscard \
+	(offsetof(xl_undolog_discard, entirely_discarded) + sizeof(bool))
+
 /* Switch undo log. */
 typedef struct xl_undolog_switch
 {
@@ -55,6 +64,9 @@ typedef struct xl_undolog_switch
 	UndoRecPtr prevlog_xact_start;
 	UndoRecPtr prevlog_last_urp;
 } xl_undolog_switch;
+
+#define SizeOfUndologSwitch \
+	(offsetof(xl_undolog_switch, prevlog_last_urp) + sizeof(UndoRecPtr))
 
 extern void undolog_desc(StringInfo buf,XLogReaderState *record);
 extern const char *undolog_identify(uint8 info);
