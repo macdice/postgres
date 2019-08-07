@@ -488,7 +488,6 @@ extern void CheckPointUndoLogs(XLogRecPtr checkPointRedo,
 /* File sync request management. */
 
 
-extern UndoRecPtr UndoLogGetLastXactStartPoint(UndoLogNumber logno);
 extern UndoRecPtr UndoLogGetNextInsertPtr(UndoLogNumber logno);
 extern void UndoLogSwitchSetPrevLogInfo(UndoLogNumber logno,
 										UndoRecPtr prevlog_last_urp,

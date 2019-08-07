@@ -286,29 +286,6 @@ UndoLogRecPtrIsDiscardedSlowPath(UndoRecPtr pointer)
 }
 
 /*
- * Fetch the previous transaction's start undo record point.
- */
-UndoRecPtr
-UndoLogGetLastXactStartPoint(UndoLogNumber logno)
-{
-	UndoLogSlot *slot = find_undo_log_slot(logno, false);
-	uint64 last_xact_start = 0;
-
-	if (unlikely(slot == NULL))
-		return InvalidUndoRecPtr;
-
-	LWLockAcquire(&slot->mutex, LW_SHARED);
-	/* TODO: review */
-	last_xact_start = slot->meta.unlogged.last_xact_start;
-	LWLockRelease(&slot->mutex);
-
-	if (last_xact_start == 0)
-		return InvalidUndoRecPtr;
-
-	return MakeUndoRecPtr(logno, last_xact_start);
-}
-
-/*
  * Detach from the undo log we are currently attached to, returning it to the
  * appropriate free list if it still has space.
  */
@@ -672,7 +649,7 @@ UndoLogAllocate(UndoLogAllocContext *context,
 		/*
 		 * While we have the lock, check if we have been forcibly detached by
 		 * DROP TABLESPACE.  That can only happen between transactions (see
-		 * DropUndoLogsInsTablespace()).
+		 * DropUndoLogsInTablespace()).
 		 */
 		if (slot->pid == InvalidPid)
 		{
@@ -683,8 +660,9 @@ UndoLogAllocate(UndoLogAllocContext *context,
 		/* Record that we are attached to this log. */
 		slot->meta.unlogged.xid = GetTopTransactionId();
 		/*
-		 * Maintain our tracking of the and the previous transaction start
-		 * locations.
+		 * Maintain our tracking of the current and previous transaction start
+		 * locations so that we can report the previous transaction start
+		 * location to the caller when an xact header is needed.
 		 */
 		if (slot->meta.unlogged.this_xact_start != slot->meta.unlogged.insert)
 		{
@@ -721,8 +699,8 @@ UndoLogAllocate(UndoLogAllocContext *context,
 	Assert(new_insert % BLCKSZ >= UndoLogBlockHeaderSize);
 
 	/*
-	 * We don't need to acquire log->mutex to read log->meta.insert and
-	 * log->meta.end, because this backend is the only one that can
+	 * We don't need to acquire slot->mutex to read slot->meta.insert and
+	 * slot->meta.end, because this backend is the only one that can
 	 * modify them.
 	 */
 	if (unlikely(new_insert > slot->meta.end))
@@ -735,7 +713,7 @@ UndoLogAllocate(UndoLogAllocContext *context,
 				/*
 				 * If the same transaction is split over two undo logs then
 				 * store the previous log number in new log.  See detailed
-				 * comments in undorecord.c file header.
+				 * comments in undoaccess.c file header.
 				 */
 				*prevlog_xact_start =
 					MakeUndoRecPtr(slot->logno,
@@ -1645,7 +1623,7 @@ free_undo_log_slot(UndoLogSlot *slot)
 {
 	/*
 	 * When removing an undo log from a slot in shared memory, we acquire
-	 * UndoLogLock, log->mutex and log->discard_lock, so that other code can
+	 * UndoLogLock, slot->mutex and slot->discard_lock, so that other code can
 	 * hold any one of those locks to prevent the slot from being recycled.
 	 */
 	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
@@ -1677,7 +1655,7 @@ free_undo_log_slot(UndoLogSlot *slot)
  * be recycled while a backend is attached.  It should probably assert that it
  * is attached, however.
  *
- * 2.  All other code should acquire log->mutex before accessing any members,
+ * 2.  All other code should acquire slot->mutex before accessing any members,
  * and after doing so, check that the logno hasn't moved.  If it is not, the
  * entire undo log must be assumed to be discarded (as if this function
  * returned NULL) and the caller must behave accordingly.
