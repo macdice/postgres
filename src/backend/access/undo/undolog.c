@@ -2073,8 +2073,7 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 						 errmsg("undo logs cannot be placed in pg_global tablespace")));
 
 			/* Check permissions. */
-			aclresult = pg_tablespace_aclcheck(*tablespace, GetUserId(),
-											   ACL_CREATE);
+			aclresult = pg_tablespace_aclcheck(oid, GetUserId(), ACL_CREATE);
 			if (aclresult != ACLCHECK_OK)
 				aclcheck_error(aclresult, OBJECT_TABLESPACE, name);
 
