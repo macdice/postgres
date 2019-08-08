@@ -69,7 +69,11 @@ typedef struct UndoLogSharedData
 /* The shared memory region that all backends are attach to. */
 UndoLogSharedData *UndoLogShared;
 
+/* The per-backend cache of undo log number -> slot mappings. */
 undologtable_hash *undologtable_cache;
+
+/* The per-backend lowest known undo log number, for cache invalidation. */
+UndoLogNumber undologtable_low_logno;
 
 /* GUC variables */
 char	   *undo_tablespaces = NULL;
@@ -595,8 +599,8 @@ UndoLogBeginInsert(UndoLogAllocContext *context,
  * A suggested insertion point can optionally be passed in as 'try_location',
  * and will be returned if possible.  If not InvalidUndoRecPtr, it must fall
  * with, or exactly one byte after, the most recent allocation for the same
- * persistence level.  This interface allows for a series of allocation to be
- * made without committing to using the space yet; call UndoLogAdvance() to
+ * category.  This interface allows for a series of allocation to be made
+ * without committing to using the space yet; call UndoLogAdvance() to
  * actually advance the insert pointer.
  *
  * Return an undo log insertion point that can be converted to a buffer tag
@@ -1621,6 +1625,8 @@ allocate_undo_log_slot(void)
 static void
 free_undo_log_slot(UndoLogSlot *slot)
 {
+	UndoLogNumber	low_logno;
+
 	/*
 	 * When removing an undo log from a slot in shared memory, we acquire
 	 * UndoLogLock, slot->mutex and slot->discard_lock, so that other code can
@@ -1634,6 +1640,20 @@ free_undo_log_slot(UndoLogSlot *slot)
 	memset(&slot->meta, 0, sizeof(slot->meta));
 	LWLockRelease(&slot->mutex);
 	LWLockRelease(&slot->discard_lock);
+
+	/*
+	 * Find the new lowest existing undo log number.  This will allow very
+	 * long lived backends to give back some memory used in undologtable_cache
+	 * for ancient entirely discard undo logs.
+	 */
+	low_logno = UndoLogShared->next_logno;
+	for (UndoLogNumber i = 0; i < UndoLogNumSlots(); ++i)
+	{
+		UndoLogSlot *slot = &UndoLogShared->slots[i];
+		low_logno = Min(slot->logno, low_logno);
+	}
+	UndoLogShared->low_logno = low_logno;
+
 	LWLockRelease(UndoLogLock);
 }
 
@@ -1683,6 +1703,7 @@ find_undo_log_slot(UndoLogNumber logno, bool locked)
 		/* Nope.  Linear search for the slot in shared memory. */
 		if (!locked)
 			LWLockAcquire(UndoLogLock, LW_SHARED);
+
 		for (i = 0; i < UndoLogNumSlots(); ++i)
 		{
 			if (UndoLogShared->slots[i].logno == logno)
@@ -1710,14 +1731,24 @@ find_undo_log_slot(UndoLogNumber logno, bool locked)
 		}
 
 		/*
+		 * While we have the lock, opportunistically see if we can advance our
+		 * local record of the lowest known undo log, freeing cache memory and
+		 * avoiding the need to create a negative cache entry.  This should
+		 * be very rare.
+		 */
+		while (undologtable_low_logno < UndoLogShared->low_logno)
+			undologtable_delete(undologtable_cache, undologtable_low_logno++);
+
+		/*
 		 * If we didn't find it, then it must already have been entirely
 		 * discarded.  We create a negative cache entry so that we can answer
-		 * this question quickly next time.
+		 * this question quickly next time, unless it's below the known lowest
+		 * logno.
 		 *
 		 * TODO: We could track the lowest known undo log number, to reduce
 		 * the negative cache entry bloat.
 		 */
-		if (result == NULL)
+		if (result == NULL && logno >= undologtable_low_logno)
 		{
 			/*
 			 * Sanity check: the caller should not be asking about undo logs
@@ -1776,12 +1807,12 @@ attach_undo_log(UndoLogCategory category, Oid tablespace)
 
 	/*
 	 * For now we have a simple linked list of unattached undo logs for each
-	 * persistence level.  We'll grovel though it to find something for the
-	 * tablespace you asked for.  If you're not using multiple tablespaces
-	 * it'll be able to pop one off the front.  We might need a hash table
-	 * keyed by tablespace if this simple scheme turns out to be too slow when
-	 * using many tablespaces and many undo logs, but that seems like an
-	 * unusual use case not worth optimizing for.
+	 * category.  We'll grovel though it to find something for the tablespace
+	 * you asked for.  If you're not using multiple tablespaces it'll be able
+	 * to pop one off the front.  We might need a hash table keyed by
+	 * tablespace if this simple scheme turns out to be too slow when using
+	 * many tablespaces and many undo logs, but that seems like an unusual
+	 * use case not worth optimizing for.
 	 */
 	place = &UndoLogShared->free_lists[category];
 	while (*place != InvalidUndoLogNumber)
@@ -1790,15 +1821,15 @@ attach_undo_log(UndoLogCategory category, Oid tablespace)
 
 		/*
 		 * There should never be an undo log on the freelist that has been
-		 * entirely discarded, or hasn't been created yet.  The persistence
-		 * level should match the freelist.
+		 * entirely discarded, or hasn't been created yet.  The category
+		 * should match the freelist.
 		 */
 		if (unlikely(candidate == NULL))
 			elog(ERROR,
 				 "corrupted undo log freelist, no such undo log %u", *place);
 		if (unlikely(candidate->meta.category != category))
 			elog(ERROR,
-				 "corrupted undo log freelist, undo log %u with persistence %d found on freelist %d",
+				 "corrupted undo log freelist, undo log %u with category %d found on freelist %d",
 				 *place, candidate->meta.category, category);
 
 		if (candidate->meta.tablespace == tablespace)
@@ -1812,7 +1843,7 @@ attach_undo_log(UndoLogCategory category, Oid tablespace)
 	}
 
 	/*
-	 * If all existing undo logs for this tablespace and persistence level are
+	 * If all existing undo logs for this tablespace and category level are
 	 * busy, we'll have to create a new one.
 	 */
 	if (slot == NULL)
@@ -1913,6 +1944,8 @@ check_undo_tablespaces(char **newval, void **extra, GucSource source)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 (errmsg("undo_tablespaces cannot be changed while a transaction is in progress"))));
+
+	pfree(rawname);
 	list_free(namelist);
 
 	return true;
@@ -2041,6 +2074,9 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 			}
 		}
 	}
+
+	pfree(rawname);
+	list_free(namelist);
 
 	return need_to_unlock;
 }

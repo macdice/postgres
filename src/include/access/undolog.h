@@ -361,6 +361,7 @@ typedef struct UndoLogTableEntry
 #include "lib/simplehash.h"
 
 extern PGDLLIMPORT undologtable_hash *undologtable_cache;
+extern UndoLogNumber undologtable_low_logno;
 
 /*
  * Find or create an UndoLogTableGetEntry for this log number.  This is used
@@ -375,6 +376,10 @@ UndoLogGetTableEntry(UndoLogNumber logno)
 	entry = undologtable_lookup(undologtable_cache, logno);
 	if (likely(entry))
 		return entry;
+
+	/* Avoid a slow look up for ancient discarded undo logs. */
+	if (logno < undologtable_low_logno)
+		return NULL;
 
 	/* Slow path: force cache entry to be created. */
 	UndoLogGetSlot(logno, false);

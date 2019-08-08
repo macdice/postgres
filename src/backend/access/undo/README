@@ -39,7 +39,7 @@ each undo log, a set of meta-data properties is tracked:
 tracked, including:
 
 * the tablespace that holds its segment files
-* the persistence level (permanent, unlogged or temporary)
+* the category (permanent, unlogged, temporary, shared)
 * the "discard" pointer: data before this point has been discarded
 * the "insert" pointer: new data will be written here
 * the "end" pointer: a new undo segment file will be needed at this point
