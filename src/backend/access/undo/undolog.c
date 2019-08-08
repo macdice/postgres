@@ -92,6 +92,7 @@ static bool choose_undo_tablespace(bool force_detach, Oid *oid);
 
 PG_FUNCTION_INFO_V1(pg_stat_get_undo_logs);
 PG_FUNCTION_INFO_V1(pg_force_discard_undo);
+PG_FUNCTION_INFO_V1(pg_force_switch_undo);
 
 /*
  * How many undo logs can be active at a time?  This creates a theoretical
@@ -161,6 +162,14 @@ UndoLogShmemInit(void)
 	undologtable_cache = undologtable_create(TopMemoryContext,
 											 UndoLogNumSlots(),
 											 NULL);
+
+	/*
+	 * Each backend has its own idea of the lowest undo log number in
+	 * existence, and can trim undologtable_create entries when it advances.
+	 */
+	LWLockAcquire(UndoLogLock, LW_SHARED);
+	undologtable_low_logno = UndoLogShared->low_logno;
+	LWLockRelease(UndoLogLock);
 }
 
 void
@@ -618,6 +627,7 @@ UndoLogAllocate(UndoLogAllocContext *context,
 	UndoLogSlot *slot;
 	UndoLogOffset new_insert;
 	TransactionId logxid;
+	bool		switch_requested;
 
 	slot = CurrentSession->attached_undo_slots[context->category];
 
@@ -675,6 +685,9 @@ UndoLogAllocate(UndoLogAllocContext *context,
 			slot->meta.unlogged.this_xact_start = slot->meta.unlogged.insert;
 		}
 	}
+
+	/* Check if we've been asked to switch log for testing. */
+	switch_requested = slot->meta.status == UNDO_LOG_STATUS_SWITCH_REQUESTED;
 	LWLockRelease(&slot->mutex);
 
 	/*
@@ -707,9 +720,9 @@ UndoLogAllocate(UndoLogAllocContext *context,
 	 * slot->meta.end, because this backend is the only one that can
 	 * modify them.
 	 */
-	if (unlikely(new_insert > slot->meta.end))
+	if (unlikely(new_insert > slot->meta.end || switch_requested))
 	{
-		if (new_insert > UndoLogMaxSize)
+		if (new_insert > UndoLogMaxSize || switch_requested)
 		{
 			/* This undo log is entirely full.  Get a new one. */
 			if (logxid == GetTopTransactionId())
@@ -1430,14 +1443,12 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 
 	/* Compute header checksum. */
 	INIT_CRC32C(crc);
-	COMP_CRC32C(crc, &UndoLogShared->low_logno, sizeof(UndoLogShared->low_logno));
 	COMP_CRC32C(crc, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno));
 	COMP_CRC32C(crc, &num_logs, sizeof(num_logs));
 	FIN_CRC32C(crc);
 
 	/* Write out the number of active logs + crc. */
-	if ((write(fd, &UndoLogShared->low_logno, sizeof(UndoLogShared->low_logno)) != sizeof(UndoLogShared->low_logno)) ||
-		(write(fd, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno)) != sizeof(UndoLogShared->next_logno)) ||
+	if ((write(fd, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno)) != sizeof(UndoLogShared->next_logno)) ||
 		(write(fd, &num_logs, sizeof(num_logs)) != sizeof(num_logs)) ||
 		(write(fd, &crc, sizeof(crc)) != sizeof(crc)))
 		ereport(ERROR,
@@ -1485,6 +1496,29 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 	CleanUpUndoCheckPointFiles(priorCheckPointRedo);
 }
 
+/*
+ * Find the new lowest existing undo log number.  This will allow very
+ * long lived backends to give back some memory used in undologtable_cache
+ * for ancient entirely discard undo logs.
+ */
+static void
+compute_low_logno(void)
+{
+	UndoLogNumber	low_logno;
+
+	Assert(LWLockHeldByMeInMode(UndoLogLock, LW_EXCLUSIVE));
+
+	low_logno = UndoLogShared->next_logno;
+	for (UndoLogNumber i = 0; i < UndoLogNumSlots(); ++i)
+	{
+		UndoLogSlot *slot = &UndoLogShared->slots[i];
+		if (slot->meta.status != UNDO_LOG_STATUS_UNUSED)
+			low_logno = Min(slot->logno, low_logno);
+	}
+	UndoLogShared->low_logno = low_logno;
+elog(LOG, "compute_low_logno = %u", low_logno);
+}
+
 void
 StartupUndoLogs(XLogRecPtr checkPointRedo)
 {
@@ -1508,9 +1542,7 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 		elog(ERROR, "cannot open undo checkpoint snapshot \"%s\": %m", path);
 
 	/* Read the active log number range. */
-	if ((read(fd, &UndoLogShared->low_logno, sizeof(UndoLogShared->low_logno))
-		 != sizeof(UndoLogShared->low_logno)) ||
-		(read(fd, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno))
+	if ((read(fd, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno))
 		 != sizeof(UndoLogShared->next_logno)) ||
 		(read(fd, &nlogs, sizeof(nlogs)) != sizeof(nlogs)) ||
 		(read(fd, &crc, sizeof(crc)) != sizeof(crc)))
@@ -1518,7 +1550,6 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 
 	/* Verify the header checksum. */
 	INIT_CRC32C(new_crc);
-	COMP_CRC32C(new_crc, &UndoLogShared->low_logno, sizeof(UndoLogShared->low_logno));
 	COMP_CRC32C(new_crc, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno));
 	COMP_CRC32C(new_crc, &nlogs, sizeof(UndoLogShared->next_logno));
 	FIN_CRC32C(new_crc);
@@ -1565,6 +1596,11 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 		slot->logno = slot->meta.logno;
 		slot->pid = InvalidPid;
 		slot->oldest_data = MakeUndoRecPtr(slot->logno, slot->meta.discard);
+
+		/* If SWITCH_REQUESTED made it to disk, change it back to ACTIVE. */
+		if (slot->meta.status == UNDO_LOG_STATUS_SWITCH_REQUESTED)
+			slot->meta.status = UNDO_LOG_STATUS_ACTIVE;
+
 		if (slot->meta.status == UNDO_LOG_STATUS_ACTIVE)
 		{
 			slot->next_free = UndoLogShared->free_lists[slot->meta.category];
@@ -1572,6 +1608,12 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 		}
 	}
 	FIN_CRC32C(new_crc);
+
+	/*
+	 * Initialize the lowest undo log number.  Backends don't need negative
+	 * undologtable_cache entries below this number.
+	 */
+	compute_low_logno();
 
 	LWLockRelease(UndoLogLock);
 
@@ -1625,7 +1667,6 @@ allocate_undo_log_slot(void)
 static void
 free_undo_log_slot(UndoLogSlot *slot)
 {
-	UndoLogNumber	low_logno;
 
 	/*
 	 * When removing an undo log from a slot in shared memory, we acquire
@@ -1640,20 +1681,7 @@ free_undo_log_slot(UndoLogSlot *slot)
 	memset(&slot->meta, 0, sizeof(slot->meta));
 	LWLockRelease(&slot->mutex);
 	LWLockRelease(&slot->discard_lock);
-
-	/*
-	 * Find the new lowest existing undo log number.  This will allow very
-	 * long lived backends to give back some memory used in undologtable_cache
-	 * for ancient entirely discard undo logs.
-	 */
-	low_logno = UndoLogShared->next_logno;
-	for (UndoLogNumber i = 0; i < UndoLogNumSlots(); ++i)
-	{
-		UndoLogSlot *slot = &UndoLogShared->slots[i];
-		low_logno = Min(slot->logno, low_logno);
-	}
-	UndoLogShared->low_logno = low_logno;
-
+	compute_low_logno();
 	LWLockRelease(UndoLogLock);
 }
 
@@ -2373,6 +2401,8 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 		{
 		case UNDO_LOG_STATUS_ACTIVE:
 			values[8] = CStringGetTextDatum("ACTIVE"); break;
+		case UNDO_LOG_STATUS_SWITCH_REQUESTED:
+			values[8] = CStringGetTextDatum("SWITCH_REQUESTED"); break;
 		case UNDO_LOG_STATUS_FULL:
 			values[8] = CStringGetTextDatum("FULL"); break;
 		default:
@@ -2425,8 +2455,10 @@ pg_force_discard_undo(PG_FUNCTION_ARGS)
 	UndoLogOffset old_discard;
 	UndoLogOffset new_discard;
 
-	slot = find_undo_log_slot(logno, false);
+	if (!superuser())
+		elog(ERROR, "must be superuser");
 
+	slot = find_undo_log_slot(logno, false);
 	if (slot == NULL)
 		elog(ERROR, "undo log not found");
 
@@ -2443,8 +2475,43 @@ pg_force_discard_undo(PG_FUNCTION_ARGS)
 
 	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
 	LWLockRelease(&slot->mutex);
-	
-	return (Datum) 0;	
+
+	return (Datum) 0;
+}
+
+/*
+ * Request that an undo log that is currently being used by a transaction
+ * should behave as if it is full, for testing purposes.  This wastes undo log
+ * address space.
+ */
+Datum
+pg_force_switch_undo(PG_FUNCTION_ARGS)
+{
+	UndoLogNumber logno = PG_GETARG_INT32(0);
+	UndoLogSlot	*slot;
+
+	if (!superuser())
+		elog(ERROR, "must be superuser");
+
+	slot = find_undo_log_slot(logno, false);
+	if (slot == NULL)
+		elog(ERROR, "undo log not found");
+
+	/*
+	 * We don't bother WAL-logging this change.  It might make it to disk, but
+	 * we don't mind either way and we'll undo at startup if we restart.
+	 */
+	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	if (slot->meta.logno != logno)
+		elog(ERROR, "undo log not found (slot recycled)");
+	if (slot->meta.status != UNDO_LOG_STATUS_ACTIVE)
+		elog(ERROR, "undo log not in ACTIVE status");
+	if (!TransactionIdIsActive(slot->meta.unlogged.xid))
+		elog(ERROR, "undo log not in use by an active transaction");
+	slot->meta.status = UNDO_LOG_STATUS_SWITCH_REQUESTED;
+	LWLockRelease(&slot->mutex);
+
+	return (Datum) 0;
 }
 
 /*

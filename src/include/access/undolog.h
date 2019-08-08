@@ -36,10 +36,11 @@ typedef uint16 UndoRecordSize;
 /* Undo log statuses. */
 typedef enum
 {
-	UNDO_LOG_STATUS_UNUSED = 0,
-	UNDO_LOG_STATUS_ACTIVE,
-	UNDO_LOG_STATUS_FULL,
-	UNDO_LOG_STATUS_DISCARDED
+	UNDO_LOG_STATUS_UNUSED = 0,			/* unused slots */
+	UNDO_LOG_STATUS_ACTIVE,				/* can be used to write new data */
+	UNDO_LOG_STATUS_SWITCH_REQUESTED,	/* pg_force_log_switch */
+	UNDO_LOG_STATUS_FULL,				/* no new data can be added */
+	UNDO_LOG_STATUS_DISCARDED			/* whole log discarded */
 } UndoLogStatus;
 
 /*
