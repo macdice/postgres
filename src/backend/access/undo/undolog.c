@@ -540,7 +540,7 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 		xlrec.end = end;
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+		XLogRegisterData((char *) &xlrec, SizeOfUndologExtend);
 		XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_EXTEND);
 	}
 
@@ -1212,7 +1212,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		xlrec.entirely_discarded = entirely_discarded;
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+		XLogRegisterData((char *) &xlrec, SizeOfUndologDiscard);
 		ptr = XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_DISCARD);
 
 		if (need_to_flush_wal)
@@ -1311,7 +1311,7 @@ UndoLogSwitchSetPrevLogInfo(UndoLogNumber logno, UndoRecPtr prevlog_xact_start,
 		xlrec.prevlog_last_urp = prevlog_xact_start;
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+		XLogRegisterData((char *) &xlrec, SizeOfUndologSwitch);
 		XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_SWITCH);
 	}
 }
@@ -1392,6 +1392,7 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 	char   *data;
 	char	path[MAXPGPATH];
 	UndoLogNumber num_logs;
+	UndoLogNumber next_logno;
 	int		fd;
 	int		i;
 	pg_crc32c crc;
@@ -1428,6 +1429,7 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 		serialized[num_logs++] = slot->meta;
 		LWLockRelease(&slot->mutex);
 	}
+	next_logno = UndoLogShared->next_logno;
 
 	LWLockRelease(UndoLogLock);
 
@@ -1443,12 +1445,12 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 
 	/* Compute header checksum. */
 	INIT_CRC32C(crc);
-	COMP_CRC32C(crc, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno));
+	COMP_CRC32C(crc, &next_logno, sizeof(next_logno));
 	COMP_CRC32C(crc, &num_logs, sizeof(num_logs));
 	FIN_CRC32C(crc);
 
 	/* Write out the number of active logs + crc. */
-	if ((write(fd, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno)) != sizeof(UndoLogShared->next_logno)) ||
+	if ((write(fd, &next_logno, sizeof(next_logno)) != sizeof(next_logno)) ||
 		(write(fd, &num_logs, sizeof(num_logs)) != sizeof(num_logs)) ||
 		(write(fd, &crc, sizeof(crc)) != sizeof(crc)))
 		ereport(ERROR,
@@ -1921,7 +1923,7 @@ attach_undo_log(UndoLogCategory category, Oid tablespace)
 			xlrec.category = slot->meta.category;
 
 			XLogBeginInsert();
-			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+			XLogRegisterData((char *) &xlrec, SizeOfUndologCreate);
 			XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_CREATE);
 		}
 
@@ -2045,7 +2047,9 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 		for (;;)
 		{
 			const char *name = list_nth(namelist, index);
+			AclResult aclresult;
 
+			/* Try to resolve the name to an OID. */
 			oid = get_tablespace_oid(name, true);
 			if (oid == InvalidOid)
 			{
@@ -2063,11 +2067,19 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 							 errhint("Create the tablespace or set undo_tablespaces to a valid or empty list.")));
 				continue;
 			}
+
 			if (oid == GLOBALTABLESPACE_OID)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("undo logs cannot be placed in pg_global tablespace")));
-			/* If we got here we succeeded in finding one. */
+
+			/* Check permissions. */
+			aclresult = pg_tablespace_aclcheck(*tablespace, GetUserId(),
+											   ACL_CREATE);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_TABLESPACE, name);
+
+			/* If we got here we succeeded in finding one we can use. */
 			break;
 		}
 
@@ -2526,9 +2538,14 @@ undolog_xlog_create(XLogReaderState *record)
 	/* Create meta-data space in shared memory. */
 	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 
-	/* TODO: assert that it doesn't exist already? */
+	/*
+	 * If we recover from an online checkpoint, the undo log may already have
+	 * been created in shared memory.  Usually we'll have to allocate a fresh
+	 * slot.
+	 */
+	if ((slot = find_undo_log_slot(xlrec->logno, true)) == NULL)
+		slot = allocate_undo_log_slot();
 
-	slot = allocate_undo_log_slot();
 	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
 	slot->logno = xlrec->logno;
 	slot->meta.logno = xlrec->logno;
@@ -2537,8 +2554,8 @@ undolog_xlog_create(XLogReaderState *record)
 	slot->meta.tablespace = xlrec->tablespace;
 	slot->meta.unlogged.insert = UndoLogBlockHeaderSize;
 	slot->meta.discard = UndoLogBlockHeaderSize;
-	UndoLogShared->next_logno = Max(xlrec->logno + 1, UndoLogShared->next_logno);
 	LWLockRelease(&slot->mutex);
+	UndoLogShared->next_logno = Max(xlrec->logno + 1, UndoLogShared->next_logno);
 	LWLockRelease(UndoLogLock);
 }
 
