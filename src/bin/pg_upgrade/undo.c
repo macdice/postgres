@@ -29,14 +29,13 @@ typedef struct
  * depending on "cluster".
  */
 static void
-read_pg_undo_header(int fd, ClusterInfo *cluster, UndoLogNumber *low_logno,
+read_pg_undo_header(int fd, ClusterInfo *cluster,
 					UndoLogNumber *next_logno, UndoLogNumber *num_logs)
 {
 	pg_crc32c crc;
 
 	/* Read the header, much like StartupUndoLogs(). */
-	if (read(fd, low_logno, sizeof(*low_logno)) != sizeof(*low_logno) ||
-		read(fd, next_logno, sizeof(*next_logno)) != sizeof(*next_logno) ||
+	if (read(fd, next_logno, sizeof(*next_logno)) != sizeof(*next_logno) ||
 		read(fd, num_logs, sizeof(*num_logs)) != sizeof(*num_logs) ||
 		read(fd, &crc, sizeof(crc)) != sizeof(crc))
 		pg_fatal("pg_undo file is corrupted or cannot be read\n");
@@ -149,10 +148,8 @@ merge_undo_logs(void)
 	UndoLogInfo *logs;
 	UndoLogNumber num_logs;
 	UndoLogNumber num_old_logs;
-	UndoLogNumber old_low_logno;
 	UndoLogNumber old_next_logno;
 	UndoLogNumber num_new_logs;
-	UndoLogNumber new_low_logno;
 	UndoLogNumber new_next_logno;
 	UndoLogNumber i;
 	int			old_fd;
@@ -188,8 +185,8 @@ merge_undo_logs(void)
 		pg_fatal("could not open file \"%s\": %m\n", new_pg_undo_path);
 
 	/* Read the headers */
-	read_pg_undo_header(old_fd, &old_cluster, &old_low_logno, &old_next_logno, &num_old_logs);
-	read_pg_undo_header(new_fd, &new_cluster, &new_low_logno, &new_next_logno, &num_new_logs);
+	read_pg_undo_header(old_fd, &old_cluster, &old_next_logno, &num_old_logs);
+	read_pg_undo_header(new_fd, &new_cluster, &new_next_logno, &num_new_logs);
 
 	/* Allocate workspace that is sure to be enough for the merged set */
 	logs = malloc(sizeof(*logs) * (num_old_logs + num_new_logs));
@@ -200,12 +197,7 @@ merge_undo_logs(void)
 	}
 	num_logs = 0;
 
-	/*
-	 * Anything below the "low" logno has been entirely discarded, so we'll
-	 * take the higher of the two values.  Likewise, the "next" log number to
-	 * allocate should be the higher of the two.
-	 */
-	new_low_logno = Max(old_low_logno, new_low_logno);
+	/* The "next" log number to create should be the higher of the two. */
 	new_next_logno = Max(old_next_logno, new_next_logno);
 
 	/* Merge in the old logs */
@@ -238,14 +230,12 @@ merge_undo_logs(void)
 
 	/* Compute header checksum */
 	INIT_CRC32C(crc);
-	COMP_CRC32C(crc, &new_low_logno, sizeof(new_low_logno));
 	COMP_CRC32C(crc, &new_next_logno, sizeof(new_next_logno));
 	COMP_CRC32C(crc, &num_logs, sizeof(num_logs));
 	FIN_CRC32C(crc);
 
 	/* Write out the header */
-	if ((write(new_fd, &new_low_logno, sizeof(new_low_logno)) != sizeof(new_low_logno)) ||
-		(write(new_fd, &new_next_logno, sizeof(new_next_logno)) != sizeof(new_next_logno)) ||
+	if ((write(new_fd, &new_next_logno, sizeof(new_next_logno)) != sizeof(new_next_logno)) ||
 		(write(new_fd, &num_logs, sizeof(num_logs)) != sizeof(num_logs)) ||
 		(write(new_fd, &crc, sizeof(crc)) != sizeof(crc)))
 		pg_fatal("could not write to file \"%s\": %m", new_pg_undo_path);

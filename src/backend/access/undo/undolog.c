@@ -1518,7 +1518,6 @@ compute_low_logno(void)
 			low_logno = Min(slot->logno, low_logno);
 	}
 	UndoLogShared->low_logno = low_logno;
-elog(LOG, "compute_low_logno = %u", low_logno);
 }
 
 void
