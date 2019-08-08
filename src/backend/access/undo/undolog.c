@@ -432,9 +432,13 @@ allocate_empty_undo_segment(UndoLogNumber logno, Oid tablespace,
 		fd = OpenTransientFile(path, O_RDWR | O_CREAT | PG_BINARY);
 	}
 	if (fd < 0)
-		elog(ERROR, "could not create new file \"%s\": %m", path);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create new file \"%s\": %m", path)));
 	if (fstat(fd, &stat_buffer) < 0)
-		elog(ERROR, "could not stat \"%s\": %m", path);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not fstat \"%s\": %m", path)));
 	size = stat_buffer.st_size;
 
 	/* A buffer full of zeroes we'll use to fill up new segment files. */
@@ -446,8 +450,9 @@ allocate_empty_undo_segment(UndoLogNumber logno, Oid tablespace,
 
 		written = write(fd, zeroes, Min(nzeroes, UndoLogSegmentSize - size));
 		if (written < 0)
-			elog(ERROR, "cannot initialize undo log segment file \"%s\": %m",
-				 path);
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not initialize file \"%s\": %m", path)));
 		size += written;
 	}
 
@@ -1185,8 +1190,10 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 				}
 				else
 				{
-					elog(ERROR, "could not rename \"%s\" to \"%s\": %m",
-						 discard_path, recycle_path);
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not rename \"%s\" to \"%s\": %m",
+									discard_path, recycle_path)));
 				}
 			}
 			else
@@ -1194,7 +1201,10 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 				if (unlink(discard_path) == 0)
 					elog(DEBUG1, "unlinked undo segment \"%s\"", discard_path);
 				else
-					elog(ERROR, "could not unlink \"%s\": %m", discard_path);
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not unlink \"%s\": %m",
+									discard_path)));
 			}
 			pointer += UndoLogSegmentSize;
 		}
@@ -1255,7 +1265,7 @@ UndoLogGetOldestRecord(UndoLogNumber logno, bool *full)
 	LWLockAcquire(&slot->mutex, LW_SHARED);
 	if (slot->logno != logno)
 	{
-		/* It's been recycled.  SO it must have been entirely discarded. */
+		/* It's been recycled.  So it must have been entirely discarded. */
 		result = InvalidUndoRecPtr;
 		if (full)
 			*full = true;
@@ -1372,7 +1382,9 @@ CleanUpUndoCheckPointFiles(XLogRecPtr checkPointRedo)
 		{
 			snprintf(path, MAXPGPATH, "pg_undo/%s", de->d_name);
 			if (unlink(path) != 0)
-				elog(ERROR, "could not unlink file \"%s\": %m", path);
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not unlink file \"%s\": %m", path)));
 		}
 	}
 	FreeDir(dir);
@@ -1481,6 +1493,7 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 				(errcode_for_file_access(),
 				 errmsg("could not write to file \"%s\": %m", path)));
 
+	pgstat_report_wait_end();
 
 	/* Flush file and directory entry. */
 	pgstat_report_wait_start(WAIT_EVENT_UNDO_CHECKPOINT_SYNC);
@@ -1540,7 +1553,10 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 	pgstat_report_wait_start(WAIT_EVENT_UNDO_CHECKPOINT_READ);
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
-		elog(ERROR, "cannot open undo checkpoint snapshot \"%s\": %m", path);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open undo checkpoint file \"%s\": %m",
+						path)));
 
 	/* Read the active log number range. */
 	if ((read(fd, &UndoLogShared->next_logno, sizeof(UndoLogShared->next_logno))
@@ -1836,7 +1852,7 @@ attach_undo_log(UndoLogCategory category, Oid tablespace)
 
 	/*
 	 * For now we have a simple linked list of unattached undo logs for each
-	 * category.  We'll grovel though it to find something for the tablespace
+	 * category.  We'll grovel through it to find something for the tablespace
 	 * you asked for.  If you're not using multiple tablespaces it'll be able
 	 * to pop one off the front.  We might need a hash table keyed by
 	 * tablespace if this simple scheme turns out to be too slow when using
@@ -1877,7 +1893,7 @@ attach_undo_log(UndoLogCategory category, Oid tablespace)
 	 */
 	if (slot == NULL)
 	{
-		if (UndoLogShared->next_logno > MaxUndoLogNumber)
+		if (unlikely(UndoLogShared->next_logno > MaxUndoLogNumber))
 		{
 			/*
 			 * You've used up all 16 exabytes of undo log addressing space.
