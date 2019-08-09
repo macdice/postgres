@@ -193,6 +193,10 @@ typedef int UndoLogNumber;
 #define UndoLogOffsetPlusUsableBytes(offset, n)							\
 	UndoLogOffsetFromUsableByteNo(UndoLogOffsetToUsableByteNo(offset) + (n))
 
+/* Add 'n' usable bytes to an UndoRecPtr, stepping over headers. */
+#define UndoRecPtrPlusUsableBytes(ptr, n)							\
+	UndoLogOffsetPlusUsableBytes(ptr, n)
+
 /* Populate a RelFileNode from an UndoRecPtr. */
 #define UndoRecPtrAssignRelFileNode(rfn, urp)								 \
 	do																		 \

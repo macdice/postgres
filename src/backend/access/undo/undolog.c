@@ -108,6 +108,28 @@ UndoLogNumSlots(void)
 }
 
 /*
+ * Checks if a category requires WAL-logging.
+ */
+static inline bool
+UndoLogCategoryNeedsWal(UndoLogCategory category)
+{
+	return category != UNDO_TEMP && category != UNDO_UNLOGGED;
+}
+
+/*
+ * Read the category of a slot.
+ */
+static inline UndoLogCategory
+UndoLogSlotCategory(UndoLogSlot *slot)
+{
+	Assert(InRecovery ||
+		   CurrentSession->attached_undo_slots[slot->meta.category] == slot ||
+		   LWLockHeldByMe(&slot->mutex));
+
+	return slot->meta.category;
+}
+
+/*
  * Return the amount of traditional shmem required for undo log management.
  */
 Size
@@ -500,7 +522,7 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 
 	/* You can't extend an undo log that doesn't exist */
 	Assert(slot != NULL);
-	/* The current and new end poins must be on a segment boundary */
+	/* The current and new end points must be on a segment boundary */
 	Assert(slot->meta.end % UndoLogSegmentSize == 0);
 	Assert(new_end % UndoLogSegmentSize == 0);
 	/*
@@ -537,7 +559,7 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 	 * before WAL logging, but in that case we'll eventually try to create the
 	 * same segment(s) again, which is tolerated.
 	 */
-	if (!InRecovery)
+	if (!InRecovery && UndoLogCategoryNeedsWal(UndoLogSlotCategory(slot)))
 	{
 		xl_undolog_extend xlrec;
 
@@ -934,14 +956,14 @@ UndoLogAllocateInRecovery(UndoLogAllocContext *context,
 				{
 					slot->meta.unlogged.xid = xid;
 					if (slot->meta.unlogged.this_xact_start != slot->meta.unlogged.insert)
+					{
 						slot->meta.unlogged.last_xact_start =
 							slot->meta.unlogged.this_xact_start;
-					slot->meta.unlogged.this_xact_start =
-						slot->meta.unlogged.insert;
+						slot->meta.unlogged.this_xact_start =
+							slot->meta.unlogged.insert;
+					}
 				}
 			}
-
-			/* TODO: check locking against undo log slot recycling? */
 
 			/*
 			 * At this stage we should have an undo log that can handle this
@@ -989,8 +1011,8 @@ UndoLogAllocateInRecovery(UndoLogAllocContext *context,
 void
 UndoLogAdvance(UndoLogAllocContext *context, size_t size)
 {
-	context->try_location = UndoLogOffsetPlusUsableBytes(context->try_location,
-														 size);
+	context->try_location = UndoRecPtrPlusUsableBytes(context->try_location,
+													  size);
 }
 
 /*
@@ -2222,10 +2244,10 @@ DropUndoLogsInTablespace(Oid tablespace)
 
 		/*
 		 * TODO: For now we drop the undo log, meaning that it will never be
-		 * used again.  That wastes the rest of its address space.  Instead,
-		 * we should put it onto a special list of 'offline' undo logs, ready
-		 * to be reactivated in some other tablespace.  Then we can keep the
-		 * unused portion of its address space.
+		 * used again.  That wastes the rest of its address space.  It would
+		 * be nicer to put it onto a special list of 'offline' undo logs,
+		 * ready to be reactivated in some other tablespace.  Then we can keep
+		 * the unused portion of its address space.
 		 */
 		LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
 		slot->meta.status = UNDO_LOG_STATUS_DISCARDED;
