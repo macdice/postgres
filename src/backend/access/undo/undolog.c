@@ -171,6 +171,8 @@ UndoLogShmemInit(void)
 			UndoLogShared->slots[i].logno = InvalidUndoLogNumber;
 			LWLockInitialize(&UndoLogShared->slots[i].mutex,
 							 LWTRANCHE_UNDOLOG);
+			LWLockInitialize(&UndoLogShared->slots[i].extend_lock,
+							 LWTRANCHE_UNDOEXTEND);
 			LWLockInitialize(&UndoLogShared->slots[i].discard_lock,
 							 LWTRANCHE_UNDODISCARD);
 			LWLockInitialize(&UndoLogShared->slots[i].discard_update_lock,
@@ -518,8 +520,19 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 
 	slot = find_undo_log_slot(logno, false);
 
-	/* TODO review interlocking */
+	/*
+	 * We need to prevent a discard worker from simultaneously moving the end
+	 * pointer when it recycles segments.
+	 */
+	LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
 
+	if (slot->meta.end >= new_end)
+	{
+		/* The log was extended by another process; nothing to do. */
+		LWLockRelease(&slot->extend_lock);
+		return;
+	}
+	
 	/* You can't extend an undo log that doesn't exist */
 	Assert(slot != NULL);
 	/* The current and new end points must be on a segment boundary */
@@ -585,6 +598,8 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 	if (slot->meta.end < end)
 		slot->meta.end = end;
 	LWLockRelease(&slot->mutex);
+
+	LWLockRelease(&slot->extend_lock);
 }
 
 /*

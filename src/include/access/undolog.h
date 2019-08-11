@@ -297,6 +297,15 @@ typedef struct UndoLogAllocContext
  * actual discard but only during the update of shared memory variable which
  * influences the visibility decision but the updaters need to be blocked for
  * the entire discard process to ensure proper ordering of WAL records.
+ *
+ * The following locks protect different aspects of UndoLogSlot objects, and
+ * if more than one these is taken they must be taken in the order listed
+ * here:
+ *
+ * * UndoLogLock -- protects undo log freelists, and prevents slot alloc/free
+ * * discard_lock -- used to prevent discarding while reading
+ * * extend_lock -- used to coordinate background and foreground extension
+ * * mutex -- used to update or read the meta object or pid
  */
 typedef struct UndoLogSlot
 {
@@ -314,6 +323,8 @@ typedef struct UndoLogSlot
 	LWLock		mutex;
 	UndoLogMetaData meta;			/* current meta-data */
 	pid_t		pid;				/* InvalidPid for unattached */
+
+	LWLock		extend_lock;		/* allow 'end' to be advanced */
 
 	/* Protected by 'discard_lock'.  State used by undo workers. */
 	FullTransactionId	wait_fxmin;		/* trigger for processing this log again */

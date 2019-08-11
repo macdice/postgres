@@ -524,6 +524,7 @@ RegisterLWLockTranches(void)
 	LWLockRegisterTranche(LWTRANCHE_SXACT, "serializable_xact");
 	LWLockRegisterTranche(LWTRANCHE_UNDOLOG, "undo_log");
 	LWLockRegisterTranche(LWTRANCHE_UNDODISCARD, "undo_discard");
+	LWLockRegisterTranche(LWTRANCHE_UNDOEXTEND, "undo_extend");
 
 	/* Register named tranches. */
 	for (i = 0; i < NamedLWLockTrancheRequests; i++)
