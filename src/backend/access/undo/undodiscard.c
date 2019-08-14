@@ -383,7 +383,7 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 		 * to first check this to ensure that tablespace containing this log
 		 * doesn't get dropped concurrently.
 		 */
-		LWLockAcquire(&slot->mutex, LW_SHARED);
+		LWLockAcquire(&slot->meta_lock, LW_SHARED);
 		/*
 		 * We don't have to worry about slot recycling and check the logno
 		 * here, since we don't care about the identity of this slot, we're
@@ -391,10 +391,10 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 		 */
 		if (slot->meta.discard == slot->meta.unlogged.insert)
 		{
-			LWLockRelease(&slot->mutex);
+			LWLockRelease(&slot->meta_lock);
 			continue;
 		}
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 
 		/* We can't process temporary undo logs. */
 		if (slot->meta.category == UNDO_TEMP)
@@ -475,13 +475,13 @@ TempUndoDiscard(UndoLogNumber logno)
 	 * to first check this to ensure that tablespace containing this log
 	 * doesn't get dropped concurrently.
 	 */
-	LWLockAcquire(&slot->mutex, LW_SHARED);
+	LWLockAcquire(&slot->meta_lock, LW_SHARED);
 	if (slot->meta.discard == slot->meta.unlogged.insert)
 	{
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 		return;
 	}
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	/* Process the undo log. */
 	UndoLogDiscard(MakeUndoRecPtr(slot->logno, slot->meta.unlogged.insert),

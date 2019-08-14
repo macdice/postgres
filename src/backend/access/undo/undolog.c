@@ -80,7 +80,7 @@ char	   *undo_tablespaces = NULL;
 
 static UndoLogSlot *find_undo_log_slot(UndoLogNumber logno, bool locked);
 static UndoLogSlot *allocate_undo_log_slot(void);
-static void free_undo_log_slot(UndoLogSlot *log);
+static void free_undo_log_slot(UndoLogSlot *log, UndoLogNumber logno);
 static void attach_undo_log(UndoLogCategory category, Oid tablespace);
 static void detach_current_undo_log(UndoLogCategory category, bool full);
 static void extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end);
@@ -124,7 +124,7 @@ UndoLogSlotCategory(UndoLogSlot *slot)
 {
 	Assert(InRecovery ||
 		   CurrentSession->attached_undo_slots[slot->meta.category] == slot ||
-		   LWLockHeldByMe(&slot->mutex));
+		   LWLockHeldByMe(&slot->meta_lock));
 
 	return slot->meta.category;
 }
@@ -169,7 +169,7 @@ UndoLogShmemInit(void)
 		{
 			memset(&UndoLogShared->slots[i], 0, sizeof(UndoLogShared->slots[i]));
 			UndoLogShared->slots[i].logno = InvalidUndoLogNumber;
-			LWLockInitialize(&UndoLogShared->slots[i].mutex,
+			LWLockInitialize(&UndoLogShared->slots[i].meta_lock,
 							 LWTRANCHE_UNDOLOG);
 			LWLockInitialize(&UndoLogShared->slots[i].extend_lock,
 							 LWTRANCHE_UNDOEXTEND);
@@ -298,7 +298,7 @@ UndoLogRecPtrIsDiscardedSlowPath(UndoRecPtr pointer)
 	}
 	else
 	{
-		LWLockAcquire(&slot->mutex, LW_SHARED);
+		LWLockAcquire(&slot->meta_lock, LW_SHARED);
 		if (unlikely(logno != slot->logno))
 		{
 			/*
@@ -310,7 +310,7 @@ UndoLogRecPtrIsDiscardedSlowPath(UndoRecPtr pointer)
 		}
 		else
 			discard = MakeUndoRecPtr(logno, slot->meta.discard);
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 	}
 
 	/*
@@ -337,12 +337,12 @@ detach_current_undo_log(UndoLogCategory category, bool full)
 
 	CurrentSession->attached_undo_slots[category] = NULL;
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	slot->pid = InvalidPid;
 	slot->meta.unlogged.xid = InvalidTransactionId;
 	if (full)
 		slot->meta.status = UNDO_LOG_STATUS_FULL;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	/* Push back onto the appropriate free list, unless it's full. */
 	if (!full)
@@ -521,14 +521,14 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 	slot = find_undo_log_slot(logno, false);
 
 	/*
-	 * We need to prevent a discard worker from simultaneously moving the end
-	 * pointer when it recycles segments.
+	 * UndoLogDiscard() might try to move the end pointer concurrently, so we
+	 * need to acquire extend_lock while we do this.
 	 */
 	LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
 
 	if (slot->meta.end >= new_end)
 	{
-		/* The log was extended by another process; nothing to do. */
+		/* The log was already extended by another process; nothing to do. */
 		LWLockRelease(&slot->extend_lock);
 		return;
 	}
@@ -585,19 +585,15 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 	}
 
 	/*
-	 * We didn't need to acquire the mutex to read 'end' above because only
-	 * we write to it.  But we need the mutex to update it, because the
-	 * checkpointer might read it concurrently.
-	 *
 	 * XXX It's possible for meta.end to be higher already during
 	 * recovery, because of the timing of a checkpoint; in that case we did
 	 * nothing above and we shouldn't update shmem here.  That interaction
 	 * needs more analysis.
 	 */
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	if (slot->meta.end < end)
 		slot->meta.end = end;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	LWLockRelease(&slot->extend_lock);
 }
@@ -670,6 +666,7 @@ UndoLogAllocate(UndoLogAllocContext *context,
 	UndoLogOffset new_insert;
 	TransactionId logxid;
 	bool		switch_requested;
+	UndoLogOffset end;
 
 	slot = CurrentSession->attached_undo_slots[context->category];
 
@@ -697,7 +694,7 @@ UndoLogAllocate(UndoLogAllocContext *context,
 		session->need_to_choose_undo_tablespace = false;
 	}
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	logxid = slot->meta.unlogged.xid;
 
 	if (logxid != GetTopTransactionId())
@@ -709,7 +706,7 @@ UndoLogAllocate(UndoLogAllocContext *context,
 		 */
 		if (slot->pid == InvalidPid)
 		{
-			LWLockRelease(&slot->mutex);
+			LWLockRelease(&slot->meta_lock);
 			slot = NULL;
 			goto retry;
 		}
@@ -728,9 +725,12 @@ UndoLogAllocate(UndoLogAllocContext *context,
 		}
 	}
 
+	/* Capture end pointer while we have the lock. */
+	end = slot->meta.end;
+
 	/* Check if we've been asked to switch log for testing. */
 	switch_requested = slot->meta.status == UNDO_LOG_STATUS_SWITCH_REQUESTED;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	/*
 	 * 'size' is expressed in usable non-header bytes.  Figure out how far we
@@ -758,11 +758,12 @@ UndoLogAllocate(UndoLogAllocContext *context,
 	Assert(new_insert % BLCKSZ >= UndoLogBlockHeaderSize);
 
 	/*
-	 * We don't need to acquire slot->mutex to read slot->meta.insert and
-	 * slot->meta.end, because this backend is the only one that can
-	 * modify them.
+	 * We don't need to acquire meta_lock to read meta.insert, because we're
+	 * attached.  The end pointer was captured while holding meta_lock, and
+	 * extend_undo_log() will check it again (a concurrency UndoLogDiscard()
+	 * might recycle a segment and move end).
 	 */
-	if (unlikely(new_insert > slot->meta.end || switch_requested))
+	if (unlikely(new_insert > end || switch_requested))
 	{
 		if (new_insert > UndoLogMaxSize || switch_requested)
 		{
@@ -793,7 +794,6 @@ UndoLogAllocate(UndoLogAllocContext *context,
 		extend_undo_log(slot->logno,
 						new_insert + UndoLogSegmentSize -
 						new_insert % UndoLogSegmentSize);
-		Assert(new_insert <= slot->meta.end);
 	}
 
 	/*
@@ -956,9 +956,9 @@ UndoLogAllocateInRecovery(UndoLogAllocContext *context,
 				Assert(backup_size == sizeof(UndoLogUnloggedMetaData));
 
 				/* Restore the unlogged members from the backup-imaged. */
-				LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+				LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 				memcpy(&slot->meta.unlogged, backup, sizeof(UndoLogUnloggedMetaData));
-				LWLockRelease(&slot->mutex);
+				LWLockRelease(&slot->meta_lock);
 			}
 			else
 			{
@@ -1056,16 +1056,16 @@ UndoLogAdvanceFinal(UndoRecPtr insertion_point, size_t size)
 	 */
 	Assert(UndoRecPtrGetOffset(insertion_point) == slot->meta.unlogged.insert);
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	slot->meta.unlogged.insert =
 		UndoLogOffsetPlusUsableBytes(slot->meta.unlogged.insert, size);
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 }
 
 /*
  * Advance the discard pointer in one undo log, discarding all undo data
  * relating to one or more whole transactions.  The passed in undo pointer is
- * the address of the oldest data that the called would like to keep, and the
+ * the address of the oldest data that the caller would like to keep, and the
  * affected undo log is implied by this pointer, ie
  * UndoRecPtrGetLogNo(discard_pointer).
  *
@@ -1078,10 +1078,6 @@ UndoLogAdvanceFinal(UndoRecPtr insertion_point, size_t size)
  *
  * Return true if the discard point was updated, and false if nothing was done
  * because the log precending the given point was already discarded.
- *
- * TODO: The return value is not yet reliable and the code still doesn't work
- * correctly if called for the same undo log in two backends; more
- * interlocking work required here.
  */
 bool
 UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
@@ -1103,16 +1099,28 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		return false;
 	}
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	/*
+	 * We hold discard_lock for the duration of the operation, so that
+	 * superuser CALL pg_force_undo_discard() and background workers don't try
+	 * to discard in the same undo log at the same time.  Otherwise, we don't
+	 * normally expect contention on this lock.
+	 */
+	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
 	if (unlikely(slot->logno != logno || discard <= slot->meta.discard))
 	{
 		/*
-		 * Already discarded entirely and the slot has been recycled, or up
-		 * to this point).
+		 * Already discarded entirely and the slot has been recycled, or
+		 * already discarded up to this point.
 		 */
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->discard_lock);
 		return false;
 	}
+
+	/*
+	 * Perform pre-flight checks, and announce the discard operation that is
+	 * in progress in shared memory.
+	 */
+	LWLockAcquire(&slot->meta_lock, LW_SHARED);
 	if (discard > slot->meta.unlogged.insert)
 		elog(ERROR, "cannot move discard point past insert point");
 	old_discard = slot->meta.discard;
@@ -1130,13 +1138,36 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		slot->meta.unlogged.insert = slot->meta.end;
 		discard = slot->meta.end;
 	}
-	LWLockRelease(&slot->mutex);
+	/* TODO: set discard_in_progress! */
+	LWLockRelease(&slot->meta_lock);
 
 	/*
-	 * TODO: I think we need a new lock just for this phase, so that buffer
-	 * dropping and IO are done by only one backend if a superuser command and
-	 * a discard worker both run this!
+	 * Check if we crossed a segment boundary and need to do some filesystem
+	 * operations.  This affects whether we need to flush the WAL.
 	 */
+	segno = old_discard / UndoLogSegmentSize;
+	new_segno = discard / UndoLogSegmentSize;
+	if (segno < new_segno)
+		need_to_flush_wal = true;
+
+	/* WAL-log the discard. */
+	{
+		xl_undolog_discard xlrec;
+		XLogRecPtr ptr;
+
+		xlrec.logno = logno;
+		xlrec.discard = discard;
+		xlrec.end = end;
+		xlrec.latestxid = xid;
+		xlrec.entirely_discarded = entirely_discarded;
+
+		XLogBeginInsert();
+		XLogRegisterData((char *) &xlrec, SizeOfUndologDiscard);
+		ptr = XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_DISCARD);
+
+		if (need_to_flush_wal)
+			XLogFlush(ptr);
+	}
 
 	/*
 	 * Drop all buffers holding this undo data out of the buffer pool (except
@@ -1148,22 +1179,20 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	 */
 	forget_undo_buffers(logno, old_discard, discard, entirely_discarded);
 
-	/*
-	 * Check if we crossed a segment boundary and need to do some synchronous
-	 * filesystem operations.
-	 */
-	segno = old_discard / UndoLogSegmentSize;
-	new_segno = discard / UndoLogSegmentSize;
+	/* Perform filesystem operations, if we crossed a segment boundary */
 	if (segno < new_segno)
 	{
 		int		recycle;
 		UndoLogOffset pointer;
 
 		/*
-		 * We always WAL-log discards, but we only need to flush the WAL if we
-		 * have performed a filesystem operation.
+		 * While we're deciding whether we can recycle file(s) to extend this
+		 * undo log, we'll hold extend_lock.  This conflicts with
+		 * UndoAllocate(), which also adds new files at the end.  Blocking a
+		 * foreground process is not ideal, but if we recycle files frequently
+		 * enough it shouldn't need to do that often.
 		 */
-		need_to_flush_wal = true;
+		LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
 
 		/*
 		 * XXX When we rename or unlink a file, it's possible that some
@@ -1185,13 +1214,13 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		 * spare one, but we could have an adaptive algorithm that recycles
 		 * multiple segments at a time and pays just one fsync().
 		 */
-		LWLockAcquire(&slot->mutex, LW_SHARED);
+		LWLockAcquire(&slot->meta_lock, LW_SHARED);
 		if ((slot->meta.end - slot->meta.unlogged.insert) < UndoLogSegmentSize &&
 			slot->meta.status == UNDO_LOG_STATUS_ACTIVE)
 			recycle = 1;
 		else
 			recycle = 0;
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 
 		/* Rewind to the start of the segment. */
 		pointer = segno * UndoLogSegmentSize;
@@ -1244,37 +1273,32 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 									discard_path)));
 			}
 			pointer += UndoLogSegmentSize;
+
+			/* Update shmem to show the new discard and end pointers. */
+			LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
+			slot->meta.discard = discard;
+			slot->meta.end = end;
+			LWLockRelease(&slot->meta_lock);
+
+			LWLockRelease(&slot->extend_lock);
 		}
 	}
-
-	/* WAL log the discard. */
+	else
 	{
-		xl_undolog_discard xlrec;
-		XLogRecPtr ptr;
-
-		xlrec.logno = logno;
-		xlrec.discard = discard;
-		xlrec.end = end;
-		xlrec.latestxid = xid;
-		xlrec.entirely_discarded = entirely_discarded;
-
-		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, SizeOfUndologDiscard);
-		ptr = XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_DISCARD);
-
-		if (need_to_flush_wal)
-			XLogFlush(ptr);
+		/*
+		 * No filesystem work needed.  Just update shmem to show the new
+		 * discard pointer.
+		 */
+		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
+		slot->meta.discard = discard;
+		LWLockRelease(&slot->meta_lock);
 	}
 
-	/* Update shmem to show the new discard and end pointers. */
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
-	slot->meta.discard = discard;
-	slot->meta.end = end;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->discard_lock);
 
 	/* If we discarded everything, the slot can be given up. */
 	if (entirely_discarded)
-		free_undo_log_slot(slot);
+		free_undo_log_slot(slot, logno);
 
 	return true;
 }
@@ -1299,7 +1323,7 @@ UndoLogGetOldestRecord(UndoLogNumber logno, bool *full)
 		return InvalidUndoRecPtr;
 	}
 
-	LWLockAcquire(&slot->mutex, LW_SHARED);
+	LWLockAcquire(&slot->meta_lock, LW_SHARED);
 	if (slot->logno != logno)
 	{
 		/* It's been recycled.  So it must have been entirely discarded. */
@@ -1321,7 +1345,7 @@ UndoLogGetOldestRecord(UndoLogNumber logno, bool *full)
 		if (full)
 			*full = slot->meta.status == UNDO_LOG_STATUS_FULL;
 	}
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	return result;
 }
@@ -1344,10 +1368,10 @@ UndoLogSwitchSetPrevLogInfo(UndoLogNumber logno, UndoRecPtr prevlog_xact_start,
 	 */
 	Assert(AmAttachedToUndoLogSlot(slot));
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	slot->meta.prevlog_xact_start = prevlog_xact_start;
 	slot->meta.prevlog_last_urp = prevlog_last_urp;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	/* Wal log the log switch. */
 	{
@@ -1372,10 +1396,10 @@ UndoLogGetNextInsertPtr(UndoLogNumber logno)
 	UndoLogSlot *slot = find_undo_log_slot(logno, false);
 	UndoRecPtr	insert;
 
-	LWLockAcquire(&slot->mutex, LW_SHARED);
+	LWLockAcquire(&slot->meta_lock, LW_SHARED);
 	/* TODO: what if the slot has been recycled? */
 	insert = slot->meta.unlogged.insert;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	return MakeUndoRecPtr(logno, insert);
 }
@@ -1473,10 +1497,10 @@ CheckPointUndoLogs(XLogRecPtr checkPointRedo, XLogRecPtr priorCheckPointRedo)
 		if (slot->logno == InvalidUndoLogNumber)
 			continue;
 
-		/* Capture snapshot while holding each mutex. */
-		LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+		/* Capture snapshot while holding each meta_lock. */
+		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 		serialized[num_logs++] = slot->meta;
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 	}
 	next_logno = UndoLogShared->next_logno;
 
@@ -1650,6 +1674,7 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 		slot->logno = slot->meta.logno;
 		slot->pid = InvalidPid;
 		slot->oldest_data = MakeUndoRecPtr(slot->logno, slot->meta.discard);
+		slot->discard_in_progress = slot->meta.discard;
 
 		/* If SWITCH_REQUESTED made it to disk, change it back to ACTIVE. */
 		if (slot->meta.status == UNDO_LOG_STATUS_SWITCH_REQUESTED)
@@ -1702,6 +1727,7 @@ allocate_undo_log_slot(void)
 			slot->pid = 0;
 			slot->wait_fxmin = InvalidFullTransactionId;
 			slot->oldest_data =0;
+			slot->discard_in_progress = 0;
 			slot->next_free = -1;
 			slot->logno = -1;
 			return slot;
@@ -1713,27 +1739,33 @@ allocate_undo_log_slot(void)
 
 /*
  * Free an UndoLogSlot object in shared memory, so that it can be reused.
- * This is a rare event, and has complications for all code paths that access
- * slots.  Unless the current session is attached to the slot, it must be
- * prepared for it to be freed and then potentially recycled for use by
+ * This is a very rare event, and has complications for all code paths that
+ * access slots.  Unless the current session is attached to the slot, it must
+ * be prepared for it to be freed and then potentially recycled for use by
  * another log.  See UndoLogGetSlot().
  */
 static void
-free_undo_log_slot(UndoLogSlot *slot)
+free_undo_log_slot(UndoLogSlot *slot, UndoLogNumber logno)
 {
 
 	/*
 	 * When removing an undo log from a slot in shared memory, we acquire
-	 * UndoLogLock, slot->mutex and slot->discard_lock, so that other code can
-	 * hold any one of those locks to prevent the slot from being recycled.
+	 * UndoLogLock, slot->meta_lock and slot->discard_lock, so that other code
+	 * can hold any one of those locks to prevent the slot from being
+	 * recycled.
 	 */
 	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	Assert(slot->logno != InvalidUndoLogNumber);
-	slot->logno = InvalidUndoLogNumber;
-	memset(&slot->meta, 0, sizeof(slot->meta));
-	LWLockRelease(&slot->mutex);
+	if (slot->logno == logno)
+	{
+		slot->logno = InvalidUndoLogNumber;
+		memset(&slot->meta, 0, sizeof(slot->meta));
+	}
+	LWLockRelease(&slot->meta_lock);
+	LWLockRelease(&slot->extend_lock);
 	LWLockRelease(&slot->discard_lock);
 	compute_low_logno();
 	LWLockRelease(UndoLogLock);
@@ -1757,10 +1789,10 @@ free_undo_log_slot(UndoLogSlot *slot)
  * be recycled while a backend is attached.  It should probably assert that it
  * is attached, however.
  *
- * 2.  All other code should acquire slot->mutex before accessing any members,
- * and after doing so, check that the logno hasn't moved.  If it is not, the
- * entire undo log must be assumed to be discarded (as if this function
- * returned NULL) and the caller must behave accordingly.
+ * 2.  All other code should acquire slot->meta_lock before accessing any
+ * members, and after doing so, check that the logno hasn't moved.  If it is
+ * not, the entire undo log must be assumed to be discarded (as if this
+ * function returned NULL) and the caller must behave accordingly.
  *
  * Return NULL if the undo log has been entirely discarded.  It is an error to
  * ask for undo logs that have never been created.
@@ -1853,7 +1885,7 @@ find_undo_log_slot(UndoLogNumber logno, bool locked)
 /*
  * Get a pointer to an UndoLogSlot object corresponding to a given logno.
  *
- * In general, the caller must acquire the UndoLogSlot's mutex to access
+ * In general, the caller must acquire the UndoLogSlot's meta_lock to access
  * the contents, and at that time must consider that the logno might have
  * changed because the undo log it contained has been entirely discarded.
  *
@@ -1986,9 +2018,9 @@ attach_undo_log(UndoLogCategory category, Oid tablespace)
 	}
 	LWLockRelease(UndoLogLock);
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	slot->pid = MyProcPid;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	CurrentSession->attached_undo_slots[category] = slot;
 }
@@ -2151,10 +2183,10 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 
 			if (slot != NULL)
 			{
-				LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+				LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 				slot->pid = InvalidPid;
 				slot->meta.unlogged.xid = InvalidTransactionId;
-				LWLockRelease(&slot->mutex);
+				LWLockRelease(&slot->meta_lock);
 
 				LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 				slot->next_free = UndoLogShared->free_lists[i];
@@ -2194,7 +2226,7 @@ DropUndoLogsInTablespace(Oid tablespace)
 			continue;
 
 		/* Check if this undo log can be forcibly detached. */
-		LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 		if (slot->meta.discard == slot->meta.unlogged.insert &&
 			(slot->meta.unlogged.xid == InvalidTransactionId ||
 			 !TransactionIdIsInProgress(slot->meta.unlogged.xid)))
@@ -2215,7 +2247,7 @@ DropUndoLogsInTablespace(Oid tablespace)
 			 */
 			ok = false;
 		}
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 
 		/* If we failed, then give up now and report failure. */
 		if (!ok)
@@ -2264,9 +2296,9 @@ DropUndoLogsInTablespace(Oid tablespace)
 		 * ready to be reactivated in some other tablespace.  Then we can keep
 		 * the unused portion of its address space.
 		 */
-		LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 		slot->meta.status = UNDO_LOG_STATUS_DISCARDED;
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 	}
 
 	/* Forget about all sync requests relating to this tablespace. */
@@ -2425,13 +2457,13 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 		 * log will be consistent because we'll take the per-log lock while
 		 * copying them.
 		 */
-		LWLockAcquire(&slot->mutex, LW_SHARED);
+		LWLockAcquire(&slot->meta_lock, LW_SHARED);
 
 		/* Skip unused slots and entirely discarded undo logs. */
 		if (slot->logno == InvalidUndoLogNumber ||
 			slot->meta.status == UNDO_LOG_STATUS_DISCARDED)
 		{
-			LWLockRelease(&slot->mutex);
+			LWLockRelease(&slot->meta_lock);
 			continue;
 		}
 
@@ -2471,7 +2503,7 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 		default:
 			nulls[8] = true;
 		}
-		LWLockRelease(&slot->mutex);
+		LWLockRelease(&slot->meta_lock);
 
 		/*
 		 * Deal with potentially slow tablespace name lookup without the lock.
@@ -2515,7 +2547,6 @@ pg_force_discard_undo(PG_FUNCTION_ARGS)
 {
 	UndoLogNumber logno = PG_GETARG_INT32(0);
 	UndoLogSlot	*slot;
-	UndoLogOffset old_discard;
 	UndoLogOffset new_discard;
 
 	if (!superuser())
@@ -2525,19 +2556,23 @@ pg_force_discard_undo(PG_FUNCTION_ARGS)
 	if (slot == NULL)
 		elog(ERROR, "undo log not found");
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	/*
+	 * Choose a new discard pointer value that is the current insert pointer
+	 * of the undo log, and make sure no transaction is in progress in that
+	 * undo log.  This must be a safe place to discard to, since no data will
+	 * remain.
+	 */
+	LWLockAcquire(&slot->meta_lock, LW_SHARED);
 	if (slot->meta.logno != logno)
 		elog(ERROR, "undo log not found (slot recycled)");
 	if (slot->meta.status == UNDO_LOG_STATUS_DISCARDED)
 		elog(ERROR, "undo log already entirely discarded");
 	if (TransactionIdIsActive(slot->meta.unlogged.xid))
 		elog(ERROR, "undo log in use by an active transaction");
-	old_discard = slot->meta.discard;
 	new_discard = slot->meta.unlogged.insert;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
-	LWLockRelease(&slot->mutex);
+	UndoLogDiscard(MakeUndoRecPtr(logno, new_discard), InvalidTransactionId);
 
 	return (Datum) 0;
 }
@@ -2564,7 +2599,7 @@ pg_force_switch_undo(PG_FUNCTION_ARGS)
 	 * We don't bother WAL-logging this change.  It might make it to disk, but
 	 * we don't mind either way and we'll undo at startup if we restart.
 	 */
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	if (slot->meta.logno != logno)
 		elog(ERROR, "undo log not found (slot recycled)");
 	if (slot->meta.status != UNDO_LOG_STATUS_ACTIVE)
@@ -2572,7 +2607,7 @@ pg_force_switch_undo(PG_FUNCTION_ARGS)
 	if (!TransactionIdIsActive(slot->meta.unlogged.xid))
 		elog(ERROR, "undo log not in use by an active transaction");
 	slot->meta.status = UNDO_LOG_STATUS_SWITCH_REQUESTED;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	return (Datum) 0;
 }
@@ -2597,7 +2632,7 @@ undolog_xlog_create(XLogReaderState *record)
 	if ((slot = find_undo_log_slot(xlrec->logno, true)) == NULL)
 		slot = allocate_undo_log_slot();
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	slot->logno = xlrec->logno;
 	slot->meta.logno = xlrec->logno;
 	slot->meta.status = UNDO_LOG_STATUS_ACTIVE;
@@ -2605,7 +2640,7 @@ undolog_xlog_create(XLogReaderState *record)
 	slot->meta.tablespace = xlrec->tablespace;
 	slot->meta.unlogged.insert = UndoLogBlockHeaderSize;
 	slot->meta.discard = UndoLogBlockHeaderSize;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 	UndoLogShared->next_logno = Max(xlrec->logno + 1, UndoLogShared->next_logno);
 	LWLockRelease(UndoLogLock);
 }
@@ -2686,11 +2721,11 @@ undolog_xlog_discard(XLogReaderState *record)
 	 * deleted, but we could replay WAL that expects the files to be there.
 	 */
 
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	Assert(slot->logno == xlrec->logno);
 	discard = slot->meta.discard;
 	end = slot->meta.end;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	/* Drop buffers before we remove/recycle any files. */
 	forget_undo_buffers(xlrec->logno, discard, xlrec->discard,
@@ -2756,14 +2791,14 @@ undolog_xlog_discard(XLogReaderState *record)
 	undofile_request_sync_dir(slot->meta.tablespace);
 
 	/* Update shmem. */
-	LWLockAcquire(&slot->mutex, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	slot->meta.discard = xlrec->discard;
 	slot->meta.end = end;
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	/* If we discarded everything, the slot can be given up. */
 	if (xlrec->entirely_discarded)
-		free_undo_log_slot(slot);
+		free_undo_log_slot(slot, xlrec->logno);
 }
 
 /*
@@ -2815,10 +2850,10 @@ bool
 AmAttachedToUndoLogSlot(UndoLogSlot *slot)
 {
 	/*
-	 * In general, we can't access log's members without locking.  But this
-	 * function is intended only for asserting that you are attached, and
-	 * while you're attached the slot can't be recycled, so don't bother
-	 * locking.
+	 * In general, we can't access a slot without locking.  But this function
+	 * is intended only for asserting that you are attached, and while you're
+	 * attached the slot can't be recycled, so its category can't change, so
+	 * don't bother locking.
 	 */
 	return CurrentSession->attached_undo_slots[slot->meta.category] == slot;
 }

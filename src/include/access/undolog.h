@@ -305,7 +305,7 @@ typedef struct UndoLogAllocContext
  * * UndoLogLock -- protects undo log freelists, and prevents slot alloc/free
  * * discard_lock -- used to prevent discarding while reading
  * * extend_lock -- used to coordinate background and foreground extension
- * * mutex -- used to update or read the meta object or pid
+ * * meta_lock -- used to update or read the meta object or pid
  */
 typedef struct UndoLogSlot
 {
@@ -319,8 +319,8 @@ typedef struct UndoLogSlot
 	/* Protected by UndoLogLock. */
 	UndoLogNumber next_free;		/* link for active unattached undo logs */
 
-	/* Protected by 'mutex'. */
-	LWLock		mutex;
+	/* Protected by 'meta_lock'. */
+	LWLock		meta_lock;
 	UndoLogMetaData meta;			/* current meta-data */
 	pid_t		pid;				/* InvalidPid for unattached */
 
@@ -328,6 +328,7 @@ typedef struct UndoLogSlot
 
 	/* Protected by 'discard_lock'.  State used by undo workers. */
 	FullTransactionId	wait_fxmin;		/* trigger for processing this log again */
+	UndoLogOffset discard_in_progress;
 	UndoRecPtr	oldest_data;
 	LWLock		discard_lock;		/* prevents discarding while reading */
 	LWLock      discard_update_lock;    /* block updaters during discard */
