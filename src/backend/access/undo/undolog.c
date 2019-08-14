@@ -1190,7 +1190,9 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		 * undo log, we'll hold extend_lock.  This conflicts with
 		 * UndoAllocate(), which also adds new files at the end.  Blocking a
 		 * foreground process is not ideal, but if we recycle files frequently
-		 * enough it shouldn't need to do that often.
+		 * enough it shouldn't need to do that often, and when it happens, the
+		 * foreground process is still better waiting for our rename() than
+		 * its own filesystem block allocation system calls.
 		 */
 		LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
 
@@ -2678,10 +2680,15 @@ forget_undo_buffers(int logno, UndoLogOffset old_discard,
 	new_blockno = new_discard / BLCKSZ;
 	if (drop_tail)
 		++new_blockno;
-	while (old_blockno < new_blockno)
+	if (UndoLogNumberGetCategory(logno) == UNDO_TEMP)
 	{
-		ForgetBuffer(rnode, UndoLogForkNum, old_blockno);
-		ForgetLocalBuffer(rnode, UndoLogForkNum, old_blockno++);
+		while (old_blockno < new_blockno)
+			ForgetLocalBuffer(rnode, UndoLogForkNum, old_blockno++);
+	}
+	else
+	{
+		while (old_blockno < new_blockno)
+			DiscardBuffer(rnode, UndoLogForkNum, old_blockno++);
 	}
 }
 /*

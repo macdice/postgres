@@ -177,8 +177,8 @@ extern Buffer ReadBufferWithoutRelcache(RelFileNode rnode,
 										ForkNumber forkNum, BlockNumber blockNum,
 										ReadBufferMode mode, BufferAccessStrategy strategy,
 										char relpersistence);
-extern void ForgetBuffer(RelFileNode rnode, ForkNumber forkNum,
-						 BlockNumber blockNum);
+extern void DiscardBuffer(RelFileNode rnode, ForkNumber forkNum,
+						  BlockNumber blockNum);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);

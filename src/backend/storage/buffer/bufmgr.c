@@ -1341,7 +1341,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * just like permanent relations.
 	 */
 	buf->tag = newTag;
-	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
+	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED | BM_DISCARDED |
 				   BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
 				   BUF_USAGECOUNT_MASK);
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
@@ -1374,17 +1374,17 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 }
 
 /*
- * ForgetBuffer -- drop a buffer from shared buffers
+ * DiscardBuffer -- drop a buffer from pool, or mark discarded if pinned
  *
  * If the buffer isn't present in shared buffers, nothing happens.  If it is
- * present, it is discarded without making any attempt to write it back out to
- * the operating system.  The caller must therefore somehow be sure that the
- * data won't be needed for anything now or in the future.  It assumes that
- * there is no concurrent access to the block, except that it might be being
- * concurrently written.
+ * present and not pinned, it is discarded without making any attempt to write
+ * it back out to the operating system.  If it is present and pinned, it is
+ * marked as discarded, which marks it clean and unused until invalidated.
+ * The caller must therefore somehow be sure that the data won't be needed for
+ * anything now or in the future once no longer pinned.
  */
 void
-ForgetBuffer(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum)
+DiscardBuffer(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum)
 {
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
 	BufferTag	tag;			/* identity of target block */
@@ -1408,7 +1408,10 @@ ForgetBuffer(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum)
 
 	/* didn't find it, so nothing to do */
 	if (buf_id < 0)
+{
+elog(LOG, "DiscardBuffer: block %u not found!", blockNum);
 		return;
+}
 
 	/* take the buffer header lock */
 	bufHdr = GetBufferDescriptor(buf_id);
@@ -1423,9 +1426,29 @@ ForgetBuffer(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum)
 	if (RelFileNodeEquals(bufHdr->tag.rnode, rnode) &&
 		bufHdr->tag.blockNum == blockNum &&
 		bufHdr->tag.forkNum == forkNum)
-		InvalidateBuffer(bufHdr);		/* releases spinlock */
+	{
+		if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
+		{
+			InvalidateBuffer(bufHdr);		/* releases spinlock */
+elog(LOG, "DiscardBuffer: invalidated block %u!", blockNum);
+		}
+		else
+		{
+			/*
+			 * We can't invalidate it yet, but we can prevent it from being
+			 * written back.
+			 */
+			buf_state |= BM_DISCARDED;
+			buf_state &= ~(BM_DIRTY | BM_JUST_DIRTIED | BUF_USAGECOUNT_MASK);
+			UnlockBufHdr(bufHdr, buf_state);
+elog(LOG, "DiscardBuffer: block %u marked BM_DISCARDED!", blockNum);
+		}
+	}
 	else
+{
 		UnlockBufHdr(bufHdr, buf_state);
+elog(LOG, "DiscardBuffer: block %u was already changed!", blockNum);
+}
 }
 
 /*
@@ -1574,7 +1597,10 @@ MarkBufferDirty(Buffer buffer)
 		buf_state = old_buf_state;
 
 		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
-		buf_state |= BM_DIRTY | BM_JUST_DIRTIED;
+
+		/* Suppress dirty mark if discarded */
+		if (!(buf_state & BM_DISCARDED))
+			buf_state |= BM_DIRTY | BM_JUST_DIRTIED;
 
 		if (pg_atomic_compare_exchange_u32(&bufHdr->state, &old_buf_state,
 										   buf_state))
@@ -1584,7 +1610,7 @@ MarkBufferDirty(Buffer buffer)
 	/*
 	 * If the buffer was not dirty already, do vacuum accounting.
 	 */
-	if (!(old_buf_state & BM_DIRTY))
+	if (!(old_buf_state & BM_DIRTY) && (buf_state & BM_DIRTY))
 	{
 		VacuumPageDirty++;
 		pgBufferUsage.shared_blks_dirtied++;
@@ -1686,6 +1712,9 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 		{
 			if (old_buf_state & BM_LOCKED)
 				old_buf_state = WaitBufHdrUnlocked(buf);
+
+			/* We should never be trying to pin a discarded buffer */
+			Assert(!(old_buf_state & BM_DISCARDED));
 
 			buf_state = old_buf_state;
 
