@@ -929,7 +929,12 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if (track_io_timing)
 				INSTR_TIME_SET_CURRENT(io_start);
 
-			smgrread(smgr, forkNum, blockNum, (char *) bufBlock);
+			if (!smgrread(smgr, forkNum, blockNum, (char *) bufBlock))
+			{
+				/* smgr reports that the block has been discarded */
+				/* TODO what do we need to do wit bufHdr? */
+				return InvalidBuffer;
+			}
 
 			if (track_io_timing)
 			{
@@ -1429,6 +1434,7 @@ elog(LOG, "DiscardBuffer: block %u not found!", blockNum);
 	{
 		if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
 		{
+			/* Nobody has it pinned, so we can immediately invalidate it. */
 			InvalidateBuffer(bufHdr);		/* releases spinlock */
 elog(LOG, "DiscardBuffer: invalidated block %u!", blockNum);
 		}
@@ -1436,7 +1442,8 @@ elog(LOG, "DiscardBuffer: invalidated block %u!", blockNum);
 		{
 			/*
 			 * We can't invalidate it yet, but we can prevent it from being
-			 * written back.
+			 * written back, and mark it as unused so that it's a candidate
+			 * for early replacement once it's unpinned.
 			 */
 			buf_state |= BM_DISCARDED;
 			buf_state &= ~(BM_DIRTY | BM_JUST_DIRTIED | BUF_USAGECOUNT_MASK);

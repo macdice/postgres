@@ -1101,7 +1101,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 
 	/*
 	 * We hold discard_lock for the duration of the operation, so that
-	 * superuser CALL pg_force_undo_discard() and background workers don't try
+	 * superuser CALL pg_force_discard_undo() and background workers don't try
 	 * to discard in the same undo log at the same time.  Otherwise, we don't
 	 * normally expect contention on this lock.
 	 */
@@ -1138,7 +1138,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		slot->meta.unlogged.insert = slot->meta.end;
 		discard = slot->meta.end;
 	}
-	/* TODO: set discard_in_progress! */
+	slot->discard_in_progress = discard;
 	LWLockRelease(&slot->meta_lock);
 
 	/*
@@ -1168,6 +1168,8 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		if (need_to_flush_wal)
 			XLogFlush(ptr);
 	}
+
+	/* TODO: update discard_in_progress here?  or just discard? ?! */
 
 	/*
 	 * Drop all buffers holding this undo data out of the buffer pool (except
@@ -1275,15 +1277,15 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 									discard_path)));
 			}
 			pointer += UndoLogSegmentSize;
-
-			/* Update shmem to show the new discard and end pointers. */
-			LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
-			slot->meta.discard = discard;
-			slot->meta.end = end;
-			LWLockRelease(&slot->meta_lock);
-
-			LWLockRelease(&slot->extend_lock);
 		}
+
+		/* Update shmem to show the new discard and end pointers. */
+		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
+		slot->meta.discard = discard;
+		slot->meta.end = end;
+		LWLockRelease(&slot->meta_lock);
+
+		LWLockRelease(&slot->extend_lock);
 	}
 	else
 	{

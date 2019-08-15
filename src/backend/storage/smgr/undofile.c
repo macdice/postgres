@@ -133,7 +133,7 @@ undofile_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 #endif							/* USE_PREFETCH */
 }
 
-void
+bool
 undofile_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 			  char *buffer)
 {
@@ -142,6 +142,12 @@ undofile_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	int			nbytes;
 
 	Assert(forknum == MAIN_FORKNUM);
+
+	/* Check if the block has been discarded. */
+	if (UndoRecPtrIsDiscarded(MakeUndoRecPtr(reln->smgr_rnode.node.relNode,
+											 BLCKSZ * blocknum)))
+		return false;
+
 	file = undofile_get_segment_file(reln, blocknum / UNDOSEG_SIZE);
 	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) UNDOSEG_SIZE));
 	Assert(seekpos < (off_t) BLCKSZ * UNDOSEG_SIZE);
@@ -159,6 +165,8 @@ undofile_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 						blocknum, FilePathName(file),
 						nbytes, BLCKSZ)));
 	}
+
+	return true;
 }
 
 void

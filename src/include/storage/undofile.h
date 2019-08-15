@@ -33,7 +33,7 @@ extern void undofile_extend(SMgrRelation reln, ForkNumber forknum,
 		 BlockNumber blocknum, char *buffer, bool skipFsync);
 extern void undofile_prefetch(SMgrRelation reln, ForkNumber forknum,
 		   BlockNumber blocknum);
-extern void undofile_read(SMgrRelation reln, ForkNumber forknum,
+extern bool undofile_read(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, char *buffer);
 extern void undofile_write(SMgrRelation reln, ForkNumber forknum,
 		BlockNumber blocknum, char *buffer, bool skipFsync);
