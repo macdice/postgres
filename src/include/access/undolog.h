@@ -216,7 +216,7 @@ typedef int UndoLogNumber;
  */
 typedef struct UndoLogUnloggedMetaData
 {
-	UndoLogOffset insert;		/* next insertion point (head) */
+	UndoLogOffset insert;			/* next insertion point (head) */
 	UndoLogOffset last_xact_start;	/* last transaction's first byte in this log */
 	UndoLogOffset this_xact_start;	/* this transaction's first byte in this log */
 	TransactionId xid;				/* currently attached/writing xid */
@@ -233,11 +233,12 @@ typedef struct UndoLogMetaData
 
 	/* Members that are fixed for the lifetime of the undo log. */
 	UndoLogNumber logno;
-	Oid		tablespace;
+	Oid			tablespace;
 	UndoLogCategory category;
 
 	/* Members that are changed by explicit WAL records. */
 	UndoLogStatus status;
+	UndoLogOffset begin;			/* beginning of lowest segment file */
 	UndoLogOffset end;				/* one past end of highest segment */
 	UndoLogOffset discard;			/* oldest data needed (tail) */
 
@@ -328,7 +329,6 @@ typedef struct UndoLogSlot
 
 	/* Protected by 'discard_lock'.  State used by undo workers. */
 	FullTransactionId	wait_fxmin;		/* trigger for processing this log again */
-	UndoLogOffset discard_in_progress;
 	UndoRecPtr	oldest_data;
 	LWLock		discard_lock;		/* prevents discarding while reading */
 	LWLock      discard_update_lock;    /* block updaters during discard */

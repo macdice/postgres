@@ -145,8 +145,11 @@ undofile_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 	/* Check if the block has been discarded. */
 	if (UndoRecPtrIsDiscarded(MakeUndoRecPtr(reln->smgr_rnode.node.relNode,
-											 BLCKSZ * blocknum)))
+											 BLCKSZ * (blocknum + 1))))
+	{
+		elog(LOG, "undofile_read -- returning false for block %u!", blocknum);
 		return false;
+	}
 
 	file = undofile_get_segment_file(reln, blocknum / UNDOSEG_SIZE);
 	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) UNDOSEG_SIZE));

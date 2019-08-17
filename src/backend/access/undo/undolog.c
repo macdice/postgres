@@ -1138,7 +1138,6 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		slot->meta.unlogged.insert = slot->meta.end;
 		discard = slot->meta.end;
 	}
-	slot->discard_in_progress = discard;
 	LWLockRelease(&slot->meta_lock);
 
 	/*
@@ -1168,8 +1167,6 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		if (need_to_flush_wal)
 			XLogFlush(ptr);
 	}
-
-	/* TODO: update discard_in_progress here?  or just discard? ?! */
 
 	/*
 	 * Drop all buffers holding this undo data out of the buffer pool (except
@@ -1679,7 +1676,6 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 		slot->logno = slot->meta.logno;
 		slot->pid = InvalidPid;
 		slot->oldest_data = MakeUndoRecPtr(slot->logno, slot->meta.discard);
-		slot->discard_in_progress = slot->meta.discard;
 
 		/* If SWITCH_REQUESTED made it to disk, change it back to ACTIVE. */
 		if (slot->meta.status == UNDO_LOG_STATUS_SWITCH_REQUESTED)
@@ -1732,7 +1728,6 @@ allocate_undo_log_slot(void)
 			slot->pid = 0;
 			slot->wait_fxmin = InvalidFullTransactionId;
 			slot->oldest_data =0;
-			slot->discard_in_progress = 0;
 			slot->next_free = -1;
 			slot->logno = -1;
 			return slot;
@@ -2413,7 +2408,7 @@ ResetUndoLogs(UndoLogCategory category)
 Datum
 pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_UNDO_LOGS_COLS 9
+#define PG_STAT_GET_UNDO_LOGS_COLS 10
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -2481,32 +2476,35 @@ pg_stat_get_undo_logs(PG_FUNCTION_ARGS)
 		tablespace = slot->meta.tablespace;
 
 		snprintf(buffer, sizeof(buffer), UndoRecPtrFormat,
-				 MakeUndoRecPtr(slot->logno, slot->meta.discard));
+				 MakeUndoRecPtr(slot->logno, slot->meta.begin));
 		values[3] = CStringGetTextDatum(buffer);
 		snprintf(buffer, sizeof(buffer), UndoRecPtrFormat,
-				 MakeUndoRecPtr(slot->logno, slot->meta.unlogged.insert));
+				 MakeUndoRecPtr(slot->logno, slot->meta.discard));
 		values[4] = CStringGetTextDatum(buffer);
 		snprintf(buffer, sizeof(buffer), UndoRecPtrFormat,
-				 MakeUndoRecPtr(slot->logno, slot->meta.end));
+				 MakeUndoRecPtr(slot->logno, slot->meta.unlogged.insert));
 		values[5] = CStringGetTextDatum(buffer);
+		snprintf(buffer, sizeof(buffer), UndoRecPtrFormat,
+				 MakeUndoRecPtr(slot->logno, slot->meta.end));
+		values[6] = CStringGetTextDatum(buffer);
 		if (slot->meta.unlogged.xid == InvalidTransactionId)
-			nulls[6] = true;
-		else
-			values[6] = TransactionIdGetDatum(slot->meta.unlogged.xid);
-		if (slot->pid == InvalidPid)
 			nulls[7] = true;
 		else
-			values[7] = Int32GetDatum((int32) slot->pid);
+			values[7] = TransactionIdGetDatum(slot->meta.unlogged.xid);
+		if (slot->pid == InvalidPid)
+			nulls[8] = true;
+		else
+			values[8] = Int32GetDatum((int32) slot->pid);
 		switch (slot->meta.status)
 		{
 		case UNDO_LOG_STATUS_ACTIVE:
-			values[8] = CStringGetTextDatum("ACTIVE"); break;
+			values[9] = CStringGetTextDatum("ACTIVE"); break;
 		case UNDO_LOG_STATUS_SWITCH_REQUESTED:
-			values[8] = CStringGetTextDatum("SWITCH_REQUESTED"); break;
+			values[9] = CStringGetTextDatum("SWITCH_REQUESTED"); break;
 		case UNDO_LOG_STATUS_FULL:
-			values[8] = CStringGetTextDatum("FULL"); break;
+			values[9] = CStringGetTextDatum("FULL"); break;
 		default:
-			nulls[8] = true;
+			nulls[9] = true;
 		}
 		LWLockRelease(&slot->meta_lock);
 
