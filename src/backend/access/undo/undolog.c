@@ -672,7 +672,7 @@ UndoLogAllocate(UndoLogAllocContext *context,
 
 	/*
 	 * We may need to attach to an undo log, either because this is the first
-	 * time this backend as needed to write to an undo log at all or because
+	 * time this backend has needed to write to an undo log at all or because
 	 * the undo_tablespaces GUC was changed.  When doing that, we'll need
 	 * interlocking against tablespaces being concurrently dropped.
 	 */
@@ -1450,6 +1450,7 @@ CleanUpUndoCheckPointFiles(XLogRecPtr checkPointRedo)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not unlink file \"%s\": %m", path)));
+			elog(DEBUG2, "unlinking unreachable pg_undo file \"%s\"", path);
 		}
 	}
 	FreeDir(dir);
@@ -1620,7 +1621,7 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not open undo checkpoint file \"%s\": %m",
+				 errmsg("could not open pg_undo checkpoint file \"%s\": %m",
 						path)));
 
 	/* Read the active log number range. */
@@ -1787,15 +1788,15 @@ free_undo_log_slot(UndoLogSlot *slot, UndoLogNumber logno)
  * To do that, one of the following approaches must be taken by the calling
  * code:
  *
- * 1.  If the calling code knows that it is attached to this lock or is the
+ * 1.  If the calling code knows that it is attached to this slot or is the
  * recovery process, then there is no way for the slot to be recycled, so it's
  * not necessary to check that the log number hasn't changed.  The slot cannot
  * be recycled while a backend is attached.  It should probably assert that it
  * is attached, however.
  *
  * 2.  All other code should acquire slot->meta_lock before accessing any
- * members, and after doing so, check that the logno hasn't moved.  If it is
- * not, the entire undo log must be assumed to be discarded (as if this
+ * members, and after doing so, check that the logno remains the same.  If it
+ * is not, the entire undo log must be assumed to be discarded (as if this
  * function returned NULL) and the caller must behave accordingly.
  *
  * Return NULL if the undo log has been entirely discarded.  It is an error to
