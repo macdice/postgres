@@ -931,8 +931,13 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 			if (!smgrread(smgr, forkNum, blockNum, (char *) bufBlock))
 			{
-				/* smgr reports that the block has been discarded */
-				/* TODO what do we need to do wit bufHdr? */
+				/*
+				 * smgr reports that the block has been discarded, so we can't
+				 * attempt to read it.
+				 */
+				TerminateBufferIO(bufHdr, false, 0);
+				UnpinBuffer(bufHdr, true);
+
 				return InvalidBuffer;
 			}
 
