@@ -1064,17 +1064,20 @@ UndoLogAdvanceFinal(UndoRecPtr insertion_point, size_t size)
  * relating to one or more whole transactions.  The passed in undo pointer is
  * the address of the oldest data that the caller would like to keep, and the
  * affected undo log is implied by this pointer, ie
- * UndoRecPtrGetLogNo(discard_pointer).
+ * UndoRecPtrGetLogNo(discard_pointer).  Possibly also advance one or both of
+ * the begin and end pointers, when segment boundaries are crossed.
  *
- * The caller asserts that there will be no attempts to access the undo log
- * region being discarded after this moment.  This operation will cause the
- * relevant buffers to be dropped immediately, without writing any data out to
- * disk.  Any attempt to read the buffers (except a partial buffer at the end
- * of this range which will remain) may result in IO errors, because the
- * underlying segment file may have been physically removed.
+ * After this call returns, all buffers that are wholly in the discarded range
+ * will be discarded with DiscardBuffer().  Readers and writers must be
+ * prepared to deal with InvalidBuffer when attempting to read, but already
+ * pinned buffers remain valid but are specially marked to avoid writeback.
+ * This arrangement allows us to avoid more heavy duty interlocking with
+ * backends that may be reading or writing undo contents.
  *
- * Return true if the discard point was updated, and false if nothing was done
- * because the log preceeding the given point was already discarded.
+ * Note that 'begin' trails along behind 'discard', so that we can use a
+ * single WAL record for each discard operation.  The logging occurs after
+ * we've performed filesystem operations to advance 'begin', but before we've
+ * performed shared memory operations that affect concurrent backends.
  */
 bool
 UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
@@ -1096,19 +1099,21 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	slot = find_undo_log_slot(logno, false);
 	if (unlikely(slot == NULL))
 	{
-		/* Already discarded (entirely). */
+		/*
+		 * There is no slot for this undo log number, so it must be entirely
+		 * discarded.
+		 */
 		return false;
 	}
-
-	elog(LOG, "UndoLogDiscard %lx", discard_point);
 
 	/*
 	 * We hold discard_lock for the duration of the operation, so that only
 	 * one backend can discard data in a given undo log at a time.  Normally
 	 * we don't expect any contention except when superusers run
 	 * pg_force_discard_undo(), but extend_undo_log() also acquires it when it
-	 * needs to advance the end point.  We might be able to avoid taking the
-	 * lock if we don't need to move 'begin' or 'end'.
+	 * needs to advance the end point.  (Possible improvement: we might be
+	 * able to avoid taking discard_lock if we don't need to modify 'begin' or
+	 * 'end'.)
 	 */
 	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
 	if (unlikely(slot->logno != logno))
@@ -1146,8 +1151,9 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		old_end < insert + UndoLogSegmentSize)
 	{
 		/*
-		 * We could figure out a better number to recycle to keep up with the
-		 * rate, but for now we don't create more than one spare segment.
+		 * We could figure out a better number of files to recycle to keep up
+		 * with the rate of consumption, but for now we don't create more than
+		 * one spare segment.
 		 */
 		new_end += UndoLogSegmentSize;
 		recycle = 1;
@@ -1291,13 +1297,13 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 			 * full, there is no further use for it.  Normally we'd get around
 			 * to advancing 'begin' and therefore unlink the last files in
 			 * some future call to UndoLogDiscard(), but in this case there
-			 * will be no further calls.  Recurse to finish the job.
+			 * will be no further calls.  Recurse now to finish the job.
 			 */
 			UndoLogDiscard(MakeUndoRecPtr(logno, new_end), xid);
 		}
 		else
 		{
-			/* There are no files left, so it's time to giv eup the slot. */
+			/* There are no files left, so it's time to give up the slot. */
 			free_undo_log_slot(slot, logno);
 		}
 	}
