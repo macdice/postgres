@@ -48,6 +48,7 @@ typedef struct xl_undolog_extend
 typedef struct xl_undolog_discard
 {
 	UndoLogNumber logno;
+	UndoLogOffset begin;
 	UndoLogOffset discard;
 	UndoLogOffset end;
 	TransactionId latestxid;	/* latest xid whose undolog are discarded. */

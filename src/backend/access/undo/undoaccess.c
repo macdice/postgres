@@ -258,20 +258,16 @@ UndoRecordPrepareUpdateNext(UndoRecordInsertContext *context,
 	if (!UndoRecPtrIsValid(xact_urp))
 		return;
 
-	slot = UndoLogGetSlot(UndoRecPtrGetLogNo(xact_urp), false);
-
 	/*
-	 * Acquire the discard lock before reading the undo record so that discard
-	 * worker doesn't remove the record while we are in process of reading it.
+	 * Preliminary check if it's already discarded, to avoid bothering the
+	 * buffer manager if we can.  It could still be discarded after our check,
+	 * but then we'll just get invalid buffers or buffers marked discarded and
+	 * skip doing work later.
 	 */
-	LWLockAcquire(&slot->discard_update_lock, LW_SHARED);
-	/* Check if it is already discarded. */
 	if (UndoRecPtrIsDiscarded(xact_urp))
-	{
-		/* Release lock and return. */
-		LWLockRelease(&slot->discard_update_lock);
 		return;
-	}
+
+	slot = UndoLogGetSlot(UndoRecPtrGetLogNo(xact_urp), false);
 
 	/* Compute the offset of the uur_next in the undo record. */
 	offset = SizeOfUndoRecordHeader +
@@ -285,9 +281,6 @@ UndoRecordPrepareUpdateNext(UndoRecordInsertContext *context,
 	 * actual undo record during update phase.
 	 */
 	context->xact_urec_info[index].next = urecptr;
-
-	/* We can now release the discard lock as we have read the undo record. */
-	LWLockRelease(&slot->discard_update_lock);
 }
 
 /*
@@ -390,6 +383,10 @@ UndoRecordUpdateTransInfo(UndoRecordInsertContext *context, int idx)
 			memcpy(writeptr, sourceptr, can_write);
 			MarkBufferDirty(buffer);
 		}
+else
+{
+elog(LOG, "UndoRecordUpdateTransInfo skipping!");
+}
 
 		/* Update bookkeeping information. */
 		write_bytes -= can_write;

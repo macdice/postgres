@@ -227,11 +227,7 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 			LWLockRelease(&slot->discard_lock);
 
 			if (need_discard)
-			{
-				LWLockAcquire(&slot->discard_update_lock, LW_EXCLUSIVE);
 				UndoLogDiscard(undo_recptr, latest_discardxid);
-				LWLockRelease(&slot->discard_update_lock);
-			}
 
 			break;
 		}

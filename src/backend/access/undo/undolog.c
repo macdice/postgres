@@ -85,9 +85,9 @@ static void attach_undo_log(UndoLogCategory category, Oid tablespace);
 static void detach_current_undo_log(UndoLogCategory category, bool full);
 static void extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end);
 static void undo_log_before_exit(int code, Datum value);
-static void forget_undo_buffers(int logno, UndoLogOffset old_discard,
-								UndoLogOffset new_discard,
-								bool drop_tail);
+static void discard_undo_buffers(int logno, UndoLogOffset old_discard,
+								 UndoLogOffset new_discard,
+								 bool drop_tail);
 static bool choose_undo_tablespace(bool force_detach, Oid *oid);
 
 PG_FUNCTION_INFO_V1(pg_stat_get_undo_logs);
@@ -171,12 +171,8 @@ UndoLogShmemInit(void)
 			UndoLogShared->slots[i].logno = InvalidUndoLogNumber;
 			LWLockInitialize(&UndoLogShared->slots[i].meta_lock,
 							 LWTRANCHE_UNDOLOG);
-			LWLockInitialize(&UndoLogShared->slots[i].extend_lock,
-							 LWTRANCHE_UNDOEXTEND);
 			LWLockInitialize(&UndoLogShared->slots[i].discard_lock,
 							 LWTRANCHE_UNDODISCARD);
-			LWLockInitialize(&UndoLogShared->slots[i].discard_update_lock,
-							 LWTRANCHE_DISCARD_UPDATE);
 		}
 	}
 	else
@@ -522,14 +518,15 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 
 	/*
 	 * UndoLogDiscard() might try to move the end pointer concurrently, so we
-	 * need to acquire extend_lock while we do this.
+	 * need to acquire discard_lock while we do this.  Perhaps in future we
+	 * could have a separate extend lock.
 	 */
-	LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
 
 	if (slot->meta.end >= new_end)
 	{
 		/* The log was already extended by another process; nothing to do. */
-		LWLockRelease(&slot->extend_lock);
+		LWLockRelease(&slot->discard_lock);
 		return;
 	}
 	
@@ -595,7 +592,7 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 		slot->meta.end = end;
 	LWLockRelease(&slot->meta_lock);
 
-	LWLockRelease(&slot->extend_lock);
+	LWLockRelease(&slot->discard_lock);
 }
 
 /*
@@ -1077,20 +1074,24 @@ UndoLogAdvanceFinal(UndoRecPtr insertion_point, size_t size)
  * underlying segment file may have been physically removed.
  *
  * Return true if the discard point was updated, and false if nothing was done
- * because the log precending the given point was already discarded.
+ * because the log preceeding the given point was already discarded.
  */
 bool
 UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 {
 	UndoLogNumber logno = UndoRecPtrGetLogNo(discard_point);
-	UndoLogOffset discard = UndoRecPtrGetOffset(discard_point);
+	UndoLogOffset new_discard = UndoRecPtrGetOffset(discard_point);
+	UndoLogOffset insert;
 	UndoLogOffset old_discard;
-	UndoLogOffset end;
+	UndoLogOffset old_begin;
+	UndoLogOffset new_begin;
+	UndoLogOffset old_end;
+	UndoLogOffset new_end;
+	UndoLogOffset old_offset;
+	UndoLogOffset new_offset;
 	UndoLogSlot *slot;
-	int			segno;
-	int			new_segno;
-	bool		need_to_flush_wal = false;
-	bool		entirely_discarded = false;
+	int			recycle;
+	bool		entirely_discarded;
 
 	slot = find_undo_log_slot(logno, false);
 	if (unlikely(slot == NULL))
@@ -1099,207 +1100,207 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		return false;
 	}
 
+	elog(LOG, "UndoLogDiscard %lx", discard_point);
+
 	/*
-	 * We hold discard_lock for the duration of the operation, so that
-	 * superuser CALL pg_force_discard_undo() and background workers don't try
-	 * to discard in the same undo log at the same time.  Otherwise, we don't
-	 * normally expect contention on this lock.
+	 * We hold discard_lock for the duration of the operation, so that only
+	 * one backend can discard data in a given undo log at a time.  Normally
+	 * we don't expect any contention except when superusers run
+	 * pg_force_discard_undo(), but extend_undo_log() also acquires it when it
+	 * needs to advance the end point.  We might be able to avoid taking the
+	 * lock if we don't need to move 'begin' or 'end'.
 	 */
 	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
-	if (unlikely(slot->logno != logno || discard <= slot->meta.discard))
+	if (unlikely(slot->logno != logno))
 	{
-		/*
-		 * Already discarded entirely and the slot has been recycled, or
-		 * already discarded up to this point.
-		 */
+		/* Already discarded entirely and the slot has been recycled. */
 		LWLockRelease(&slot->discard_lock);
 		return false;
 	}
 
-	/*
-	 * Perform pre-flight checks, and announce the discard operation that is
-	 * in progress in shared memory.
-	 */
 	LWLockAcquire(&slot->meta_lock, LW_SHARED);
-	if (discard > slot->meta.unlogged.insert)
-		elog(ERROR, "cannot move discard point past insert point");
+	old_begin = slot->meta.begin;
 	old_discard = slot->meta.discard;
-	end = slot->meta.end;
-	/* Are we discarding the last remaining data in a log marked as full? */
-	if (slot->meta.status == UNDO_LOG_STATUS_FULL &&
-		discard == slot->meta.unlogged.insert)
-	{
-		/*
-		 * Adjust the discard and insert pointers so that the final segment is
-		 * deleted from disk, and remember not to recycle it.
-		 */
-		entirely_discarded = true;
-		/* TODO: Check if the following line is replayed correctly */
-		slot->meta.unlogged.insert = slot->meta.end;
-		discard = slot->meta.end;
-	}
+	insert = slot->meta.unlogged.insert;
+	old_end = slot->meta.end;
+	entirely_discarded =
+		slot->meta.status == UNDO_LOG_STATUS_FULL && new_discard >= insert;
 	LWLockRelease(&slot->meta_lock);
 
-	/*
-	 * Check if we crossed a segment boundary and need to do some filesystem
-	 * operations.  This affects whether we need to flush the WAL.
-	 */
-	segno = old_discard / UndoLogSegmentSize;
-	new_segno = discard / UndoLogSegmentSize;
-	if (segno < new_segno)
-		need_to_flush_wal = true;
+	/* Sanity checks. */
+	if (unlikely(new_discard > insert))
+		elog(ERROR, "cannot move discard point past insert point");
+	if (unlikely(old_begin > old_discard))
+		elog(ERROR, "undo begin point unexpectedly past discard point");
 
-	/* WAL-log the discard. */
+	/* How far can we advance 'begin'? */
+	new_begin = old_discard - old_discard % UndoLogSegmentSize;
+	Assert(new_begin <= old_discard);
+	Assert(new_begin >= old_begin);
+
+	/* Can we also advance 'end' by renaming one of the old files? */
+	new_end = old_end = slot->meta.end;
+	recycle = 0;
+	if (new_begin > old_begin &&
+		!entirely_discarded &&
+		old_end < insert + UndoLogSegmentSize)
+	{
+		/*
+		 * We could figure out a better number to recycle to keep up with the
+		 * rate, but for now we don't create more than one spare segment.
+		 */
+		new_end += UndoLogSegmentSize;
+		recycle = 1;
+	}
+
+	/* Perform any file system operations. */
+	new_offset = old_end;
+	for (old_offset = old_begin;
+		 old_offset < new_begin;
+		 old_offset += UndoLogSegmentSize)
+	{
+		char old_path[MAXPGPATH];
+
+		/* Tell the checkpointer that the file is going away. */
+		undofile_forget_sync(logno, old_offset / UndoLogSegmentSize,
+							 slot->meta.tablespace);
+
+		UndoLogSegmentPath(logno, old_offset / UndoLogSegmentSize,
+						   slot->meta.tablespace, old_path);
+
+		/* Rename or unlink? */
+		if (recycle > 0)
+		{
+			char new_path[MAXPGPATH];
+
+			UndoLogSegmentPath(logno, new_offset / UndoLogSegmentSize,
+							   slot->meta.tablespace, new_path);
+
+			if (rename(old_path, new_path) == 0)
+			{
+				elog(LOG, "recycled undo segment \"%s\" -> \"%s\"", /* TODO DEBUG1 */
+					 old_path, new_path);
+				--recycle;
+				/* Tell the checkpointer to flush this file. */
+				undofile_request_sync(logno, new_offset / UndoLogSegmentSize,
+									  slot->meta.tablespace);
+				new_offset += UndoLogSegmentSize;
+			}
+			else if (errno != ENOENT)
+			{
+				/*
+				 * Since we log after performing the action, it's possible
+				 * that after crash recovery we could find that it's already
+				 * gone.  Only report other errors.
+				 */
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not rename \"%s\" to \"%s\": %m",
+								old_path, new_path)));
+			}
+		}
+		else
+		{
+			if (unlink(old_path) == 0)
+				elog(LOG, "unlinked undo segment \"%s\"", old_path); /* TODO DEBUG1 */
+			else if (errno != ENOENT)
+			{
+				/* See note above about tolerating ENOENT. */
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not unlink \"%s\": %m",
+								old_path)));
+			}
+		}
+	}
+
+	/*
+	 * If we unlinked or renamed anything, tell the checkpointer to flush the
+	 * containing directory.
+	 */
+	if (new_begin != old_begin)
+		undofile_request_sync_dir(slot->meta.tablespace);
+
+	/*
+	 * Now log the discard operation in the WAL.  We have already performed
+	 * the filesystem operations required to advance 'begin'.  Note that we
+	 * have not done any filesystem operations caused by advancing 'discard'
+	 * yet: that's not safe, because we haven't updated shared memory yet and
+	 * we don't want there to be any attempts to read a file that is gone.
+	 */
 	{
 		xl_undolog_discard xlrec;
-		XLogRecPtr ptr;
 
 		xlrec.logno = logno;
-		xlrec.discard = discard;
-		xlrec.end = end;
+		xlrec.begin = new_begin;
+		xlrec.discard = new_discard;
+		xlrec.end = new_end;
 		xlrec.latestxid = xid;
 		xlrec.entirely_discarded = entirely_discarded;
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfUndologDiscard);
-		ptr = XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_DISCARD);
-
-		if (need_to_flush_wal)
-			XLogFlush(ptr);
+		XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_DISCARD);
 	}
 
 	/*
-	 * Drop all buffers holding this undo data out of the buffer pool (except
-	 * the last one, if the new location is in the middle of it somewhere), so
-	 * that the contained data doesn't ever touch the disk.  The caller
-	 * promises that this data will not be needed again.  We have to drop the
-	 * buffers from the buffer pool before removing files, otherwise a
-	 * concurrent session might try to write the block to evict the buffer.
+	 * We we're discarding the whole log, fast-forward 'discard' right up to
+	 * the end, in preparation for going around again to advance 'begin' and
+	 * thereby remove all files (see end).
 	 */
-	forget_undo_buffers(logno, old_discard, discard, entirely_discarded);
+	if (entirely_discarded)
+		new_discard = new_end;
 
-	/* Perform filesystem operations, if we crossed a segment boundary */
-	if (segno < new_segno)
-	{
-		int		recycle;
-		UndoLogOffset pointer;
+	/*
+	 * Update meta-data in shared memory.  After this is done, undofile_read()
+	 * will begin to return false so that ReadBuffer() functions return
+	 * invalid buffer for buffers before new_discard, so no new buffers in the
+	 * discarded range can enter the buffer pool.
+	 *
+	 * If a concurrent checkpoint begins after the WAL record is logged, but
+	 * before we update shared memory here, then the checkpoint will have the
+	 * non-advanced begin, discard and end points.  That's OK because we only
+	 * removed files relating to the advancing of 'begin', not 'discard', so
+	 * we'll just try to unlink them again and tolerate ENOENT.
+	 */
+	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
+	slot->meta.begin = new_begin;
+	slot->meta.discard = new_discard;
+	slot->meta.end = new_end;
+	LWLockRelease(&slot->meta_lock);
 
-		/*
-		 * While we're deciding whether we can recycle file(s) to extend this
-		 * undo log, we'll hold extend_lock.  This conflicts with
-		 * UndoAllocate(), which also adds new files at the end.  Blocking a
-		 * foreground process is not ideal, but if we recycle files frequently
-		 * enough it shouldn't need to do that often, and when it happens, the
-		 * foreground process is still better waiting for our rename() than
-		 * its own filesystem block allocation system calls.
-		 */
-		LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
-
-		/*
-		 * XXX When we rename or unlink a file, it's possible that some
-		 * backend still has it open because it has recently read a page from
-		 * it.  smgr/undofile.c in any such backend will eventually close it,
-		 * because it considers that fd to belong to the file with the name
-		 * that we're unlinking or renaming and it doesn't like to keep more
-		 * than one open at a time.  No backend should ever try to read from
-		 * such a file descriptor; that is what it means when we say that the
-		 * caller of UndoLogDiscard() asserts that there will be no attempts
-		 * to access the discarded range of undo log.  In the case of a
-		 * rename, if a backend were to attempt to read undo data in the range
-		 * being discarded, it would read entirely the wrong data.
-		 */
-
-		/*
-		 * How many segments should we recycle (= rename from tail position to
-		 * head position)?  For now it's always 1 unless there is already a
-		 * spare one, but we could have an adaptive algorithm that recycles
-		 * multiple segments at a time and pays just one fsync().
-		 */
-		LWLockAcquire(&slot->meta_lock, LW_SHARED);
-		if ((slot->meta.end - slot->meta.unlogged.insert) < UndoLogSegmentSize &&
-			slot->meta.status == UNDO_LOG_STATUS_ACTIVE)
-			recycle = 1;
-		else
-			recycle = 0;
-		LWLockRelease(&slot->meta_lock);
-
-		/* Rewind to the start of the segment. */
-		pointer = segno * UndoLogSegmentSize;
-
-		while (pointer < new_segno * UndoLogSegmentSize)
-		{
-			char	discard_path[MAXPGPATH];
-
-			/* Tell the checkpointer that the file is going away. */
-			undofile_forget_sync(logno, pointer / UndoLogSegmentSize,
-								 slot->meta.tablespace);
-
-			UndoLogSegmentPath(logno, pointer / UndoLogSegmentSize,
-							   slot->meta.tablespace, discard_path);
-
-			/* Can we recycle the oldest segment? */
-			if (recycle > 0)
-			{
-				char	recycle_path[MAXPGPATH];
-
-				/*
-				 * End points one byte past the end of the current undo space,
-				 * ie to the first byte of the segment file we want to create.
-				 */
-				UndoLogSegmentPath(logno, end / UndoLogSegmentSize,
-								   slot->meta.tablespace, recycle_path);
-				if (rename(discard_path, recycle_path) == 0)
-				{
-					elog(DEBUG1, "recycled undo segment \"%s\" -> \"%s\"",
-						 discard_path, recycle_path);
-					end += UndoLogSegmentSize;
-					--recycle;
-				}
-				else
-				{
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not rename \"%s\" to \"%s\": %m",
-									discard_path, recycle_path)));
-				}
-			}
-			else
-			{
-				if (unlink(discard_path) == 0)
-					elog(DEBUG1, "unlinked undo segment \"%s\"", discard_path);
-				else
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not unlink \"%s\": %m",
-									discard_path)));
-			}
-			pointer += UndoLogSegmentSize;
-		}
-
-		/* Update shmem to show the new discard and end pointers. */
-		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
-		slot->meta.discard = discard;
-		slot->meta.end = end;
-		LWLockRelease(&slot->meta_lock);
-
-		LWLockRelease(&slot->extend_lock);
-	}
-	else
-	{
-		/*
-		 * No filesystem work needed.  Just update shmem to show the new
-		 * discard pointer.
-		 */
-		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
-		slot->meta.discard = discard;
-		LWLockRelease(&slot->meta_lock);
-	}
+	/*
+	 * Try to invalidate all existing buffers in the discarded range.  Any
+	 * that can't be invalidated because they are currently pinned will remain
+	 * valid, but have BM_DISCARDED set.  Either way, they can never be
+	 * written back again after this point, so it's safe to unlink the
+	 * underlying files at the next UndoLogDiscard() call that manages to
+	 * advance 'begin'.
+	 */
+	discard_undo_buffers(logno, old_discard, new_discard, entirely_discarded);
 
 	LWLockRelease(&slot->discard_lock);
 
-	/* If we discarded everything, the slot can be given up. */
-	if (entirely_discarded)
-		free_undo_log_slot(slot, logno);
+	/* Handle the case where all data has been discarded. */
+	if (unlikely(entirely_discarded))
+	{
+		if (new_begin < new_end)
+		{
+			/*
+			 * If we discarded the last byte in an undo log that was marked
+			 * full, there is no further use for it.  Normally we'd get around
+			 * to advancing 'begin' and therefore unlink the last files in
+			 * some future call to UndoLogDiscard(), but in this case there
+			 * will be no further calls.  Recurse to finish the job.
+			 */
+			UndoLogDiscard(MakeUndoRecPtr(logno, new_end), xid);
+		}
+		else
+		{
+			/* There are no files left, so it's time to giv eup the slot. */
+			free_undo_log_slot(slot, logno);
+		}
+	}
 
 	return true;
 }
@@ -1756,7 +1757,6 @@ free_undo_log_slot(UndoLogSlot *slot, UndoLogNumber logno)
 	 */
 	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
-	LWLockAcquire(&slot->extend_lock, LW_EXCLUSIVE);
 	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	Assert(slot->logno != InvalidUndoLogNumber);
 	if (slot->logno == logno)
@@ -1765,7 +1765,6 @@ free_undo_log_slot(UndoLogSlot *slot, UndoLogNumber logno)
 		memset(&slot->meta, 0, sizeof(slot->meta));
 	}
 	LWLockRelease(&slot->meta_lock);
-	LWLockRelease(&slot->extend_lock);
 	LWLockRelease(&slot->discard_lock);
 	compute_low_logno();
 	LWLockRelease(UndoLogLock);
@@ -2287,7 +2286,7 @@ DropUndoLogsInTablespace(Oid tablespace)
 		 * it may contain data, or at least be needed again very soon.  Here
 		 * we need to drop even that page from the buffer pool.
 		 */
-		forget_undo_buffers(slot->logno, slot->meta.discard, slot->meta.discard, true);
+		discard_undo_buffers(slot->logno, slot->meta.discard, slot->meta.discard, true);
 
 		/*
 		 * TODO: For now we drop the undo log, meaning that it will never be
@@ -2661,7 +2660,7 @@ undolog_xlog_extend(XLogReaderState *record)
 }
 
 /*
- * Drop all buffers for the given undo log, from the old_discard to up
+ * Drop all buffers for the given undo log, from old_discard up to
  * new_discard.  If drop_tail is true, also drop the buffer that holds
  * new_discard; this is used when discarding undo logs completely, for example
  * via DROP TABLESPACE.  If it is false, then the final buffer is not dropped
@@ -2669,7 +2668,7 @@ undolog_xlog_extend(XLogReaderState *record)
  *
  */
 static void
-forget_undo_buffers(int logno, UndoLogOffset old_discard,
+discard_undo_buffers(int logno, UndoLogOffset old_discard,
 					UndoLogOffset new_discard, bool drop_tail)
 {
 	BlockNumber old_blockno;
@@ -2736,8 +2735,8 @@ undolog_xlog_discard(XLogReaderState *record)
 	LWLockRelease(&slot->meta_lock);
 
 	/* Drop buffers before we remove/recycle any files. */
-	forget_undo_buffers(xlrec->logno, discard, xlrec->discard,
-						xlrec->entirely_discarded);
+	discard_undo_buffers(xlrec->logno, discard, xlrec->discard,
+						 xlrec->entirely_discarded);
 
 	/* Rewind to the start of the segment. */
 	old_segment_begin = discard - discard % UndoLogSegmentSize;

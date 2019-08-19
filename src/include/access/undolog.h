@@ -286,26 +286,12 @@ typedef struct UndoLogAllocContext
  * The in-memory control object for an undo log.  We have a fixed-sized array
  * of these.
  *
- * The following two locks are used to manage the discard process
- * discard_lock - should be acquired for undo read to protect it from discard and
- * discard worker will acquire this lock to update oldest_data.
- *
- * discard_update_lock - This lock will be acquired in exclusive mode by discard
- * worker during the discard process and in shared mode to update the
- * next_urp in previous transaction's start header.
- *
- * Two different locks are used so that the readers are not blocked during the
- * actual discard but only during the update of shared memory variable which
- * influences the visibility decision but the updaters need to be blocked for
- * the entire discard process to ensure proper ordering of WAL records.
- *
  * The following locks protect different aspects of UndoLogSlot objects, and
  * if more than one these is taken they must be taken in the order listed
  * here:
  *
  * * UndoLogLock -- protects undo log freelists, and prevents slot alloc/free
- * * discard_lock -- used to prevent discarding while reading
- * * extend_lock -- used to coordinate background and foreground extension
+ * * discard_lock -- used to prevent concurrent modification of begin and end
  * * meta_lock -- used to update or read the meta object or pid
  */
 typedef struct UndoLogSlot
@@ -325,13 +311,10 @@ typedef struct UndoLogSlot
 	UndoLogMetaData meta;			/* current meta-data */
 	pid_t		pid;				/* InvalidPid for unattached */
 
-	LWLock		extend_lock;		/* allow 'end' to be advanced */
-
 	/* Protected by 'discard_lock'.  State used by undo workers. */
 	FullTransactionId	wait_fxmin;		/* trigger for processing this log again */
 	UndoRecPtr	oldest_data;
-	LWLock		discard_lock;		/* prevents discarding while reading */
-	LWLock      discard_update_lock;    /* block updaters during discard */
+	LWLock		discard_lock;		/* prevents concurrent discarding */
 } UndoLogSlot;
 
 extern UndoLogSlot *UndoLogGetSlot(UndoLogNumber logno, bool missing_ok);
