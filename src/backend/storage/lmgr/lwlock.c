@@ -523,8 +523,7 @@ RegisterLWLockTranches(void)
 	LWLockRegisterTranche(LWTRANCHE_PARALLEL_HASH_JOIN, "parallel_hash_join");
 	LWLockRegisterTranche(LWTRANCHE_SXACT, "serializable_xact");
 	LWLockRegisterTranche(LWTRANCHE_UNDOLOG, "undo_log");
-	LWLockRegisterTranche(LWTRANCHE_UNDODISCARD, "undo_discard");
-	LWLockRegisterTranche(LWTRANCHE_UNDOEXTEND, "undo_extend");
+	LWLockRegisterTranche(LWTRANCHE_UNDOFILE, "undo_file");
 
 	/* Register named tranches. */
 	for (i = 0; i < NamedLWLockTrancheRequests; i++)
