@@ -30,13 +30,13 @@
 #include "utils/resowner.h"
 
 /*
- * Discard as many record sets as we can from the undo log occupying a given
- * slot, considering the given xmin horizon.  If we encounter a record set
- * that needs to be rolled back, register a rollback request.  Set *hibernate
- * to false if work was done.
+ * Discard as many record sets as we can from a given undo log, considering
+ * the given xmin horizon.  If we encounter a record set that needs to be
+ * rolled back, register a rollback request.  Set *hibernate to false if work
+ * was done.  Return the fxid to wait for, before calling again.
  */
-static void
-UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
+static FullTransactionId
+UndoDiscardOneLog(UndoLogNumber logno, TransactionId xmin, bool *hibernate)
 {
 	UndoRecPtr	undo_recptr, next_insert;
 	UndoRecPtr	next_urecptr = InvalidUndoRecPtr;
@@ -44,28 +44,8 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 	bool	need_discard = false;
 	FullTransactionId	undofxid = InvalidFullTransactionId;
 	TransactionId	latest_discardxid = InvalidTransactionId;
-	UndoLogNumber logno;
 
-	/*
-	 * Currently we expect only one discard worker to be active at any time,
-	 * but in future we might have more than one, and superuser maintenance
-	 * functions might also discard data concurrently.  So we we have to
-	 * assume that the given slot could be recycled underneath us any time we
-	 * don't hold one of the locks that prevents that.  We'll detect that by
-	 * the log number changing.
-	 */
-	LWLockAcquire(&slot->discard_lock, LW_SHARED);
-	logno = slot->logno;
-	if (UndoRecPtrIsValid(slot->oldest_data))
-	{
-		undo_recptr = slot->oldest_data;
-		LWLockRelease(&slot->discard_lock);
-	}
-	else
-	{
-		LWLockRelease(&slot->discard_lock);
-		undo_recptr = UndoLogGetOldestRecord(logno, NULL);
-	}
+	undo_recptr = UndoLogGetOldestRecord(logno, NULL);
 
 	/* There might not be any undo log and hibernation might be needed. */
 	*hibernate = true;
@@ -207,25 +187,6 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 				undofxid = InvalidFullTransactionId;
 			}
 
-			/* Update the shared memory state. */
-			LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
-
-			/*
-			 * If the slot has been recycling while we were thinking about it,
-			 * we have to abandon the operation.
-			 */
-			if (slot->logno != logno)
-			{
-				LWLockRelease(&slot->discard_lock);
-				break;
-			}
-
-			/* Update the slot information for the next pass of discard. */
-			slot->wait_fxmin = undofxid;
-			slot->oldest_data = undo_recptr;
-
-			LWLockRelease(&slot->discard_lock);
-
 			if (need_discard)
 				UndoLogDiscard(undo_recptr, latest_discardxid);
 
@@ -246,6 +207,8 @@ UndoDiscardOneLog(UndoLogSlot *slot, TransactionId xmin, bool *hibernate)
 	} while (true);
 
 	CommitTransactionCommand();
+
+	return undofxid;
 }
 
 /*
@@ -350,7 +313,7 @@ UndoLogProcess()
  * oldestXmin
  */
 void
-UndoDiscard(TransactionId oldestXmin, bool *hibernate)
+UndoDiscard(DiscardWorkerState *state, TransactionId oldestXmin, bool *hibernate)
 {
 	FullTransactionId oldestXidHavingUndo;
 	UndoLogSlot *slot = NULL;
@@ -374,6 +337,9 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 	 */
 	while ((slot = UndoLogNextSlot(slot)))
 	{
+		UndoLogNumber	logno;
+		DiscardWaitTableEntry *entry;
+
 		/*
 		 * If the log is already discarded, then we are done.  It is important
 		 * to first check this to ensure that tablespace containing this log
@@ -385,26 +351,52 @@ UndoDiscard(TransactionId oldestXmin, bool *hibernate)
 		 * here, since we don't care about the identity of this slot, we're
 		 * visiting all of them.
 		 */
-		if (slot->meta.discard == slot->meta.unlogged.insert)
+		if (slot->meta.discard == slot->meta.unlogged.insert ||
+			slot->meta.category == UNDO_TEMP)
 		{
 			LWLockRelease(&slot->meta_lock);
 			continue;
 		}
+		logno = slot->logno;
 		LWLockRelease(&slot->meta_lock);
 
-		/* We can't process temporary undo logs. */
-		if (slot->meta.category == UNDO_TEMP)
-			continue;
+		/* See if we already remembered a wait_fxid for this log. */
+		entry = (DiscardWaitTableEntry *) hash_search(state->wait_table,
+													  &logno,
+													  HASH_FIND,
+													  NULL);
 
 		/*
 		 * If the first xid of the undo log is smaller than the xmin then try
 		 * to discard the undo log.
 		 */
-		if (!FullTransactionIdIsValid(slot->wait_fxmin) ||
-			FullTransactionIdPrecedes(slot->wait_fxmin, oldestXidHavingUndo))
+		if (!entry ||
+			FullTransactionIdPrecedes(entry->wait_fxmin, oldestXidHavingUndo))
 		{
+			FullTransactionId wait_fxmin;
+
 			/* Process the undo log. */
-			UndoDiscardOneLog(slot, oldestXmin, hibernate);
+			wait_fxmin = UndoDiscardOneLog(logno, oldestXmin, hibernate);
+
+			if (!FullTransactionIdIsValid(wait_fxmin))
+			{
+				/* Drop the hash table entry, if we had one. */
+				if (entry)
+					hash_search(state->wait_table, &logno, HASH_REMOVE, NULL);
+			}
+			else
+			{
+				/*
+				 * Remember not to bother with this log again until wait_fxmin
+				 * is reached.
+				 */
+				if (!entry)
+					entry = (DiscardWaitTableEntry *) hash_search(state->wait_table,
+																  &logno,
+																  HASH_ENTER,
+																  NULL);
+				entry->wait_fxmin = wait_fxmin;
+			}
 		}
 	}
 
