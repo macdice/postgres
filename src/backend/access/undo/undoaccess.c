@@ -1290,55 +1290,14 @@ UnpackedUndoRecord *
 UndoFetchRecord(UndoRecordFetchContext *context, UndoRecPtr urp)
 {
 	RelFileNode rnode;
-	int			logno;
-	UndoLogSlot *slot;
 	UnpackedUndoRecord *uur = NULL;
 
-	logno = UndoRecPtrGetLogNo(urp);
-	slot = UndoLogGetSlot(logno, true);
-
 	/*
-	 * If slot is NULL that means undo log number is unknown.  Presumably it
-	 * has been entirely discarded.
+	 * Check if it's discarded before we begin.  It might still turn out to be
+	 * discarded later, but we'll detect that.
 	 */
-	if (slot == NULL)
+	if (UndoRecPtrIsDiscarded(urp))
 		return NULL;
-
-	/*
-	 * Prevent UndoDiscardOneLog() from discarding data while we try to read
-	 * it.  Usually we would acquire log->mutex to read log->meta members, but
-	 * in this case we know that discard can't move without also holding
-	 * log->discard_lock.
-	 *
-	 * In Hot Standby mode log->oldest_data is never initialized because it's
-	 * get updated by undo discard worker whereas in HotStandby undo logs are
-	 * getting discarded using discard WAL.  So in HotStandby we can directly
-	 * check whether the undo record pointer is discarded or not.  But, we can
-	 * not do same for normal case because discard worker can concurrently
-	 * discard the undo logs.
-	 *
-	 * XXX We can avoid this check by always initializing log->oldest_data in
-	 * HotStandby mode as well whenever we apply discard WAL.  But, for doing
-	 * that we need to acquire discard lock just for setting this variable?
-	 */
-	if (InHotStandby)
-	{
-		if (UndoRecPtrIsDiscarded(urp))
-			return NULL;
-	}
-	else
-	{
-		LWLockAcquire(&slot->discard_lock, LW_SHARED);
-		if (slot->logno != logno || urp < slot->oldest_data)
-		{
-			/*
-			 * The slot has been recycled because the undo log was entirely
-			 * discarded, or the pointer is before the oldest data.
-			 */
-			LWLockRelease(&slot->discard_lock);
-			return NULL;
-		}
-	}
 
 	/*
 	 * Allocate memory for holding the undo record, caller should be
@@ -1362,11 +1321,8 @@ UndoFetchRecord(UndoRecordFetchContext *context, UndoRecPtr urp)
 	}
 
 	/* Fetch the current undo record. */
-	UndoGetOneRecord(uur, urp, rnode, slot->meta.category, &context->buffer);
-
-	/* Release the discard lock after fetching the record. */
-	if (!InHotStandby)
-		LWLockRelease(&slot->discard_lock);
+	UndoGetOneRecord(uur, urp, rnode, UndoRecPtrGetCategory(urp),
+					 &context->buffer);
 
 	context->urp = urp;
 
@@ -1572,38 +1528,10 @@ UndoBulkFetchRecord(UndoRecPtr *from_urecptr, UndoRecPtr to_urecptr,
 		 * See detail comment in UndoFetchRecord.  In normal mode we are
 		 * holding transaction undo action lock so it can not be discarded.
 		 */
-		if (one_page)
-		{
-			/* Refer comments in UndoFetchRecord. */
-			if (InHotStandby)
-			{
-				if (UndoRecPtrIsDiscarded(urecptr))
-					break;
-			}
-			else
-			{
-				LWLockAcquire(&slot->discard_lock, LW_SHARED);
-				if (slot->logno != logno || urecptr < slot->oldest_data)
-				{
-					/*
-					 * The undo log slot has been recycled because it was
-					 * entirely discarded, or the data has been discarded
-					 * already.
-					 */
-					LWLockRelease(&slot->discard_lock);
-					break;
-				}
-			}
+		if (one_page && UndoRecPtrIsDiscarded(urecptr))
+			break;
 
-			/* Read the undo record. */
-			UndoGetOneRecord(uur, urecptr, rnode, category, &buffer);
-
-			/* Release the discard lock after fetching the record. */
-			if (!InHotStandby)
-				LWLockRelease(&slot->discard_lock);
-		}
-		else
-			UndoGetOneRecord(uur, urecptr, rnode, category, &buffer);
+		UndoGetOneRecord(uur, urecptr, rnode, category, &buffer);
 
 		/*
 		 * As soon as the transaction id is changed we can stop fetching the
