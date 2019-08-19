@@ -98,7 +98,8 @@ typedef uint64 UndoLogOffset;
 #define UndoLogOffsetFormat UINT64_FORMAT
 
 /* Number of blocks of BLCKSZ in an undo log segment file.  128 = 1MB. */
-#define UNDOSEG_SIZE 128
+//#define UNDOSEG_SIZE 128
+#define UNDOSEG_SIZE 2
 
 /* Size of an undo log segment file in bytes. */
 #define UndoLogSegmentSize ((size_t) BLCKSZ * UNDOSEG_SIZE)
@@ -291,15 +292,15 @@ typedef struct UndoLogAllocContext
  * here:
  *
  * * UndoLogLock -- protects undo log freelists, and prevents slot alloc/free
- * * discard_lock -- used to prevent concurrent modification of begin and end
+ * * file_lock -- used to prevent concurrent modification of begin and end
  * * meta_lock -- used to update or read the meta object or pid
  */
 typedef struct UndoLogSlot
 {
 	/*
-	 * Protected by UndoLogLock and 'mutex'.  Both must be held to steal this
-	 * slot for another undolog.  Either may be held to prevent that from
-	 * happening.
+	 * Protected by UndoLogLock, file_lock and meta_lock.  All must be held to
+	 * steal this slot for another undolog.  Any one may be held to prevent
+	 * that from happening.
 	 */
 	UndoLogNumber logno;			/* InvalidUndoLogNumber for unused slots */
 
@@ -311,10 +312,7 @@ typedef struct UndoLogSlot
 	UndoLogMetaData meta;			/* current meta-data */
 	pid_t		pid;				/* InvalidPid for unattached */
 
-	/* Protected by 'discard_lock'.  State used by undo workers. */
-	FullTransactionId	wait_fxmin;		/* trigger for processing this log again */
-	UndoRecPtr	oldest_data;
-	LWLock		discard_lock;		/* prevents concurrent discarding */
+	LWLock		file_lock;			/* prevents concurrent file operations */
 } UndoLogSlot;
 
 extern UndoLogSlot *UndoLogGetSlot(UndoLogNumber logno, bool missing_ok);

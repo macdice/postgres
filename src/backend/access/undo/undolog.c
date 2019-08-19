@@ -171,8 +171,8 @@ UndoLogShmemInit(void)
 			UndoLogShared->slots[i].logno = InvalidUndoLogNumber;
 			LWLockInitialize(&UndoLogShared->slots[i].meta_lock,
 							 LWTRANCHE_UNDOLOG);
-			LWLockInitialize(&UndoLogShared->slots[i].discard_lock,
-							 LWTRANCHE_UNDODISCARD);
+			LWLockInitialize(&UndoLogShared->slots[i].file_lock,
+							 LWTRANCHE_UNDOFILE);
 		}
 	}
 	else
@@ -518,15 +518,14 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 
 	/*
 	 * UndoLogDiscard() might try to move the end pointer concurrently, so we
-	 * need to acquire discard_lock while we do this.  Perhaps in future we
-	 * could have a separate extend lock.
+	 * need to acquire file_lock while we do this.
 	 */
-	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->file_lock, LW_EXCLUSIVE);
 
 	if (slot->meta.end >= new_end)
 	{
-		/* The log was already extended by another process; nothing to do. */
-		LWLockRelease(&slot->discard_lock);
+		/* The log was already extended by UndoLogDiscard(); nothing to do. */
+		LWLockRelease(&slot->file_lock);
 		return;
 	}
 	
@@ -581,18 +580,12 @@ extend_undo_log(UndoLogNumber logno, UndoLogOffset new_end)
 		XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_EXTEND);
 	}
 
-	/*
-	 * XXX It's possible for meta.end to be higher already during
-	 * recovery, because of the timing of a checkpoint; in that case we did
-	 * nothing above and we shouldn't update shmem here.  That interaction
-	 * needs more analysis.
-	 */
+	/* Update shared memory. */
 	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
-	if (slot->meta.end < end)
-		slot->meta.end = end;
+	slot->meta.end = end;
 	LWLockRelease(&slot->meta_lock);
 
-	LWLockRelease(&slot->discard_lock);
+	LWLockRelease(&slot->file_lock);
 }
 
 /*
@@ -1107,19 +1100,21 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	}
 
 	/*
-	 * We hold discard_lock for the duration of the operation, so that only
-	 * one backend can discard data in a given undo log at a time.  Normally
-	 * we don't expect any contention except when superusers run
+	 * We hold file_lock for the duration of the operation, so that only one
+	 * backend can discard data in a given undo log at a time.  Normally we
+	 * don't expect any contention except when superusers run
 	 * pg_force_discard_undo(), but extend_undo_log() also acquires it when it
-	 * needs to advance the end point.  (Possible improvement: we might be
-	 * able to avoid taking discard_lock if we don't need to modify 'begin' or
-	 * 'end'.)
+	 * needs to advance the end point.
+	 *
+	 * As a possible improvement: we should be able to avoid taking
+	 * file_lock if we don't need to modify 'begin' or 'end', with some
+	 * extra precautions.
 	 */
-	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->file_lock, LW_EXCLUSIVE);
 	if (unlikely(slot->logno != logno))
 	{
 		/* Already discarded entirely and the slot has been recycled. */
-		LWLockRelease(&slot->discard_lock);
+		LWLockRelease(&slot->file_lock);
 		return false;
 	}
 
@@ -1133,7 +1128,9 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	LWLockRelease(&slot->meta_lock);
 
 	/* Sanity checks. */
-	if (unlikely(new_discard > insert))
+	if (unlikely(new_discard < old_discard))
+		elog(ERROR, "cannot move discard point backwards");
+	if (unlikely(new_discard > insert && !entirely_discarded))
 		elog(ERROR, "cannot move discard point past insert point");
 	if (unlikely(old_begin > old_discard))
 		elog(ERROR, "undo begin point unexpectedly past discard point");
@@ -1275,6 +1272,8 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	slot->meta.end = new_end;
 	LWLockRelease(&slot->meta_lock);
 
+	LWLockRelease(&slot->file_lock);
+
 	/*
 	 * Try to invalidate all existing buffers in the discarded range.  Any
 	 * that can't be invalidated because they are currently pinned will remain
@@ -1285,13 +1284,13 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	 */
 	discard_undo_buffers(logno, old_discard, new_discard, entirely_discarded);
 
-	LWLockRelease(&slot->discard_lock);
-
 	/* Handle the case where all data has been discarded. */
 	if (unlikely(entirely_discarded))
 	{
+		elog(LOG, "entirely discarded");
 		if (new_begin < new_end)
 		{
+		elog(LOG, "entirely discarded 111");
 			/*
 			 * If we discarded the last byte in an undo log that was marked
 			 * full, there is no further use for it.  Normally we'd get around
@@ -1303,6 +1302,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 		}
 		else
 		{
+		elog(LOG, "entirely discarded 222");
 			/* There are no files left, so it's time to give up the slot. */
 			free_undo_log_slot(slot, logno);
 		}
@@ -1682,7 +1682,7 @@ StartupUndoLogs(XLogRecPtr checkPointRedo)
 		 */
 		slot->logno = slot->meta.logno;
 		slot->pid = InvalidPid;
-		slot->oldest_data = MakeUndoRecPtr(slot->logno, slot->meta.discard);
+		//slot->oldest_data = MakeUndoRecPtr(slot->logno, slot->meta.discard);
 
 		/* If SWITCH_REQUESTED made it to disk, change it back to ACTIVE. */
 		if (slot->meta.status == UNDO_LOG_STATUS_SWITCH_REQUESTED)
@@ -1733,8 +1733,6 @@ allocate_undo_log_slot(void)
 		{
 			memset(&slot->meta, 0, sizeof(slot->meta));
 			slot->pid = 0;
-			slot->wait_fxmin = InvalidFullTransactionId;
-			slot->oldest_data =0;
 			slot->next_free = -1;
 			slot->logno = -1;
 			return slot;
@@ -1757,12 +1755,12 @@ free_undo_log_slot(UndoLogSlot *slot, UndoLogNumber logno)
 
 	/*
 	 * When removing an undo log from a slot in shared memory, we acquire
-	 * UndoLogLock, slot->meta_lock and slot->discard_lock, so that other code
+	 * UndoLogLock, slot->meta_lock and slot->file_lock, so that other code
 	 * can hold any one of those locks to prevent the slot from being
 	 * recycled.
 	 */
 	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
-	LWLockAcquire(&slot->discard_lock, LW_EXCLUSIVE);
+	LWLockAcquire(&slot->file_lock, LW_EXCLUSIVE);
 	LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 	Assert(slot->logno != InvalidUndoLogNumber);
 	if (slot->logno == logno)
@@ -1771,7 +1769,7 @@ free_undo_log_slot(UndoLogSlot *slot, UndoLogNumber logno)
 		memset(&slot->meta, 0, sizeof(slot->meta));
 	}
 	LWLockRelease(&slot->meta_lock);
-	LWLockRelease(&slot->discard_lock);
+	LWLockRelease(&slot->file_lock);
 	compute_low_logno();
 	LWLockRelease(UndoLogLock);
 }
