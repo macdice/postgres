@@ -78,14 +78,7 @@ undoinspect(PG_FUNCTION_ARGS)
 
 	slot = UndoLogGetSlot(logno, false);
 
-	/* Prevent any data from being discarded while we look at it. */
-	LWLockAcquire(&slot->discard_lock, LW_SHARED);
-
-	/*
-	 * We need a consistent snapshot of the range of records and the length of
-	 * the final record.
-	 */
-	LWLockAcquire(&slot->mutex, LW_SHARED);
+	LWLockAcquire(&slot->meta_lock, LW_SHARED);
 	empty = true;
 	if (slot->logno == logno)
 	{
@@ -94,7 +87,7 @@ undoinspect(PG_FUNCTION_ARGS)
 		category = slot->meta.category;
 		oldest_record_ptr = MakeUndoRecPtr(slot->logno, slot->meta.discard);
 	}
-	LWLockRelease(&slot->mutex);
+	LWLockRelease(&slot->meta_lock);
 
 	/* Now walk back record-by-record dumping description data. */
 	if (!empty)
@@ -162,8 +155,6 @@ undoinspect(PG_FUNCTION_ARGS)
 		}
 		pfree(sb.data);
 	}
-
-	LWLockRelease(&slot->discard_lock);
 
 	tuplestore_donestoring(tupstore);
 
