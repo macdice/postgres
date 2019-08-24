@@ -897,6 +897,15 @@ typedef struct GatherMerge
 } GatherMerge;
 
 /* ----------------
+ *		scatter node
+ * ----------------
+ */
+typedef struct Scatter
+{
+	Plan		plan;
+} Scatter;
+
+/* ----------------
  *		hash build node
  *
  * If the executor is supposed to try to apply skew join optimization, then

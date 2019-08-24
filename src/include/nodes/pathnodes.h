@@ -1478,6 +1478,14 @@ typedef struct GatherMergePath
 	int			num_workers;	/* number of workers sought to help */
 } GatherMergePath;
 
+/*
+ * ScatterPath runs one copy of a plan, but distributes its results across
+ * multiple workers.
+ */
+typedef struct ScatterPath
+{
+	Path		path;
+} ScatterPath;
 
 /*
  * All join-type paths share these fields.

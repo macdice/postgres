@@ -31,6 +31,7 @@
 #include "utils/tuplesort.h"
 #include "nodes/tidbitmap.h"
 #include "storage/condition_variable.h"
+#include "storage/shm_mmq.h"
 
 
 struct PlanState;				/* forward references in this file */
@@ -2187,6 +2188,17 @@ typedef struct GatherMergeState
 	struct GMReaderTupleBuffer *gm_tuple_buffers;	/* nreaders tuple buffers */
 	struct binaryheap *gm_heap; /* binary heap of slot indices */
 } GatherMergeState;
+
+/* ----------------
+ * ScatterState information
+ * ----------------
+ */
+ typedef struct ScatterState
+ {
+	PlanState	ps;				/* its first field is NodeTag */
+	size_t		mmq_size;
+	shm_mmq_handle *mmq_handle;
+ } ScatterState;
 
 /* ----------------
  *	 Values displayed by EXPLAIN ANALYZE

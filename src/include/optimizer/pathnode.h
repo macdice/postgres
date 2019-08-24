@@ -91,6 +91,10 @@ extern GatherMergePath *create_gather_merge_path(PlannerInfo *root,
 												 List *pathkeys,
 												 Relids required_outer,
 												 double *rows);
+extern ScatterPath *create_scatter_path(PlannerInfo *root,
+										RelOptInfo *rel, Path *subpath,
+										PathTarget *target,
+										Relids required_outer, double *rows);
 extern SubqueryScanPath *create_subqueryscan_path(PlannerInfo *root,
 												  RelOptInfo *rel, Path *subpath,
 												  List *pathkeys, Relids required_outer);

@@ -1804,6 +1804,24 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	return pathnode;
 }
 
+ScatterPath *
+create_scatter_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
+					PathTarget *target, Relids required_outer, double *rows)
+{
+	ScatterPath *pathnode = makeNode(ScatterPath);
+	Cost		input_startup_cost = subpath->startup_cost;
+	Cost		input_total_cost = subpath->total_cost;
+
+	Assert(subpath->parallel_safe);
+
+	pathnode->path.pathtype = T_Scatter;
+
+	cost_scatter(pathnode, root, rel, pathnode->path.param_info,
+				 input_startup_cost, input_total_cost, rows);
+
+	return pathnode;
+}
+
 /*
  * translate_sub_tlist - get subquery column numbers represented by tlist
  *
