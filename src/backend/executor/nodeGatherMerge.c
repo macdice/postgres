@@ -732,7 +732,11 @@ gm_readnext_tuple(GatherMergeState *gm_state, int nreader, bool nowait,
 	reader = gm_state->reader[nreader - 1];
 	tup = TupleQueueReaderNext(reader, nowait, done);
 
-	return tup;
+	/*
+	 * Since we'll be holding onto these, we need make a copy.  The tuple we
+	 * just read is only valid until the next read.
+	 */
+	return heap_copytuple(tup);
 }
 
 /*

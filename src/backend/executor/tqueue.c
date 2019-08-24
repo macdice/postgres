@@ -43,6 +43,7 @@ typedef struct TQueueDestReceiver
 struct TupleQueueReader
 {
 	shm_mq_handle *queue;		/* shm_mq to receive from */
+	HeapTupleData htup;			/* used for returned tuples */
 };
 
 /*
@@ -140,6 +141,8 @@ CreateTupleQueueReader(shm_mq_handle *handle)
 {
 	TupleQueueReader *reader = palloc0(sizeof(TupleQueueReader));
 
+	ItemPointerSetInvalid(&reader->htup.t_self);
+	reader->htup.t_tableOid = InvalidOid;
 	reader->queue = handle;
 
 	return reader;
@@ -164,9 +167,9 @@ DestroyTupleQueueReader(TupleQueueReader *reader)
  * nowait = true and no tuple is ready to return.  *done, if not NULL,
  * is set to true when there are no remaining tuples and otherwise to false.
  *
- * The returned tuple, if any, is allocated in CurrentMemoryContext.
- * Note that this routine must not leak memory!  (We used to allow that,
- * but not any more.)
+ * The returned tuple, if any, is either in shared memory or a private buffer
+ * and remains valid until the next call.  It should not be freed by the
+ * caller.
  *
  * Even when shm_mq_receive() returns SHM_MQ_WOULD_BLOCK, this can still
  * accumulate bytes from a partially-read message, so it's useful to call
@@ -175,7 +178,6 @@ DestroyTupleQueueReader(TupleQueueReader *reader)
 HeapTuple
 TupleQueueReaderNext(TupleQueueReader *reader, bool nowait, bool *done)
 {
-	HeapTupleData htup;
 	shm_mq_result result;
 	Size		nbytes;
 	void	   *data;
@@ -200,13 +202,11 @@ TupleQueueReaderNext(TupleQueueReader *reader, bool nowait, bool *done)
 	Assert(result == SHM_MQ_SUCCESS);
 
 	/*
-	 * Set up a dummy HeapTupleData pointing to the data from the shm_mq
-	 * (which had better be sufficiently aligned).
+	 * Point our HeapTupleData to the data from the shm_mq (which had better
+	 * be sufficiently aligned).
 	 */
-	ItemPointerSetInvalid(&htup.t_self);
-	htup.t_tableOid = InvalidOid;
-	htup.t_len = nbytes;
-	htup.t_data = data;
+	reader->htup.t_len = nbytes;
+	reader->htup.t_data = data;
 
-	return heap_copytuple(&htup);
+	return &reader->htup;
 }

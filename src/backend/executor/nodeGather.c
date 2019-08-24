@@ -280,7 +280,7 @@ gather_getnext(GatherState *gatherstate)
 			{
 				ExecStoreHeapTuple(tup, /* tuple to store */
 								   fslot,	/* slot to store the tuple */
-								   true);	/* pfree tuple when done with it */
+								   false);	/* don't pfree tuple when done */
 				return fslot;
 			}
 		}
