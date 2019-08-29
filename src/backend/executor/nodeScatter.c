@@ -29,7 +29,7 @@ ExecScatter(PlanState *pstate)
 
 ScatterState *
 ExecInitScatter(Scatter *node, EState *estate, int eflags)
-{
+{   
 	ScatterState *state;
 
 	state = makeNode(ScatterState);
@@ -51,20 +51,17 @@ ExecReScanScatter(ScatterState *node)
 }
 
 void
-ExecScatterEstimate(ScatterState *node,
-					ParallelContext *pcxt)
+ExecScatterEstimate(ScatterState *node, ParallelContext *pcxt)
 {
 	//EState	   *estate = node->ps.state;
 
-	node->mmq_size = shm_mmq_estimate(pcxt->nworkers + 1,
-									  SCATTER_QUEUE_SIZE);
+	node->mmq_size = shm_mmq_estimate(SCATTER_QUEUE_SIZE);
 	shm_toc_estimate_chunk(&pcxt->estimator, node->mmq_size);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 }
 
 void
-ExecScatterInitializeDSM(ScatterState *node,
-						 ParallelContext *pcxt)
+ExecScatterInitializeDSM(ScatterState *node, ParallelContext *pcxt)
 {
 	//EState	   *estate = node->ps.state;
 	shm_mmq	   *mmq;
@@ -72,9 +69,7 @@ ExecScatterInitializeDSM(ScatterState *node,
 	mmq = shm_toc_allocate(pcxt->toc, node->mmq_size);
 	shm_toc_insert(pcxt->toc, node->ps.plan->plan_node_id, mmq);
 
-	node->mmq_handle = shm_mmq_init(mmq,
-									pcxt->nworkers + 1,
-									SCATTER_QUEUE_SIZE);
+	node->mmq_handle = shm_mmq_init(mmq, SCATTER_QUEUE_SIZE);
 }
 
 void
@@ -90,5 +85,5 @@ ExecScatterInitializeWorker(ScatterState *node,
 	shm_mmq *mmq;
 
 	mmq = shm_toc_lookup(pwcxt->toc, node->ps.plan->plan_node_id, false);
-	node->mmq_handle = shm_mmq_attach(mmq, ParallelWorkerNumber + 1);
+	node->mmq_handle = shm_mmq_attach(mmq);
 }

@@ -540,6 +540,13 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		(*set_rel_pathlist_hook) (root, rel, rti, rte);
 
 	/*
+	 * If this is a baserel, we shoudl also consider generating scatter paths
+	 * for it.
+	 */
+	if (rel->reloptkind == RELOPT_BASEREL)
+		generate_scatter_paths(root, rel);
+
+	/*
 	 * If this is a baserel, we should normally consider gathering any partial
 	 * paths we may have created for it.  We have to do this after calling the
 	 * set_rel_pathlist_hook, else it cannot add partial paths to be included
@@ -2725,6 +2732,27 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_rows)
 										subpath->pathkeys, NULL, rowsp);
 		add_path(rel, &path->path);
 	}
+}
+
+/*
+ * generate_scatter_paths
+ *		Generate partial paths for a relation by pushing a Scatter on top of
+ *		a parallel-safe path.
+ */
+void
+generate_scatter_paths(PlannerInfo *root, RelOptInfo *rel)
+{
+	Path	   *cheapest_total;
+	ScatterPath *path;
+
+	elog(LOG, "generate_scatter_paths()");
+	cheapest_total = get_cheapest_parallel_safe_total_inner(rel->pathlist);
+	if (!cheapest_total)
+		return;
+
+	path = create_scatter_path(root, cheapest_total);
+	add_path(rel, &path->path);
+	elog(LOG, "generate_scatter_paths() **added one**");
 }
 
 /*
