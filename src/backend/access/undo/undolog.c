@@ -1138,6 +1138,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	UndoLogOffset old_discard;
 	UndoLogSlot *slot;
 	bool		entirely_discarded;
+	XLogRecPtr	recptr = InvalidXLogRecPtr;
 
 	slot = find_undo_log_slot(logno, false);
 	if (unlikely(slot == NULL))
@@ -1184,7 +1185,7 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfUndologDiscard);
-		XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_DISCARD);
+		recptr = XLogInsert(RM_UNDOLOG_ID, XLOG_UNDOLOG_DISCARD);
 	}
 
 	/*
@@ -1213,13 +1214,26 @@ UndoLogDiscard(UndoRecPtr discard_point, TransactionId xid)
 	discard_undo_buffers(logno, old_discard, new_discard, entirely_discarded);
 
 	/*
-	 * Now that we've discarded all buffers, the buffer manager can't attempt
-	 * to write back any data [TODO: really?  do we need to wait for in
-	 * progress IO to finish?], so it's safe to unlink or move files.  If
-	 * there are any unused, perform expensive filesystem operations.
+	 * Have we crossed a segment file boundary?  If so, we'll need to do some
+	 * filesystem operations.  Now that we've discarded all buffers, the
+	 * buffer manager can't attempt to write back any data [TODO: really?  do
+	 * we need to wait for in progress IO to finish?], so it's safe to unlink
+	 * or move files.  If there are any unused, perform expensive filesystem
+	 * operations.
 	 */
 	if (new_discard / UndoLogSegmentSize > begin / UndoLogSegmentSize)
+	{
+		/*
+		 * If we WAL-logged this discard operation (ie it's not temporary or
+		 * unlogged), we need to flush that WAL record before we unlink any
+		 * files.  This makes sure that we can't have a discard pointer that
+		 * points to a non-existing file, after crash recovery.  (TODO: Is
+		 * this true, in case of PITR?)
+		 */
+		if (!XLogRecPtrIsInvalid(recptr))
+			XLogFlush(recptr);
 		undo_log_adjust_physical_range(logno, new_discard, 0);
+	}
 
 	if (entirely_discarded)
 		free_undo_log_slot(slot, logno);
