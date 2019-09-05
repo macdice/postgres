@@ -57,8 +57,8 @@ typedef struct WALSegmentContext
 
 typedef struct XLogReaderState XLogReaderState;
 
-/* Function type definitions for various xlogreader interactions */
-typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
+/* Function type definition for the read_page callback */
+typedef bool (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen,
 							   XLogRecPtr targetRecPtr,
@@ -175,6 +175,20 @@ struct XLogReaderState
 	XLogRecPtr	ReadRecPtr;		/* start of last record read */
 	XLogRecPtr	EndRecPtr;		/* end+1 of last record read */
 
+	/* ----------------------------------------
+	 * Communication with page reader
+	 * readBuf is XLOG_BLCKSZ bytes, valid up to at least readLen bytes.
+	 *  ----------------------------------------
+	 */
+	/* variables to communicate with page reader */
+	XLogRecPtr	readPagePtr;	/* page pointer to read */
+	int32		readLen;		/* bytes requested to reader, or actual bytes
+								 * read by reader, which must be larger than
+								 * the request, or -1 on error */
+	TimeLineID	readPageTLI;	/* TLI for data currently in readBuf */
+	char	   *readBuf;		/* buffer to store data */
+	bool		page_verified;  /* is the page on the buffer verified? */
+
 
 	/* ----------------------------------------
 	 * Decoded representation of current record
@@ -202,13 +216,6 @@ struct XLogReaderState
 	 * private/internal state
 	 * ----------------------------------------
 	 */
-
-	/*
-	 * Buffer for currently read page (XLOG_BLCKSZ bytes, valid up to at least
-	 * readLen bytes)
-	 */
-	char	   *readBuf;
-	uint32		readLen;
 
 	/* last read XLOG position for data currently in readBuf */
 	WALSegmentContext segcxt;
