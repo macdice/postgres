@@ -920,7 +920,7 @@ static bool InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 						 XLogSource source, bool notfoundOk);
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
-static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
+static bool	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 										bool fetching_ckpt, XLogRecPtr tliRecPtr);
@@ -4375,7 +4375,6 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	XLogRecord *record;
 	XLogPageReadPrivate *private = (XLogPageReadPrivate *) xlogreader->private_data;
 
-	/* Pass through parameters to XLogPageRead */
 	private->fetching_ckpt = fetching_ckpt;
 	private->emode = emode;
 	private->randAccess = (xlogreader->ReadRecPtr == InvalidXLogRecPtr);
@@ -12111,7 +12110,7 @@ CancelBackup(void)
  * XLogPageRead() to try fetching the record from another source, or to
  * sleep and retry.
  */
-static int
+static bool
 XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 			 XLogRecPtr targetRecPtr, char *readBuf)
 {
@@ -12170,7 +12169,8 @@ retry:
 			readLen = 0;
 			readSource = XLOG_FROM_ANY;
 
-			return -1;
+			xlogreader->readLen = -1;
+			return false;
 		}
 	}
 
@@ -12265,7 +12265,8 @@ retry:
 		goto next_record_is_invalid;
 	}
 
-	return readLen;
+	xlogreader->readLen = readLen;
+	return true;
 
 next_record_is_invalid:
 	lastSourceFailed = true;
@@ -12279,8 +12280,9 @@ next_record_is_invalid:
 	/* In standby-mode, keep trying */
 	if (StandbyMode)
 		goto retry;
-	else
-		return -1;
+
+	xlogreader->readLen = -1;
+	return false;
 }
 
 /*
