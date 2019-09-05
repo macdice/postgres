@@ -61,7 +61,7 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 	XLogReaderState *xlogreader;
 	char	   *errormsg;
 
-	xlogreader = XLogReaderAllocate(WalSegSz, datadir, NULL);
+	xlogreader = XLogReaderAllocate(WalSegSz, XLOG_BLCKSZ, datadir, NULL);
 
 	if (xlogreader == NULL)
 		pg_fatal("out of memory");
@@ -121,7 +121,7 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex,
 	char	   *errormsg;
 	XLogRecPtr	endptr;
 
-	xlogreader = XLogReaderAllocate(WalSegSz, datadir, NULL);
+	xlogreader = XLogReaderAllocate(WalSegSz, XLOG_BLCKSZ, datadir, NULL);
 	if (xlogreader == NULL)
 		pg_fatal("out of memory");
 
@@ -181,7 +181,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 			forkptr += SizeOfXLogShortPHD;
 	}
 
-	xlogreader = XLogReaderAllocate(WalSegSz, datadir, NULL);
+	xlogreader = XLogReaderAllocate(WalSegSz, XLOG_BLCKSZ, datadir, NULL);
 	if (xlogreader == NULL)
 		pg_fatal("out of memory");
 

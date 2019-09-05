@@ -151,6 +151,7 @@ struct XLogReaderState
 	 *  ----------------------------------------
 	 */
 	/* variables to communicate with page reader */
+	int			pageSize;		/* size of a page */
 	XLogRecPtr	readPagePtr;	/* page pointer to read */
 	int32		readLen;		/* bytes requested to reader, or actual bytes
 								 * read by reader, which must be larger than
@@ -243,7 +244,7 @@ struct XLogReaderState
 
 /* Get a new XLogReader */
 extern XLogReaderState *XLogReaderAllocate(int wal_segment_size,
-										   const char *waldir,
+										   int page_size, const char *waldir,
 										   WALSegmentCleanupCB cleanup_cb);
 
 /* Free an XLogReader */
