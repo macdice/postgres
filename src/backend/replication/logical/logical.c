@@ -199,11 +199,14 @@ StartupDecodingContext(List *output_plugin_options,
 
 	ctx->slot = slot;
 
-	ctx->reader = XLogReaderAllocate(wal_segment_size, NULL, cleanup_cb);
+	ctx->reader =
+		XLogReaderAllocate(wal_segment_size, XLOG_BLCKSZ, NULL, cleanup_cb);
+
 	if (!ctx->reader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory")));
+	ctx->reader->readBuf = palloc(XLOG_BLCKSZ);
 	ctx->page_read = page_read;
 
 	ctx->reorder = ReorderBufferAllocate();

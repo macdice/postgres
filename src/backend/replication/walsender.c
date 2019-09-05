@@ -579,8 +579,8 @@ StartReplication(StartReplicationCmd *cmd)
 				 errmsg("IDENTIFY_SYSTEM has not been run before START_REPLICATION")));
 
 	/* create xlogreader for physical replication */
-	xlogreader =
-		XLogReaderAllocate(wal_segment_size, NULL, wal_segment_close);
+	xlogreader = XLogReaderAllocate(wal_segment_size, XLOG_BLCKSZ,
+									NULL, wal_segment_close);
 
 	if (!xlogreader)
 		ereport(ERROR,

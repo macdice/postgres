@@ -1330,7 +1330,8 @@ XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 	char	   *errormsg;
 	TimeLineID	save_currtli = ThisTimeLineID;
 
-	xlogreader = XLogReaderAllocate(wal_segment_size, NULL, wal_segment_close);
+	xlogreader = XLogReaderAllocate(wal_segment_size, XLOG_BLCKSZ,
+									NULL, wal_segment_close);
 
 	if (!xlogreader)
 		ereport(ERROR,

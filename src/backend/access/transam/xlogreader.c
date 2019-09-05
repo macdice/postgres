@@ -72,7 +72,7 @@ report_invalid_record(XLogReaderState *state, const char *fmt,...)
  * Returns NULL if the xlogreader couldn't be allocated.
  */
 XLogReaderState *
-XLogReaderAllocate(int wal_segment_size, const char *waldir,
+XLogReaderAllocate(int wal_segment_size, int page_size, const char *waldir,
 				   WALSegmentCleanupCB cleanup_cb)
 {
 	XLogReaderState *state;
@@ -87,6 +87,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 	state->cleanup_cb = cleanup_cb;
 
 	state->max_block_id = -1;
+	state->pageSize = page_size;
 
 	/*
 	 * Permanently allocate readBuf.  We do it this way, rather than just
@@ -95,7 +96,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 	 * isn't guaranteed to have any particular alignment, whereas
 	 * palloc_extended() will provide MAXALIGN'd storage.
 	 */
-	state->readBuf = (char *) palloc_extended(XLOG_BLCKSZ,
+	state->readBuf = (char *) palloc_extended(state->pageSize,
 											  MCXT_ALLOC_NO_OOM);
 	if (!state->readBuf)
 	{
@@ -163,7 +164,7 @@ XLogReaderFree(XLogReaderState *state)
  * readRecordBufSize is set to the new buffer size.
  *
  * To avoid useless small increases, round its size to a multiple of
- * XLOG_BLCKSZ, and make sure it's at least 5*Max(BLCKSZ, XLOG_BLCKSZ) to start
+ * page size, and make sure it's at least 5*Max(BLCKSZ, <page size>) to start
  * with.  (That is enough for all "normal" records, but very large commit or
  * abort records might need more space.)
  */
@@ -172,8 +173,8 @@ allocate_recordbuf(XLogReaderState *state, uint32 reclength)
 {
 	uint32		newSize = reclength;
 
-	newSize += XLOG_BLCKSZ - (newSize % XLOG_BLCKSZ);
-	newSize = Max(newSize, 5 * Max(BLCKSZ, XLOG_BLCKSZ));
+	newSize += state->pageSize - (newSize % state->pageSize);
+	newSize = Max(newSize, 5 * Max(BLCKSZ, state->pageSize));
 
 #ifndef FRONTEND
 
@@ -238,6 +239,8 @@ void
 XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
 {
 	Assert(!XLogRecPtrIsInvalid(RecPtr));
+	Assert(state->readBuf != NULL &&
+		   state->readBuf == (void *) MAXALIGN(state->readBuf));
 
 	ResetDecoder(state);
 
@@ -366,15 +369,15 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 			XLogPageHeader pageHeader;
 
 			targetPagePtr =
-				state->ReadRecPtr - (state->ReadRecPtr % XLOG_BLCKSZ);
-			targetRecOff = state->ReadRecPtr % XLOG_BLCKSZ;
+				state->ReadRecPtr - (state->ReadRecPtr % state->pageSize);
+			targetRecOff = state->ReadRecPtr % state->pageSize;
 
 			/*
 			 * Check if we have enough data. For the first record in the page,
 			 * the requesting length doesn't contain page header.
 			 */
 			if (XLogNeedData(state, targetPagePtr,
-							 Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ),
+							 Min(targetRecOff + SizeOfXLogRecord, state->pageSize),
 							 targetRecOff != 0))
 				return XLREAD_NEED_DATA;
 
@@ -421,7 +424,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 			 * verified that we got the whole header.
 			 */
 			prec = (XLogRecord *) (state->readBuf +
-								   state->ReadRecPtr % XLOG_BLCKSZ);
+								   state->ReadRecPtr % state->pageSize);
 			total_len = prec->xl_tot_len;
 
 			/*
@@ -432,7 +435,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 			 * ensure that we enter the XLREAD_CONTINUATION state below;
 			 * otherwise we might fail to apply ValidXLogRecordHeader at all.
 			 */
-			if (targetRecOff <= XLOG_BLCKSZ - SizeOfXLogRecord)
+			if (targetRecOff <= state->pageSize - SizeOfXLogRecord)
 			{
 				if (!ValidXLogRecordHeader(state, state->ReadRecPtr,
 										   state->PrevRecPtr, prec))
@@ -477,10 +480,10 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 			 * available
 			 */
 			targetPagePtr =
-				state->ReadRecPtr - (state->ReadRecPtr % XLOG_BLCKSZ);
-			targetRecOff = state->ReadRecPtr % XLOG_BLCKSZ;
+				state->ReadRecPtr - (state->ReadRecPtr % state->pageSize);
+			targetRecOff = state->ReadRecPtr % state->pageSize;
 
-			request_len = Min(targetRecOff + total_len, XLOG_BLCKSZ);
+			request_len = Min(targetRecOff + total_len, state->pageSize);
 			record_len = request_len - targetRecOff;
 
 			/* ReadRecPtr contains page header */
@@ -549,7 +552,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 
 			/* Calculate pointer to beginning of next page */
 			state->recordContRecPtr = state->ReadRecPtr + record_len;
-			Assert(state->recordContRecPtr % XLOG_BLCKSZ == 0);
+			Assert(state->recordContRecPtr % state->pageSize == 0);
 
 			state->readRecordState = XLREAD_CONTINUATION;
 		}
@@ -576,7 +579,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 				/* this request contains page header */
 				Assert (targetPagePtr != 0);
 				if (XLogNeedData(state, targetPagePtr,
-								 Min(state->recordRemainLen, XLOG_BLCKSZ),
+								 Min(state->recordRemainLen, state->pageSize),
 								 false))
 					return XLREAD_NEED_DATA;
 
@@ -628,7 +631,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 				Assert(state->readLen >= pageHeaderSize);
 
 				contdata = (char *) state->readBuf + pageHeaderSize;
-				record_len = XLOG_BLCKSZ - pageHeaderSize;
+				record_len = state->pageSize - pageHeaderSize;
 				if (pageHeader->xlp_rem_len < record_len)
 					record_len = pageHeader->xlp_rem_len;
 
@@ -655,7 +658,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 				}
 
 				/* Calculate pointer to beginning of next page, and continue */
-				state->recordContRecPtr += XLOG_BLCKSZ;
+				state->recordContRecPtr += state->pageSize;
 			}
 
 			/* targetPagePtr is pointing the last-read page here */
@@ -789,10 +792,10 @@ XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 				XLogPageHeaderSize((XLogPageHeader) state->readBuf);
 
 			addLen = pageHeaderSize;
-			if (reqLen + pageHeaderSize <= XLOG_BLCKSZ)
+			if (reqLen + pageHeaderSize <= state->pageSize)
 				addLen = pageHeaderSize;
 			else
-				addLen = XLOG_BLCKSZ - reqLen;
+				addLen = state->pageSize - reqLen;
 
 			Assert(addLen >= 0);
 		}
@@ -805,7 +808,7 @@ XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 	/* Data is not in our buffer, request the caller for it. */
 	XLByteToSeg(pageptr, targetSegNo, state->segcxt.ws_segsize);
 	targetPageOff = XLogSegmentOffset(pageptr, state->segcxt.ws_segsize);
-	Assert((pageptr % XLOG_BLCKSZ) == 0);
+	Assert((pageptr % state->pageSize) == 0);
 
 	/*
 	 * Every time we request to load new data of a page to the caller, even if
@@ -829,7 +832,7 @@ XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 		 * will not come back here, but will request the actual target page.
 		 */
 		state->readPagePtr = pageptr - targetPageOff;
-		state->readLen = XLOG_BLCKSZ;
+		state->readLen = state->pageSize;
 		return true;
 	}
 
@@ -962,7 +965,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	int32		offset;
 	XLogPageHeader hdr = (XLogPageHeader) phdr;
 
-	Assert((recptr % XLOG_BLCKSZ) == 0);
+	Assert((recptr % state->pageSize) == 0);
 
 	XLByteToSeg(recptr, segno, state->segcxt.ws_segsize);
 	offset = XLogSegmentOffset(recptr, state->segcxt.ws_segsize);
@@ -1016,10 +1019,10 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 								  "WAL file is from different database system: incorrect segment size in page header");
 			return false;
 		}
-		else if (longhdr->xlp_xlog_blcksz != XLOG_BLCKSZ)
+		else if (longhdr->xlp_xlog_blcksz != state->pageSize)
 		{
 			report_invalid_record(state,
-								  "WAL file is from different database system: incorrect XLOG_BLCKSZ in page header");
+								  "WAL file is from different database system: incorrect block size in page header");
 			return false;
 		}
 	}
@@ -1140,7 +1143,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr,
 		 * XLogNeedData() is prepared to handle that and will read at
 		 * least short page-header worth of data
 		 */
-		targetRecOff = tmpRecPtr % XLOG_BLCKSZ;
+		targetRecOff = tmpRecPtr % state->pageSize;
 
 		/* scroll back to page boundary */
 		targetPagePtr = tmpRecPtr - targetRecOff;
@@ -1174,8 +1177,8 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr,
 			 *
 			 * Note that record headers are MAXALIGN'ed
 			 */
-			if (MAXALIGN(header->xlp_rem_len) >= (XLOG_BLCKSZ - pageHeaderSize))
-				tmpRecPtr = targetPagePtr + XLOG_BLCKSZ;
+			if (MAXALIGN(header->xlp_rem_len) >= (state->pageSize - pageHeaderSize))
+				tmpRecPtr = targetPagePtr + state->pageSize;
 			else
 			{
 				/*
