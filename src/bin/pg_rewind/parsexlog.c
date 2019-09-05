@@ -47,7 +47,7 @@ typedef struct XLogPageReadPrivate
 	int			tliIndex;
 } XLogPageReadPrivate;
 
-static int	SimpleXLogPageRead(XLogReaderState *xlogreader,
+static bool	SimpleXLogPageRead(XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
 
@@ -246,7 +246,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 }
 
 /* XLogReader callback function, to read a WAL page */
-static int
+static bool
 SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 				   int reqLen, XLogRecPtr targetRecPtr, char *readBuf)
 {
@@ -306,7 +306,8 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 			if (private->restoreCommand == NULL)
 			{
 				pg_log_error("could not open file \"%s\": %m", xlogfpath);
-				return -1;
+				xlogreader->readLen = -1;
+				return false;
 			}
 
 			/*
@@ -319,7 +320,10 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 											 private->restoreCommand);
 
 			if (xlogreadfd < 0)
-				return -1;
+			{
+				xlogreader->readLen = -1;
+				return false;
+			}
 			else
 				pg_log_debug("using file \"%s\" restored from archive",
 							 xlogfpath);
@@ -335,7 +339,8 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 	if (lseek(xlogreadfd, (off_t) targetPageOff, SEEK_SET) < 0)
 	{
 		pg_log_error("could not seek in file \"%s\": %m", xlogfpath);
-		return -1;
+		xlogreader->readLen = -1;
+		return false;
 	}
 
 
@@ -348,13 +353,15 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 			pg_log_error("could not read file \"%s\": read %d of %zu",
 						 xlogfpath, r, (Size) XLOG_BLCKSZ);
 
-		return -1;
+		xlogreader->readLen = -1;
+		return false;
 	}
 
 	Assert(targetSegNo == xlogreadsegno);
 
 	xlogreader->seg.ws_tli = targetHistory[private->tliIndex].tli;
-	return XLOG_BLCKSZ;
+	xlogreader->readLen = XLOG_BLCKSZ;
+	return true;
 }
 
 /*

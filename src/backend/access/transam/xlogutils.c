@@ -686,8 +686,8 @@ XLogTruncateRelation(RelFileNode rnode, ForkNumber forkNum,
 void
 XLogReadDetermineTimeline(XLogReaderState *state, XLogRecPtr wantPage, uint32 wantLength)
 {
-	const XLogRecPtr lastReadPage = (state->seg.ws_segno *
-									 state->segcxt.ws_segsize + state->segoff);
+	const XLogRecPtr lastReadPage = state->seg.ws_segno *
+	state->segcxt.ws_segsize + state->readLen;
 
 	Assert(wantPage != InvalidXLogRecPtr && wantPage % XLOG_BLCKSZ == 0);
 	Assert(wantLength <= XLOG_BLCKSZ);
@@ -824,7 +824,7 @@ wal_segment_close(XLogReaderState *state)
  * exists for normal backends, so we have to do a check/sleep/repeat style of
  * loop for now.
  */
-int
+bool
 read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page)
 {
@@ -926,7 +926,8 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	else if (targetPagePtr + reqLen > read_upto)
 	{
 		/* not enough data there */
-		return -1;
+		state->readLen = -1;
+		return false;
 	}
 	else
 	{
@@ -944,7 +945,8 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		WALReadRaiseError(&errinfo);
 
 	/* number of valid bytes in the buffer */
-	return count;
+	state->readLen = count;
+	return true;
 }
 
 /*
