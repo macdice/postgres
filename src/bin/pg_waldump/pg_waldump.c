@@ -1050,7 +1050,7 @@ main(int argc, char **argv)
 
 	/* we have everything we need, start reading */
 	xlogreader_state =
-		XLogReaderAllocate(WalSegSz, waldir, WALDumpCloseSegment);
+		XLogReaderAllocate(WalSegSz, XLOG_BLCKSZ, waldir, WALDumpCloseSegment);
 
 	if (!xlogreader_state)
 		fatal_error("out of memory");

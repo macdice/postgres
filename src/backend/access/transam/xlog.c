@@ -1225,7 +1225,10 @@ XLogInsertRecord(XLogRecData *rdata,
 			appendBinaryStringInfo(&recordBuf, rdata->data, rdata->len);
 
 		if (!debug_reader)
-			debug_reader = XLogReaderAllocate(wal_segment_size, NULL, NULL);
+		{
+			debug_reader =
+				XLogReaderAllocate(wal_segment_size, XLOG_BLCKSZ, NULL, NULL);
+		}
 
 		if (!debug_reader)
 		{
@@ -6611,8 +6614,8 @@ StartupXLOG(void)
 		OwnLatch(&XLogCtl->recoveryWakeupLatch);
 
 	/* Set up XLOG reader facility */
-	xlogreader =
-		XLogReaderAllocate(wal_segment_size, NULL, wal_segment_close);
+	xlogreader = XLogReaderAllocate(wal_segment_size, XLOG_BLCKSZ,
+									NULL, wal_segment_close);
 
 	if (!xlogreader)
 		ereport(ERROR,
