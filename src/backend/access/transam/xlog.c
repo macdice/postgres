@@ -838,13 +838,6 @@ static XLogSource currentSource = XLOG_FROM_ANY;
 static bool lastSourceFailed = false;
 static bool pendingWalRcvRestart = false;
 
-typedef struct XLogPageReadPrivate
-{
-	int			emode;
-	bool		fetching_ckpt;	/* are we fetching a checkpoint record? */
-	bool		randAccess;
-} XLogPageReadPrivate;
-
 /*
  * These variables track when we last obtained some WAL data to process,
  * and where we got it from.  (XLogReceiptSource is initially the same as
@@ -920,8 +913,8 @@ static bool InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 						 XLogSource source, bool notfoundOk);
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
-static bool	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
-						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
+static bool XLogPageRead(XLogReaderState *xlogreader,
+						 bool fetching_ckpt, int emode, bool randAccess);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 										bool fetching_ckpt, XLogRecPtr tliRecPtr);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
@@ -1234,8 +1227,7 @@ XLogInsertRecord(XLogRecData *rdata,
 			appendBinaryStringInfo(&recordBuf, rdata->data, rdata->len);
 
 		if (!debug_reader)
-			debug_reader = XLogReaderAllocate(wal_segment_size, NULL,
-											  XL_ROUTINE(), NULL);
+			debug_reader = XLogReaderAllocate(wal_segment_size, NULL, NULL);
 
 		if (!debug_reader)
 		{
@@ -4369,15 +4361,10 @@ CleanupBackupHistory(void)
  * record is available.
  */
 static XLogRecord *
-ReadRecord(XLogReaderState *xlogreader, int emode,
-		   bool fetching_ckpt)
+ReadRecord(XLogReaderState *xlogreader, int emode, bool fetching_ckpt)
 {
 	XLogRecord *record;
-	XLogPageReadPrivate *private = (XLogPageReadPrivate *) xlogreader->private_data;
-
-	private->fetching_ckpt = fetching_ckpt;
-	private->emode = emode;
-	private->randAccess = (xlogreader->ReadRecPtr == InvalidXLogRecPtr);
+	bool		randAccess = (xlogreader->ReadRecPtr == InvalidXLogRecPtr);
 
 	/* This is the first attempt to read this page. */
 	lastSourceFailed = false;
@@ -4385,8 +4372,16 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	for (;;)
 	{
 		char	   *errormsg;
+		XLogReadRecordResult result;
 
-		record = XLogReadRecord(xlogreader, &errormsg);
+		while ((result = XLogReadRecord(xlogreader, &record, &errormsg))
+			   == XLREAD_NEED_DATA)
+		{
+			if (!XLogPageRead(xlogreader, fetching_ckpt, emode, randAccess))
+				break;
+
+		}
+
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -6456,7 +6451,6 @@ StartupXLOG(void)
 	bool		backupFromStandby = false;
 	DBState		dbstate_at_startup;
 	XLogReaderState *xlogreader;
-	XLogPageReadPrivate private;
 	bool		promoted = false;
 	struct stat st;
 
@@ -6615,13 +6609,9 @@ StartupXLOG(void)
 		OwnLatch(&XLogCtl->recoveryWakeupLatch);
 
 	/* Set up XLOG reader facility */
-	MemSet(&private, 0, sizeof(XLogPageReadPrivate));
 	xlogreader =
-		XLogReaderAllocate(wal_segment_size, NULL,
-						   XL_ROUTINE(.page_read = &XLogPageRead,
-									  .segment_open = NULL,
-									  .segment_close = wal_segment_close),
-						   &private);
+		XLogReaderAllocate(wal_segment_size, NULL, wal_segment_close);
+
 	if (!xlogreader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -12107,12 +12097,13 @@ CancelBackup(void)
  * sleep and retry.
  */
 static bool
-XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
-			 XLogRecPtr targetRecPtr, char *readBuf)
+XLogPageRead(XLogReaderState *xlogreader,
+			 bool fetching_ckpt, int emode, bool randAccess)
 {
-	XLogPageReadPrivate *private =
-	(XLogPageReadPrivate *) xlogreader->private_data;
-	int			emode = private->emode;
+	char *readBuf				= xlogreader->readBuf;
+	XLogRecPtr targetPagePtr	= xlogreader->readPagePtr;
+	int reqLen					= xlogreader->readLen;
+	XLogRecPtr targetRecPtr		= xlogreader->ReadRecPtr;
 	uint32		targetPageOff;
 	XLogSegNo	targetSegNo PG_USED_FOR_ASSERTS_ONLY;
 	int			r;
@@ -12155,8 +12146,8 @@ retry:
 		 flushedUpto < targetPagePtr + reqLen))
 	{
 		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
-										 private->randAccess,
-										 private->fetching_ckpt,
+										 randAccess,
+										 fetching_ckpt,
 										 targetRecPtr))
 		{
 			if (readFile >= 0)
@@ -12261,6 +12252,7 @@ retry:
 		goto next_record_is_invalid;
 	}
 
+	Assert(xlogreader->readPagePtr == targetPagePtr);
 	xlogreader->readLen = readLen;
 	return true;
 
