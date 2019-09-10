@@ -157,6 +157,7 @@ struct XLogReaderState
 								 * read by reader, which must be larger than
 								 * the request, or -1 on error */
 	TimeLineID	readPageTLI;	/* TLI for data currently in readBuf */
+	XLogSegNo	readSegNo;		/* Segment # for data currently in readBuf */
 	char	   *readBuf;		/* buffer to store data */
 	bool		page_verified;	/* is the page header on the buffer verified? */
 	bool		record_verified;	/* is the current record header verified? */
