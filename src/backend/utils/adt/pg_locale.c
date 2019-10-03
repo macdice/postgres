@@ -1551,6 +1551,18 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 #if defined(__GLIBC__)
 		/* Use the glibc version because we don't have anything better. */
 		collversion = pstrdup(gnu_get_libc_version());
+#elif defined(LC_VERSION_MASK)
+		/* FreeBSD exposes the CLDR version. */
+		locale_t loc = newlocale(LC_COLLATE, collcollate, NULL);
+		if (loc)
+		{
+			collversion =
+				pstrdup(querylocale(LC_COLLATE_MASK | LC_VERSION_MASK, loc));
+			freelocale(loc);
+		}
+		else
+			ereport(ERROR,
+					(errmsg("could not load locale \"%s\"", collcollate)));
 #endif
 	}
 
