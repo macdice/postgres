@@ -14,11 +14,13 @@
 #ifndef HASHJOIN_H
 #define HASHJOIN_H
 
+#include "executor/executor.h"
 #include "nodes/execnodes.h"
 #include "port/atomics.h"
 #include "storage/barrier.h"
 #include "storage/buffile.h"
 #include "storage/lwlock.h"
+#include "utils/hashutils.h"
 
 /* ----------------------------------------------------------------
  *				hash-join hash table structures
@@ -339,6 +341,10 @@ typedef struct HashJoinTableData
 	bool	   *hashStrict;		/* is each hash join operator strict? */
 	Oid		   *collations;
 
+	/* Attribute numbers for specialized simple attribute hash functions. */
+	int			inner_attnos[2];
+	int			outer_attnos[2];
+	
 	Size		spaceUsed;		/* memory space currently used by tuples */
 	Size		spaceAllowed;	/* upper limit for space used */
 	Size		spacePeak;		/* peak space used */
@@ -358,5 +364,112 @@ typedef struct HashJoinTableData
 	ParallelHashJoinBatchAccessor *batches;
 	dsa_pointer current_chunk_shared;
 }			HashJoinTableData;
+
+/* Available hash functions specializations. */
+typedef enum HashJoinHashFun
+{
+	HJ_HASH32_FUN_EXPRESSION,
+	HJ_HASH32_FUN_INT4,
+	HJ_HASH32_FUN_INT4_INT4,
+	HJ_HASH32_FUN_INT4_TEXT,
+	HJ_HASH32_FUN_INT8,
+	HJ_HASH32_FUN_INT8_INT4,
+	HJ_HASH32_FUN_VARLENA,
+	HJ_HASH32_FUN_VARLENA_INT4,
+	HJ_HASH32_FUN_VARLENA_VARLENA
+} HashJoinHashFun;
+
+static pg_attribute_always_inline bool
+do_compute_hash(HashJoinHashFun hashfun,
+				HashJoinTable hashtable,
+				ExprContext *econtext,
+				List *hashkeys,
+				bool outer_tuple,
+				bool keep_nulls,
+				TupleTableSlot *slot,
+				uint32 *hashvalue32)
+{
+	int		   *attnos;
+	uint32		hashkey = 0;
+	FmgrInfo   *hashfunctions;
+	ListCell   *hk;
+	int			i = 0;
+	MemoryContext oldContext;
+
+	if (outer_tuple)
+	{
+		attnos = hashtable->outer_attnos;
+		hashfunctions = hashtable->outer_hashfunctions;
+	}
+	else
+	{
+		attnos = hashtable->inner_attnos;
+		hashfunctions = hashtable->inner_hashfunctions;
+	}
+	
+	switch (hashfun)
+	{
+	case HJ_HASH32_FUN_EXPRESSION:
+		ResetExprContext(econtext);
+		oldContext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);		
+		econtext->ecxt_outertuple = slot;
+		foreach (hk, hashkeys)
+		{
+			ExprState  *keyexpr = (ExprState *) lfirst(hk);
+			Datum		keyval;
+			bool		isNull;
+
+			/* rotate hashkey left 1 bit at each step */
+			hashkey = (hashkey << 1) | ((hashkey & 0x80000000) ? 1 : 0);
+
+			/*
+			 * Get the join attribute value of the tuple
+			 */
+			keyval = ExecEvalExpr(keyexpr, econtext, &isNull);
+
+			/*
+			 * If the attribute is NULL, and the join operator is strict, then
+			 * this tuple cannot pass the join qual so we can reject it
+			 * immediately (unless we're scanning the outside of an outer join, in
+			 * which case we must not reject it).  Otherwise we act like the
+			 * hashcode of NULL is zero (this will support operators that act like
+			 * IS NOT DISTINCT, though not any more-random behavior).  We treat
+			 * the hash support function as strict even if the operator is not.
+			 *
+			 * Note: currently, all hashjoinable operators must be strict since
+			 * the hash index AM assumes that.  However, it takes so little extra
+			 * code here to allow non-strict that we may as well do it.
+			 */
+			if (isNull)
+			{
+				if (hashtable->hashStrict[i] && !keep_nulls)
+				{
+					MemoryContextSwitchTo(oldContext);
+					return false;	/* cannot match */
+				}
+				/* else, leave hashkey unmodified, equivalent to hashcode 0 */
+			}
+			else
+			{
+				/* Compute the hash function */
+				uint32		hkey;
+				
+				hkey = DatumGetUInt32(FunctionCall1Coll(&hashfunctions[i], hashtable->collations[i], keyval));
+				hashkey ^= hkey;
+			}
+
+			i++;
+		}
+		MemoryContextSwitchTo(oldContext);
+		
+		*hashvalue32 = hashkey;
+		return true;
+	case HJ_HASH32_FUN_INT4:
+		*hashvalue32 = hash_combine(0, attnos[0]);
+		return true;
+	default:
+		elog(ERROR, "fail");
+	}		
+};
 
 #endif							/* HASHJOIN_H */

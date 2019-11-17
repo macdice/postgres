@@ -813,12 +813,14 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 			 */
 			ExprContext *econtext = hjstate->js.ps.ps_ExprContext;
 
-			econtext->ecxt_outertuple = slot;
-			if (ExecHashGetHashValue(hashtable, econtext,
-									 hjstate->hj_OuterHashKeys,
-									 true,	/* outer tuple */
-									 HJ_FILL_OUTER(hjstate),
-									 hashvalue))
+			if (do_compute_hash(HJ_HASH32_FUN_EXPRESSION,
+								hashtable,
+								econtext,
+								hjstate->hj_OuterHashKeys,
+								true,
+								HJ_FILL_OUTER(hjstate),
+								slot,
+								hashvalue))
 			{
 				/* remember outer relation is not empty for possible rescan */
 				hjstate->hj_OuterNotEmpty = true;
@@ -881,12 +883,14 @@ ExecParallelHashJoinOuterGetTuple(PlanState *outerNode,
 		{
 			ExprContext *econtext = hjstate->js.ps.ps_ExprContext;
 
-			econtext->ecxt_outertuple = slot;
-			if (ExecHashGetHashValue(hashtable, econtext,
-									 hjstate->hj_OuterHashKeys,
-									 true,	/* outer tuple */
-									 HJ_FILL_OUTER(hjstate),
-									 hashvalue))
+			if (do_compute_hash(HJ_HASH32_FUN_EXPRESSION,
+								hashtable,
+								econtext,
+								hjstate->hj_OuterHashKeys,
+								true,
+								hashtable->keepNulls,
+								slot,
+								hashvalue))
 				return slot;
 
 			/*
@@ -1380,12 +1384,14 @@ ExecParallelHashJoinPartitionOuter(HashJoinState *hjstate)
 		slot = ExecProcNode(outerState);
 		if (TupIsNull(slot))
 			break;
-		econtext->ecxt_outertuple = slot;
-		if (ExecHashGetHashValue(hashtable, econtext,
-								 hjstate->hj_OuterHashKeys,
-								 true,	/* outer tuple */
-								 HJ_FILL_OUTER(hjstate),
-								 &hashvalue))
+		if (do_compute_hash(HJ_HASH32_FUN_EXPRESSION,
+							hashtable,
+							econtext,
+							hjstate->hj_OuterHashKeys,
+							true,
+							HJ_FILL_OUTER(hjstate),
+							slot,
+							&hashvalue))
 		{
 			int			batchno;
 			int			bucketno;

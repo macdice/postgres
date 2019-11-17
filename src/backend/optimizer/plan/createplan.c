@@ -21,6 +21,7 @@
 
 #include "access/sysattr.h"
 #include "catalog/pg_class.h"
+#include "executor/hashjoin.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/extensible.h"
@@ -40,6 +41,7 @@
 #include "parser/parse_clause.h"
 #include "parser/parsetree.h"
 #include "partitioning/partprune.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 
 
@@ -4374,6 +4376,59 @@ create_mergejoin_plan(PlannerInfo *root,
 	return join_plan;
 }
 
+static bool
+get_simple_attribute_ref(OpExpr *clause, int *attno)
+{
+	Node	   *node;
+
+	Assert(is_opclause(clause));
+	node = (Node *) linitial(clause->args);
+	if (IsA(node, RelabelType))
+		node = (Node *) ((RelabelType *) node)->arg;
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+
+		*attno = var->varattno;
+		return true;
+	}
+	return false;
+}
+
+/*
+ * Check if a specialization can be used for a simple attribute reference
+ * using a supported hash function.
+ */
+static void
+get_hf_specialization(List *operators,
+					  List *keys,
+					  HashJoinHashFun *hashfunction,
+					  int *attnos)
+{
+	int nkeys = list_length(operators);
+
+	*hashfunction = HJ_HASH32_FUN_EXPRESSION;
+	if (nkeys == 1)
+	{
+		Oid			hashop = list_nth_oid(operators, 0);
+		Oid			left_hashfn;
+		Oid			right_hashfn;
+
+		if (!get_simple_attribute_ref(linitial(keys), attnos))
+			return;
+		if (!get_op_hash_functions(hashop, &left_hashfn, &right_hashfn))
+			elog(ERROR, "could not find hash function for hash operator %u",
+				 hashop);
+		if (left_hashfn != right_hashfn)
+			return;
+		if (left_hashfn == F_HASHINT4)
+			*hashfunction = HJ_HASH32_FUN_INT4;
+		else if (left_hashfn == F_HASHVARLENA)
+			*hashfunction = HJ_HASH32_FUN_VARLENA;
+		elog(LOG, "got hash function = %d", *hashfunction);
+	}
+}
+
 static HashJoin *
 create_hashjoin_plan(PlannerInfo *root,
 					 HashPath *best_path)
@@ -4394,6 +4449,10 @@ create_hashjoin_plan(PlannerInfo *root,
 	AttrNumber	skewColumn = InvalidAttrNumber;
 	bool		skewInherit = false;
 	ListCell   *lc;
+	HashJoinHashFun outer_hashfunction;
+	HashJoinHashFun inner_hashfunction;
+	int outer_attnos[2];
+	int inner_attnos[2];
 
 	/*
 	 * HashJoin can project, so we don't have to demand exact tlists from the
@@ -4503,6 +4562,19 @@ create_hashjoin_plan(PlannerInfo *root,
 		inner_hashkeys = lappend(inner_hashkeys, lsecond(hclause->args));
 	}
 
+	/*
+	 * Check if we can use specializations for the given hash operators and
+	 * keys, or have to use the generic code that can handle any expression.
+	 */
+	get_hf_specialization(hashoperators,
+						  outer_hashkeys,
+						  &outer_hashfunction,
+						  outer_attnos);
+	get_hf_specialization(hashoperators,
+						  inner_hashkeys,
+						  &inner_hashfunction,
+						  inner_attnos);
+	
 	/*
 	 * Build the hash node and hash join node.
 	 */

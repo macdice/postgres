@@ -165,10 +165,14 @@ MultiExecPrivateHash(HashState *node)
 		if (TupIsNull(slot))
 			break;
 		/* We have to compute the hash value */
-		econtext->ecxt_outertuple = slot;
-		if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
-								 false, hashtable->keepNulls,
-								 &hashvalue))
+		if (do_compute_hash(HJ_HASH32_FUN_EXPRESSION,
+							hashtable,
+							econtext,
+							hashkeys,
+							false,
+							hashtable->keepNulls,
+							slot,
+							&hashvalue))
 		{
 			int			bucketNumber;
 
@@ -417,7 +421,6 @@ ExecEndHash(HashState *node)
 	outerPlan = outerPlanState(node);
 	ExecEndNode(outerPlan);
 }
-
 
 /* ----------------------------------------------------------------
  *		ExecHashTableCreate
