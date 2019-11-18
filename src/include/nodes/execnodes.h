@@ -1948,6 +1948,7 @@ typedef struct HashJoinState
 	int			hj_JoinState;
 	bool		hj_MatchedOuter;
 	bool		hj_OuterNotEmpty;
+	HashJoinNullPolicy hj_OuterNullPolicy;
 } HashJoinState;
 
 

@@ -226,10 +226,16 @@ static HashJoin *make_hashjoin(List *tlist,
 							   List *hashclauses,
 							   List *hashoperators, List *hashcollations,
 							   List *hashkeys,
+							   HashJoinHashFunType hashfuntype,
+							   List *attnos,
+							   bool nullable,
 							   Plan *lefttree, Plan *righttree,
 							   JoinType jointype, bool inner_unique);
 static Hash *make_hash(Plan *lefttree,
 					   List *hashkeys,
+					   HashJoinHashFunType hashfuntype,
+					   List *attnos,
+					   bool nullable,
 					   Oid skewTable,
 					   AttrNumber skewColumn,
 					   bool skewInherit);
@@ -4376,20 +4382,29 @@ create_mergejoin_plan(PlannerInfo *root,
 	return join_plan;
 }
 
+/*
+ * Check if a there is a simple attribute ref on a given side, and if so, what
+ * the attribute number is and whether it's know to be not nulll.
+ */
 static bool
-get_simple_attribute_ref(OpExpr *clause, int *attno)
+get_simple_attribute_ref(OpExpr *clause, int side, bool *notnull, List **attnos)
 {
 	Node	   *node;
 
-	Assert(is_opclause(clause));
-	node = (Node *) linitial(clause->args);
+	if (!is_opclause(clause))
+		return false;
+
+	Assert(list_length(clause->args) == 2);
+	Assert(side == 0 || side == 1);
+	node = (Node *) list_nth(clause->args, side);
 	if (IsA(node, RelabelType))
 		node = (Node *) ((RelabelType *) node)->arg;
 	if (IsA(node, Var))
 	{
 		Var		   *var = (Var *) node;
 
-		*attno = var->varattno;
+		*attnos = lappend_int(*attnos, var->varattno);
+		*notnull = false;		/* TODO: go and dig up attnotnull */
 		return true;
 	}
 	return false;
@@ -4397,24 +4412,33 @@ get_simple_attribute_ref(OpExpr *clause, int *attno)
 
 /*
  * Check if a specialization can be used for a simple attribute reference
- * using a supported hash function.
+ * using a supported hash function.  The passed in hashclauses must have the
+ * outer side first, and side should be 0 for outer and 1 for inner.
  */
 static void
-get_hf_specialization(List *operators,
-					  List *keys,
-					  HashJoinHashFun *hashfunction,
-					  int *attnos)
+get_hashfuntype(List *operators,
+				List *hashclauses,
+				int side,
+				HashJoinHashFunType *hashfuntype,
+				bool *notnull,
+				List **attnos)
 {
-	int nkeys = list_length(operators);
+	int nkeys = list_length(hashclauses);
 
-	*hashfunction = HJ_HASH32_FUN_EXPRESSION;
+	/* Defaults in case we exit early */	
+	*hashfuntype = HJ_HASH32_FUN_EXPRESSION;
+	*notnull = false;
+
 	if (nkeys == 1)
 	{
 		Oid			hashop = list_nth_oid(operators, 0);
 		Oid			left_hashfn;
 		Oid			right_hashfn;
 
-		if (!get_simple_attribute_ref(linitial(keys), attnos))
+		if (!get_simple_attribute_ref(linitial(hashclauses),
+									  side,
+									  notnull,
+									  attnos))
 			return;
 		if (!get_op_hash_functions(hashop, &left_hashfn, &right_hashfn))
 			elog(ERROR, "could not find hash function for hash operator %u",
@@ -4422,10 +4446,10 @@ get_hf_specialization(List *operators,
 		if (left_hashfn != right_hashfn)
 			return;
 		if (left_hashfn == F_HASHINT4)
-			*hashfunction = HJ_HASH32_FUN_INT4;
+			*hashfuntype = HJ_HASH32_FUN_INT4;
 		else if (left_hashfn == F_HASHVARLENA)
-			*hashfunction = HJ_HASH32_FUN_VARLENA;
-		elog(LOG, "got hash function = %d", *hashfunction);
+			*hashfuntype = HJ_HASH32_FUN_VARLENA;
+		elog(LOG, "got hash function type = %d", *hashfuntype);
 	}
 }
 
@@ -4449,10 +4473,12 @@ create_hashjoin_plan(PlannerInfo *root,
 	AttrNumber	skewColumn = InvalidAttrNumber;
 	bool		skewInherit = false;
 	ListCell   *lc;
-	HashJoinHashFun outer_hashfunction;
-	HashJoinHashFun inner_hashfunction;
-	int outer_attnos[2];
-	int inner_attnos[2];
+	HashJoinHashFunType outer_hashfuntype;
+	HashJoinHashFunType inner_hashfuntype;
+	List	   *outer_attnos = NIL;
+	List	   *inner_attnos = NIL;
+	bool		outer_notnull;
+	bool		inner_notnull;
 
 	/*
 	 * HashJoin can project, so we don't have to demand exact tlists from the
@@ -4566,20 +4592,27 @@ create_hashjoin_plan(PlannerInfo *root,
 	 * Check if we can use specializations for the given hash operators and
 	 * keys, or have to use the generic code that can handle any expression.
 	 */
-	get_hf_specialization(hashoperators,
-						  outer_hashkeys,
-						  &outer_hashfunction,
-						  outer_attnos);
-	get_hf_specialization(hashoperators,
-						  inner_hashkeys,
-						  &inner_hashfunction,
-						  inner_attnos);
-	
+	get_hashfuntype(hashoperators,
+					hashclauses,
+					0,
+					&outer_hashfuntype,
+					&outer_notnull,
+					&outer_attnos);
+	get_hashfuntype(hashoperators,
+					hashclauses,
+					1,
+					&inner_hashfuntype,
+					&inner_notnull,
+					&inner_attnos);
+
 	/*
 	 * Build the hash node and hash join node.
 	 */
 	hash_plan = make_hash(inner_plan,
 						  inner_hashkeys,
+						  inner_hashfuntype,
+						  inner_attnos,
+						  inner_notnull,
 						  skewTable,
 						  skewColumn,
 						  skewInherit);
@@ -4609,6 +4642,9 @@ create_hashjoin_plan(PlannerInfo *root,
 							  hashoperators,
 							  hashcollations,
 							  outer_hashkeys,
+							  outer_hashfuntype,
+							  outer_attnos,
+							  outer_notnull,
 							  outer_plan,
 							  (Plan *) hash_plan,
 							  best_path->jpath.jointype,
@@ -5653,6 +5689,9 @@ make_hashjoin(List *tlist,
 			  List *hashoperators,
 			  List *hashcollations,
 			  List *hashkeys,
+			  HashJoinHashFunType hashfuntype,
+			  List *attnos,
+			  bool notnull,
 			  Plan *lefttree,
 			  Plan *righttree,
 			  JoinType jointype,
@@ -5669,6 +5708,8 @@ make_hashjoin(List *tlist,
 	node->hashoperators = hashoperators;
 	node->hashcollations = hashcollations;
 	node->hashkeys = hashkeys;
+	node->hashfuntype = hashfuntype;
+	node->notnull = notnull;
 	node->join.jointype = jointype;
 	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
@@ -5679,6 +5720,9 @@ make_hashjoin(List *tlist,
 static Hash *
 make_hash(Plan *lefttree,
 		  List *hashkeys,
+		  HashJoinHashFunType hashfuntype,
+		  List *attnos,
+		  bool notnull,
 		  Oid skewTable,
 		  AttrNumber skewColumn,
 		  bool skewInherit)
@@ -5692,6 +5736,9 @@ make_hash(Plan *lefttree,
 	plan->righttree = NULL;
 
 	node->hashkeys = hashkeys;
+	node->hashfuntype = hashfuntype;
+	node->attnos = attnos;
+	node->notnull = notnull;
 	node->skewTable = skewTable;
 	node->skewColumn = skewColumn;
 	node->skewInherit = skewInherit;

@@ -58,8 +58,6 @@ static void *dense_alloc(HashJoinTable hashtable, Size size);
 static HashJoinTuple ExecParallelHashTupleAlloc(HashJoinTable hashtable,
 												size_t size,
 												dsa_pointer *shared);
-static void MultiExecPrivateHash(HashState *node);
-static void MultiExecParallelHash(HashState *node);
 static inline HashJoinTuple ExecParallelHashFirstTuple(HashJoinTable table,
 													   int bucketno);
 static inline HashJoinTuple ExecParallelHashNextTuple(HashJoinTable table,
@@ -93,6 +91,21 @@ ExecHash(PlanState *pstate)
 	return NULL;
 }
 
+static pg_attribute_always_inline void
+MultiExecPrivateHash(HashState *node,
+					 HashJoinHashFunType hashfuntype,
+					 HashJoinNullPolicy nullpolicy,
+					 bool skew);
+
+static pg_attribute_always_inline void
+MultiExecParallelHash(HashState *node,
+					  HashJoinHashFunType hashfuntype,
+					  HashJoinNullPolicy nullpolicy,
+					  bool skew);
+
+/* Include the machine-generated specialization table */
+#include "nodeHashSpecial.inc"
+
 /* ----------------------------------------------------------------
  *		MultiExecHash
  *
@@ -103,15 +116,28 @@ ExecHash(PlanState *pstate)
 Node *
 MultiExecHash(HashState *node)
 {
+	Hash	   *plan = castNode(Hash, node->ps.plan);
+	HashJoinNullPolicy nullpolicy;
+
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
 		InstrStartNode(node->ps.instrument);
 
-	if (node->parallel_state != NULL)
-		MultiExecParallelHash(node);
+	/* figure out how to handle nulls */
+	if (plan->notnull)
+		nullpolicy = HJ_KEY_NOTNULL;
+	else if (node->hashtable->keepNulls)
+		nullpolicy = HJ_KEY_KEEPNULL;
 	else
-		MultiExecPrivateHash(node);
-
+		nullpolicy = HJ_KEY_DROPNULL;
+	
+	/* invoke the appropriate specialized function */
+	MultiExecHash_specialization_table
+		[node->parallel_state == NULL ? 0 : 1]
+		[plan->hashfuntype]
+		[nullpolicy]
+		[node->hashtable->skewEnabled](node);
+	
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
 		InstrStopNode(node->ps.instrument, node->hashtable->partialTuples);
@@ -133,8 +159,11 @@ MultiExecHash(HashState *node)
  *		hash table and (if necessary) batch files.
  * ----------------------------------------------------------------
  */
-static void
-MultiExecPrivateHash(HashState *node)
+static pg_attribute_always_inline void
+MultiExecPrivateHash(HashState *node,
+					 HashJoinHashFunType hashfuntype,
+					 HashJoinNullPolicy nullpolicy,
+					 bool skew)
 {
 	PlanState  *outerNode;
 	List	   *hashkeys;
@@ -165,19 +194,20 @@ MultiExecPrivateHash(HashState *node)
 		if (TupIsNull(slot))
 			break;
 		/* We have to compute the hash value */
-		if (do_compute_hash(HJ_HASH32_FUN_EXPRESSION,
+		if (do_compute_hash(hashfuntype,
 							hashtable,
 							econtext,
 							hashkeys,
-							false,
-							hashtable->keepNulls,
+							false,					/* outer_tuple */
+							nullpolicy,
 							slot,
 							&hashvalue))
 		{
 			int			bucketNumber;
 
-			bucketNumber = ExecHashGetSkewBucket(hashtable, hashvalue);
-			if (bucketNumber != INVALID_SKEW_BUCKET_NO)
+			if (skew &&
+				((bucketNumber = ExecHashGetSkewBucket(hashtable, hashvalue)) !=
+				 INVALID_SKEW_BUCKET_NO))
 			{
 				/* It's a skew tuple, so put it into that hash table */
 				ExecHashSkewTableInsert(hashtable, slot, hashvalue,
@@ -213,8 +243,11 @@ MultiExecPrivateHash(HashState *node)
  *		a set of co-operating backends.
  * ----------------------------------------------------------------
  */
-static void
-MultiExecParallelHash(HashState *node)
+static pg_attribute_always_inline void
+MultiExecParallelHash(HashState *node,
+					  HashJoinHashFunType hashfuntype,
+					  HashJoinNullPolicy nullpolicy,
+					  bool skew)
 {
 	ParallelHashJoinState *pstate;
 	PlanState  *outerNode;
@@ -286,9 +319,14 @@ MultiExecParallelHash(HashState *node)
 				if (TupIsNull(slot))
 					break;
 				econtext->ecxt_outertuple = slot;
-				if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
-										 false, hashtable->keepNulls,
-										 &hashvalue))
+				if (do_compute_hash(hashfuntype,
+									hashtable,
+									econtext,
+									hashkeys,
+									false,					/* outer_tuple */
+									nullpolicy,
+									slot,
+									&hashvalue))
 					ExecParallelHashTableInsert(hashtable, slot, hashvalue);
 				hashtable->partialTuples++;
 			}
@@ -515,6 +553,11 @@ ExecHashTableCreate(HashState *state, List *hashOperators, List *hashCollations,
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->batches = NULL;
 
+	if (node->attnos != NIL)
+		hashtable->inner_attnos[0] = linitial_int(node->attnos);
+	if (list_length(node->attnos) > 1)
+		hashtable->inner_attnos[1] = lsecond_int(node->attnos);
+	
 #ifdef HJDEBUG
 	printf("Hashjoin %p: initial nbatch = %d, nbuckets = %d\n",
 		   hashtable, nbatch, nbuckets);

@@ -729,6 +729,29 @@ typedef struct MergeJoin
 	bool	   *mergeNullsFirst;	/* per-clause nulls ordering */
 } MergeJoin;
 
+/* TODO: where should this go? */
+
+/* Available hash functions specializations. */
+typedef enum HashJoinHashFunType
+{
+	HJ_HASH32_FUN_EXPRESSION,		/* general expression based keys */
+	HJ_HASH32_FUN_INT4,
+	HJ_HASH32_FUN_INT4_INT4,
+	HJ_HASH32_FUN_INT4_TEXT,
+	HJ_HASH32_FUN_INT8,
+	HJ_HASH32_FUN_INT8_INT4,
+	HJ_HASH32_FUN_VARLENA,
+	HJ_HASH32_FUN_VARLENA_INT4,
+	HJ_HASH32_FUN_VARLENA_VARLENA
+} HashJoinHashFunType;
+
+typedef enum HashJoinNullPolicy
+{
+	HJ_KEY_NOTNULL,					/* skip null checks, attnotnull */
+	HJ_KEY_KEEPNULL,				/* in outer joins, we keep nulls */
+	HJ_KEY_DROPNULL					/* in inner joins, we drop nulls */
+} HashJoinNullPolicy;
+
 /* ----------------
  *		hash join node
  * ----------------
@@ -738,13 +761,16 @@ typedef struct HashJoin
 	Join		join;
 	List	   *hashclauses;
 	List	   *hashoperators;
-	List	   *hashcollations;
+	List	   *hashcollations;	
 
 	/*
 	 * List of expressions to be hashed for tuples from the outer plan, to
 	 * perform lookups in the hashtable over the inner plan.
 	 */
 	List	   *hashkeys;
+	HashJoinHashFunType hashfuntype;
+	List	   *attnos;
+	bool		notnull;
 } HashJoin;
 
 /* ----------------
@@ -913,6 +939,9 @@ typedef struct Hash
 	 * needed to put them into the hashtable.
 	 */
 	List	   *hashkeys;		/* hash keys for the hashjoin condition */
+	HashJoinHashFunType hashfuntype;
+	List	   *attnos;
+	bool		notnull;
 	Oid			skewTable;		/* outer join key's table OID, or InvalidOid */
 	AttrNumber	skewColumn;		/* outer join key's column #, or zero */
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */

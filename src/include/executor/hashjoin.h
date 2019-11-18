@@ -365,27 +365,17 @@ typedef struct HashJoinTableData
 	dsa_pointer current_chunk_shared;
 }			HashJoinTableData;
 
-/* Available hash functions specializations. */
-typedef enum HashJoinHashFun
-{
-	HJ_HASH32_FUN_EXPRESSION,
-	HJ_HASH32_FUN_INT4,
-	HJ_HASH32_FUN_INT4_INT4,
-	HJ_HASH32_FUN_INT4_TEXT,
-	HJ_HASH32_FUN_INT8,
-	HJ_HASH32_FUN_INT8_INT4,
-	HJ_HASH32_FUN_VARLENA,
-	HJ_HASH32_FUN_VARLENA_INT4,
-	HJ_HASH32_FUN_VARLENA_VARLENA
-} HashJoinHashFun;
-
+/*
+ * Compute the hash value.  This is designed to be inlined, so that branches
+ * can be removed in the generated code.
+ */
 static pg_attribute_always_inline bool
-do_compute_hash(HashJoinHashFun hashfun,
+do_compute_hash(HashJoinHashFunType hashfun,
 				HashJoinTable hashtable,
 				ExprContext *econtext,
 				List *hashkeys,
 				bool outer_tuple,
-				bool keep_nulls,
+				HashJoinNullPolicy nullpolicy,
 				TupleTableSlot *slot,
 				uint32 *hashvalue32)
 {
@@ -395,6 +385,8 @@ do_compute_hash(HashJoinHashFun hashfun,
 	ListCell   *hk;
 	int			i = 0;
 	MemoryContext oldContext;
+	bool		isNull;
+	Datum		datum;
 
 	if (outer_tuple)
 	{
@@ -417,10 +409,6 @@ do_compute_hash(HashJoinHashFun hashfun,
 		{
 			ExprState  *keyexpr = (ExprState *) lfirst(hk);
 			Datum		keyval;
-			bool		isNull;
-
-			/* rotate hashkey left 1 bit at each step */
-			hashkey = (hashkey << 1) | ((hashkey & 0x80000000) ? 1 : 0);
 
 			/*
 			 * Get the join attribute value of the tuple
@@ -440,9 +428,9 @@ do_compute_hash(HashJoinHashFun hashfun,
 			 * the hash index AM assumes that.  However, it takes so little extra
 			 * code here to allow non-strict that we may as well do it.
 			 */
-			if (isNull)
+			if (nullpolicy != HJ_KEY_NOTNULL && isNull)
 			{
-				if (hashtable->hashStrict[i] && !keep_nulls)
+				if (hashtable->hashStrict[i] && nullpolicy == HJ_KEY_DROPNULL)
 				{
 					MemoryContextSwitchTo(oldContext);
 					return false;	/* cannot match */
@@ -451,11 +439,10 @@ do_compute_hash(HashJoinHashFun hashfun,
 			}
 			else
 			{
-				/* Compute the hash function */
-				uint32		hkey;
-				
-				hkey = DatumGetUInt32(FunctionCall1Coll(&hashfunctions[i], hashtable->collations[i], keyval));
-				hashkey ^= hkey;
+				hashkey = hash_combine(hashkey,
+									   DatumGetUInt32(FunctionCall1Coll(&hashfunctions[i],
+																		hashtable->collations[i],
+																		keyval)));
 			}
 
 			i++;
@@ -464,8 +451,19 @@ do_compute_hash(HashJoinHashFun hashfun,
 		
 		*hashvalue32 = hashkey;
 		return true;
+
 	case HJ_HASH32_FUN_INT4:
-		*hashvalue32 = hash_combine(0, attnos[0]);
+		elog(LOG, "hash will look at attribute %d", attnos[0]);
+		datum = slot_getattr(slot, attnos[0], &isNull);
+		if (nullpolicy != HJ_KEY_NOTNULL && isNull)
+		{
+			if (nullpolicy == HJ_KEY_DROPNULL)
+				return false;
+			/* else, leave hashkey unmodified, equivalent to hashcode 0 */
+		}
+		else
+			hashkey = hash_combine(0, datum);
+		*hashvalue32 = hashkey;
 		return true;
 	default:
 		elog(ERROR, "fail");

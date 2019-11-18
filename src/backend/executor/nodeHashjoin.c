@@ -672,7 +672,7 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 		case JOIN_LEFT:
 		case JOIN_ANTI:
 			hjstate->hj_NullInnerTupleSlot =
-				ExecInitNullTupleSlot(estate, innerDesc, &TTSOpsVirtual);
+				ExecInitNullTupleSlot(estate, innerDesc, &TTSOpsVirtual);			
 			break;
 		case JOIN_RIGHT:
 			hjstate->hj_NullOuterTupleSlot =
@@ -687,6 +687,19 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 		default:
 			elog(ERROR, "unrecognized join type: %d",
 				 (int) node->join.jointype);
+	}
+
+	/* compute policy for keeping or dropping outer nulls */
+	switch (node->join.jointype)
+	{
+		case JOIN_LEFT:
+		case JOIN_ANTI:
+		case JOIN_FULL:
+			hjstate->hj_OuterNullPolicy = HJ_KEY_KEEPNULL;
+			break;
+		default:
+			hjstate->hj_OuterNullPolicy = HJ_KEY_DROPNULL;
+			break;
 	}
 
 	/*
@@ -817,8 +830,8 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 								hashtable,
 								econtext,
 								hjstate->hj_OuterHashKeys,
-								true,
-								HJ_FILL_OUTER(hjstate),
+								true,						/* outer_tuple */
+								hjstate->hj_OuterNullPolicy,
 								slot,
 								hashvalue))
 			{
@@ -887,8 +900,8 @@ ExecParallelHashJoinOuterGetTuple(PlanState *outerNode,
 								hashtable,
 								econtext,
 								hjstate->hj_OuterHashKeys,
-								true,
-								hashtable->keepNulls,
+								true,					/* outer_tuple */
+								hjstate->hj_OuterNullPolicy,
 								slot,
 								hashvalue))
 				return slot;
@@ -1388,8 +1401,8 @@ ExecParallelHashJoinPartitionOuter(HashJoinState *hjstate)
 							hashtable,
 							econtext,
 							hjstate->hj_OuterHashKeys,
-							true,
-							HJ_FILL_OUTER(hjstate),
+							true,						/* outer_tuple */
+							hjstate->hj_OuterNullPolicy,
 							slot,
 							&hashvalue))
 		{

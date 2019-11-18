@@ -26,6 +26,38 @@ extern Datum hash_any_extended(const unsigned char *k,
 extern Datum hash_uint32(uint32 k);
 extern Datum hash_uint32_extended(uint32 k, uint64 seed);
 
+#define hash_rot(x,k) (((x)<<(k)) | ((x)>>(32-(k))))
+
+#define hash_final(a,b,c) \
+{ \
+  c ^= b; c -= hash_rot(b,14); \
+  a ^= c; a -= hash_rot(c,11); \
+  b ^= a; b -= hash_rot(a,25); \
+  c ^= b; c -= hash_rot(b,16); \
+  a ^= c; a -= hash_rot(c, 4); \
+  b ^= a; b -= hash_rot(a,14); \
+  c ^= b; c -= hash_rot(b,24); \
+}
+
+/*
+ * TODO: This is an inlineable version of hash_uint32, but with a uint32
+ * return value.
+ */
+static inline uint32
+hash_uint32_i(uint32 k)
+{
+	uint32		a,
+				b,
+				c;
+
+	a = b = c = 0x9e3779b9 + (uint32) sizeof(uint32) + 3923095;
+	a += k;
+
+	hash_final(a, b, c);
+
+	return c;
+}
+
 /*
  * Combine two 32-bit hash values, resulting in another hash value, with
  * decent bit mixing.
