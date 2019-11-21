@@ -29,6 +29,8 @@
 #include "miscadmin.h"
 #include "storage/freespace.h"
 #include "storage/smgr.h"
+#include "storage/standby.h"
+#include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -623,6 +625,18 @@ smgr_redo(XLogReaderState *record)
 		BlockNumber	blocks[MAX_FORKNUM];
 		int		nforks = 0;
 		bool		need_fsm_vacuum = false;
+		RelFileNodeBackend rnodeb;
+
+		/*
+		 * Lock and invalidated the relfilenode, to make sure that any
+		 * background reader requests are canceled.
+		 */
+		StandbyAcquireAccessExclusiveLock(XLogRecGetXid(record),
+										  xlrec->rnode.dbNode,
+										  xlrec->rnode.relNode);
+		rnodeb.node = xlrec->rnode;
+		rnodeb.backend = InvalidBackendId;
+		CacheInvalidateSmgr(rnodeb);
 
 		reln = smgropen(xlrec->rnode, InvalidBackendId);
 

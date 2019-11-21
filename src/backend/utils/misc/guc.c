@@ -60,6 +60,7 @@
 #include "parser/scansup.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "postmaster/bgreader.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
@@ -3224,6 +3225,50 @@ static struct config_int ConfigureNamesInt[] =
 		&tcp_user_timeout,
 		0, 0, INT_MAX,
 		NULL, assign_tcp_user_timeout, show_tcp_user_timeout
+	},
+
+	{
+		{"max_background_readers", PGC_POSTMASTER, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Maximum number of background readers."),
+			gettext_noop("A value of 0 disables background reading."),
+			0
+		},
+		&max_background_readers,
+		1, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_background_reader_queue_depth", PGC_POSTMASTER, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Maximum number of queued background reader requests."),
+			gettext_noop("A value of 0 disables background reading."),
+			0
+		},
+		&max_background_reader_queue_depth,
+		10, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"background_reader_idle_timeout",  PGC_POSTMASTER, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Maximum idle time before readers time out."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&background_reader_idle_timeout,
+		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"background_reader_launch_delay",  PGC_POSTMASTER, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Delay to limit the rate at which readers launch."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&background_reader_launch_delay,
+		1000, 0, INT_MAX,
+		NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */

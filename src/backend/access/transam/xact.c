@@ -5788,6 +5788,19 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		ExpireTreeKnownAssignedTransactionIds(
 											  xid, parsed->nsubxacts, parsed->subxacts, max_xid);
 
+		/* Invalidate background reader requests for dropped relfilenodes. */
+		for (int i = 0; i < parsed->nrels; ++i)
+		{
+			RelFileNodeBackend rnodeb;
+
+			StandbyAcquireAccessExclusiveLock(xid,
+											  parsed->xnodes[i].dbNode,
+											  parsed->xnodes[i].relNode);
+			rnodeb.node = parsed->xnodes[i];
+			rnodeb.backend = InvalidBackendId;
+			CacheInvalidateSmgr(rnodeb);
+		}
+
 		/*
 		 * Send any cache invalidations attached to the commit. We must
 		 * maintain the same order of invalidation then release locks as
@@ -5911,9 +5924,18 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 		ExpireTreeKnownAssignedTransactionIds(
 											  xid, parsed->nsubxacts, parsed->subxacts, max_xid);
 
-		/*
-		 * There are no invalidation messages to send or undo.
-		 */
+		/* Invalidate background reader requests for dropped relfilenodes. */
+		for (int i = 0; i < parsed->nrels; ++i)
+		{
+			RelFileNodeBackend rnodeb;
+
+			StandbyAcquireAccessExclusiveLock(xid,
+											  parsed->xnodes[i].dbNode,
+											  parsed->xnodes[i].relNode);
+			rnodeb.node = parsed->xnodes[i];
+			rnodeb.backend = InvalidBackendId;
+			CacheInvalidateSmgr(rnodeb);
+		}
 
 		/*
 		 * Release locks, if any. There are no invalidations to send.

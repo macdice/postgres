@@ -679,6 +679,8 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
  * is OK, because we only use it during XLOG replay.  If in the future we
  * want to use it on temporary or unlogged relations, we could pass additional
  * parameters.
+ *
+ * TODO: fixme, bgreader uses this too, for permanent and unlogged
  */
 Buffer
 ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
@@ -688,8 +690,6 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 	bool		hit;
 
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
-
-	Assert(InRecovery);
 
 	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
 							 mode, strategy, &hit);

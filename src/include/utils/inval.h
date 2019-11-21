@@ -21,6 +21,7 @@
 
 typedef void (*SyscacheCallbackFunction) (Datum arg, int cacheid, uint32 hashvalue);
 typedef void (*RelcacheCallbackFunction) (Datum arg, Oid relid);
+typedef void (*SmgrInvalCallbackFunction) (Datum arg, RelFileNode rnode);
 
 
 extern void AcceptInvalidationMessages(void);
@@ -57,6 +58,9 @@ extern void CacheRegisterSyscacheCallback(int cacheid,
 
 extern void CacheRegisterRelcacheCallback(RelcacheCallbackFunction func,
 										  Datum arg);
+
+extern void CacheRegisterSmgrInvalCallback(SmgrInvalCallbackFunction func,
+										   Datum arg);
 
 extern void CallSyscacheCallbacks(int cacheid, uint32 hashvalue);
 

@@ -3641,6 +3641,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_AUTOVACUUM_MAIN:
 			event_name = "AutoVacuumMain";
 			break;
+		case WAIT_EVENT_BGREADER_MAIN:
+			event_name = "BgReaderMain";
+			break;
 		case WAIT_EVENT_BGWRITER_HIBERNATE:
 			event_name = "BgWriterHibernate";
 			break;

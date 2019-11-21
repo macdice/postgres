@@ -189,6 +189,7 @@ static int	maxSharedInvalidMessagesArray;
 
 #define MAX_SYSCACHE_CALLBACKS 64
 #define MAX_RELCACHE_CALLBACKS 10
+#define MAX_SMGRINVAL_CALLBACKS 10
 
 static struct SYSCACHECALLBACK
 {
@@ -209,6 +210,14 @@ static struct RELCACHECALLBACK
 }			relcache_callback_list[MAX_RELCACHE_CALLBACKS];
 
 static int	relcache_callback_count = 0;
+
+static struct SMGRINVALCALLBACK
+{
+	SmgrInvalCallbackFunction function;
+	Datum		arg;
+}			smgr_inval_callback_list[MAX_SMGRINVAL_CALLBACKS];
+
+static int	smgr_inval_callback_count = 0;
 
 /* ----------------------------------------------------------------
  *				Invalidation list support functions
@@ -607,6 +616,13 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 		rnode.node = msg->sm.rnode;
 		rnode.backend = (msg->sm.backend_hi << 16) | (int) msg->sm.backend_lo;
 		smgrclosenode(rnode);
+
+		for (int i = 0; i < smgr_inval_callback_count; i++)
+		{
+			struct SMGRINVALCALLBACK *entry = &smgr_inval_callback_list[i];
+
+			entry->function(entry->arg, msg->sm.rnode);
+		}
 	}
 	else if (msg->id == SHAREDINVALRELMAP_ID)
 	{
@@ -1475,6 +1491,22 @@ CacheRegisterRelcacheCallback(RelcacheCallbackFunction func,
 	relcache_callback_list[relcache_callback_count].arg = arg;
 
 	++relcache_callback_count;
+}
+
+/*
+ * CacheRegisterSmgrInvalCallback
+ *		Register a function to be called for future SMGR invalidations.
+ */
+void
+CacheRegisterSmgrInvalCallback(SmgrInvalCallbackFunction func, Datum arg)
+{
+	if (smgr_inval_callback_count >= MAX_SMGRINVAL_CALLBACKS)
+		elog(FATAL, "out of smgr_inval_callback_list slots");
+
+	smgr_inval_callback_list[smgr_inval_callback_count].function = func;
+	smgr_inval_callback_list[smgr_inval_callback_count].arg = arg;
+
+	++smgr_inval_callback_count;
 }
 
 /*
