@@ -22,6 +22,7 @@
 #include "postmaster/bgreader.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/walreader.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
 #include "storage/dsm.h"
@@ -133,6 +134,9 @@ static const struct
 	},
 	{
 		"BackgroundReaderMain", BackgroundReaderMain
+	},
+	{
+		"WalReaderMain", WalReaderMain
 	}
 };
 

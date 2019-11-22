@@ -131,6 +131,16 @@ struct XLogReaderState
 	XLogRecPtr	ReadRecPtr;		/* start of last record read */
 	XLogRecPtr	EndRecPtr;		/* end+1 of last record read */
 
+	/*
+	 * Some XLogPageReadCB implementations may support waiting for WAL data to
+	 * be accessed before it is flushed.  Durability may be set to a lower
+	 * level to request that.
+	 */
+	enum
+	{
+		XLOGREADER_FLUSH,
+		XLOGREADER_WRITE
+	} durability;
 
 	/* ----------------------------------------
 	 * Decoded representation of current record

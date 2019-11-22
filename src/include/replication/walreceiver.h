@@ -18,6 +18,7 @@
 #include "pgtime.h"
 #include "replication/logicalproto.h"
 #include "replication/walsender.h"
+#include "storage/condition_variable.h"
 #include "storage/latch.h"
 #include "storage/spin.h"
 #include "utils/tuplestore.h"
@@ -81,6 +82,14 @@ typedef struct
 	 */
 	XLogRecPtr	receivedUpto;
 	TimeLineID	receivedTLI;
+
+	/*
+	 * Similar to receivedUpto, but advancing when WAL is written but not yet
+	 * crash safe.  We'll broadcast to anyone interested in the CV when it
+	 * advances.
+	 */
+	XLogRecPtr	writtenUpto;
+	ConditionVariable writtenUptoAdvanced;
 
 	/*
 	 * latestChunkStart is the starting byte position of the current "batch"
@@ -312,6 +321,8 @@ extern bool WalRcvRunning(void);
 extern void RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr,
 								 const char *conninfo, const char *slotname);
 extern XLogRecPtr GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI);
+extern XLogRecPtr GetWalRcvWriteRecPtr2(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI);
+extern XLogRecPtr WaitForWalRcvWrite(XLogRecPtr recptr, int wait_event);
 extern int	GetReplicationApplyDelay(void);
 extern int	GetReplicationTransferLatency(void);
 extern void WalRcvForceReply(void);

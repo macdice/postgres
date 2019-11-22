@@ -45,8 +45,10 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "postmaster/bgreader.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
+#include "postmaster/walreader.h"
 #include "postmaster/walwriter.h"
 #include "replication/basebackup.h"
 #include "replication/logical.h"
@@ -7001,6 +7003,8 @@ StartupXLOG(void)
 		{
 			PublishStartupProcessInformation();
 			EnableSyncRequestForwarding();
+			if (max_background_readers > 0)
+				StartWalReader();
 			SendPostmasterSignal(PMSIGNAL_RECOVERY_STARTED);
 			bgwriterLaunched = true;
 		}

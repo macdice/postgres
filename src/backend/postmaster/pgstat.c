@@ -3671,6 +3671,15 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_SYSLOGGER_MAIN:
 			event_name = "SysLoggerMain";
 			break;
+		case WAIT_EVENT_WAL_READER_WAIT_FOR_BGREADER:
+			event_name = "WalReaderWaitForBgReader";
+			break;
+		case WAIT_EVENT_WAL_READER_WAIT_FOR_REPLAY:
+			event_name = "WalReaderWaitForReplay";
+			break;
+		case WAIT_EVENT_WAL_READER_WAIT_FOR_WAL:
+			event_name = "WalReaderWaitForWal";
+			break;
 		case WAIT_EVENT_WAL_RECEIVER_MAIN:
 			event_name = "WalReceiverMain";
 			break;

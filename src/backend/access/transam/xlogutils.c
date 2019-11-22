@@ -25,6 +25,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "replication/walreceiver.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -836,10 +837,25 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		 * notices recovery finishes, so we only have to maintain it for the
 		 * local process until recovery ends.
 		 */
-		if (!RecoveryInProgress())
-			read_upto = GetFlushRecPtr();
+		if (state->durability == XLOGREADER_FLUSH)
+		{
+			if (!RecoveryInProgress())
+				read_upto = GetFlushRecPtr();
+			else
+				read_upto = GetXLogReplayRecPtr(&ThisTimeLineID);
+		}
+		else if (state->durability == XLOGREADER_WRITE)
+		{
+			/*
+			 * XXX This is all a bit hacky; there should possibly be a better
+			 * centralised tracking of available WAL, instead of asking the
+			 * wal receiver module like this
+			 */
+			read_upto = GetWalRcvWriteRecPtr2(NULL, &ThisTimeLineID);
+		}
 		else
-			read_upto = GetXLogReplayRecPtr(&ThisTimeLineID);
+			elog(ERROR, "unknown XLog reader durability level");
+
 		tli = ThisTimeLineID;
 
 		/*
@@ -874,8 +890,24 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 			if (loc <= read_upto)
 				break;
 
-			CHECK_FOR_INTERRUPTS();
-			pg_usleep(1000L);
+			/*
+			 * XXX Come up with a better way to manage these waits without
+			 * having to know about wal receiver interfaces here
+			 */
+			if (state->durability == XLOGREADER_WRITE)
+			{
+				/* Wait for available data to advance. */
+				WaitForWalRcvWrite(read_upto, 0); /* TODO wait event */
+			}
+			else
+			{
+				/*
+				 * XXX also replace this preexisting cruft with decent
+				 * CV-based signalling
+				 */
+				CHECK_FOR_INTERRUPTS();
+				pg_usleep(1000L);
+			}
 		}
 		else
 		{

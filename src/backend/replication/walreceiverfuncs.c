@@ -64,6 +64,7 @@ WalRcvShmemInit(void)
 		WalRcv->walRcvState = WALRCV_STOPPED;
 		SpinLockInit(&WalRcv->mutex);
 		WalRcv->latch = NULL;
+		ConditionVariableInit(&WalRcv->writtenUptoAdvanced);
 	}
 }
 
@@ -308,6 +309,57 @@ GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
 	SpinLockRelease(&walrcv->mutex);
 
 	return recptr;
+}
+
+/*
+ * XXX Actually, GetWalRcvWriteRecPtr() returns the *flush* position (but
+ * internally calls it "received").  This one really returns the write
+ * position.  Need to fix this terminology soup.
+ */
+XLogRecPtr
+GetWalRcvWriteRecPtr2(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
+{
+	WalRcvData *walrcv = WalRcv;
+	XLogRecPtr	recptr;
+
+	SpinLockAcquire(&walrcv->mutex);
+	recptr = walrcv->writtenUpto;
+	if (latestChunkStart)
+		*latestChunkStart = walrcv->latestChunkStart;
+	if (receiveTLI)
+		*receiveTLI = walrcv->receivedTLI;
+	SpinLockRelease(&walrcv->mutex);
+
+	return recptr;
+}
+
+/*
+ * Wait for WAL to be written at or beyond the given location, and return a
+ * location one byte past the end.  Note that this doesn't wait for WAL to be
+ * flushed, so any WAL data read in the region indicated might later be lost
+ * in a crash.
+ *
+ * XXX several other functions use the words "receive" and "write" very
+ * imprecisely, they all mean "flush", but here I really truly mean "write"
+ */
+XLogRecPtr
+WaitForWalRcvWrite(XLogRecPtr recptr, int wait_event)
+{
+	XLogRecPtr result;
+
+	ConditionVariablePrepareToSleep(&WalRcv->writtenUptoAdvanced);
+	for (;;)
+	{
+		SpinLockAcquire(&WalRcv->mutex);
+		result = WalRcv->writtenUpto;
+		SpinLockRelease(&WalRcv->mutex);
+		if (result > recptr)
+			break;
+		ConditionVariableSleep(&WalRcv->writtenUptoAdvanced, wait_event);
+	}
+	ConditionVariableCancelSleep();
+
+	return result;
 }
 
 /*

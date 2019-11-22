@@ -103,6 +103,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 					   waldir);
 
 	state->read_page = pagereadfunc;
+	state->durability = XLOGREADER_FLUSH;
 	/* system_identifier initialized to zeroes above */
 	state->private_data = private_data;
 	/* ReadRecPtr, EndRecPtr and readLen initialized to zeroes above */

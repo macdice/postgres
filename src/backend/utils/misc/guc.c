@@ -65,6 +65,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
+#include "postmaster/walreader.h"
 #include "postmaster/walwriter.h"
 #include "replication/logicallauncher.h"
 #include "replication/reorderbuffer.h"
@@ -3268,6 +3269,28 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&background_reader_launch_delay,
 		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_wal_prefetch_distance", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("How far the WAL prefetcher should read ahead, compared to recovery."),
+			NULL,
+			GUC_UNIT_BYTE
+		},
+		&max_wal_prefetch_distance,
+		8 * 1024, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"min_wal_prefetch_distance", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Disables the WAL prefetcher if it is unable to get at least this far ahead of recovery."),
+			NULL,
+			GUC_UNIT_BYTE
+		},
+		&min_wal_prefetch_distance,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

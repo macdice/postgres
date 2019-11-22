@@ -976,6 +976,17 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 		buf += byteswritten;
 
 		LogstreamResult.Write = recptr;
+
+		/*
+		 * Let the WAL reader know that more data has been written.  It's OK
+		 * to tell it about WAL data that hasn't been flushed yet, because
+		 * it's only going to use it for prefetching.
+		 */
+		SpinLockAcquire(&WalRcv->mutex);
+		WalRcv->writtenUpto = LogstreamResult.Write;
+		SpinLockRelease(&WalRcv->mutex);
+
+		ConditionVariableBroadcast(&WalRcv->writtenUptoAdvanced);
 	}
 }
 
