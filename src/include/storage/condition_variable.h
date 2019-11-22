@@ -57,6 +57,8 @@ extern void ConditionVariablePrepareToSleep(ConditionVariable *cv);
 
 /* Wake up a single waiter (via signal) or all waiters (via broadcast). */
 extern void ConditionVariableSignal(ConditionVariable *cv);
+extern void ConditionVariableSignalLifo(ConditionVariable *cv);
+extern void ConditionVariableSignalFifo(ConditionVariable *cv);
 extern void ConditionVariableBroadcast(ConditionVariable *cv);
 
 #endif							/* CONDITION_VARIABLE_H */

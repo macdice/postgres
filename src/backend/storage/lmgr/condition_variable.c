@@ -101,7 +101,7 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 
 	/* Add myself to the wait queue. */
 	SpinLockAcquire(&cv->mutex);
-	proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
+	proclist_push_head(&cv->wakeup, pgprocno, cvWaitLink);
 	SpinLockRelease(&cv->mutex);
 }
 
@@ -210,7 +210,7 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 		if (!proclist_contains(&cv->wakeup, MyProc->pgprocno, cvWaitLink))
 		{
 			done = true;
-			proclist_push_tail(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
+			proclist_push_head(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
 		}
 		SpinLockRelease(&cv->mutex);
 
@@ -269,7 +269,8 @@ ConditionVariableCancelSleep(void)
 }
 
 /*
- * Wake up the oldest process sleeping on the CV, if there is any.
+ * Wake up the oldest process sleeping on the CV, if there is one.  This order
+ * allows for wakeups to be distributed evenly to all workers in a pool.
  *
  * Note: it's difficult to tell whether this has any real effect: we know
  * whether we took an entry off the list, but the entry might only be a
@@ -277,19 +278,49 @@ ConditionVariableCancelSleep(void)
  * a flag telling whether it woke somebody.
  */
 void
-ConditionVariableSignal(ConditionVariable *cv)
+ConditionVariableSignalFifo(ConditionVariable *cv)
 {
 	PGPROC	   *proc = NULL;
 
 	/* Remove the first process from the wakeup queue (if any). */
 	SpinLockAcquire(&cv->mutex);
 	if (!proclist_is_empty(&cv->wakeup))
-		proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
+		proc = proclist_pop_tail_node(&cv->wakeup, cvWaitLink);
 	SpinLockRelease(&cv->mutex);
 
 	/* If we found someone sleeping, set their latch to wake them up. */
 	if (proc != NULL)
 		SetLatch(&proc->procLatch);
+}
+
+/*
+ * Wake up the newest process sleeping on the CV, if there is one.  This order
+ * allows for wakeups to be delivered to a busy set of workers, so that other
+ * workers can time out due to idleness.
+ *
+ * See comments for the FIFO version.
+ */
+void
+ConditionVariableSignalLifo(ConditionVariable *cv)
+{
+	PGPROC	   *proc = NULL;
+
+	SpinLockAcquire(&cv->mutex);
+	if (!proclist_is_empty(&cv->wakeup))
+		proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
+	SpinLockRelease(&cv->mutex);
+
+	if (proc != NULL)
+		SetLatch(&proc->procLatch);
+}
+
+/*
+ * Wake up a process sleeping on the CV, if there is one.
+ */
+void
+ConditionVariableSignal(ConditionVariable *cv)
+{
+	ConditionVariableSignalFifo(cv);
 }
 
 /*
@@ -341,10 +372,10 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 
 	if (!proclist_is_empty(&cv->wakeup))
 	{
-		proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
+		proc = proclist_pop_tail_node(&cv->wakeup, cvWaitLink);
 		if (!proclist_is_empty(&cv->wakeup))
 		{
-			proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
+			proclist_push_head(&cv->wakeup, pgprocno, cvWaitLink);
 			have_sentinel = true;
 		}
 	}
@@ -371,7 +402,7 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 		proc = NULL;
 		SpinLockAcquire(&cv->mutex);
 		if (!proclist_is_empty(&cv->wakeup))
-			proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
+			proc = proclist_pop_tail_node(&cv->wakeup, cvWaitLink);
 		have_sentinel = proclist_contains(&cv->wakeup, pgprocno, cvWaitLink);
 		SpinLockRelease(&cv->mutex);
 

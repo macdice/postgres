@@ -181,6 +181,20 @@ proclist_pop_head_node_offset(proclist_head *list, size_t node_offset)
 }
 
 /*
+ * Remove and return the last process from a list (there must be one).
+ */
+static inline PGPROC *
+proclist_pop_tail_node_offset(proclist_head *list, size_t node_offset)
+{
+	PGPROC	   *proc;
+
+	Assert(!proclist_is_empty(list));
+	proc = GetPGProcByNumber(list->tail);
+	proclist_delete_offset(list, list->tail, node_offset);
+	return proc;
+}
+
+/*
  * Helper macros to avoid repetition of offsetof(PGPROC, <member>).
  * 'link_member' is the name of a proclist_node member in PGPROC.
  */
@@ -192,6 +206,8 @@ proclist_pop_head_node_offset(proclist_head *list, size_t node_offset)
 	proclist_push_tail_offset((list), (procno), offsetof(PGPROC, link_member))
 #define proclist_pop_head_node(list, link_member) \
 	proclist_pop_head_node_offset((list), offsetof(PGPROC, link_member))
+#define proclist_pop_tail_node(list, link_member) \
+	proclist_pop_tail_node_offset((list), offsetof(PGPROC, link_member))
 #define proclist_contains(list, procno, link_member) \
 	proclist_contains_offset((list), (procno), offsetof(PGPROC, link_member))
 
