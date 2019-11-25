@@ -3675,11 +3675,6 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 		/* Success! */
 		curFileTLI = tli;
 
-		/* Report recovery progress in PS display */
-		snprintf(activitymsg, sizeof(activitymsg), "recovering %s",
-				 xlogfname);
-		set_ps_display(activitymsg, false);
-
 		/* Track source of data in assorted state variables */
 		readSource = source;
 		XLogReceiptSource = source;
@@ -6179,6 +6174,19 @@ CheckRequiredParameterValues(void)
 	}
 }
 
+static void
+XLogUpdateProcessTitle(XLogRecPtr recptr)
+{
+	char process_title[80];
+
+	snprintf(process_title,
+			 sizeof(process_title),
+			 "    replaying %X/%X",
+			 (uint32) (EndRecPtr >> 32),
+			 (uint32) EndRecPtr);
+	set_ps_display(process_title, false);
+}
+
 /*
  * This must be called ONCE during postmaster or standalone-backend startup
  */
@@ -7034,6 +7042,7 @@ StartupXLOG(void)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
+			XLogRecPtr next_title_lsn = 0;
 
 			InRedo = true;
 
@@ -7048,6 +7057,11 @@ StartupXLOG(void)
 			{
 				bool		switchedTLI = false;
 
+				if (update_process_title && EndRecPtr >= next_title_lsn)
+				{
+					XLogUpdateProcessTitle(EndRecPtr);
+					next_title_lsn = EndRecPtr + 8192;
+				}
 #ifdef WAL_DEBUG
 				if (XLOG_DEBUG ||
 					(rmid == RM_XACT_ID && trace_recovery_messages <= DEBUG2) ||
@@ -11921,6 +11935,8 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						wait_time = wal_retrieve_retry_interval -
 							(secs * 1000 + usecs / 1000);
 
+						if (update_process_title)
+							XLogUpdateProcessTitle(RecPtr);
 						(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
 										 WL_LATCH_SET | WL_TIMEOUT |
 										 WL_EXIT_ON_PM_DEATH,
