@@ -1767,7 +1767,12 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 				/* see if there are any matches on this page */
 				/* note that this will clear moreRight if we can stop */
 				if (_bt_readpage(scan, dir, P_FIRSTDATAKEY(opaque)))
+				{
+					/* Begin fetching the next page. */
+					if (opaque->btpo_next != P_NONE)
+						PrefetchBuffer(rel, MAIN_FORKNUM, opaque->btpo_next);
 					break;
+				}
 			}
 			else if (scan->parallel_scan != NULL)
 			{
