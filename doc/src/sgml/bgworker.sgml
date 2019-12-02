@@ -60,6 +60,7 @@ typedef struct BackgroundWorker
     Datum       bgw_main_arg;
     char        bgw_extra[BGW_EXTRALEN];
     int         bgw_notify_pid;
+    uint32     *bgw_terminate_count;
 } BackgroundWorker;
 </programlisting>
   </para>
@@ -186,6 +187,13 @@ typedef struct BackgroundWorker
    at postmaster startup time, or when the backend registering the worker does
    not wish to wait for the worker to start up.  Otherwise, it should be
    initialized to <literal>MyProcPid</literal>.
+  </para>
+
+  <para>
+   <structfield>bgw_terminate_count</structfield> is the address of a counter
+   that the caller can provide, as part of a protocol for tracking how many
+   workers of a special class are running.  Only the postmaster will modify
+   this value.
   </para>
 
   <para>Once running, the process can connect to a database by calling
