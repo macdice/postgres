@@ -418,6 +418,8 @@ EnqueueBackgroundReaderRequest(Oid relid,
 	int			candidate;
 	bool		need_more_workers = false;
 	bool		had_to_wait = false;
+	int			requests,
+				readers;
 
 	request.relid = relid;
 	request.rnode = rnode;
@@ -481,9 +483,12 @@ EnqueueBackgroundReaderRequest(Oid relid,
 	 * If there are no workers, or there was already something waiting in the
 	 * queue before us, we'll consider adding a new worker.
 	 */
-	if (CurrentBackgroundReaders() == 0 ||
-		(Shared->head != Shared->tail &&
-		 CurrentBackgroundReaders() < max_background_readers))
+	readers = CurrentBackgroundReaders();
+	requests = Shared->head - Shared->tail;
+	if (requests < 0)
+		requests += Shared->size;
+	Assert(requests >= 0);
+	if (readers == 0 || (requests > 0 && readers < max_background_readers))
 
 	{
 		need_more_workers = true;
@@ -495,8 +500,10 @@ EnqueueBackgroundReaderRequest(Oid relid,
 	Shared->head = new_head;
 	LWLockRelease(BackgroundReaderLock);
 
-	/* Signal a worker, if one is waiting. */
-	ConditionVariableSignal(&Shared->queue_not_empty);
+	/* Signal a worker, if it looks like there may be an idle one. */
+	/* XXX questionable */
+	if (requests < readers)
+		ConditionVariableSignal(&Shared->queue_not_empty);
 
 	if (need_more_workers)
 	{
