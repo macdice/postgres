@@ -317,6 +317,9 @@ BackgroundWorkerStateChange(void)
 			notify_pid = slot->worker.bgw_notify_pid;
 			if ((slot->worker.bgw_flags & BGWORKER_CLASS_PARALLEL) != 0)
 				BackgroundWorkerData->parallel_terminate_count++;
+			if (slot->worker.bgw_terminate_count)
+				*slot->worker.bgw_terminate_count += 1;
+
 			pg_memory_barrier();
 			slot->pid = 0;
 			slot->in_use = false;
@@ -364,6 +367,8 @@ BackgroundWorkerStateChange(void)
 		rw->rw_worker.bgw_restart_time = slot->worker.bgw_restart_time;
 		rw->rw_worker.bgw_main_arg = slot->worker.bgw_main_arg;
 		memcpy(rw->rw_worker.bgw_extra, slot->worker.bgw_extra, BGW_EXTRALEN);
+		rw->rw_worker.bgw_terminate_count =
+			slot->worker.bgw_terminate_count;
 
 		/*
 		 * Copy the PID to be notified about state changes, but only if the
@@ -420,6 +425,8 @@ ForgetBackgroundWorker(slist_mutable_iter *cur)
 	slot = &BackgroundWorkerData->slot[rw->rw_shmem_slot];
 	if ((rw->rw_worker.bgw_flags & BGWORKER_CLASS_PARALLEL) != 0)
 		BackgroundWorkerData->parallel_terminate_count++;
+	if (rw->rw_worker.bgw_terminate_count)
+		*rw->rw_worker.bgw_terminate_count += 1;
 
 	slot->in_use = false;
 
@@ -544,6 +551,9 @@ ResetBackgroundWorkerCrashTimes(void)
 			 */
 			Assert((rw->rw_worker.bgw_flags & BGWORKER_CLASS_PARALLEL) == 0);
 
+			/* Likewise for custom terminate counters. */
+			Assert(rw->rw_worker.bgw_terminate_count == NULL);
+
 			/*
 			 * Allow this worker to be restarted immediately after we finish
 			 * resetting.
@@ -628,6 +638,17 @@ SanityCheckBackgroundWorker(BackgroundWorker *worker, int elevel)
 		ereport(elevel,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("background worker \"%s\": parallel workers may not be configured for restart",
+						worker->bgw_name)));
+		return false;
+	}
+
+	/* Likewise for general terminate counting. */
+	if (worker->bgw_terminate_count &&
+		worker->bgw_restart_time != BGW_NEVER_RESTART)
+	{
+		ereport(elevel,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("background worker \"%s\": workers with terminate counts may not be configured for restart",
 						worker->bgw_name)));
 		return false;
 	}
@@ -951,6 +972,20 @@ RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
 	if (!SanityCheckBackgroundWorker(worker, ERROR))
 		return false;
 
+	/*
+	 * In order to make this function not throw for the benefit of callers
+	 * that are trying to maintain worker counters, allocate the memory we'll
+	 * need for the caller's handle first, so that we can report allocation
+	 * failure by returning false before we've done anything.
+	 */
+	if (handle)
+	{
+		*handle = MemoryContextAlloc(CurrentMemoryContext,
+									 sizeof(BackgroundWorkerHandle));
+		if (!*handle)
+			return false;
+	}
+
 	parallel = (worker->bgw_flags & BGWORKER_CLASS_PARALLEL) != 0;
 
 	LWLockAcquire(BackgroundWorkerLock, LW_EXCLUSIVE);
@@ -1012,12 +1047,17 @@ RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
 
 	/*
 	 * If we found a slot and the user has provided a handle, initialize it.
+	 * If we failed, then free the memory we allocated earlier.
 	 */
-	if (success && handle)
+	if (handle)
 	{
-		*handle = palloc(sizeof(BackgroundWorkerHandle));
-		(*handle)->slot = slotno;
-		(*handle)->generation = generation;
+		if (success)
+		{
+			(*handle)->slot = slotno;
+			(*handle)->generation = generation;
+		}
+		else
+			pfree(*handle);
 	}
 
 	return success;
