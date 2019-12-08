@@ -931,6 +931,14 @@ typedef struct BTScanOpaqueData
 	char	   *currTuples;		/* tuple storage for currPos */
 	char	   *markTuples;		/* tuple storage for markPos */
 
+	/* State used to track prefetching. */
+	int			prefetchIndex;
+	int			prefetchedBlocks;;
+	BlockNumber	lastPrefetchedHeapBlock;
+	BlockNumber lastFetchedHeapBlock;
+	BlockNumber sequentialHeapBlock;
+	bool		firstTupleFetched;
+
 	/*
 	 * If the marked position is on the same page as current position, we
 	 * don't use markPos, but just keep the marked itemIndex in markItemIndex

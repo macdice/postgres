@@ -1436,6 +1436,93 @@ readcomplete:
 	return true;
 }
 
+static void
+_bt_prefetch(IndexScanDesc scan, ScanDirection dir)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	BlockNumber blockno;
+
+	/*
+	 * XXX don't prefect if bitmap index scan, it will be for nothing and then
+	 * it will be done again!
+	 */
+
+	/*
+	 * It's probably a waste of time to start prefetching until we're in a
+	 * multi-tuple scan.
+	 */
+	if (!so->firstTupleFetched)
+	{
+		so->firstTupleFetched = true;
+		return;
+	}
+
+	/*
+	 * We want to keep N pefetch operations in flight at a time.  Whenever we
+	 * see that we're about to fetch a new heap block, we'll consider
+	 * initiating one or more new prefetches.
+	 */
+	blockno = ItemPointerGetBlockNumber(&scan->xs_heaptid);
+	if (so->lastFetchedHeapBlock == blockno)
+		return;
+	if (so->prefetchedBlocks > 0)
+		--so->prefetchedBlocks;
+	so->lastFetchedHeapBlock = blockno;
+
+	if (ScanDirectionIsForward(dir))
+	{
+		/*
+		 * Can we prefetch heap pages?  Don't bother if it's sequential,
+		 * because we rely on the operating system to prefetch sequential reads
+		 * reads already, and it's known that at least Linux stops doing that
+		 * well if you issue advice.
+		 */
+		while (so->prefetchedBlocks < effective_io_concurrency &&
+			   so->prefetchIndex < so->currPos.lastItem)
+		{
+			/* If no heap relation, abandon. */
+			if (!scan->heapRelation)
+			{
+				so->prefetchIndex = so->currPos.lastItem;
+				break;
+			}
+
+			/* Look for a heap block that isn't repeating or sequential. */
+			blockno = ItemPointerGetBlockNumber(&so->currPos.items[so->prefetchIndex].heapTid);
+			if (blockno != so->lastPrefetchedHeapBlock &&
+				blockno != so->sequentialHeapBlock)
+			{
+				PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blockno);
+				so->lastPrefetchedHeapBlock = blockno;
+				++so->prefetchedBlocks;
+			}
+			so->sequentialHeapBlock = blockno + 1;
+			++so->prefetchIndex;
+		}
+
+		/* Can we prefetch the next index page? */
+		if (so->prefetchedBlocks < effective_io_concurrency &&
+			so->prefetchIndex == so->currPos.lastItem)
+		{
+			/* Don't bother if it's sequential. */
+			if (so->currPos.nextPage != P_NONE &&
+				so->currPos.nextPage != so->currPos.currPage + 1)
+			{
+				PrefetchBuffer(scan->indexRelation,
+							   MAIN_FORKNUM,
+							   so->currPos.nextPage);
+				++so->prefetchedBlocks;
+			}
+			++so->prefetchIndex;
+			return;
+		}
+	}
+	else
+	{
+		/* TODO the same thing, but backwards */
+	}
+}
+
 /*
  *	_bt_next() -- Get the next item in a scan.
  *
@@ -1482,6 +1569,8 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 	scan->xs_heaptid = currItem->heapTid;
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
+
+	_bt_prefetch(scan, dir);
 
 	return true;
 }
@@ -1660,6 +1749,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 		so->currPos.firstItem = 0;
 		so->currPos.lastItem = itemIndex - 1;
 		so->currPos.itemIndex = 0;
+		so->prefetchIndex = 0;
 	}
 	else
 	{

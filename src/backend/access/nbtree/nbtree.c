@@ -387,6 +387,13 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	 */
 	so->currTuples = so->markTuples = NULL;
 
+	so->prefetchIndex = 0;
+	so->prefetchedBlocks = 0;
+	so->lastPrefetchedHeapBlock = InvalidBlockNumber;
+	so->lastFetchedHeapBlock = InvalidBlockNumber;
+	so->sequentialHeapBlock = InvalidBlockNumber;
+	so->firstTupleFetched = false;
+
 	scan->xs_itupdesc = RelationGetDescr(rel);
 
 	scan->opaque = so;
