@@ -123,6 +123,9 @@ extern void FormIndexDatum(IndexInfo *indexInfo,
 
 extern void index_check_collation_versions(Oid relid);
 
+extern char *index_force_collation_version(const ObjectAddress *otherObject,
+										   const char *version,
+										   void *userdata);
 extern void index_force_collation_versions(Oid indexid, Oid coll,
 										   char *version);
 

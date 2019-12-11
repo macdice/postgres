@@ -2084,6 +2084,26 @@ SELECT objid::regclass FROM pg_depend WHERE refobjversion = 'not a version';
 -------
 (0 rows)
 
+-- Test ALTER INDEX name ALTER COLLATION name REFRESH VERSION
+UPDATE pg_depend SET refobjversion = 'not a version'
+WHERE refclassid = 'pg_collation'::regclass
+AND objid::regclass::text = 'icuidx17_part'
+AND refobjversion IS NOT NULL;
+SELECT objid::regclass FROM pg_depend WHERE refobjversion = 'not a version';
+     objid     
+---------------
+ icuidx17_part
+(1 row)
+
+ALTER INDEX icuidx17_part ALTER COLLATION "en-x-icu" REFRESH VERSION;
+SELECT objid::regclass, refobjversion = 'not a version' AS ver FROM pg_depend
+WHERE refclassid = 'pg_collation'::regclass
+AND objid::regclass::text = 'icuidx17_part';
+     objid     | ver 
+---------------+-----
+ icuidx17_part | f
+(1 row)
+
 -- cleanup
 RESET search_path;
 SET client_min_messages TO warning;

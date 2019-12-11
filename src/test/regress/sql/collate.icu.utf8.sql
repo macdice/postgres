@@ -843,6 +843,17 @@ VACUUM FULL collate_part_1;
 
 SELECT objid::regclass FROM pg_depend WHERE refobjversion = 'not a version';
 
+-- Test ALTER INDEX name ALTER COLLATION name REFRESH VERSION
+UPDATE pg_depend SET refobjversion = 'not a version'
+WHERE refclassid = 'pg_collation'::regclass
+AND objid::regclass::text = 'icuidx17_part'
+AND refobjversion IS NOT NULL;
+SELECT objid::regclass FROM pg_depend WHERE refobjversion = 'not a version';
+ALTER INDEX icuidx17_part ALTER COLLATION "en-x-icu" REFRESH VERSION;
+SELECT objid::regclass, refobjversion = 'not a version' AS ver FROM pg_depend
+WHERE refclassid = 'pg_collation'::regclass
+AND objid::regclass::text = 'icuidx17_part';
+
 -- cleanup
 RESET search_path;
 SET client_min_messages TO warning;

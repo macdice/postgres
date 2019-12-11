@@ -3181,7 +3181,7 @@ index_build(Relation heapRelation,
 	SetUserIdAndSecContext(save_userid, save_sec_context);
 }
 
-static char *
+char *
 index_force_collation_version(const ObjectAddress *otherObject,
 							  const char *version,
 							  void *userdata)
