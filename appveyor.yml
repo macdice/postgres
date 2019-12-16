@@ -5,7 +5,7 @@ image: Visual Studio 2015
 install:
   - '"C:\Program Files\Microsoft SDKs\Windows\v7.1\Bin\SetEnv.cmd" /x64'
   - '"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" x86_amd64'
-  - SET PATH=%PATH%;C:\MinGW\msys\1.0\bin\
+  - SET PATH=%PATH%;C:\MinGW\msys\2.0\bin\
 
 before_build:
   - perl buildsetup.pl
