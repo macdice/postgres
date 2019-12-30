@@ -511,6 +511,42 @@ get_icu_locale_comment(const char *localename)
 }
 #endif							/* USE_ICU */
 
+#if WIN32
+typedef struct SystemLocaleCallbackContext
+{
+	int		   *ncreated;
+	Oid			nspid;
+} SystemLocaleCallbackContext;
+
+static BOOL
+SystemLocaleCallback(LPWSTR locale_name, DWORD flags, LPARAM param)
+{
+	SystemLocaleCallbackContext *context = (SystemLocaleCallbackContext *) param;
+	char	   *collcollate = locale_name;
+	Oid			collid;
+
+	/*
+	 * Be paranoid about not allowing any non-ASCII strings into
+	 * pg_collation
+	 */
+	if (!is_all_ascii(langtag) || !is_all_ascii(collcollate))
+		return TRUE;
+
+	collid = CollationCreate(collcollate,
+							 context->nspid, GetUserId(),
+							 COLLPROVIDER_LIBC, true, -1,
+							 collcollate, collcollate,
+							 get_collation_actual_version(COLLPROVIDER_LIBC, collcollate),
+							 true, true);
+	if (OidIsValid(collid))
+	{
+		*context->ncreated++;
+		CommandCounterIncrement();
+	}
+
+	return TRUE;
+}
+#endif							/* WIN32 */
 
 /*
  * pg_import_system_collations: add known system collations to pg_collation
@@ -684,6 +720,21 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 					(errmsg("no usable system locales were found")));
 	}
 #endif							/* READ_LOCALE_A_OUTPUT */
+
+#ifdef WIN32
+	/* Load collations known to Windows. */
+	{
+		SystemLocaleCallbackContext context;
+
+		context.nspid = nspid;
+		context.ncreated = &ncreated;
+		if (!EnumSystemLocalesEx(SystemLocaleCallback, 0, &context, NULL))
+			ereport(ERROR,
+					(ERRCODE_SYSTEM_ERROR,
+					 errmsg("could not enumerate system locales, Win32 error %d",
+							GetLastError())));
+	}
+#endif							/* WIN32 */
 
 	/*
 	 * Load collations known to ICU
