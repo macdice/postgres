@@ -25,6 +25,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "postmaster/bgreader.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
@@ -147,6 +148,7 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, BTreeShmemSize());
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
+		size = add_size(size, BackgroundReaderShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -217,6 +219,7 @@ CreateSharedMemoryAndSemaphores(void)
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
 	InitBufferPool();
+	BackgroundReaderInit();
 
 	/*
 	 * Set up lock manager

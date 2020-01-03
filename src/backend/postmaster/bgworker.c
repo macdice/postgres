@@ -17,6 +17,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "postmaster/bgreader.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
@@ -128,6 +129,9 @@ static const struct
 	},
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
+	},
+	{
+		"BackgroundReaderMain", BackgroundReaderMain
 	}
 };
 

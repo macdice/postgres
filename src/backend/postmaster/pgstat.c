@@ -3636,6 +3636,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_AUTOVACUUM_MAIN:
 			event_name = "AutoVacuumMain";
 			break;
+		case WAIT_EVENT_BGREADER_MAIN:
+			event_name = "BgReaderMain";
+			break;
 		case WAIT_EVENT_BGWRITER_HIBERNATE:
 			event_name = "BgWriterHibernate";
 			break;
@@ -3737,6 +3740,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 
 	switch (w)
 	{
+		case WAIT_EVENT_BGREADER_ENQUEUE:
+			event_name = "BgReaderEnqueue";
+			break;
 		case WAIT_EVENT_BGWORKER_SHUTDOWN:
 			event_name = "BgWorkerShutdown";
 			break;

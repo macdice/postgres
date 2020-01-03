@@ -14,6 +14,7 @@ include $(top_builddir)/src/Makefile.global
 
 OBJS = \
 	autovacuum.o \
+	bgreader.o \
 	bgworker.o \
 	bgwriter.o \
 	checkpointer.o \
