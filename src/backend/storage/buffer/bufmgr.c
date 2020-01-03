@@ -42,6 +42,7 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
+#include "postmaster/bgreader.h"
 #include "postmaster/bgwriter.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
@@ -530,7 +531,6 @@ ComputeIoConcurrency(int io_concurrency, double *target)
 void
 PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 {
-#ifdef USE_PREFETCH
 	Assert(RelationIsValid(reln));
 	Assert(BlockNumberIsValid(blockNum));
 
@@ -545,8 +545,10 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot access temporary tables of other sessions")));
 
+#ifdef USE_PREFETCH
 		/* pass it off to localbuf.c */
 		LocalPrefetchBuffer(reln->rd_smgr, forkNum, blockNum);
+#endif
 	}
 	else
 	{
@@ -570,7 +572,23 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 
 		/* If not in buffers, initiate prefetch */
 		if (buf_id < 0)
-			smgrprefetch(reln->rd_smgr, forkNum, blockNum);
+		{
+			if (max_background_readers > 0)
+			{
+				/* Ask a background reader to read it, if configured. */
+				EnqueueBackgroundReaderRequest(reln->rd_smgr->smgr_rnode.node,
+											   forkNum,
+											   blockNum,
+											   false /* don't wait */);
+			}
+#ifdef USE_PREFETCH
+			else
+			{
+				/* Tell the kernel we'll read it soon. */
+				smgrprefetch(reln->rd_smgr, forkNum, blockNum);
+			}
+#endif
+		}
 
 		/*
 		 * If the block *is* in buffers, we do nothing.  This is not really
@@ -584,7 +602,6 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 		 * not clear that there's enough of a problem to justify that.
 		 */
 	}
-#endif							/* USE_PREFETCH */
 }
 
 

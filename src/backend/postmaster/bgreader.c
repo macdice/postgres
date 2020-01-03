@@ -94,6 +94,7 @@ HandleBackgroundReaderRequest(BackgroundReaderRequest *request)
 
 	PG_TRY();
 	{
+elog(LOG, "worker reading block %u", request->blockNum);
 		reln = smgropen(request->rnode, InvalidBackendId);
 		smgrread(reln, request->forkNum, request->blockNum, destination);
 #if 0
