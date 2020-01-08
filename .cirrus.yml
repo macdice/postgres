@@ -3,4 +3,4 @@ freebsd_instance:
 
 task:
   install_script: pkg install -y gmake readline perl5 bison
-  script: ./configure --enable-cassert --enable-debug --with-includes=/usr/local/include --with-libs=/usr/local/lib && gmake -s && gmake -s check
+  script: ./configure --enable-cassert --enable-debug --with-includes=/usr/local/include --with-libs=/usr/local/lib && gmake -s && gmake -s check || cat src/test/regress/log/initdb.log 
