@@ -2,5 +2,5 @@ freebsd_instance:
   image_family: freebsd-12-1
 
 task:
-  install_script: pkg install gmake readline
+  install_script: pkg install -y gmake readline
   script: ./configure --enable-cassert --enable-debug --with-includes=/usr/local/include --with-libs=/usr/local/lib && gmake -s && gmake -s check
