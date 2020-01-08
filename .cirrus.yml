@@ -5,7 +5,7 @@ task:
   install_script:
     pkg install -y gmake readline perl5 bison
   create_user_script:
-    - pw usreadd postgres
+    - pw useradd postgres
     - chown -R postgres:postgres .
   build_script:
     su postgres -c ./configure --enable-cassert --enable-debug --with-includes=/usr/local/include --with-libs=/usr/local/lib && gmake -s
