@@ -75,4 +75,9 @@ OBJS = \
 	tqueue.o \
 	tstoreReceiver.o
 
+nodeHashjoin.o: nodeHashjoinSpecializations.c
+
+nodeHashjoinSpecializations.c: Gen_nodeHashjoinSpecializations.pl
+	$(PERL) ./Gen_nodeHashjoinSpecializations.pl > nodeHashjoinSpecializations.c
+
 include $(top_srcdir)/src/backend/common.mk

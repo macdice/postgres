@@ -152,17 +152,19 @@ static void ExecParallelHashJoinPartitionOuter(HashJoinState *node);
  *		ExecHashJoinImpl
  *
  *		This function implements the Hybrid Hashjoin algorithm.  It is marked
- *		with an always-inline attribute so that ExecHashJoin() and
- *		ExecParallelHashJoin() can inline it.  Compilers that respect the
- *		attribute should create versions specialized for parallel == true and
- *		parallel == false with unnecessary branches removed.
+ *		with an always-inline attribute so that wrapper functions can be
+ *		defined to create specialized functions with the unnecessary branches
+ *		removed.
  *
  *		Note: the relation we build hash table on is the "inner"
  *			  the other one is "outer".
  * ----------------------------------------------------------------
  */
 static pg_attribute_always_inline TupleTableSlot *
-ExecHashJoinImpl(PlanState *pstate, bool parallel)
+ExecHashJoinImpl(PlanState *pstate,
+				 bool parallel,
+				 bool fill_inner,
+				 bool fill_outer)
 {
 	HashJoinState *node = castNode(HashJoinState, pstate);
 	PlanState  *outerNode;
@@ -198,6 +200,8 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 	 */
 	for (;;)
 	{
+		bool match;
+
 		/*
 		 * It's possible to iterate this loop many times before returning a
 		 * tuple, in some pathological cases such as needing to move much of
@@ -238,7 +242,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 * from the outer plan node.  If we succeed, we have to stash
 				 * it away for later consumption by ExecHashJoinOuterGetTuple.
 				 */
-				if (HJ_FILL_INNER(node))
+				if (fill_inner)
 				{
 					/* no chance to not build the hash table */
 					node->hj_FirstOuterTupleSlot = NULL;
@@ -255,7 +259,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					 */
 					node->hj_FirstOuterTupleSlot = NULL;
 				}
-				else if (HJ_FILL_OUTER(node) ||
+				else if (fill_outer ||
 						 (outerNode->plan->startup_cost < hashNode->ps.plan->total_cost &&
 						  !node->hj_OuterNotEmpty))
 				{
@@ -279,7 +283,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				hashtable = ExecHashTableCreate(hashNode,
 												node->hj_HashOperators,
 												node->hj_Collations,
-												HJ_FILL_INNER(node));
+												fill_inner);
 				node->hj_HashTable = hashtable;
 
 				/*
@@ -295,7 +299,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 * doing a left outer join, we can quit without scanning the
 				 * outer relation.
 				 */
-				if (hashtable->totalTuples == 0 && !HJ_FILL_OUTER(node))
+				if (hashtable->totalTuples == 0 && !fill_outer)
 					return NULL;
 
 				/*
@@ -358,7 +362,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				if (TupIsNull(outerTupleSlot))
 				{
 					/* end of batch, or maybe whole join */
-					if (HJ_FILL_INNER(node))
+					if (fill_inner)
 					{
 						/* set up to scan for unmatched inner tuples */
 						ExecPrepHashTableForUnmatched(node);
@@ -421,22 +425,19 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 * Scan the selected hash bucket for matches to current outer
 				 */
 				if (parallel)
-				{
-					if (!ExecParallelScanHashBucket(node, econtext))
-					{
-						/* out of matches; check for possible outer-join fill */
-						node->hj_JoinState = HJ_FILL_OUTER_TUPLE;
-						continue;
-					}
-				}
+					match = ExecParallelScanHashBucket(node, econtext);
 				else
+					match = ExecScanHashBucket(node, econtext);
+
+				if (!match)
 				{
-					if (!ExecScanHashBucket(node, econtext))
-					{
-						/* out of matches; check for possible outer-join fill */
-						node->hj_JoinState = HJ_FILL_OUTER_TUPLE;
-						continue;
-					}
+					/*
+					 * Out of matches; check for possible outer-join fill if
+					 * appropriate, or skip that and fetch a new outer tuple.
+					 */
+					node->hj_JoinState =
+						fill_outer ? HJ_FILL_OUTER_TUPLE : HJ_NEED_NEW_OUTER;
+					continue;
 				}
 
 				/*
@@ -453,8 +454,10 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 */
 				if (joinqual == NULL || ExecQual(joinqual, econtext))
 				{
-					node->hj_MatchedOuter = true;
-					HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
+					if (fill_outer)
+						node->hj_MatchedOuter = true;
+					if (fill_inner)
+						HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
 
 					/* In an antijoin, we never return a matched tuple */
 					if (node->js.jointype == JOIN_ANTI)
@@ -482,6 +485,8 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 
 			case HJ_FILL_OUTER_TUPLE:
 
+				Assert(fill_outer);
+
 				/*
 				 * The current outer tuple has run out of matches, so check
 				 * whether to emit a dummy outer-join tuple.  Whether we emit
@@ -489,8 +494,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 */
 				node->hj_JoinState = HJ_NEED_NEW_OUTER;
 
-				if (!node->hj_MatchedOuter &&
-					HJ_FILL_OUTER(node))
+				if (!node->hj_MatchedOuter)
 				{
 					/*
 					 * Generate a fake join tuple with nulls for the inner
@@ -506,6 +510,8 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				break;
 
 			case HJ_FILL_INNER_TUPLES:
+
+				Assert(fill_inner);
 
 				/*
 				 * We have finished a batch, but we are doing right/full join,
@@ -556,37 +562,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 	}
 }
 
-/* ----------------------------------------------------------------
- *		ExecHashJoin
- *
- *		Parallel-oblivious version.
- * ----------------------------------------------------------------
- */
-static TupleTableSlot *			/* return: a tuple or NULL */
-ExecHashJoin(PlanState *pstate)
-{
-	/*
-	 * On sufficiently smart compilers this should be inlined with the
-	 * parallel-aware branches removed.
-	 */
-	return ExecHashJoinImpl(pstate, false);
-}
-
-/* ----------------------------------------------------------------
- *		ExecParallelHashJoin
- *
- *		Parallel-aware version.
- * ----------------------------------------------------------------
- */
-static TupleTableSlot *			/* return: a tuple or NULL */
-ExecParallelHashJoin(PlanState *pstate)
-{
-	/*
-	 * On sufficiently smart compilers this should be inlined with the
-	 * parallel-oblivious branches removed.
-	 */
-	return ExecHashJoinImpl(pstate, true);
-}
+#include "nodeHashjoinSpecializations.c"
 
 /* ----------------------------------------------------------------
  *		ExecInitHashJoin
@@ -614,12 +590,6 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hjstate->js.ps.plan = (Plan *) node;
 	hjstate->js.ps.state = estate;
 
-	/*
-	 * See ExecHashJoinInitializeDSM() and ExecHashJoinInitializeWorker()
-	 * where this function may be replaced with a parallel version, if we
-	 * managed to launch a parallel query.
-	 */
-	hjstate->js.ps.ExecProcNode = ExecHashJoin;
 	hjstate->js.jointype = node->join.jointype;
 
 	/*
@@ -732,6 +702,13 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hjstate->hj_JoinState = HJ_BUILD_HASHTABLE;
 	hjstate->hj_MatchedOuter = false;
 	hjstate->hj_OuterNotEmpty = false;
+
+	/*
+	 * See ExecHashJoinInitializeDSM() and ExecHashJoinInitializeWorker()
+	 * where this function may be replaced with a parallel version, if we
+	 * managed to launch a parallel query.
+	 */
+	hjstate->js.ps.ExecProcNode = GetExecHashJoinFunction(hjstate, false);
 
 	return hjstate;
 }
@@ -1429,7 +1406,7 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	if (pcxt->seg == NULL)
 		return;
 
-	ExecSetExecProcNode(&state->js.ps, ExecParallelHashJoin);
+	ExecSetExecProcNode(&state->js.ps, GetExecHashJoinFunction(state, true));
 
 	/*
 	 * Set up the state needed to coordinate access to the shared hash
@@ -1522,5 +1499,5 @@ ExecHashJoinInitializeWorker(HashJoinState *state,
 	hashNode = (HashState *) innerPlanState(state);
 	hashNode->parallel_state = pstate;
 
-	ExecSetExecProcNode(&state->js.ps, ExecParallelHashJoin);
+	ExecSetExecProcNode(&state->js.ps, GetExecHashJoinFunction(state, true));
 }
