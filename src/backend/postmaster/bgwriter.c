@@ -301,9 +301,7 @@ BackgroundWriterMain(void)
 		 * down with latch events that are likely to happen frequently during
 		 * normal operation.
 		 */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   BgWriterDelay /* ms */ , WAIT_EVENT_BGWRITER_MAIN);
+		rc = WaitMyLatch(BgWriterDelay /* ms */ , WAIT_EVENT_BGWRITER_MAIN);
 
 		/*
 		 * If no latch event and BgBufferSync says nothing's happening, extend
@@ -328,10 +326,8 @@ BackgroundWriterMain(void)
 			/* Ask for notification at next buffer allocation */
 			StrategyNotifyBgWriter(MyProc->pgprocno);
 			/* Sleep ... */
-			(void) WaitLatch(MyLatch,
-							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-							 BgWriterDelay * HIBERNATE_FACTOR,
-							 WAIT_EVENT_BGWRITER_HIBERNATE);
+			(void) WaitMyLatch(BgWriterDelay * HIBERNATE_FACTOR,
+							   WAIT_EVENT_BGWRITER_HIBERNATE);
 			/* Reset the notification request in case we timed out */
 			StrategyNotifyBgWriter(-1);
 		}

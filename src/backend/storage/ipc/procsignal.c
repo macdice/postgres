@@ -395,10 +395,7 @@ WaitForProcSignalBarrier(uint64 generation)
 
 			CHECK_FOR_INTERRUPTS();
 
-			events =
-				WaitLatch(MyLatch,
-						  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						  timeout, WAIT_EVENT_PROC_SIGNAL_BARRIER);
+			events = WaitMyLatch(timeout, WAIT_EVENT_PROC_SIGNAL_BARRIER);
 			ResetLatch(MyLatch);
 
 			oldval = pg_atomic_read_u64(&slot->pss_barrierGeneration);

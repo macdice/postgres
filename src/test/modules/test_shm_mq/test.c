@@ -231,8 +231,7 @@ test_shm_mq_pipelined(PG_FUNCTION_ARGS)
 			 * have read or written data and therefore there may now be work
 			 * for us to do.
 			 */
-			(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
-							 PG_WAIT_EXTENSION);
+			(void) WaitMyLatch(-1, PG_WAIT_EXTENSION);
 			ResetLatch(MyLatch);
 			CHECK_FOR_INTERRUPTS();
 		}

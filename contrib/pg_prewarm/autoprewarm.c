@@ -217,10 +217,7 @@ autoprewarm_main(Datum main_arg)
 		if (autoprewarm_interval <= 0)
 		{
 			/* We're only dumping at shutdown, so just wait forever. */
-			(void) WaitLatch(&MyProc->procLatch,
-							 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
-							 -1L,
-							 PG_WAIT_EXTENSION);
+			(void) WaitMyLatch(-1, PG_WAIT_EXTENSION);
 		}
 		else
 		{
@@ -246,10 +243,7 @@ autoprewarm_main(Datum main_arg)
 			}
 
 			/* Sleep until the next dump time. */
-			(void) WaitLatch(&MyProc->procLatch,
-							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-							 delay_in_ms,
-							 PG_WAIT_EXTENSION);
+			(void) WaitMyLatch(delay_in_ms, PG_WAIT_EXTENSION);
 		}
 
 		/* Reset the latch, loop. */

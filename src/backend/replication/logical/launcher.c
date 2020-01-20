@@ -211,9 +211,7 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 		 * We need timeout because we generally don't get notified via latch
 		 * about the worker attach.  But we don't expect to have to wait long.
 		 */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   10L, WAIT_EVENT_BGWORKER_STARTUP);
+		rc = WaitMyLatch(10L, WAIT_EVENT_BGWORKER_STARTUP);
 
 		if (rc & WL_LATCH_SET)
 		{
@@ -482,9 +480,7 @@ logicalrep_worker_stop(Oid subid, Oid relid)
 		LWLockRelease(LogicalRepWorkerLock);
 
 		/* Wait a bit --- we don't expect to have to wait long. */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   10L, WAIT_EVENT_BGWORKER_STARTUP);
+		rc = WaitMyLatch(10L, WAIT_EVENT_BGWORKER_STARTUP);
 
 		if (rc & WL_LATCH_SET)
 		{
@@ -526,9 +522,7 @@ logicalrep_worker_stop(Oid subid, Oid relid)
 		LWLockRelease(LogicalRepWorkerLock);
 
 		/* Wait a bit --- we don't expect to have to wait long. */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   10L, WAIT_EVENT_BGWORKER_SHUTDOWN);
+		rc = WaitMyLatch(10L, WAIT_EVENT_BGWORKER_SHUTDOWN);
 
 		if (rc & WL_LATCH_SET)
 		{
@@ -1034,10 +1028,7 @@ ApplyLauncherMain(Datum main_arg)
 		}
 
 		/* Wait for more work. */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   wait_time,
-					   WAIT_EVENT_LOGICAL_LAUNCHER_MAIN);
+		rc = WaitMyLatch(wait_time, WAIT_EVENT_LOGICAL_LAUNCHER_MAIN);
 
 		if (rc & WL_LATCH_SET)
 		{

@@ -293,6 +293,7 @@ InitPostmasterChild(void)
 	InitializeLatchSupport();
 	MyLatch = &LocalLatchData;
 	InitLatch(MyLatch);
+	InitializeMyLatchWaitSet();
 
 	/*
 	 * If possible, make this process a group leader, so that the postmaster
@@ -325,6 +326,7 @@ InitStandaloneProcess(const char *argv0)
 	InitializeLatchSupport();
 	MyLatch = &LocalLatchData;
 	InitLatch(MyLatch);
+	InitializeMyLatchWaitSet();
 
 	/* Compute paths, no postmaster to inherit from */
 	if (my_exec_path[0] == '\0')
@@ -346,13 +348,15 @@ SwitchToSharedLatch(void)
 
 	MyLatch = &MyProc->procLatch;
 
+	/* Tell our long-lived WaitEventSet objects to switch latches */
 	if (FeBeWaitSet)
 		ModifyWaitEvent(FeBeWaitSet, 1, WL_LATCH_SET, MyLatch);
+	ModifyMyLatchWaitSet();
 
 	/*
 	 * Set the shared latch as the local one might have been set. This
 	 * shouldn't normally be necessary as code is supposed to check the
-	 * condition before waiting for the latch, but a bit care can't hurt.
+	 * condition before waiting for the latch, but a bit of care can't hurt.
 	 */
 	SetLatch(MyLatch);
 }

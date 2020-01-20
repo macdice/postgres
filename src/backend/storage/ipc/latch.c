@@ -55,6 +55,7 @@
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
+#include "utils/memutils.h"
 
 /*
  * Select the fd readiness primitive to use. Normally the "most modern"
@@ -138,6 +139,9 @@ static int	selfpipe_writefd = -1;
 
 /* Process owning the self-pipe --- needed for checking purposes */
 static int	selfpipe_owner_pid = 0;
+
+/* The standard set used for WaitMyLatch to wait for our own latch */
+static WaitEventSet *MyLatchWaitSet;
 
 /* Private function prototypes */
 static void sendSelfPipeByte(void);
@@ -231,6 +235,43 @@ InitializeLatchSupport(void)
 #else
 	/* currently, nothing to do here for Windows */
 #endif
+}
+
+void
+InitializeMyLatchWaitSet(void)
+{
+	/* Clean up, if we inherited one from the postmaster. */
+	if (IsUnderPostmaster)
+	{
+		if (MyLatchWaitSet != NULL)
+		{
+#ifdef WAIT_USE_KQUEUE
+			/* kqueue fds are not inherited, so don't close */
+			MyLatchWaitSet->kqueue_fd = -1;
+#endif
+			FreeWaitEventSet(MyLatchWaitSet);
+			MyLatchWaitSet = NULL;
+		}
+	}
+	Assert(MyLatchWaitSet == NULL);
+
+	/* Set up the WaitEventSet used by WaitMyLatch(). */
+	MyLatchWaitSet = CreateWaitEventSet(TopMemoryContext, 2);
+	AddWaitEventToSet(MyLatchWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
+					  MyLatch, NULL);
+	if (IsUnderPostmaster)
+		AddWaitEventToSet(MyLatchWaitSet, WL_EXIT_ON_PM_DEATH,
+						  PGINVALID_SOCKET, NULL, NULL);
+}
+
+/*
+ * If MyLatch is changed to point to a different Latch, we need to update
+ * MyLatchWaitSet so it has the new address.
+ */
+void
+ModifyMyLatchWaitSet(void)
+{
+	ModifyWaitEvent(MyLatchWaitSet, 0, WL_LATCH_SET, MyLatch);
 }
 
 /*
@@ -430,6 +471,48 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 	FreeWaitEventSet(set);
 
 	return ret;
+}
+
+/*
+ * Wait on MyLatchWaitSet.  The timeout is specified in milliseconds, with -1
+ * for no timeout.  Return a value that is compatible with WaitLatch(MyLatch).
+ */
+int
+WaitMyLatch(long timeout, uint32 wait_event_info)
+{
+	WaitEvent	event;
+
+	if (WaitEventSetWait(MyLatchWaitSet, timeout, &event, 1,
+						 wait_event_info) == 0)
+		return WL_TIMEOUT;
+	else
+		return event.events;
+}
+
+/*
+ * Like WaitMyLatch(), but don't exit on postmaster exit.
+ */
+int
+WaitMyLatchNoExit(long timeout, uint32 wait_event_info)
+{
+	int		result;
+
+	/*
+	 * We don't want to have a separate WaitEventSet just for this, so just
+	 * modify the flag temporarily.
+	 */
+	PG_TRY();
+	{
+		MyLatchWaitSet->exit_on_postmaster_death = false;
+		result = WaitMyLatch(timeout, wait_event_info);
+	}
+	PG_FINALLY();
+	{
+		MyLatchWaitSet->exit_on_postmaster_death = true;
+	}
+	PG_END_TRY();
+
+	return result;
 }
 
 /*
@@ -656,7 +739,8 @@ FreeWaitEventSet(WaitEventSet *set)
 #if defined(WAIT_USE_EPOLL)
 	close(set->epoll_fd);
 #elif defined(WAIT_USE_KQUEUE)
-	close(set->kqueue_fd);
+	if (set->kqueue_fd >= 0)
+		close(set->kqueue_fd);
 #elif defined(WAIT_USE_WIN32)
 	WaitEvent  *cur_event;
 
@@ -890,7 +974,7 @@ WaitEventAdjustEpoll(WaitEventSet *set, WaitEvent *event, int action)
 	rc = epoll_ctl(set->epoll_fd, action, event->fd, &epoll_ev);
 
 	if (rc < 0)
-		ereport(ERROR,
+		ereport(PANIC,
 				(errcode_for_socket_access(),
 		/* translator: %s is a syscall name, such as "poll()" */
 				 errmsg("%s failed: %m",

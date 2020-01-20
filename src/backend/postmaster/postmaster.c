@@ -4871,12 +4871,6 @@ SubPostmasterMain(int argc, char *argv[])
 	IsPostmasterEnvironment = true;
 	whereToSendOutput = DestNone;
 
-	/* Setup as postmaster child */
-	InitPostmasterChild();
-
-	/* Setup essential subsystems (to ensure elog() behaves sanely) */
-	InitializeGUCOptions();
-
 	/* Check we got appropriate args */
 	if (argc < 3)
 		elog(FATAL, "invalid subpostmaster invocation");
@@ -4887,6 +4881,12 @@ SubPostmasterMain(int argc, char *argv[])
 
 	/* Close the postmaster's sockets (as soon as we know them) */
 	ClosePostmasterPorts(strcmp(argv[1], "--forklog") == 0);
+
+	/* Setup as postmaster child */
+	InitPostmasterChild();
+
+	/* Setup essential subsystems (to ensure elog() behaves sanely) */
+	InitializeGUCOptions();
 
 	/*
 	 * Set reference point for stack-depth checking
