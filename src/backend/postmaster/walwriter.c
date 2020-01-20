@@ -253,9 +253,6 @@ WalWriterMain(void)
 		else
 			cur_timeout = WalWriterDelay * HIBERNATE_FACTOR;
 
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 cur_timeout,
-						 WAIT_EVENT_WAL_WRITER_MAIN);
+		(void) WaitMyLatch(cur_timeout, WAIT_EVENT_WAL_WRITER_MAIN);
 	}
 }

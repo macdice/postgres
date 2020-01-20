@@ -185,9 +185,7 @@ wait_for_relation_state_change(Oid relid, char expected_state)
 		if (!worker)
 			return false;
 
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 1000L, WAIT_EVENT_LOGICAL_SYNC_STATE_CHANGE);
+		(void) WaitMyLatch(1000L, WAIT_EVENT_LOGICAL_SYNC_STATE_CHANGE);
 
 		ResetLatch(MyLatch);
 	}
@@ -238,9 +236,7 @@ wait_for_worker_state_change(char expected_state)
 		 * Wait.  We expect to get a latch signal back from the apply worker,
 		 * but use a timeout in case it dies without sending one.
 		 */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   1000L, WAIT_EVENT_LOGICAL_SYNC_STATE_CHANGE);
+		rc = WaitMyLatch(1000L, WAIT_EVENT_LOGICAL_SYNC_STATE_CHANGE);
 
 		if (rc & WL_LATCH_SET)
 			ResetLatch(MyLatch);

@@ -55,6 +55,7 @@
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
+#include "utils/memutils.h"
 
 /*
  * Select the fd readiness primitive to use. Normally the "most modern"
@@ -430,6 +431,37 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 	FreeWaitEventSet(set);
 
 	return ret;
+}
+
+/*
+ * For callers with the common requirement to wait for their own latch or a
+ * timeout (or -1 for no timeout), with automatic exit on postmaster death,
+ * this variant reuses a WaitEventSet.  On builds where that allocates kernel
+ * resources, this approach avoids building them up and tearing them down
+ * every time.
+ */
+int
+WaitMyLatch(long timeout, uint32 wait_event_info)
+{
+	static WaitEventSet *set;
+	WaitEvent	event;
+
+	/* Create on demand. */
+	if (set == NULL)
+	{
+		WaitEventSet *wes;
+
+		wes = CreateWaitEventSet(TopMemoryContext, 2);
+		AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+		AddWaitEventToSet(wes, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET, NULL,
+						  NULL);
+		set = wes;
+	}
+
+	if (WaitEventSetWait(set, timeout, &event, 1, wait_event_info) == 0)
+		return WL_TIMEOUT;
+	else
+		return event.events;
 }
 
 /*

@@ -1283,8 +1283,8 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 		}
 		else
 		{
-			(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
-							 PG_WAIT_LOCK | locallock->tag.lock.locktag_type);
+			(void) WaitMyLatch(-1,
+							   PG_WAIT_LOCK | locallock->tag.lock.locktag_type);
 			ResetLatch(MyLatch);
 			/* check for deadlocks first, as that's probably log-worthy */
 			if (got_deadlock_timeout)
@@ -1793,8 +1793,7 @@ CheckDeadLockAlert(void)
 void
 ProcWaitForSignal(uint32 wait_event_info)
 {
-	(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
-					 wait_event_info);
+	(void) WaitMyLatch(-1, wait_event_info);
 	ResetLatch(MyLatch);
 	CHECK_FOR_INTERRUPTS();
 }

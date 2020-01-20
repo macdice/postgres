@@ -511,10 +511,8 @@ CheckpointerMain(void)
 			cur_timeout = Min(cur_timeout, XLogArchiveTimeout - elapsed_secs);
 		}
 
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 cur_timeout * 1000L /* convert to ms */ ,
-						 WAIT_EVENT_CHECKPOINTER_MAIN);
+		(void) WaitMyLatch(cur_timeout * 1000L /* convert to ms */ ,
+						   WAIT_EVENT_CHECKPOINTER_MAIN);
 	}
 }
 
