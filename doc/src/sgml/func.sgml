@@ -18917,6 +18917,38 @@ SELECT collation for ('foo' COLLATE "de_DE");
    </para>
 
    <indexterm>
+    <primary>xid8_current</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>xid8_current_if_assigned</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>xid8_current_snapshot</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>xid8_snapshot_xip</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>xid8_snapshot_xmax</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>xid8_snapshot_xmin</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>xid8_visible_in_snapshot</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>xid8_status</primary>
+   </indexterm>
+
+   <indexterm>
     <primary>txid_current</primary>
    </indexterm>
 
@@ -18949,10 +18981,72 @@ SELECT collation for ('foo' COLLATE "de_DE");
    </indexterm>
 
    <para>
-    The functions shown in <xref linkend="functions-txid-snapshot"/>
+    The functions shown in <xref linkend="functions-xid8-snapshot"/>
     provide server transaction information in an exportable form.  The main
     use of these functions is to determine which transactions were committed
     between two snapshots.
+   </para>
+
+   <table id="functions-xid8-snapshot">
+    <title>Transaction IDs and Snapshots</title>
+    <tgroup cols="3">
+     <thead>
+      <row><entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry></row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry><literal><function>xid8_current()</function></literal></entry>
+       <entry><type>xid8</type></entry>
+       <entry>get current transaction ID, assigning a new one if the current transaction does not have one</entry>
+      </row>
+      <row>
+       <entry><literal><function>xid8_current_if_assigned()</function></literal></entry>
+       <entry><type>xid8</type></entry>
+       <entry>same as <function>xid8_current()</function> but returns null instead of assigning a new transaction ID if none is already assigned</entry>
+      </row>
+      <row>
+       <entry><literal><function>xid8_current_snapshot()</function></literal></entry>
+       <entry><type>xid8_snapshot</type></entry>
+       <entry>get current snapshot</entry>
+      </row>
+      <row>
+       <entry><literal><function>xid8_snapshot_xip(<parameter>xid8_snapshot</parameter>)</function></literal></entry>
+       <entry><type>setof xid8</type></entry>
+       <entry>get in-progress transaction IDs in snapshot</entry>
+      </row>
+      <row>
+       <entry><literal><function>xid8_snapshot_xmax(<parameter>xid8_snapshot</parameter>)</function></literal></entry>
+       <entry><type>xid8</type></entry>
+       <entry>get <literal>xmax</literal> of snapshot</entry>
+      </row>
+      <row>
+       <entry><literal><function>xid8_snapshot_xmin(<parameter>xid8_snapshot</parameter>)</function></literal></entry>
+       <entry><type>xid8</type></entry>
+       <entry>get <literal>xmin</literal> of snapshot</entry>
+      </row>
+      <row>
+       <entry><literal><function>xid8_visible_in_snapshot(<parameter>xid8</parameter>, <parameter>xid8_snapshot</parameter>)</function></literal></entry>
+       <entry><type>boolean</type></entry>
+       <entry>is transaction ID visible in snapshot? (do not use with subtransaction ids)</entry>
+      </row>
+      <row>
+       <entry><literal><function>xid8_status(<parameter>xid8</parameter>)</function></literal></entry>
+       <entry><type>text</type></entry>
+       <entry>report the status of the given transaction: <literal>committed</literal>, <literal>aborted</literal>, <literal>in progress</literal>, or null if the transaction ID is too old</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+   <para>
+    In releases of <productname>PostgreSQL</productname> before 13 there was
+    no <type>xid8</type> type, so variants of these functions were provided
+    that used <type>bigint</type>.  The older functions with
+    <literal>txid</literal>
+    in the name are still supported for backwards compatibility, but may be
+    removed from a future release.  The <type>bigint</type> variants are shown
+    in <xref linkend="functions-txid-snapshot"/>.
    </para>
 
    <table id="functions-txid-snapshot">
@@ -18966,42 +19060,42 @@ SELECT collation for ('foo' COLLATE "de_DE");
       <row>
        <entry><literal><function>txid_current()</function></literal></entry>
        <entry><type>bigint</type></entry>
-       <entry>get current transaction ID, assigning a new one if the current transaction does not have one</entry>
+       <entry>see <function>xid8_current()</function></entry>
       </row>
       <row>
        <entry><literal><function>txid_current_if_assigned()</function></literal></entry>
        <entry><type>bigint</type></entry>
-       <entry>same as <function>txid_current()</function> but returns null instead of assigning a new transaction ID if none is already assigned</entry>
+       <entry>see <function>xid8_current_if_assigned()</function></entry>
       </row>
       <row>
        <entry><literal><function>txid_current_snapshot()</function></literal></entry>
        <entry><type>txid_snapshot</type></entry>
-       <entry>get current snapshot</entry>
+       <entry>see <function>xid8_snapshot()</function></entry>
       </row>
       <row>
        <entry><literal><function>txid_snapshot_xip(<parameter>txid_snapshot</parameter>)</function></literal></entry>
        <entry><type>setof bigint</type></entry>
-       <entry>get in-progress transaction IDs in snapshot</entry>
+       <entry>see <function>xid8_snapshot_xip()</function></entry>
       </row>
       <row>
        <entry><literal><function>txid_snapshot_xmax(<parameter>txid_snapshot</parameter>)</function></literal></entry>
        <entry><type>bigint</type></entry>
-       <entry>get <literal>xmax</literal> of snapshot</entry>
+       <entry>see <function>xid8_snapshot_xmax()</function></entry>
       </row>
       <row>
        <entry><literal><function>txid_snapshot_xmin(<parameter>txid_snapshot</parameter>)</function></literal></entry>
        <entry><type>bigint</type></entry>
-       <entry>get <literal>xmin</literal> of snapshot</entry>
+       <entry>see <function>xid8_snapshot_xmin()</function></entry>
       </row>
       <row>
        <entry><literal><function>txid_visible_in_snapshot(<parameter>bigint</parameter>, <parameter>txid_snapshot</parameter>)</function></literal></entry>
        <entry><type>boolean</type></entry>
-       <entry>is transaction ID visible in snapshot? (do not use with subtransaction ids)</entry>
+       <entry>see <function>xid8_visible_in_snapshot()</function></entry>
       </row>
       <row>
        <entry><literal><function>txid_status(<parameter>bigint</parameter>)</function></literal></entry>
        <entry><type>text</type></entry>
-       <entry>report the status of the given transaction: <literal>committed</literal>, <literal>aborted</literal>, <literal>in progress</literal>, or null if the transaction ID is too old</entry>
+       <entry>see <function>xid8_status()</function></entry>
       </row>
      </tbody>
     </tgroup>
@@ -19012,13 +19106,15 @@ SELECT collation for ('foo' COLLATE "de_DE");
     wraps around every 4 billion transactions.  However, these functions
     export a 64-bit format that is extended with an <quote>epoch</quote> counter
     so it will not wrap around during the life of an installation.
-    The data type used by these functions, <type>txid_snapshot</type>,
+    The data type used by these functions, <type>xid8_snapshot</type>,
     stores information about transaction ID
     visibility at a particular moment in time.  Its components are
-    described in <xref linkend="functions-txid-snapshot-parts"/>.
+    described in <xref linkend="functions-xid8-snapshot-parts"/>.  The
+    <type>xid8</type> values it contains can be converted to <type>xid</type>
+    by casting, if required.
    </para>
 
-   <table id="functions-txid-snapshot-parts">
+   <table id="functions-xid8-snapshot-parts">
     <title>Snapshot Components</title>
     <tgroup cols="2">
      <thead>
@@ -19033,7 +19129,7 @@ SELECT collation for ('foo' COLLATE "de_DE");
       <row>
        <entry><type>xmin</type></entry>
        <entry>
-         Earliest transaction ID (txid) that is still active.  All earlier
+         Earliest transaction ID (xid8) that is still active.  All earlier
          transactions will either be committed and visible, or rolled
          back and dead.
        </entry>
@@ -19042,7 +19138,7 @@ SELECT collation for ('foo' COLLATE "de_DE");
       <row>
        <entry><type>xmax</type></entry>
        <entry>
-        First as-yet-unassigned txid.  All txids greater than or equal to this
+        First as-yet-unassigned xid8.  All xid8s greater than or equal to this
         are not yet started as of the time of the snapshot, and thus invisible.
        </entry>
       </row>
@@ -19050,14 +19146,14 @@ SELECT collation for ('foo' COLLATE "de_DE");
       <row>
        <entry><type>xip_list</type></entry>
        <entry>
-        Active txids at the time of the snapshot.  The list
-        includes only those active txids between <literal>xmin</literal>
-        and <literal>xmax</literal>; there might be active txids higher
-        than <literal>xmax</literal>.  A txid that is <literal>xmin &lt;= txid &lt;
+        Active xid8s at the time of the snapshot.  The list
+        includes only those active xid8s between <literal>xmin</literal>
+        and <literal>xmax</literal>; there might be active xid8s higher
+        than <literal>xmax</literal>.  An xid8 that is <literal>xmin &lt;= xid8 &lt;
         xmax</literal> and not in this list was already completed
         at the time of the snapshot, and thus either visible or
         dead according to its commit status.  The list does not
-        include txids of subtransactions.
+        include xid8s of subtransactions.
        </entry>
       </row>
 
@@ -19066,14 +19162,14 @@ SELECT collation for ('foo' COLLATE "de_DE");
    </table>
 
    <para>
-    <type>txid_snapshot</type>'s textual representation is
+    <type>xid8_snapshot</type>'s textual representation is
     <literal><replaceable>xmin</replaceable>:<replaceable>xmax</replaceable>:<replaceable>xip_list</replaceable></literal>.
     For example <literal>10:20:10,14,15</literal> means
     <literal>xmin=10, xmax=20, xip_list=10, 14, 15</literal>.
    </para>
 
    <para>
-    <function>txid_status(bigint)</function> reports the commit status of a recent
+    <function>xid8_status(xid8)</function> reports the commit status of a recent
     transaction.  Applications may use it to determine whether a transaction
     committed or aborted when the application and database server become
     disconnected while a <literal>COMMIT</literal> is in progress.
@@ -19087,7 +19183,7 @@ SELECT collation for ('foo' COLLATE "de_DE");
     transactions are reported as <literal>in progress</literal>; applications must
     check <link
     linkend="view-pg-prepared-xacts"><literal>pg_prepared_xacts</literal></link> if they
-    need to determine whether the txid is a prepared transaction.
+    need to determine whether the xid8 is a prepared transaction.
    </para>
 
    <para>
