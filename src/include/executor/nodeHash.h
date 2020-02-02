@@ -75,5 +75,7 @@ extern void ExecHashRetrieveInstrumentation(HashState *node);
 extern void ExecShutdownHash(HashState *node);
 extern void ExecHashAccumInstrumentation(HashInstrumentation *instrument,
 										 HashJoinTable hashtable);
+extern void ExecHashFlushInsertBuffer(HashJoinTable hashtable);
+extern void ExecParallelHashFlushInsertBuffer(HashJoinTable hashtable);
 
 #endif							/* NODEHASH_H */

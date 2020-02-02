@@ -281,6 +281,26 @@ typedef struct ParallelHashJoinState
 #define PHJ_GROW_BUCKETS_REINSERTING	2
 #define PHJ_GROW_BUCKETS_PHASE(n)		((n) % 3)	/* circular phases */
 
+/*
+ * How many tuples to insert as a batch, to allow for prefetching.  This should
+ * be set high enough that by the time we've finished issuing a software
+ * prefetch for the last one, the first one is now available in memory without
+ * a cache miss, but low enough that we don't overflow the available cache
+ * lines.
+ */
+#define HJ_INSERT_BUFFER_SIZE			64
+
+typedef struct HashJoinTableInsertBuffer
+{
+	struct
+	{
+		HashJoinTupleData *tuple;
+		dsa_pointer	tuple_shared;
+		int			bucketno;
+	}			tuples[HJ_INSERT_BUFFER_SIZE];
+	int			ntuples;
+} HashJoinTableInsertBuffer;
+
 typedef struct HashJoinTableData
 {
 	int			nbuckets;		/* # buckets in the in-memory hash table */
@@ -347,6 +367,8 @@ typedef struct HashJoinTableData
 
 	MemoryContext hashCxt;		/* context for whole-hash-join storage */
 	MemoryContext batchCxt;		/* context for this-batch-only storage */
+
+	HashJoinTableInsertBuffer insert_buffer;
 
 	/* used for dense allocation of tuples (into linked chunks) */
 	HashMemoryChunk chunks;		/* one list for the whole batch */
