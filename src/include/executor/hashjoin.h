@@ -281,6 +281,19 @@ typedef struct ParallelHashJoinState
 #define PHJ_GROW_BUCKETS_REINSERTING	2
 #define PHJ_GROW_BUCKETS_PHASE(n)		((n) % 3)	/* circular phases */
 
+#define HJ_INSERTION_QUEUE_DEPTH		4
+
+typedef struct HashJoinTableInserter
+{
+	struct
+	{
+		HashJoinTupleData *tuple;
+		dsa_pointer	tuple_shared;
+		int			bucketno;
+	}			queue[HJ_INSERTION_QUEUE_DEPTH];
+	int			head;
+} HashJoinTableInserter;
+
 typedef struct HashJoinTableData
 {
 	int			nbuckets;		/* # buckets in the in-memory hash table */
@@ -347,6 +360,8 @@ typedef struct HashJoinTableData
 
 	MemoryContext hashCxt;		/* context for whole-hash-join storage */
 	MemoryContext batchCxt;		/* context for this-batch-only storage */
+
+	HashJoinTableInserter inserter;
 
 	/* used for dense allocation of tuples (into linked chunks) */
 	HashMemoryChunk chunks;		/* one list for the whole batch */
