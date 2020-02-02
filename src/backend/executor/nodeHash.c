@@ -68,6 +68,10 @@ static inline HashJoinTuple ExecParallelHashNextTuple(HashJoinTable table,
 static inline void ExecParallelHashPushTuple(dsa_pointer_atomic *head,
 											 HashJoinTuple tuple,
 											 dsa_pointer tuple_shared);
+static inline void ExecParallelHashEnqueueTuple(HashJoinTable hashtable,
+												HashJoinTuple tuple,
+												dsa_pointer tuple_shared,
+												int bucketno);
 static void ExecParallelHashJoinSetUpBatches(HashJoinTable hashtable, int nbatch);
 static void ExecParallelHashEnsureBatchAccessors(HashJoinTable hashtable);
 static void ExecParallelHashRepartitionFirst(HashJoinTable hashtable);
@@ -79,6 +83,7 @@ static bool ExecParallelHashTuplePrealloc(HashJoinTable hashtable,
 										  size_t size);
 static void ExecParallelHashMergeCounters(HashJoinTable hashtable);
 static void ExecParallelHashCloseBatchAccessors(HashJoinTable hashtable);
+static void ExecHashResetInsertQueue(HashJoinTable hashtable);
 
 
 /* ----------------------------------------------------------------
@@ -189,6 +194,7 @@ MultiExecPrivateHash(HashState *node)
 			hashtable->totalTuples += 1;
 		}
 	}
+	ExecHashFlushInsertQueue(hashtable);
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
@@ -289,6 +295,7 @@ MultiExecParallelHash(HashState *node)
 					ExecParallelHashTableInsert(hashtable, slot, hashvalue);
 				hashtable->partialTuples++;
 			}
+			ExecParallelHashFlushInsertQueue(hashtable);
 
 			/*
 			 * Make sure that any tuples we wrote to disk are visible to
@@ -512,6 +519,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, List *hashCollations,
 	hashtable->parallel_state = state->parallel_state;
 	hashtable->area = state->ps.state->es_query_dsa;
 	hashtable->batches = NULL;
+	ExecHashResetInsertQueue(hashtable);
 
 #ifdef HJDEBUG
 	printf("Hashjoin %p: initial nbatch = %d, nbuckets = %d\n",
@@ -905,6 +913,8 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	nbatch = oldnbatch * 2;
 	Assert(nbatch > 1);
 
+	ExecHashFlushInsertQueue(hashtable);
+
 #ifdef HJDEBUG
 	printf("Hashjoin %p: increasing nbatch to %d because space = %zu\n",
 		   hashtable, nbatch, hashtable->spaceUsed);
@@ -1061,6 +1071,8 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 	int			i;
 
 	Assert(BarrierPhase(&pstate->build_barrier) == PHJ_BUILD_HASHING_INNER);
+
+	ExecHashResetInsertQueue(hashtable);
 
 	/*
 	 * It's unlikely, but we need to be prepared for new participants to show
@@ -1461,6 +1473,7 @@ ExecHashIncreaseNumBuckets(HashJoinTable hashtable)
 
 	memset(hashtable->buckets.unshared, 0,
 		   hashtable->nbuckets * sizeof(HashJoinTuple));
+	ExecHashResetInsertQueue(hashtable);
 
 	/* scan through all tuples in all chunks to rebuild the hash table */
 	for (chunk = hashtable->chunks; chunk != NULL; chunk = chunk->next.unshared)
@@ -1500,6 +1513,8 @@ ExecParallelHashIncreaseNumBuckets(HashJoinTable hashtable)
 	dsa_pointer chunk_s;
 
 	Assert(BarrierPhase(&pstate->build_barrier) == PHJ_BUILD_HASHING_INNER);
+
+	ExecHashResetInsertQueue(hashtable);
 
 	/*
 	 * It's unlikely, but we need to be prepared for new participants to show
@@ -1579,6 +1594,55 @@ ExecParallelHashIncreaseNumBuckets(HashJoinTable hashtable)
 	}
 }
 
+static inline void
+ExecHashPushTuple(HashJoinTable hashtable, HashJoinTuple tuple, int bucketno)
+{
+	tuple->next.unshared = hashtable->buckets.unshared[bucketno];
+	hashtable->buckets.unshared[bucketno] = tuple;
+}
+
+static inline void
+ExecHashEnqueueTuple(HashJoinTable hashtable, HashJoinTuple tuple, int bucketno)
+{
+	HashJoinTableInserter *inserter = &hashtable->inserter;
+	int			i = inserter->head;
+
+	/* Push the oldest item into the hash table. */
+	if (inserter->queue[i].tuple)
+		ExecHashPushTuple(hashtable,
+						  inserter->queue[i].tuple,
+						  inserter->queue[i].bucketno);
+
+	/* Start fetching the cache line, and add it to the queue. */
+	pg_prefetch_mem(&hashtable->buckets.unshared[bucketno]);
+	inserter->queue[i].tuple = tuple;
+	inserter->queue[i].bucketno = bucketno;
+	inserter->head = (i + 1) % HJ_INSERTION_QUEUE_DEPTH;
+}
+
+void
+ExecHashFlushInsertQueue(HashJoinTable hashtable)
+{
+	HashJoinTableInserter *inserter = &hashtable->inserter;
+
+	for (int i = 0; i < HJ_INSERTION_QUEUE_DEPTH; ++i)
+	{
+		if (inserter->queue[i].tuple)
+		{
+			ExecHashPushTuple(hashtable,
+							  inserter->queue[i].tuple,
+							  inserter->queue[i].bucketno);
+			inserter->queue[i].tuple = NULL;
+		}
+	}
+}
+
+static inline void
+ExecHashResetInsertQueue(HashJoinTable hashtable)
+{
+	memset(&hashtable->inserter, 0, sizeof(hashtable->inserter));
+}
+
 /*
  * ExecHashTableInsert
  *		insert a tuple into the hash table depending on the hash value
@@ -1631,8 +1695,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(hashTuple));
 
 		/* Push it onto the front of the bucket's list */
-		hashTuple->next.unshared = hashtable->buckets.unshared[bucketno];
-		hashtable->buckets.unshared[bucketno] = hashTuple;
+		ExecHashEnqueueTuple(hashtable, hashTuple, bucketno);
 
 		/*
 		 * Increase the (optimal) number of buckets if we just exceeded the
@@ -1711,8 +1774,7 @@ retry:
 		memcpy(HJTUPLE_MINTUPLE(hashTuple), tuple, tuple->t_len);
 
 		/* Push it onto the front of the bucket's list */
-		ExecParallelHashPushTuple(&hashtable->buckets.shared[bucketno],
-								  hashTuple, shared);
+		ExecParallelHashEnqueueTuple(hashtable, hashTuple, shared, bucketno);
 	}
 	else
 	{
@@ -1758,14 +1820,14 @@ ExecParallelHashTableInsertCurrentBatch(HashJoinTable hashtable,
 
 	ExecHashGetBucketAndBatch(hashtable, hashvalue, &bucketno, &batchno);
 	Assert(batchno == hashtable->curbatch);
+
 	hashTuple = ExecParallelHashTupleAlloc(hashtable,
 										   HJTUPLE_OVERHEAD + tuple->t_len,
 										   &shared);
 	hashTuple->hashvalue = hashvalue;
 	memcpy(HJTUPLE_MINTUPLE(hashTuple), tuple, tuple->t_len);
 	HeapTupleHeaderClearMatch(HJTUPLE_MINTUPLE(hashTuple));
-	ExecParallelHashPushTuple(&hashtable->buckets.shared[bucketno],
-							  hashTuple, shared);
+	ExecParallelHashEnqueueTuple(hashtable, hashTuple, shared, bucketno);
 
 	if (shouldFree)
 		heap_free_minimal_tuple(tuple);
@@ -3221,6 +3283,44 @@ ExecParallelHashPushTuple(dsa_pointer_atomic *head,
 												&tuple->next.shared,
 												tuple_shared))
 			break;
+	}
+}
+
+static inline void
+ExecParallelHashEnqueueTuple(HashJoinTable hashtable, HashJoinTuple tuple,
+							 dsa_pointer tuple_shared, int bucketno)
+{
+	HashJoinTableInserter *inserter = &hashtable->inserter;
+	int			i = inserter->head;
+
+	/* Push the oldest item into the hash table. */
+	if (inserter->queue[i].tuple)
+		ExecParallelHashPushTuple(&hashtable->buckets.shared[inserter->queue[i].bucketno],
+								  inserter->queue[i].tuple,
+								  inserter->queue[i].tuple_shared);
+
+	/* Start fetching the cache line, and add it to the queue. */
+	pg_prefetch_mem(&hashtable->buckets.unshared[bucketno]);
+	inserter->queue[i].tuple = tuple;
+	inserter->queue[i].tuple_shared = tuple_shared;
+	inserter->queue[i].bucketno = bucketno;
+	inserter->head = (i + 1) % HJ_INSERTION_QUEUE_DEPTH;
+}
+
+void
+ExecParallelHashFlushInsertQueue(HashJoinTable hashtable)
+{
+	HashJoinTableInserter *inserter = &hashtable->inserter;
+
+	for (int i = 0; i < HJ_INSERTION_QUEUE_DEPTH; ++i)
+	{
+		if (inserter->queue[i].tuple)
+		{
+			ExecParallelHashPushTuple(&hashtable->buckets.shared[inserter->queue[i].bucketno],
+									  inserter->queue[i].tuple,
+									  inserter->queue[i].tuple_shared);
+			inserter->queue[i].tuple = NULL;
+		}
 	}
 }
 
