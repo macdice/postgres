@@ -1800,15 +1800,14 @@ assign_record_type_typmod(TupleDesc tupDesc)
 	/* Find or create a hashtable entry for this tuple descriptor */
 	recentry = (RecordCacheEntry *) hash_search(RecordCacheHash,
 												(void *) &tupDesc,
-												HASH_ENTER, &found);
-	if (found && recentry->tupdesc != NULL)
+												HASH_FIND, NULL);
+	if (recentry)
 	{
 		tupDesc->tdtypmod = recentry->tupdesc->tdtypmod;
 		return;
 	}
 
 	/* Not present, so need to manufacture an entry */
-	recentry->tupdesc = NULL;
 	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
 
 	/* Look in the SharedRecordTypmodRegistry, if attached */
@@ -1822,6 +1821,10 @@ assign_record_type_typmod(TupleDesc tupDesc)
 	}
 	ensure_record_cache_typmod_slot_exists(entDesc->tdtypmod);
 	RecordCacheArray[entDesc->tdtypmod] = entDesc;
+	recentry = (RecordCacheEntry *) hash_search(RecordCacheHash,
+												(void *) &tupDesc,
+												HASH_ENTER, &found);
+	Assert(!found);
 	recentry->tupdesc = entDesc;
 
 	/* Assign a unique tupdesc identifier, too. */
