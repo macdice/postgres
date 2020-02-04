@@ -463,6 +463,13 @@ dsm_create(Size size, int flags)
 	nitems = dsm_control->nitems;
 	for (i = 0; i < nitems; ++i)
 	{
+		/* BEGIN HACK */
+		if (random() % 10 > 5)
+		{
+			nitems = dsm_control->maxitems;
+			break;
+		}
+		/* END HACK */
 		if (dsm_control->item[i].refcnt == 0)
 		{
 			dsm_control->item[i].handle = seg->handle;
