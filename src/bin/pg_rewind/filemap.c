@@ -19,12 +19,13 @@
 #include "filemap.h"
 #include "pg_rewind.h"
 #include "storage/fd.h"
+#include "storage/segment.h"
 
 filemap_t  *filemap = NULL;
 
 static bool isRelDataFile(const char *path);
 static char *datasegpath(RelFileNode rnode, ForkNumber forknum,
-						 BlockNumber segno);
+						 SegmentNumber segno);
 static int	path_cmp(const void *a, const void *b);
 static int	final_filemap_cmp(const void *a, const void *b);
 static void filemap_list_to_array(filemap_t *map);
@@ -421,7 +422,7 @@ process_block_change(ForkNumber forknum, RelFileNode rnode, BlockNumber blkno)
 	file_entry_t *key_ptr;
 	file_entry_t *entry;
 	BlockNumber blkno_inseg;
-	int			segno;
+	SegmentNumber segno;
 	filemap_t  *map = filemap;
 	file_entry_t **e;
 
@@ -759,7 +760,7 @@ isRelDataFile(const char *path)
  * The returned path is palloc'd
  */
 static char *
-datasegpath(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
+datasegpath(RelFileNode rnode, ForkNumber forknum, SegmentNumber segno)
 {
 	char	   *path;
 	char	   *segpath;

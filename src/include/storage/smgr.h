@@ -17,6 +17,7 @@
 #include "lib/ilist.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
+#include "storage/segment.h"
 
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
@@ -67,7 +68,7 @@ typedef struct SMgrRelationData
 	 * for md.c; per-fork arrays of the number of open segments
 	 * (md_num_open_segs) and the segments themselves (md_seg_fds).
 	 */
-	int			md_num_open_segs[MAX_FORKNUM + 1];
+	SegmentNumber md_num_open_segs[MAX_FORKNUM + 1];
 	struct _MdfdVec *md_seg_fds[MAX_FORKNUM + 1];
 
 	/* if unowned, list link in list of all unowned SMgrRelations */

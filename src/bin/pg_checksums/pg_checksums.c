@@ -29,6 +29,7 @@
 #include "storage/bufpage.h"
 #include "storage/checksum.h"
 #include "storage/checksum_impl.h"
+#include "storage/segment.h"
 
 
 static int64 files = 0;
@@ -167,7 +168,7 @@ skipfile(const char *fn)
 }
 
 static void
-scan_file(const char *fn, BlockNumber segmentno)
+scan_file(const char *fn, SegmentNumber segmentno)
 {
 	PGAlignedBlock buf;
 	PageHeader	header = (PageHeader) buf.data;
@@ -321,7 +322,7 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 			char		fnonly[MAXPGPATH];
 			char	   *forkpath,
 					   *segmentpath;
-			BlockNumber segmentno = 0;
+			SegmentNumber segmentno = 0;
 
 			if (skipfile(de->d_name))
 				continue;
