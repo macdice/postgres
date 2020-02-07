@@ -409,6 +409,7 @@ struct pg_conn
 	/* Connection data */
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
 								 * unconnected */
+	pg_int64	sockChangeCount;	/* advances when socket is opened/closed */
 	SockAddr	laddr;			/* Local address */
 	SockAddr	raddr;			/* Remote address */
 	ProtocolVersion pversion;	/* FE/BE protocol version in use */

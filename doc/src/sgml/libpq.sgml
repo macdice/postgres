@@ -2280,6 +2280,23 @@ int PQsocket(const PGconn *conn);
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-PQsocketChangeCount">
+     <term><function>PQsocketChangeCount</function><indexterm><primary>PQsocketChangeCount</primary></indexterm></term>
+     <listitem>
+      <para>
+       Returns a counter that increases whenever the socket has changed.
+       This can be used to know when the value returned by
+       <xref linkend="libpq-PQsocket"/> represents a different socket, even
+       if it happens to have the same file descriptor number.
+
+<synopsis>
+pg_int64 PQsocketChangeCount(const PGconn *conn);
+</synopsis>
+
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="libpq-PQbackendPID">
      <term><function>PQbackendPID</function><indexterm><primary>PQbackendPID</primary></indexterm></term>
      <listitem>

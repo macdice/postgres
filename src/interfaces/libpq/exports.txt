@@ -179,3 +179,4 @@ PQgetgssctx               176
 PQsetSSLKeyPassHook		  177
 PQgetSSLKeyPassHook		  178
 PQdefaultSSLKeyPassHook	  179
+PQsocketChangeCount       180

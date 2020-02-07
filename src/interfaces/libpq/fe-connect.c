@@ -464,6 +464,7 @@ pqDropConnection(PGconn *conn, bool flushInput)
 	if (conn->sock != PGINVALID_SOCKET)
 		closesocket(conn->sock);
 	conn->sock = PGINVALID_SOCKET;
+	conn->sockChangeCount++;
 
 	/* Optionally discard any unread data */
 	if (flushInput)
@@ -2538,6 +2539,7 @@ keep_going:						/* We will come back to here until there is
 					 */
 
 					conn->sock = socket(addr_cur->ai_family, SOCK_STREAM, 0);
+					conn->sockChangeCount++;
 					if (conn->sock == PGINVALID_SOCKET)
 					{
 						/*
@@ -6704,6 +6706,14 @@ PQsocket(const PGconn *conn)
 	if (!conn)
 		return -1;
 	return (conn->sock != PGINVALID_SOCKET) ? conn->sock : -1;
+}
+
+pg_int64
+PQsocketChangeCount(const PGconn *conn)
+{
+	if (!conn)
+		return -1;
+	return conn->sockChangeCount;
 }
 
 int
