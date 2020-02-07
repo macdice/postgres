@@ -616,11 +616,7 @@ copy_read_data(void *outbuf, int minread, int maxread)
 		/*
 		 * Wait for more data or latch.
 		 */
-		(void) WaitLatchOrSocket(MyLatch,
-								 WL_SOCKET_READABLE | WL_LATCH_SET |
-								 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-								 fd, 1000L, WAIT_EVENT_LOGICAL_SYNC_DATA);
-
+		(void) walrcv_wait(wrconn, 1000L, WAIT_EVENT_LOGICAL_SYNC_DATA);
 		ResetLatch(MyLatch);
 	}
 
