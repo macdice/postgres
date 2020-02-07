@@ -194,6 +194,12 @@ PGAC_ARG_BOOL(enable, atomics, yes,
               [do not use atomic operations])
 
 #
+# Hardware transactional memory
+#
+PGAC_ARG_BOOL(enable, htm, no,
+              [use hardware transactional memory operations])
+
+#
 # --enable-debug adds -g to compiler flags
 #
 PGAC_ARG_BOOL(enable, debug, no,
@@ -592,6 +598,11 @@ if test "$enable_profiling" = yes && test "$ac_cv_prog_cc_g" = yes; then
   else
     AC_MSG_ERROR([--enable-profiling is supported only when using GCC])
   fi
+fi
+
+# enable HTM if --enable-htm
+if test "$enable_htm" = yes; then
+  CFLAGS="$CFLAGS -mrtm"
 fi
 
 # We already have this in Makefile.win32, but configure needs it too
@@ -1167,6 +1178,10 @@ if test "$enable_atomics" = yes; then
 else
   AC_MSG_WARN([
 *** Not using atomic operations will cause poor performance.])
+fi
+
+if test "$enable_htm" = yes; then
+  AC_DEFINE(HAVE_HTM, 1, [Define to 1 if you want to use HTM.])
 fi
 
 if test "$with_gssapi" = yes ; then

@@ -43,6 +43,10 @@
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 
+#ifdef HAVE_HTM
+#include <immintrin.h>
+#endif
+
 static void ExecHashIncreaseNumBatches(HashJoinTable hashtable);
 static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
 static void ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable);
@@ -3214,6 +3218,26 @@ ExecParallelHashPushTuple(dsa_pointer_atomic *head,
 						  HashJoinTuple tuple,
 						  dsa_pointer tuple_shared)
 {
+#ifdef HAVE_HTM
+	volatile int status;
+
+	/* Use a hardware transaction.  This should be slightly faster than CAS. */
+	for (;;)
+	{
+		if ((status = _xbegin()) == _XBEGIN_STARTED)
+		{
+			tuple->next.shared = dsa_pointer_atomic_read(head);
+			dsa_pointer_atomic_write(head, tuple_shared);
+			_xend();
+			return;
+		}
+
+		/* If it's not a retryable status, fall through to CAS loop below. */
+		if (!(status & (_XABORT_RETRY  | _XABORT_CONFLICT)))
+			break;
+	}
+#endif
+
 	for (;;)
 	{
 		tuple->next.shared = dsa_pointer_atomic_read(head);
