@@ -3210,6 +3210,7 @@ ExecParallelHashNextTuple(HashJoinTable hashtable, HashJoinTuple tuple)
 	return next;
 }
 
+
 /*
  * Insert a tuple at the front of a chain of tuples in DSA memory atomically.
  */
@@ -3222,20 +3223,18 @@ ExecParallelHashPushTuple(dsa_pointer_atomic *head,
 	volatile int status;
 
 	/* Use a hardware transaction.  This should be slightly faster than CAS. */
-	for (;;)
+	if ((status = _xbegin()) == _XBEGIN_STARTED)
 	{
-		if ((status = _xbegin()) == _XBEGIN_STARTED)
-		{
-			tuple->next.shared = dsa_pointer_atomic_read(head);
-			dsa_pointer_atomic_write(head, tuple_shared);
-			_xend();
-			return;
-		}
-
-		/* If it's not a retryable status, fall through to CAS loop below. */
-		if (!(status & (_XABORT_RETRY  | _XABORT_CONFLICT)))
-			break;
+		tuple->next.shared = dsa_pointer_atomic_read(head);
+		dsa_pointer_atomic_write(head, tuple_shared);
+		_xend();
+		return;
 	}
+
+	/*
+	 * We could check the status for eg _XABORT_RETRY and try the transaction
+	 * again, but for now fall back to the CAS path.
+	 */
 #endif
 
 	for (;;)
