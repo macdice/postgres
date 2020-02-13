@@ -112,7 +112,7 @@ typedef struct SlruFlushData *SlruFlush;
 typedef enum
 {
 	SLRU_OPEN_FAILED,
-	SLRU_SEEK_FAILED,
+	SLRU_SIZE_FAILED,
 	SLRU_READ_FAILED,
 	SLRU_WRITE_FAILED,
 	SLRU_FSYNC_FAILED,
@@ -611,9 +611,9 @@ SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
 		SlruReportIOError(ctl, pageno, 0);
 	}
 
-	if ((endpos = lseek(fd, 0, SEEK_END)) < 0)
+	if ((endpos = pg_file_size(fd)) < 0)
 	{
-		slru_errcause = SLRU_SEEK_FAILED;
+		slru_errcause = SLRU_SIZE_FAILED;
 		slru_errno = errno;
 		SlruReportIOError(ctl, pageno, 0);
 	}
@@ -646,7 +646,7 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	SlruShared	shared = ctl->shared;
 	int			segno = pageno / SLRU_PAGES_PER_SEGMENT;
 	int			rpageno = pageno % SLRU_PAGES_PER_SEGMENT;
-	int			offset = rpageno * BLCKSZ;
+	off_t		offset = rpageno * BLCKSZ;
 	char		path[MAXPGPATH];
 	int			fd;
 
@@ -676,17 +676,9 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 		return true;
 	}
 
-	if (lseek(fd, (off_t) offset, SEEK_SET) < 0)
-	{
-		slru_errcause = SLRU_SEEK_FAILED;
-		slru_errno = errno;
-		CloseTransientFile(fd);
-		return false;
-	}
-
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SLRU_READ);
-	if (read(fd, shared->page_buffer[slotno], BLCKSZ) != BLCKSZ)
+	if (pg_pread(fd, shared->page_buffer[slotno], BLCKSZ, offset) != BLCKSZ)
 	{
 		pgstat_report_wait_end();
 		slru_errcause = SLRU_READ_FAILED;
@@ -726,7 +718,7 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 	SlruShared	shared = ctl->shared;
 	int			segno = pageno / SLRU_PAGES_PER_SEGMENT;
 	int			rpageno = pageno % SLRU_PAGES_PER_SEGMENT;
-	int			offset = rpageno * BLCKSZ;
+	off_t		offset = rpageno * BLCKSZ;
 	char		path[MAXPGPATH];
 	int			fd = -1;
 
@@ -836,18 +828,9 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 		}
 	}
 
-	if (lseek(fd, (off_t) offset, SEEK_SET) < 0)
-	{
-		slru_errcause = SLRU_SEEK_FAILED;
-		slru_errno = errno;
-		if (!fdata)
-			CloseTransientFile(fd);
-		return false;
-	}
-
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
-	if (write(fd, shared->page_buffer[slotno], BLCKSZ) != BLCKSZ)
+	if (pg_pwrite(fd, shared->page_buffer[slotno], BLCKSZ, offset) != BLCKSZ)
 	{
 		pgstat_report_wait_end();
 		/* if write didn't set errno, assume problem is no disk space */
@@ -911,12 +894,12 @@ SlruReportIOError(SlruCtl ctl, int pageno, TransactionId xid)
 					 errmsg("could not access status of transaction %u", xid),
 					 errdetail("Could not open file \"%s\": %m.", path)));
 			break;
-		case SLRU_SEEK_FAILED:
+		case SLRU_SIZE_FAILED:
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not access status of transaction %u", xid),
-					 errdetail("Could not seek in file \"%s\" to offset %u: %m.",
-							   path, offset)));
+					 errdetail("Could not get size of file \"%s\": %m.",
+							   path)));
 			break;
 		case SLRU_READ_FAILED:
 			if (errno)
