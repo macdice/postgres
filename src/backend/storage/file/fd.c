@@ -323,6 +323,30 @@ static int	fsync_parent_path(const char *fname, int elevel);
 
 
 /*
+ * pg_file_size --- return the size of a file
+ */
+int64
+pg_file_size(int fd)
+{
+#ifdef WIN32
+	LARGE_INTEGER result;
+
+	if (GetFileSizeEx(handle, &result))
+		return result;
+
+	_dosmaperr(GetLastError());
+	return -1;
+#else
+	struct stat st;
+
+	if (fstat(fd, &st) == 0)
+		return st.st_size;
+
+	return -1;
+#endif
+}
+
+/*
  * pg_fsync --- do fsync with or without writethrough
  */
 int

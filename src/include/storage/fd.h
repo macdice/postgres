@@ -139,6 +139,7 @@ extern void RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok,
 								   bool unlink_all);
 extern bool looks_like_temp_rel_name(const char *name);
 
+extern int64 pg_file_size(int fd);
 extern int	pg_fsync(int fd);
 extern int	pg_fsync_no_writethrough(int fd);
 extern int	pg_fsync_writethrough(int fd);
