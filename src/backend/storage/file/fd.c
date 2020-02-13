@@ -330,9 +330,17 @@ pg_file_size(int fd)
 {
 #ifdef WIN32
 	LARGE_INTEGER result;
+	HANDLE handle;
+
+	handle = (HANDLE) _get_osfhandle(fd);
+	if (handle == INVALID_HANDLE_VALUE)
+	{
+		errno = EBADF;
+		return -1;
+	}
 
 	if (GetFileSizeEx(handle, &result))
-		return result;
+		return result.QuadPart;
 
 	_dosmaperr(GetLastError());
 	return -1;
