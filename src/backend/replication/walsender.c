@@ -487,15 +487,11 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 				 errmsg("could not open file \"%s\": %m", path)));
 
 	/* Determine file length and send it to client */
-	histfilelen = lseek(fd, 0, SEEK_END);
+	histfilelen = pg_file_size(fd);
 	if (histfilelen < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not seek to end of file \"%s\": %m", path)));
-	if (lseek(fd, 0, SEEK_SET) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not seek to beginning of file \"%s\": %m", path)));
+				 errmsg("could not get size of file \"%s\": %m", path)));
 
 	pq_sendint32(&buf, histfilelen);	/* col2 len */
 
