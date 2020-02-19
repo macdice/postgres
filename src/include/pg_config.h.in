@@ -295,6 +295,9 @@
 /* Define to 1 if you have the `history_truncate_file' function. */
 #undef HAVE_HISTORY_TRUNCATE_FILE
 
+/* Define to 1 if you want to use HTM. */
+#undef HAVE_HTM
+
 /* Define to 1 if you have the <ieeefp.h> header file. */
 #undef HAVE_IEEEFP_H
 
