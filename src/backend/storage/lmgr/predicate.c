@@ -202,6 +202,7 @@
 #include "access/xlog.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/htm.h"
 #include "storage/bufmgr.h"
 #include "storage/predicate.h"
 #include "storage/predicate_internals.h"
@@ -312,6 +313,61 @@
 	((targethash) ^ ((uint32) PointerGetDatum((predicatelocktag)->myXact)) \
 	 << LOG2_NUM_PREDICATELOCK_PARTITIONS)
 
+
+#ifdef HAVE_HTM
+
+/*
+ * If this microarchitecture doesn't support HTM, or if our HTM transaction
+ * aborts for any reason, we'll return false.  This macro expects to be used in
+ * a function that has a use_memory_transaction parameter and returns false if
+ * an HTM transaction abort.
+ */
+#define MaybeBeginMemoryTransaction() \
+	if (use_memory_transaction && (!have_htm_support || !pg_htm_begin())) \
+		return false
+#define MaybeCommitMemoryTransaction() \
+	if (use_memory_transaction) \
+		pg_htm_commit()
+/*
+ * When in a hardware memory transaction, we don't acquire any locks at all.
+ * We still need to read them though, so that we can abort explicitly if we
+ * see that some other process has the lock and must therefore be in the
+ * fallback path, and so that the memory hardware aborts our transaction if
+ * that changes underneath us.
+ *
+ * XXX: lwlock.h should probably give us a tidy interface for the read, rather
+ * than accessing its internal state directly like this!
+ *
+ * XXX: It's probably not necessary to abort explicitly if only a share lock is
+ * held?  Not sure if it's worth worrying about since we'll get (spurious)
+ * conflicts from the shared counter changing, but for now abort only on
+ * 1 << 24 which is the sentinel value LW_VAL_EXCLUSIVE.
+ */
+#define MaybeLWLockAcquire(lock, mode) \
+	do { \
+		if (!use_memory_transaction) \
+			LWLockAcquire((lock), (mode)); \
+		else if (pg_atomic_read_u32(&(lock)->state) == (1 << 24)) \
+			pg_htm_abort(); \
+	} while (0)
+#define MaybeLWLockRelease(lock) \
+	do { \
+		if (!use_memory_transaction) \
+			LWLockRelease((lock)); \
+	} while (0)
+
+#else
+
+/*
+ * If HTM is isn't supported in this build, just return false.  This should
+ * remove the HTM path entirely from the generated code, given enough inlining.
+ */
+#define MaybeBeginMemoryTransaction() if (use_memory_transaction) return false
+#define MaybeCommitMemoryTransaction()
+#define MaybeLWLockAcquire(lock, mode) LWLockAcquire((lock), (mode))
+#define MaybeLWLockRelease(lock) LWLockRelease((lock))
+
+#endif
 
 /*
  * The SLRU buffer area through which we access the old xids.
@@ -473,14 +529,17 @@ static void PredicateLockAcquire(const PREDICATELOCKTARGETTAG *targettag);
 static void DropAllPredicateLocksFromTable(Relation relation,
 										   bool transfer);
 static void SetNewSxactGlobalXmin(void);
-static void ClearOldPredicateLocks(void);
+static pg_attribute_always_inline void ClearOldPredicateLocks(bool use_memory_transaction);
 static void ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
-									   bool summarize);
+									   bool summarize,
+									   bool use_memory_transaction);
 static bool XidIsConcurrent(TransactionId xid);
 static void CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag);
-static void FlagRWConflict(SERIALIZABLEXACT *reader, SERIALIZABLEXACT *writer);
+static void FlagRWConflict(SERIALIZABLEXACT *reader, SERIALIZABLEXACT *writer,
+						   bool use_memory_transaction);
 static void OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
-													SERIALIZABLEXACT *writer);
+													SERIALIZABLEXACT *writer,
+													bool use_memory_transaction);
 static void CreateLocalPredicateLockHash(void);
 static void ReleasePredicateLocksLocal(void);
 
@@ -1466,7 +1525,7 @@ SummarizeOldestCommittedSxact(void)
 					 ? sxact->SeqNo.earliestOutConflictCommit : InvalidSerCommitSeqNo);
 
 	/* Summarize and release the detail. */
-	ReleaseOneSerializableXact(sxact, false, true);
+	ReleaseOneSerializableXact(sxact, false, true, false);
 
 	LWLockRelease(SerializableFinishedListLock);
 }
@@ -2372,10 +2431,11 @@ DecrementParentLocks(const PREDICATELOCKTARGETTAG *targettag)
  * granularity promotion or the local lock table. See
  * PredicateLockAcquire for that.
  */
-static void
-CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
-					uint32 targettaghash,
-					SERIALIZABLEXACT *sxact)
+static pg_attribute_always_inline bool
+CreatePredicateLockImpl(const PREDICATELOCKTARGETTAG *targettag,
+						uint32 targettaghash,
+						SERIALIZABLEXACT *sxact,
+						bool use_memory_transaction)
 {
 	PREDICATELOCKTARGET *target;
 	PREDICATELOCKTAG locktag;
@@ -2385,10 +2445,12 @@ CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
 
 	partitionLock = PredicateLockHashPartitionLock(targettaghash);
 
-	LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
+	MaybeBeginMemoryTransaction();
+
+	MaybeLWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
 	if (IsInParallelMode())
-		LWLockAcquire(&sxact->predicateLockListLock, LW_EXCLUSIVE);
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+		MaybeLWLockAcquire(&sxact->predicateLockListLock, LW_EXCLUSIVE);
+	MaybeLWLockAcquire(partitionLock, LW_EXCLUSIVE);
 
 	/* Make sure that the target is represented. */
 	target = (PREDICATELOCKTARGET *)
@@ -2396,10 +2458,13 @@ CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
 									targettag, targettaghash,
 									HASH_ENTER_NULL, &found);
 	if (!target)
+	{
+		MaybeCommitMemoryTransaction();
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of shared memory"),
 				 errhint("You might need to increase max_pred_locks_per_transaction.")));
+	}
 	if (!found)
 		SHMQueueInit(&(target->predicateLocks));
 
@@ -2411,10 +2476,13 @@ CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
 									PredicateLockHashCodeFromTargetHashCode(&locktag, targettaghash),
 									HASH_ENTER_NULL, &found);
 	if (!lock)
+	{
+		MaybeCommitMemoryTransaction();
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of shared memory"),
 				 errhint("You might need to increase max_pred_locks_per_transaction.")));
+	}
 
 	if (!found)
 	{
@@ -2424,10 +2492,23 @@ CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
 		lock->commitSeqNo = InvalidSerCommitSeqNo;
 	}
 
-	LWLockRelease(partitionLock);
+	MaybeLWLockRelease(partitionLock);
 	if (IsInParallelMode())
-		LWLockRelease(&sxact->predicateLockListLock);
-	LWLockRelease(SerializablePredicateLockListLock);
+		MaybeLWLockRelease(&sxact->predicateLockListLock);
+	MaybeLWLockRelease(SerializablePredicateLockListLock);
+
+	MaybeCommitMemoryTransaction();
+
+	return true;
+}
+
+static void
+CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
+					uint32 targettaghash,
+					SERIALIZABLEXACT *sxact)
+{
+	if (!CreatePredicateLockImpl(targettag, targettaghash, sxact, true))
+		CreatePredicateLockImpl(targettag, targettaghash, sxact, false);
 }
 
 /*
@@ -3259,14 +3340,16 @@ SetNewSxactGlobalXmin(void)
  * MySerializableXact variable and benefit from the optimization in its own
  * time.
  */
-void
-ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
+static pg_attribute_always_inline bool
+ReleasePredicateLocksImpl(bool isCommit, bool isReadOnlySafe,
+						  bool use_memory_transaction)
 {
 	bool		needToClear;
 	RWConflict	conflict,
 				nextConflict,
 				possibleUnsafeConflict;
 	SERIALIZABLEXACT *roXact;
+	TransactionId approximateNextXid;
 
 	/*
 	 * We can't trust XactReadOnly here, because a transaction which started
@@ -3293,7 +3376,7 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 		if (IsParallelWorker())
 		{
 			ReleasePredicateLocksLocal();
-			return;
+			return true;
 		}
 
 		/*
@@ -3320,10 +3403,17 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 	if (MySerializableXact == InvalidSerializableXact)
 	{
 		Assert(LocalPredicateLockHash == NULL);
-		return;
+		return true;
 	}
 
-	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+	/*
+	 * We might need an unsynchronized read of the next xid, but we don't want
+	 * that read to be considered part of our memory transaction.  So read it first.
+	 */
+	approximateNextXid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+
+	MaybeBeginMemoryTransaction();
+	MaybeLWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
 	/*
 	 * If the transaction is committing, but it has been partially released
@@ -3355,9 +3445,10 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 		 */
 		if (SxactIsPartiallyReleased(MySerializableXact))
 		{
-			LWLockRelease(SerializableXactHashLock);
+			MaybeLWLockRelease(SerializableXactHashLock);
+			MaybeCommitMemoryTransaction();
 			ReleasePredicateLocksLocal();
-			return;
+			return true;
 		}
 		else
 		{
@@ -3390,7 +3481,7 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 	 * transaction to complete before freeing some RAM; correctness of visible
 	 * behavior is not affected.
 	 */
-	MySerializableXact->finishedBefore = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+	MySerializableXact->finishedBefore = approximateNextXid;
 
 	/*
 	 * If it's not a commit it's either a rollback or a read-only transaction
@@ -3624,9 +3715,9 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 		}
 	}
 
-	LWLockRelease(SerializableXactHashLock);
+	MaybeLWLockRelease(SerializableXactHashLock);
 
-	LWLockAcquire(SerializableFinishedListLock, LW_EXCLUSIVE);
+	MaybeLWLockAcquire(SerializableFinishedListLock, LW_EXCLUSIVE);
 
 	/* Add this to the list of transactions to check for later cleanup. */
 	if (isCommit)
@@ -3642,14 +3733,26 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 	if (!isCommit)
 		ReleaseOneSerializableXact(MySerializableXact,
 								   isReadOnlySafe && IsInParallelMode(),
-								   false);
+								   false,
+								   use_memory_transaction);
 
-	LWLockRelease(SerializableFinishedListLock);
+	MaybeLWLockRelease(SerializableFinishedListLock);
 
 	if (needToClear)
-		ClearOldPredicateLocks();
+		ClearOldPredicateLocks(use_memory_transaction);
+
+	MaybeCommitMemoryTransaction();
 
 	ReleasePredicateLocksLocal();
+
+	return true;
+}
+
+void
+ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
+{
+	if (!ReleasePredicateLocksImpl(isCommit, isReadOnlySafe, true))
+		ReleasePredicateLocksImpl(isCommit, isReadOnlySafe, false);
 }
 
 static void
@@ -3670,8 +3773,8 @@ ReleasePredicateLocksLocal(void)
  * Clear old predicate locks, belonging to committed transactions that are no
  * longer interesting to any in-progress transaction.
  */
-static void
-ClearOldPredicateLocks(void)
+static pg_attribute_always_inline void
+ClearOldPredicateLocks(bool use_memory_transaction)
 {
 	SERIALIZABLEXACT *finishedSxact;
 	PREDICATELOCK *predlock;
@@ -3680,12 +3783,12 @@ ClearOldPredicateLocks(void)
 	 * Loop through finished transactions. They are in commit order, so we can
 	 * stop as soon as we find one that's still interesting.
 	 */
-	LWLockAcquire(SerializableFinishedListLock, LW_EXCLUSIVE);
+	MaybeLWLockAcquire(SerializableFinishedListLock, LW_EXCLUSIVE);
 	finishedSxact = (SERIALIZABLEXACT *)
 		SHMQueueNext(FinishedSerializableTransactions,
 					 FinishedSerializableTransactions,
 					 offsetof(SERIALIZABLEXACT, finishedLink));
-	LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+	MaybeLWLockAcquire(SerializableXactHashLock, LW_SHARED);
 	while (finishedSxact)
 	{
 		SERIALIZABLEXACT *nextSxact;
@@ -3702,10 +3805,11 @@ ClearOldPredicateLocks(void)
 			 * This transaction committed before any in-progress transaction
 			 * took its snapshot. It's no longer interesting.
 			 */
-			LWLockRelease(SerializableXactHashLock);
+			MaybeLWLockRelease(SerializableXactHashLock);
 			SHMQueueDelete(&(finishedSxact->finishedLink));
-			ReleaseOneSerializableXact(finishedSxact, false, false);
-			LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+			ReleaseOneSerializableXact(finishedSxact, false, false,
+									   use_memory_transaction);
+			MaybeLWLockAcquire(SerializableXactHashLock, LW_SHARED);
 		}
 		else if (finishedSxact->commitSeqNo > PredXact->HavePartialClearedThrough
 				 && finishedSxact->commitSeqNo <= PredXact->CanPartialClearThrough)
@@ -3715,13 +3819,14 @@ ClearOldPredicateLocks(void)
 			 * transaction committed are read-only, so we can clear part of
 			 * its state.
 			 */
-			LWLockRelease(SerializableXactHashLock);
+			MaybeLWLockRelease(SerializableXactHashLock);
 
 			if (SxactIsReadOnly(finishedSxact))
 			{
 				/* A read-only transaction can be removed entirely */
 				SHMQueueDelete(&(finishedSxact->finishedLink));
-				ReleaseOneSerializableXact(finishedSxact, false, false);
+				ReleaseOneSerializableXact(finishedSxact, false, false,
+										   use_memory_transaction);
 			}
 			else
 			{
@@ -3730,11 +3835,12 @@ ClearOldPredicateLocks(void)
 				 * need to keep the SERIALIZABLEXACT but can release the
 				 * SIREAD locks and conflicts in.
 				 */
-				ReleaseOneSerializableXact(finishedSxact, true, false);
+				ReleaseOneSerializableXact(finishedSxact, true, false,
+										   use_memory_transaction);
 			}
 
 			PredXact->HavePartialClearedThrough = finishedSxact->commitSeqNo;
-			LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+			MaybeLWLockAcquire(SerializableXactHashLock, LW_SHARED);
 		}
 		else
 		{
@@ -3743,12 +3849,12 @@ ClearOldPredicateLocks(void)
 		}
 		finishedSxact = nextSxact;
 	}
-	LWLockRelease(SerializableXactHashLock);
+	MaybeLWLockRelease(SerializableXactHashLock);
 
 	/*
 	 * Loop through predicate locks on dummy transaction for summarized data.
 	 */
-	LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
+	MaybeLWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
 	predlock = (PREDICATELOCK *)
 		SHMQueueNext(&OldCommittedSxact->predicateLocks,
 					 &OldCommittedSxact->predicateLocks,
@@ -3763,11 +3869,11 @@ ClearOldPredicateLocks(void)
 						 &predlock->xactLink,
 						 offsetof(PREDICATELOCK, xactLink));
 
-		LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+		MaybeLWLockAcquire(SerializableXactHashLock, LW_SHARED);
 		Assert(predlock->commitSeqNo != 0);
 		Assert(predlock->commitSeqNo != InvalidSerCommitSeqNo);
 		canDoPartialCleanup = (predlock->commitSeqNo <= PredXact->CanPartialClearThrough);
-		LWLockRelease(SerializableXactHashLock);
+		MaybeLWLockRelease(SerializableXactHashLock);
 
 		/*
 		 * If this lock originally belonged to an old enough transaction, we
@@ -3787,7 +3893,7 @@ ClearOldPredicateLocks(void)
 			targettaghash = PredicateLockTargetTagHashCode(&targettag);
 			partitionLock = PredicateLockHashPartitionLock(targettaghash);
 
-			LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+			MaybeLWLockAcquire(partitionLock, LW_EXCLUSIVE);
 
 			SHMQueueDelete(&(predlock->targetLink));
 			SHMQueueDelete(&(predlock->xactLink));
@@ -3798,14 +3904,14 @@ ClearOldPredicateLocks(void)
 										HASH_REMOVE, NULL);
 			RemoveTargetIfNoLongerUsed(target, targettaghash);
 
-			LWLockRelease(partitionLock);
+			MaybeLWLockRelease(partitionLock);
 		}
 
 		predlock = nextpredlock;
 	}
 
-	LWLockRelease(SerializablePredicateLockListLock);
-	LWLockRelease(SerializableFinishedListLock);
+	MaybeLWLockRelease(SerializablePredicateLockListLock);
+	MaybeLWLockRelease(SerializableFinishedListLock);
 }
 
 /*
@@ -3829,7 +3935,8 @@ ClearOldPredicateLocks(void)
  */
 static void
 ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
-						   bool summarize)
+						   bool summarize,
+						   bool use_memory_transaction)
 {
 	PREDICATELOCK *predlock;
 	SERIALIZABLEXIDTAG sxidtag;
@@ -3839,15 +3946,15 @@ ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
 	Assert(sxact != NULL);
 	Assert(SxactIsRolledBack(sxact) || SxactIsCommitted(sxact));
 	Assert(partial || !SxactIsOnFinishedList(sxact));
-	Assert(LWLockHeldByMe(SerializableFinishedListLock));
+	Assert(LWLockHeldByMe(SerializableFinishedListLock) ^ use_memory_transaction);
 
 	/*
 	 * First release all the predicate locks held by this xact (or transfer
 	 * them to OldCommittedSxact if summarize is true)
 	 */
-	LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
+	MaybeLWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
 	if (IsInParallelMode())
-		LWLockAcquire(&sxact->predicateLockListLock, LW_EXCLUSIVE);
+		MaybeLWLockAcquire(&sxact->predicateLockListLock, LW_EXCLUSIVE);
 	predlock = (PREDICATELOCK *)
 		SHMQueueNext(&(sxact->predicateLocks),
 					 &(sxact->predicateLocks),
@@ -3874,7 +3981,7 @@ ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
 		targettaghash = PredicateLockTargetTagHashCode(&targettag);
 		partitionLock = PredicateLockHashPartitionLock(targettaghash);
 
-		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+		MaybeLWLockAcquire(partitionLock, LW_EXCLUSIVE);
 
 		SHMQueueDelete(targetLink);
 
@@ -3916,7 +4023,7 @@ ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
 		else
 			RemoveTargetIfNoLongerUsed(target, targettaghash);
 
-		LWLockRelease(partitionLock);
+		MaybeLWLockRelease(partitionLock);
 
 		predlock = nextpredlock;
 	}
@@ -3928,11 +4035,11 @@ ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
 	SHMQueueInit(&sxact->predicateLocks);
 
 	if (IsInParallelMode())
-		LWLockRelease(&sxact->predicateLockListLock);
-	LWLockRelease(SerializablePredicateLockListLock);
+		MaybeLWLockRelease(&sxact->predicateLockListLock);
+	MaybeLWLockRelease(SerializablePredicateLockListLock);
 
 	sxidtag.xid = sxact->topXid;
-	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+	MaybeLWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
 	/* Release all outConflicts (unless 'partial' is true) */
 	if (!partial)
@@ -3979,7 +4086,7 @@ ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
 		ReleasePredXact(sxact);
 	}
 
-	LWLockRelease(SerializableXactHashLock);
+	MaybeLWLockRelease(SerializableXactHashLock);
 }
 
 /*
@@ -4045,15 +4152,17 @@ CheckForSerializableConflictOutNeeded(Relation relation, Snapshot snapshot)
  * transactions overlap (i.e., they cannot see each other's writes), then we
  * have a conflict out.
  */
-void
-CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot snapshot)
+static pg_attribute_always_inline bool
+CheckForSerializableConflictOutImpl(Relation relation, TransactionId xid,
+									Snapshot snapshot,
+									bool use_memory_transaction)
 {
 	SERIALIZABLEXIDTAG sxidtag;
 	SERIALIZABLEXID *sxid;
 	SERIALIZABLEXACT *sxact;
 
 	if (!SerializationNeededForRead(relation, snapshot))
-		return;
+		return true;
 
 	/* Check if someone else has already decided that we need to die */
 	if (SxactIsDoomed(MySerializableXact))
@@ -4067,13 +4176,15 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
 	Assert(TransactionIdIsValid(xid));
 
 	if (TransactionIdEquals(xid, GetTopTransactionIdIfAny()))
-		return;
+		return true;
+
+	MaybeBeginMemoryTransaction();
 
 	/*
 	 * Find sxact or summarized info for the top level xid.
 	 */
 	sxidtag.xid = xid;
-	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+	MaybeLWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 	sxid = (SERIALIZABLEXID *)
 		hash_search(SerializableXidHash, &sxidtag, HASH_FIND, NULL);
 	if (!sxid)
@@ -4091,34 +4202,42 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
 				&& (!SxactIsReadOnly(MySerializableXact)
 					|| conflictCommitSeqNo
 					<= MySerializableXact->SeqNo.lastCommitBeforeSnapshot))
+			{
+				MaybeCommitMemoryTransaction();
 				ereport(ERROR,
 						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 						 errmsg("could not serialize access due to read/write dependencies among transactions"),
 						 errdetail_internal("Reason code: Canceled on conflict out to old pivot %u.", xid),
 						 errhint("The transaction might succeed if retried.")));
+			}
 
 			if (SxactHasSummaryConflictIn(MySerializableXact)
 				|| !SHMQueueEmpty(&MySerializableXact->inConflicts))
+			{
+				MaybeCommitMemoryTransaction();
 				ereport(ERROR,
 						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 						 errmsg("could not serialize access due to read/write dependencies among transactions"),
 						 errdetail_internal("Reason code: Canceled on identification as a pivot, with conflict out to old committed transaction %u.", xid),
 						 errhint("The transaction might succeed if retried.")));
+			}
 
 			MySerializableXact->flags |= SXACT_FLAG_SUMMARY_CONFLICT_OUT;
 		}
 
 		/* It's not serializable or otherwise not important. */
-		LWLockRelease(SerializableXactHashLock);
-		return;
+		MaybeLWLockRelease(SerializableXactHashLock);
+		MaybeCommitMemoryTransaction();
+		return true;
 	}
 	sxact = sxid->myXact;
 	Assert(TransactionIdEquals(sxact->topXid, xid));
 	if (sxact == MySerializableXact || SxactIsDoomed(sxact))
 	{
 		/* Can't conflict with ourself or a transaction that will roll back. */
-		LWLockRelease(SerializableXactHashLock);
-		return;
+		MaybeLWLockRelease(SerializableXactHashLock);
+		MaybeCommitMemoryTransaction();
+		return true;
 	}
 
 	/*
@@ -4132,12 +4251,14 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
 		if (!SxactIsPrepared(sxact))
 		{
 			sxact->flags |= SXACT_FLAG_DOOMED;
-			LWLockRelease(SerializableXactHashLock);
-			return;
+			MaybeLWLockRelease(SerializableXactHashLock);
+			MaybeCommitMemoryTransaction();
+			return true;
 		}
 		else
 		{
-			LWLockRelease(SerializableXactHashLock);
+			MaybeLWLockRelease(SerializableXactHashLock);
+			MaybeCommitMemoryTransaction();
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to read/write dependencies among transactions"),
@@ -4158,38 +4279,49 @@ CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot s
 			|| MySerializableXact->SeqNo.lastCommitBeforeSnapshot < sxact->SeqNo.earliestOutConflictCommit))
 	{
 		/* Read-only transaction will appear to run first.  No conflict. */
-		LWLockRelease(SerializableXactHashLock);
-		return;
+		MaybeLWLockRelease(SerializableXactHashLock);
+		return true;
 	}
 
 	if (!XidIsConcurrent(xid))
 	{
 		/* This write was already in our snapshot; no conflict. */
-		LWLockRelease(SerializableXactHashLock);
-		return;
+		MaybeLWLockRelease(SerializableXactHashLock);
+		return true;
 	}
 
 	if (RWConflictExists(MySerializableXact, sxact))
 	{
 		/* We don't want duplicate conflict records in the list. */
-		LWLockRelease(SerializableXactHashLock);
-		return;
+		MaybeLWLockRelease(SerializableXactHashLock);
+		return true;
 	}
 
 	/*
 	 * Flag the conflict.  But first, if this conflict creates a dangerous
 	 * structure, ereport an error.
 	 */
-	FlagRWConflict(MySerializableXact, sxact);
-	LWLockRelease(SerializableXactHashLock);
+	FlagRWConflict(MySerializableXact, sxact, use_memory_transaction);
+	MaybeLWLockRelease(SerializableXactHashLock);
+	MaybeCommitMemoryTransaction();
+
+	return true;
+}
+
+void
+CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot snapshot)
+{
+	if (!CheckForSerializableConflictOutImpl(relation, xid, snapshot, true))
+		CheckForSerializableConflictOutImpl(relation, xid, snapshot, false);
 }
 
 /*
  * Check a particular target for rw-dependency conflict in. A subroutine of
  * CheckForSerializableConflictIn().
  */
-static void
-CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
+static pg_attribute_always_inline bool
+CheckTargetForConflictsInImpl(PREDICATELOCKTARGETTAG *targettag,
+							  bool use_memory_transaction)
 {
 	uint32		targettaghash;
 	LWLock	   *partitionLock;
@@ -4198,6 +4330,8 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 	PREDICATELOCK *mypredlock = NULL;
 	PREDICATELOCKTAG mypredlocktag;
 
+	MaybeBeginMemoryTransaction();
+
 	Assert(MySerializableXact != InvalidSerializableXact);
 
 	/*
@@ -4205,7 +4339,7 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 	 */
 	targettaghash = PredicateLockTargetTagHashCode(targettag);
 	partitionLock = PredicateLockHashPartitionLock(targettaghash);
-	LWLockAcquire(partitionLock, LW_SHARED);
+	MaybeLWLockAcquire(partitionLock, LW_SHARED);
 	target = (PREDICATELOCKTARGET *)
 		hash_search_with_hash_value(PredicateLockTargetHash,
 									targettag, targettaghash,
@@ -4213,8 +4347,9 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 	if (!target)
 	{
 		/* Nothing has this target locked; we're done here. */
-		LWLockRelease(partitionLock);
-		return;
+		MaybeLWLockRelease(partitionLock);
+		MaybeCommitMemoryTransaction();
+		return true;
 	}
 
 	/*
@@ -4225,7 +4360,7 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 		SHMQueueNext(&(target->predicateLocks),
 					 &(target->predicateLocks),
 					 offsetof(PREDICATELOCK, targetLink));
-	LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+	MaybeLWLockAcquire(SerializableXactHashLock, LW_SHARED);
 	while (predlock)
 	{
 		SHM_QUEUE  *predlocktargetlink;
@@ -4264,8 +4399,8 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 											  sxact->finishedBefore))
 				 && !RWConflictExists(sxact, MySerializableXact))
 		{
-			LWLockRelease(SerializableXactHashLock);
-			LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+			MaybeLWLockRelease(SerializableXactHashLock);
+			MaybeLWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
 			/*
 			 * Re-check after getting exclusive lock because the other
@@ -4277,17 +4412,17 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 											 sxact->finishedBefore))
 				&& !RWConflictExists(sxact, MySerializableXact))
 			{
-				FlagRWConflict(sxact, MySerializableXact);
+				FlagRWConflict(sxact, MySerializableXact, use_memory_transaction);
 			}
 
-			LWLockRelease(SerializableXactHashLock);
-			LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+			MaybeLWLockRelease(SerializableXactHashLock);
+			MaybeLWLockAcquire(SerializableXactHashLock, LW_SHARED);
 		}
 
 		predlock = nextpredlock;
 	}
-	LWLockRelease(SerializableXactHashLock);
-	LWLockRelease(partitionLock);
+	MaybeLWLockRelease(SerializableXactHashLock);
+	MaybeLWLockRelease(partitionLock);
 
 	/*
 	 * If we found one of our own SIREAD locks to remove, remove it now.
@@ -4302,11 +4437,11 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 		uint32		predlockhashcode;
 		PREDICATELOCK *rmpredlock;
 
-		LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
+		MaybeLWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
 		if (IsInParallelMode())
-			LWLockAcquire(&MySerializableXact->predicateLockListLock, LW_EXCLUSIVE);
-		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-		LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+			MaybeLWLockAcquire(&MySerializableXact->predicateLockListLock, LW_EXCLUSIVE);
+		MaybeLWLockAcquire(partitionLock, LW_EXCLUSIVE);
+		MaybeLWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
 		/*
 		 * Remove the predicate lock from shared memory, if it wasn't removed
@@ -4337,11 +4472,11 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 			RemoveTargetIfNoLongerUsed(target, targettaghash);
 		}
 
-		LWLockRelease(SerializableXactHashLock);
-		LWLockRelease(partitionLock);
+		MaybeLWLockRelease(SerializableXactHashLock);
+		MaybeLWLockRelease(partitionLock);
 		if (IsInParallelMode())
-			LWLockRelease(&MySerializableXact->predicateLockListLock);
-		LWLockRelease(SerializablePredicateLockListLock);
+			MaybeLWLockRelease(&MySerializableXact->predicateLockListLock);
+		MaybeLWLockRelease(SerializablePredicateLockListLock);
 
 		if (rmpredlock != NULL)
 		{
@@ -4357,6 +4492,15 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 			DecrementParentLocks(targettag);
 		}
 	}
+	MaybeCommitMemoryTransaction();
+	return true;
+}
+
+static void
+CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
+{
+	if (!CheckTargetForConflictsInImpl(targettag, true))
+		CheckTargetForConflictsInImpl(targettag, false);
 }
 
 /*
@@ -4524,7 +4668,7 @@ CheckTableForSerializableConflictIn(Relation relation)
 			if (predlock->tag.myXact != MySerializableXact
 				&& !RWConflictExists(predlock->tag.myXact, MySerializableXact))
 			{
-				FlagRWConflict(predlock->tag.myXact, MySerializableXact);
+				FlagRWConflict(predlock->tag.myXact, MySerializableXact, false);
 			}
 
 			predlock = nextpredlock;
@@ -4546,12 +4690,14 @@ CheckTableForSerializableConflictIn(Relation relation)
  * the transaction hash table.
  */
 static void
-FlagRWConflict(SERIALIZABLEXACT *reader, SERIALIZABLEXACT *writer)
+FlagRWConflict(SERIALIZABLEXACT *reader, SERIALIZABLEXACT *writer,
+			   bool use_memory_transaction)
 {
 	Assert(reader != writer);
 
 	/* First, see if this conflict causes failure. */
-	OnConflict_CheckForSerializationFailure(reader, writer);
+	OnConflict_CheckForSerializationFailure(reader, writer,
+											use_memory_transaction);
 
 	/* Actually do the conflict flagging. */
 	if (reader == OldCommittedSxact)
@@ -4582,12 +4728,13 @@ FlagRWConflict(SERIALIZABLEXACT *reader, SERIALIZABLEXACT *writer)
  */
 static void
 OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
-										SERIALIZABLEXACT *writer)
+										SERIALIZABLEXACT *writer,
+										bool use_memory_transaction)
 {
 	bool		failure;
 	RWConflict	conflict;
 
-	Assert(LWLockHeldByMe(SerializableXactHashLock));
+	Assert(use_memory_transaction ^ LWLockHeldByMe(SerializableXactHashLock));
 
 	failure = false;
 
@@ -4716,7 +4863,8 @@ OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
 		 */
 		if (MySerializableXact == writer)
 		{
-			LWLockRelease(SerializableXactHashLock);
+			MaybeLWLockRelease(SerializableXactHashLock);
+			MaybeCommitMemoryTransaction();
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to read/write dependencies among transactions"),
@@ -4725,7 +4873,8 @@ OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
 		}
 		else if (SxactIsPrepared(writer))
 		{
-			LWLockRelease(SerializableXactHashLock);
+			MaybeLWLockRelease(SerializableXactHashLock);
+			MaybeCommitMemoryTransaction();
 
 			/* if we're not the writer, we have to be the reader */
 			Assert(MySerializableXact == reader);
@@ -4755,23 +4904,26 @@ OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
  * committing writes, so letting it commit ensures progress.  If we
  * canceled the far conflict, it might immediately fail again on retry.
  */
-void
-PreCommit_CheckForSerializationFailure(void)
+static pg_attribute_always_inline bool
+PreCommit_CheckForSerializationFailureImpl(bool use_memory_transaction)
 {
 	RWConflict	nearConflict;
 
 	if (MySerializableXact == InvalidSerializableXact)
-		return;
+		return true;
 
 	Assert(IsolationIsSerializable());
 
-	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+	MaybeBeginMemoryTransaction();
+
+	MaybeLWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
 	/* Check if someone else has already decided that we need to die */
 	if (SxactIsDoomed(MySerializableXact))
 	{
 		Assert(!SxactIsPartiallyReleased(MySerializableXact));
-		LWLockRelease(SerializableXactHashLock);
+		MaybeLWLockRelease(SerializableXactHashLock);
+		MaybeCommitMemoryTransaction();
 		ereport(ERROR,
 				(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 				 errmsg("could not serialize access due to read/write dependencies among transactions"),
@@ -4809,7 +4961,8 @@ PreCommit_CheckForSerializationFailure(void)
 					 */
 					if (SxactIsPrepared(nearConflict->sxactOut))
 					{
-						LWLockRelease(SerializableXactHashLock);
+						MaybeLWLockRelease(SerializableXactHashLock);
+						MaybeCommitMemoryTransaction();
 						ereport(ERROR,
 								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 								 errmsg("could not serialize access due to read/write dependencies among transactions"),
@@ -4835,7 +4988,17 @@ PreCommit_CheckForSerializationFailure(void)
 	MySerializableXact->prepareSeqNo = ++(PredXact->LastSxactCommitSeqNo);
 	MySerializableXact->flags |= SXACT_FLAG_PREPARED;
 
-	LWLockRelease(SerializableXactHashLock);
+	MaybeLWLockRelease(SerializableXactHashLock);
+	MaybeCommitMemoryTransaction();
+
+	return true;
+}
+
+void
+PreCommit_CheckForSerializationFailure(void)
+{
+	if (!PreCommit_CheckForSerializationFailureImpl(true))
+		PreCommit_CheckForSerializationFailureImpl(false);
 }
 
 /*------------------------------------------------------------------------*/
