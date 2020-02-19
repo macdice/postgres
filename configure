@@ -831,6 +831,7 @@ with_pgport
 enable_rpath
 enable_spinlocks
 enable_atomics
+enable_htm
 enable_debug
 enable_profiling
 enable_coverage
@@ -1518,6 +1519,7 @@ Optional Features:
                           executables
   --disable-spinlocks     do not use spinlocks
   --disable-atomics       do not use atomic operations
+  --enable-htm            use hardware transactional memory operations
   --enable-debug          build with debugging symbols (-g)
   --enable-profiling      build with profiling enabled
   --enable-coverage       build with coverage testing instrumentation
@@ -3293,6 +3295,33 @@ if test "${enable_atomics+set}" = set; then :
 
 else
   enable_atomics=yes
+
+fi
+
+
+
+#
+# Hardware transactional memory
+#
+
+
+# Check whether --enable-htm was given.
+if test "${enable_htm+set}" = set; then :
+  enableval=$enable_htm;
+  case $enableval in
+    yes)
+      :
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --enable-htm option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  enable_htm=no
 
 fi
 
@@ -6902,6 +6931,11 @@ $as_echo "#define PROFILE_PID_DIR 1" >>confdefs.h
   else
     as_fn_error $? "--enable-profiling is supported only when using GCC" "$LINENO" 5
   fi
+fi
+
+# enable HTM if --enable-htm
+if test "$enable_htm" = yes; then
+  CFLAGS="$CFLAGS -mrtm"
 fi
 
 # We already have this in Makefile.win32, but configure needs it too
@@ -11924,6 +11958,12 @@ else
 *** Not using atomic operations will cause poor performance." >&5
 $as_echo "$as_me: WARNING:
 *** Not using atomic operations will cause poor performance." >&2;}
+fi
+
+if test "$enable_htm" = yes; then
+
+$as_echo "#define HAVE_HTM 1" >>confdefs.h
+
 fi
 
 if test "$with_gssapi" = yes ; then

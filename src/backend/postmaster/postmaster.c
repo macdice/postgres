@@ -109,6 +109,7 @@
 #include "pg_getopt.h"
 #include "pgstat.h"
 #include "port/pg_bswap.h"
+#include "port/htm.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/fork_process.h"
@@ -2634,6 +2635,10 @@ InitProcessGlobals(void)
 			((uint64) MyStartTimestamp >> 20);
 	}
 	srandom(rseed);
+
+#ifdef HAVE_HTM
+	htm_init();
+#endif
 }
 
 
