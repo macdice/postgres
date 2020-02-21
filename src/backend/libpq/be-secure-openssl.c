@@ -347,6 +347,7 @@ be_tls_open_server(Port *port)
 	int			err;
 	int			waitfor;
 	unsigned long ecode;
+	WaitEvent	event;
 
 	Assert(!port->ssl);
 	Assert(!port->peer);
@@ -415,12 +416,15 @@ aloop:
 				 * StartupPacketTimeoutHandler() which directly exits.
 				 */
 				if (err == SSL_ERROR_WANT_READ)
-					waitfor = WL_SOCKET_READABLE | WL_EXIT_ON_PM_DEATH;
+					waitfor = WL_SOCKET_READABLE;
 				else
-					waitfor = WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH;
+					waitfor = WL_SOCKET_WRITEABLE;
 
-				(void) WaitLatchOrSocket(MyLatch, waitfor, port->sock, 0,
-										 WAIT_EVENT_SSL_OPEN_SERVER);
+				/* FeBeWaitSet has port->sock in position 0 */
+				Assert(port == MyProcPort);
+				ModifyWaitEvent(FeBeWaitSet, 0, waitfor, NULL);
+				(void) WaitEventSetWait(FeBeWaitSet, -1, &event, 1,
+										WAIT_EVENT_SSL_OPEN_SERVER);
 				goto aloop;
 			case SSL_ERROR_SYSCALL:
 				if (r < 0)
