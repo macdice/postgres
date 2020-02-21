@@ -300,6 +300,9 @@ static XLogRecPtr recoveryStopLSN;
 static char recoveryStopName[MAXFNAMELEN];
 static bool recoveryStopAfter;
 
+/* A WaitEventSet we'll use to wait for recoveryWakeupLatch */
+static WaitEventSet *recoveryWaitSet;
+
 /*
  * During normal operation, the only timeline we care about is ThisTimeLineID.
  * During recovery, however, things are more complicated.  To simplify life
@@ -6015,6 +6018,8 @@ recoveryApplyDelay(XLogReaderState *record)
 
 	while (true)
 	{
+		WaitEvent	event;
+
 		ResetLatch(&XLogCtl->recoveryWakeupLatch);
 
 		/* might change the trigger file's location */
@@ -6039,10 +6044,10 @@ recoveryApplyDelay(XLogReaderState *record)
 		elog(DEBUG2, "recovery apply delay %ld seconds, %d milliseconds",
 			 secs, microsecs / 1000);
 
-		(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 secs * 1000L + microsecs / 1000,
-						 WAIT_EVENT_RECOVERY_APPLY_DELAY);
+		(void) WaitEventSetWait(recoveryWaitSet,
+								secs * 1000L + microsecs / 1000,
+								&event, 1,
+								WAIT_EVENT_RECOVERY_APPLY_DELAY);
 	}
 	return true;
 }
@@ -6366,7 +6371,15 @@ StartupXLOG(void)
 	 * recovery.
 	 */
 	if (ArchiveRecoveryRequested)
+	{
 		OwnLatch(&XLogCtl->recoveryWakeupLatch);
+		recoveryWaitSet = CreateWaitEventSet(TopMemoryContext, 2);
+		AddWaitEventToSet(recoveryWaitSet, WL_LATCH_SET,
+						  PGINVALID_SOCKET, &XLogCtl->recoveryWakeupLatch,
+						  NULL);
+		AddWaitEventToSet(recoveryWaitSet, WL_POSTMASTER_DEATH,
+						  PGINVALID_SOCKET, NULL, NULL);
+	}
 
 	/* Set up XLOG reader facility */
 	MemSet(&private, 0, sizeof(XLogPageReadPrivate));
@@ -7053,6 +7066,7 @@ StartupXLOG(void)
 					(errmsg("redo starts at %X/%X",
 							(uint32) (ReadRecPtr >> 32), (uint32) ReadRecPtr)));
 
+
 			/*
 			 * main redo apply loop
 			 */
@@ -7363,7 +7377,11 @@ StartupXLOG(void)
 	 * it, but let's do it for the sake of tidiness.
 	 */
 	if (ArchiveRecoveryRequested)
+	{
+		FreeWaitEventSet(recoveryWaitSet);
+		recoveryWaitSet = NULL;
 		DisownLatch(&XLogCtl->recoveryWakeupLatch);
+	}
 
 	/*
 	 * We are now done reading the xlog from stream. Turn off streaming
@@ -11972,16 +11990,15 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						long		secs,
 									wait_time;
 						int			usecs;
+						WaitEvent	event;
 
 						TimestampDifference(last_fail_time, now, &secs, &usecs);
 						wait_time = wal_retrieve_retry_interval -
 							(secs * 1000 + usecs / 1000);
 
-						(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
-										 WL_LATCH_SET | WL_TIMEOUT |
-										 WL_EXIT_ON_PM_DEATH,
-										 wait_time,
-										 WAIT_EVENT_RECOVERY_WAL_STREAM);
+						(void) WaitEventSetWait(recoveryWaitSet,
+												wait_time, &event, 1,
+												WAIT_EVENT_RECOVERY_WAL_STREAM);
 						ResetLatch(&XLogCtl->recoveryWakeupLatch);
 						now = GetCurrentTimestamp();
 					}
@@ -12048,6 +12065,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			case XLOG_FROM_STREAM:
 				{
 					bool		havedata;
+					WaitEvent	event;
 
 					/*
 					 * We should be able to move to XLOG_FROM_STREAM
@@ -12162,10 +12180,9 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * to react to a trigger file promptly and to check if the
 					 * WAL receiver is still active.
 					 */
-					(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
-									 WL_LATCH_SET | WL_TIMEOUT |
-									 WL_EXIT_ON_PM_DEATH,
-									 5000L, WAIT_EVENT_RECOVERY_WAL_ALL);
+					(void) WaitEventSetWait(recoveryWaitSet,
+											5000L, &event, 1,
+											WAIT_EVENT_RECOVERY_WAL_ALL);
 					ResetLatch(&XLogCtl->recoveryWakeupLatch);
 					break;
 				}
