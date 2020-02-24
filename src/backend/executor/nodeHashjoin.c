@@ -1056,7 +1056,7 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 			 */
 			ExecHashTableInsert(hashtable, slot, hashvalue);
 		}
-		ExecHashFlushInsertQueue(hashtable);
+		ExecHashFlushInserter(hashtable);
 
 		/*
 		 * after we build the hash table, the inner batch file is no longer
@@ -1161,7 +1161,7 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 						ExecParallelHashTableInsertCurrentBatch(hashtable, slot,
 																hashvalue);
 					}
-					ExecParallelHashFlushInsertQueue(hashtable);
+					ExecParallelHashFlushInserter(hashtable);
 					sts_end_parallel_scan(inner_tuples);
 					BarrierArriveAndWait(batch_barrier,
 										 WAIT_EVENT_HASH_BATCH_LOADING);

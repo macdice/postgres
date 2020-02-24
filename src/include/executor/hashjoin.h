@@ -281,7 +281,7 @@ typedef struct ParallelHashJoinState
 #define PHJ_GROW_BUCKETS_REINSERTING	2
 #define PHJ_GROW_BUCKETS_PHASE(n)		((n) % 3)	/* circular phases */
 
-#define HJ_INSERTION_QUEUE_DEPTH		4
+#define HJ_INSERT_BUFFER_SIZE			16
 
 typedef struct HashJoinTableInserter
 {
@@ -290,8 +290,8 @@ typedef struct HashJoinTableInserter
 		HashJoinTupleData *tuple;
 		dsa_pointer	tuple_shared;
 		int			bucketno;
-	}			queue[HJ_INSERTION_QUEUE_DEPTH];
-	int			head;
+	}			tuples[HJ_INSERT_BUFFER_SIZE];
+	int			ntuples;
 } HashJoinTableInserter;
 
 typedef struct HashJoinTableData
