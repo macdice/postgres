@@ -45,7 +45,7 @@ extern void htm_init(void);
 /* ICC, GCC, MSVC use Intel's _xbegin() interfaces for x86 instructions. */
 /* TODO: Only tested on GCC; is the header the same on the others?  Is there a minimum version for each compiler? */
 #include <immintrin.h>
-#define pg_htm_begin() (_xbegin() == _XBEGIN_STARTED)
+#define pg_htm_begin() (have_htm_support && _xbegin() == _XBEGIN_STARTED)
 #define pg_htm_commit() _xend()
 #define pg_htm_abort() _xabort(0)
 #elif (defined(__IBMC__) || defined(__IBMCPP__))
