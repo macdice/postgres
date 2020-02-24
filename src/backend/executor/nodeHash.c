@@ -37,6 +37,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "port/htm.h"
 #include "port/pg_bitutils.h"
 #include "utils/dynahash.h"
 #include "utils/lsyscache.h"
@@ -3337,11 +3338,30 @@ ExecParallelHashFlushInsertBuffer(HashJoinTable hashtable)
 		pg_prefetch_mem(&hashtable->buckets.shared[insert_buffer->tuples[i].bucketno]);
 	for (int i = 0; i < insert_buffer->ntuples; ++i)
 		pg_prefetch_mem(insert_buffer->tuples[i].tuple);
-	/* Do the insertions. */
-	for (int i = 0; i < insert_buffer->ntuples; ++i)
-		ExecParallelHashPushTuple(&hashtable->buckets.shared[insert_buffer->tuples[i].bucketno],
-								  insert_buffer->tuples[i].tuple,
-								  insert_buffer->tuples[i].tuple_shared);
+	/* Do the insertions, using HTM if configured and enabled. */
+	if (pg_htm_begin())
+	{
+		/* Try to insert all tuples in a single memory transaction. */
+		for (int i = 0; i < insert_buffer->ntuples; ++i)
+		{
+			HashJoinTuple tuple = insert_buffer->tuples[i].tuple;
+			dsa_pointer tuple_shared = insert_buffer->tuples[i].tuple_shared;
+			dsa_pointer_atomic *head;
+
+			head = &hashtable->buckets.shared[insert_buffer->tuples[i].bucketno];
+			tuple->next.shared = dsa_pointer_atomic_read(head);
+			dsa_pointer_atomic_write(head, tuple_shared);
+		}
+		pg_htm_commit();
+	}
+	else
+	{
+		/* Insert all tuples by compare-and-swap. */
+		for (int i = 0; i < insert_buffer->ntuples; ++i)
+			ExecParallelHashPushTuple(&hashtable->buckets.shared[insert_buffer->tuples[i].bucketno],
+									  insert_buffer->tuples[i].tuple,
+									  insert_buffer->tuples[i].tuple_shared);
+	}
 	insert_buffer->ntuples = 0;
 }
 
