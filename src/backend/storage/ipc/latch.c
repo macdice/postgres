@@ -56,6 +56,7 @@
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
+#include "utils/memutils.h"
 
 /*
  * Select the fd readiness primitive to use. Normally the "most modern"
@@ -128,6 +129,9 @@ struct WaitEventSet
 	HANDLE	   *handles;
 #endif
 };
+
+/* A common WaitEventSet used to implement WatchLatch() */
+static WaitEventSet *CommonWaitSet;
 
 #ifndef WIN32
 /* Are we currently in WaitLatch? The signal handler would like to know. */
@@ -240,6 +244,20 @@ InitializeLatchSupport(void)
 #else
 	/* currently, nothing to do here for Windows */
 #endif
+}
+
+void
+InitializeCommonWaitSet(void)
+{
+	Assert(CommonWaitSet == NULL);
+
+	/* Set up the WaitEventSet used by WaitLatch(). */
+	CommonWaitSet = CreateWaitEventSet(TopMemoryContext, 2);
+	AddWaitEventToSet(CommonWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
+					  MyLatch, NULL);
+	if (IsUnderPostmaster)
+		AddWaitEventToSet(CommonWaitSet, WL_EXIT_ON_PM_DEATH,
+						  PGINVALID_SOCKET, NULL, NULL);
 }
 
 /*
@@ -365,8 +383,29 @@ int
 WaitLatch(Latch *latch, int wakeEvents, long timeout,
 		  uint32 wait_event_info)
 {
-	return WaitLatchOrSocket(latch, wakeEvents, PGINVALID_SOCKET, timeout,
-							 wait_event_info);
+	WaitEvent	event;
+
+	/* Postmaster-managed callers must handle postmaster death somehow. */
+	Assert(!IsUnderPostmaster ||
+		   (wakeEvents & WL_EXIT_ON_PM_DEATH) ||
+		   (wakeEvents & WL_POSTMASTER_DEATH));
+
+	/*
+	 * Some callers may have a latch other than MyLatch, or want to handle
+	 * postmaster death differently.  It's cheap to assign those, so just do it
+	 * every time.
+	 */
+	ModifyWaitEvent(CommonWaitSet, 0, WL_LATCH_SET, latch);
+	CommonWaitSet->exit_on_postmaster_death =
+		((wakeEvents & WL_EXIT_ON_PM_DEATH) != 0);
+
+	if (WaitEventSetWait(CommonWaitSet,
+						 (wakeEvents & WL_TIMEOUT) ? timeout : -1,
+						 &event, 1,
+						 wait_event_info) == 0)
+		return WL_TIMEOUT;
+	else
+		return event.events;
 }
 
 /*
@@ -700,7 +739,11 @@ FreeWaitEventSet(WaitEventSet *set)
 	ReleaseExternalFD();
 #elif defined(WAIT_USE_KQUEUE)
 	close(set->kqueue_fd);
-	ReleaseExternalFD();
+	if (set->kqueue_fd >= 0)
+	{
+		close(set->kqueue_fd);
+		ReleaseExternalFD();
+	}
 #elif defined(WAIT_USE_WIN32)
 	WaitEvent  *cur_event;
 
