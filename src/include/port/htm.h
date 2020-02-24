@@ -24,6 +24,9 @@
  * relevant branches are removed by constant folding.
  */
 #define have_htm_support false
+#define pg_htm_begin() false
+#define pg_htm_commit()
+#define pg_htm_abort()
 
 #else
 
