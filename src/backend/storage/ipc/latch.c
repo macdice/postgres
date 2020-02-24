@@ -90,6 +90,7 @@ struct WaitEventSet
 {
 	int			nevents;		/* number of registered events */
 	int			nevents_space;	/* maximum number of events in this set */
+	int			free_list;		/* position of first free event */
 
 	/*
 	 * Array, of nevents_space length, storing the definition of events this
@@ -125,6 +126,8 @@ struct WaitEventSet
 #elif defined(WAIT_USE_POLL)
 	/* poll expects events to be waited on every poll() call, prepare once */
 	struct pollfd *pollfds;
+	/* track the populated range of pollfds */
+	int			npollfds;
 #elif defined(WAIT_USE_WIN32)
 
 	/*
@@ -133,6 +136,8 @@ struct WaitEventSet
 	 * event->pos + 1).
 	 */
 	HANDLE	   *handles;
+	/* track the populated range of handles */
+	int			nhandles;
 #endif
 };
 
@@ -724,13 +729,16 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 #elif defined(WAIT_USE_POLL)
 	set->pollfds = (struct pollfd *) data;
 	data += MAXALIGN(sizeof(struct pollfd) * nevents);
+	set->npollfds = 0;
 #elif defined(WAIT_USE_WIN32)
 	set->handles = (HANDLE) data;
 	data += MAXALIGN(sizeof(HANDLE) * nevents);
+	set->nhandles = 0;
 #endif
 
 	set->latch = NULL;
 	set->nevents_space = nevents;
+	set->nevents = 0;
 	set->exit_on_postmaster_death = false;
 
 #if defined(WAIT_USE_EPOLL)
@@ -777,10 +785,24 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	 * Note: pgwin32_signal_event should be first to ensure that it will be
 	 * reported when multiple events are set.  We want to guarantee that
 	 * pending signals are serviced.
+	 *
+	 * We set unused handles to INVALID_HANDLE_VALUE, because
+	 * WaitForMultipleObjects() considers that to mean "this process" which is
+	 * not signaled until process, so it's a way of leaving a hole in the
+	 * middle of the wait set if you remove something (just like -1 in the poll
+	 * implementation).  An alternative would be to fill in holes and create a
+	 * non 1-to-1 mapping between 'events' and 'handles'.
 	 */
 	set->handles[0] = pgwin32_signal_event;
-	StaticAssertStmt(WSA_INVALID_EVENT == NULL, "");
+	for (int i = 0; i < nevents; ++i)
+		set->handles[i + 1] = INVALID_HANDLE_VALUE;
 #endif
+
+	/* Set up the free list. */
+	for (int i = 0; i < nevents; ++i)
+		set->events[i].next_free = i + 1;
+	set->events[nevents - 1].next_free = -1;
+	set->free_list = 0;
 
 	return set;
 }
@@ -807,9 +829,12 @@ FreeWaitEventSet(WaitEventSet *set)
 	WaitEvent  *cur_event;
 
 	for (cur_event = set->events;
-		 cur_event < (set->events + set->nevents);
+		 cur_event < (set->events + set->nhandles);
 		 cur_event++)
 	{
+		if (set->handles[cur_event->pos + 1] == INVALID_HANDLE_VALUE)
+			continue;
+
 		if (cur_event->events & WL_LATCH_SET)
 		{
 			/* uses the latch's HANDLE */
@@ -864,9 +889,6 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 {
 	WaitEvent  *event;
 
-	/* not enough space */
-	Assert(set->nevents < set->nevents_space);
-
 	if (events == WL_EXIT_ON_PM_DEATH)
 	{
 		events = WL_POSTMASTER_DEATH;
@@ -892,8 +914,12 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	if (fd == PGINVALID_SOCKET && (events & WL_SOCKET_MASK))
 		elog(ERROR, "cannot wait on socket event without a socket");
 
-	event = &set->events[set->nevents];
-	event->pos = set->nevents++;
+	/* Do we have any free slots? */
+	if (set->free_list == -1)
+		elog(ERROR, "WaitEventSet is full");
+
+	event = &set->events[set->free_list];
+	event->pos = set->free_list;
 	event->fd = fd;
 	event->events = events;
 	event->user_data = user_data;
@@ -935,6 +961,11 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	WaitEventAdjustWin32(set, event);
 #endif
 
+	/* Remove it from the free list. */
+	set->free_list = event->next_free;
+	event->next_free = -1;
+	set->nevents++;
+
 	return event->pos;
 }
 
@@ -953,7 +984,7 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 	int			old_events;
 #endif
 
-	Assert(pos < set->nevents);
+	Assert(pos < set->nevents_space);
 
 	event = &set->events[pos];
 #if defined(WAIT_USE_KQUEUE)
@@ -1016,6 +1047,58 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 #endif
 }
 
+/*
+ * Remove an event by position.
+ */
+void
+RemoveWaitEventFromSet(WaitEventSet *set, int pos)
+{
+	WaitEvent  *event;
+
+	Assert(pos >= 0);
+	Assert(pos < set->nevents_space);
+	event = &set->events[pos];
+
+	/* For now only sockets can be removed */
+	if ((event->events & WL_SOCKET_MASK) == 0)
+		elog(ERROR, "event type cannot be removed");
+
+#if defined(WAIT_USE_EPOLL)
+	WaitEventAdjustEpoll(set, event, EPOLL_CTL_DEL);
+#elif defined(WAIT_USE_KQUEUE)
+	{
+		int old_events = event->events;
+
+		event->events = 0;
+		WaitEventAdjustKqueue(set, event, old_events);
+	}
+#elif defined(WAIT_USE_POLL)
+	/* no kernel state to remove, just blank out the fd */
+	set->pollfds[event->pos].fd = -1;
+	/* see if we can shrink the range of active fds */
+	while (set->npollfds > 0 &&
+		   set->pollfds[set->npollfds - 1].fd == -1)
+		set->npollfds -= 1;
+#elif defined(WAIT_USE_WIN32)
+	WSAEventSelect(event->fd, NULL, 0);
+	if (set->handles[event->pos + 1] != INVALID_HANDLE_VALUE)
+	{
+		WSACloseEvent(set->handles[event->pos + 1]);
+		set->handles[event->pos + 1] = INVALID_HANDLE_VALUE;
+	}
+	/* see if we can shrink the range of active handles */
+	while (set->nhandles > 0 &&
+		   set->handles[set->nhandles] == INVALID_HANDLE_VALUE)
+		set->nhandles -= 1;
+#endif
+
+	/* This position is now free. */
+	memset(event, 0, sizeof(*event));
+	event->next_free = set->free_list;
+	set->free_list = pos;
+	set->nevents--;
+}
+
 #if defined(WAIT_USE_EPOLL)
 /*
  * action can be one of EPOLL_CTL_ADD | EPOLL_CTL_MOD | EPOLL_CTL_DEL
@@ -1075,6 +1158,9 @@ WaitEventAdjustPoll(WaitEventSet *set, WaitEvent *event)
 
 	pollfd->revents = 0;
 	pollfd->fd = event->fd;
+
+	/* track the known range of populated slots */
+	set->npollfds = Max(event->pos + 1, set->nevents);
 
 	/* prepare pollfd entry once */
 	if (event->events == WL_LATCH_SET)
@@ -1166,7 +1252,9 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 	Assert(event->events != WL_LATCH_SET || set->latch != NULL);
 	Assert(event->events == WL_LATCH_SET ||
 		   event->events == WL_POSTMASTER_DEATH ||
-		   (event->events & (WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE)));
+		   (event->events & (WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE)) ||
+		   (event->events == 0 &&
+			(old_events & (WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE))));
 
 	if (event->events == WL_POSTMASTER_DEATH)
 	{
@@ -1255,6 +1343,9 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 {
 	HANDLE	   *handle = &set->handles[event->pos + 1];
 
+	/* track the known range of populated slots */
+	set->nhandles = Max(event->pos + 1, set->nhandles);
+
 	if (event->events == WL_LATCH_SET)
 	{
 		Assert(set->latch != NULL);
@@ -1275,12 +1366,15 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 		if (event->events & WL_SOCKET_CONNECTED)
 			flags |= FD_CONNECT;
 
-		if (*handle == WSA_INVALID_EVENT)
+		if (*handle == INVALID_HANDLE_VALUE)
 		{
 			*handle = WSACreateEvent();
 			if (*handle == WSA_INVALID_EVENT)
+			{
+				*handle = INVALID_HANDLE_VALUE;
 				elog(ERROR, "failed to create event for socket: error code %d",
 					 WSAGetLastError());
+			}
 		}
 		if (WSAEventSelect(event->fd, *handle, flags) != 0)
 			elog(ERROR, "failed to set up event for socket: error code %d",
@@ -1427,6 +1521,11 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	return returned_events;
 }
 
+int
+WaitEventSetSize(WaitEventSet *set)
+{
+	return set->nevents;
+}
 
 #if defined(WAIT_USE_EPOLL)
 
@@ -1717,7 +1816,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	struct pollfd *cur_pollfd;
 
 	/* Sleep */
-	rc = poll(set->pollfds, set->nevents, (int) cur_timeout);
+	rc = poll(set->pollfds, set->npollfds, (int) cur_timeout);
 
 	/* Check return code */
 	if (rc < 0)
@@ -1901,9 +2000,9 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	/*
 	 * Sleep.
 	 *
-	 * Need to wait for ->nevents + 1, because signal handle is in [0].
+	 * Need to wait for ->nhandles + 1, because signal handle is in [0].
 	 */
-	rc = WaitForMultipleObjects(set->nevents + 1, set->handles, FALSE,
+	rc = WaitForMultipleObjects(set->nhandles + 1, set->handles, FALSE,
 								cur_timeout);
 
 	/* Check return code */
