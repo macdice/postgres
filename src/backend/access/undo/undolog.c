@@ -35,6 +35,7 @@
 #include "catalog/pg_tablespace_d.h"
 #include "commands/tablespace.h"
 #include "funcapi.h"
+#include "lib/ilist.h"
 #include "lib/qunique.h"
 #include "miscadmin.h"
 #include "storage/procarray.h"
@@ -75,6 +76,7 @@ static void discard_undo_buffers(int logno, UndoLogOffset old_discard,
 								 UndoLogOffset new_discard,
 								 bool drop_tail);
 static void scan_physical_range(void);
+static bool choose_undo_tablespace(bool force_detach, Oid *tablespace);
 
 /*
  * How many undo logs can be active at a time?  This creates a theoretical
@@ -279,6 +281,7 @@ AtProcExit_UndoLog(void)
 			LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 			slot->pid = InvalidPid;
 			slot->xid = InvalidTransactionId;
+			slot->busy = false;
 			LWLockRelease(&slot->meta_lock);
 
 			LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
@@ -675,27 +678,34 @@ UndoLogSlot *
 UndoLogGetForPersistence(char persistence)
 {
 	UndoLogSlot *slot = NULL;
-	slist_head *slist;
 	slist_mutable_iter iter;
 	xl_undolog_create xlrec;
 	UndoPersistenceLevel plevel = GetUndoPersistenceLevel(persistence);
 	Oid			tablespace = DEFAULTTABLESPACE_OID;
+	bool		ts_lock_held;
 
-	/* Is there one on our private free list of attached undo logs? */
-	slist = &CurrentSession->sticky_undo_log_slots[plevel];
-	if (!slist_is_empty(slist))
+	/*
+	 * Is there one on our private free list of attached undo logs?  For now we
+	 * do a linear search for the tablespace we want, but we only expect zero
+	 * or one items.
+	 */
+	slist_foreach_modify(iter, &CurrentSession->sticky_undo_log_slots[plevel])
 	{
-		/* TODO: Make sure we get rid of logs for the wrong tablespace */
-		slot = slist_container(UndoLogSlot, next, slist_pop_head_node(slist));
+		slot = slist_container(UndoLogSlot, next, iter.cur);
 		Assert(slot->meta.persistence == persistence);
-		Assert(slot->meta.tablespace == tablespace);
-		return slot;
+		if (slot->meta.tablespace == tablespace)
+		{
+			slist_delete_current(&iter);
+			return slot;
+		}
 	}
 
 	/*
-	 * TODO: figure out how to how to get this safely
+	 * Decide on a tablespace.  This might acquire TablespaceCreateLock, in
+	 * which case we need to hold it until we've managed to set the busy flag,
+	 * in order to prevent the tablespace from being dropped concurrently.
 	 */
-	tablespace = DEFAULTTABLESPACE_OID;
+	ts_lock_held = choose_undo_tablespace(false, &tablespace);
 
 	/* Is there one on the shared freelist? */
 	LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
@@ -711,8 +721,12 @@ UndoLogGetForPersistence(char persistence)
 			LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 			slot->pid = MyProcPid;
 			slot->xid = GetTopTransactionIdIfAny();
+			slot->busy = true;
 			LWLockRelease(&slot->meta_lock);
 
+			if (ts_lock_held)
+				LWLockRelease(TablespaceCreateLock);
+				
 			return slot;
 		}
 	}
@@ -745,6 +759,7 @@ UndoLogGetForPersistence(char persistence)
 	slot->meta.size = UndoLogSegmentSize;
 	slot->pid = MyProcPid;
 	slot->xid = GetTopTransactionIdIfAny();
+	slot->busy = true;
 
 	/* Write a WAL log. */
 	xlrec.logno = UndoLogShared->next_logno;
@@ -758,6 +773,8 @@ UndoLogGetForPersistence(char persistence)
 	++UndoLogShared->next_logno;
 
 	LWLockRelease(UndoLogLock);
+	if (ts_lock_held)
+		LWLockRelease(TablespaceCreateLock);
 
 	return slot;
 }
@@ -773,12 +790,19 @@ UndoLogPut(UndoLogSlot *slot)
 	plevel = GetUndoPersistenceLevel(slot->meta.persistence);
 
 	/*
+	 * Don't prevent the tablespace from being dropped.  We do this without
+	 * taking a lock, which means that DropUndoLogsInTablespace() might
+	 * consider a tablespace undroppable for a bit longer if we only put this
+	 * on our private freelist below.  That doesn't seem to be a problem.
+	 */
+	slot->busy = false;
+
+	/*
 	 * For now, we'll only allow you to keep one sticky undo log
 	 * around, and push everything else back on the shared free list.
 	 *
 	 * TODO: Figure out a decent policy.
 	 */
-
 	if (slist_is_empty(&CurrentSession->sticky_undo_log_slots[plevel]))
 		slist_push_head(&CurrentSession->sticky_undo_log_slots[plevel],
 						&slot->next);
@@ -1085,6 +1109,7 @@ StartupUndoLogs(UndoCheckpointContext *ctx)
 		 */
 		slot->logno = slot->meta.logno;
 		slot->pid = InvalidPid;
+		slot->busy = false;
 
 		if (slot->meta.insert < slot->meta.size ||
 			slot->meta.discard < slot->meta.insert)
@@ -1356,7 +1381,6 @@ assign_undo_tablespaces(const char *newval, void *extra)
 		CurrentSession->need_to_choose_undo_tablespace = true;
 }
 
-#if 0
 static bool
 choose_undo_tablespace(bool force_detach, Oid *tablespace)
 {
@@ -1447,7 +1471,7 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 
 #if 0
 	/*
-	 * If we came here because the user changed undo_tablesaces, then detach
+	 * If we came here because the user changed undo_tablespaces, then detach
 	 * from any undo logs we happen to be attached to.
 	 */
 	if (force_detach)
@@ -1461,6 +1485,7 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 				LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 				slot->pid = InvalidPid;
 				slot->xid = InvalidTransactionId;
+				slot->busy = false;
 				LWLockRelease(&slot->meta_lock);
 
 				LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
@@ -1479,8 +1504,14 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 
 	return need_to_unlock;
 }
-#endif
 
+/*
+ * We can only drop undo logs that have no data in them, and are not "busy"
+ * being used in a live UndoRecordSet.  They can be on the shared freelist or
+ * on a backend-private freelist.  In the latter case, the backend will
+ * eventually discover this has happened when they try to use the slot and
+ * find that XXX.
+ */
 bool
 DropUndoLogsInTablespace(Oid tablespace)
 {
@@ -1510,6 +1541,7 @@ DropUndoLogsInTablespace(Oid tablespace)
 		/* Check if this undo log can be forcibly detached. */
 		LWLockAcquire(&slot->meta_lock, LW_EXCLUSIVE);
 		if (slot->meta.discard == slot->meta.insert &&
+			!slot->busy &&
 			(slot->xid == InvalidTransactionId ||
 			 !TransactionIdIsInProgress(slot->xid)))
 		{
@@ -1524,8 +1556,8 @@ DropUndoLogsInTablespace(Oid tablespace)
 		else
 		{
 			/*
-			 * There is data we need in this undo log.  We can't force it to
-			 * be detached.
+			 * There is data we need in this undo log or it's busy in an
+			 * UndoRecordSet.  We can't let it be dropped.
 			 */
 			ok = false;
 		}
@@ -1536,9 +1568,9 @@ DropUndoLogsInTablespace(Oid tablespace)
 			return false;
 
 		/*
-		 * Put this undo log back on the appropriate free-list.  No one can
-		 * attach to it while we hold TablespaceCreateLock, but if we return
-		 * earlier in a future go around this loop, we need the undo log to
+		 * Put this undo log back on the appropriate shared free-list.  No one
+		 * can attach to it while we hold TablespaceCreateLock, but if we bail
+		 * out early in a future go around this loop, we need the undo log to
 		 * remain usable.  We'll remove all appropriate logs from the
 		 * free-lists in a separate step below.
 		 */

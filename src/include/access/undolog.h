@@ -152,6 +152,7 @@ typedef struct UndoLogSlot
 	TransactionId xid;
 	UndoLogOffset begin;			/* beginning of lowest segment file */
 	UndoLogOffset end;				/* one past end of highest segment */
+	bool		busy;				/* prevent tablespace being dropped */
 } UndoLogSlot;
 
 extern UndoLogSlot *UndoLogGetSlot(UndoLogNumber logno, bool missing_ok);
