@@ -134,13 +134,14 @@ typedef enum UndoLogSlotState
 	UNDOLOGSLOT_ON_SHARED_FREE_LIST,
 
 	/*
-	 * This slot is managing an undo log, but currently on one backend's free
-	 * list.  In this state, the undo log can be moved to UNDOLOGSLOT_FREE
-	 * state by CheckPointUndoLogs() or DropUndoLogsInTablespace(), but no
-	 * other backend can acquire it.  That can be detected by a change in
-	 * associated pid.  This state exists to give backends a fast way to keep
-	 * reusing the same undo log for sequential transactions without having to
-	 * take a more heavily contended lock.
+	 * This slot is managing an undo log, but currently on one backend's
+	 * private free list.  In this state, the undo log can be moved to
+	 * UNDOLOGSLOT_FREE state by CheckPointUndoLogs() or
+	 * DropUndoLogsInTablespace(), but no other backend can acquire it.  That
+	 * can be detected by a change in associated pid.  This state exists to
+	 * give backends a fast way to keep reusing the same undo log for
+	 * sequential transactions without having to take a more heavily contended
+	 * lock.
 	 */
 	UNDOLOGSLOT_ON_PRIVATE_FREE_LIST,
 
