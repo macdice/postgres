@@ -2229,6 +2229,22 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
+      <varlistentry id="guc-maintenance-io-concurrency" xreflabel="maintenance_io_concurrency">
+       <term><varname>maintenance_io_concurrency</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>maintenance_io_concurrency</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Similar to <varname>effective_io_concurrency</varname>, but used
+         for maintenance tasks such as VACUUM.  The default value is higher,
+         because maintenance processes work on behalf of many concurrent
+         regular processes.
+        </para>
+       </listitem>
+      </varlistentry>
+ 
       <varlistentry id="guc-max-worker-processes" xreflabel="max_worker_processes">
        <term><varname>max_worker_processes</varname> (<type>integer</type>)
        <indexterm>

@@ -68,6 +68,7 @@ extern PGDLLIMPORT char *BufferBlocks;
 
 /* in guc.c */
 extern int	effective_io_concurrency;
+extern int	maintenance_io_concurrency;
 
 /* in localbuf.c */
 extern PGDLLIMPORT int NLocBuffer;
