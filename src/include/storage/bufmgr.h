@@ -161,7 +161,6 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 /*
  * prototypes for functions in bufmgr.c
  */
-extern bool ComputeIoConcurrency(int io_concurrency, double *target);
 extern void PrefetchBuffer(Relation reln, ForkNumber forkNum,
 						   BlockNumber blockNum);
 extern Buffer ReadBuffer(Relation reln, BlockNumber blockNum);
