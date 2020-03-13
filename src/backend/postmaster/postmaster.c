@@ -572,7 +572,7 @@ PostmasterMain(int argc, char *argv[])
 	bool		listen_addr_saved = false;
 	int			i;
 	char	   *output_config_variable = NULL;
-Assert(false);
+
 	InitProcessGlobals();
 
 	PostmasterPid = MyProcPid;

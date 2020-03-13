@@ -1499,6 +1499,7 @@ ExecHashJoinReInitializeDSM(HashJoinState *state, ParallelContext *cxt)
 	ParallelHashJoinState *pstate =
 	shm_toc_lookup(cxt->toc, plan_node_id, false);
 
+Assert(1 == 2);
 	/*
 	 * It would be possible to reuse the shared hash table in single-batch
 	 * cases by resetting and then fast-forwarding build_barrier to
