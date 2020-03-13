@@ -35,6 +35,6 @@ do "config.pl" if (-f "src/tools/msvc/config.pl");
 
 # print "PATH: $_\n" foreach (split(';',$ENV{PATH}));
 
-$config->{options}->{asserts} = 1;
+$config->{asserts} = 1;
 
 Mkvcbuild::mkvcbuild($config);
