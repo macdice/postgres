@@ -4,7 +4,10 @@ use warnings FATAL => qw(all);
 use File::Find;
 
 my $Target = "regression.diffs";
-
+find(\&dump, "src");
+$Target = "postmaster.log";
+find(\&dump, "src");
+$Target = "initdb.log";
 find(\&dump, "src");
 
 sub dump {
