@@ -866,6 +866,8 @@ err:
 	/*
 	 * Invalidate the read state, if this was an error. We might read from a
 	 * different source after failure.
+	 *
+	 * XXX !?!
 	 */
 	if (readOff < 0 || state->errormsg_buf[0] != '\0')
 		XLogReaderInvalReadState(state);
