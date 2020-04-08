@@ -66,7 +66,8 @@ typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen,
 							   XLogRecPtr targetRecPtr,
-							   char *readBuf);
+							   char *readBuf,
+							   bool nowait);
 typedef void (*WALSegmentOpenCB) (XLogReaderState *xlogreader,
 								  XLogSegNo nextSegNo,
 								  TimeLineID *tli_p);
@@ -153,17 +154,18 @@ typedef struct
 /*
  * The decoded contents of a record.  This occupies a contiguous region of
  * memory, with main_data and blocks[n].data pointing to memory after the
- * member declared here.
+ * members declared here.
  */
 typedef struct DecodedXLogRecord
 {
 	/* Private member used for resource management. */
 	size_t		size;			/* total size of decoded record */
 	bool		oversized;		/* outside the regular decode buffer? */
-	XLogRecPtr	lsn;			/* location */
-	struct DecodedXLogRecord *next;	/* read queue link */
+	struct DecodedXLogRecord *next;	/* decoded record queue  link */
 
 	/* Public members. */
+	XLogRecPtr	lsn;			/* location */
+	XLogRecPtr	next_lsn;		/* location of next record */
 	XLogRecord	header;			/* header */
 	RepOriginId record_origin;
 	TransactionId toplevel_xid; /* XID of top-level transaction */
@@ -197,13 +199,24 @@ struct XLogReaderState
 	void	   *private_data;
 
 	/*
-	 * Start and end point of last record read.  EndRecPtr is also used as the
-	 * position to read next.  Calling XLogBeginRead() sets EndRecPtr to the
-	 * starting position and ReadRecPtr to invalid.
+	 * Start and end point of last record returned by XLogReadRecord().
+	 *
+	 * XXX These are also available as record->lsn and record->next_lsn,
+	 * but since these were part of the public interface...
 	 */
 	XLogRecPtr	ReadRecPtr;		/* start of last record read */
 	XLogRecPtr	EndRecPtr;		/* end+1 of last record read */
 
+	/*
+	 * Start and end point of the last record read and decoded by
+	 * XLogReadRecordInternal().  NextRecPtr is also used as the position to
+	 * decode next.  Calling XLogBeginRead() sets NextRecPtr and EndRecPtr to
+	 * the requested starting position.
+	 */
+	XLogRecPtr	DecodeRecPtr;	/* start of last record decoded */
+	XLogRecPtr	NextRecPtr;		/* end+1 of last record decoded */
+
+	/* Last record returned by XLogReadRecord. */
 	DecodedXLogRecord *record;
 
 	/* ----------------------------------------
@@ -221,8 +234,8 @@ struct XLogReaderState
 	/*
 	 * Buffer for decoded records.  This is a circular buffer, though
 	 * individual records can't be split in the middle, so some space is often
-	 * wasted at the end.  Records that don't fit in this space are allocated
-	 * and freed individually.
+	 * wasted at the end.  Oversized records that don't fit in this space are
+	 * allocated separately.
 	 */
 	char	   *decode_buffer;
 	size_t		decode_buffer_size;
@@ -231,13 +244,12 @@ struct XLogReaderState
 	char	   *decode_buffer_tail;		/* read head */
 
 	/*
-	 * Queue of records that have been decoded but not yet returned.  This is
-	 * a linked list that usually consists of consecutive records in
-	 * decode_buffer, but may also contain pointers to oversized records
-	 * allocated with palloc().
+	 * Queue of records that have been decoded.  This is a linked list that
+	 * usually consists of consecutive records in decode_buffer, but may also
+	 * contain oversized records allocated with palloc().
 	 */
-	DecodedXLogRecord *read_queue_head;	/* newest decoded record */
-	DecodedXLogRecord *read_queue_tail;	/* oldest decoded record */
+	DecodedXLogRecord *decode_queue_head;	/* newest decoded record */
+	DecodedXLogRecord *decode_queue_tail;	/* oldest decoded record */
 
 	/* last read XLOG position for data currently in readBuf */
 	WALSegmentContext segcxt;
@@ -310,7 +322,8 @@ extern struct XLogRecord *XLogReadRecord(XLogReaderState *state,
 										 char **errormsg);
 
 /* Try to read ahead, if there is space in the decoding buffer. */
-extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state);
+extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state,
+										char **errormsg);
 
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
@@ -353,6 +366,7 @@ extern bool DecodeXLogRecord(XLogReaderState *state,
 #define XLogRecGetDataLen(decoder) ((decoder)->record->main_data_len)
 #define XLogRecHasAnyBlockRefs(decoder) ((decoder)->record->max_block_id >= 0)
 #define XLogRecMaxBlockId(decoder) ((decoder)->record->max_block_id)
+#define XLogRecGetBlock(decoder, i) (&(decoder)->record->blocks[(i)])
 #define XLogRecHasBlockRef(decoder, block_id) \
 	((decoder)->record->blocks[block_id].in_use)
 #define XLogRecHasBlockImage(decoder, block_id) \

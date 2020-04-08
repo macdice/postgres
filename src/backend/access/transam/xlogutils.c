@@ -857,7 +857,8 @@ wal_segment_close(XLogReaderState *state)
  */
 int
 read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
-					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page)
+					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page,
+					 bool nowait)
 {
 	XLogRecPtr	read_upto,
 				loc;
@@ -881,7 +882,7 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 			 * data, we'll return an error.  This is used by xlogprefetch.c
 			 * while streaming.
 			 */
-			read_upto = GetWalRcvWriteRecPtr();
+			read_upto = GetWalRcvWriteRecPtrUnlocked();
 			state->currTLI = tli = options->tli;
 			break;
 
