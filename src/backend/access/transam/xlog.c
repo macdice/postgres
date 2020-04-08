@@ -35,6 +35,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "access/xloginsert.h"
+#include "access/xlogprefetch.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/catversion.h"
@@ -7169,12 +7170,16 @@ StartupXLOG(void)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
+			XLogPrefetchState prefetch;
 
 			InRedo = true;
 
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							(uint32) (ReadRecPtr >> 32), (uint32) ReadRecPtr)));
+
+			/* Prepare to prefetch, if configured. */
+			XLogPrefetchBegin(&prefetch);
 
 			/*
 			 * main redo apply loop
@@ -7204,6 +7209,12 @@ StartupXLOG(void)
 
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
+
+				/* Peform WAL prefetching, if enabled. */
+				XLogPrefetch(&prefetch,
+							 ThisTimeLineID,
+							 xlogreader->ReadRecPtr,
+							 currentSource == XLOG_FROM_STREAM);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -7376,6 +7387,9 @@ StartupXLOG(void)
 					 */
 					if (AllowCascadeReplication())
 						WalSndWakeup();
+
+					/* Reset the prefetcher. */
+					XLogPrefetchReconfigure();
 				}
 
 				/* Exit loop if we reached inclusive recovery target */
@@ -7392,6 +7406,7 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
+			XLogPrefetchEnd(&prefetch);
 
 			if (reachedRecoveryTarget)
 			{
@@ -12150,6 +12165,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					currentSource = XLOG_FROM_STREAM;
 					startWalReceiver = true;
+					XLogPrefetchReconfigure();
 					break;
 
 				case XLOG_FROM_STREAM:
