@@ -113,6 +113,9 @@ const struct config_enum_entry dynamic_shared_memory_options[] = {
 /* Implementation selector. */
 int			dynamic_shared_memory_type;
 
+/* Amount of space reserved for DSM segments in the main area. */
+int			dynamic_shared_memory_main_size;
+
 /* Size of buffer to be used for zero-filling. */
 #define ZBUFFER_SIZE				8192
 
