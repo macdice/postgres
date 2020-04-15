@@ -986,25 +986,6 @@ vacuum_set_xid_limits(Relation rel,
 	 */
 	*oldestXmin = GetOldestNonRemovableTransactionId(rel);
 
-	if (OldSnapshotThresholdActive())
-	{
-		TransactionId limit_xmin;
-		TimestampTz limit_ts;
-
-		if (TransactionIdLimitedForOldSnapshots(*oldestXmin, rel,
-												&limit_xmin, &limit_ts))
-		{
-			/*
-			 * TODO: We should only set the threshold if we are pruning on the
-			 * basis of the increased limits.  Not as crucial here as it is
-			 * for opportunistic pruning (which often happens at a much higher
-			 * frequency), but would still be a significant improvement.
-			 */
-			SetOldSnapshotThresholdTimestamp(limit_ts, limit_xmin);
-			*oldestXmin = limit_xmin;
-		}
-	}
-
 	Assert(TransactionIdIsNormal(*oldestXmin));
 
 	/*

@@ -16,6 +16,7 @@
 #include "access/htup.h"
 #include "access/xlogdefs.h"
 #include "datatype/timestamp.h"
+#include "lib/ilist.h"
 #include "lib/pairingheap.h"
 #include "storage/buf.h"
 
@@ -118,6 +119,34 @@ typedef enum SnapshotType
 	SNAPSHOT_NON_VACUUMABLE
 } SnapshotType;
 
+typedef enum SnapshotTimeoutState {
+	/*
+	 * No timeout, and it is safe to use this snapshot.
+	 */
+	SNAPSHOT_TIMEOUT_NONE,
+
+	/*
+	 * The snapshot is in TimedSnapshots, holding back xmin, but is not a type
+	 * of snapshot that we allow to time out.  Safe to use.  It has this name
+	 * because it also blocks everything after it from timing out.
+	 */
+	SNAPSHOT_TIMEOUT_BLOCKING,
+
+	/*
+	 * The snapshot is in TimedSnapshots, but the timeout has not yet been
+	 * reached.  Safe to use.
+	 */
+	SNAPSHOT_TIMEOUT_WAITING,
+
+	/*
+	 * The snapshot is no longer in TimedSnaphots, and must not be used for
+	 * any visibility purposes (including heap access and visibility-map based
+	 * optimizations), because it no longer prevents xmin from advancing.  Data it
+	 * needs to see may be vacuumed away at any time.
+	 */
+	SNAPSHOT_TIMEOUT_REACHED
+} SnapshotTimeoutState;
+
 typedef struct SnapshotData *Snapshot;
 
 #define InvalidSnapshot		((Snapshot) NULL)
@@ -205,8 +234,9 @@ typedef struct SnapshotData
 	uint32		regd_count;		/* refcount on RegisteredSnapshots */
 	pairingheap_node ph_node;	/* link in the RegisteredSnapshots heap */
 
-	TimestampTz whenTaken;		/* timestamp when snapshot was taken */
-	XLogRecPtr	lsn;			/* position in the WAL stream when taken */
+	TimestampTz	whenTaken;		/* timestamp when snapshot was taken */
+	dlist_node timeout_node;	/* link in TimedSnapshots */
+	SnapshotTimeoutState timeout_state;
 
 	/*
 	 * The transaction completion count at the time GetSnapshotData() built
@@ -215,5 +245,14 @@ typedef struct SnapshotData
 	 */
 	uint64		snapXactCompletionCount;
 } SnapshotData;
+
+static inline void
+CheckForOldSnapshot(Snapshot snapshot)
+{
+	if (unlikely(snapshot->timeout_state == SNAPSHOT_TIMEOUT_REACHED))
+		ereport(ERROR,
+				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
+				 errmsg("snapshot too old")));
+}
 
 #endif							/* SNAPSHOT_H */

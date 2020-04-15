@@ -2092,34 +2092,6 @@ GetMaxSnapshotSubxidCount(void)
 }
 
 /*
- * Initialize old_snapshot_threshold specific parts of a newly build snapshot.
- */
-static void
-GetSnapshotDataInitOldSnapshot(Snapshot snapshot)
-{
-	if (!OldSnapshotThresholdActive())
-	{
-		/*
-		 * If not using "snapshot too old" feature, fill related fields with
-		 * dummy values that don't require any locking.
-		 */
-		snapshot->lsn = InvalidXLogRecPtr;
-		snapshot->whenTaken = 0;
-	}
-	else
-	{
-		/*
-		 * Capture the current time and WAL stream location in case this
-		 * snapshot becomes old enough to need to fall back on the special
-		 * "old snapshot" logic.
-		 */
-		snapshot->lsn = GetXLogInsertRecPtr();
-		snapshot->whenTaken = GetSnapshotCurrentTimestamp();
-		MaintainOldSnapshotTimeMapping(snapshot->whenTaken, snapshot->xmin);
-	}
-}
-
-/*
  * Helper function for GetSnapshotData() that checks if the bulk of the
  * visibility information in the snapshot is still valid. If so, it updates
  * the fields that need to change and returns true. Otherwise it returns
@@ -2172,8 +2144,8 @@ GetSnapshotDataReuse(Snapshot snapshot)
 	snapshot->active_count = 0;
 	snapshot->regd_count = 0;
 	snapshot->copied = false;
-
-	GetSnapshotDataInitOldSnapshot(snapshot);
+	snapshot->whenTaken = 0;		/* set by EnableSnapshotTimeout() */
+	snapshot->timeout_state = SNAPSHOT_TIMEOUT_NONE;
 
 	return true;
 }
@@ -2558,8 +2530,8 @@ GetSnapshotData(Snapshot snapshot)
 	snapshot->active_count = 0;
 	snapshot->regd_count = 0;
 	snapshot->copied = false;
-
-	GetSnapshotDataInitOldSnapshot(snapshot);
+	snapshot->whenTaken = 0;		/* set by EnableSnapshotTimeout() */
+	snapshot->timeout_state = SNAPSHOT_TIMEOUT_NONE;
 
 	return snapshot;
 }

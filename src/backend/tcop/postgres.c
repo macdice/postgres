@@ -3379,6 +3379,12 @@ ProcessInterrupts(void)
 		pgstat_report_stat(true);
 	}
 
+	if (SnapshotTimeoutPending)
+	{
+		HandleSnapshotTimeout();
+		SnapshotTimeoutPending = false;
+	}
+
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();
 

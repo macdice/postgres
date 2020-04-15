@@ -223,6 +223,12 @@ BitmapHeapNext(BitmapHeapScanState *node)
 
 			if (skip_fetch)
 			{
+				/*
+				 * if we relied on VM_ALL_VISIBLE, our snapshot had better
+				 * not have timed out
+				 */
+				CheckForOldSnapshot(node->ss.ps.state->es_snapshot);
+
 				/* can't be lossy in the skip_fetch case */
 				Assert(tbmres->ntuples >= 0);
 

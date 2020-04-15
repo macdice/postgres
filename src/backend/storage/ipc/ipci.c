@@ -143,7 +143,6 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, WalRcvShmemSize());
 	size = add_size(size, PgArchShmemSize());
 	size = add_size(size, ApplyLauncherShmemSize());
-	size = add_size(size, SnapMgrShmemSize());
 	size = add_size(size, BTreeShmemSize());
 	size = add_size(size, SyncScanShmemSize());
 	size = add_size(size, AsyncShmemSize());
@@ -296,7 +295,6 @@ CreateSharedMemoryAndSemaphores(void)
 	/*
 	 * Set up other modules that need some shared memory space
 	 */
-	SnapMgrInit();
 	BTreeShmemInit();
 	SyncScanShmemInit();
 	AsyncShmemInit();

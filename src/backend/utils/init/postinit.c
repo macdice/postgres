@@ -78,6 +78,7 @@ static void IdleInTransactionSessionTimeoutHandler(void);
 static void IdleSessionTimeoutHandler(void);
 static void IdleStatsUpdateTimeoutHandler(void);
 static void ClientCheckTimeoutHandler(void);
+static void SnapshotTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
 static void process_settings(Oid databaseid, Oid roleid);
@@ -691,6 +692,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		RegisterTimeout(CLIENT_CONNECTION_CHECK_TIMEOUT, ClientCheckTimeoutHandler);
 		RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT,
 						IdleStatsUpdateTimeoutHandler);
+		RegisterTimeout(SNAPSHOT_TIMEOUT, SnapshotTimeoutHandler);
 	}
 
 	/*
@@ -1313,6 +1315,14 @@ static void
 ClientCheckTimeoutHandler(void)
 {
 	CheckClientConnectionPending = true;
+	InterruptPending = true;
+	SetLatch(MyLatch);
+}
+
+static void
+SnapshotTimeoutHandler(void)
+{
+	SnapshotTimeoutPending = true;
 	InterruptPending = true;
 	SetLatch(MyLatch);
 }

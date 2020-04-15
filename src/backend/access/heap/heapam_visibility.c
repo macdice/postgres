@@ -1765,6 +1765,8 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
 bool
 HeapTupleSatisfiesVisibility(HeapTuple tup, Snapshot snapshot, Buffer buffer)
 {
+	CheckForOldSnapshot(snapshot);
+
 	switch (snapshot->snapshot_type)
 	{
 		case SNAPSHOT_MVCC:
