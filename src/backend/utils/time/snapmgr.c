@@ -67,67 +67,13 @@
 #include "utils/resowner_private.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/timeout.h"
 
 
 /*
  * GUC parameters
  */
 int			old_snapshot_threshold; /* number of minutes, -1 disables */
-
-/*
- * Structure for dealing with old_snapshot_threshold implementation.
- */
-typedef struct OldSnapshotControlData
-{
-	/*
-	 * Variables for old snapshot handling are shared among processes and are
-	 * only allowed to move forward.
-	 */
-	slock_t		mutex_current;	/* protect current_timestamp */
-	TimestampTz current_timestamp;	/* latest snapshot timestamp */
-	slock_t		mutex_latest_xmin;	/* protect latest_xmin and next_map_update */
-	TransactionId latest_xmin;	/* latest snapshot xmin */
-	TimestampTz next_map_update;	/* latest snapshot valid up to */
-	slock_t		mutex_threshold;	/* protect threshold fields */
-	TimestampTz threshold_timestamp;	/* earlier snapshot is old */
-	TransactionId threshold_xid;	/* earlier xid may be gone */
-
-	/*
-	 * Keep one xid per minute for old snapshot error handling.
-	 *
-	 * Use a circular buffer with a head offset, a count of entries currently
-	 * used, and a timestamp corresponding to the xid at the head offset.  A
-	 * count_used value of zero means that there are no times stored; a
-	 * count_used value of OLD_SNAPSHOT_TIME_MAP_ENTRIES means that the buffer
-	 * is full and the head must be advanced to add new entries.  Use
-	 * timestamps aligned to minute boundaries, since that seems less
-	 * surprising than aligning based on the first usage timestamp.  The
-	 * latest bucket is effectively stored within latest_xmin.  The circular
-	 * buffer is updated when we get a new xmin value that doesn't fall into
-	 * the same interval.
-	 *
-	 * It is OK if the xid for a given time slot is from earlier than
-	 * calculated by adding the number of minutes corresponding to the
-	 * (possibly wrapped) distance from the head offset to the time of the
-	 * head entry, since that just results in the vacuuming of old tuples
-	 * being slightly less aggressive.  It would not be OK for it to be off in
-	 * the other direction, since it might result in vacuuming tuples that are
-	 * still expected to be there.
-	 *
-	 * Use of an SLRU was considered but not chosen because it is more
-	 * heavyweight than is needed for this, and would probably not be any less
-	 * code to implement.
-	 *
-	 * Persistence is not needed.
-	 */
-	int			head_offset;	/* subscript of oldest tracked time */
-	TimestampTz head_timestamp; /* time corresponding to head xid */
-	int			count_used;		/* how many slots are in use */
-	TransactionId xid_by_minute[FLEXIBLE_ARRAY_MEMBER];
-} OldSnapshotControlData;
-
-static volatile OldSnapshotControlData *oldSnapshotControl;
-
 
 /*
  * CurrentSnapshot points to the only snapshot taken in transaction-snapshot
@@ -189,9 +135,6 @@ typedef struct ActiveSnapshotElt
 /* Top of the stack of active snapshots */
 static ActiveSnapshotElt *ActiveSnapshot = NULL;
 
-/* Bottom of the stack of active snapshots */
-static ActiveSnapshotElt *OldestActiveSnapshot = NULL;
-
 /*
  * Currently registered Snapshots.  Ordered in a heap by xmin, so that we can
  * quickly find the one with lowest xmin, to advance our MyPgXact->xmin.
@@ -225,10 +168,10 @@ typedef struct ExportedSnapshot
 static List *exportedSnapshots = NIL;
 
 /* Prototypes for local functions */
-static TimestampTz AlignTimestampToMinuteBoundary(TimestampTz ts);
 static Snapshot CopySnapshot(Snapshot snapshot);
 static void FreeSnapshot(Snapshot snapshot);
 static void SnapshotResetXmin(void);
+static void SetSnapshotExpireTime(Snapshot snapshot);
 
 /*
  * Snapshot fields to be serialized.
@@ -245,53 +188,7 @@ typedef struct SerializedSnapshotData
 	bool		suboverflowed;
 	bool		takenDuringRecovery;
 	CommandId	curcid;
-	TimestampTz whenTaken;
-	XLogRecPtr	lsn;
 } SerializedSnapshotData;
-
-Size
-SnapMgrShmemSize(void)
-{
-	Size		size;
-
-	size = offsetof(OldSnapshotControlData, xid_by_minute);
-	if (old_snapshot_threshold > 0)
-		size = add_size(size, mul_size(sizeof(TransactionId),
-									   OLD_SNAPSHOT_TIME_MAP_ENTRIES));
-
-	return size;
-}
-
-/*
- * Initialize for managing old snapshot detection.
- */
-void
-SnapMgrInit(void)
-{
-	bool		found;
-
-	/*
-	 * Create or attach to the OldSnapshotControlData structure.
-	 */
-	oldSnapshotControl = (volatile OldSnapshotControlData *)
-		ShmemInitStruct("OldSnapshotControlData",
-						SnapMgrShmemSize(), &found);
-
-	if (!found)
-	{
-		SpinLockInit(&oldSnapshotControl->mutex_current);
-		oldSnapshotControl->current_timestamp = 0;
-		SpinLockInit(&oldSnapshotControl->mutex_latest_xmin);
-		oldSnapshotControl->latest_xmin = InvalidTransactionId;
-		oldSnapshotControl->next_map_update = 0;
-		SpinLockInit(&oldSnapshotControl->mutex_threshold);
-		oldSnapshotControl->threshold_timestamp = 0;
-		oldSnapshotControl->threshold_xid = InvalidTransactionId;
-		oldSnapshotControl->head_offset = 0;
-		oldSnapshotControl->head_timestamp = 0;
-		oldSnapshotControl->count_used = 0;
-	}
-}
 
 /*
  * GetTransactionSnapshot
@@ -353,6 +250,7 @@ GetTransactionSnapshot(void)
 			/* Mark it as "registered" in FirstXactSnapshot */
 			FirstXactSnapshot->regd_count++;
 			pairingheap_add(&RegisteredSnapshots, &FirstXactSnapshot->ph_node);
+			SetSnapshotExpireTime(FirstXactSnapshot);
 		}
 		else
 			CurrentSnapshot = GetSnapshotData(&CurrentSnapshotData);
@@ -401,36 +299,6 @@ GetLatestSnapshot(void)
 	SecondarySnapshot = GetSnapshotData(&SecondarySnapshotData);
 
 	return SecondarySnapshot;
-}
-
-/*
- * GetOldestSnapshot
- *
- *		Get the transaction's oldest known snapshot, as judged by the LSN.
- *		Will return NULL if there are no active or registered snapshots.
- */
-Snapshot
-GetOldestSnapshot(void)
-{
-	Snapshot	OldestRegisteredSnapshot = NULL;
-	XLogRecPtr	RegisteredLSN = InvalidXLogRecPtr;
-
-	if (!pairingheap_is_empty(&RegisteredSnapshots))
-	{
-		OldestRegisteredSnapshot = pairingheap_container(SnapshotData, ph_node,
-														 pairingheap_first(&RegisteredSnapshots));
-		RegisteredLSN = OldestRegisteredSnapshot->lsn;
-	}
-
-	if (OldestActiveSnapshot != NULL)
-	{
-		XLogRecPtr	ActiveLSN = OldestActiveSnapshot->as_snap->lsn;
-
-		if (XLogRecPtrIsInvalid(RegisteredLSN) || RegisteredLSN > ActiveLSN)
-			return OldestActiveSnapshot->as_snap;
-	}
-
-	return OldestRegisteredSnapshot;
 }
 
 /*
@@ -493,7 +361,8 @@ GetNonHistoricCatalogSnapshot(Oid relid)
 		 * CatalogSnapshot pointer is already valid.
 		 */
 		pairingheap_add(&RegisteredSnapshots, &CatalogSnapshot->ph_node);
-	}
+		SetSnapshotExpireTime(CatalogSnapshot);
+	 }
 
 	return CatalogSnapshot;
 }
@@ -513,7 +382,8 @@ InvalidateCatalogSnapshot(void)
 {
 	if (CatalogSnapshot)
 	{
-		pairingheap_remove(&RegisteredSnapshots, &CatalogSnapshot->ph_node);
+		if (!CatalogSnapshot->too_old)
+			pairingheap_remove(&RegisteredSnapshots, &CatalogSnapshot->ph_node);
 		CatalogSnapshot = NULL;
 		SnapshotResetXmin();
 	}
@@ -646,6 +516,7 @@ SetTransactionSnapshot(Snapshot sourcesnap, VirtualTransactionId *sourcevxid,
 		/* Mark it as "registered" in FirstXactSnapshot */
 		FirstXactSnapshot->regd_count++;
 		pairingheap_add(&RegisteredSnapshots, &FirstXactSnapshot->ph_node);
+		SetSnapshotExpireTime(FirstXactSnapshot);
 	}
 
 	FirstSnapshotSet = true;
@@ -679,6 +550,9 @@ CopySnapshot(Snapshot snapshot)
 	newsnap->regd_count = 0;
 	newsnap->active_count = 0;
 	newsnap->copied = true;
+
+	newsnap->too_old = snapshot->too_old;
+	newsnap->expire_time = snapshot->expire_time;
 
 	/* setup XID array */
 	if (snapshot->xcnt > 0)
@@ -755,8 +629,8 @@ PushActiveSnapshot(Snapshot snap)
 	newactive->as_snap->active_count++;
 
 	ActiveSnapshot = newactive;
-	if (OldestActiveSnapshot == NULL)
-		OldestActiveSnapshot = ActiveSnapshot;
+
+	SetSnapshotExpireTime(newactive->as_snap);
 }
 
 /*
@@ -827,8 +701,6 @@ PopActiveSnapshot(void)
 
 	pfree(ActiveSnapshot);
 	ActiveSnapshot = newstack;
-	if (ActiveSnapshot == NULL)
-		OldestActiveSnapshot = NULL;
 
 	SnapshotResetXmin();
 }
@@ -891,7 +763,10 @@ RegisterSnapshotOnOwner(Snapshot snapshot, ResourceOwner owner)
 	ResourceOwnerRememberSnapshot(owner, snap);
 
 	if (snap->regd_count == 1)
+	{
 		pairingheap_add(&RegisteredSnapshots, &snap->ph_node);
+		SetSnapshotExpireTime(snap);
+	}
 
 	return snap;
 }
@@ -928,7 +803,7 @@ UnregisterSnapshotFromOwner(Snapshot snapshot, ResourceOwner owner)
 	ResourceOwnerForgetSnapshot(owner, snapshot);
 
 	snapshot->regd_count--;
-	if (snapshot->regd_count == 0)
+	if (snapshot->regd_count == 0 && !snapshot->too_old)
 		pairingheap_remove(&RegisteredSnapshots, &snapshot->ph_node);
 
 	if (snapshot->regd_count == 0 && snapshot->active_count == 0)
@@ -998,13 +873,6 @@ GetFullRecentGlobalXmin(void)
  * dropped.  For efficiency, we only consider recomputing PGXACT->xmin when
  * the active snapshot stack is empty; this allows us not to need to track
  * which active snapshot is oldest.
- *
- * Note: it's tempting to use GetOldestSnapshot() here so that we can include
- * active snapshots in the calculation.  However, that compares by LSN not
- * xmin so it's not entirely clear that it's the same thing.  Also, we'd be
- * critically dependent on the assumption that the bottommost active snapshot
- * stack entry has the oldest xmin.  (Current uses of GetOldestSnapshot() are
- * not actually critical, but this would be.)
  */
 static void
 SnapshotResetXmin(void)
@@ -1076,8 +944,6 @@ AtSubAbort_Snapshot(int level)
 		pfree(ActiveSnapshot);
 
 		ActiveSnapshot = next;
-		if (ActiveSnapshot == NULL)
-			OldestActiveSnapshot = NULL;
 	}
 
 	SnapshotResetXmin();
@@ -1099,7 +965,7 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 	 * stacked as active, we don't want the code below to be chasing through a
 	 * dangling pointer.
 	 */
-	if (FirstXactSnapshot != NULL)
+	if (FirstXactSnapshot != NULL && !FirstXactSnapshot->too_old)
 	{
 		Assert(FirstXactSnapshot->regd_count > 0);
 		Assert(!pairingheap_is_empty(&RegisteredSnapshots));
@@ -1133,6 +999,9 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 				elog(WARNING, "could not unlink file \"%s\": %m",
 					 esnap->snapfile);
 
+			if (esnap->snapshot->too_old)
+				continue;
+
 			pairingheap_remove(&RegisteredSnapshots,
 							   &esnap->snapshot->ph_node);
 		}
@@ -1161,7 +1030,6 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 	 * it'll go away with TopTransactionContext.
 	 */
 	ActiveSnapshot = NULL;
-	OldestActiveSnapshot = NULL;
 	pairingheap_reset(&RegisteredSnapshots);
 
 	CurrentSnapshot = NULL;
@@ -1262,6 +1130,7 @@ ExportSnapshot(Snapshot snapshot)
 
 	snapshot->regd_count++;
 	pairingheap_add(&RegisteredSnapshots, &snapshot->ph_node);
+	SetSnapshotExpireTime(snapshot);
 
 	/*
 	 * Fill buf with a text serialization of the snapshot, plus identification
@@ -1697,335 +1566,6 @@ ThereAreNoPriorRegisteredSnapshots(void)
 
 
 /*
- * Return a timestamp that is exactly on a minute boundary.
- *
- * If the argument is already aligned, return that value, otherwise move to
- * the next minute boundary following the given time.
- */
-static TimestampTz
-AlignTimestampToMinuteBoundary(TimestampTz ts)
-{
-	TimestampTz retval = ts + (USECS_PER_MINUTE - 1);
-
-	return retval - (retval % USECS_PER_MINUTE);
-}
-
-/*
- * Get current timestamp for snapshots
- *
- * This is basically GetCurrentTimestamp(), but with a guarantee that
- * the result never moves backward.
- */
-TimestampTz
-GetSnapshotCurrentTimestamp(void)
-{
-	TimestampTz now = GetCurrentTimestamp();
-
-	/*
-	 * Don't let time move backward; if it hasn't advanced, use the old value.
-	 */
-	SpinLockAcquire(&oldSnapshotControl->mutex_current);
-	if (now <= oldSnapshotControl->current_timestamp)
-		now = oldSnapshotControl->current_timestamp;
-	else
-		oldSnapshotControl->current_timestamp = now;
-	SpinLockRelease(&oldSnapshotControl->mutex_current);
-
-	return now;
-}
-
-/*
- * Get timestamp through which vacuum may have processed based on last stored
- * value for threshold_timestamp.
- *
- * XXX: So far, we never trust that a 64-bit value can be read atomically; if
- * that ever changes, we could get rid of the spinlock here.
- */
-TimestampTz
-GetOldSnapshotThresholdTimestamp(void)
-{
-	TimestampTz threshold_timestamp;
-
-	SpinLockAcquire(&oldSnapshotControl->mutex_threshold);
-	threshold_timestamp = oldSnapshotControl->threshold_timestamp;
-	SpinLockRelease(&oldSnapshotControl->mutex_threshold);
-
-	return threshold_timestamp;
-}
-
-static void
-SetOldSnapshotThresholdTimestamp(TimestampTz ts, TransactionId xlimit)
-{
-	SpinLockAcquire(&oldSnapshotControl->mutex_threshold);
-	oldSnapshotControl->threshold_timestamp = ts;
-	oldSnapshotControl->threshold_xid = xlimit;
-	SpinLockRelease(&oldSnapshotControl->mutex_threshold);
-}
-
-/*
- * TransactionIdLimitedForOldSnapshots
- *
- * Apply old snapshot limit, if any.  This is intended to be called for page
- * pruning and table vacuuming, to allow old_snapshot_threshold to override
- * the normal global xmin value.  Actual testing for snapshot too old will be
- * based on whether a snapshot timestamp is prior to the threshold timestamp
- * set in this function.
- */
-TransactionId
-TransactionIdLimitedForOldSnapshots(TransactionId recentXmin,
-									Relation relation)
-{
-	if (TransactionIdIsNormal(recentXmin)
-		&& old_snapshot_threshold >= 0
-		&& RelationAllowsEarlyPruning(relation))
-	{
-		TimestampTz ts = GetSnapshotCurrentTimestamp();
-		TransactionId xlimit = recentXmin;
-		TransactionId latest_xmin;
-		TimestampTz update_ts;
-		bool		same_ts_as_threshold = false;
-
-		SpinLockAcquire(&oldSnapshotControl->mutex_latest_xmin);
-		latest_xmin = oldSnapshotControl->latest_xmin;
-		update_ts = oldSnapshotControl->next_map_update;
-		SpinLockRelease(&oldSnapshotControl->mutex_latest_xmin);
-
-		/*
-		 * Zero threshold always overrides to latest xmin, if valid.  Without
-		 * some heuristic it will find its own snapshot too old on, for
-		 * example, a simple UPDATE -- which would make it useless for most
-		 * testing, but there is no principled way to ensure that it doesn't
-		 * fail in this way.  Use a five-second delay to try to get useful
-		 * testing behavior, but this may need adjustment.
-		 */
-		if (old_snapshot_threshold == 0)
-		{
-			if (TransactionIdPrecedes(latest_xmin, MyPgXact->xmin)
-				&& TransactionIdFollows(latest_xmin, xlimit))
-				xlimit = latest_xmin;
-
-			ts -= 5 * USECS_PER_SEC;
-			SetOldSnapshotThresholdTimestamp(ts, xlimit);
-
-			return xlimit;
-		}
-
-		ts = AlignTimestampToMinuteBoundary(ts)
-			- (old_snapshot_threshold * USECS_PER_MINUTE);
-
-		/* Check for fast exit without LW locking. */
-		SpinLockAcquire(&oldSnapshotControl->mutex_threshold);
-		if (ts == oldSnapshotControl->threshold_timestamp)
-		{
-			xlimit = oldSnapshotControl->threshold_xid;
-			same_ts_as_threshold = true;
-		}
-		SpinLockRelease(&oldSnapshotControl->mutex_threshold);
-
-		if (!same_ts_as_threshold)
-		{
-			if (ts == update_ts)
-			{
-				xlimit = latest_xmin;
-				if (NormalTransactionIdFollows(xlimit, recentXmin))
-					SetOldSnapshotThresholdTimestamp(ts, xlimit);
-			}
-			else
-			{
-				LWLockAcquire(OldSnapshotTimeMapLock, LW_SHARED);
-
-				if (oldSnapshotControl->count_used > 0
-					&& ts >= oldSnapshotControl->head_timestamp)
-				{
-					int			offset;
-
-					offset = ((ts - oldSnapshotControl->head_timestamp)
-							  / USECS_PER_MINUTE);
-					if (offset > oldSnapshotControl->count_used - 1)
-						offset = oldSnapshotControl->count_used - 1;
-					offset = (oldSnapshotControl->head_offset + offset)
-						% OLD_SNAPSHOT_TIME_MAP_ENTRIES;
-					xlimit = oldSnapshotControl->xid_by_minute[offset];
-
-					if (NormalTransactionIdFollows(xlimit, recentXmin))
-						SetOldSnapshotThresholdTimestamp(ts, xlimit);
-				}
-
-				LWLockRelease(OldSnapshotTimeMapLock);
-			}
-		}
-
-		/*
-		 * Failsafe protection against vacuuming work of active transaction.
-		 *
-		 * This is not an assertion because we avoid the spinlock for
-		 * performance, leaving open the possibility that xlimit could advance
-		 * and be more current; but it seems prudent to apply this limit.  It
-		 * might make pruning a tiny bit less aggressive than it could be, but
-		 * protects against data loss bugs.
-		 */
-		if (TransactionIdIsNormal(latest_xmin)
-			&& TransactionIdPrecedes(latest_xmin, xlimit))
-			xlimit = latest_xmin;
-
-		if (NormalTransactionIdFollows(xlimit, recentXmin))
-			return xlimit;
-	}
-
-	return recentXmin;
-}
-
-/*
- * Take care of the circular buffer that maps time to xid.
- */
-void
-MaintainOldSnapshotTimeMapping(TimestampTz whenTaken, TransactionId xmin)
-{
-	TimestampTz ts;
-	TransactionId latest_xmin;
-	TimestampTz update_ts;
-	bool		map_update_required = false;
-
-	/* Never call this function when old snapshot checking is disabled. */
-	Assert(old_snapshot_threshold >= 0);
-
-	ts = AlignTimestampToMinuteBoundary(whenTaken);
-
-	/*
-	 * Keep track of the latest xmin seen by any process. Update mapping with
-	 * a new value when we have crossed a bucket boundary.
-	 */
-	SpinLockAcquire(&oldSnapshotControl->mutex_latest_xmin);
-	latest_xmin = oldSnapshotControl->latest_xmin;
-	update_ts = oldSnapshotControl->next_map_update;
-	if (ts > update_ts)
-	{
-		oldSnapshotControl->next_map_update = ts;
-		map_update_required = true;
-	}
-	if (TransactionIdFollows(xmin, latest_xmin))
-		oldSnapshotControl->latest_xmin = xmin;
-	SpinLockRelease(&oldSnapshotControl->mutex_latest_xmin);
-
-	/* We only needed to update the most recent xmin value. */
-	if (!map_update_required)
-		return;
-
-	/* No further tracking needed for 0 (used for testing). */
-	if (old_snapshot_threshold == 0)
-		return;
-
-	/*
-	 * We don't want to do something stupid with unusual values, but we don't
-	 * want to litter the log with warnings or break otherwise normal
-	 * processing for this feature; so if something seems unreasonable, just
-	 * log at DEBUG level and return without doing anything.
-	 */
-	if (whenTaken < 0)
-	{
-		elog(DEBUG1,
-			 "MaintainOldSnapshotTimeMapping called with negative whenTaken = %ld",
-			 (long) whenTaken);
-		return;
-	}
-	if (!TransactionIdIsNormal(xmin))
-	{
-		elog(DEBUG1,
-			 "MaintainOldSnapshotTimeMapping called with xmin = %lu",
-			 (unsigned long) xmin);
-		return;
-	}
-
-	LWLockAcquire(OldSnapshotTimeMapLock, LW_EXCLUSIVE);
-
-	Assert(oldSnapshotControl->head_offset >= 0);
-	Assert(oldSnapshotControl->head_offset < OLD_SNAPSHOT_TIME_MAP_ENTRIES);
-	Assert((oldSnapshotControl->head_timestamp % USECS_PER_MINUTE) == 0);
-	Assert(oldSnapshotControl->count_used >= 0);
-	Assert(oldSnapshotControl->count_used <= OLD_SNAPSHOT_TIME_MAP_ENTRIES);
-
-	if (oldSnapshotControl->count_used == 0)
-	{
-		/* set up first entry for empty mapping */
-		oldSnapshotControl->head_offset = 0;
-		oldSnapshotControl->head_timestamp = ts;
-		oldSnapshotControl->count_used = 1;
-		oldSnapshotControl->xid_by_minute[0] = xmin;
-	}
-	else if (ts < oldSnapshotControl->head_timestamp)
-	{
-		/* old ts; log it at DEBUG */
-		LWLockRelease(OldSnapshotTimeMapLock);
-		elog(DEBUG1,
-			 "MaintainOldSnapshotTimeMapping called with old whenTaken = %ld",
-			 (long) whenTaken);
-		return;
-	}
-	else if (ts <= (oldSnapshotControl->head_timestamp +
-					((oldSnapshotControl->count_used - 1)
-					 * USECS_PER_MINUTE)))
-	{
-		/* existing mapping; advance xid if possible */
-		int			bucket = (oldSnapshotControl->head_offset
-							  + ((ts - oldSnapshotControl->head_timestamp)
-								 / USECS_PER_MINUTE))
-		% OLD_SNAPSHOT_TIME_MAP_ENTRIES;
-
-		if (TransactionIdPrecedes(oldSnapshotControl->xid_by_minute[bucket], xmin))
-			oldSnapshotControl->xid_by_minute[bucket] = xmin;
-	}
-	else
-	{
-		/* We need a new bucket, but it might not be the very next one. */
-		int			advance = ((ts - oldSnapshotControl->head_timestamp)
-							   / USECS_PER_MINUTE);
-
-		oldSnapshotControl->head_timestamp = ts;
-
-		if (advance >= OLD_SNAPSHOT_TIME_MAP_ENTRIES)
-		{
-			/* Advance is so far that all old data is junk; start over. */
-			oldSnapshotControl->head_offset = 0;
-			oldSnapshotControl->count_used = 1;
-			oldSnapshotControl->xid_by_minute[0] = xmin;
-		}
-		else
-		{
-			/* Store the new value in one or more buckets. */
-			int			i;
-
-			for (i = 0; i < advance; i++)
-			{
-				if (oldSnapshotControl->count_used == OLD_SNAPSHOT_TIME_MAP_ENTRIES)
-				{
-					/* Map full and new value replaces old head. */
-					int			old_head = oldSnapshotControl->head_offset;
-
-					if (old_head == (OLD_SNAPSHOT_TIME_MAP_ENTRIES - 1))
-						oldSnapshotControl->head_offset = 0;
-					else
-						oldSnapshotControl->head_offset = old_head + 1;
-					oldSnapshotControl->xid_by_minute[old_head] = xmin;
-				}
-				else
-				{
-					/* Extend map to unused entry. */
-					int			new_tail = (oldSnapshotControl->head_offset
-											+ oldSnapshotControl->count_used)
-					% OLD_SNAPSHOT_TIME_MAP_ENTRIES;
-
-					oldSnapshotControl->count_used++;
-					oldSnapshotControl->xid_by_minute[new_tail] = xmin;
-				}
-			}
-		}
-	}
-
-	LWLockRelease(OldSnapshotTimeMapLock);
-}
-
-
-/*
  * Setup a snapshot that replaces normal catalog snapshots that allows catalog
  * access to behave just like it did at a certain point in the past.
  *
@@ -2113,8 +1653,6 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.suboverflowed = snapshot->suboverflowed;
 	serialized_snapshot.takenDuringRecovery = snapshot->takenDuringRecovery;
 	serialized_snapshot.curcid = snapshot->curcid;
-	serialized_snapshot.whenTaken = snapshot->whenTaken;
-	serialized_snapshot.lsn = snapshot->lsn;
 
 	/*
 	 * Ignore the SubXID array if it has overflowed, unless the snapshot was
@@ -2187,8 +1725,6 @@ RestoreSnapshot(char *start_address)
 	snapshot->suboverflowed = serialized_snapshot.suboverflowed;
 	snapshot->takenDuringRecovery = serialized_snapshot.takenDuringRecovery;
 	snapshot->curcid = serialized_snapshot.curcid;
-	snapshot->whenTaken = serialized_snapshot.whenTaken;
-	snapshot->lsn = serialized_snapshot.lsn;
 
 	/* Copy XIDs, if present. */
 	if (serialized_snapshot.xcnt > 0)
@@ -2211,6 +1747,9 @@ RestoreSnapshot(char *start_address)
 	snapshot->regd_count = 0;
 	snapshot->active_count = 0;
 	snapshot->copied = true;
+
+	snapshot->too_old = false;
+	snapshot->expire_time = 0;
 
 	return snapshot;
 }
@@ -2347,4 +1886,103 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 	}
 
 	return false;
+}
+
+/*
+ * Find any snapshots that are too old and mark them as such, and see if we can
+ * advance this backend's xmin.
+ */
+void HandleSnapshotTimeout(void)
+{
+	TransactionId		xmin = InvalidTransactionId;
+	TimestampTz			now = GetCurrentTimestamp();
+	TimestampTz			next_expire_time = 0;
+
+	/*
+	 * See if we can mark any registered snapshots as too old, and unregister
+	 * them.
+	 *
+	 * XXX This assumes that two registered snapshots with same xmin are sorted
+	 * in expire_time order, which isn't true right now.
+	 */
+	while (!pairingheap_is_empty(&RegisteredSnapshots))
+	{
+		Snapshot snapshot;
+
+		snapshot = pairingheap_container(SnapshotData, ph_node,
+										 pairingheap_first(&RegisteredSnapshots));
+		if (snapshot->expire_time == 0 || snapshot->expire_time > now)
+		{
+			xmin = snapshot->xmin;
+			next_expire_time = snapshot->expire_time;
+			break;
+		}
+
+		/* Forcibly deregister the snapshot so that it no longer holds up xmin. */
+		snapshot->too_old = true;
+		pairingheap_remove_first(&RegisteredSnapshots);
+	}
+
+	/*
+	 * Also scan the active snapshots, seeing if any need to be marked too old,
+	 * and find the new xmin.
+	 */
+	for (ActiveSnapshotElt *s = ActiveSnapshot; s; s = s->as_next)
+	{
+		if (s->as_snap->too_old)
+			continue;
+		else if (s->as_snap->expire_time > 0 && s->as_snap->expire_time <= now)
+			 s->as_snap->too_old = true;
+		else
+		{
+			/* See if we have a new lowest xmin. */
+			if (xmin == InvalidTransactionId ||
+				TransactionIdPrecedes(s->as_snap->xmin, xmin))
+				xmin = s->as_snap->xmin;
+			/* See if we have a new earliest expire_time. */
+			if (next_expire_time == 0 ||
+				s->as_snap->expire_time < next_expire_time)
+				next_expire_time = s->as_snap->expire_time;
+		}
+	}
+
+	/* Set timer for the next snapshot that will expire. */
+	if (next_expire_time > 0)
+		enable_timeout_after(SNAPSHOT_TIMEOUT, (now - next_expire_time) / 1000);
+
+	/* Advertise new xmin. */
+	MyPgXact->xmin = xmin;
+}
+
+/*
+ * SetSnapshotExpireTime
+ *		Configure the time at which a snapshot becomes too old.
+ *
+ * This should be called whenever a snapshot is made active or registered.
+ */
+static void
+SetSnapshotExpireTime(Snapshot snapshot)
+{
+	/*
+	 * If this snapshot was already marked as too old (perhaps because it was
+	 * copied from one that was too old), then don't clobber the flag.
+	 */
+	if (snapshot->too_old)
+		return;
+
+	snapshot->too_old = false;
+	if (old_snapshot_threshold < 0)
+	{
+		/* Feature not enabled. */
+		snapshot->expire_time = 0;
+	}
+	else
+	{
+		TimestampTz		now = GetCurrentTimestamp();
+
+		/* Set up a timer that will call HandleSnapshotTimeout. */
+		snapshot->expire_time = now + old_snapshot_threshold * 1000;
+		enable_timeout_after(SNAPSHOT_TIMEOUT,
+							 (snapshot->expire_time - now) / 1000);
+	}
 }

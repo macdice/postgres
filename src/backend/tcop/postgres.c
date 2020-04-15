@@ -3204,6 +3204,12 @@ ProcessInterrupts(void)
 
 	}
 
+	if (SnapshotTimeoutPending)
+	{
+		HandleSnapshotTimeout();
+		SnapshotTimeoutPending = false;
+	}
+
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();
 

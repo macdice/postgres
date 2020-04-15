@@ -238,8 +238,6 @@ extern bool BgBufferSync(struct WritebackContext *wb_context);
 
 extern void AtProcExit_LocalBuffers(void);
 
-extern void TestForOldSnapshot_impl(Snapshot snapshot, Relation relation);
-
 /* in freelist.c */
 extern BufferAccessStrategy GetAccessStrategy(BufferAccessStrategyType btype);
 extern void FreeAccessStrategy(BufferAccessStrategy strategy);
@@ -269,22 +267,16 @@ extern void FreeAccessStrategy(BufferAccessStrategy strategy);
  * Note that a NULL snapshot argument is allowed and causes a fast return
  * without error; this is to support call sites which can be called from
  * either scans or index modification areas.
- *
- * For best performance, keep the tests that are fastest and/or most likely to
- * exclude a page from old snapshot testing near the front.
  */
 static inline void
 TestForOldSnapshot(Snapshot snapshot, Relation relation, Page page)
 {
 	Assert(relation != NULL);
 
-	if (old_snapshot_threshold >= 0
-		&& (snapshot) != NULL
-		&& ((snapshot)->snapshot_type == SNAPSHOT_MVCC
-			|| (snapshot)->snapshot_type == SNAPSHOT_TOAST)
-		&& !XLogRecPtrIsInvalid((snapshot)->lsn)
-		&& PageGetLSN(page) > (snapshot)->lsn)
-		TestForOldSnapshot_impl(snapshot, relation);
+	if (snapshot && snapshot->too_old)
+		ereport(ERROR,
+				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
+				 errmsg("snapshot too old")));
 }
 
 #endif							/* FRONTEND */

@@ -199,8 +199,8 @@ typedef struct SnapshotData
 	uint32		regd_count;		/* refcount on RegisteredSnapshots */
 	pairingheap_node ph_node;	/* link in the RegisteredSnapshots heap */
 
-	TimestampTz whenTaken;		/* timestamp when snapshot was taken */
-	XLogRecPtr	lsn;			/* position in the WAL stream when taken */
+	TimestampTz	expire_time;	/* when will this snapshot become too old? */
+	bool		too_old;
 } SnapshotData;
 
 #endif							/* SNAPSHOT_H */

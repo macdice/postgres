@@ -615,18 +615,10 @@ toast_close_indexes(Relation *toastidxs, int num_indexes, LOCKMODE lock)
 /* ----------
  * init_toast_snapshot
  *
- *	Initialize an appropriate TOAST snapshot.  We must use an MVCC snapshot
- *	to initialize the TOAST snapshot; since we don't know which one to use,
- *	just use the oldest one.  This is safe: at worst, we will get a "snapshot
- *	too old" error that might have been avoided otherwise.
+ *	Initialize an appropriate TOAST snapshot.
  */
 void
 init_toast_snapshot(Snapshot toast_snapshot)
 {
-	Snapshot	snapshot = GetOldestSnapshot();
-
-	if (snapshot == NULL)
-		elog(ERROR, "no known snapshots");
-
-	InitToastSnapshot(*toast_snapshot, snapshot->lsn, snapshot->whenTaken);
+	InitToastSnapshot(*toast_snapshot);
 }
