@@ -11,4 +11,9 @@ RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'pg_old_snapshot_time_mapping'
 LANGUAGE C STRICT;
 
+CREATE FUNCTION pg_clobber_current_snapshot_timestamp(now timestamptz)
+RETURNS VOID
+AS 'MODULE_PATHNAME', 'pg_clobber_current_snapshot_timestamp'
+LANGUAGE C STRICT;
+
 -- XXX. Do we want REVOKE commands here?

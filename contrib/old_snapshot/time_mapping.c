@@ -36,6 +36,7 @@ typedef struct
 
 PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(pg_old_snapshot_time_mapping);
+PG_FUNCTION_INFO_V1(pg_clobber_current_snapshot_timestamp);
 
 static OldSnapshotTimeMapping *GetOldSnapshotTimeMapping(void);
 static TupleDesc MakeOldSnapshotTimeMappingTupleDesc(void);
@@ -156,4 +157,16 @@ MakeOldSnapshotTimeMappingTuple(TupleDesc tupdesc, OldSnapshotTimeMapping *mappi
 	values[2] = TransactionIdGetDatum(mapping->xid_by_minute[array_position]);
 
 	return heap_form_tuple(tupdesc, values, nulls);
+}
+
+Datum
+pg_clobber_current_snapshot_timestamp(PG_FUNCTION_ARGS)
+{
+	TimestampTz new_current_timestamp = PG_GETARG_TIMESTAMPTZ(0);
+
+	LWLockAcquire(OldSnapshotTimeMapLock, LW_EXCLUSIVE);
+	oldSnapshotControl->current_timestamp = new_current_timestamp;
+	LWLockRelease(OldSnapshotTimeMapLock);
+
+	PG_RETURN_NULL();
 }
