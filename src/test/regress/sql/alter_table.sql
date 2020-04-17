@@ -41,7 +41,7 @@ ALTER TABLE attmp ADD COLUMN k int4;
 
 ALTER TABLE attmp ADD COLUMN l tid;
 
-ALTER TABLE attmp ADD COLUMN m xid;
+ALTER TABLE attmp ADD COLUMN m xid4;
 
 ALTER TABLE attmp ADD COLUMN n oidvector;
 
@@ -104,7 +104,7 @@ ALTER TABLE attmp ADD COLUMN k int4;
 
 ALTER TABLE attmp ADD COLUMN l tid;
 
-ALTER TABLE attmp ADD COLUMN m xid;
+ALTER TABLE attmp ADD COLUMN m xid4;
 
 ALTER TABLE attmp ADD COLUMN n oidvector;
 
@@ -1645,7 +1645,7 @@ from pg_locks l join pg_class c on l.relation = c.oid
 where virtualtransaction = (
         select virtualtransaction
         from pg_locks
-        where transactionid = pg_current_xact_id()::xid)
+        where transactionid = pg_current_xact_id()::xid4)
 and locktype = 'relation'
 and relnamespace != (select oid from pg_namespace where nspname = 'pg_catalog')
 and c.relname != 'my_locks'
@@ -1732,7 +1732,7 @@ from pg_locks l join pg_class c on l.relation = c.oid
 where virtualtransaction = (
         select virtualtransaction
         from pg_locks
-        where transactionid = pg_current_xact_id()::xid)
+        where transactionid = pg_current_xact_id()::xid4)
 and locktype = 'relation'
 and relnamespace != (select oid from pg_namespace where nspname = 'pg_catalog')
 and c.relname = 'my_locks'

@@ -164,7 +164,7 @@ static const FormData_pg_attribute a1 = {
 
 static const FormData_pg_attribute a2 = {
 	.attname = {"xmin"},
-	.atttypid = XIDOID,
+	.atttypid = XID4OID,
 	.attlen = sizeof(TransactionId),
 	.attnum = MinTransactionIdAttributeNumber,
 	.attcacheoff = -1,
@@ -192,7 +192,7 @@ static const FormData_pg_attribute a3 = {
 
 static const FormData_pg_attribute a4 = {
 	.attname = {"xmax"},
-	.atttypid = XIDOID,
+	.atttypid = XID4OID,
 	.attlen = sizeof(TransactionId),
 	.attnum = MaxTransactionIdAttributeNumber,
 	.attcacheoff = -1,

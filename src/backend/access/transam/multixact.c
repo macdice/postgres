@@ -3360,7 +3360,7 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
 
 		tupdesc = CreateTemplateTupleDesc(2);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "xid",
-						   XIDOID, -1, 0);
+						   XID4OID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "mode",
 						   TEXTOID, -1, 0);
 

@@ -3508,7 +3508,7 @@ column_type_alignment(Oid ftype)
 		case FLOAT8OID:
 		case NUMERICOID:
 		case OIDOID:
-		case XIDOID:
+		case XID4OID:
 		case XID8OID:
 		case CIDOID:
 		case CASHOID:

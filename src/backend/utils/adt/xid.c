@@ -31,7 +31,7 @@
 
 
 Datum
-xidin(PG_FUNCTION_ARGS)
+xid4in(PG_FUNCTION_ARGS)
 {
 	char	   *str = PG_GETARG_CSTRING(0);
 
@@ -39,7 +39,7 @@ xidin(PG_FUNCTION_ARGS)
 }
 
 Datum
-xidout(PG_FUNCTION_ARGS)
+xid4out(PG_FUNCTION_ARGS)
 {
 	TransactionId transactionId = PG_GETARG_TRANSACTIONID(0);
 	char	   *result = (char *) palloc(16);
@@ -49,10 +49,10 @@ xidout(PG_FUNCTION_ARGS)
 }
 
 /*
- *		xidrecv			- converts external binary format to xid
+ *		xid4recv		- converts external binary format to xid4
  */
 Datum
-xidrecv(PG_FUNCTION_ARGS)
+xid4recv(PG_FUNCTION_ARGS)
 {
 	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
 
@@ -60,10 +60,10 @@ xidrecv(PG_FUNCTION_ARGS)
 }
 
 /*
- *		xidsend			- converts xid to binary format
+ *		xid4send		- converts xid4 to binary format
  */
 Datum
-xidsend(PG_FUNCTION_ARGS)
+xid4send(PG_FUNCTION_ARGS)
 {
 	TransactionId arg1 = PG_GETARG_TRANSACTIONID(0);
 	StringInfoData buf;
@@ -74,10 +74,10 @@ xidsend(PG_FUNCTION_ARGS)
 }
 
 /*
- *		xideq			- are two xids equal?
+ *		xid4eq			- are two xid4s equal?
  */
 Datum
-xideq(PG_FUNCTION_ARGS)
+xid4eq(PG_FUNCTION_ARGS)
 {
 	TransactionId xid1 = PG_GETARG_TRANSACTIONID(0);
 	TransactionId xid2 = PG_GETARG_TRANSACTIONID(1);
@@ -86,10 +86,10 @@ xideq(PG_FUNCTION_ARGS)
 }
 
 /*
- *		xidneq			- are two xids different?
+ *		xid4ne			- are two xid4s different?
  */
 Datum
-xidneq(PG_FUNCTION_ARGS)
+xid4ne(PG_FUNCTION_ARGS)
 {
 	TransactionId xid1 = PG_GETARG_TRANSACTIONID(0);
 	TransactionId xid2 = PG_GETARG_TRANSACTIONID(1);

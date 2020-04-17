@@ -1233,7 +1233,7 @@ CREATE OR REPLACE FUNCTION
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_get_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT lsn pg_lsn, OUT xid xid, OUT data text)
+    OUT lsn pg_lsn, OUT xid xid4, OUT data text)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000
@@ -1241,7 +1241,7 @@ AS 'pg_logical_slot_get_changes';
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_peek_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT lsn pg_lsn, OUT xid xid, OUT data text)
+    OUT lsn pg_lsn, OUT xid xid4, OUT data text)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000
@@ -1249,7 +1249,7 @@ AS 'pg_logical_slot_peek_changes';
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_get_binary_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT lsn pg_lsn, OUT xid xid, OUT data bytea)
+    OUT lsn pg_lsn, OUT xid xid4, OUT data bytea)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000
@@ -1257,7 +1257,7 @@ AS 'pg_logical_slot_get_binary_changes';
 
 CREATE OR REPLACE FUNCTION pg_logical_slot_peek_binary_changes(
     IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
-    OUT lsn pg_lsn, OUT xid xid, OUT data bytea)
+    OUT lsn pg_lsn, OUT xid xid4, OUT data bytea)
 RETURNS SETOF RECORD
 LANGUAGE INTERNAL
 VOLATILE ROWS 1000 COST 1000

@@ -121,7 +121,7 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		TupleDescInitEntry(tupdesc, (AttrNumber) 6, "virtualxid",
 						   TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 7, "transactionid",
-						   XIDOID, -1, 0);
+						   XID4OID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 8, "classid",
 						   OIDOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 9, "objid",

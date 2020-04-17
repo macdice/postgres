@@ -436,7 +436,7 @@ pg_last_committed_xact(PG_FUNCTION_ARGS)
 	 */
 	tupdesc = CreateTemplateTupleDesc(2);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "xid",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "timestamp",
 					   TIMESTAMPTZOID, -1, 0);
 	tupdesc = BlessTupleDesc(tupdesc);

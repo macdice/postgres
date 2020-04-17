@@ -204,7 +204,7 @@ ecpg_is_type_an_array(int type, const struct statement *stmt, const struct varia
 			return ECPG_ARRAY_ERROR;
 		if (!ecpg_type_infocache_push(&(stmt->connection->cache_head), TIDOID, ECPG_ARRAY_NONE, stmt->lineno))
 			return ECPG_ARRAY_ERROR;
-		if (!ecpg_type_infocache_push(&(stmt->connection->cache_head), XIDOID, ECPG_ARRAY_NONE, stmt->lineno))
+		if (!ecpg_type_infocache_push(&(stmt->connection->cache_head), XID4OID, ECPG_ARRAY_NONE, stmt->lineno))
 			return ECPG_ARRAY_ERROR;
 		if (!ecpg_type_infocache_push(&(stmt->connection->cache_head), CIDOID, ECPG_ARRAY_NONE, stmt->lineno))
 			return ECPG_ARRAY_ERROR;

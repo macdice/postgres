@@ -110,23 +110,23 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
 	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "next_oid",
 					   OIDOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "next_multixact_id",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 10, "next_multi_offset",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 11, "oldest_xid",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 12, "oldest_xid_dbid",
 					   OIDOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 13, "oldest_active_xid",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 14, "oldest_multi_xid",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 15, "oldest_multi_dbid",
 					   OIDOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 16, "oldest_commit_ts_xid",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 17, "newest_commit_ts_xid",
-					   XIDOID, -1, 0);
+					   XID4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 18, "checkpoint_time",
 					   TIMESTAMPTZOID, -1, 0);
 	tupdesc = BlessTupleDesc(tupdesc);

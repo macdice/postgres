@@ -32,7 +32,7 @@ copy gstest3 from stdin;
 alter table gstest3 add primary key (a);
 
 create temp table gstest4(id integer, v integer,
-                          unhashable_col bit(4), unsortable_col xid);
+                          unhashable_col bit(4), unsortable_col xid4);
 insert into gstest4
 values (1,1,b'0000','1'), (2,2,b'0001','1'),
        (3,4,b'0010','2'), (4,8,b'0011','2'),

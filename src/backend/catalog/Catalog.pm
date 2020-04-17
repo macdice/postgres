@@ -33,7 +33,7 @@ sub ParseHeader
 		'int64'         => 'int8',
 		'Oid'           => 'oid',
 		'NameData'      => 'name',
-		'TransactionId' => 'xid',
+		'TransactionId' => 'xid4',
 		'XLogRecPtr'    => 'pg_lsn');
 
 	my %catalog;

@@ -742,9 +742,9 @@ sub gen_pg_attribute
 			$attnum = 0;
 			my @SYS_ATTRS = (
 				{ name => 'ctid',     type => 'tid' },
-				{ name => 'xmin',     type => 'xid' },
+				{ name => 'xmin',     type => 'xid4' },
 				{ name => 'cmin',     type => 'cid' },
-				{ name => 'xmax',     type => 'xid' },
+				{ name => 'xmax',     type => 'xid4' },
 				{ name => 'cmax',     type => 'cid' },
 				{ name => 'tableoid', type => 'oid' });
 			foreach my $attr (@SYS_ATTRS)

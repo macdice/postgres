@@ -1,36 +1,36 @@
--- xid and xid8
+-- xid4 and xid8
 
 -- values in range, in octal, decimal, hex
-select '010'::xid,
-       '42'::xid,
-       '0xffffffff'::xid,
-       '-1'::xid,
+select '010'::xid4,
+       '42'::xid4,
+       '0xffffffff'::xid4,
+       '-1'::xid4,
 	   '010'::xid8,
 	   '42'::xid8,
 	   '0xffffffffffffffff'::xid8,
 	   '-1'::xid8;
 
 -- garbage values are not yet rejected (perhaps they should be)
-select ''::xid;
-select 'asdf'::xid;
+select ''::xid4;
+select 'asdf'::xid4;
 select ''::xid8;
 select 'asdf'::xid8;
 
 -- equality
-select '1'::xid = '1'::xid;
-select '1'::xid != '1'::xid;
+select '1'::xid4 = '1'::xid4;
+select '1'::xid4 != '1'::xid4;
 select '1'::xid8 = '1'::xid8;
 select '1'::xid8 != '1'::xid8;
 
 -- conversion
-select '1'::xid = '1'::xid8::xid;
-select '1'::xid != '1'::xid8::xid;
+select '1'::xid4 = '1'::xid8::xid4;
+select '1'::xid4 != '1'::xid8::xid4;
 
--- we don't want relational operators for xid, due to use of modular arithmetic
-select '1'::xid < '2'::xid;
-select '1'::xid <= '2'::xid;
-select '1'::xid > '2'::xid;
-select '1'::xid >= '2'::xid;
+-- we don't want relational operators for xid4, due to use of modular arithmetic
+select '1'::xid4 < '2'::xid4;
+select '1'::xid4 <= '2'::xid4;
+select '1'::xid4 > '2'::xid4;
+select '1'::xid4 >= '2'::xid4;
 
 -- we want them for xid8 though
 select '1'::xid8 < '2'::xid8, '2'::xid8 < '2'::xid8, '2'::xid8 < '1'::xid8;
