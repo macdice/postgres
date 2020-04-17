@@ -135,6 +135,7 @@ extern TransactionId TransactionIdLimitedForOldSnapshots(TransactionId recentXmi
 														 Relation relation);
 extern void MaintainOldSnapshotTimeMapping(TimestampTz whenTaken,
 										   TransactionId xmin);
+extern void TruncateOldSnapshotTimeMapping(TransactionId frozenXID);
 
 extern char *ExportSnapshot(Snapshot snapshot);
 

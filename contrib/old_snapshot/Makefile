@@ -10,7 +10,7 @@ EXTENSION = old_snapshot
 DATA = old_snapshot--1.0.sql
 PGFILEDESC = "old_snapshot - utilities in support of old_snapshot_threshold"
 
-REGRESS = old_snapshot
+TAP_TESTS = 1
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config
