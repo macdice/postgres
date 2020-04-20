@@ -2001,6 +2001,27 @@ MaintainOldSnapshotTimeMapping(TimestampTz whenTaken, TransactionId xmin)
 
 
 /*
+ * Remove old xids from the timing map, so the CLOG can be truncated.
+ */
+void
+TruncateOldSnapshotTimeMapping(TransactionId frozenXID)
+{
+	LWLockAcquire(OldSnapshotTimeMapLock, LW_EXCLUSIVE);
+	while (oldSnapshotControl->count_used > 0 &&
+		   TransactionIdPrecedes(oldSnapshotControl->xid_by_minute[oldSnapshotControl->head_offset],
+								 frozenXID))
+	{
+		oldSnapshotControl->head_timestamp += USECS_PER_MINUTE;
+		oldSnapshotControl->head_offset =
+			(oldSnapshotControl->head_offset + 1) %
+			OLD_SNAPSHOT_TIME_MAP_ENTRIES;
+		oldSnapshotControl->count_used--;
+	}
+	LWLockRelease(OldSnapshotTimeMapLock);
+}
+
+
+/*
  * Setup a snapshot that replaces normal catalog snapshots that allows catalog
  * access to behave just like it did at a certain point in the past.
  *
