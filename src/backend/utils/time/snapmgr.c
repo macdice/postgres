@@ -1774,23 +1774,6 @@ TransactionIdLimitedForOldSnapshots(TransactionId recentXmin,
 	next_map_update_ts = oldSnapshotControl->next_map_update;
 	SpinLockRelease(&oldSnapshotControl->mutex_latest_xmin);
 
-	/*
-	 * Zero threshold always overrides to latest xmin, if valid.  Without some
-	 * heuristic it will find its own snapshot too old on, for example, a
-	 * simple UPDATE -- which would make it useless for most testing, but
-	 * there is no principled way to ensure that it doesn't fail in this way.
-	 * Use a five-second delay to try to get useful testing behavior, but this
-	 * may need adjustment.
-	 */
-	if (old_snapshot_threshold == 0)
-	{
-		if (TransactionIdPrecedes(latest_xmin, MyProc->xmin)
-			&& TransactionIdFollows(latest_xmin, xlimit))
-			xlimit = latest_xmin;
-
-		ts -= 5 * USECS_PER_SEC;
-	}
-	else
 	{
 		ts = AlignTimestampToMinuteBoundary(ts)
 			- (old_snapshot_threshold * USECS_PER_MINUTE);
@@ -1881,10 +1864,6 @@ MaintainOldSnapshotTimeMapping(TimestampTz whenTaken, TransactionId xmin)
 
 	/* We only needed to update the most recent xmin value. */
 	if (!map_update_required)
-		return;
-
-	/* No further tracking needed for 0 (used for testing). */
-	if (old_snapshot_threshold == 0)
 		return;
 
 	/*
