@@ -1907,6 +1907,20 @@ typedef struct MergeJoinState
 	ExprContext *mj_InnerEContext;
 } MergeJoinState;
 
+/*
+ * How many tuples to load from the outer side of the join at once.
+ */
+#define HJ_PROBE_BUFFER_SIZE 8
+
+typedef struct HashJoinProbeBuffer
+{
+	uint8		ntuples;
+	uint8		index;
+	bool		eof;
+	TupleTableSlot *slots[HJ_PROBE_BUFFER_SIZE];
+	uint32		hash_values[HJ_PROBE_BUFFER_SIZE];
+} HashJoinProbeBuffer;
+
 /* ----------------
  *	 HashJoinState information
  *
@@ -1957,6 +1971,7 @@ typedef struct HashJoinState
 	int			hj_JoinState;
 	bool		hj_MatchedOuter;
 	bool		hj_OuterNotEmpty;
+	HashJoinProbeBuffer hj_ProbeBuffer;
 } HashJoinState;
 
 
