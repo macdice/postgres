@@ -2008,6 +2008,9 @@ ExecScanHashBucket(HashJoinState *hjstate,
 
 	while (hashTuple != NULL)
 	{
+		/* Prefetch the cacheline for the next tuple, if there is one. */
+		pg_prefetch_mem(hashTuple->next.unshared);
+
 		if (hashTuple->hashvalue == hashvalue)
 		{
 			TupleTableSlot *inntuple;
@@ -2065,6 +2068,9 @@ ExecParallelScanHashBucket(HashJoinState *hjstate,
 
 	while (hashTuple != NULL)
 	{
+		/* Prefetch the cacheline for the next tuple, if there is one. */
+		pg_prefetch_mem(ExecParallelHashNextTuple(hashtable, hashTuple));
+
 		if (hashTuple->hashvalue == hashvalue)
 		{
 			TupleTableSlot *inntuple;
