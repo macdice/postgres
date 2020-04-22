@@ -136,17 +136,15 @@
 static TupleTableSlot *ExecHashJoinOuterGetTuple(PlanState *outerNode,
 												 HashJoinState *hjstate,
 												 uint32 *hashvalue);
-static TupleTableSlot *ExecParallelHashJoinOuterGetTuple(PlanState *outerNode,
-														 HashJoinState *hjstate,
-														 uint32 *hashvalue);
 static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
 												 BufFile *file,
 												 uint32 *hashvalue,
 												 TupleTableSlot *tupleSlot);
+static void ExecHashJoinResetProbeBuffer(HashJoinState *hjstate);
+static void ExecHashJoinLoadProbeBuffer(HashJoinState *hjstate, PlanState *outerNode);
 static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
 static bool ExecParallelHashJoinNewBatch(HashJoinState *hjstate);
 static void ExecParallelHashJoinPartitionOuter(HashJoinState *node);
-
 
 /* ----------------------------------------------------------------
  *		ExecHashJoinImpl
@@ -243,7 +241,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					/* no chance to not build the hash table */
 					node->hj_FirstOuterTupleSlot = NULL;
 				}
-				else if (parallel)
+				else if (true || parallel)
 				{
 					/*
 					 * The empty-outer optimization is not implemented for
@@ -347,13 +345,8 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				/*
 				 * We don't have an outer tuple, try to get the next one
 				 */
-				if (parallel)
-					outerTupleSlot =
-						ExecParallelHashJoinOuterGetTuple(outerNode, node,
-														  &hashvalue);
-				else
-					outerTupleSlot =
-						ExecHashJoinOuterGetTuple(outerNode, node, &hashvalue);
+				outerTupleSlot =
+					ExecHashJoinOuterGetTuple(outerNode, node, &hashvalue);
 
 				if (TupIsNull(outerTupleSlot))
 				{
@@ -552,6 +545,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 
 			case HJ_NEED_NEW_BATCH:
 
+
 				/*
 				 * Try to advance to next batch.  Done if there are no more.
 				 */
@@ -565,6 +559,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					if (!ExecHashJoinNewBatch(node))
 						return NULL;	/* end of parallel-oblivious join */
 				}
+				ExecHashJoinResetProbeBuffer(node);
 				node->hj_JoinState = HJ_NEED_NEW_OUTER;
 				break;
 
@@ -675,6 +670,10 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	ops = ExecGetResultSlotOps(outerPlanState(hjstate), NULL);
 	hjstate->hj_OuterTupleSlot = ExecInitExtraTupleSlot(estate, outerDesc,
 														ops);
+
+	for (int i = 0; i < HJ_PROBE_BUFFER_SIZE; ++i)
+		hjstate->hj_ProbeBuffer.slots[i] =
+			ExecInitExtraTupleSlot(estate, outerDesc, ops);
 
 	/*
 	 * detect whether we need only consider the first matching inner tuple
@@ -809,11 +808,54 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 						  HashJoinState *hjstate,
 						  uint32 *hashvalue)
 {
+	TupleTableSlot *slot;
+	HashJoinProbeBuffer *probe_buffer = &hjstate->hj_ProbeBuffer;
+	int		i;
+
+	/* See if we need to load some new tuples. */
+	if (probe_buffer->index == probe_buffer->ntuples)
+	{
+		if (probe_buffer->eof)
+			return NULL;
+		ExecHashJoinLoadProbeBuffer(hjstate, outerNode);
+		if (probe_buffer->ntuples == 0)
+			return NULL;
+	}
+
+	/* Ok, we have at least one tuple to work with. */
+	i = probe_buffer->index;
+	Assert(i < probe_buffer->ntuples);
+	*hashvalue = probe_buffer->hash_values[i];
+	slot = probe_buffer->slots[i];
+	++probe_buffer->index;
+
+	return slot;
+}
+
+static void
+ExecHashJoinResetProbeBuffer(HashJoinState *hjstate)
+{
+	HashJoinProbeBuffer *probe_buffer = &hjstate->hj_ProbeBuffer;
+
+	probe_buffer->index = 0;
+	probe_buffer->ntuples = 0;
+	probe_buffer->eof = false;
+}
+
+static void
+ExecHashJoinLoadProbeBuffer(HashJoinState *hjstate, PlanState *outerNode)
+{
 	HashJoinTable hashtable = hjstate->hj_HashTable;
+	bool		parallel = hashtable->parallel_state;
 	int			curbatch = hashtable->curbatch;
+	HashJoinProbeBuffer *probe_buffer = &hjstate->hj_ProbeBuffer;
 	TupleTableSlot *slot;
 
-	if (curbatch == 0)			/* if it is the first pass */
+
+	probe_buffer->index = 0;
+	probe_buffer->ntuples = 0;
+
+	if (curbatch == 0 && (!parallel || hashtable->nbatch == 1))
 	{
 		/*
 		 * Check to see if first outer tuple was already fetched by
@@ -821,38 +863,75 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 		 */
 		slot = hjstate->hj_FirstOuterTupleSlot;
 		if (!TupIsNull(slot))
-			hjstate->hj_FirstOuterTupleSlot = NULL;
-		else
-			slot = ExecProcNode(outerNode);
-
-		while (!TupIsNull(slot))
 		{
-			/*
-			 * We have to compute the tuple's hash value.
-			 */
+			ExecCopySlot(probe_buffer->slots[probe_buffer->ntuples++], slot);
+			hjstate->hj_FirstOuterTupleSlot = NULL;
+		}
+
+		/* Fill up as many slots as we can with tuples. */
+		while (probe_buffer->ntuples < HJ_PROBE_BUFFER_SIZE)
+		{
+			slot = ExecProcNode(outerNode);
+			if (TupIsNull(slot))
+			{
+				probe_buffer->eof = true;
+				break;
+			}
+
+			ExecCopySlot(probe_buffer->slots[probe_buffer->ntuples++], slot);
+		}
+
+		/* Compute the hashes for these tuples. */
+		for (int i = 0; i < probe_buffer->ntuples;)
+		{
 			ExprContext *econtext = hjstate->js.ps.ps_ExprContext;
+			TupleTableSlot *slot = probe_buffer->slots[i];
 
 			econtext->ecxt_outertuple = slot;
 			if (ExecHashGetHashValue(hashtable, econtext,
 									 hjstate->hj_OuterHashKeys,
 									 true,	/* outer tuple */
 									 HJ_FILL_OUTER(hjstate),
-									 hashvalue))
+									 &probe_buffer->hash_values[i]))
 			{
 				/* remember outer relation is not empty for possible rescan */
 				hjstate->hj_OuterNotEmpty = true;
+				++i;
+				continue;
+			}
 
-				return slot;
+			/* That tuple couldn't match because of a NULL, so discard it. */
+			--probe_buffer->ntuples;
+
+			/*
+			 * If it wasn't the last active slot, slide the rest down and move
+			 * the spare slot to the end so that it's in the right position to
+			 * receive a new tuple while preserving the input order.
+			 */
+			if (probe_buffer->ntuples - i > 0)
+			{
+				for (int j = i; j < probe_buffer->ntuples; ++j)
+					probe_buffer->slots[j] = probe_buffer->slots[j + 1];
+				probe_buffer->slots[probe_buffer->ntuples] = slot;
 			}
 
 			/*
-			 * That tuple couldn't match because of a NULL, so discard it and
-			 * continue with the next one.
+			 * Try to fetch a new tuple into the now spare slot since we'd
+			 * like to have enough for prefetching purposes if possible.
 			 */
-			slot = ExecProcNode(outerNode);
+			if (!probe_buffer->eof)
+			{
+				if ((slot = ExecProcNode(outerNode)) && !TTS_EMPTY(slot))
+					ExecCopySlot(probe_buffer->slots[probe_buffer->ntuples++],
+								 slot);
+				else
+					probe_buffer->eof = true;
+			}
+
+			/* Go around again, without incrementing i. */
 		}
 	}
-	else if (curbatch < hashtable->nbatch)
+	else if (curbatch < hashtable->nbatch && !parallel)
 	{
 		BufFile    *file = hashtable->outerBatchFile[curbatch];
 
@@ -861,80 +940,39 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 		 * is empty.
 		 */
 		if (file == NULL)
-			return NULL;
+			return;
 
-		slot = ExecHashJoinGetSavedTuple(hjstate,
+		/* Load as many tuples and hash values as we can. */
+		while (probe_buffer->ntuples < HJ_PROBE_BUFFER_SIZE &&
+			   ExecHashJoinGetSavedTuple(hjstate,
 										 file,
-										 hashvalue,
-										 hjstate->hj_OuterTupleSlot);
-		if (!TupIsNull(slot))
-			return slot;
+										 &probe_buffer->hash_values[probe_buffer->ntuples],
+										 probe_buffer->slots[probe_buffer->ntuples]))
+			++probe_buffer->ntuples;
 	}
-
-	/* End of this batch */
-	return NULL;
-}
-
-/*
- * ExecHashJoinOuterGetTuple variant for the parallel case.
- */
-static TupleTableSlot *
-ExecParallelHashJoinOuterGetTuple(PlanState *outerNode,
-								  HashJoinState *hjstate,
-								  uint32 *hashvalue)
-{
-	HashJoinTable hashtable = hjstate->hj_HashTable;
-	int			curbatch = hashtable->curbatch;
-	TupleTableSlot *slot;
-
-	/*
-	 * In the Parallel Hash case we only run the outer plan directly for
-	 * single-batch hash joins.  Otherwise we have to go to batch files, even
-	 * for batch 0.
-	 */
-	if (curbatch == 0 && hashtable->nbatch == 1)
-	{
-		slot = ExecProcNode(outerNode);
-
-		while (!TupIsNull(slot))
-		{
-			ExprContext *econtext = hjstate->js.ps.ps_ExprContext;
-
-			econtext->ecxt_outertuple = slot;
-			if (ExecHashGetHashValue(hashtable, econtext,
-									 hjstate->hj_OuterHashKeys,
-									 true,	/* outer tuple */
-									 HJ_FILL_OUTER(hjstate),
-									 hashvalue))
-				return slot;
-
-			/*
-			 * That tuple couldn't match because of a NULL, so discard it and
-			 * continue with the next one.
-			 */
-			slot = ExecProcNode(outerNode);
-		}
-	}
-	else if (curbatch < hashtable->nbatch)
+	else if (curbatch < hashtable->nbatch && parallel)
 	{
 		MinimalTuple tuple;
 
-		tuple = sts_parallel_scan_next(hashtable->batches[curbatch].outer_tuples,
-									   hashvalue);
-		if (tuple != NULL)
+		/* Load as many tuples and hash values as we can. */
+		while (probe_buffer->ntuples < HJ_PROBE_BUFFER_SIZE &&
+			   (tuple = sts_parallel_scan_next(hashtable->batches[curbatch].outer_tuples,
+											   &probe_buffer->hash_values[probe_buffer->ntuples])))
 		{
-			ExecForceStoreMinimalTuple(tuple,
-									   hjstate->hj_OuterTupleSlot,
-									   false);
-			slot = hjstate->hj_OuterTupleSlot;
-			return slot;
+			TupleTableSlot *slot = probe_buffer->slots[probe_buffer->ntuples++];
+
+			if (TTS_IS_MINIMALTUPLE(slot))
+				ExecStoreMinimalTuple(heap_copy_minimal_tuple(tuple), slot, true);
+			else
+				ExecForceStoreMinimalTuple(tuple, slot, false);
 		}
-		else
-			ExecClearTuple(hjstate->hj_OuterTupleSlot);
 	}
 
-	/* End of this batch */
-	return NULL;
+	/* Prefetch the inner tuples that correspond to these hash values. */
+	ExecWillScanHashBuckets(hashtable,
+							probe_buffer->hash_values,
+							probe_buffer->ntuples,
+							parallel);
 }
 
 /*
@@ -1373,6 +1411,8 @@ ExecReScanHashJoin(HashJoinState *node)
 
 	node->hj_MatchedOuter = false;
 	node->hj_FirstOuterTupleSlot = NULL;
+
+	ExecHashJoinResetProbeBuffer(node);
 
 	/*
 	 * if chgParam of subnode is not null then plan will be re-scanned by

@@ -1979,6 +1979,49 @@ ExecHashGetBucketAndBatch(HashJoinTable hashtable,
 }
 
 /*
+ * ExecWillScanHashBuckets
+ *		prepare to scan a set of buckets, by prefetching cache lines
+ */
+void
+ExecWillScanHashBuckets(HashJoinTable hashtable,
+						uint32 *hash_values,
+						int count,
+						bool parallel)
+{
+	uint32		mask = hashtable->nbuckets - 1;
+
+	/*
+	 * First we prefetch the cache lines holding the buckets, then we prefetch
+	 * the first tuple in each non-empty chain.
+	 */
+	if (parallel)
+	{
+		for (int i = 0; i < count; ++i)
+			pg_prefetch_mem(&hashtable->buckets.shared[hash_values[i] & mask]);
+		for (int i = 0; i < count; ++i)
+		{
+			dsa_pointer p =
+				dsa_pointer_atomic_read(&hashtable->buckets.shared[hash_values[i] & mask]);
+
+			if (p != InvalidDsaPointer)
+				pg_prefetch_mem(dsa_get_address(hashtable->area, p));
+		}
+	}
+	else
+	{
+		for (int i = 0; i < count; ++i)
+			pg_prefetch_mem(&hashtable->buckets.unshared[hash_values[i] & mask]);
+		for (int i = 0; i < count; ++i)
+		{
+			uint32		bucketno = hash_values[i] & mask;
+
+			if (hashtable->buckets.unshared[bucketno])
+				pg_prefetch_mem(hashtable->buckets.unshared[bucketno]);
+		}
+	}
+}
+
+/*
  * ExecScanHashBucket
  *		scan a hash bucket for matches to the current outer tuple
  *
@@ -2013,6 +2056,10 @@ ExecScanHashBucket(HashJoinState *hjstate,
 
 	while (hashTuple != NULL)
 	{
+		/* Prefetch the cacheline for the next tuple, if there is one. */
+		if (hashTuple->next.unshared)
+			pg_prefetch_mem(hashTuple->next.unshared);
+
 		if (hashTuple->hashvalue == hashvalue)
 		{
 			TupleTableSlot *inntuple;
@@ -2070,6 +2117,12 @@ ExecParallelScanHashBucket(HashJoinState *hjstate,
 
 	while (hashTuple != NULL)
 	{
+		/* Prefetch the cacheline for the next tuple, if there is one. */
+		void *next_tuple = ExecParallelHashNextTuple(hashtable, hashTuple);
+
+		if (next_tuple)
+			pg_prefetch_mem(next_tuple);
+
 		if (hashTuple->hashvalue == hashvalue)
 		{
 			TupleTableSlot *inntuple;
