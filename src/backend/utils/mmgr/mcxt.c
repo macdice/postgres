@@ -350,6 +350,9 @@ MemoryContextSetIdentifier(MemoryContext context, const char *id)
  * A possible caller error is to reparent a context under itself, creating
  * a loop in the context graph.  We assert here that context != new_parent,
  * but checking for multi-level loops seems more trouble than it's worth.
+ *
+ * If a callback was installed with MemoryContextSetMemAllocatedCB(), it is
+ * uninstalled by this operation and must be reinstalled if it is still needed.
  */
 void
 MemoryContextSetParent(MemoryContext context, MemoryContext new_parent)
@@ -378,6 +381,15 @@ MemoryContextSetParent(MemoryContext context, MemoryContext new_parent)
 			context->nextchild->prevchild = context->prevchild;
 	}
 
+	/* Remove memory allocation callback, if there is one. */
+	if (context->mem_allocated_cb)
+	{
+		context->mem_allocated_cb(-(ssize_t) context->mem_allocated,
+								  context->mem_allocated_cb_data);
+		context->mem_allocated_cb = NULL;
+		context->mem_allocated_cb_data = NULL;
+	}
+
 	/* And relink */
 	if (new_parent)
 	{
@@ -395,6 +407,26 @@ MemoryContextSetParent(MemoryContext context, MemoryContext new_parent)
 		context->prevchild = NULL;
 		context->nextchild = NULL;
 	}
+}
+
+/*
+ * MemoryContextSetMemAllocatedCB
+ *		Install a function that will be called whenever the total size of
+ *		underlying storage changes.
+ *
+ * The callback will be called immediately with the current total size, and
+ * then again whenever the memory context allocates or frees underlying chunks
+ * of memory from the system allocator.  Call with NULL to clear.
+ */
+void
+MemoryContextSetMemAllocatedCB(MemoryContext context,
+							   void (*mem_allocated_cb)(ssize_t delta, void *data),
+							   void *data)
+{
+	context->mem_allocated_cb = mem_allocated_cb;
+	context->mem_allocated_cb_data = data;
+	if (mem_allocated_cb)
+		mem_allocated_cb(context->mem_allocated, data);
 }
 
 /*
@@ -776,11 +808,15 @@ MemoryContextCreate(MemoryContext node,
 		parent->firstchild = node;
 		/* inherit allowInCritSection flag from parent */
 		node->allowInCritSection = parent->allowInCritSection;
+		/* inherit memory allocation notification callback */
+		node->mem_allocated_cb = parent->mem_allocated_cb;
+		node->mem_allocated_cb_data = parent->mem_allocated_cb_data;
 	}
 	else
 	{
 		node->nextchild = NULL;
 		node->allowInCritSection = false;
+		node->mem_allocated_cb = NULL;
 	}
 
 	VALGRIND_CREATE_MEMPOOL(node, 0, false);

@@ -282,6 +282,9 @@ GenerationReset(MemoryContext context)
 		dlist_delete(miter.cur);
 
 		context->mem_allocated -= block->blksize;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(-(ssize_t) block->blksize,
+									  context->mem_allocated_cb_data);
 
 #ifdef CLOBBER_FREED_MEMORY
 		wipe_mem(block, block->blksize);
@@ -339,6 +342,9 @@ GenerationAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(block->blksize,
+									  context->mem_allocated_cb_data);
 
 		/* block with a single (used) chunk */
 		block->blksize = blksize;
@@ -394,6 +400,9 @@ GenerationAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(block->blksize,
+									  context->mem_allocated_cb_data);
 
 		block->blksize = blksize;
 		block->nchunks = 0;
@@ -509,6 +518,9 @@ GenerationFree(MemoryContext context, void *pointer)
 		set->block = NULL;
 
 	context->mem_allocated -= block->blksize;
+	if (context->mem_allocated_cb)
+		context->mem_allocated_cb(-(ssize_t) block->blksize,
+								  context->mem_allocated_cb_data);
 	free(block);
 }
 

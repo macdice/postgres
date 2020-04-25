@@ -308,6 +308,9 @@ SlabReset(MemoryContext context)
 			free(block);
 			slab->nblocks--;
 			context->mem_allocated -= slab->blockSize;
+			if (context->mem_allocated_cb)
+				context->mem_allocated_cb(-(ssize_t) slab->blockSize,
+										  context->mem_allocated_cb_data);
 		}
 	}
 
@@ -393,6 +396,9 @@ SlabAlloc(MemoryContext context, Size size)
 		slab->minFreeChunks = slab->chunksPerBlock;
 		slab->nblocks += 1;
 		context->mem_allocated += slab->blockSize;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(slab->blockSize,
+									  context->mem_allocated_cb_data);
 	}
 
 	/* grab the block from the freelist (even the new block is there) */
@@ -560,6 +566,9 @@ SlabFree(MemoryContext context, void *pointer)
 		free(block);
 		slab->nblocks--;
 		context->mem_allocated -= slab->blockSize;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(-(ssize_t) slab->blockSize,
+									  context->mem_allocated_cb_data);
 	}
 	else
 		dlist_push_head(&slab->freelist[block->nfree], &block->node);

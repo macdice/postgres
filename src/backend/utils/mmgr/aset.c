@@ -385,6 +385,7 @@ AllocSetContextCreateInternal(MemoryContext parent,
 	Size		firstBlockSize;
 	AllocSet	set;
 	AllocBlock	block;
+	MemoryContext context;
 
 	/* Assert we padded AllocChunkData properly */
 	StaticAssertStmt(ALLOC_CHUNKHDRSZ == MAXALIGN(ALLOC_CHUNKHDRSZ),
@@ -431,6 +432,8 @@ AllocSetContextCreateInternal(MemoryContext parent,
 
 		if (freelist->first_free != NULL)
 		{
+			MemoryContext	context;
+
 			/* Remove entry from freelist */
 			set = freelist->first_free;
 			freelist->first_free = (AllocSet) set->header.nextchild;
@@ -440,14 +443,17 @@ AllocSetContextCreateInternal(MemoryContext parent,
 			set->maxBlockSize = maxBlockSize;
 
 			/* Reinitialize its header, installing correct name and parent */
-			MemoryContextCreate((MemoryContext) set,
+			context = (MemoryContext) set;
+			MemoryContextCreate(context,
 								T_AllocSetContext,
 								&AllocSetMethods,
 								parent,
 								name);
 
-			((MemoryContext) set)->mem_allocated =
-				set->keeper->endptr - ((char *) set);
+			context->mem_allocated = set->keeper->endptr - ((char *) set);
+			if (context->mem_allocated_cb)
+				context->mem_allocated_cb(context->mem_allocated,
+										  context->mem_allocated_cb_data);
 
 			return (MemoryContext) set;
 		}
@@ -531,15 +537,19 @@ AllocSetContextCreateInternal(MemoryContext parent,
 		set->allocChunkLimit >>= 1;
 
 	/* Finally, do the type-independent part of context creation */
-	MemoryContextCreate((MemoryContext) set,
+	context = (MemoryContext) set;
+	MemoryContextCreate(context,
 						T_AllocSetContext,
 						&AllocSetMethods,
 						parent,
 						name);
 
-	((MemoryContext) set)->mem_allocated = firstBlockSize;
+	context->mem_allocated = firstBlockSize;
+	if (context->mem_allocated_cb)
+		context->mem_allocated_cb(firstBlockSize,
+								  context->mem_allocated_cb_data);
 
-	return (MemoryContext) set;
+	return context;
 }
 
 /*
@@ -561,6 +571,7 @@ AllocSetReset(MemoryContext context)
 	AllocBlock	block;
 	Size		keepersize PG_USED_FOR_ASSERTS_ONLY
 	= set->keeper->endptr - ((char *) set);
+
 
 	AssertArg(AllocSetIsValid(set));
 
@@ -599,7 +610,12 @@ AllocSetReset(MemoryContext context)
 		else
 		{
 			/* Normal case, release the block */
-			context->mem_allocated -= block->endptr - ((char *) block);
+			size_t		freed = block->endptr - ((char *) block);
+
+			context->mem_allocated -= freed;
+			if (context->mem_allocated_cb)
+				context->mem_allocated_cb(-(ssize_t) freed,
+										  context->mem_allocated_cb_data);
 
 #ifdef CLOBBER_FREED_MEMORY
 			wipe_mem(block, block->freeptr - ((char *) block));
@@ -665,11 +681,21 @@ AllocSetDelete(MemoryContext context)
 				freelist->first_free = (AllocSetContext *) oldset->header.nextchild;
 				freelist->num_free--;
 
+
 				/* All that remains is to free the header/initial block */
 				free(oldset);
 			}
 			Assert(freelist->num_free == 0);
 		}
+
+		/*
+		 * Behave as if we'd destroyed it.  Perhaps we should have separate
+		 * accounting for memory chunks on free lists, but their existence
+		 * shouldn't prevent new queries from starting.
+		 */
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(-(ssize_t) set->initBlockSize,
+									  context->mem_allocated_cb_data);
 
 		/* Now add the just-deleted context to the freelist. */
 		set->header.nextchild = (MemoryContext) freelist->first_free;
@@ -685,7 +711,14 @@ AllocSetDelete(MemoryContext context)
 		AllocBlock	next = block->next;
 
 		if (block != set->keeper)
-			context->mem_allocated -= block->endptr - ((char *) block);
+		{
+			size_t		freed = block->endptr - ((char *) block);
+
+			context->mem_allocated -= freed;
+			if (context->mem_allocated_cb)
+				context->mem_allocated_cb(-(ssize_t) freed,
+										  context->mem_allocated_cb_data);
+		}
 
 #ifdef CLOBBER_FREED_MEMORY
 		wipe_mem(block, block->freeptr - ((char *) block));
@@ -700,6 +733,9 @@ AllocSetDelete(MemoryContext context)
 	Assert(context->mem_allocated == keepersize);
 
 	/* Finally, free the context header, including the keeper block */
+	if (context->mem_allocated_cb)
+		context->mem_allocated_cb(-(ssize_t) set->initBlockSize,
+								  context->mem_allocated_cb_data);
 	free(set);
 }
 
@@ -741,6 +777,9 @@ AllocSetAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(blksize,
+									  context->mem_allocated_cb_data);
 
 		block->aset = set;
 		block->freeptr = block->endptr = ((char *) block) + blksize;
@@ -934,6 +973,9 @@ AllocSetAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(blksize,
+									  context->mem_allocated_cb_data);
 
 		block->aset = set;
 		block->freeptr = ((char *) block) + ALLOC_BLOCKHDRSZ;
@@ -1007,6 +1049,8 @@ AllocSetFree(MemoryContext context, void *pointer)
 
 	if (chunk->size > set->allocChunkLimit)
 	{
+		size_t		freed;
+
 		/*
 		 * Big chunks are certain to have been allocated as single-chunk
 		 * blocks.  Just unlink that block and return it to malloc().
@@ -1032,12 +1076,18 @@ AllocSetFree(MemoryContext context, void *pointer)
 		if (block->next)
 			block->next->prev = block->prev;
 
-		context->mem_allocated -= block->endptr - ((char *) block);
+		freed = block->endptr - ((char*) block);
+		context->mem_allocated -= freed;
+		if (context->mem_allocated_cb)
+			context->mem_allocated_cb(-(ssize_t) freed,
+									  context->mem_allocated_cb_data);
 
 #ifdef CLOBBER_FREED_MEMORY
-		wipe_mem(block, block->freeptr - ((char *) block));
+		wipe_mem(block, freed);
 #endif
+
 		free(block);
+
 	}
 	else
 	{
@@ -1137,6 +1187,15 @@ AllocSetRealloc(MemoryContext context, void *pointer, Size size)
 		/* updated separately, not to underflow when (oldblksize > blksize) */
 		context->mem_allocated -= oldblksize;
 		context->mem_allocated += blksize;
+		if (context->mem_allocated_cb)
+		{
+			if (oldblksize > blksize)
+				context->mem_allocated_cb(-(ssize_t) (oldblksize - blksize),
+										  context->mem_allocated_cb_data);
+			else if (oldblksize < blksize)
+				context->mem_allocated_cb(blksize - oldblksize,
+										  context->mem_allocated_cb_data);
+		}
 
 		block->freeptr = block->endptr = ((char *) block) + blksize;
 

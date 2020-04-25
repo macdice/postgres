@@ -88,6 +88,10 @@ extern void MemoryContextStatsDetail(MemoryContext context, int max_children);
 extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 												bool allow);
 
+extern void MemoryContextSetMemAllocatedCB(MemoryContext context,
+										   void (*mem_allocated_cb)(ssize_t delta, void *data),
+										   void *data);
+
 #ifdef MEMORY_CONTEXT_CHECKING
 extern void MemoryContextCheck(MemoryContext context);
 #endif

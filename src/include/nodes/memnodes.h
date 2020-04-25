@@ -80,6 +80,8 @@ typedef struct MemoryContextData
 	bool		isReset;		/* T = no space alloced since last reset */
 	bool		allowInCritSection; /* allow palloc in critical section */
 	Size		mem_allocated;	/* track memory allocated for this context */
+	void		(*mem_allocated_cb)(ssize_t delta, void *data);
+	void	   *mem_allocated_cb_data;
 	const MemoryContextMethods *methods;	/* virtual function table */
 	MemoryContext parent;		/* NULL if no parent (toplevel context) */
 	MemoryContext firstchild;	/* head of linked list of children */
