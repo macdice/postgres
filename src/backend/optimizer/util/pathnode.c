@@ -1381,6 +1381,7 @@ create_merge_append_path(PlannerInfo *root,
 	MergeAppendPath *pathnode = makeNode(MergeAppendPath);
 	Cost		input_startup_cost;
 	Cost		input_total_cost;
+	PathMemory	input_memory = {0};
 	ListCell   *l;
 
 	pathnode->path.pathtype = T_MergeAppend;
@@ -1404,11 +1405,13 @@ create_merge_append_path(PlannerInfo *root,
 		pathnode->limit_tuples = -1.0;
 
 	/*
-	 * Add up the sizes and costs of the input paths.
+	 * Add up the sizes and costs of the input paths.  Also sum the memory
+	 * estimates, because input paths will run simultaneous.
 	 */
 	pathnode->path.rows = 0;
 	input_startup_cost = 0;
 	input_total_cost = 0;
+	
 	foreach(l, subpaths)
 	{
 		Path	   *subpath = (Path *) lfirst(l);
@@ -1422,6 +1425,9 @@ create_merge_append_path(PlannerInfo *root,
 			/* Subpath is adequately ordered, we won't need to sort it */
 			input_startup_cost += subpath->startup_cost;
 			input_total_cost += subpath->total_cost;
+
+			/* Plans will run concurrently. */
+			AddConcurrentMemory(input_memory, subpath->memory);
 		}
 		else
 		{
@@ -1436,9 +1442,13 @@ create_merge_append_path(PlannerInfo *root,
 					  subpath->pathtarget->width,
 					  0.0,
 					  work_mem,
-					  pathnode->limit_tuples);
+					  pathnode->limit_tuples,
+					  &subpath->memory);
 			input_startup_cost += sort_path.startup_cost;
 			input_total_cost += sort_path.total_cost;
+
+			/* Plans will run concurrently. */
+			AddConcurrentMemory(input_memory, sort_path.memory);
 		}
 
 		/* All child paths must have same parameterization */
@@ -1460,6 +1470,8 @@ create_merge_append_path(PlannerInfo *root,
 						  pathkeys, list_length(subpaths),
 						  input_startup_cost, input_total_cost,
 						  pathnode->path.rows);
+
+	AddConcurrentMemory(pathnode->path.memory, input_memory);
 
 	return pathnode;
 }
@@ -1542,7 +1554,8 @@ create_material_path(RelOptInfo *rel, Path *subpath)
 				  subpath->startup_cost,
 				  subpath->total_cost,
 				  subpath->rows,
-				  subpath->pathtarget->width);
+				  subpath->pathtarget->width,
+				  &subpath->memory);
 
 	return pathnode;
 }
@@ -1698,7 +1711,8 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 				  subpath->pathtarget->width,
 				  0.0,
 				  work_mem,
-				  -1.0);
+				  -1.0,
+				  &subpath->memory);
 
 		/*
 		 * Charge one cpu_operator_cost per comparison per input tuple. We
@@ -1734,7 +1748,8 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 					 subpath->startup_cost,
 					 subpath->total_cost,
 					 rel->rows,
-					 subpath->pathtarget->width);
+					 subpath->pathtarget->width,
+					 &subpath->memory);
 	}
 
 	if (sjinfo->semi_can_btree && sjinfo->semi_can_hash)
@@ -1787,6 +1802,7 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	GatherMergePath *pathnode = makeNode(GatherMergePath);
 	Cost		input_startup_cost = 0;
 	Cost		input_total_cost = 0;
+	PathMemory	input_memory = {0};
 
 	Assert(subpath->parallel_safe);
 	Assert(pathkeys);
@@ -1808,6 +1824,7 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 		/* Subpath is adequately ordered, we won't need to sort it */
 		input_startup_cost += subpath->startup_cost;
 		input_total_cost += subpath->total_cost;
+		AddConcurrentMemory(input_memory, subpath->memory);
 	}
 	else
 	{
@@ -1822,13 +1839,16 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 				  subpath->pathtarget->width,
 				  0.0,
 				  work_mem,
-				  -1);
+				  -1,
+				  &subpath->memory);
 		input_startup_cost += sort_path.startup_cost;
 		input_total_cost += sort_path.total_cost;
+		AddConcurrentMemory(input_memory, sort_path.memory);
 	}
 
 	cost_gather_merge(pathnode, root, rel, pathnode->path.param_info,
-					  input_startup_cost, input_total_cost, rows);
+					  input_startup_cost, input_total_cost, rows,
+					  &input_memory);
 
 	return pathnode;
 }
@@ -2826,7 +2846,8 @@ create_incremental_sort_path(PlannerInfo *root,
 						  subpath->rows,
 						  subpath->pathtarget->width,
 						  0.0,	/* XXX comparison_cost shouldn't be 0? */
-						  work_mem, limit_tuples);
+						  work_mem, limit_tuples,
+						  &subpath->memory);
 
 	sort->nPresortedCols = presorted_keys;
 
@@ -2871,7 +2892,8 @@ create_sort_path(PlannerInfo *root,
 			  subpath->rows,
 			  subpath->pathtarget->width,
 			  0.0,				/* XXX comparison_cost shouldn't be 0? */
-			  work_mem, limit_tuples);
+			  work_mem, limit_tuples,
+			  &subpath->memory);
 
 	return pathnode;
 }
@@ -2920,7 +2942,8 @@ create_group_path(PlannerInfo *root,
 			   numGroups,
 			   qual,
 			   subpath->startup_cost, subpath->total_cost,
-			   subpath->rows);
+			   subpath->rows,
+			   &subpath->memory);
 
 	/* add tlist eval cost for each output row */
 	pathnode->path.startup_cost += target->cost.startup;
@@ -3039,7 +3062,8 @@ create_agg_path(PlannerInfo *root,
 			 list_length(groupClause), numGroups,
 			 qual,
 			 subpath->startup_cost, subpath->total_cost,
-			 subpath->rows, subpath->pathtarget->width);
+			 subpath->rows, subpath->pathtarget->width,
+			 &subpath->memory);
 
 	/* add tlist eval cost for each output row */
 	pathnode->path.startup_cost += target->cost.startup;
@@ -3151,7 +3175,8 @@ create_groupingsets_path(PlannerInfo *root,
 					 subpath->startup_cost,
 					 subpath->total_cost,
 					 subpath->rows,
-					 subpath->pathtarget->width);
+					 subpath->pathtarget->width,
+					 &subpath->memory);
 			is_first = false;
 			if (!rollup->is_hashed)
 				is_first_sort = false;
@@ -3175,7 +3200,8 @@ create_groupingsets_path(PlannerInfo *root,
 						 having_qual,
 						 0.0, 0.0,
 						 subpath->rows,
-						 subpath->pathtarget->width);
+						 subpath->pathtarget->width,
+						 &subpath->memory);
 				if (!rollup->is_hashed)
 					is_first_sort = false;
 			}
@@ -3188,7 +3214,8 @@ create_groupingsets_path(PlannerInfo *root,
 						  subpath->pathtarget->width,
 						  0.0,
 						  work_mem,
-						  -1.0);
+						  -1.0,
+						  &subpath->memory);
 
 				/* Account for cost of aggregation */
 
@@ -3201,7 +3228,8 @@ create_groupingsets_path(PlannerInfo *root,
 						 sort_path.startup_cost,
 						 sort_path.total_cost,
 						 sort_path.rows,
-						 subpath->pathtarget->width);
+						 subpath->pathtarget->width,
+						 &subpath->memory);
 			}
 
 			pathnode->path.total_cost += agg_path.total_cost;
@@ -3334,7 +3362,8 @@ create_windowagg_path(PlannerInfo *root,
 				   list_length(winclause->orderClause),
 				   subpath->startup_cost,
 				   subpath->total_cost,
-				   subpath->rows);
+				   subpath->rows,
+				   &subpath->memory);
 
 	/* add tlist eval cost for each output row */
 	pathnode->path.startup_cost += target->cost.startup;

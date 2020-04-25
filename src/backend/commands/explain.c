@@ -21,6 +21,7 @@
 #include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
+#include "miscadmin.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -113,6 +114,7 @@ static void show_tidbitmap_info(BitmapHeapScanState *planstate,
 								ExplainState *es);
 static void show_instrumentation_count(const char *qlabel, int which,
 									   PlanState *planstate, ExplainState *es);
+static void show_memory(ExplainState *es, QueryDesc *queryDesc);
 static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
@@ -185,6 +187,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
 			es->settings = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "memory") == 0)
+			es->memory = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "timing") == 0)
 		{
 			timing_set = true;
@@ -626,6 +630,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (es->costs)
 		ExplainPrintJITSummary(es, queryDesc);
 
+	if (es->memory)
+		show_memory(es, queryDesc);
+
 	/*
 	 * Close down the query and free resources.  Include time for this in the
 	 * total execution time (although it should be pretty minimal).
@@ -933,6 +940,42 @@ ExplainPrintJIT(ExplainState *es, int jit_flags, JitInstrumentation *ji)
 	}
 
 	ExplainCloseGroup("JIT", "JIT", true, es);
+}
+
+/*
+ * show_memory
+ */
+void
+show_memory(ExplainState *es, QueryDesc *queryDesc)
+{
+	size_t		estimated_kb;
+
+	ExplainOpenGroup("Memory", "Memory", true, es);
+
+	if (queryDesc->estate->es_top_eflags & EXEC_FLAG_REWIND)
+		estimated_kb = work_mem *
+			(queryDesc->plannedstmt->planTree->mem_random_freed +
+			 queryDesc->plannedstmt->planTree->mem_random_held);
+	else
+		estimated_kb = work_mem *
+			(queryDesc->plannedstmt->planTree->mem_seq_freed +
+			 queryDesc->plannedstmt->planTree->mem_seq_held);
+
+	/* for higher density, open code the text output format */
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		ExplainIndentText(es);
+		appendStringInfoString(es->str, "Memory:\n");
+		es->indent++;
+		ExplainIndentText(es);
+		appendStringInfo(es->str, "Estimated Peak Memory: %zukB\n", estimated_kb);
+		es->indent--;
+	}
+	else
+	{
+		ExplainPropertyInteger("Estimated Peak Memory", "kB", estimated_kb, es);
+	}
+	ExplainCloseGroup("Memory", "Memory", true, es);
 }
 
 /*
@@ -1547,9 +1590,18 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	{
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
-			appendStringInfo(es->str, "  (cost=%.2f..%.2f rows=%.0f width=%d)",
-							 plan->startup_cost, plan->total_cost,
-							 plan->plan_rows, plan->plan_width);
+			if (es->memory && es->verbose)
+				appendStringInfo(es->str, "  (cost=%.2f..%.2f rows=%.0f width=%d memory=%zukB, %zukB, %zuKB, %zukB)",
+								 plan->startup_cost, plan->total_cost,
+								 plan->plan_rows, plan->plan_width,
+								 (size_t) (plan->mem_seq_freed * work_mem),
+								 (size_t) (plan->mem_seq_held * work_mem),
+								 (size_t) (plan->mem_random_freed * work_mem),
+								 (size_t) (plan->mem_random_held * work_mem));
+			else
+				appendStringInfo(es->str, "  (cost=%.2f..%.2f rows=%.0f width=%d)",
+								 plan->startup_cost, plan->total_cost,
+								 plan->plan_rows, plan->plan_width);
 		}
 		else
 		{
@@ -1561,6 +1613,17 @@ ExplainNode(PlanState *planstate, List *ancestors,
 								 0, es);
 			ExplainPropertyInteger("Plan Width", NULL, plan->plan_width,
 								   es);
+			if (es->memory && es->verbose)
+			{
+				ExplainPropertyFloat("Sequential Memory Freed", NULL,
+									 plan->mem_seq_freed * work_mem, 2, es);
+				ExplainPropertyFloat("Sequential Memory Held", NULL,
+									 plan->mem_seq_held * work_mem, 2, es);
+				ExplainPropertyFloat("Random Memory Freed", NULL,
+									 plan->mem_random_freed * work_mem, 2, es);
+				ExplainPropertyFloat("Random Memory Held", NULL,
+									 plan->mem_random_held * work_mem, 2, es);
+			}
 		}
 	}
 

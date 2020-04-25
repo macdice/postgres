@@ -70,6 +70,30 @@
 #define CP_LABEL_TLIST		0x0004	/* tlist must contain sortgrouprefs */
 #define CP_IGNORE_TLIST		0x0008	/* caller will replace tlist */
 
+/*
+ * Copy the memory estimates from a PathMemory to a Plan.
+ *
+ * XXX Or just make PathMemory visible also to plans, so we can assign it?
+ */
+static void copy_plan_memory_from_path(Plan *plan, const PathMemory *memory)
+{
+	plan->mem_seq_freed = memory->seq_freed;
+	plan->mem_seq_held = memory->seq_held;
+	plan->mem_random_freed = memory->random_freed;
+	plan->mem_random_held = memory->random_held;
+}
+
+/*
+ * Sometimes we need to synthesize a PathMemory from a Plan, even though we
+ * don't have a Path.
+ */
+static void copy_path_memory_from_plan(PathMemory *memory, const Plan *plan)
+{
+	memory->seq_freed = plan->mem_seq_freed;
+	memory->seq_held = plan->mem_seq_held;
+	memory->random_freed = plan->mem_random_freed;
+	memory->random_held = plan->mem_random_held;
+}
 
 static Plan *create_plan_recurse(PlannerInfo *root, Path *best_path,
 								 int flags);
@@ -1891,6 +1915,10 @@ create_projection_plan(PlannerInfo *root, ProjectionPath *best_path, int flags)
 		plan->total_cost = best_path->path.total_cost;
 		plan->plan_rows = best_path->path.rows;
 		plan->plan_width = best_path->path.pathtarget->width;
+		plan->mem_seq_freed = best_path->path.memory.seq_freed;
+		plan->mem_seq_held = best_path->path.memory.seq_held;
+		plan->mem_random_freed = best_path->path.memory.random_freed;
+		plan->mem_random_held = best_path->path.memory.random_held;
 		plan->parallel_safe = best_path->path.parallel_safe;
 		/* ... but don't change subplan's parallel_aware flag */
 	}
@@ -2385,6 +2413,7 @@ create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path)
 		plan->total_cost = mminfo->pathcost;
 		plan->plan_rows = 1;
 		plan->plan_width = mminfo->path->pathtarget->width;
+		copy_plan_memory_from_path(plan, &best_path->path.memory);
 		plan->parallel_aware = false;
 		plan->parallel_safe = mminfo->path->parallel_safe;
 
@@ -3180,6 +3209,10 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 		plan->plan_rows =
 			clamp_row_est(apath->bitmapselectivity * apath->path.parent->tuples);
 		plan->plan_width = 0;	/* meaningless */
+		plan->mem_seq_freed = apath->path.memory.seq_freed;
+		plan->mem_seq_held = apath->path.memory.seq_held;
+		plan->mem_random_freed = apath->path.memory.random_freed;
+		plan->mem_random_held = apath->path.memory.random_held;
 		plan->parallel_aware = false;
 		plan->parallel_safe = apath->path.parallel_safe;
 		*qual = subquals;
@@ -3244,6 +3277,7 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 			plan->plan_rows =
 				clamp_row_est(opath->bitmapselectivity * opath->path.parent->tuples);
 			plan->plan_width = 0;	/* meaningless */
+			copy_plan_memory_from_path(plan, &opath->path.memory);
 			plan->parallel_aware = false;
 			plan->parallel_safe = opath->path.parallel_safe;
 		}
@@ -3291,6 +3325,7 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 		plan->plan_rows =
 			clamp_row_est(ipath->indexselectivity * ipath->path.parent->tuples);
 		plan->plan_width = 0;	/* meaningless */
+		copy_plan_memory_from_path(plan, &ipath->path.memory);
 		plan->parallel_aware = false;
 		plan->parallel_safe = ipath->path.parallel_safe;
 		/* Extract original index clauses, actual index quals, relevant ECs */
@@ -4595,6 +4630,24 @@ create_hashjoin_plan(PlannerInfo *root,
 	hash_plan->plan.startup_cost = hash_plan->plan.total_cost;
 
 	/*
+	 * Likewise for memory.  This has to be recreated just for EXPLAIN
+	 * display, duplicating logic in costsize.c, since there is no "hash"
+	 * path.
+	 */
+	copy_plan_memory_from_path(&hash_plan->plan,
+							   &best_path->jpath.innerjoinpath->memory);
+	if (!best_path->jpath.path.parallel_aware && best_path->num_batches == 1)
+	{
+		hash_plan->plan.mem_seq_held += best_path->hashtable_mem;
+		hash_plan->plan.mem_random_held += best_path->hashtable_mem;
+	}
+	else
+	{
+		hash_plan->plan.mem_seq_freed += best_path->hashtable_mem;
+		hash_plan->plan.mem_random_freed += best_path->hashtable_mem;
+	}
+
+	/*
 	 * If parallel-aware, the executor will also need an estimate of the total
 	 * number of rows expected from all participants so that it can size the
 	 * shared hash table.
@@ -5123,6 +5176,7 @@ copy_generic_path_info(Plan *dest, Path *src)
 	dest->total_cost = src->total_cost;
 	dest->plan_rows = src->rows;
 	dest->plan_width = src->pathtarget->width;
+	copy_plan_memory_from_path(dest, &src->memory);
 	dest->parallel_aware = src->parallel_aware;
 	dest->parallel_safe = src->parallel_safe;
 }
@@ -5138,6 +5192,10 @@ copy_plan_costsize(Plan *dest, Plan *src)
 	dest->total_cost = src->total_cost;
 	dest->plan_rows = src->plan_rows;
 	dest->plan_width = src->plan_width;
+	dest->mem_seq_freed = src->mem_seq_freed;
+	dest->mem_seq_held = src->mem_seq_held;
+	dest->mem_random_freed = src->mem_random_freed;
+	dest->mem_random_held = src->mem_random_held;
 	/* Assume the inserted node is not parallel-aware. */
 	dest->parallel_aware = false;
 	/* Assume the inserted node is parallel-safe, if child plan is. */
@@ -5158,6 +5216,7 @@ label_sort_with_costsize(PlannerInfo *root, Sort *plan, double limit_tuples)
 {
 	Plan	   *lefttree = plan->plan.lefttree;
 	Path		sort_path;		/* dummy for result of cost_sort */
+	PathMemory	input_memory;
 
 	/*
 	 * This function shouldn't have to deal with IncrementalSort plans because
@@ -5165,17 +5224,24 @@ label_sort_with_costsize(PlannerInfo *root, Sort *plan, double limit_tuples)
 	 */
 	Assert(IsA(plan, Sort));
 
+	/* Reconstruct PathMemory from the plan. */
+	copy_path_memory_from_plan(&input_memory, lefttree);
+
 	cost_sort(&sort_path, root, NIL,
 			  lefttree->total_cost,
 			  lefttree->plan_rows,
 			  lefttree->plan_width,
 			  0.0,
 			  work_mem,
-			  limit_tuples);
+			  limit_tuples,
+			  &input_memory);
 	plan->plan.startup_cost = sort_path.startup_cost;
 	plan->plan.total_cost = sort_path.total_cost;
 	plan->plan.plan_rows = lefttree->plan_rows;
 	plan->plan.plan_width = lefttree->plan_width;
+
+	copy_plan_memory_from_path(&plan->plan, &sort_path.memory);
+
 	plan->plan.parallel_aware = false;
 	plan->plan.parallel_safe = lefttree->parallel_safe;
 }
@@ -6315,6 +6381,7 @@ materialize_finished_plan(Plan *subplan)
 {
 	Plan	   *matplan;
 	Path		matpath;		/* dummy for result of cost_material */
+	PathMemory	input_memory;
 
 	matplan = (Plan *) make_material(subplan);
 
@@ -6328,16 +6395,21 @@ materialize_finished_plan(Plan *subplan)
 	matplan->initPlan = subplan->initPlan;
 	subplan->initPlan = NIL;
 
+	/* Make the PathMemory for the Path we don't have. */
+	copy_path_memory_from_plan(&input_memory, subplan);
+
 	/* Set cost data */
 	cost_material(&matpath,
 				  subplan->startup_cost,
 				  subplan->total_cost,
 				  subplan->plan_rows,
-				  subplan->plan_width);
+				  subplan->plan_width,
+				  &input_memory);
 	matplan->startup_cost = matpath.startup_cost;
 	matplan->total_cost = matpath.total_cost;
 	matplan->plan_rows = subplan->plan_rows;
 	matplan->plan_width = subplan->plan_width;
+	copy_plan_memory_from_path(matplan, &matpath.memory);
 	matplan->parallel_aware = false;
 	matplan->parallel_safe = subplan->parallel_safe;
 

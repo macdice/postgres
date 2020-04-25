@@ -61,6 +61,25 @@ typedef struct AggClauseCosts
 } AggClauseCosts;
 
 /*
+ * Estimates of peak memory usage by a path, measured in work_mem units rather
+ * than absolute bytes.
+ *
+ * Since we don't yet know whether the resulting plan node will be executed
+ * with eflags that cause it optimize for random access (primarily rescans),
+ * we compute both "sequential" and "random" estimates.  Since some nodes hold
+ * onto memory even if not asked to, or don't hold onto memory even when asked
+ * to, we need a "freed" and a "held" component for each.
+ */
+typedef struct PathMemory
+{
+	double		seq_freed;		/* freed at end of scan if no flags */
+	double		seq_held;		/* held at end of scan if no flags */
+	double		random_freed;	/* freed at end of scan if REWIND */
+	double		random_held;	/* heldat end of scan if REWIND */
+} PathMemory;
+
+
+/*
  * This enum identifies the different types of "upper" (post-scan/join)
  * relations that we might deal with during planning.
  */
@@ -1158,6 +1177,7 @@ typedef struct Path
 	double		rows;			/* estimated number of result tuples */
 	Cost		startup_cost;	/* cost expended before fetching any tuples */
 	Cost		total_cost;		/* total cost (assuming all tuples fetched) */
+	PathMemory	memory;			/* memory usage estimates */
 
 	List	   *pathkeys;		/* sort ordering of path's output */
 	/* pathkeys is a List of PathKey nodes; see above */
@@ -1600,6 +1620,7 @@ typedef struct HashPath
 	List	   *path_hashclauses;	/* join clauses used for hashing */
 	int			num_batches;	/* number of batches expected */
 	double		inner_rows_total;	/* total inner rows expected */
+	size_t		hashtable_mem;		/* memory used by the hash table */
 } HashPath;
 
 /*
@@ -2550,6 +2571,7 @@ typedef struct JoinCostWorkspace
 	int			numbuckets;
 	int			numbatches;
 	double		inner_rows_total;
+	double		hashtable_mem;
 } JoinCostWorkspace;
 
 /*

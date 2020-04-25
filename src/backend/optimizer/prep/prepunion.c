@@ -1074,7 +1074,8 @@ choose_hashed_setop(PlannerInfo *root, List *groupClauses,
 			 numGroupCols, dNumGroups,
 			 NIL,
 			 input_path->startup_cost, input_path->total_cost,
-			 input_path->rows, input_path->pathtarget->width);
+			 input_path->rows, input_path->pathtarget->width,
+			 &input_path->memory);
 
 	/*
 	 * Now for the sorted case.  Note that the input is *always* unsorted,
@@ -1085,11 +1086,13 @@ choose_hashed_setop(PlannerInfo *root, List *groupClauses,
 	/* XXX cost_sort doesn't actually look at pathkeys, so just pass NIL */
 	cost_sort(&sorted_p, root, NIL, sorted_p.total_cost,
 			  input_path->rows, input_path->pathtarget->width,
-			  0.0, work_mem, -1.0);
+			  0.0, work_mem, -1.0,
+			  &input_path->memory);
 	cost_group(&sorted_p, root, numGroupCols, dNumGroups,
 			   NIL,
 			   sorted_p.startup_cost, sorted_p.total_cost,
-			   input_path->rows);
+			   input_path->rows,
+			   &input_path->memory);
 
 	/*
 	 * Now make the decision using the top-level tuple fraction.  First we

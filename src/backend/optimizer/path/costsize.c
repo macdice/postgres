@@ -287,6 +287,8 @@ cost_seqscan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + cpu_run_cost + disk_run_cost;
+
+	/* Leave memory estimates at zero. */
 }
 
 /*
@@ -359,6 +361,8 @@ cost_samplescan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/* Leave memory estimates at zero. */
 }
 
 /*
@@ -397,6 +401,12 @@ cost_gather(GatherPath *path, PlannerInfo *root,
 
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = (startup_cost + run_cost);
+
+	/* Estimate memory.  For now, DSM segment and other overheads ignored. */
+	AddConcurrentWorkerMemory(path->path.memory, path->subpath->memory,
+							  path->num_workers);
+	if (parallel_leader_participation)
+		AddConcurrentMemory(path->path.memory, path->subpath->memory);
 }
 
 /*
@@ -413,7 +423,8 @@ void
 cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 				  RelOptInfo *rel, ParamPathInfo *param_info,
 				  Cost input_startup_cost, Cost input_total_cost,
-				  double *rows)
+				  double *rows,
+				  const PathMemory *input_memory)
 {
 	Cost		startup_cost = 0;
 	Cost		run_cost = 0;
@@ -464,6 +475,19 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 
 	path->path.startup_cost = startup_cost + input_startup_cost;
 	path->path.total_cost = (startup_cost + run_cost + input_total_cost);
+
+	/*
+	 * XXX Unlike cost_gather(), we received the "input" costs from the
+	 * caller.  This is a strange and arbitrary difference between cost
+	 * functions, and cost_gather() and cost_gather_merge() went different
+	 * ways on that.  Although we can reach the subpath from here, we can't
+	 * see if there is a sort path to be inserted from here.  This is a bit
+	 * messy and seems to be historical noise (mentioned at top of file).
+	 */
+	AddConcurrentWorkerMemory(path->path.memory, *input_memory,
+							  path->path.parallel_workers);
+	if (parallel_leader_participation)
+		AddConcurrentMemory(path->path.memory, *input_memory);
 }
 
 /*
@@ -757,6 +781,8 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = startup_cost + run_cost;
+
+	/* Leave memory estimates at zero. */
 }
 
 /*
@@ -1043,6 +1069,12 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/*
+	 * Bitmap-building paths account for the memory occupied by the TBMs they
+	 * produce.
+	 */
+	AddConcurrentMemory(path->memory, bitmapqual->memory);
 }
 
 /*
@@ -1123,7 +1155,15 @@ cost_bitmap_and_node(BitmapAndPath *path, PlannerInfo *root)
 		totalCost += subCost;
 		if (l != list_head(path->bitmapquals))
 			totalCost += 100.0 * cpu_operator_cost;
+
+		/* We'll only have one subpath running at a time. */
+		AddSequentialMemory(path->path.memory, subpath->memory);
 	}
+
+	/* The aggregated bitmap occupies memory. */
+	path->path.memory.seq_freed += 1.0;
+	path->path.memory.random_freed += 1.0;
+
 	path->bitmapselectivity = selec;
 	path->path.rows = 0;		/* per above, not used */
 	path->path.startup_cost = totalCost;
@@ -1169,6 +1209,9 @@ cost_bitmap_or_node(BitmapOrPath *path, PlannerInfo *root)
 		if (l != list_head(path->bitmapquals) &&
 			!IsA(subpath, IndexPath))
 			totalCost += 100.0 * cpu_operator_cost;
+
+		/* We'll only have one subpath running at a time. */
+		AddSequentialMemory(path->path.memory, subpath->memory);
 	}
 	path->bitmapselectivity = Min(selec, 1.0);
 	path->path.rows = 0;		/* per above, not used */
@@ -1281,6 +1324,8 @@ cost_tidscan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/* Leave memory estimates at zero. */
 }
 
 /*
@@ -1330,6 +1375,8 @@ cost_subqueryscan(SubqueryScanPath *path, PlannerInfo *root,
 
 	path->path.startup_cost += startup_cost;
 	path->path.total_cost += startup_cost + run_cost;
+
+	AddConcurrentMemory(path->path.memory, path->subpath->memory);
 }
 
 /*
@@ -1391,6 +1438,13 @@ cost_functionscan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/*
+	 * For now, just account for the tuplestore, while is not freed at end of
+	 * scan regardless of EXEC_FLAG_REWIND, so it must be counted as 'held'.
+	 */
+	path->memory.seq_held = 1.0;
+	path->memory.random_held = 1.0;
 }
 
 /*
@@ -1447,6 +1501,14 @@ cost_tablefuncscan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/*
+	 * execSRF.c uses a work_mem-sized tuplestore, and frees it as soon as the
+	 * result set is exhausted, regardless of eflags.  So we count this a
+	 * 'freed' memory either way.
+	 */
+	path->memory.seq_freed = 1.0;
+	path->memory.random_freed = 1.0;
 }
 
 /*
@@ -1494,6 +1556,8 @@ cost_valuesscan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/* No memory is used. */
 }
 
 /*
@@ -1541,6 +1605,14 @@ cost_ctescan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/*
+	 * XXX It'd be over conservative to charge each CTE scan for the
+	 * tuplestore and the subplan (we've double-count when there is more than
+	 * one CTE scan), but it'd also be over conservative to charge the
+	 * initplan to the top node, because it won't actually run concurrently
+	 * with that node either.  Perhaps the latter option is better.
+	 */
 }
 
 /*
@@ -1578,6 +1650,12 @@ cost_namedtuplestorescan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/*
+	 * We don't actually know where the tuplestore is coming from, since SPI
+	 * code can install any tuplestore.  For now, no attempt to estimate the
+	 * memory usage here.
+	 */
 }
 
 /*
@@ -1612,6 +1690,8 @@ cost_resultscan(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/* No memory. */
 }
 
 /*
@@ -1654,6 +1734,14 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
 	runion->rows = total_rows;
 	runion->pathtarget->width = Max(nrterm->pathtarget->width,
 									rterm->pathtarget->width);
+
+	/* The non-recursive and recursive paths are scanned sequentially. */
+	AddSequentialMemory(runion->memory, nrterm->memory);
+	AddSequentialMemory(runion->memory, rterm->memory);
+	runion->memory.seq_freed += 1.0; /* working tuplestore */
+	runion->memory.seq_held += 2.0; /* intermediate tuplestore + hash table */
+	runion->memory.random_freed += 1.0; /* same if EXEC_FLAG_REWIND */
+	runion->memory.random_held += 2.0;
 }
 
 /*
@@ -1799,7 +1887,8 @@ cost_incremental_sort(Path *path,
 					  PlannerInfo *root, List *pathkeys, int presorted_keys,
 					  Cost input_startup_cost, Cost input_total_cost,
 					  double input_tuples, int width, Cost comparison_cost, int sort_mem,
-					  double limit_tuples)
+					  double limit_tuples,
+					  const PathMemory *input_memory)
 {
 	Cost		startup_cost = 0,
 				run_cost = 0,
@@ -1919,6 +2008,15 @@ cost_incremental_sort(Path *path,
 	path->rows = input_tuples;
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/*
+	 * Increment sort never shields its subpath from EXEC_FLAG_REWIND.  It
+	 * does use some memory itself, so we add that to the input estimates.  It
+	 * doesn't hold onto memory between rescans.
+	 */
+	AddConcurrentMemory(path->memory, *input_memory);
+	path->memory.seq_freed += (sort_mem / (double) work_mem);
+	path->memory.random_freed += (sort_mem / (double) work_mem);
 }
 
 /*
@@ -1937,8 +2035,8 @@ void
 cost_sort(Path *path, PlannerInfo *root,
 		  List *pathkeys, Cost input_cost, double tuples, int width,
 		  Cost comparison_cost, int sort_mem,
-		  double limit_tuples)
-
+		  double limit_tuples,
+		  const PathMemory *input_memory)
 {
 	Cost		startup_cost;
 	Cost		run_cost;
@@ -1956,6 +2054,13 @@ cost_sort(Path *path, PlannerInfo *root,
 	path->rows = tuples;
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/* Sort shields the child path from EXEC_FLAG_REWIND. */
+	AddConcurrentMemorySuppressRandom(path->memory, *input_memory);
+
+	/* Sort holds onto the tuplestore, whether asked to or not. */
+	path->memory.seq_held += sort_mem / (double) work_mem;
+	path->memory.random_held += sort_mem / (double) work_mem;
 }
 
 /*
@@ -2073,6 +2178,7 @@ cost_append(AppendPath *apath)
 
 				apath->path.rows += subpath->rows;
 				apath->path.total_cost += subpath->total_cost;
+				AddSequentialMemory(apath->path.memory, subpath->memory);
 			}
 		}
 		else
@@ -2116,13 +2222,15 @@ cost_append(AppendPath *apath)
 							  subpath->pathtarget->width,
 							  0.0,
 							  work_mem,
-							  apath->limit_tuples);
+							  apath->limit_tuples,
+							  &subpath->memory);
 					subpath = &sort_path;
 				}
 
 				apath->path.rows += subpath->rows;
 				apath->path.startup_cost += subpath->startup_cost;
 				apath->path.total_cost += subpath->total_cost;
+				AddSequentialMemory(apath->path.memory, subpath->memory);
 			}
 		}
 	}
@@ -2170,6 +2278,8 @@ cost_append(AppendPath *apath)
 			}
 
 			apath->path.rows = clamp_row_est(apath->path.rows);
+
+			AddSequentialMemory(apath->path.memory, subpath->memory);
 
 			i++;
 		}
@@ -2248,6 +2358,8 @@ cost_merge_append(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost + input_startup_cost;
 	path->total_cost = startup_cost + run_cost + input_total_cost;
+
+	/* Memory is estimated in create_merge_append_path(). */
 }
 
 /*
@@ -2265,7 +2377,8 @@ cost_merge_append(Path *path, PlannerInfo *root,
 void
 cost_material(Path *path,
 			  Cost input_startup_cost, Cost input_total_cost,
-			  double tuples, int width)
+			  double tuples, int width,
+			  const PathMemory *input_memory)
 {
 	Cost		startup_cost = input_startup_cost;
 	Cost		run_cost = input_total_cost - input_startup_cost;
@@ -2303,6 +2416,13 @@ cost_material(Path *path,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+
+	/* Material shields the subpath from EXEC_FLAG_REWIND. */
+	AddConcurrentMemorySuppressRandom(path->memory, *input_memory);
+
+	/* Material holds tuplestore memory whether asked to or not. */
+	path->memory.seq_held += 1.0;
+	path->memory.random_held += 1.0;
 }
 
 /*
@@ -2322,12 +2442,14 @@ cost_agg(Path *path, PlannerInfo *root,
 		 int numGroupCols, double numGroups,
 		 List *quals,
 		 Cost input_startup_cost, Cost input_total_cost,
-		 double input_tuples, double input_width)
+		 double input_tuples, double input_width,
+		 const PathMemory *input_memory)
 {
 	double		output_tuples;
 	Cost		startup_cost;
 	Cost		total_cost;
 	AggClauseCosts dummy_aggcosts;
+	double		hashtable_mem = 0;
 
 	/* Use all-zero per-aggregate costs if NULL is passed */
 	if (aggcosts == NULL)
@@ -2451,6 +2573,8 @@ cost_agg(Path *path, PlannerInfo *root,
 		nbatches = Max(ceil(nbatches), 1.0);
 		num_partitions = Max(num_partitions, 2);
 
+		hashtable_mem = ((numGroups * hashentrysize) / nbatches) / work_mem;
+
 		/*
 		 * The number of partitions can change at different levels of
 		 * recursion; but for the purposes of this calculation assume it stays
@@ -2505,6 +2629,12 @@ cost_agg(Path *path, PlannerInfo *root,
 	path->rows = output_tuples;
 	path->startup_cost = startup_cost;
 	path->total_cost = total_cost;
+
+
+	AddConcurrentMemory(path->memory, *input_memory);
+	/* We hold onto hash table memory (if any) whether asked to or not. */
+	path->memory.seq_held += hashtable_mem;
+	path->memory.random_held += hashtable_mem;
 }
 
 /*
@@ -2518,7 +2648,8 @@ void
 cost_windowagg(Path *path, PlannerInfo *root,
 			   List *windowFuncs, int numPartCols, int numOrderCols,
 			   Cost input_startup_cost, Cost input_total_cost,
-			   double input_tuples)
+			   double input_tuples,
+			   const PathMemory *input_memory)
 {
 	Cost		startup_cost;
 	Cost		total_cost;
@@ -2578,6 +2709,12 @@ cost_windowagg(Path *path, PlannerInfo *root,
 	path->rows = input_tuples;
 	path->startup_cost = startup_cost;
 	path->total_cost = total_cost;
+
+	/* Account for input path and per-partition tuplestore. */
+	AddConcurrentMemory(path->memory, *input_memory);
+	path->memory.seq_freed += 1.0;
+	path->memory.random_freed += 1.0;
+	/* XXX This is certainly too simplistic. */
 }
 
 /*
@@ -2593,7 +2730,8 @@ cost_group(Path *path, PlannerInfo *root,
 		   int numGroupCols, double numGroups,
 		   List *quals,
 		   Cost input_startup_cost, Cost input_total_cost,
-		   double input_tuples)
+		   double input_tuples,
+		   const PathMemory *input_memory)
 {
 	double		output_tuples;
 	Cost		startup_cost;
@@ -2632,6 +2770,14 @@ cost_group(Path *path, PlannerInfo *root,
 	path->rows = output_tuples;
 	path->startup_cost = startup_cost;
 	path->total_cost = total_cost;
+
+	/*
+	 * For now, charge for a work_mem-sized hash table that is not freed.
+	 * This can certainly be improved.
+	 */
+	AddConcurrentMemory(path->memory, *input_memory);
+	path->memory.seq_held = 1.0;
+	path->memory.random_held = 1.0;
 }
 
 /*
@@ -2907,6 +3053,13 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
 
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = startup_cost + run_cost;
+
+	/*
+	 * Both input paths will run concurrently, and the inner plan will have
+	 * EXEC_FLAG_REWIND set.
+	 */
+	AddConcurrentMemory(path->path.memory, outer_path->memory);
+	AddConcurrentMemoryRequireRandom(path->path.memory, inner_path->memory);
 }
 
 /*
@@ -3078,7 +3231,8 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 				  outer_path->pathtarget->width,
 				  0.0,
 				  work_mem,
-				  -1.0);
+				  -1.0,
+				  &outer_path->memory);
 		startup_cost += sort_path.startup_cost;
 		startup_cost += (sort_path.total_cost - sort_path.startup_cost)
 			* outerstartsel;
@@ -3104,7 +3258,8 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 				  inner_path->pathtarget->width,
 				  0.0,
 				  work_mem,
-				  -1.0);
+				  -1.0,
+				  &inner_path->memory);
 		startup_cost += sort_path.startup_cost;
 		startup_cost += (sort_path.total_cost - sort_path.startup_cost)
 			* innerstartsel;
@@ -3413,6 +3568,27 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 
 	path->jpath.path.startup_cost = startup_cost;
 	path->jpath.path.total_cost = startup_cost + run_cost;
+
+	/*
+	 * Both input paths will run simultaneously.  There may also be a hidden
+	 * materialize path here (created on the fly during plan creation), so we
+	 * need to account for that here too.
+	 */
+	AddConcurrentMemory(path->jpath.path.memory, outer_path->memory);
+	if (!path->materialize_inner)
+		AddConcurrentMemory(path->jpath.path.memory, inner_path->memory);
+	else
+	{
+		/*
+		 * Duplicate logic from cost_material() for our invisible material
+		 * path.  EXEC_FLAG_REWIND is suppressed, and the tuplestore holds
+		 * memory.
+		 */
+		AddConcurrentMemorySuppressRandom(path->jpath.path.memory,
+										  outer_path->memory);
+		path->jpath.path.memory.seq_held += 1.0;
+		path->jpath.path.memory.random_held += 1.0;
+	}
 }
 
 /*
@@ -3514,7 +3690,8 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	int			numbuckets;
 	int			numbatches;
 	int			num_skew_mcvs;
-	size_t		space_allowed;	/* unused */
+	size_t		expected_hashtable_mem;
+	size_t		allowed_hashtable_mem;	/* unused */
 
 	/* cost of source data */
 	startup_cost += outer_path->startup_cost;
@@ -3559,7 +3736,8 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 							true,	/* useskew */
 							parallel_hash,	/* try_combined_hash_mem */
 							outer_path->parallel_workers,
-							&space_allowed,
+							&expected_hashtable_mem,
+							&allowed_hashtable_mem,
 							&numbuckets,
 							&numbatches,
 							&num_skew_mcvs);
@@ -3592,6 +3770,7 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	workspace->numbuckets = numbuckets;
 	workspace->numbatches = numbatches;
 	workspace->inner_rows_total = inner_path_rows_total;
+	workspace->hashtable_mem = expected_hashtable_mem / (double) (work_mem * 1024);
 }
 
 /*
@@ -3852,8 +4031,50 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 
 	path->jpath.path.startup_cost = startup_cost;
 	path->jpath.path.total_cost = startup_cost + run_cost;
-}
 
+	if (path->jpath.path.parallel_workers > 0)
+	{
+		/*
+		 * In a parallel hash join, the inner path will run to completion, and
+		 * then the outer path will run to completion.  This allows memory to
+		 * be freed in between, reducing peak memory usage.
+		 */
+		AddSequentialMemory(path->jpath.path.memory, inner_path->memory);
+		AddSequentialMemory(path->jpath.path.memory, outer_path->memory);
+	}
+	else
+	{
+		/*
+		 * In a serial hash join, that's not true, because the empty-outer
+		 * optimization interleaves access.  We have to consider the paths to
+		 * be executed concurrently.
+		 */
+		AddConcurrentMemory(path->jpath.path.memory, inner_path->memory);
+		AddConcurrentMemory(path->jpath.path.memory, outer_path->memory);
+	}
+
+	/*
+	 * The hashtable is only preserved across rescans for single batch
+	 * non-parallel joins; otherwise it's destroyed and rebuilt every time, so
+	 * it doesn't occupy memory after the scan ends.
+	 */
+	if (numbatches == 1 && path->jpath.path.parallel_workers == 0)
+	{
+		path->jpath.path.memory.seq_held += workspace->hashtable_mem;
+		path->jpath.path.memory.random_held += workspace->hashtable_mem;
+	}
+	else
+	{
+		path->jpath.path.memory.seq_freed += workspace->hashtable_mem;
+		path->jpath.path.memory.random_freed += workspace->hashtable_mem;
+	}
+
+	/*
+	 * createplan.c needs this to create the synthetic Hash node for EXPLAIN
+	 * display only.
+	 */
+	path->hashtable_mem = workspace->hashtable_mem;
+}
 
 /*
  * cost_subplan
@@ -3938,6 +4159,8 @@ cost_subplan(PlannerInfo *root, SubPlan *subplan, Plan *plan)
 
 	subplan->startup_cost = sp_cost.startup;
 	subplan->per_call_cost = sp_cost.per_tuple;
+
+	/* XXX How and where to estimate memory usage? */
 }
 
 

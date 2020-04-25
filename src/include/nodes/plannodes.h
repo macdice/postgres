@@ -123,6 +123,12 @@ typedef struct Plan
 	double		plan_rows;		/* number of rows plan is expected to emit */
 	int			plan_width;		/* average row width in bytes */
 
+	/* planner's estimate of peak memory usage (see PathMemory) */
+	double		mem_seq_freed;	/* freed at end of scan if no flags */
+	double		mem_seq_held;	/* held at end of scan if no flags */
+	double		mem_random_freed;	/* freed at end of scan if REWIND */
+	double		mem_random_held;	/* held at end of scan if REWIND */
+
 	/*
 	 * information needed for parallel query
 	 */

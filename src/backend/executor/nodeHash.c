@@ -433,6 +433,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, List *hashCollations,
 	Hash	   *node;
 	HashJoinTable hashtable;
 	Plan	   *outerNode;
+	size_t		space_expected;		/* unused */
 	size_t		space_allowed;
 	int			nbuckets;
 	int			nbatch;
@@ -465,6 +466,7 @@ ExecHashTableCreate(HashState *state, List *hashOperators, List *hashCollations,
 							state->parallel_state != NULL,
 							state->parallel_state != NULL ?
 							state->parallel_state->nparticipants - 1 : 0,
+							&space_expected,
 							&space_allowed,
 							&nbuckets, &nbatch, &num_skew_mcvs);
 
@@ -668,6 +670,7 @@ void
 ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 						bool try_combined_hash_mem,
 						int parallel_workers,
+						size_t *space_expected,
 						size_t *space_allowed,
 						int *numbuckets,
 						int *numbatches,
@@ -799,6 +802,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 		{
 			ExecChooseHashTableSize(ntuples, tupwidth, useskew,
 									false, parallel_workers,
+									space_expected,
 									space_allowed,
 									numbuckets,
 									numbatches,
@@ -839,6 +843,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	Assert(nbuckets > 0);
 	Assert(nbatch > 0);
 
+	*space_expected = bucket_bytes + inner_rel_bytes / nbatch;
 	*numbuckets = nbuckets;
 	*numbatches = nbatch;
 }

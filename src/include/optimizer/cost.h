@@ -38,6 +38,78 @@ typedef enum
 	CONSTRAINT_EXCLUSION_PARTITION	/* apply c_e to otherrels only */
 }			ConstraintExclusionType;
 
+/*
+ * Macros used to estimate memory usage.  These are in this header rather than
+ * inside costsize.c because they're also needed by pathnode.c.
+ */
+
+/*
+ * The memory of concurrently running subpaths is summed (nest loop join,
+ * merge join).
+ */
+#define AddConcurrentMemory(dest, src)				\
+	do												\
+	{												\
+		(dest).seq_freed += (src).seq_freed;		\
+		(dest).seq_held += (src).seq_held;			\
+		(dest).random_freed += (src).random_freed;	\
+		(dest).random_held += (src).random_held;	\
+	} while (0)
+
+/*
+ * Parallel workers multiply memory usage, but always free it at the end of a
+ * scan even if the nodes would normally hold it, because they shut down
+ * (gather, gather merge).
+ */
+#define AddConcurrentWorkerMemory(dest, src, n)							\
+	do																	\
+	{																	\
+		(dest).seq_freed +=	(n) * ((src).seq_freed + (src).seq_held);	\
+		(dest).random_freed +=	(n) * ((src).random_freed + (src).random_held);	\
+	} while (0)
+
+/*
+ * Only the 'held' memory of sequentially running paths is summed; for the
+ * 'freed' memory we use the peak value over all sequentially run paths
+ * (append, hash join).
+ */
+#define AddSequentialMemory(dest, src)									\
+	do																	\
+	{																	\
+		(dest).seq_freed = Max((dest).seq_freed, (src).seq_freed);		\
+		(dest).seq_held += (src).seq_held;								\
+		(dest).random_freed = Max((dest).random_freed, (src).random_freed); \
+		(dest).random_held += (src).random_held;						\
+	} while (0)
+
+/*
+ * When an executor node suppresses the EXEC_FLAG_REWIND flag while running a
+ * subplan, indicating that it can look after rescans without rerunning the
+ * subplan by caching the results, we model this by adding the subpath's "seq"
+ * estimates to the "random" estimates (material, sort).
+ */
+#define AddConcurrentMemorySuppressRandom(dest, src)	\
+	do													\
+	{													\
+		(dest).seq_freed += (src).seq_freed;			\
+		(dest).seq_held += (src).seq_held;				\
+		(dest).random_freed += (src).seq_freed;			\
+		(dest).random_held += (src).seq_held;			\
+	} while (0)
+
+/*
+ * When an executor node set the EXEC_FLAG_REWIND flag while running a
+ * subplan, indicating that it intends to rescan it, we model this by adding
+ * the subpath's "random" estimates to the "seq" estimates (nested loop join).
+ */
+#define AddConcurrentMemoryRequireRandom(dest, src)		\
+	do													\
+	{													\
+		(dest).seq_freed += (src).random_freed;			\
+		(dest).seq_held += (src).random_held;			\
+		(dest).random_freed += (src).random_freed;		\
+		(dest).random_held += (src).random_held;		\
+	} while (0)
 
 /*
  * prototypes for costsize.c
@@ -101,12 +173,14 @@ extern void cost_recursive_union(Path *runion, Path *nrterm, Path *rterm);
 extern void cost_sort(Path *path, PlannerInfo *root,
 					  List *pathkeys, Cost input_cost, double tuples, int width,
 					  Cost comparison_cost, int sort_mem,
-					  double limit_tuples);
+					  double limit_tuples,
+					  const PathMemory *input_memory);
 extern void cost_incremental_sort(Path *path,
 								  PlannerInfo *root, List *pathkeys, int presorted_keys,
 								  Cost input_startup_cost, Cost input_total_cost,
 								  double input_tuples, int width, Cost comparison_cost, int sort_mem,
-								  double limit_tuples);
+								  double limit_tuples,
+								  const PathMemory *input_memory);
 extern void cost_append(AppendPath *path);
 extern void cost_merge_append(Path *path, PlannerInfo *root,
 							  List *pathkeys, int n_streams,
@@ -114,22 +188,26 @@ extern void cost_merge_append(Path *path, PlannerInfo *root,
 							  double tuples);
 extern void cost_material(Path *path,
 						  Cost input_startup_cost, Cost input_total_cost,
-						  double tuples, int width);
+						  double tuples, int width,
+						  const PathMemory *input_memory);
 extern void cost_agg(Path *path, PlannerInfo *root,
 					 AggStrategy aggstrategy, const AggClauseCosts *aggcosts,
 					 int numGroupCols, double numGroups,
 					 List *quals,
 					 Cost input_startup_cost, Cost input_total_cost,
-					 double input_tuples, double input_width);
+					 double input_tuples, double input_width,
+					 const PathMemory *input_memory);
 extern void cost_windowagg(Path *path, PlannerInfo *root,
 						   List *windowFuncs, int numPartCols, int numOrderCols,
 						   Cost input_startup_cost, Cost input_total_cost,
-						   double input_tuples);
+						   double input_tuples,
+						   const PathMemory *input_memory);
 extern void cost_group(Path *path, PlannerInfo *root,
 					   int numGroupCols, double numGroups,
 					   List *quals,
 					   Cost input_startup_cost, Cost input_total_cost,
-					   double input_tuples);
+					   double input_tuples,
+					   const PathMemory *input_memory);
 extern void initial_cost_nestloop(PlannerInfo *root,
 								  JoinCostWorkspace *workspace,
 								  JoinType jointype,
@@ -163,7 +241,8 @@ extern void cost_gather(GatherPath *path, PlannerInfo *root,
 extern void cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 							  RelOptInfo *rel, ParamPathInfo *param_info,
 							  Cost input_startup_cost, Cost input_total_cost,
-							  double *rows);
+							  double *rows,
+							  const PathMemory *input_memory);
 extern void cost_subplan(PlannerInfo *root, SubPlan *subplan, Plan *plan);
 extern void cost_qual_eval(QualCost *cost, List *quals, PlannerInfo *root);
 extern void cost_qual_eval_node(QualCost *cost, Node *qual, PlannerInfo *root);

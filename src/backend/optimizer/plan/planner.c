@@ -6332,7 +6332,8 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 	seqScanPath = create_seqscan_path(root, rel, NULL, 0);
 	cost_sort(&seqScanAndSortPath, root, NIL,
 			  seqScanPath->total_cost, rel->tuples, rel->reltarget->width,
-			  comparisonCost, maintenance_work_mem, -1.0);
+			  comparisonCost, maintenance_work_mem, -1.0,
+			  &seqScanPath->memory);
 
 	/* Estimate the cost of index scan */
 	indexScanPath = create_index_path(root, indexInfo,
