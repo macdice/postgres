@@ -1933,6 +1933,7 @@ typedef struct MergeJoinState
  *		hj_JoinState			current state of ExecHashJoin state machine
  *		hj_MatchedOuter			true if found a join match for current outer
  *		hj_OuterNotEmpty		true if outer relation known not empty
+ *		hj_OptimizeRescan		true if we should expend memory to help rescan
  * ----------------
  */
 
@@ -1960,6 +1961,7 @@ typedef struct HashJoinState
 	int			hj_JoinState;
 	bool		hj_MatchedOuter;
 	bool		hj_OuterNotEmpty;
+	bool		hj_OptimizeRescan;
 } HashJoinState;
 
 

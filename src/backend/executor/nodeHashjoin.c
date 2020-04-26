@@ -146,6 +146,7 @@ static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
 static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
 static bool ExecParallelHashJoinNewBatch(HashJoinState *hjstate);
 static void ExecParallelHashJoinPartitionOuter(HashJoinState *node);
+static void ExecHashJoinReleaseMemory(HashJoinState *node);
 
 
 /* ----------------------------------------------------------------
@@ -658,6 +659,14 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	outerNode = outerPlan(node);
 	hashNode = (Hash *) innerPlan(node);
 
+	/*
+	 * Should we try to keep the hash table in memory after we've finished
+	 * scanning?  That might help us if we rescan, but otherwise it's a waste
+	 * of memory and we might as well free it.
+	 */
+	if (eflags & EXEC_FLAG_REWIND)
+		hjstate->hj_OptimizeRescan = true;
+
 	outerPlanState(hjstate) = ExecInitNode(outerNode, estate, eflags);
 	outerDesc = ExecGetResultType(outerPlanState(hjstate));
 	innerPlanState(hjstate) = ExecInitNode((Plan *) hashNode, estate, eflags);
@@ -1027,7 +1036,16 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 	}
 
 	if (curbatch >= nbatch)
+	{
+		/* Give back memory now, unless it might be useful. */
+		if (!hjstate->hj_OptimizeRescan)
+		{
+			ExecHashJoinReleaseMemory(hjstate);
+			hjstate->hj_JoinState = HJ_BUILD_HASHTABLE;
+		}
+
 		return false;			/* no more batches */
+	}
 
 	hashtable->curbatch = curbatch;
 
@@ -1286,6 +1304,26 @@ ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
 	return tupleSlot;
 }
 
+static void
+ExecHashJoinReleaseMemory(HashJoinState *node)
+{
+	HashState  *hashNode = castNode(HashState, innerPlanState(node));
+
+	Assert(hashNode->hashtable == node->hj_HashTable);
+	/* accumulate stats from old hash table, if wanted */
+	/* (this should match ExecShutdownHash) */
+	if (hashNode->ps.instrument && !hashNode->hinstrument)
+		hashNode->hinstrument = (HashInstrumentation *)
+			palloc0(sizeof(HashInstrumentation));
+	if (hashNode->hinstrument)
+		ExecHashAccumInstrumentation(hashNode->hinstrument,
+									 hashNode->hashtable);
+	/* for safety, be sure to clear child plan node's pointer too */
+	hashNode->hashtable = NULL;
+
+	ExecHashTableDestroy(node->hj_HashTable);
+	node->hj_HashTable = NULL;
+}
 
 void
 ExecReScanHashJoin(HashJoinState *node)
@@ -1328,31 +1366,20 @@ ExecReScanHashJoin(HashJoinState *node)
 		else
 		{
 			/* must destroy and rebuild hash table */
-			HashState  *hashNode = castNode(HashState, innerPlanState(node));
+			ExecHashJoinReleaseMemory(node);
 
-			Assert(hashNode->hashtable == node->hj_HashTable);
-			/* accumulate stats from old hash table, if wanted */
-			/* (this should match ExecShutdownHash) */
-			if (hashNode->ps.instrument && !hashNode->hinstrument)
-				hashNode->hinstrument = (HashInstrumentation *)
-					palloc0(sizeof(HashInstrumentation));
-			if (hashNode->hinstrument)
-				ExecHashAccumInstrumentation(hashNode->hinstrument,
-											 hashNode->hashtable);
-			/* for safety, be sure to clear child plan node's pointer too */
-			hashNode->hashtable = NULL;
-
-			ExecHashTableDestroy(node->hj_HashTable);
-			node->hj_HashTable = NULL;
 			node->hj_JoinState = HJ_BUILD_HASHTABLE;
-
-			/*
-			 * if chgParam of subnode is not null then plan will be re-scanned
-			 * by first ExecProcNode.
-			 */
-			if (node->js.ps.righttree->chgParam == NULL)
-				ExecReScan(node->js.ps.righttree);
 		}
+	}
+
+	if (node->hj_HashTable == NULL)
+	{
+		/*
+		 * if chgParam of subnode is not null then plan will be re-scanned by
+		 * first ExecProcNode.
+		 */
+		if (node->js.ps.righttree->chgParam == NULL)
+			ExecReScan(node->js.ps.righttree);
 	}
 
 	/* Always reset intra-tuple state */

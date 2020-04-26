@@ -4055,12 +4055,13 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 
 	/*
 	 * The hashtable is only preserved across rescans for single batch
-	 * non-parallel joins; otherwise it's destroyed and rebuilt every time, so
-	 * it doesn't occupy memory after the scan ends.
+	 * non-parallel joins when EXEC_FLAG_REWIND is passed down; otherwise it's
+	 * destroyed and rebuilt every time, so it doesn't occupy memory after the
+	 * scan ends.
 	 */
 	if (numbatches == 1 && path->jpath.path.parallel_workers == 0)
 	{
-		path->jpath.path.memory.seq_held += workspace->hashtable_mem;
+		path->jpath.path.memory.seq_freed += workspace->hashtable_mem;
 		path->jpath.path.memory.random_held += workspace->hashtable_mem;
 	}
 	else
