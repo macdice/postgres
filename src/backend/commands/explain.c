@@ -949,6 +949,7 @@ void
 show_memory(ExplainState *es, QueryDesc *queryDesc)
 {
 	size_t		estimated_kb;
+	size_t		actual_kb;
 
 	ExplainOpenGroup("Memory", "Memory", true, es);
 
@@ -960,6 +961,7 @@ show_memory(ExplainState *es, QueryDesc *queryDesc)
 		estimated_kb = work_mem *
 			(queryDesc->plannedstmt->planTree->mem_seq_freed +
 			 queryDesc->plannedstmt->planTree->mem_seq_held);
+	actual_kb = queryDesc->estate->es_query_peak_mem / 1024;
 
 	/* for higher density, open code the text output format */
 	if (es->format == EXPLAIN_FORMAT_TEXT)
@@ -969,11 +971,18 @@ show_memory(ExplainState *es, QueryDesc *queryDesc)
 		es->indent++;
 		ExplainIndentText(es);
 		appendStringInfo(es->str, "Estimated Peak Memory: %zukB\n", estimated_kb);
+		if (es->analyze)
+		{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "Actual Peak Memory: %zukB\n",
+							 actual_kb);
+		}
 		es->indent--;
 	}
 	else
 	{
 		ExplainPropertyInteger("Estimated Peak Memory", "kB", estimated_kb, es);
+		ExplainPropertyInteger("Actual Peak Memory", "kB", actual_kb, es);
 	}
 	ExplainCloseGroup("Memory", "Memory", true, es);
 }

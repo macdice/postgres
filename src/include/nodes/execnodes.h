@@ -571,6 +571,10 @@ typedef struct EState
 	/* Other working state: */
 	MemoryContext es_query_cxt; /* per-query context in which EState lives */
 
+	/* Tracking for peak memory usage. */
+	size_t		es_query_current_mem;
+	size_t		es_query_peak_mem;
+
 	List	   *es_tupleTable;	/* List of TupleTableSlots */
 
 	uint64		es_processed;	/* # of tuples processed */

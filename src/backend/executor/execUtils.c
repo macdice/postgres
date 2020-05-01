@@ -69,6 +69,26 @@ static bool tlist_matches_tupdesc(PlanState *ps, List *tlist, Index varno, Tuple
 static void ShutdownExprContext(ExprContext *econtext, bool isCommit);
 
 
+static void
+ExecutorStateMemCB(ssize_t delta, void *data)
+{
+	EState *estate = (EState *) data;
+	size_t current = estate->es_query_current_mem;
+
+	if (delta < 0)
+	{
+		Assert(current >= -delta);
+		current -= (size_t) -delta;
+	}
+	else
+	{
+		current += delta;
+		if (current > estate->es_query_peak_mem)
+			estate->es_query_peak_mem = current;
+	}
+	estate->es_query_current_mem = current;
+}
+
 /* ----------------------------------------------------------------
  *				 Executor state and memory management functions
  * ----------------------------------------------------------------
@@ -107,6 +127,12 @@ CreateExecutorState(void)
 	oldcontext = MemoryContextSwitchTo(qcontext);
 
 	estate = makeNode(EState);
+
+	/*
+	 * Ask the memory context and its children to tell us about changes in the
+	 * total size of underlying memory blocks.
+	 */
+	MemoryContextSetMemAllocatedCB(qcontext, ExecutorStateMemCB, estate);
 
 	/*
 	 * Initialize all fields of the Executor State structure
