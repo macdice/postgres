@@ -1790,8 +1790,10 @@ extern Size table_block_parallelscan_initialize(Relation rel,
 extern void table_block_parallelscan_reinitialize(Relation rel,
 												  ParallelTableScanDesc pscan);
 extern BlockNumber table_block_parallelscan_nextpage(Relation rel,
+													 ParallelBlockTableScanWork pbscanwork,
 													 ParallelBlockTableScanDesc pbscan);
 extern void table_block_parallelscan_startblock_init(Relation rel,
+													 ParallelBlockTableScanWork pbscanwork,
 													 ParallelBlockTableScanDesc pbscan);
 
 
