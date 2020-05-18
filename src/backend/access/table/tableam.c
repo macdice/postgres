@@ -408,9 +408,14 @@ table_block_parallelscan_reinitialize(Relation rel, ParallelTableScanDesc pscan)
  * to set the startblock once.
  */
 void
-table_block_parallelscan_startblock_init(Relation rel, ParallelBlockTableScanDesc pbscan)
+table_block_parallelscan_startblock_init(Relation rel,
+										 ParallelBlockTableScanWork workspace,
+										 ParallelBlockTableScanDesc pbscan)
 {
 	BlockNumber sync_startpage = InvalidBlockNumber;
+
+	/* Reset the state we use for controlling allocation size. */
+	memset(workspace, 0, sizeof(*workspace));
 
 retry:
 	/* Grab the spinlock. */
@@ -451,7 +456,9 @@ retry:
  * backend gets an InvalidBlockNumber return.
  */
 BlockNumber
-table_block_parallelscan_nextpage(Relation rel, ParallelBlockTableScanDesc pbscan)
+table_block_parallelscan_nextpage(Relation rel,
+								  ParallelBlockTableScanWork workspace,
+								  ParallelBlockTableScanDesc pbscan)
 {
 	BlockNumber page;
 	uint64		nallocated;
@@ -471,7 +478,28 @@ table_block_parallelscan_nextpage(Relation rel, ParallelBlockTableScanDesc pbsca
 	 * The actual page to return is calculated by adding the counter to the
 	 * starting block number, modulo nblocks.
 	 */
-	nallocated = pg_atomic_fetch_add_u64(&pbscan->phs_nallocated, 1);
+	if (workspace->phsw_nallocated_range > 0)
+	{
+		nallocated = ++workspace->phsw_nallocated;
+		workspace->phsw_nallocated_range--;
+	}
+	else
+	{
+		/*
+		 * Ramp up the step size as we go, until we approach the end of the
+		 * scan, and then ramp it back down again to avoid unfair allocation.
+		 * XXX Come up with a better algorithm!
+		 */
+		if (workspace->phsw_nallocated > pbscan->phs_nblocks - 64)
+			workspace->phsw_step_size = 1;
+		else if (workspace->phsw_step_size < 64)
+			workspace->phsw_step_size++;
+
+		nallocated = workspace->phsw_nallocated =
+			pg_atomic_fetch_add_u64(&pbscan->phs_nallocated,
+									workspace->phsw_step_size);
+		workspace->phsw_nallocated_range = workspace->phsw_step_size - 1;
+	}
 	if (nallocated >= pbscan->phs_nblocks)
 		page = InvalidBlockNumber;	/* all blocks have been allocated */
 	else
