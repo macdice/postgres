@@ -69,14 +69,18 @@
  */
 struct shm_mq
 {
+	pg_atomic_uint64 mq_bytes_read;
+	char		mq_padding1[PG_CACHE_LINE_SIZE - sizeof(pg_atomic_uint64)];
+	pg_atomic_uint64 mq_bytes_written;
+	char		mq_padding2[PG_CACHE_LINE_SIZE - sizeof(pg_atomic_uint64)];
+
 	slock_t		mq_mutex;
 	PGPROC	   *mq_receiver;
 	PGPROC	   *mq_sender;
-	pg_atomic_uint64 mq_bytes_read;
-	pg_atomic_uint64 mq_bytes_written;
 	Size		mq_ring_size;
+	uint16		mq_ring_offset;
 	bool		mq_detached;
-	uint8		mq_ring_offset;
+
 	char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
 };
 
