@@ -54,8 +54,8 @@ SELECT abort_increasing, noabort_increasing FROM abbrev_abort_uuids ORDER BY noa
 ----
 
 -- index creation using abbreviated keys successfully
-CREATE INDEX abbrev_abort_uuids__noabort_increasing_idx ON abbrev_abort_uuids (noabort_increasing);
-CREATE INDEX abbrev_abort_uuids__noabort_decreasing_idx ON abbrev_abort_uuids (noabort_decreasing);
+CREATE INDEX abbrev_abort_uuids__noabort_increasing_idx ON abbrev_abort_uuids (noabort_increasing, id);
+CREATE INDEX abbrev_abort_uuids__noabort_decreasing_idx ON abbrev_abort_uuids (noabort_decreasing, id);
 
 -- verify
 EXPLAIN (COSTS OFF)
@@ -66,8 +66,8 @@ SELECT id, noabort_increasing, noabort_decreasing FROM abbrev_abort_uuids ORDER 
 SELECT id, noabort_increasing, noabort_decreasing FROM abbrev_abort_uuids ORDER BY noabort_decreasing LIMIT 5;
 
 -- index creation using abbreviated keys, hitting abort
-CREATE INDEX abbrev_abort_uuids__abort_increasing_idx ON abbrev_abort_uuids (abort_increasing);
-CREATE INDEX abbrev_abort_uuids__abort_decreasing_idx ON abbrev_abort_uuids (abort_decreasing);
+CREATE INDEX abbrev_abort_uuids__abort_increasing_idx ON abbrev_abort_uuids (abort_increasing, id);
+CREATE INDEX abbrev_abort_uuids__abort_decreasing_idx ON abbrev_abort_uuids (abort_decreasing, id);
 
 -- verify
 EXPLAIN (COSTS OFF)
