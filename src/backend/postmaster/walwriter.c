@@ -68,6 +68,7 @@
  * GUC parameters
  */
 int			WalWriterDelay = 200;
+int			WalWriterSleep = 200;
 int			WalWriterFlushAfter = 128;
 
 /*
@@ -249,9 +250,9 @@ WalWriterMain(void)
 		 * sleep time so as to reduce the server's idle power consumption.
 		 */
 		if (left_till_hibernate > 0)
-			cur_timeout = WalWriterDelay;	/* in ms */
+			cur_timeout = WalWriterSleep;	/* in ms */
 		else
-			cur_timeout = WalWriterDelay * HIBERNATE_FACTOR;
+			cur_timeout = WalWriterSleep * HIBERNATE_FACTOR;
 
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,

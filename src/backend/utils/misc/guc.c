@@ -2723,6 +2723,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"wal_writer_sleep", PGC_SIGHUP, WAL_SETTINGS,
+			gettext_noop("How often WAL writer wakes up."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&WalWriterSleep,
+		200, 1, 10000,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"wal_writer_flush_after", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Amount of WAL written out by WAL writer that triggers a flush."),
 			NULL,
