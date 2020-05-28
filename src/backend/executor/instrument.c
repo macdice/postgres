@@ -15,6 +15,7 @@
 
 #include <unistd.h>
 
+#include "executor/executor.h"
 #include "executor/instrument.h"
 
 BufferUsage pgBufferUsage;
@@ -24,6 +25,26 @@ static WalUsage save_pgWalUsage;
 
 static void BufferUsageAdd(BufferUsage *dst, const BufferUsage *add);
 static void WalUsageAdd(WalUsage *dst, WalUsage *add);
+
+
+/*
+ * ExecProcNode wrapper that performs instrumentation calls.  By keeping
+ * this a separate function, we avoid overhead in the normal case where
+ * no instrumentation is wanted.
+ */
+TupleTableSlot *
+ExecProcNodeInstr(PlanState *node)
+{
+	TupleTableSlot *result;
+
+	InstrStartNode(node->instrument);
+
+	result = node->ExecProcNodeReal(node);
+
+	InstrStopNode(node->instrument, TupIsNull(result) ? 0.0 : 1.0);
+
+	return result;
+}
 
 
 /* Allocate new instrumentation structure(s) */
@@ -64,10 +85,10 @@ InstrInit(Instrumentation *instr, int instrument_options)
 
 /* Entry to a plan node */
 void
-InstrStartNode(Instrumentation *instr)
+ InstrStartNode(Instrumentation *instr)
 {
 	if (instr->need_timer &&
-		!INSTR_TIME_SET_CURRENT_LAZY(instr->starttime))
+		unlikely(!INSTR_TIME_SET_CURRENT_LAZY(instr->starttime)))
 		elog(ERROR, "InstrStartNode called twice in a row");
 
 	/* save buffer usage totals at node entry, if needed */
@@ -90,7 +111,7 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 	/* let's update the time only if the timer was requested */
 	if (instr->need_timer)
 	{
-		if (INSTR_TIME_IS_ZERO(instr->starttime))
+		if (unlikely(INSTR_TIME_IS_ZERO(instr->starttime)))
 			elog(ERROR, "InstrStopNode called without start");
 
 		INSTR_TIME_SET_CURRENT(endtime);
@@ -126,7 +147,7 @@ InstrEndLoop(Instrumentation *instr)
 	if (!instr->running)
 		return;
 
-	if (!INSTR_TIME_IS_ZERO(instr->starttime))
+	if (unlikely(!INSTR_TIME_IS_ZERO(instr->starttime)))
 		elog(ERROR, "InstrEndLoop called on running node");
 
 	/* Accumulate per-cycle statistics into totals */
