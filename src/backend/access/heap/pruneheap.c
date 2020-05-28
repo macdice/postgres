@@ -204,8 +204,32 @@ heap_page_prune(Relation relation, Buffer buffer, TransactionId OldestXmin,
 	prstate.nredirected = prstate.ndead = prstate.nunused = 0;
 	memset(prstate.marked, 0, sizeof(prstate.marked));
 
-	/* Scan the page */
 	maxoff = PageGetMaxOffsetNumber(page);
+
+#if 1
+	for (char *p = (char *) PageGetItemId(page, FirstOffsetNumber);
+		 p < (char *) PageGetItemId(page, maxoff);
+		 p += 64)
+	{
+		__builtin_prefetch((ItemId)p);
+	}
+
+	for (offnum = FirstOffsetNumber;
+		 offnum <= maxoff;
+		 offnum = OffsetNumberNext(offnum))
+	{
+		ItemId		itemid;
+
+		itemid = PageGetItemId(page, offnum);
+		if (!ItemIdIsUsed(itemid) || ItemIdIsDead(itemid) || !ItemIdHasStorage(itemid))
+			continue;
+
+		__builtin_prefetch((HeapTupleHeader) PageGetItem(page, itemid));
+		__builtin_prefetch(PageGetItem(page, itemid) + sizeof(HeapTupleHeaderData) - 1);
+	}
+#endif
+
+	/* Scan the page */
 	for (offnum = FirstOffsetNumber;
 		 offnum <= maxoff;
 		 offnum = OffsetNumberNext(offnum))
