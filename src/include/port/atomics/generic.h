@@ -67,6 +67,29 @@ pg_atomic_unlocked_write_u32_impl(volatile pg_atomic_uint32 *ptr, uint32 val)
 }
 #endif
 
+#ifndef PG_HAVE_ATOMIC_WRITE_U32_ARRAY_ZERO
+#define PG_HAVE_ATOMIC_WRITE_U32_ARRAY_ZERO
+
+#if !defined(PG_HAVE_ATOMIC_U32_SIMULATION)
+
+static inline void
+pg_atomic_write_u32_array_zero_impl(volatile pg_atomic_uint32 *ptr, size_t n)
+{
+	memset((void *) ptr, 0, sizeof(*ptr) * n);
+}
+
+#else
+
+static inline void
+pg_atomic_write_u32_array_zero_impl(volatile pg_atomic_uint32 *ptr, size_t n)
+{
+	for (size_t i = 0; i < n; ++i)
+		pg_atomic_write_u32_impl(&ptr[i], 0);
+}
+
+#endif /* PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY && !PG_HAVE_ATOMIC_U64_SIMULATION */
+#endif /* PG_HAVE_ATOMIC_WRITE_U32_ARRAY_ZERO */
+
 /*
  * provide fallback for test_and_set using atomic_exchange if available
  */
@@ -162,6 +185,29 @@ pg_atomic_init_u32_impl(volatile pg_atomic_uint32 *ptr, uint32 val_)
 {
 	pg_atomic_write_u32_impl(ptr, val_);
 }
+#endif
+
+#ifndef PG_HAVE_ATOMIC_INIT_U32_ARRAY_ZERO
+#define PG_HAVE_ATOMIC_INIT_U32_ARRAY_ZERO
+
+#if !defined(PG_HAVE_ATOMIC_U32_SIMULATION)
+
+static inline void
+pg_atomic_init_u32_array_zero_impl(volatile pg_atomic_uint32 *ptr, size_t n)
+{
+	pg_atomic_write_u32_array_zero_impl(ptr, n);
+}
+
+#else
+
+static inline void
+pg_atomic_init_u32_array_zero_impl(volatile pg_atomic_uint32 *ptr, size_t n)
+{
+	for (size_t i = 0; i < n; ++i)
+		pg_atomic_init_u32_impl(&ptr[i], 0);
+}
+
+#endif
 #endif
 
 #if !defined(PG_HAVE_ATOMIC_EXCHANGE_U32) && defined(PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U32)
@@ -289,6 +335,30 @@ pg_atomic_write_u64_impl(volatile pg_atomic_uint64 *ptr, uint64 val)
 #endif /* PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY && !PG_HAVE_ATOMIC_U64_SIMULATION */
 #endif /* PG_HAVE_ATOMIC_WRITE_U64 */
 
+#ifndef PG_HAVE_ATOMIC_WRITE_U64_ARRAY_ZERO
+#define PG_HAVE_ATOMIC_WRITE_U64_ARRAY_ZERO
+
+#if defined(PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY) && \
+	!defined(PG_HAVE_ATOMIC_U64_SIMULATION)
+
+static inline void
+pg_atomic_write_u64_array_zero_impl(volatile pg_atomic_uint64 *ptr, size_t n)
+{
+	memset((void *) ptr, 0, sizeof(*ptr) * n);
+}
+
+#else
+
+static inline void
+pg_atomic_write_u64_array_zero_impl(volatile pg_atomic_uint64 *ptr, size_t n)
+{
+	for (size_t i = 0; i < n; ++i)
+		pg_atomic_write_u64_impl(&ptr[i], 0);
+}
+
+#endif /* PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY && !PG_HAVE_ATOMIC_U64_SIMULATION */
+#endif /* PG_HAVE_ATOMIC_WRITE_U64_ARRAY_ZERO */
+
 #ifndef PG_HAVE_ATOMIC_READ_U64
 #define PG_HAVE_ATOMIC_READ_U64
 
@@ -332,6 +402,30 @@ pg_atomic_init_u64_impl(volatile pg_atomic_uint64 *ptr, uint64 val_)
 {
 	pg_atomic_write_u64_impl(ptr, val_);
 }
+#endif
+
+#ifndef PG_HAVE_ATOMIC_INIT_U64_ARRAY_ZERO
+#define PG_HAVE_ATOMIC_INIT_U64_ARRAY_ZERO
+
+#if defined(PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY) && \
+	!defined(PG_HAVE_ATOMIC_U64_SIMULATION)
+
+static inline void
+pg_atomic_init_u64_array_zero_impl(volatile pg_atomic_uint64 *ptr, size_t n)
+{
+	pg_atomic_write_u64_array_zero_impl(ptr, n);
+}
+
+#else
+
+static inline void
+pg_atomic_init_u64_array_zero_impl(volatile pg_atomic_uint64 *ptr, size_t n)
+{
+	for (size_t i = 0; i < n; ++i)
+		pg_atomic_init_u64_impl(&ptr[i], 0);
+}
+
+#endif
 #endif
 
 #if !defined(PG_HAVE_ATOMIC_FETCH_ADD_U64) && defined(PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U64)

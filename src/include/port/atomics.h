@@ -228,6 +228,19 @@ pg_atomic_init_u32(volatile pg_atomic_uint32 *ptr, uint32 val)
 }
 
 /*
+ * pg_atomic_init_u32_array_zero - initialize array of atomic variables
+ *
+ * Equivalent to pg_atomic_init_u32(&ptr[i], 0) for n elements.
+ */
+static inline void
+pg_atomic_init_u32_array_zero(volatile pg_atomic_uint32 *ptr, size_t n)
+{
+	AssertPointerAlignment(ptr, 4);
+
+	pg_atomic_init_u32_array_zero_impl(ptr, n);
+}
+
+/*
  * pg_atomic_read_u32 - unlocked read from atomic variable.
  *
  * The read is guaranteed to return a value as it has been written by this or
@@ -260,6 +273,19 @@ pg_atomic_write_u32(volatile pg_atomic_uint32 *ptr, uint32 val)
 	AssertPointerAlignment(ptr, 4);
 
 	pg_atomic_write_u32_impl(ptr, val);
+}
+
+/*
+ * pg_atomic_write_u32_array_zero - write 0 to array of atomic variables
+ *
+ * Equivalent to pg_atomic_write_u32(&ptr[i], 0) for n elements.
+ */
+static inline void
+pg_atomic_write_u32_array_zero(volatile pg_atomic_uint32 *ptr, size_t n)
+{
+	AssertPointerAlignment(ptr, 4);
+
+	pg_atomic_write_u32_array_zero_impl(ptr, n);
 }
 
 /*
@@ -425,6 +451,15 @@ pg_atomic_init_u64(volatile pg_atomic_uint64 *ptr, uint64 val)
 	pg_atomic_init_u64_impl(ptr, val);
 }
 
+static inline void
+pg_atomic_init_u64_array_zero(volatile pg_atomic_uint64 *ptr, size_t n)
+{
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+	AssertPointerAlignment(ptr, 8);
+#endif
+	pg_atomic_init_u64_array_zero_impl(ptr, n);
+}
+
 static inline uint64
 pg_atomic_read_u64(volatile pg_atomic_uint64 *ptr)
 {
@@ -441,6 +476,15 @@ pg_atomic_write_u64(volatile pg_atomic_uint64 *ptr, uint64 val)
 	AssertPointerAlignment(ptr, 8);
 #endif
 	pg_atomic_write_u64_impl(ptr, val);
+}
+
+static inline void
+pg_atomic_write_u64_array_zero(volatile pg_atomic_uint64 *ptr, size_t n)
+{
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+	AssertPointerAlignment(ptr, 8);
+#endif
+	pg_atomic_write_u64_array_zero_impl(ptr, n);
 }
 
 static inline uint64
