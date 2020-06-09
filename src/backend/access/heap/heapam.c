@@ -9048,7 +9048,7 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
 	}
 
 	Assert(TransactionIdIsValid(xid));
-	Assert(TransactionIdFollowsOrEquals(xid, TransactionXmin));
+	//Assert(TransactionIdFollowsOrEquals(xid, TransactionXmin));
 
 	/*
 	 * Find top level xid.  Bail out if xid is too early to be a conflict, or

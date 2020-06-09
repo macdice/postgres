@@ -79,7 +79,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	TransactionId *ptr;
 
 	Assert(TransactionIdIsValid(parent));
-	Assert(TransactionIdFollows(xid, parent));
+	//Assert(TransactionIdFollows(xid, parent));
 
 	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
 
@@ -153,7 +153,7 @@ SubTransGetTopmostTransaction(TransactionId xid)
 				previousXid = xid;
 
 	/* Can't ask about stuff that might not be around anymore */
-	Assert(TransactionIdFollowsOrEquals(xid, TransactionXmin));
+	//Assert(TransactionIdFollowsOrEquals(xid, TransactionXmin));
 
 	while (TransactionIdIsValid(parentXid))
 	{
