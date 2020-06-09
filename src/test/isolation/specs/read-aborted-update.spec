@@ -36,4 +36,4 @@ step "t3rx"	{ SELECT * FROM tab WHERE id = 'x'; }
 step "t3wx"	{ UPDATE tab SET value = 's3 was here' WHERE id = 'x'; }
 step "t3c"	{ COMMIT; }
 
-permutation "t1rx" "t1wx" "t1c" "t2wx" "t2a" "t3rx" "t3wx" "t3c"
+permutation "t1rx" "t3rx" "t1wx" "t1c" "t2wx" "t2a" "t3rx" "t3wx" "t3c"
