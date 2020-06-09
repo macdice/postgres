@@ -9007,6 +9007,12 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
 	 * while it is visible to us.  The "visible" bool indicates whether the
 	 * tuple is visible to us, while HeapTupleSatisfiesVacuum checks what else
 	 * is going on with it.
+	 *
+	 * In the event of an updated tuple that is not visible to us, the xmin of
+	 * the tuple (which must be a committed xid) will be used -- not the
+	 * updater's xid (which may itself have committed, or even aborted).  The
+	 * successor tuple is often handled by another call here, at which point
+	 * we'll check the updater's xid.
 	 */
 	htsvResult = HeapTupleSatisfiesVacuum(tuple, TransactionXmin, buffer);
 	switch (htsvResult)
@@ -9017,17 +9023,17 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
 			xid = HeapTupleHeaderGetXmin(tuple->t_data);
 			break;
 		case HEAPTUPLE_RECENTLY_DEAD:
-			if (!visible)
-				return;
-			xid = HeapTupleHeaderGetUpdateXid(tuple->t_data);
-			break;
 		case HEAPTUPLE_DELETE_IN_PROGRESS:
-			xid = HeapTupleHeaderGetUpdateXid(tuple->t_data);
+			if (visible)
+				xid = HeapTupleHeaderGetUpdateXid(tuple->t_data);
+			else
+				xid = HeapTupleHeaderGetXmin(tuple->t_data);
 			break;
 		case HEAPTUPLE_INSERT_IN_PROGRESS:
 			xid = HeapTupleHeaderGetXmin(tuple->t_data);
 			break;
 		case HEAPTUPLE_DEAD:
+			Assert(!visible);
 			return;
 		default:
 
