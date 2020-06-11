@@ -230,6 +230,60 @@ ssimkovi@ag.or.at
   <bibliodiv>
    <title>Proceedings and Articles</title>
 
+   <biblioentry id="ports12">
+    <title><ulink url="https://arxiv.org/pdf/1208.4179">Serializable Snapshot Isolation in PostgreSQL</ulink></title>
+    <authorgroup>
+     <author>
+      <firstname>Dan</firstname>
+      <surname>Ports</surname>
+     </author>
+     <author>
+      <firstname>Kevin</firstname>
+      <surname>Grittner</surname>
+     </author>
+    </authorgroup>
+    <publisher>
+     <publishername>Proceedings of the VLDB Endowment (PVLDB)</publishername>
+    </publisher>
+    <seriesvolnums>Vol. 5, No. 12, pp. 1850-1861</seriesvolnums>
+    <pubdate>2012</pubdate>
+   </biblioentry>
+
+   <biblioentry id="berenson95">
+    <title><ulink url="https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf">A Critique of ANSI SQL Isolation Levels</ulink></title>
+    <authorgroup>
+     <author>
+      <firstname>Hal</firstname>
+      <surname>Berenson</surname>
+     </author>
+     <author>
+      <firstname>Phil</firstname>
+      <surname>Bernstein</surname>
+     </author>
+     <author>
+      <firstname>Jim</firstname>
+      <surname>Gray</surname>
+     </author>
+     <author>
+      <firstname>Jim</firstname>
+      <surname>Melton</surname>
+     </author>
+     <author>
+      <firstname>Elizabeth</firstname>
+      <surname>O'Neil</surname>
+     </author>
+     <author>
+      <firstname>Patrick</firstname>
+      <surname>O'Neil</surname>
+     </author>
+    </authorgroup>
+    <pubsnumber>MSR-TR-95-51</pubsnumber>
+    <publisher>
+     <publishername>Microsoft Research</publishername>
+    </publisher>
+    <pubdate>June 1995</pubdate>
+   </biblioentry>
+
    <biblioentry id="olson93">
     <title>Partial indexing in POSTGRES: research project</title>
     <authorgroup>
