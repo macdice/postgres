@@ -18,7 +18,6 @@
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
-
 /*
  * GUC variables
  */
@@ -83,5 +82,11 @@ extern void predicatelock_twophase_recover(TransactionId xid, uint16 info,
 /* parallel query support */
 extern SerializableXactHandle ShareSerializableXact(void);
 extern void AttachSerializableXact(SerializableXactHandle handle);
+
+/* hypothetical snapshot safety support, allowing SERIALIZABLE on standbys */
+extern void GetSnapshotSafetyAfterThisCommit(SnapshotToken *token, SnapshotSafety *safety);
+extern void NotifyHypotheticalSnapshotSafety(SnapshotToken token, SnapshotSafety safety);
+extern void BeginSnapshotSafetyReplay(SnapshotToken token, SnapshotSafety safety);
+extern void CompleteSnapshotSafetyReplay(void);
 
 #endif							/* PREDICATE_H */

@@ -105,6 +105,12 @@ typedef struct SERIALIZABLEXACT
 	 */
 	SHM_QUEUE	possibleUnsafeConflicts;
 
+	/*
+	 * for committing transactions: would a hypothetical read-only snapshot
+	 * taken immediately after this transaction commits be safe?
+	 */
+	SnapshotSafety snapshotSafetyAfterThisCommit;
+
 	TransactionId topXid;		/* top level xid for the transaction, if one
 								 * exists; else invalid */
 	TransactionId finishedBefore;	/* invalid means still running; else the
@@ -137,6 +143,7 @@ typedef struct SERIALIZABLEXACT
  * reference to it.  It'll be recycled by the leader at end-of-transaction.
  */
 #define SXACT_FLAG_PARTIALLY_RELEASED	0x00000800
+#define SXACT_FLAG_HYPOTHETICAL			0x00001000
 
 /*
  * The following types are used to provide an ad hoc list for holding
@@ -185,6 +192,11 @@ typedef struct PredXactListData
 	SerCommitSeqNo HavePartialClearedThrough;	/* have cleared through this
 												 * seq no */
 	SERIALIZABLEXACT *OldCommittedSxact;	/* shared copy of dummy sxact */
+
+	/* Tracking of snapshot safety on standby servers. */
+	SHM_QUEUE	snapshotSafetyWaitList;
+	SnapshotToken NewestSnapshotToken;
+	SnapshotSafety NewestSnapshotSafety;
 
 	PredXactListElement element;
 }			PredXactListData;

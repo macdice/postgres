@@ -1946,13 +1946,14 @@ StartTransaction(void)
 	{
 		s->startedInRecovery = true;
 		XactReadOnly = true;
+		XactDeferrable = true;
 	}
 	else
 	{
 		s->startedInRecovery = false;
 		XactReadOnly = DefaultXactReadOnly;
+		XactDeferrable = DefaultXactDeferrable;
 	}
-	XactDeferrable = DefaultXactDeferrable;
 	XactIsoLevel = DefaultXactIsoLevel;
 	forceSyncCommit = false;
 	MyXactFlags = 0;
@@ -5480,6 +5481,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	xl_xact_invals xl_invals;
 	xl_xact_twophase xl_twophase;
 	xl_xact_origin xl_origin;
+	xl_xact_snapshot_safety xl_snapshot_safety;
 	uint8		info;
 
 	Assert(CritSectionCount > 0);
@@ -5558,6 +5560,13 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
 	}
 
+	if (IsolationIsSerializable())
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_SNAPSHOT_SAFETY;
+		GetSnapshotSafetyAfterThisCommit(&xl_snapshot_safety.token,
+										 &xl_snapshot_safety.safety);
+	}
+
 	if (xl_xinfo.xinfo != 0)
 		info |= XLOG_XACT_HAS_INFO;
 
@@ -5605,6 +5614,10 @@ XactLogCommitRecord(TimestampTz commit_time,
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_ORIGIN)
 		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_SNAPSHOT_SAFETY)
+		XLogRegisterData((char *) (&xl_snapshot_safety),
+						 sizeof(xl_xact_snapshot_safety));
 
 	/* we allow filtering by xacts */
 	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
@@ -5792,6 +5805,10 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		 */
 		RecordKnownAssignedTransactionIds(max_xid);
 
+		if (parsed->xinfo & XACT_XINFO_HAS_SNAPSHOT_SAFETY)
+			BeginSnapshotSafetyReplay(parsed->snapshot_token,
+									  parsed->snapshot_safety);
+
 		/*
 		 * Mark the transaction committed in pg_xact. We use async commit
 		 * protocol during recovery to provide information on database
@@ -5802,6 +5819,9 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		 * recovered. It's unlikely but it's good to be safe.
 		 */
 		TransactionIdAsyncCommitTree(xid, parsed->nsubxacts, parsed->subxacts, lsn);
+
+		if (parsed->xinfo & XACT_XINFO_HAS_SNAPSHOT_SAFETY)
+			CompleteSnapshotSafetyReplay();
 
 		/*
 		 * We must mark clog before we update the ProcArray.
@@ -5944,6 +5964,46 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 	DropRelationFiles(parsed->xnodes, parsed->nrels, true);
 }
 
+XLogRecPtr
+XactLogSnapshotSafetyRecord(SnapshotToken token, SnapshotSafety safety)
+{
+	XLogRecPtr result;
+	xl_xact_snapshot_safety snapshot_safety;
+
+	snapshot_safety.token = token;
+	snapshot_safety.safety = safety;
+
+	START_CRIT_SECTION();
+	XLogBeginInsert();
+	XLogRegisterData((char *) &snapshot_safety, sizeof(snapshot_safety));
+	result = XLogInsert(RM_XACT_ID, XLOG_XACT_SNAPSHOT_SAFETY);
+	END_CRIT_SECTION();
+
+	/*
+	 * TODO: How can we avoid having to flush again (after already flushing
+	 * for the commit)?  If we don't have this flush here, then they standby
+	 * has to wait a while to find out whether its snapshot is safe.
+	 */
+	XLogFlush(result);
+
+	return result;
+}
+
+static void
+xact_redo_snapshot_safety(xl_xact_snapshot_safety *snapshot_safety)
+{
+	/*
+	 * Any earlier COMMIT record must have carried a snapshot safety message
+	 * the same token as this record, and had safety ==
+	 * SNAPSHOT_SAFETY_UNKNOWN.  This new independent snapshot safety message
+	 * reports that the safety is now known.  We will wake any backend that is
+	 * waiting to learn if the snapshot is safe.
+	 */
+	if (standbyState >= STANDBY_INITIALIZED)
+		NotifyHypotheticalSnapshotSafety(snapshot_safety->token,
+										 snapshot_safety->safety);
+}
+
 void
 xact_redo(XLogReaderState *record)
 {
@@ -6016,6 +6076,13 @@ xact_redo(XLogReaderState *record)
 		if (standbyState >= STANDBY_INITIALIZED)
 			ProcArrayApplyXidAssignment(xlrec->xtop,
 										xlrec->nsubxacts, xlrec->xsub);
+	}
+	else if (info == XLOG_XACT_SNAPSHOT_SAFETY)
+	{
+		xl_xact_snapshot_safety *xlrec =
+			(xl_xact_snapshot_safety *) XLogRecGetData(record);
+
+		xact_redo_snapshot_safety(xlrec);
 	}
 	else
 		elog(PANIC, "xact_redo: unknown op code %u", info);
