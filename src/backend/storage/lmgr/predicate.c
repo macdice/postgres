@@ -3352,7 +3352,6 @@ SetNewSxactGlobalXmin(void)
 	for (sxact = FirstPredXact(); sxact != NULL; sxact = NextPredXact(sxact))
 	{
 		if (!SxactIsRolledBack(sxact)
-			&& !SxactIsHypothetical(sxact)
 			&& !SxactIsCommitted(sxact)
 			&& sxact != OldCommittedSxact)
 		{
@@ -5045,7 +5044,7 @@ PreCommit_CheckForSerializationFailure(void)
 			SHMQueueInit(&(sxact->possibleUnsafeConflicts));
 			sxact->topXid = InvalidTransactionId;
 			sxact->finishedBefore = InvalidTransactionId;
-			sxact->xmin = MySerializableXact->xmin;
+			sxact->xmin = MySerializableXact->xmin;		/* XXX NOT OK */
 			sxact->pid = InvalidPid;
 			SHMQueueInit(&(sxact->predicateLocks));
 			SHMQueueElemInit(&(sxact->finishedLink));
