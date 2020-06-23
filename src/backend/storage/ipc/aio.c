@@ -1510,6 +1510,7 @@ pgaio_submit_pending(bool drain)
 		io->aiocb.aio_sigevent.sigev_signo = SIGIO;
 		io->aiocb.aio_sigevent.sigev_value.sival_ptr = io;
 
+retry:
 		switch (io->type)
 		{
 			case PGAIO_INVALID:
@@ -1558,8 +1559,33 @@ pgaio_submit_pending(bool drain)
 				error = aio_write(&io->aiocb);
 				break;
 		}
-		/* XXX handle EAGAIN by waiting for something to complete; how? */
-		if (error != 0)
+
+		if (error == EAGAIN)
+		{
+			/*
+			 * Kernel AIO resources exhausted, which might mean you need
+			 * to increase a system limit with sysctl, or decrease the relevant
+			 * GUCs so that we do less readahead, or it might mean there is too
+			 * much concurrent activity.  To carry on, we need to wait for
+			 * existing outstanding IOs to complete.  If anything this process
+			 * initiated completes, this'll return immediate with EINTR so we
+			 * can try again.
+			 *
+			 * XXX: But we might have missed it already!  The right primitive
+			 * here is: aio_suspend() on all this process's in flight IOs, to
+			 * close that race.
+			 *
+			 * XXX: We don't currently have a convenient way to wait for any IO
+			 * initiated by other backends (rather than a specific IO, via the
+			 * cv), so we fall back to polling...  which is not great.  We'd
+			 * need the timeout anyway as a last resort (see also similar note
+			 * in pgaio_io_wait()).
+			 */
+			usleep(100000);
+			pgaio_drain_shared();
+			goto retry;
+		}
+		else if ((errno = error) != 0)
 			elog(PANIC, "failed to submit IO type %s: %m",
 				 pgaio_io_action_string(io->type));
 	}
