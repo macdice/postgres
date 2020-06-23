@@ -1,0 +1,25 @@
+task:
+  name: FreeBSD
+  freebsd_instance:
+    image_family: freebsd-12-1
+  install_script:
+    - pkg install -y readline flex bison gmake perl5
+  create_user_script:
+    - pw useradd postgres
+    - chown -R postgres:postgres .
+  build_script:
+    - su postgres -c './configure --enable-cassert --enable-debug --with-posix-aio --with-includes=/usr/local/include --with-libs=/usr/local/lib'
+    - su postgres -c 'make -s -j4'
+  test_script:
+    - su postgres -c 'make -s check' || su postgres -c '( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )'
+
+task:
+  name: macOS
+  osx_instance:
+    image: catalina-base
+  build_script:
+    - ./configure --enable-cassert --enable-debug --with-posix-aio --without-readline
+    - make -s -j4
+  test_script:
+    - make -s check || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
+
