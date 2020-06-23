@@ -1484,6 +1484,14 @@ PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 	/* Close excess kernel FDs. */
 	ReleaseLruFiles();
 
+	/*
+	 * XXX Windows OVERLAPPED support: we'll need to be able to open files
+	 * that'll be used by md.c with FILE_FLAG_OVERLAPPED, to allow aio.c to
+	 * submit async IO.  Then there are probably other paths that still expect
+	 * the file to work with synchronous IO routines, but it won't block
+	 * anymore, so we'll need to do more work to fix that!
+	 */
+
 	vfdP->fd = BasicOpenFilePerm(fileName, fileFlags, fileMode);
 
 	if (vfdP->fd < 0)

@@ -239,6 +239,10 @@ struct PgAioInProgress
 #ifdef USE_POSIX_AIO
 	struct aiocb aiocb;
 #endif
+
+#ifdef USE_WIN32_OVERLAPPED
+	OVERLAPPED overlapped;
+#endif
 };
 
 /* typedef in header */
@@ -451,7 +455,7 @@ static dlist_head local_recycle_requests;
 struct io_uring local_ring;
 #endif
 
-#ifdef USE_POSIX_AIO
+#if defined(USE_POSIX_AIO) || defined(USE_WIN32_OVERLAPPED)
 /* shared queue for completions */
 squeue32 *aio_shared_queue;
 #endif
@@ -633,6 +637,32 @@ fprintf(stderr, "macOS sucks\n");
 }
 #endif
 
+#ifdef USE_WIN32_OVERLAPPED
+static void
+pgaio_overlapped_completed(DWORD error,
+						   DWORD bytes_transferred,
+						   OVERLAPPED *overlapped)
+{
+	PgAioInProgress *io;
+
+	/* Find our IO object. */
+	io = (PgAioInProgress *) (((char *) overlapped) -
+							  offsetof(PgAioInProgress, overlapped));
+
+	if (error == 0)
+		io->result = bytes_transferred;
+	else
+	{
+		/* XXX Need to call GetOverlappedResult() to get error information (?) */
+		_dosmapperr(GetLastError());
+		io->result = -errno;
+	}
+	if (!squeue32_enqueue(aio_shared_queue,
+						  io - &aio_ctl->in_progress_io[0]))
+		elog(PANIC, "shared completion queue unexpectedly full");
+}
+#endif
+
 static Size
 AioCtlShmemSize(void)
 {
@@ -662,7 +692,7 @@ AioBounceShmemSize(void)
 					mul_size(BLCKSZ, max_aio_bounce_buffers));
 }
 
-#ifdef USE_POSIX_AIO
+#if defined(USE_POSIX_AIO) || defined(USE_WIN32_OVERLAPPED)
 static Size
 AioSharedQueueSize(void)
 {
@@ -679,7 +709,7 @@ AioShmemSize(void)
 	size = add_size(size, AioCtlBackendShmemSize());
 	size = add_size(size, AioBounceShmemSize());
 
-#ifdef USE_POSIX_AIO
+#if defined(USE_POSIX_AIO) || defined(USE_WIN32_OVERLAPPED)
 	size = add_size(size, AioSharedQueueSize());
 #endif
 
@@ -692,7 +722,7 @@ AioShmemInit(void)
 	bool		found;
 	uint32		TotalProcs = MaxBackends + NUM_AUXILIARY_PROCS;
 
-#ifdef USE_POSIX_AIO
+#if defined(USE_POSIX_AIO) || defined(USE_WIN32_OVERLAPPED)
 	aio_shared_queue = (squeue32 *)
 		ShmemInitStruct("PgAioSharedQueue", AioSharedQueueSize(), &found);
 	if (!found)
@@ -1590,6 +1620,89 @@ retry:
 				 pgaio_io_action_string(io->type));
 	}
 }
+
+#elif defined(USE_WIN32_OVERLAPPED)
+
+void  __attribute__((noinline))
+pgaio_submit_pending(bool drain)
+{
+	if (!my_aio)
+		return;
+
+	while (!dlist_is_empty(&my_aio->pending))
+	{
+		dlist_node *node;
+		PgAioInProgress *io;
+		int error;
+		size_t already_done;
+
+		node = dlist_pop_head_node(&my_aio->pending);
+		io = dlist_container(PgAioInProgress, io_node, node);
+
+		Assert(io->flags & PGAIOIP_PENDING);
+		io->flags = (io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
+		my_aio->pending_count--;
+
+		memset(&io->overlapped, 0, sizeof(io->overlapped));
+
+retry:
+		switch (io->type)
+		{
+			case PGAIO_INVALID:
+			case PGAIO_NOP:
+				error = 0;
+				break;
+			case PGAIO_FLUSH_RANGE:
+				/* XXX: how are you supposed to do an async FlushFileBuffers()? */
+				break;
+			case PGAIO_FSYNC:
+				/* XXX: how are you supposed to do an async FlushFileBuffers()? */
+				break;
+			case PGAIO_READ_BUFFER:
+				io->overlapped.Offset = io->d.read_buffer.offset + already_done;
+				if (!ReadFileEx(_get_osfhandle(io->d.read_buffer.fd),
+								io->d.read_buffer.bufdata + already_done,
+								io->d.read_buffer.nbytes - already_done,
+								&io->overlapped,
+								pgaio_overlapped_completed))
+				{
+					/* XXX: handle error! */
+				}
+				break;
+			case PGAIO_WRITE_BUFFER:
+				already_done = io->d.write_buffer.already_done;
+				io->overlapped.Offset = io->d.write_buffer.offset + already_done;
+				if (!WriteFileEx(_get_osfhandle(io->d.write_buffer.fd),
+								 io->d.write_buffer.bufdata + already_done,
+								 io->d.write_buffer.nbytes - already_done,
+								 &io->overlapped,
+								 pgaio_overlapped_completed))
+				{
+					/* XXX: handle error! */
+				}
+				break;
+			case PGAIO_WRITE_WAL:
+				//Assert(io->d.write_buffer.already_done == 0);
+				io->overlapped.Offset = io->d.write_wal.offset + already_done;
+				if (!WriteFileEx(_get_osfhandle(io->d.write_wal.fd),
+								 io->d.write_wal.bufdata + already_done,
+								 io->d.write_wal.nbytes - already_done,
+								 &io->overlapped,
+								 pgaio_overlapped_completed))
+				{
+					/* XXX: handle error! */
+				}
+				break;
+		}
+
+		/*
+		 * XXX:  There is probably an error condition that means "IO resources
+		 * exhausted", where we need to wait for something to complete before
+		 * trying again?
+		 */
+	}
+}
+
 #endif
 
 #ifdef USE_LIBURING
@@ -1830,6 +1943,29 @@ again:
 				 * there's no guarantee that another backend will ever drain the
 				 * queue.  So, as a last resort, we'll also do it ourselves after
 				 * 100ms.  XXX: How can we do better than this?!
+				 */
+				ConditionVariableTimedSleep(&io->cv, 100, WAIT_EVENT_AIO_IO_COMPLETE_ONE);
+			}
+#endif
+#ifdef USE_WIN32_OVERLAPPED
+			if (io->owner_id == my_aio_id)
+			{
+				/*
+				 * XXX: Call some variant of WaitForSingleObject() that will
+				 * wait for the overlapped IO to complete.  As for POSIX AIO,
+				 * we just want to sleep that long, but we rely on
+				 * pgaio_overlapped_completed() to actually do something with
+				 * the result.
+				 */
+				 /* XXX */
+			}
+			else
+			{
+				/*
+				 * As for POSIX AIO.  Waiting for another backend to pass on
+				 * message about completion, but also need to poll of last
+				 * resource just in case no one else ever gets around to
+				 * draining the queue.
 				 */
 				ConditionVariableTimedSleep(&io->cv, 100, WAIT_EVENT_AIO_IO_COMPLETE_ONE);
 			}
