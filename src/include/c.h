@@ -1138,6 +1138,11 @@ extern void ExceptionalCondition(const char *conditionName,
  */
 typedef union PGAlignedBlock
 {
+#ifdef pg_attribute_aligned
+	pg_attribute_aligned(4096)
+#else
+	__declspec(align(4096))
+#endif
 	char		data[BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
@@ -1146,10 +1151,16 @@ typedef union PGAlignedBlock
 /* Same, but for an XLOG_BLCKSZ-sized buffer */
 typedef union PGAlignedXLogBlock
 {
+#ifdef pg_attribute_aligned
+	pg_attribute_aligned(4096)
+#else
+	__declspec(align(4096))
+#endif
 	char		data[XLOG_BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
-} PGAlignedXLogBlock;
+} PGAlignedXLogBlock
+;
 
 /* msb for char */
 #define HIGHBIT					(0x80)
