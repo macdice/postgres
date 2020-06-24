@@ -31,7 +31,30 @@
 static ConditionVariable *cv_sleep_target = NULL;
 
 /* Reusable WaitEventSet. */
-static WaitEventSet *cv_wait_event_set = NULL;
+extern WaitEventSet *cv_wait_event_set;
+WaitEventSet *cv_wait_event_set = NULL;
+
+void
+ConditionVariableStartup(void)
+{
+	/*
+	 * If first time through in this process, create a WaitEventSet, which
+	 * we'll reuse for all condition variable sleeps.
+	 */
+	if (cv_wait_event_set == NULL)
+	{
+		WaitEventSet *new_event_set;
+
+		new_event_set = CreateWaitEventSet(TopMemoryContext, 2);
+		AddWaitEventToSet(new_event_set, WL_LATCH_SET, PGINVALID_SOCKET,
+						  MyLatch, NULL);
+		if (IsUnderPostmaster)
+			AddWaitEventToSet(new_event_set, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
+							  NULL, NULL);
+		/* Don't set cv_wait_event_set until we have a correct WES. */
+		cv_wait_event_set = new_event_set;
+	}
+}
 
 /*
  * Initialize a condition variable.
@@ -62,22 +85,7 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 {
 	int			pgprocno = MyProc->pgprocno;
 
-	/*
-	 * If first time through in this process, create a WaitEventSet, which
-	 * we'll reuse for all condition variable sleeps.
-	 */
-	if (cv_wait_event_set == NULL)
-	{
-		WaitEventSet *new_event_set;
-
-		new_event_set = CreateWaitEventSet(TopMemoryContext, 2);
-		AddWaitEventToSet(new_event_set, WL_LATCH_SET, PGINVALID_SOCKET,
-						  MyLatch, NULL);
-		AddWaitEventToSet(new_event_set, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
-		/* Don't set cv_wait_event_set until we have a correct WES. */
-		cv_wait_event_set = new_event_set;
-	}
+	ConditionVariableStartup();
 
 	/*
 	 * If some other sleep is already prepared, cancel it; this is necessary

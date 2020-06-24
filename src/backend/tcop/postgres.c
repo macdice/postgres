@@ -65,6 +65,7 @@
 #include "replication/slot.h"
 #include "replication/walsender.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -3902,6 +3903,9 @@ PostgresMain(int argc, char *argv[],
 
 		/* Initialize MaxBackends (if under postmaster, was done already) */
 		InitializeMaxBackends();
+
+		/* AIO is needed during InitPostgres() */
+		pgaio_postmaster_init();
 	}
 
 	/* Early initialization */

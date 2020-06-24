@@ -446,7 +446,8 @@ extern void PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems);
 extern void PageIndexTupleDeleteNoCompact(Page page, OffsetNumber offset);
 extern bool PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 									Item newtup, Size newsize);
-extern char *PageSetChecksumCopy(Page page, BlockNumber blkno);
+struct PgAioBounceBuffer;
+extern char *PageSetChecksumCopy(Page page, BlockNumber blkno, struct PgAioBounceBuffer **bb);
 extern void PageSetChecksumInplace(Page page, BlockNumber blkno);
 
 #endif							/* BUFPAGE_H */

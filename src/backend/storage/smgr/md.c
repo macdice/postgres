@@ -32,6 +32,7 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/md.h"
@@ -117,7 +118,6 @@ static MemoryContext MdCxt;		/* context for all MdfdVec objects */
  */
 #define EXTENSION_DONT_CHECK_SIZE	(1 << 4)
 
-
 /* local routines */
 static void mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum,
 						 bool isRedo);
@@ -140,6 +140,15 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forkno,
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
 
+static inline int _mdfd_open_flags(void)
+{
+	int		flags = O_RDWR | PG_BINARY;
+
+	if (io_data_direct)
+		flags |= PG_O_DIRECT;
+
+	return flags;
+}
 
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.
@@ -201,14 +210,14 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 
 	path = relpath(reln->smgr_rnode, forkNum);
 
-	fd = PathNameOpenFile(path, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	fd = PathNameOpenFile(path, _mdfd_open_flags() | O_CREAT | O_EXCL);
 
 	if (fd < 0)
 	{
 		int			save_errno = errno;
 
 		if (isRedo)
-			fd = PathNameOpenFile(path, O_RDWR | PG_BINARY);
+			fd = PathNameOpenFile(path, _mdfd_open_flags());
 		if (fd < 0)
 		{
 			/* be sure to report the error reported by create, not open */
@@ -315,7 +324,7 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 		/* truncate(2) would be easier here, but Windows hasn't got it */
 		int			fd;
 
-		fd = OpenTransientFile(path, O_RDWR | PG_BINARY);
+		fd = OpenTransientFile(path, _mdfd_open_flags());
 		if (fd >= 0)
 		{
 			int			save_errno;
@@ -439,6 +448,124 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
 }
 
+static void
+zeroextend_complete(void *pgsw_private, void *write_private)
+{
+	BlockNumber *latest = (BlockNumber *) write_private;
+}
+
+BlockNumber
+mdzeroextend(SMgrRelation reln, ForkNumber forknum,
+			 BlockNumber blocknum, int nblocks, bool skipFsync)
+{
+	MdfdVec    *v;
+	char	   *zerobuf = palloc_io_aligned(BLCKSZ, MCXT_ALLOC_ZERO);
+	pg_streaming_write *pgsw ;
+	BlockNumber latest;
+	BlockNumber curblocknum = blocknum;
+	int			remblocks = nblocks;
+
+	Assert(nblocks > 0);
+
+	pgsw = pg_streaming_write_alloc(Min(256, nblocks), &latest, zeroextend_complete);
+
+	/* This assert is too expensive to have on normally ... */
+#ifdef CHECK_WRITE_VS_EXTEND
+	Assert(blocknum >= mdnblocks(reln, forknum));
+#endif
+
+	/*
+	 * If a relation manages to grow to 2^32-1 blocks, refuse to extend it any
+	 * more --- we mustn't create a block whose number actually is
+	 * InvalidBlockNumber.
+	 */
+	// FIXME
+#if 0
+	if (blocknum == InvalidBlockNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("cannot extend file \"%s\" beyond %u blocks",
+						relpath(reln->smgr_rnode, forknum),
+						InvalidBlockNumber)));
+#endif
+
+	while (remblocks > 0)
+	{
+		int fd;
+		int ret;
+		int segstartblock = curblocknum % ((BlockNumber) RELSEG_SIZE);
+		int segendblock = (curblocknum % ((BlockNumber) RELSEG_SIZE)) + remblocks;
+		off_t		seekpos;
+
+		if (segendblock > RELSEG_SIZE)
+			segendblock = RELSEG_SIZE;
+
+		v = _mdfd_getseg(reln, forknum, curblocknum, skipFsync, EXTENSION_CREATE);
+
+		Assert(segstartblock < RELSEG_SIZE);
+		Assert(segendblock <= RELSEG_SIZE);
+
+		seekpos = (off_t) BLCKSZ * segstartblock;
+
+		fd = FileGetRawDesc(v->mdfd_vfd);
+		ret = posix_fallocate(fd,
+							  seekpos,
+							  (off_t) BLCKSZ * (segendblock - segstartblock));
+
+		if (ret != 0)
+			elog(ERROR, "fallocate failed: %m");
+
+		for (BlockNumber i = segstartblock; i < segendblock; i++)
+		{
+			PgAioInProgress *aio = pg_streaming_write_get_io(pgsw);
+			AioBufferTag tag = {.rnode = reln->smgr_rnode, .forkNum = forknum, .blockNum = i};
+
+			FileStartWrite(aio, v->mdfd_vfd, zerobuf, BLCKSZ, i * BLCKSZ, &tag, InvalidBuffer);
+
+			pg_streaming_write_write(pgsw, aio, (void*) &i);
+
+			/* FIXME: ensure errors are handled equivalently */
+#if 0
+			int			nbytes;
+
+			if ((nbytes = FileWrite(v->mdfd_vfd, zerobuf, BLCKSZ,
+									i * BLCKSZ, WAIT_EVENT_DATA_FILE_EXTEND)) != BLCKSZ)
+			{
+				if (nbytes < 0)
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not extend file \"%s\": %m",
+									FilePathName(v->mdfd_vfd)),
+							 errhint("Check free disk space.")));
+				/* short write: complain appropriately */
+				ereport(ERROR,
+						(errcode(ERRCODE_DISK_FULL),
+						 errmsg("could not extend file \"%s\": wrote only %d of %d bytes at block %u",
+								FilePathName(v->mdfd_vfd),
+								nbytes, BLCKSZ, blocknum),
+						 errhint("Check free disk space.")));
+			}
+#endif
+		}
+
+		if (!skipFsync && !SmgrIsTemp(reln))
+			register_dirty_segment(reln, forknum, v);
+
+		Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+
+		remblocks -= segendblock - segstartblock;
+		curblocknum += segendblock - segstartblock;
+	}
+
+	pg_streaming_write_wait_all(pgsw);
+	pg_streaming_write_free(pgsw);
+
+	pfree(zerobuf);
+
+	return blocknum + (nblocks - 1);
+}
+
+
 /*
  *	mdopenfork() -- Open one fork of the specified relation.
  *
@@ -462,7 +589,7 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 
 	path = relpath(reln->smgr_rnode, forknum);
 
-	fd = PathNameOpenFile(path, O_RDWR | PG_BINARY);
+	fd = PathNameOpenFile(path, _mdfd_open_flags());
 
 	if (fd < 0)
 	{
@@ -664,6 +791,37 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 }
 
 /*
+ *	mdread() -- Read the specified block from a relation.
+ */
+void
+mdstartread(PgAioInProgress *io, SMgrRelation reln,
+			ForkNumber forknum, BlockNumber blocknum,
+			char *buffer, int bufno, int mode)
+{
+	off_t		seekpos;
+	MdfdVec    *v;
+	AioBufferTag tag = {.rnode = reln->smgr_rnode, .forkNum = forknum, .blockNum = blocknum};
+
+	AssertPointerAlignment(buffer, 4096);
+
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	if (!FileStartRead(io, v->mdfd_vfd, buffer, BLCKSZ, seekpos, &tag, bufno, mode))
+	{
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write block %u in file \"%s\": %m",
+						blocknum, FilePathName(v->mdfd_vfd))));
+	}
+
+}
+
+/*
  *	mdwrite() -- Write the supplied block at the appropriate location.
  *
  *		This is to be used only for updating already-existing blocks of a
@@ -727,6 +885,53 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 	if (!skipFsync && !SmgrIsTemp(reln))
 		register_dirty_segment(reln, forknum, v);
+}
+
+/*
+ *	mdstartwrite() -- Asynchronously start a Write the supplied block at the
+ *  appropriate location.
+ */
+void
+mdstartwrite(PgAioInProgress *io, SMgrRelation reln,
+			 ForkNumber forknum, BlockNumber blocknum,
+			 char *buffer, int bufno, bool skipFsync)
+{
+	off_t		seekpos;
+	MdfdVec    *v;
+	AioBufferTag tag = {.rnode = reln->smgr_rnode, .forkNum = forknum, .blockNum = blocknum};
+
+	/* This assert is too expensive to have on normally ... */
+#ifdef CHECK_WRITE_VS_EXTEND
+	Assert(blocknum < mdnblocks(reln, forknum));
+#endif
+
+	TRACE_POSTGRESQL_SMGR_MD_WRITE_START(forknum, blocknum,
+										 reln->smgr_rnode.node.spcNode,
+										 reln->smgr_rnode.node.dbNode,
+										 reln->smgr_rnode.node.relNode,
+										 reln->smgr_rnode.backend);
+
+	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
+					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	/*
+	 * XXX: In the synchronous case this is after the write - should be fine,
+	 * I think?
+	 */
+	if (!skipFsync && !SmgrIsTemp(reln))
+		register_dirty_segment(reln, forknum, v);
+
+	if (!FileStartWrite(io, v->mdfd_vfd, buffer, BLCKSZ, seekpos, &tag, bufno))
+	{
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write block %u in file \"%s\": %m",
+						blocknum, FilePathName(v->mdfd_vfd))));
+	}
 }
 
 /*
@@ -970,6 +1175,21 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 	}
 }
 
+int
+mdfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
+{
+	MdfdVec    *v = mdopenfork(reln, forknum, EXTENSION_FAIL);
+
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 EXTENSION_FAIL);
+
+	*off = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(*off < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	return FileGetRawDesc(v->mdfd_vfd);
+}
+
 /*
  * register_unlink_segment() -- Schedule a file to be deleted after next checkpoint
  */
@@ -1126,7 +1346,7 @@ _mdfd_openseg(SMgrRelation reln, ForkNumber forknum, BlockNumber segno,
 	fullpath = _mdfd_segpath(reln, forknum, segno);
 
 	/* open the file */
-	fd = PathNameOpenFile(fullpath, O_RDWR | PG_BINARY | oflags);
+	fd = PathNameOpenFile(fullpath, _mdfd_open_flags() | oflags);
 
 	pfree(fullpath);
 
@@ -1330,7 +1550,7 @@ mdsyncfiletag(const FileTag *ftag, char *path)
 		strlcpy(path, p, MAXPGPATH);
 		pfree(p);
 
-		file = PathNameOpenFile(path, O_RDWR | PG_BINARY);
+		file = PathNameOpenFile(path, _mdfd_open_flags());
 		if (file < 0)
 			return -1;
 		need_to_close = true;

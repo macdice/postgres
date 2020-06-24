@@ -4138,11 +4138,32 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN:
 			event_name = "WALSyncMethodAssign";
 			break;
+		case WAIT_EVENT_WAL_WAIT_FLUSH:
+			event_name = "WALWaitFlush";
+			break;
 		case WAIT_EVENT_WAL_WAIT_INSERT:
 			event_name = "WALWaitInsert";
 			break;
+		case WAIT_EVENT_WAL_WAIT_WRITE:
+			event_name = "WALWaitWrite";
+			break;
 		case WAIT_EVENT_WAL_WRITE:
 			event_name = "WALWrite";
+			break;
+		case WAIT_EVENT_AIO_SUBMIT:
+			event_name = "AIOSubmit";
+			break;
+		case WAIT_EVENT_AIO_IO_COMPLETE_ANY:
+			event_name = "AIOCompleteAny";
+			break;
+		case WAIT_EVENT_AIO_IO_COMPLETE_ONE:
+			event_name = "AIOCompleteOne";
+			break;
+		case WAIT_EVENT_AIO_REFS:
+			event_name = "AIORefs";
+			break;
+		case WAIT_EVENT_AIO_BACKPRESSURE:
+			event_name = "AIOBackpressure";
 			break;
 
 			/* no default case, so that compiler will warn */

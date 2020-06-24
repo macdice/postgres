@@ -18,6 +18,7 @@
 #include "access/itup.h"
 #include "access/xlog.h"
 #include "pgstat.h"
+#include "storage/aio.h"
 #include "storage/checksum.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
@@ -1162,22 +1163,30 @@ PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
  * returned page and not refer to it again.
  */
 char *
-PageSetChecksumCopy(Page page, BlockNumber blkno)
+PageSetChecksumCopy(Page page, BlockNumber blkno, PgAioBounceBuffer **bb)
 {
-	static char *pageCopy = NULL;
+	static char *pageCopySync = NULL;
+	char *pageCopy;
+
+	if (bb)
+		*bb = NULL;
 
 	/* If we don't need a checksum, just return the passed-in data */
 	if (PageIsNew(page) || !DataChecksumsEnabled())
 		return (char *) page;
 
-	/*
-	 * We allocate the copy space once and use it over on each subsequent
-	 * call.  The point of palloc'ing here, rather than having a static char
-	 * array, is first to ensure adequate alignment for the checksumming code
-	 * and second to avoid wasting space in processes that never call this.
-	 */
-	if (pageCopy == NULL)
-		pageCopy = MemoryContextAllocIOAligned(TopMemoryContext, BLCKSZ, 0);
+	if (bb)
+	{
+		*bb = pgaio_bounce_buffer_get();
+		pageCopy = pgaio_bounce_buffer_buffer(*bb);
+	}
+	else if (!pageCopySync)
+	{
+		pageCopySync = MemoryContextAllocIOAligned(TopMemoryContext, BLCKSZ, 0);
+		pageCopy = pageCopySync;
+	}
+	else
+		pageCopy = pageCopySync;
 
 	memcpy(pageCopy, (char *) page, BLCKSZ);
 	((PageHeader) pageCopy)->pd_checksum = pg_checksum_page(pageCopy, blkno);

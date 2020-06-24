@@ -434,6 +434,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			 */
 			SetProcessingMode(BootstrapProcessing);
 			bootstrap_signals();
+			InitProcess();
 			BootStrapXLOG();
 			BootstrapModeMain();
 			proc_exit(1);		/* should never return */
@@ -503,11 +504,6 @@ BootstrapModeMain(void)
 	 */
 	if (pg_link_canary_is_frontend())
 		elog(ERROR, "backend is incorrectly linked to frontend functions");
-
-	/*
-	 * Do backend-like initialization for bootstrap mode
-	 */
-	InitProcess();
 
 	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
 

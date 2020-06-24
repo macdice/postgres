@@ -117,6 +117,7 @@
 #include "postmaster/syslogger.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
@@ -1001,6 +1002,13 @@ PostmasterMain(int argc, char *argv[])
 	 * workers, calculate MaxBackends.
 	 */
 	InitializeMaxBackends();
+
+	/*
+	 * As AIO might create interal FDs, and will trigger shared memory
+	 * allocations, need to do this before reset_shared() and
+	 * set_max_safe_fds().
+	 */
+	pgaio_postmaster_init();
 
 	/*
 	 * Set up shared memory and semaphores.

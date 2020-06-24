@@ -45,6 +45,8 @@ typedef union ConditionVariableMinimallyPadded
 /* Initialize a condition variable. */
 extern void ConditionVariableInit(ConditionVariable *cv);
 
+extern void ConditionVariableStartup(void);
+
 /*
  * To sleep on a condition variable, a process should use a loop which first
  * checks the condition, exiting the loop if it is met, and then calls
