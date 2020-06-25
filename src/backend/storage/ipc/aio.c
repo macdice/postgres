@@ -805,10 +805,13 @@ pgaio_complete_ios(bool in_error)
 			}
 			else
 			{
+				Assert((*(volatile PgAioIPFlags*) &io->flags) & (PGAIOIP_SOFT_FAILURE | PGAIOIP_HARD_FAILURE));
+
 				LWLockAcquire(SharedAIOCompletionLock, LW_EXCLUSIVE);
 				*(volatile PgAioIPFlags*) &io->flags =
 					(io->flags & ~(PGAIOIP_REAPED | PGAIOIP_IN_PROGRESS)) |
-					PGAIOIP_DONE | PGAIOIP_SHARED_FAILED;
+					PGAIOIP_DONE |
+					PGAIOIP_SHARED_FAILED;
 				dlist_push_tail(&aio_ctl->reaped_uncompleted, &io->io_node);
 				LWLockRelease(SharedAIOCompletionLock);
 			}
@@ -826,8 +829,8 @@ pgaio_complete_ios(bool in_error)
 			LWLockAcquire(SharedAIOCompletionLock, LW_EXCLUSIVE);
 			*(volatile PgAioIPFlags*) &io->flags =
 				(io->flags & ~(PGAIOIP_REAPED | PGAIOIP_IN_PROGRESS)) |
-				PGAIOIP_HARD_FAILURE |
 				PGAIOIP_DONE |
+				PGAIOIP_HARD_FAILURE |
 				PGAIOIP_SHARED_FAILED;
 			dlist_push_tail(&aio_ctl->reaped_uncompleted, &io->io_node);
 			LWLockRelease(SharedAIOCompletionLock);
@@ -1401,7 +1404,7 @@ again:
 	Assert(flags & done_flags);
 
 out:
-	if (flags & (PGAIOIP_SOFT_FAILURE | PGAIOIP_SOFT_FAILURE))
+	if (flags & (PGAIOIP_SOFT_FAILURE | PGAIOIP_HARD_FAILURE))
 	{
 		/* can retry soft failures, but not hard ones */
 		/* FIXME: limit number of soft retries */
@@ -1477,6 +1480,12 @@ pgaio_io_get(void)
 		LWLockRelease(SharedAIOCtlLock);
 		elog(DEBUG1, "needed to drain while getting IO (used %d inflight %d)",
 			 aio_ctl->used_count, pg_atomic_read_u32(&my_aio->inflight));
+
+		/*
+		 * FIXME: should we wait for IO instead?
+		 *
+		 * Also, need to protect against too many ios handed out but not used.
+		 */
 		pgaio_drain(&aio_ctl->shared_ring);
 
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
