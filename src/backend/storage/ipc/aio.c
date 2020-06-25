@@ -70,7 +70,7 @@ typedef enum PgAioInProgressFlags
 	PGAIOIP_UNUSED = 1 << 0,
 
 	/*  */
-	PGAIOIP_IDLE2 = 1 << 1,
+	PGAIOIP_IDLE = 1 << 1,
 
 	/*  */
 	PGAIOIP_IN_PROGRESS = 1 << 2,
@@ -1315,7 +1315,7 @@ again:
 		done_flags |= PGAIOIP_SHARED_CALLBACK_CALLED;
 
 		/* possible due to racyness */
-		done_flags |= PGAIOIP_UNUSED | PGAIOIP_IDLE2;
+		done_flags |= PGAIOIP_UNUSED | PGAIOIP_IDLE;
 
 		init_flags = flags = *(volatile PgAioIPFlags*) &io->flags;
 
@@ -1341,14 +1341,14 @@ again:
 		Assert(!(io->flags & PGAIOIP_UNUSED));
 
 		/* shouldn't wait on an unprep'ed IO */
-		Assert(!(io->flags & PGAIOIP_IDLE2));
+		Assert(!(io->flags & PGAIOIP_IDLE));
 	}
 
 	/*
 	 * When holding a reference the IO can't go idle. And if we're not, we
 	 * should have exited above.
 	 */
-	Assert(!(init_flags & PGAIOIP_IDLE2));
+	Assert(!(init_flags & PGAIOIP_IDLE));
 
 	if (init_flags & done_flags)
 	{
@@ -1503,7 +1503,7 @@ pgaio_io_get(void)
 	io->user_referenced = true;
 	io->system_referenced = false;
 
-	*(volatile PgAioIPFlags*) &io->flags = PGAIOIP_IDLE2;
+	*(volatile PgAioIPFlags*) &io->flags = PGAIOIP_IDLE;
 
 	pgaio_io_wait_extra_refs(io);
 	Assert(pg_atomic_read_u32(&io->extra_refs) == 0);
@@ -1541,7 +1541,7 @@ pgaio_io_done(PgAioInProgress *io)
 	if (io->flags & PGAIOIP_SOFT_FAILURE)
 		return false;
 
-	if (io->flags & (PGAIOIP_DONE | PGAIOIP_IDLE2))
+	if (io->flags & (PGAIOIP_DONE | PGAIOIP_IDLE))
 		return true;
 
 	return false;
@@ -1558,7 +1558,7 @@ pgaio_io_done(PgAioInProgress *io)
 void
 pgaio_io_on_completion_local(PgAioInProgress *io, PgAioOnCompletionLocalContext *ocb)
 {
-	Assert(io->flags & PGAIOIP_IDLE2);
+	Assert(io->flags & PGAIOIP_IDLE);
 	Assert(io->on_completion_local == NULL);
 
 	io->on_completion_local = ocb;
@@ -1664,7 +1664,7 @@ pgaio_io_recycle(PgAioInProgress *io)
 {
 	uint32 init_flags = *(volatile PgAioIPFlags*) &io->flags;
 
-	Assert(init_flags & (PGAIOIP_IDLE2 | PGAIOIP_DONE));
+	Assert(init_flags & (PGAIOIP_IDLE | PGAIOIP_DONE));
 	Assert(io->user_referenced);
 	Assert(!io->system_referenced);
 	Assert(io->merge_with == NULL);
@@ -1694,7 +1694,7 @@ pgaio_io_recycle(PgAioInProgress *io)
 			my_aio->local_completed_count--;
 		}
 		io->flags &= ~PGAIOIP_DONE;
-		io->flags |= PGAIOIP_IDLE2;
+		io->flags |= PGAIOIP_IDLE;
 	}
 
 	io->flags &= ~(PGAIOIP_DONE |
@@ -1704,7 +1704,7 @@ pgaio_io_recycle(PgAioInProgress *io)
 				   PGAIOIP_RETRY |
 				   PGAIOIP_HARD_FAILURE |
 				   PGAIOIP_SOFT_FAILURE);
-	Assert(io->flags == PGAIOIP_IDLE2);
+	Assert(io->flags == PGAIOIP_IDLE);
 	io->result = 0;
 	io->on_completion_local = NULL;
 }
@@ -1713,13 +1713,13 @@ static void  __attribute__((noinline))
 pgaio_prepare_io(PgAioInProgress *io, PgAioAction action)
 {
 	/* true for now, but not necessarily in the future */
-	Assert(io->flags == PGAIOIP_IDLE2);
+	Assert(io->flags == PGAIOIP_IDLE);
 	Assert(io->user_referenced);
 	Assert(io->merge_with == NULL);
 
 	Assert(my_aio->pending_count < PGAIO_SUBMIT_BATCH_SIZE);
 
-	io->flags = (io->flags & ~PGAIOIP_IDLE2) | PGAIOIP_IN_PROGRESS | PGAIOIP_PENDING;
+	io->flags = (io->flags & ~PGAIOIP_IDLE) | PGAIOIP_IN_PROGRESS | PGAIOIP_PENDING;
 
 	/* for this module */
 	io->system_referenced = true;
@@ -1760,7 +1760,7 @@ pgaio_io_release(PgAioInProgress *io)
 		Assert(!(io->flags & PGAIOIP_INFLIGHT));
 		Assert(!(io->flags & PGAIOIP_MERGE));
 		Assert(io->flags & PGAIOIP_DONE ||
-			   io->flags & PGAIOIP_IDLE2);
+			   io->flags & PGAIOIP_IDLE);
 
 		if (io->flags & PGAIOIP_DONE)
 		{
@@ -1853,7 +1853,7 @@ pgaio_io_flag_string(PgAioIPFlags flags, StringInfo s)
 #define STRINGIFY_FLAG(f) if (flags & f) {  appendStringInfoString(s, first ? CppAsString(f) : " | " CppAsString(f)); first = false;}
 
 	STRINGIFY_FLAG(PGAIOIP_UNUSED);
-	STRINGIFY_FLAG(PGAIOIP_IDLE2);
+	STRINGIFY_FLAG(PGAIOIP_IDLE);
 	STRINGIFY_FLAG(PGAIOIP_IN_PROGRESS);
 	STRINGIFY_FLAG(PGAIOIP_PENDING);
 	STRINGIFY_FLAG(PGAIOIP_INFLIGHT);
@@ -2067,7 +2067,7 @@ pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb)
 {
 	Assert(bb != NULL);
 	Assert(io->bb == NULL);
-	Assert(io->flags == PGAIOIP_IDLE2);
+	Assert(io->flags == PGAIOIP_IDLE);
 	Assert(io->user_referenced);
 
 	io->bb = bb;
