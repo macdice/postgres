@@ -12,6 +12,8 @@
  */
 #include "postgres.h"
 
+//#define ILIST_DEBUG 1
+
 #include <fcntl.h>
 #include <liburing.h>
 #include <sys/stat.h>
@@ -406,7 +408,7 @@ extern int max_aio_in_flight;
 extern int max_aio_bounce_buffers;
 int max_aio_in_progress = 32768; /* XXX: Multiple of MaxBackends instead? */
 int max_aio_in_flight = 4096;
-int max_aio_bounce_buffers = 1024;
+int max_aio_bounce_buffers = 4096;
 
 /* global list of in-progress IO */
 static PgAioCtl *aio_ctl;

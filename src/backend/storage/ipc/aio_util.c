@@ -1,3 +1,5 @@
+//#define ILIST_DEBUG 1
+
 #include "postgres.h"
 
 #include "storage/aio.h"

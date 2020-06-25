@@ -309,7 +309,7 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		p.curblock = 0;
 		p.lastblock = last_block;
 
-		pgsr = pg_streaming_read_alloc(512, (uintptr_t) &p,
+		pgsr = pg_streaming_read_alloc(1024, (uintptr_t) &p,
 									   prewarm_buffer_next,
 									   prewarm_buffer_release);
 
@@ -343,7 +343,7 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		p.curblock = 0;
 		p.lastblock = last_block;
 
-		pgsr = pg_streaming_read_alloc(512, (uintptr_t) &p,
+		pgsr = pg_streaming_read_alloc(1024, (uintptr_t) &p,
 									   prewarm_smgr_next,
 									   prewarm_smgr_release);
 
