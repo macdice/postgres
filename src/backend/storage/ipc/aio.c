@@ -384,7 +384,6 @@ static bool pgaio_complete_read_buffer(PgAioInProgress *io);
 static bool pgaio_complete_write_buffer(PgAioInProgress *io);
 static bool pgaio_complete_write_wal(PgAioInProgress *io);
 
-static int reopen_buffered(const AioBufferTag *tag);
 
 static MemoryContext aio_retry_context;
 
@@ -1556,6 +1555,15 @@ pgaio_io_on_completion_local(PgAioInProgress *io, PgAioOnCompletionLocalContext 
 	io->on_completion_local = ocb;
 }
 
+static int
+reopen_buffered(const AioBufferTag *tag)
+{
+	uint32 off;
+	SMgrRelation reln = smgropen(tag->rnode.node, tag->rnode.backend);
+
+	return smgrfd(reln, tag->forkNum, tag->blockNum, &off);
+}
+
 void
 pgaio_io_retry(PgAioInProgress *io)
 {
@@ -2609,15 +2617,6 @@ pgaio_complete_flush_range(PgAioInProgress *io)
 #endif
 
 	return true;
-}
-
-static int
-reopen_buffered(const AioBufferTag *tag)
-{
-	uint32 off;
-	SMgrRelation reln = smgropen(tag->rnode.node, tag->rnode.backend);
-
-	return smgrfd(reln, tag->forkNum, tag->blockNum, &off);
 }
 
 static bool
