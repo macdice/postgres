@@ -485,12 +485,12 @@ $result = $node_subscriber2->safe_psql('postgres', "SELECT a FROM tab3");
 is($result, qq(), 'delete from tab3 replicated');
 
 # truncate
+# these will NOT be replicated
+$node_publisher->safe_psql('postgres', "TRUNCATE tab1_2, tab2_1, tab3_1");
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO tab1 VALUES (1), (2), (5)");
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO tab2 VALUES (1), (2), (5)");
-# these will NOT be replicated
-$node_publisher->safe_psql('postgres', "TRUNCATE tab1_2, tab2_1, tab3_1");
 
 $node_publisher->wait_for_catchup('sub_viaroot');
 $node_publisher->wait_for_catchup('sub2');
