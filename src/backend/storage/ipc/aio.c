@@ -294,7 +294,6 @@ typedef struct PgAioPerBackend
 	 * PgAioInProgress->io_node
 	 */
 	dlist_head reaped;
-	uint32 reaped_count;
 
 	/*
 	 * IOs that were completed, but not yet recycled.
@@ -367,9 +366,12 @@ static void pgaio_finish_io(PgAioInProgress *io);
 static void pgaio_bounce_buffer_release_locked(PgAioInProgress *io);
 
 /* io_uring related functions */
-static int pgaio_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs);
-static void pgaio_complete_cqes(struct io_uring *ring,
-								struct io_uring_cqe **cqes, int ready);
+static int pgaio_uring_submit(bool drain);
+static int pgaio_uring_drain(struct io_uring *ring);
+static void pgaio_uring_wait_one(struct io_uring *ring, PgAioInProgress *io, uint32 wait_event_info);
+
+static int pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs);
+static void pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe);
 
 static int __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
 								unsigned flags, sigset_t *sig);
@@ -588,7 +590,6 @@ pgaio_postmaster_child_exit(int code, Datum arg)
 	Assert(my_aio->pending_count == 0);
 	Assert(dlist_is_empty(&my_aio->pending));
 
-	Assert(my_aio->reaped_count == 0);
 	Assert(dlist_is_empty(&my_aio->reaped));
 
 	Assert(my_aio->foreign_completed_count == 0);
@@ -643,7 +644,7 @@ pgaio_at_commit(void)
 }
 
 static int
-pgaio_split_complete(PgAioInProgress *io)
+pgaio_uncombine_one(PgAioInProgress *io)
 {
 	int orig_result = io->result;
 	int running_result = orig_result;
@@ -731,7 +732,6 @@ pgaio_split_complete(PgAioInProgress *io)
 								PGAIOIP_MERGE)) |
 				PGAIOIP_REAPED;
 
-			my_aio->reaped_count++;
 			Assert(dlist_is_member(&my_aio->reaped, &last->io_node));
 			dlist_insert_after(&last->io_node, &cur->io_node);
 			extracted++;
@@ -746,6 +746,29 @@ pgaio_split_complete(PgAioInProgress *io)
 	}
 
 	return extracted;
+}
+
+static void
+pgaio_uncombine(void)
+{
+	dlist_mutable_iter iter;
+
+	/* "unmerge" merged IOs, so they can be treated uniformly */
+	dlist_foreach_modify(iter, &my_aio->reaped)
+	{
+		PgAioInProgress *io = dlist_container(PgAioInProgress, io_node, iter.cur);
+		uint32 extracted = 0;
+
+		if (io->flags & PGAIOIP_MERGE)
+			extracted += pgaio_uncombine_one(io);
+
+		/*
+		 * FIXME: this should a) probably not be here, b) only once for all
+		 * the received IOs.
+		 */
+		pg_atomic_fetch_sub_u32(&aio_ctl->backend_state[io->owner_id].inflight,
+								extracted + 1);
+	}
 }
 
 static void  __attribute__((noinline))
@@ -776,7 +799,6 @@ pgaio_complete_ios(bool in_error)
 			finished = cb(io);
 
 			dlist_delete_from(&my_aio->reaped, node);
-			my_aio->reaped_count--;
 
 			if (finished)
 			{
@@ -800,7 +822,6 @@ pgaio_complete_ios(bool in_error)
 		{
 			Assert(in_error);
 
-			my_aio->reaped_count--;
 			dlist_delete_from(&my_aio->reaped, node);
 
 			LWLockAcquire(SharedAIOCompletionLock, LW_EXCLUSIVE);
@@ -813,8 +834,6 @@ pgaio_complete_ios(bool in_error)
 			LWLockRelease(SharedAIOCompletionLock);
 		}
 	}
-
-	Assert(my_aio->reaped_count == 0);
 
 	/* if any IOs weren't fully done, re-submit them */
 	if (pending_count_before != my_aio->pending_count)
@@ -916,80 +935,23 @@ pgaio_complete_ios(bool in_error)
 }
 
 /*
- * This checks if there are completions to be processed, before unlocking the
- * ring.
+ * Receive completions in ring.
  */
-static int  __attribute__((noinline))
-pgaio_drain_and_unlock(struct io_uring *ring)
-{
-	int processed = 0;
-	dlist_mutable_iter iter;
-
-	Assert(LWLockHeldByMe(SharedAIOCompletionLock));
-
-	START_CRIT_SECTION();
-
-	if (io_uring_cq_ready(ring))
-	{
-		struct io_uring_cqe *local_reaped_cqes[PGAIO_MAX_LOCAL_REAPED];
-
-		processed = my_aio->reaped_count =
-			io_uring_peek_batch_cqe(ring,
-									local_reaped_cqes,
-									PGAIO_MAX_LOCAL_REAPED);
-
-		pgaio_complete_cqes(ring,
-							local_reaped_cqes,
-							my_aio->reaped_count);
-	}
-
-	LWLockRelease(SharedAIOCompletionLock);
-
-	/* "unmerge" merged IOs, so they can be treated uniformly */
-	dlist_foreach_modify(iter, &my_aio->reaped)
-	{
-		PgAioInProgress *io = dlist_container(PgAioInProgress, io_node, iter.cur);
-		int extracted = 0;
-
-		if (io->flags & PGAIOIP_MERGE)
-		{
-			extracted += pgaio_split_complete(io);
-		}
-
-		pg_atomic_fetch_sub_u32(&aio_ctl->backend_state[io->owner_id].inflight,
-								extracted + 1);
-	}
-
-	END_CRIT_SECTION();
-
-	if (my_aio->reaped_count > 0)
-		pgaio_complete_ios(false);
-
-	return processed;
-}
-
 static int  __attribute__((noinline))
 pgaio_drain(struct io_uring *ring)
 {
-	int total = 0;
+	int ndrained = 0;
 
-	while (true)
-	{
-		uint32 ready = io_uring_cq_ready(ring);
-		uint32 processed;
+	START_CRIT_SECTION();
 
-		if (ready == 0)
-			break;
+	ndrained = pgaio_uring_drain(ring);
 
+	if (ndrained > 0)
+		pgaio_uncombine();
 
-		LWLockAcquire(SharedAIOCompletionLock, LW_EXCLUSIVE);
-		processed = pgaio_drain_and_unlock(ring);
-		total += processed;
+	END_CRIT_SECTION();
 
-		if (processed >= ready)
-			break;
-	}
-
+	pgaio_complete_ios(false);
 
 	/*
 	 * Transfer all the foreign completions into the local queue.
@@ -1013,6 +975,9 @@ pgaio_drain(struct io_uring *ring)
 		SpinLockRelease(&my_aio->foreign_completed_lock);
 	}
 
+	/*
+	 * Call all pending local callbacks.
+	 */
 	if (my_aio->local_completed_count != 0)
 	{
 		static int recursion_count  = 0;
@@ -1040,13 +1005,7 @@ pgaio_drain(struct io_uring *ring)
 		}
 	}
 
-	return total;
-}
-
-void
-pgaio_drain_shared(void)
-{
-	pgaio_drain(&aio_ctl->shared_ring);
+	return ndrained;
 }
 
 static bool
@@ -1076,6 +1035,7 @@ pgaio_can_be_combined(PgAioInProgress *last, PgAioInProgress *cur)
 				return false;
 
 			return true;
+
 		case PGAIO_NOP:
 		case PGAIO_FLUSH_RANGE:
 		case PGAIO_FSYNC:
@@ -1174,8 +1134,6 @@ pgaio_combine_pending(void)
 void  __attribute__((noinline))
 pgaio_submit_pending(bool drain)
 {
-	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
-	struct io_uring_sqe *sqe[PGAIO_SUBMIT_BATCH_SIZE];
 	int total_submitted = 0;
 	uint32 orig_total;
 
@@ -1208,69 +1166,10 @@ pgaio_submit_pending(bool drain)
 			errhidecontext(true));
 	pgaio_print_list(&my_aio->pending, NULL, offsetof(PgAioInProgress, system_node));
 #endif
-#endif
+#endif /* COMBINE_ENABLED */
 
-	while (!dlist_is_empty(&my_aio->pending))
-	{
-		int nios = 0;
-		int nsubmit = Min(my_aio->pending_count, PGAIO_SUBMIT_BATCH_SIZE);
-		int inflight_add = 0;
-		struct iovec *iovs = pgaio_uring_submit_iovecs;
 
-		Assert(nsubmit != 0 && nsubmit <= my_aio->pending_count);
-		LWLockAcquire(SharedAIOSubmissionLock, LW_EXCLUSIVE);
-
-		for (int i = 0; i < nsubmit; i++)
-		{
-			dlist_node *node;
-			PgAioInProgress *io;
-
-			sqe[nios] = io_uring_get_sqe(&aio_ctl->shared_ring);
-
-			if (!sqe[nios])
-				break;
-
-			node = dlist_pop_head_node(&my_aio->pending);
-			io = dlist_container(PgAioInProgress, io_node, node);
-
-			Assert(io->flags & PGAIOIP_PENDING);
-
-			ios[nios] = io;
-			inflight_add += pgaio_sq_from_io(ios[nios], sqe[nios], &iovs);
-
-			*(volatile PgAioIPFlags*) &io->flags =
-				(io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
-			my_aio->pending_count--;
-			nios++;
-			total_submitted++;
-		}
-
-		if (nios > 0)
-		{
-			int ret;
-
-			pg_atomic_add_fetch_u32(&my_aio->inflight, inflight_add);
-			my_aio->issued_total_count++;
-
-	again:
-			pgstat_report_wait_start(WAIT_EVENT_AIO_SUBMIT);
-			ret = io_uring_submit(&aio_ctl->shared_ring);
-			pgstat_report_wait_end();
-
-			if (ret == -EINTR)
-				goto again;
-
-			if (ret < 0)
-				elog(PANIC, "failed: %d/%s",
-					 ret, strerror(-ret));
-		}
-
-		LWLockRelease(SharedAIOSubmissionLock);
-
-		/* check if there are completions we could process */
-		if (drain)
-			pgaio_drain(&aio_ctl->shared_ring);
-	}
+	total_submitted = pgaio_uring_submit(drain);
 
 #ifdef PGAIO_VERBOSE
 	elog(DEBUG3, "submitted %d (orig %d)", total_submitted, orig_total);
@@ -1299,7 +1198,10 @@ pgaio_backpressure(struct io_uring *ring, const char *loc)
 
 			total = pgaio_drain(ring);
 
-			elog(DEBUG1, "backpressure drain at %s: cqr before/after: %d/%d, my inflight b/a: %d/%d, used b/a: %d/%d, processed %d",
+			elog(DEBUG1, "backpressure drain at %s:"
+				 " cqr before/after: %d/%d"
+				 ", my inflight b/a: %d/%d"
+				 ", used b/a: %d/%d, processed %d",
 				 loc,
 				 cqr_before, io_uring_cq_ready(ring),
 				 inflight_before, pg_atomic_read_u32(&my_aio->inflight),
@@ -1474,48 +1376,9 @@ again:
 
 		if (flags & PGAIOIP_INFLIGHT)
 		{
-			int ret;
-
-			/* ensure we're going to get woken up */
-			if (IsUnderPostmaster)
-			{
-				ConditionVariablePrepareToSleep(&io->cv);
-				PG_SETMASK(&BlockSig);
-				ResetLatch(MyLatch);
-			}
-
-			flags = *(volatile PgAioIPFlags*) &io->flags;
-			if (!(flags & PGAIOIP_INFLIGHT))
-			{
-				PG_SETMASK(&UnBlockSig);
-				continue;
-			}
-
-#ifdef PGAIO_VERBOSE
-			elog(DEBUG3, "sys enter %zu, ready %d ",
-				 io - aio_ctl->in_progress_io, io_uring_cq_ready(&aio_ctl->shared_ring));
-#endif
-
-			/* wait for one io to be completed */
-			errno = 0;
-			pgstat_report_wait_start(WAIT_EVENT_AIO_IO_COMPLETE_ANY);
-			ret = __sys_io_uring_enter(aio_ctl->shared_ring.ring_fd,
-									   0, 1,
-									   IORING_ENTER_GETEVENTS, &UnBlockSig);
-			pgstat_report_wait_end();
-			PG_SETMASK(&UnBlockSig);
-
-			if (ret < 0 && errno == EINTR)
-			{
-				elog(DEBUG3, "got interrupted");
-			}
-			else if (ret != 0)
-				elog(WARNING, "unexpected: %d/%s: %m", ret, strerror(-ret));
-
-			pgaio_drain(&aio_ctl->shared_ring);
-
-			if (IsUnderPostmaster)
-				ConditionVariableCancelSleep();
+			/* note that this is allowed to spuriously return */
+			pgaio_uring_wait_one(&aio_ctl->shared_ring, io,
+								 WAIT_EVENT_AIO_IO_COMPLETE_ANY);
 		}
 		else
 		{
@@ -2198,40 +2061,204 @@ pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb)
  * --------------------------------------------------------------------------------
  */
 
-static void __attribute__((noinline))
-pgaio_complete_cqes(struct io_uring *ring, struct io_uring_cqe **cqes, int ready)
+static int
+pgaio_uring_submit(bool drain)
 {
-	int consumed = 0;
+	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
+	struct io_uring_sqe *sqe[PGAIO_SUBMIT_BATCH_SIZE];
+	int total_submitted = 0;
 
-	Assert(LWLockHeldByMe(SharedAIOCompletionLock));
-
-	for (int i = 0; i < ready; i++)
+	while (!dlist_is_empty(&my_aio->pending))
 	{
-		struct io_uring_cqe *cqe = cqes[i];
-		PgAioInProgress *io;
+		int nios = 0;
+		int nsubmit = Min(my_aio->pending_count, PGAIO_SUBMIT_BATCH_SIZE);
+		int inflight_add = 0;
+		struct iovec *iovs = pgaio_uring_submit_iovecs;
 
-		io = io_uring_cqe_get_data(cqe);
-		Assert(io != NULL);
-		Assert(io->flags & PGAIOIP_INFLIGHT);
-		Assert(io->system_referenced);
+		Assert(nsubmit != 0 && nsubmit <= my_aio->pending_count);
+		LWLockAcquire(SharedAIOSubmissionLock, LW_EXCLUSIVE);
 
-		*(volatile PgAioIPFlags*) &io->flags = (io->flags & ~PGAIOIP_INFLIGHT) | PGAIOIP_REAPED;
-		io->result = cqe->res;
-
-		// FIXME: can't do that currently, in other backends list
-		dlist_push_tail(&my_aio->reaped, &io->io_node);
-
-		if (cqe->res < 0)
+		for (int i = 0; i < nsubmit; i++)
 		{
-			elog(WARNING, "cqe: u: %p s: %d/%s f: %u",
-				 io_uring_cqe_get_data(cqe),
-				 cqe->res,
-				 cqe->res < 0 ? strerror(-cqe->res) : "",
-				 cqe->flags);
+			dlist_node *node;
+			PgAioInProgress *io;
+
+			sqe[nios] = io_uring_get_sqe(&aio_ctl->shared_ring);
+
+			if (!sqe[nios])
+				break;
+
+			node = dlist_pop_head_node(&my_aio->pending);
+			io = dlist_container(PgAioInProgress, io_node, node);
+
+			Assert(io->flags & PGAIOIP_PENDING);
+
+			ios[nios] = io;
+			inflight_add += pgaio_uring_sq_from_io(ios[nios], sqe[nios], &iovs);
+
+			*(volatile PgAioIPFlags*) &io->flags =
+				(io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
+			my_aio->pending_count--;
+			nios++;
+			total_submitted++;
 		}
 
-		io_uring_cqe_seen(ring, cqe);
-		consumed++;
+		if (nios > 0)
+		{
+			int ret;
+
+			pg_atomic_add_fetch_u32(&my_aio->inflight, inflight_add);
+			my_aio->issued_total_count++;
+
+	again:
+			pgstat_report_wait_start(WAIT_EVENT_AIO_SUBMIT);
+			ret = io_uring_submit(&aio_ctl->shared_ring);
+			pgstat_report_wait_end();
+
+			if (ret == -EINTR)
+				goto again;
+
+			if (ret < 0)
+				elog(PANIC, "failed: %d/%s",
+					 ret, strerror(-ret));
+		}
+
+		LWLockRelease(SharedAIOSubmissionLock);
+
+		/* check if there are completions we could process */
+		if (drain)
+			pgaio_drain(&aio_ctl->shared_ring);
+	}
+
+	return total_submitted;
+}
+
+static int
+pgaio_uring_drain(struct io_uring *ring)
+{
+	uint32 processed = 0;
+	int ready;
+
+	Assert(!LWLockHeldByMe(SharedAIOCompletionLock));
+
+	if (!io_uring_cq_ready(ring))
+		return 0;
+
+	LWLockAcquire(SharedAIOCompletionLock, LW_EXCLUSIVE);
+
+	/*
+	 * Don't drain more events than available right now. Otherwise it's
+	 * plausible that one backend could get stuck, for a while, receiving CQEs
+	 * without actually processing them.
+	 */
+	ready = io_uring_cq_ready(ring);
+
+	while (ready > 0)
+	{
+		struct io_uring_cqe *reaped_cqes[PGAIO_MAX_LOCAL_REAPED];
+		uint32 processed_one;
+
+		processed_one =
+			io_uring_peek_batch_cqe(ring,
+									reaped_cqes,
+									Min(PGAIO_MAX_LOCAL_REAPED, ready));
+		Assert(processed_one <= ready);
+
+		ready -= processed_one;
+		processed += processed_one;
+
+		for (int i = 0; i < processed_one; i++)
+		{
+			struct io_uring_cqe *cqe = reaped_cqes[i];
+
+			pgaio_uring_io_from_cqe(cqe);
+
+			io_uring_cqe_seen(ring, cqe);
+		}
+	}
+
+	LWLockRelease(SharedAIOCompletionLock);
+
+	return processed;
+}
+
+static void
+pgaio_uring_wait_one(struct io_uring *ring, PgAioInProgress *io, uint32 wait_event_info)
+{
+	PgAioIPFlags flags;
+	int ret;
+
+	/* ensure we're going to get woken up */
+	if (IsUnderPostmaster)
+	{
+		ConditionVariablePrepareToSleep(&io->cv);
+		ResetLatch(MyLatch);
+		PG_SETMASK(&BlockSig);
+	}
+
+	/*
+	 * If the IO is still in progress (could have finished concurrently by
+	 * another backend), wait for it using io_uring_enter.
+	 */
+	flags = *(volatile PgAioIPFlags*) &io->flags;
+	if (!(flags & PGAIOIP_INFLIGHT))
+	{
+
+#ifdef PGAIO_VERBOSE
+		elog(DEBUG3, "sys enter %zu, ready %d ",
+			 io - aio_ctl->in_progress_io, io_uring_cq_ready(ring));
+#endif
+
+		/* wait for one io to be completed */
+		errno = 0;
+		pgstat_report_wait_start(wait_event_info);
+		ret = __sys_io_uring_enter(ring->ring_fd,
+								   0, 1,
+								   IORING_ENTER_GETEVENTS, &UnBlockSig);
+		pgstat_report_wait_end();
+
+		if (ret < 0 && errno == EINTR)
+		{
+			elog(DEBUG3, "got interrupted");
+		}
+		else if (ret != 0)
+			elog(WARNING, "unexpected: %d/%s: %m", ret, strerror(-ret));
+	}
+
+	if (IsUnderPostmaster)
+	{
+		PG_SETMASK(&UnBlockSig);
+		ConditionVariableCancelSleep();
+	}
+}
+
+static void
+pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe)
+{
+	PgAioInProgress *io;
+
+	io = io_uring_cqe_get_data(cqe);
+	Assert(io != NULL);
+	Assert(io->flags & PGAIOIP_INFLIGHT);
+	Assert(io->system_referenced);
+
+	*(volatile PgAioIPFlags*) &io->flags = (io->flags & ~PGAIOIP_INFLIGHT) | PGAIOIP_REAPED;
+	io->result = cqe->res;
+
+	// FIXME: can't do that currently, in other backends list
+	dlist_push_tail(&my_aio->reaped, &io->io_node);
+
+	/*
+	 * FIXME: needs to be removed at some point, this is effectively a
+	 * critical section.
+	 */
+	if (cqe->res < 0)
+	{
+		elog(WARNING, "cqe: u: %p s: %d/%s f: %u",
+			 io_uring_cqe_get_data(cqe),
+			 cqe->res,
+			 cqe->res < 0 ? strerror(-cqe->res) : "",
+			 cqe->flags);
 	}
 }
 
@@ -2330,7 +2357,7 @@ prep_write_wal_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *
 }
 
 static int
-pgaio_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs)
+pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs)
 {
 	int submitted = 1;
 

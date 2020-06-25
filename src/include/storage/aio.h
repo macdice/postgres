@@ -98,8 +98,6 @@ extern void pgaio_io_start_write_wal(PgAioInProgress *io, int fd,
 extern void pgaio_io_retry(PgAioInProgress *io);
 extern void pgaio_submit_pending(bool drain);
 
-extern void pgaio_drain_shared(void);
-
 extern void pgaio_print_queues(void);
 struct StringInfoData;
 extern void pgaio_io_print(PgAioInProgress *io, struct StringInfoData *s);
