@@ -1976,9 +1976,12 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	if (nbytes <= 0)
 		return;
 
+	/* XXX:TM macOS has no O_DIRECT (it has fcntl(fd, F_NOCACHE, 1) instead, thanks Apple) */
+#ifdef O_DIRECT
 	/* no point */
 	if (VfdCache[file].fileFlags & O_DIRECT)
 		return;
+#endif
 
 	returnCode = FileAccess(file);
 	if (returnCode < 0)

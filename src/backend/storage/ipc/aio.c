@@ -13,11 +13,18 @@
 #include "postgres.h"
 
 #include <fcntl.h>
-#include <liburing.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
+
+#ifdef USE_LIBURING
+#include <liburing.h>
+#endif
+
+#ifdef USE_POSIX_AIO
+#include <aio.h>
+#endif
 
 #include "lib/ilist.h"
 #include "lib/stringinfo.h"
@@ -36,6 +43,10 @@
 #include "storage/shmem.h"
 #include "utils/memutils.h"
 
+#ifdef USE_POSIX_AIO
+#include "lib/squeue32.h"
+#endif
+
 
 #define PGAIO_VERBOSE
 
@@ -48,7 +59,6 @@
 #define PGAIO_BACKPRESSURE_LIMIT (max_aio_in_flight - 128)
 #define PGAIO_MAX_LOCAL_REAPED 128
 #define PGAIO_MAX_COMBINE 16
-
 
 typedef enum PgAioAction
 {
@@ -225,6 +235,10 @@ struct PgAioInProgress
 			bool no_reorder;
 		} write_wal;
 	} d;
+
+#ifdef USE_POSIX_AIO
+	struct aiocb aiocb;
+#endif
 };
 
 /* typedef in header */
@@ -338,6 +352,7 @@ typedef struct PgAioCtl
 
 	dlist_head reaped_uncompleted;
 
+#if USE_LIBURING
 	/*
 	 * FIXME: there should be multiple rings, at least one for data integrity
 	 * writes, allowing efficient interleaving with WAL writes, and one for
@@ -349,6 +364,7 @@ typedef struct PgAioCtl
 	 * limiting queue/inflight operations size).
 	 */
 	struct io_uring shared_ring;
+#endif
 
 	dlist_head bounce_buffers;
 
@@ -360,11 +376,14 @@ typedef struct PgAioCtl
 
 /* general pgaio helper functions */
 static void pgaio_complete_ios(bool in_error);
+#ifdef USE_LIBURING
 static void pgaio_backpressure(struct io_uring *ring, const char *loc);
+#endif
 static void pgaio_prepare_io(PgAioInProgress *io, PgAioAction action);
 static void pgaio_finish_io(PgAioInProgress *io);
 static void pgaio_bounce_buffer_release_locked(PgAioInProgress *io);
 
+#ifdef USE_LIBURING
 /* io_uring related functions */
 static int pgaio_uring_submit(bool drain);
 static int pgaio_uring_drain(struct io_uring *ring);
@@ -375,6 +394,7 @@ static void pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe);
 
 static int __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
 								unsigned flags, sigset_t *sig);
+#endif
 
 /* io completions */
 static bool pgaio_complete_nop(PgAioInProgress *io);
@@ -384,6 +404,8 @@ static bool pgaio_complete_read_buffer(PgAioInProgress *io);
 static bool pgaio_complete_write_buffer(PgAioInProgress *io);
 static bool pgaio_complete_write_wal(PgAioInProgress *io);
 
+
+static const char * pgaio_io_action_string(PgAioAction a);
 
 static MemoryContext aio_retry_context;
 
@@ -424,11 +446,178 @@ static int my_aio_id;
 static dlist_head local_recycle_requests;
 
 
+#ifdef USE_LIBURING
 /* io_uring local state */
 struct io_uring local_ring;
+#endif
+
+#ifdef USE_POSIX_AIO
+/* shared queue for completions */
+squeue32 *aio_shared_queue;
+#endif
 
 #define PGAIO_URING_SUBMIT_MAX_IOVEC (PGAIO_SUBMIT_BATCH_SIZE * PGAIO_MAX_COMBINE)
 struct iovec pgaio_uring_submit_iovecs[PGAIO_URING_SUBMIT_MAX_IOVEC];
+
+#ifdef USE_POSIX_AIO
+/*
+ * Check if an IO that was initiated by us has completed, and if so, retrieve
+ * the result and push the IO index into the shared completion queue for later
+ * processing by pgaio_drain(), which may run in any process.
+ *
+ * The reason for this division of labor is that this process is the only one
+ * that will receive a signal for its IO and the only one that is allowed to
+ * enquire about its error and return statuses, and yet we can't deal with all
+ * the work to be done on completion (invoking callbacks etc) from a signal
+ * handler, and we can't use the usual technique of setting a flag for
+ * CHECK_FOR_INTERRUPTS() to deal with because interrupts may be blocked, and
+ * aside from that it's hard to know if CHECK_FOR_INTERRUPTS() is in all the
+ * places required to avoid complicated deadlocks.  So: we do the part that
+ * only we can do, and push the rest into a cluster-wide queue.
+ *
+ * This function tolerates being called for the same IO while it's already
+ * running, if another signal arrives.  That isn't actually expected to happen,
+ * except on macOS where we don't know which IO has completed so we have to run
+ * around probing all outstanding IOs.  Even on other systems, tolerating that
+ * in general seems like a good idea and doesn't cost much; it also allows us
+ * to skip the extra syscalls required to block signals.
+ *
+ * The aio_error() and aio_return() functions are required to be
+ * async-signal-safe by POSIX, and the aio_return() function can only be
+ * successfully called once for a given outstanding IO, so we avoid any
+ * possibility of posting duplicate IO completions into the shared queue, or
+ * risk of clobbering io->result from more than one signal handler context.
+ *
+ * Since we post exactly one completion report per initiated IO, and we always
+ * drain after recycling an IO (XXX: where?!), and since there is a finite
+ * number of possible IOs and the queue is big enough to hold result from all
+ * of them, we don't expect the queue to be full, so the queue is no-wait.
+ */
+static void
+pgaio_sigio_handler_check(PgAioInProgress *io)
+{
+	ssize_t	return_status;
+	int		error_status;
+
+	/* Spinlocks are not safe in this context. */
+#ifdef PG_HAVE_ATOMIC_U64_SIMULATION
+#error "Cannot use squeue32 from signal handler without atomics"
+#endif
+
+	/*
+	 * XXX: Add a flag to indicate that the status has been retrieved already,
+	 * for to skip a bit of the extra syscall spam when we know trivially we've
+	 * already handled this IO, on poor old macOS?
+	 */
+
+	/* Check if the IO has completed and has an error status. */
+	error_status = aio_error(&io->aiocb);
+	if (error_status != 0)
+	{
+		/* Did aio_error() itself fail? */
+		if (error_status < 0)
+		{
+			/*
+			 * Concurrently handled by overlapping signal handler, or we were
+			 * unexpectedly asked to check an IO that didn't actually have any
+			 * IO outstanding?
+			 */
+			if (errno == EINVAL)
+				return;
+			elog(PANIC, "aio_error() failed: %m");
+		}
+
+		/*
+		 * Still running?  Should only happen on macOS where we have to check
+		 * every outstanding IO potentially repeatedly, or if a hand-crafted
+		 * signal was sent, not from the kernel AIO system.
+		 */
+		if (error_status == EINPROGRESS)
+			return;
+
+		/* Retrieve return status just to release kernel resources. */
+		return_status = aio_return(&io->aiocb);
+		if (return_status < 0)
+		{
+			/* Concurrently handled by overlapping signal handler? */
+			if (errno == EINVAL)
+				return;
+			elog(PANIC, "aio_return() failed after error: %m");
+		}
+
+		/* Set the error, and tell pgaio_drain() to deal with it. */
+		io->result = -error_status;
+		if (!squeue32_enqueue(aio_shared_queue,
+							  io - &aio_ctl->in_progress_io[0]))
+			elog(PANIC, "shared completion queue unexpectedly full");
+	}
+
+	/* IO was successful.  Now retrieve the return status. */
+	return_status = aio_return(&io->aiocb);
+	if (return_status < 0)
+	{
+		/* Concurrently handled by overlapping signal handler? */
+		if (errno == EINVAL)
+			return;
+		elog(PANIC, "aio_return() failed after success: %m");
+	}
+
+	/* Set the result, and tell pgaio_drain() to deal with it. */
+	io->result = return_status;
+	if (!squeue32_enqueue(aio_shared_queue,
+						  io - &aio_ctl->in_progress_io[0]))
+		elog(PANIC, "shared completion queue unexpectedly full");
+}
+
+/*
+ * Whenever an IO initated by this process completes, we receive a signal.
+ */
+static void
+pgaio_sigio_handler(int sig, siginfo_t *si, void *uap)
+{
+	int		save_errno = errno;
+	PgAioInProgress *io = (PgAioInProgress *) si->si_value.sival_ptr;
+
+	if (io)
+	{
+		/*
+		 * Sanity check on the pointer in the signal we received.  It had
+		 * better be correctly aligned and in the expected range, and it had
+		 * better point to an IO that this process initiated.  We don't
+		 * actually expect spurious signals carrying bogus sigev_value data,
+		 * but it doesn't cost much to check.
+		 */
+		if (((uintptr_t) io) % sizeof(io) != 0 ||
+			io < &aio_ctl->in_progress_io[0] ||
+			io >= &aio_ctl->in_progress_io[max_aio_in_progress] ||
+			io->owner_id != my_aio_id)
+			return;
+
+		pgaio_sigio_handler_check(io);
+	}
+	else
+	{
+		/*
+		 * macOS doesn't bother to pass sigev_value to the signal handler, so
+		 * we have to consider every outstanding request from this backend to
+		 * be potentially completed.  This is going to be expensive!
+		 */
+		dlist_iter iter;
+
+		/*
+		 * XXX It's not safe to access this linked list from a signal handler!
+		 * We'd probably need this list to be an array with very carefully
+		 * thought out access patterns.  Arggh Apple.
+		 */
+		dlist_foreach(iter, &my_aio->outstanding)
+			pgaio_sigio_handler_check(dlist_container(PgAioInProgress,
+													  owner_node,
+													  iter.cur));
+	}
+
+	errno = save_errno;
+}
+#endif
 
 static Size
 AioCtlShmemSize(void)
@@ -459,11 +648,28 @@ AioBounceShmemSize(void)
 					mul_size(BLCKSZ, max_aio_bounce_buffers));
 }
 
+#ifdef USE_POSIX_AIO
+static Size
+AioSharedQueueSize(void)
+{
+	return squeue32_estimate(max_aio_in_progress);
+}
+#endif
+
 Size
 AioShmemSize(void)
 {
-	return add_size(add_size(AioCtlShmemSize(), AioBounceShmemSize()),
-					AioCtlBackendShmemSize());
+	Size size = 0;
+
+	size = add_size(size, AioCtlShmemSize());
+	size = add_size(size, AioCtlBackendShmemSize());
+	size = add_size(size, AioBounceShmemSize());
+
+#ifdef USE_POSIX_AIO
+	size = add_size(size, AioSharedQueueSize());
+#endif
+
+	return size;
 }
 
 void
@@ -471,6 +677,13 @@ AioShmemInit(void)
 {
 	bool		found;
 	uint32		TotalProcs = MaxBackends + NUM_AUXILIARY_PROCS;
+
+#ifdef USE_POSIX_AIO
+	aio_shared_queue = (squeue32 *)
+		ShmemInitStruct("PgAioSharedQueue", AioSharedQueueSize(), &found);
+	if (!found)
+		squeue32_init(aio_shared_queue, max_aio_in_progress);
+#endif
 
 	aio_ctl = (PgAioCtl *)
 		ShmemInitStruct("PgAio", AioCtlShmemSize(), &found);
@@ -529,6 +742,7 @@ AioShmemInit(void)
 			}
 		}
 
+#if USE_LIBURING
 		{
 			int ret;
 
@@ -536,8 +750,21 @@ AioShmemInit(void)
 			if (ret < 0)
 				elog(ERROR, "io_uring_queue_init failed: %s", strerror(-ret));
 		}
+#endif
 
 	}
+
+#if USE_POSIX_AIO
+	{
+		struct sigaction sa;
+
+		sa.sa_sigaction = pgaio_sigio_handler;
+		sa.sa_flags = SA_RESTART | SA_SIGINFO;
+		sigemptyset(&sa.sa_mask);
+		if (sigaction(SIGIO, &sa, NULL) < 0)
+			elog(ERROR, "could not install signal handler: %m");
+	}
+#endif
 }
 
 void
@@ -560,11 +787,13 @@ pgaio_postmaster_init(void)
 											  1024,
 											  1024);
 	MemoryContextAllowInCriticalSection(aio_retry_context, true);
+
 }
 
 void
 pgaio_postmaster_child_init_local(void)
 {
+#if USE_LIBURING
 	/*
 	 *
 	 */
@@ -577,6 +806,7 @@ pgaio_postmaster_child_init_local(void)
 			elog(ERROR, "io_uring_queue_init failed: %s", strerror(-ret));
 		}
 	}
+#endif
 }
 
 static void
@@ -598,8 +828,10 @@ pgaio_postmaster_child_exit(int code, Datum arg)
 void
 pgaio_postmaster_child_init(void)
 {
+#if USE_LIBURING
 	/* no locking needed here, only affects this process */
 	io_uring_ring_dontfork(&aio_ctl->shared_ring);
+#endif
 
 	my_aio_id = MyProc->pgprocno;
 	my_aio = &aio_ctl->backend_state[my_aio_id];
@@ -936,25 +1168,9 @@ pgaio_complete_ios(bool in_error)
 	END_CRIT_SECTION();
 }
 
-/*
- * Receive completions in ring.
- */
-static int  __attribute__((noinline))
-pgaio_drain(struct io_uring *ring)
+static void
+pgaio_transfer_foreign_to_local(void)
 {
-	int ndrained = 0;
-
-	START_CRIT_SECTION();
-
-	ndrained = pgaio_uring_drain(ring);
-
-	if (ndrained > 0)
-		pgaio_uncombine();
-
-	END_CRIT_SECTION();
-
-	pgaio_complete_ios(false);
-
 	/*
 	 * Transfer all the foreign completions into the local queue.
 	 */
@@ -976,7 +1192,11 @@ pgaio_drain(struct io_uring *ring)
 		}
 		SpinLockRelease(&my_aio->foreign_completed_lock);
 	}
+}
 
+static void
+pgaio_call_pending_local_callbacks(void)
+{
 	/*
 	 * Call all pending local callbacks.
 	 */
@@ -1006,8 +1226,55 @@ pgaio_drain(struct io_uring *ring)
 			recursion_count--;
 		}
 	}
+}
+
+#ifdef USE_LIBURING
+/*
+ * Receive completions in ring.
+ */
+static int  __attribute__((noinline))
+pgaio_drain(struct io_uring *ring)
+{
+	int ndrained = 0;
+
+	START_CRIT_SECTION();
+
+	ndrained = pgaio_uring_drain(ring);
+
+	if (ndrained > 0)
+		pgaio_uncombine();
+
+	END_CRIT_SECTION();
+
+	pgaio_complete_ios(false);
+	pgaio_transfer_foreign_to_local();
+	pgaio_call_pending_local_callbacks();
 
 	return ndrained;
+}
+#endif
+
+static void
+pgaio_drain_shared(void)
+{
+#if defined(USE_LIBURING)
+	pgaio_drain(&aio_ctl->shared_ring);
+#elif defined(USE_POSIX_AIO)
+	uint32 io_index;
+
+	/* Reap as many completed IOs as we can without waiting. */
+	while (squeue32_dequeue(aio_shared_queue, &io_index))
+	{
+		PgAioInProgress *io = &aio_ctl->in_progress_io[io_index];
+
+		io->flags = (io->flags & ~PGAIOIP_INFLIGHT) | PGAIOIP_REAPED;
+		dlist_push_tail(&my_aio->reaped, &io->io_node);
+	}
+
+	pgaio_complete_ios(false);
+	pgaio_transfer_foreign_to_local();
+	pgaio_call_pending_local_callbacks();
+#endif
 }
 
 static bool
@@ -1133,6 +1400,7 @@ pgaio_combine_pending(void)
 	}
 }
 
+#if defined(USE_LIBURING)
 void  __attribute__((noinline))
 pgaio_submit_pending(bool drain)
 {
@@ -1180,6 +1448,95 @@ pgaio_submit_pending(bool drain)
 	pgaio_backpressure(&aio_ctl->shared_ring, "submit_pending");
 }
 
+#elif defined(USE_POSIX_AIO)
+
+void  __attribute__((noinline))
+pgaio_submit_pending(bool drain)
+{
+	/* XXX:TM avoid crash when not fully initialized */
+	if (!my_aio)
+		return;
+
+	while (!dlist_is_empty(&my_aio->pending))
+	{
+		dlist_node *node;
+		PgAioInProgress *io;
+		int error;
+		size_t already_done;
+
+		node = dlist_pop_head_node(&my_aio->pending);
+		io = dlist_container(PgAioInProgress, io_node, node);
+
+		Assert(io->flags & PGAIOIP_PENDING);
+		io->flags = (io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
+		my_aio->pending_count--;
+
+		/* Request a signal on completion. */
+		memset(&io->aiocb, 0, sizeof(io->aiocb));
+		io->aiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
+		io->aiocb.aio_sigevent.sigev_signo = SIGIO;
+		io->aiocb.aio_sigevent.sigev_value.sival_ptr = io;
+
+		switch (io->type)
+		{
+			case PGAIO_INVALID:
+			case PGAIO_NOP:
+				error = 0;
+				break;
+			case PGAIO_FLUSH_RANGE:
+				io->aiocb.aio_fildes = io->d.flush_range.fd;
+#ifdef O_DSYNC
+				error = aio_fsync(O_DSYNC, &io->aiocb);
+#else
+				error = aio_fsync(O_SYNC, &io->aiocb);
+#endif
+				break;
+			case PGAIO_FSYNC:
+				io->aiocb.aio_fildes = io->d.fsync.fd;
+#ifdef O_DSYNC
+				error = aio_fsync(io->d.fsync.datasync ? O_DSYNC : O_SYNC,
+								  &io->aiocb);
+#else
+				error = aio_fsync(O_SYNC, &io->aiocb);
+#endif
+				break;
+			case PGAIO_READ_BUFFER:
+				/* TODO: accumulate and use lio_list() */
+				already_done = io->d.read_buffer.already_done;
+				io->aiocb.aio_fildes = io->d.read_buffer.fd;
+				io->aiocb.aio_offset = io->d.read_buffer.offset + already_done;
+				io->aiocb.aio_nbytes = io->d.read_buffer.nbytes - already_done;
+				io->aiocb.aio_buf = io->d.read_buffer.bufdata + already_done;
+				error = aio_read(&io->aiocb);
+				break;
+			case PGAIO_WRITE_BUFFER:
+				/* TODO: accumulate and use lio_list() */
+				already_done = io->d.write_buffer.already_done;
+				io->aiocb.aio_fildes = io->d.write_buffer.fd;
+				io->aiocb.aio_offset = io->d.write_buffer.offset + already_done;
+				io->aiocb.aio_nbytes = io->d.write_buffer.nbytes - already_done;
+				io->aiocb.aio_buf = io->d.write_buffer.bufdata + already_done;
+				error = aio_write(&io->aiocb);
+				break;
+			case PGAIO_WRITE_WAL:
+				/* TODO: accumulate and use lio_list() */
+				//Assert(io->d.write_buffer.already_done == 0);
+				io->aiocb.aio_fildes = io->d.write_wal.fd;
+				io->aiocb.aio_offset = io->d.write_wal.offset;
+				io->aiocb.aio_nbytes = io->d.write_wal.nbytes;
+				io->aiocb.aio_buf = io->d.write_wal.bufdata;
+				error = aio_write(&io->aiocb);
+				break;
+		}
+		/* XXX handle EAGAIN with back-pressure?  this shows up pretty easily on a mac with default sysctls */
+		if (error != 0)
+			elog(PANIC, "failed to submit IO type %s: %m",
+				 pgaio_io_action_string(io->type));
+	}
+}
+#endif
+
+#ifdef USE_LIBURING
 static void  __attribute__((noinline))
 pgaio_backpressure(struct io_uring *ring, const char *loc)
 {
@@ -1268,6 +1625,7 @@ pgaio_backpressure(struct io_uring *ring, const char *loc)
 		}
 	}
 }
+#endif
 
 /*
  * FIXME: The !holding_reference implementation is a really ugly crock. It's
@@ -1369,7 +1727,7 @@ again:
 		if (flags & done_flags)
 			break;
 
-		pgaio_drain(&aio_ctl->shared_ring);
+		pgaio_drain_shared();
 
 		flags = *(volatile PgAioIPFlags*) &io->flags;
 
@@ -1378,9 +1736,42 @@ again:
 
 		if (flags & PGAIOIP_INFLIGHT)
 		{
+#ifdef USE_LIBURING
 			/* note that this is allowed to spuriously return */
 			pgaio_uring_wait_one(&aio_ctl->shared_ring, io,
 								 WAIT_EVENT_AIO_IO_COMPLETE_ANY);
+#endif
+#ifdef USE_POSIX_AIO
+			if (io->owner_id == my_aio_id)
+			{
+				const struct aiocb *aiocb = &io->aiocb;
+
+				/*
+				 * We're waiting for the kernel to tell us about completion with SIGIO.
+				 * That might have happened in between draining the queue and here, so
+				 * we'll use aio_suspend() as our waiting primitive.  That'll
+				 * return immediately if the IO has already completed, closing that
+				 * race condition.
+				 */
+				if (aio_suspend(&aiocb, 1, NULL) < 0 &&
+					errno != EINTR && errno != EINVAL)
+					elog(PANIC, "aio_suspend failed: %m");
+			}
+			else
+			{
+				/*
+				 * We're waiting for the kernel to tell the initiating backend
+				 * about completion, and then for that backend or any other to
+				 * drain the queue and signal the condition variable.
+				 *
+				 * Although it's highly likely to happen soon after completion,
+				 * there's no guarantee that another backend will ever drain the
+				 * queue.  So, as a last resort, we'll also do it ourselves after
+				 * 100ms.  XXX: How can we do better than this?!
+				 */
+				ConditionVariableTimedSleep(&io->cv, 100, WAIT_EVENT_AIO_IO_COMPLETE_ONE);
+			}
+#endif
 		}
 		else
 		{
@@ -1440,7 +1831,7 @@ out:
 		!(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED) &&
 		io->on_completion_local)
 	{
-		pgaio_drain(&aio_ctl->shared_ring);
+		pgaio_drain_shared();
 	}
 }
 
@@ -1486,7 +1877,7 @@ pgaio_io_get(void)
 		 *
 		 * Also, need to protect against too many ios handed out but not used.
 		 */
-		pgaio_drain(&aio_ctl->shared_ring);
+		pgaio_drain_shared();
 
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
 	}
@@ -1737,10 +2128,11 @@ pgaio_finish_io(PgAioInProgress *io)
 {
 	if (my_aio->pending_count >= PGAIO_SUBMIT_BATCH_SIZE)
 		pgaio_submit_pending(true);
+#ifdef USE_LIBURING
 	else
 		pgaio_backpressure(&aio_ctl->shared_ring, "get_io");
+#endif
 }
-
 
 void
 pgaio_io_release(PgAioInProgress *io)
@@ -1810,6 +2202,7 @@ pgaio_print_queues(void)
 		inflight += pg_atomic_read_u32(&bs->inflight);
 	}
 
+#ifdef USE_LIBURING
 	ereport(LOG,
 			errmsg("shared queue: space: %d ready: %d, we think: %u inflight",
 				   io_uring_sq_space_left(&aio_ctl->shared_ring),
@@ -1818,6 +2211,7 @@ pgaio_print_queues(void)
 			errhidestmt(true),
 			errhidecontext(true)
 		);
+#endif
 }
 
 static const char *
@@ -2036,7 +2430,7 @@ pgaio_bounce_buffer_get(void)
 		LWLockRelease(SharedAIOCtlLock);
 
 		if (!bb)
-			pgaio_drain(&aio_ctl->shared_ring);
+			pgaio_drain_shared();
 		else
 			break;
 	}
@@ -2072,6 +2466,8 @@ pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb)
 
 	io->bb = bb;
 }
+
+#if USE_LIBURING
 
 /* --------------------------------------------------------------------------------
  * io_uring related code
@@ -2442,7 +2838,7 @@ __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
 			flags, sig, _NSIG / 8);
 }
 
-
+#endif /* USE_LIBURING */
 
 /* --------------------------------------------------------------------------------
  * Code dealing with specific IO types
