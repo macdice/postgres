@@ -3722,9 +3722,10 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 		 * O_DSYNC will be sufficient to sync future writes to the log file.
 		 */
 		/* XXX:TM ZFS returns EINVAL for this on FBSD, because it's not supported */
+		/* XXX:TM netBSD UFS returns EOPNOTSUPP */
 		/* XXX:TM macOS doesn't even have it */
 #ifdef HAVE_POSIX_FALLOCATE
-		if ((errno = posix_fallocate(fd, 0, wal_segment_size)) != 0 && errno != EINVAL)
+		if ((errno = posix_fallocate(fd, 0, wal_segment_size)) != 0 && errno != EINVAL && errno != EOPNOTSUPP)
 		{
 			/* if write didn't set errno, assume no disk space */
 			save_errno = errno ? errno : ENOSPC;

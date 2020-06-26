@@ -513,7 +513,7 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 							  seekpos,
 							  (off_t) BLCKSZ * (segendblock - segstartblock));
 
-		if (ret != 0 && ret != EINVAL)
+		if (ret != 0 && ret != EINVAL && ret != EOPNOTSUPP)
 			elog(ERROR, "fallocate failed: %m");
 #endif
 
