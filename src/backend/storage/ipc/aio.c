@@ -1275,6 +1275,9 @@ pgaio_drain_shared(void)
 	pgaio_drain(&aio_ctl->shared_ring);
 #elif defined(USE_POSIX_AIO)
 	uint32 io_index;
+	int ndrained = 0;
+
+	START_CRIT_SECTION();
 
 	/* Reap as many completed IOs as we can without waiting. */
 	while (squeue32_dequeue(aio_shared_queue, &io_index))
@@ -1283,7 +1286,14 @@ pgaio_drain_shared(void)
 
 		io->flags = (io->flags & ~PGAIOIP_INFLIGHT) | PGAIOIP_REAPED;
 		dlist_push_tail(&my_aio->reaped, &io->io_node);
+		++ndrained;
 	}
+
+	// XXX broken
+	//if (ndrained > 0)
+	//	pgaio_uncombine();
+
+	END_CRIT_SECTION();
 
 	pgaio_complete_ios(false);
 	pgaio_transfer_foreign_to_local();
@@ -1470,6 +1480,10 @@ pgaio_submit_pending(bool drain)
 	/* XXX:TM avoid crash when not fully initialized */
 	if (!my_aio)
 		return;
+
+	// XXX:TM broken
+	//if (my_aio->pending_count > 1)
+	//	pgaio_combine_pending();
 
 	while (!dlist_is_empty(&my_aio->pending))
 	{
