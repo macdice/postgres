@@ -1485,7 +1485,12 @@ pgaio_submit_pending(bool drain)
 		io->flags = (io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
 		my_aio->pending_count--;
 
-		/* Request a signal on completion. */
+		/*
+		 * Request a signal on completion.
+		 *
+		 * XXX We could also group together up to AIO_LISTIO_MAX reads and
+		 * writes into a single lio_listio() call, to cut down on system calls.
+		 */
 		memset(&io->aiocb, 0, sizeof(io->aiocb));
 		io->aiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
 		io->aiocb.aio_sigevent.sigev_signo = SIGIO;
@@ -1515,7 +1520,6 @@ pgaio_submit_pending(bool drain)
 #endif
 				break;
 			case PGAIO_READ_BUFFER:
-				/* TODO: accumulate and use lio_list() */
 				already_done = io->d.read_buffer.already_done;
 				io->aiocb.aio_fildes = io->d.read_buffer.fd;
 				io->aiocb.aio_offset = io->d.read_buffer.offset + already_done;
@@ -1524,7 +1528,6 @@ pgaio_submit_pending(bool drain)
 				error = aio_read(&io->aiocb);
 				break;
 			case PGAIO_WRITE_BUFFER:
-				/* TODO: accumulate and use lio_list() */
 				already_done = io->d.write_buffer.already_done;
 				io->aiocb.aio_fildes = io->d.write_buffer.fd;
 				io->aiocb.aio_offset = io->d.write_buffer.offset + already_done;
@@ -1533,7 +1536,6 @@ pgaio_submit_pending(bool drain)
 				error = aio_write(&io->aiocb);
 				break;
 			case PGAIO_WRITE_WAL:
-				/* TODO: accumulate and use lio_list() */
 				//Assert(io->d.write_buffer.already_done == 0);
 				io->aiocb.aio_fildes = io->d.write_wal.fd;
 				io->aiocb.aio_offset = io->d.write_wal.offset;
@@ -1542,7 +1544,7 @@ pgaio_submit_pending(bool drain)
 				error = aio_write(&io->aiocb);
 				break;
 		}
-		/* XXX handle EAGAIN with back-pressure?  this shows up pretty easily on a mac with default sysctls */
+		/* XXX handle EAGAIN by waiting for something to complete; how? */
 		if (error != 0)
 			elog(PANIC, "failed to submit IO type %s: %m",
 				 pgaio_io_action_string(io->type));
