@@ -508,12 +508,14 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		seekpos = (off_t) BLCKSZ * segstartblock;
 
 		fd = FileGetRawDesc(v->mdfd_vfd);
+#ifdef HAVE_POSIX_FALLOCATE
 		ret = posix_fallocate(fd,
 							  seekpos,
 							  (off_t) BLCKSZ * (segendblock - segstartblock));
 
-		if (ret != 0)
+		if (ret != 0 && ret != EINVAL && ret != EOPNOTSUPP)
 			elog(ERROR, "fallocate failed: %m");
+#endif
 
 		for (BlockNumber i = segstartblock; i < segendblock; i++)
 		{

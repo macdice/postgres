@@ -3721,13 +3721,17 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 		 * indirect blocks are down on disk.  Therefore, fdatasync(2) or
 		 * O_DSYNC will be sufficient to sync future writes to the log file.
 		 */
-
-		if (posix_fallocate(fd, 0, wal_segment_size) != 0)
+		/* XXX:TM ZFS returns EINVAL for this on FBSD, because it's not supported */
+		/* XXX:TM netBSD UFS returns EOPNOTSUPP */
+		/* XXX:TM macOS doesn't even have it */
+#ifdef HAVE_POSIX_FALLOCATE
+		if ((errno = posix_fallocate(fd, 0, wal_segment_size)) != 0 && errno != EINVAL && errno != EOPNOTSUPP)
 		{
 			/* if write didn't set errno, assume no disk space */
 			save_errno = errno ? errno : ENOSPC;
 		}
 		else
+#endif
 		{
 			for (nbytes = 0; nbytes < wal_segment_size; nbytes += XLOG_BLCKSZ)
 			{

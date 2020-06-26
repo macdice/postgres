@@ -4159,6 +4159,9 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_AIO_IO_COMPLETE_ONE:
 			event_name = "AIOCompleteOne";
 			break;
+		case WAIT_EVENT_AIO_IO_COMPLETE_ONE_LOCAL:
+			event_name = "AIOCompleteOneLocal";
+			break;
 		case WAIT_EVENT_AIO_REFS:
 			event_name = "AIORefs";
 			break;
