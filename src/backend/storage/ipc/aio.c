@@ -1746,16 +1746,22 @@ again:
 			{
 				const struct aiocb *aiocb = &io->aiocb;
 
-				/*
-				 * We're waiting for the kernel to tell us about completion with SIGIO.
-				 * That might have happened in between draining the queue and here, so
-				 * we'll use aio_suspend() as our waiting primitive.  That'll
-				 * return immediately if the IO has already completed, closing that
-				 * race condition.
-				 */
-				if (aio_suspend(&aiocb, 1, NULL) < 0 &&
-					errno != EINTR && errno != EINVAL)
+				/* We're waiting for the kernel to tell us about completion with SIGIO. */
+				if (aio_suspend(&aiocb, 1, NULL) < 0 && errno != EINTR)
+				{
+					if (errno == EINVAL)
+					{
+						/*
+						 * This is expected if SIGIO was delivered before we suspended.
+						 * Draining the queue just once more should do the trick in that case; if not, EINVAL is not expected.
+						 */
+						pgaio_drain_shared();
+						flags = *(volatile PgAioIPFlags*) &io->flags;
+						if (flags & done_flags)
+							break;
+					}
 					elog(PANIC, "aio_suspend failed: %m");
+				}
 			}
 			else
 			{
