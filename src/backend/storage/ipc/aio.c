@@ -602,6 +602,8 @@ pgaio_sigio_handler(int sig, siginfo_t *si, void *uap)
 		 * we have to consider every outstanding request from this backend to
 		 * be potentially completed.  This is going to be expensive!
 		 */
+
+#if 0
 		dlist_iter iter;
 
 		/*
@@ -613,6 +615,17 @@ pgaio_sigio_handler(int sig, siginfo_t *si, void *uap)
 			pgaio_sigio_handler_check(dlist_container(PgAioInProgress,
 													  owner_node,
 													  iter.cur));
+#endif
+
+fprintf(stderr, "macOS sucks\n");
+		/* XXX: Insanely expensive stand-in code */
+		for (size_t i = 0; i < max_aio_in_progress; ++i)
+		{
+			PgAioInProgress *io = &aio_ctl->in_progress_io[i];
+
+			if (io->owner_id == my_aio_id)
+				pgaio_sigio_handler_check(io);
+		}
 	}
 
 	errno = save_errno;
