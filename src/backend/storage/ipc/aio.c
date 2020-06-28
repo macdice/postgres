@@ -550,6 +550,7 @@ pgaio_sigio_handler_check(PgAioInProgress *io)
 		if (!squeue32_enqueue(aio_shared_queue,
 							  io - &aio_ctl->in_progress_io[0]))
 			elog(PANIC, "shared completion queue unexpectedly full");
+		return;
 	}
 
 	/* IO was successful.  Now retrieve the return status. */
