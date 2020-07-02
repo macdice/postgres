@@ -793,13 +793,12 @@ vacuum_pgsr_next_single(uintptr_t pgsr_private, PgAioInProgress *aio, uintptr_t 
 	if (vss->blkno == vss->nblocks)
 		return PGSR_NEXT_END;
 
-	buf = ReadBufferAsync(vss->relation, MAIN_FORKNUM, vss->blkno,
+	buf = ReadBufferAsync(vss->relation, MAIN_FORKNUM, vss->blkno++,
 						  RBM_NORMAL, vac_strategy, &already_valid,
 						  &aio);
 
 	*read_private = (uintptr_t) buf;
 
-	vss->blkno++;
 
 	if (already_valid)
 		return PGSR_NEXT_NO_IO;
