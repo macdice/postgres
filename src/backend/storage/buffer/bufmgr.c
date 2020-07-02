@@ -1888,7 +1888,7 @@ BulkExtendBuffered(Relation relation, ForkNumber forkNum, int extendby, BufferAc
 		/*
 		 * If there's buffers being written out that might or might not be
 		 * available, depending on whether they've concurrently been pinned,
-		 * wait for all of those to finish, and chek cagain.
+		 * wait for all of those to finish, and check again.
 		 */
 		if ((be_state->acquired_buffers_count + be_state->pending_buffers_count) >= extendby)
 		{
