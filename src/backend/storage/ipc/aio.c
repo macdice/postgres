@@ -135,13 +135,6 @@ struct PgAioInProgress
 	int32 result;
 
 	/*
-	 * FIXME: This is just used for a realy ugly hacky pgaio_io_wait(), to
-	 * deal with some edge-cases when waiting for an IO that's owned by
-	 * another backend (e.g. in WaitIO).
-	 */
-	pg_atomic_uint32 extra_refs;
-
-	/*
 	 * Single callback that can be registered on an IO to be called upon
 	 * completion. Note that this is reset whenever an IO is recycled..
 	 */
@@ -170,6 +163,8 @@ struct PgAioInProgress
 	PgAioBounceBuffer *bb;
 
 	PgAioInProgress *merge_with;
+
+	uint64 generation;
 
 	/*
 	 * NB: Note that fds in here may *not* be relied upon for re-issuing
@@ -886,6 +881,8 @@ pgaio_complete_ios(bool in_error)
 					other->foreign_completed_count++;
 					other->foreign_completed_total_count++;
 
+					pg_write_barrier();
+
 					*(volatile PgAioIPFlags*) &cur->flags =
 						(cur->flags & ~(PGAIOIP_REAPED | PGAIOIP_IN_PROGRESS)) |
 						PGAIOIP_DONE |
@@ -914,6 +911,7 @@ pgaio_complete_ios(bool in_error)
 				cur->result = 0;
 				cur->system_referenced = true;
 				cur->on_completion_local = NULL;
+				cur->generation++;
 
 				dlist_push_tail(&aio_ctl->unused_ios, &cur->owner_node);
 				aio_ctl->used_count--;
@@ -1295,15 +1293,22 @@ pgaio_io_wait(PgAioInProgress *io, bool holding_reference)
 {
 	PgAioIPFlags init_flags;
 	PgAioIPFlags flags;
-	bool increased_refcount = false;
-	uint32 done_flags =	PGAIOIP_DONE;
+	uint32 done_flags = PGAIOIP_DONE | PGAIOIP_IDLE;
+	uint64 init_generation = *(volatile uint64*) &io->generation;
+	uint64 current_generation;
 
 #ifdef PGAIO_VERBOSE
 	elog(DEBUG3, "waiting for %zu",
 		 io - aio_ctl->in_progress_io);
 #endif
 
+	init_flags = *(volatile PgAioIPFlags*) &io->flags;
+
 again:
+
+	current_generation = *(volatile uint64*) &io->generation;
+
+	flags = *(volatile PgAioIPFlags*) &io->flags;
 
 	if (!holding_reference)
 	{
@@ -1315,65 +1320,62 @@ again:
 		done_flags |= PGAIOIP_SHARED_CALLBACK_CALLED;
 
 		/* possible due to racyness */
-		done_flags |= PGAIOIP_UNUSED | PGAIOIP_IDLE;
+		done_flags |= PGAIOIP_UNUSED;
 
-		init_flags = flags = *(volatile PgAioIPFlags*) &io->flags;
-
-		if (init_flags & (PGAIOIP_IN_PROGRESS))
-		{
-			pg_atomic_fetch_add_u32(&io->extra_refs, 1);
-			increased_refcount = true;
-			HOLD_INTERRUPTS();
-		}
-		else
-		{
-			Assert(init_flags & done_flags);
-		}
-
-		if (!increased_refcount)
+		if (!(flags & (PGAIOIP_IN_PROGRESS)))
 			goto out;
 	}
 	else
 	{
-		init_flags = flags = *(volatile PgAioIPFlags*) &io->flags;
-
 		Assert(io->user_referenced);
-		Assert(!(io->flags & PGAIOIP_UNUSED));
 
-		/* shouldn't wait on an unprep'ed IO */
-		Assert(!(io->flags & PGAIOIP_IDLE));
+		/*
+		 * Shouldn't wait our own IO when it's not in progress (otherwise this
+		 * pgaio_io_function shouldn't have been called). We can however not
+		 * assert this for the current set of flags, because if the IO was
+		 * retried, the local completion callback could have been called, and
+		 * recycled the IO. Thus check that the initial set of flags didn't
+		 * include IDLE and that either the IO is IDLE or was recycled.
+		 */
+		Assert(!(init_flags & PGAIOIP_IDLE));
+		Assert(!(flags & PGAIOIP_IDLE) ||
+			   current_generation != init_generation);
 	}
 
 	/*
-	 * When holding a reference the IO can't go idle. And if we're not, we
-	 * should have exited above.
+	 * When holding a reference the IO can't become unused. And if we're not,
+	 * we should have exited above.
 	 */
-	Assert(!(init_flags & PGAIOIP_IDLE));
+	Assert(!(flags & PGAIOIP_UNUSED));
 
-	if (init_flags & done_flags)
+	if (flags & done_flags)
 	{
 		goto out;
 	}
 
-	if ((init_flags & PGAIOIP_PENDING) &&
+	if ((flags & PGAIOIP_PENDING) &&
 		(!IsUnderPostmaster || io->owner_id == my_aio_id))
 	{
-		if (init_flags & PGAIOIP_PENDING)
+		if (flags & PGAIOIP_PENDING)
 			pgaio_submit_pending(false);
 	}
 
 	while (true)
 	{
+		current_generation = *(volatile uint64*) &io->generation;
 		flags = *(volatile PgAioIPFlags*) &io->flags;
 
-		if (flags & done_flags)
+		if (current_generation != init_generation ||
+			(flags & done_flags))
 			break;
 
 		pgaio_drain(&aio_ctl->shared_ring);
 
+		current_generation = *(volatile uint64*) &io->generation;
 		flags = *(volatile PgAioIPFlags*) &io->flags;
 
-		if (flags & done_flags)
+		if (current_generation != init_generation ||
+			(flags & done_flags))
 			break;
 
 		if (flags & PGAIOIP_INFLIGHT)
@@ -1391,8 +1393,11 @@ again:
 			if (IsUnderPostmaster)
 				ConditionVariablePrepareToSleep(&io->cv);
 
+			current_generation = *(volatile uint64*) &io->generation;
 			flags = *(volatile PgAioIPFlags*) &io->flags;
-			if (!(flags & done_flags))
+
+			if (!(current_generation != init_generation ||
+				  (flags & done_flags)))
 				ConditionVariableSleep(&io->cv, WAIT_EVENT_AIO_IO_COMPLETE_ONE);
 
 			if (IsUnderPostmaster)
@@ -1401,24 +1406,20 @@ again:
 	}
 
 	flags = *(volatile PgAioIPFlags*) &io->flags;
-	Assert(flags & done_flags);
+	current_generation = *(volatile uint64*) &io->generation;
+
+	Assert(init_generation != current_generation ||
+		   flags & done_flags);
 
 out:
-	if (flags & (PGAIOIP_SOFT_FAILURE | PGAIOIP_HARD_FAILURE))
+	if (init_generation == current_generation &&
+		(flags & (PGAIOIP_SOFT_FAILURE | PGAIOIP_HARD_FAILURE)))
 	{
 		/* can retry soft failures, but not hard ones */
 		/* FIXME: limit number of soft retries */
 		if (flags & PGAIOIP_SOFT_FAILURE)
 		{
 			pgaio_io_retry(io);
-
-			if (increased_refcount)
-			{
-				pg_atomic_fetch_sub_u32(&io->extra_refs, 1);
-				ConditionVariableBroadcast(&io->cv);
-				RESUME_INTERRUPTS();
-				increased_refcount = false;
-			}
 
 			goto again;
 		}
@@ -1429,34 +1430,15 @@ out:
 		}
 	}
 
-	if (increased_refcount)
-	{
-		pg_atomic_fetch_sub_u32(&io->extra_refs, 1);
-		ConditionVariableBroadcast(&io->cv);
-		RESUME_INTERRUPTS();
-	}
+	flags = *(volatile PgAioIPFlags*) &io->flags;
+	current_generation = *(volatile uint64*) &io->generation;
 
-	if (holding_reference &&
-		!(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED) &&
+	if (init_generation == current_generation &&
+		holding_reference &&
+		!(flags & PGAIOIP_LOCAL_CALLBACK_CALLED) &&
 		io->on_completion_local)
 	{
 		pgaio_drain(&aio_ctl->shared_ring);
-	}
-}
-
-static void
-pgaio_io_wait_extra_refs(PgAioInProgress *io)
-{
-	while (pg_atomic_read_u32(&io->extra_refs) > 0)
-	{
-		elog(WARNING, "waiting for extra refs");
-		ConditionVariablePrepareToSleep(&io->cv);
-		if (pg_atomic_read_u32(&io->extra_refs) == 0)
-		{
-			ConditionVariableCancelSleep();
-			break;
-		}
-		ConditionVariableSleep(&io->cv, WAIT_EVENT_AIO_REFS);
 	}
 }
 
@@ -1504,9 +1486,6 @@ pgaio_io_get(void)
 	io->system_referenced = false;
 
 	*(volatile PgAioIPFlags*) &io->flags = PGAIOIP_IDLE;
-
-	pgaio_io_wait_extra_refs(io);
-	Assert(pg_atomic_read_u32(&io->extra_refs) == 0);
 
 	io->owner_id = my_aio_id;
 
@@ -1669,8 +1648,6 @@ pgaio_io_recycle(PgAioInProgress *io)
 	Assert(!io->system_referenced);
 	Assert(io->merge_with == NULL);
 
-	pgaio_io_wait_extra_refs(io);
-
 	if (io->bb)
 	{
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
@@ -1695,6 +1672,8 @@ pgaio_io_recycle(PgAioInProgress *io)
 		}
 		io->flags &= ~PGAIOIP_DONE;
 		io->flags |= PGAIOIP_IDLE;
+
+		io->generation++;
 	}
 
 	io->flags &= ~(PGAIOIP_DONE |
@@ -1777,6 +1756,8 @@ pgaio_io_release(PgAioInProgress *io)
 				dlist_delete_from(&my_aio->local_completed, &io->io_node);
 				my_aio->local_completed_count--;
 			}
+
+			io->generation++;
 		}
 
 		io->flags = PGAIOIP_UNUSED;
