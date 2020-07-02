@@ -2218,7 +2218,7 @@ pgaio_uring_wait_one(struct io_uring *ring, PgAioInProgress *io, uint32 wait_eve
 	 * another backend), wait for it using io_uring_enter.
 	 */
 	flags = *(volatile PgAioIPFlags*) &io->flags;
-	if (!(flags & PGAIOIP_INFLIGHT))
+	if (flags & PGAIOIP_INFLIGHT)
 	{
 
 #ifdef PGAIO_VERBOSE
