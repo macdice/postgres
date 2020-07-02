@@ -1757,7 +1757,6 @@ bulk_extend_buffer_inval(BufferDesc *buf_hdr)
 		{
 			UnlockBufHdr(buf_hdr, buf_state);
 			LWLockRelease(partition_lock);
-			UnpinBuffer(buf_hdr, true);
 
 			return false;
 		}
