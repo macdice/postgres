@@ -1729,13 +1729,17 @@ retry:
 static bool
 bulk_extend_buffer_inval(BufferDesc *buf_hdr)
 {
+	uint32		buf_state = pg_atomic_read_u32(&buf_hdr->state);
+
+	Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+	Assert(GetPrivateRefCount(BufferDescriptorGetBuffer(buf_hdr)) > 0);
+
 	/* can't change while we're holding the pin */
-	if (pg_atomic_read_u32(&buf_hdr->state) & BM_TAG_VALID)
+	if (buf_state & BM_TAG_VALID)
 	{
 		uint32		hash;
 		LWLock	   *partition_lock;
 		BufferTag	tag;
-		uint32		buf_state;
 		uint32		old_flags;
 
 		/* have buffer pinned, so it's safe to read tag without lock */
@@ -1755,6 +1759,8 @@ bulk_extend_buffer_inval(BufferDesc *buf_hdr)
 		 */
 		if (BUF_STATE_GET_REFCOUNT(buf_state) != 1 || (buf_state & BM_DIRTY))
 		{
+			Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+
 			UnlockBufHdr(buf_hdr, buf_state);
 			LWLockRelease(partition_lock);
 
@@ -1811,7 +1817,7 @@ bulk_extend_undirty_complete(void *pgsw_private, void *write_private)
 
 	tag = ex_buf->buf_hdr->tag;
 	be_state->pending_buffers_count--;
-	dlist_delete(&ex_buf->node);
+	dlist_delete_from(&be_state->pending_buffers, &ex_buf->node);
 
 	if (bulk_extend_buffer_inval(ex_buf->buf_hdr))
 	{
@@ -4600,6 +4606,25 @@ ConditionalLockBuffer(Buffer buffer)
 									LW_EXCLUSIVE);
 }
 
+void
+BufferCheckOneLocalPin(Buffer buffer)
+{
+	if (BufferIsLocal(buffer))
+	{
+		/* There should be exactly one pin */
+		if (LocalRefCount[-buffer - 1] != 1)
+			elog(ERROR, "incorrect local pin count: %d",
+				 LocalRefCount[-buffer - 1]);
+	}
+	else
+	{
+		/* There should be exactly one local pin */
+		if (GetPrivateRefCount(buffer) != 1)
+			elog(ERROR, "incorrect local pin count: %d",
+				 GetPrivateRefCount(buffer));
+	}
+}
+
 /*
  * LockBufferForCleanup - lock a buffer in preparation for deleting items
  *
@@ -4625,20 +4650,7 @@ LockBufferForCleanup(Buffer buffer)
 	Assert(BufferIsValid(buffer));
 	Assert(PinCountWaitBuf == NULL);
 
-	if (BufferIsLocal(buffer))
-	{
-		/* There should be exactly one pin */
-		if (LocalRefCount[-buffer - 1] != 1)
-			elog(ERROR, "incorrect local pin count: %d",
-				 LocalRefCount[-buffer - 1]);
-		/* Nobody else to wait for */
-		return;
-	}
-
-	/* There should be exactly one local pin */
-	if (GetPrivateRefCount(buffer) != 1)
-		elog(ERROR, "incorrect local pin count: %d",
-			 GetPrivateRefCount(buffer));
+	BufferCheckOneLocalPin(buffer);
 
 	bufHdr = GetBufferDescriptor(buffer - 1);
 
