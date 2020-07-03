@@ -1174,8 +1174,6 @@ pgaio_submit_pending(bool drain)
 #ifdef PGAIO_VERBOSE
 	elog(DEBUG3, "submitted %d (orig %d)", total_submitted, orig_total);
 #endif
-
-	pgaio_backpressure(&aio_ctl->shared_ring, "submit_pending");
 }
 
 static void  __attribute__((noinline))
