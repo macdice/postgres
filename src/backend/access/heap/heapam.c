@@ -222,7 +222,7 @@ heap_pgsr_next_single(uintptr_t pgsr_private, PgAioInProgress *aio, uintptr_t *r
 	{
 		blockno = ++scan->rs_prefetch_block;
 		if (blockno >= scan->rs_nblocks)
-			blockno = 0;
+			scan->rs_prefetch_block = blockno = 0;
 		if (blockno == scan->rs_startblock ||
 			(scan->rs_numblocks != InvalidBlockNumber &&
 			 --scan->rs_numblocks == 0))
