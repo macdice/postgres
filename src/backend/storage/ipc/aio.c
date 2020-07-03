@@ -2123,6 +2123,22 @@ pgaio_uring_submit(bool drain)
 
 		LWLockRelease(SharedAIOSubmissionLock);
 
+		/*
+		 * Others might have been waiting for this IO. Because it wasn't
+		 * marked as in-flight until now, they might be waiting for the
+		 * CV. Wake'em up.
+		 */
+		for (int i = 0; i < nios; i++)
+		{
+			PgAioInProgress *cur = ios[i];
+
+			while (cur)
+			{
+				ConditionVariableBroadcast(&cur->cv);
+				cur = cur->merge_with;
+			}
+		}
+
 		/* check if there are completions we could process */
 		if (drain)
 			pgaio_drain(&aio_ctl->shared_ring);
