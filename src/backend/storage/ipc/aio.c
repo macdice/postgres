@@ -1306,6 +1306,16 @@ pgaio_io_wait(PgAioInProgress *io, bool holding_reference)
 
 	init_flags = *(volatile PgAioIPFlags*) &io->flags;
 
+	/*
+	 * If the IO we're waiting for is ours and not yet submitted, submit
+	 * now.
+	 */
+	if ((init_flags & PGAIOIP_PENDING) &&
+		(!IsUnderPostmaster || io->owner_id == my_aio_id))
+	{
+		pgaio_submit_pending(false);
+	}
+
 again:
 
 	current_generation = *(volatile uint64*) &io->generation;
@@ -1355,13 +1365,6 @@ again:
 		goto out;
 	}
 
-	if ((flags & PGAIOIP_PENDING) &&
-		(!IsUnderPostmaster || io->owner_id == my_aio_id))
-	{
-		if (flags & PGAIOIP_PENDING)
-			pgaio_submit_pending(false);
-	}
-
 	while (true)
 	{
 		current_generation = *(volatile uint64*) &io->generation;
@@ -1380,7 +1383,17 @@ again:
 			(flags & done_flags))
 			break;
 
-		if (flags & PGAIOIP_INFLIGHT)
+		if (my_aio->pending_count > 0)
+		{
+			/*
+			 * If we otherwise would have to sleep submit all pending
+			 * requests, to avoid others having to wait for us to submit
+			 * them. Don't want to so when not needing to sleep, as submitting
+			 * IOs in smaller increments can be less efficient.
+			 */
+			pgaio_submit_pending(false);
+		}
+		else if (flags & PGAIOIP_INFLIGHT)
 		{
 			/* note that this is allowed to spuriously return */
 			pgaio_uring_wait_one(&aio_ctl->shared_ring, io,
