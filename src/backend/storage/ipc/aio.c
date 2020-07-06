@@ -1157,7 +1157,7 @@ pgaio_submit_pending(bool drain)
 	ereport(LOG, errmsg("before combine"),
 			errhidestmt(true),
 			errhidecontext(true));
-	pgaio_print_list(&my_aio->pending, NULL, offsetof(PgAioInProgress, system_node));
+	pgaio_print_list(&my_aio->pending, NULL, offsetof(PgAioInProgress, io_node));
 #endif
 	if (my_aio->pending_count > 1)
 		pgaio_combine_pending();
@@ -1166,7 +1166,7 @@ pgaio_submit_pending(bool drain)
 	ereport(LOG, errmsg("after combine"),
 			errhidestmt(true),
 			errhidecontext(true));
-	pgaio_print_list(&my_aio->pending, NULL, offsetof(PgAioInProgress, system_node));
+	pgaio_print_list(&my_aio->pending, NULL, offsetof(PgAioInProgress, io_node));
 #endif
 #endif /* COMBINE_ENABLED */
 
