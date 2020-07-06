@@ -4885,13 +4885,7 @@ WaitIO(BufferDesc *buf)
 	for (;;)
 	{
 		uint32		buf_state;
-		PgAioInProgress *aio = buf->io_in_progress;
-
-		if (aio)
-		{
-			pgaio_io_wait(aio, false);
-			ConditionVariablePrepareToSleep(cv);
-		}
+		PgAioInProgress *aio;
 
 		/*
 		 * It may not be necessary to acquire the spinlock to check the flag
@@ -4899,10 +4893,19 @@ WaitIO(BufferDesc *buf)
 		 * play it safe.
 		 */
 		buf_state = LockBufHdr(buf);
+		aio = buf->io_in_progress;
 		UnlockBufHdr(buf, buf_state);
 
 		if (!(buf_state & BM_IO_IN_PROGRESS))
 			break;
+
+		if (aio)
+		{
+			pgaio_io_wait(aio, false);
+			ConditionVariablePrepareToSleep(cv);
+			continue;
+		}
+
 		ConditionVariableSleep(cv, WAIT_EVENT_BUFFILE_WAITIO);
 	}
 	ConditionVariableCancelSleep();
