@@ -1146,6 +1146,8 @@ pgaio_submit_pending(bool drain)
 		return;
 	}
 
+	HOLD_INTERRUPTS();
+
 	orig_total = my_aio->pending_count;
 
 #define COMBINE_ENABLED
@@ -1174,6 +1176,8 @@ pgaio_submit_pending(bool drain)
 #ifdef PGAIO_VERBOSE
 	elog(DEBUG3, "submitted %d (orig %d)", total_submitted, orig_total);
 #endif
+
+	RESUME_INTERRUPTS();
 }
 
 static void  __attribute__((noinline))
