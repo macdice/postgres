@@ -21,10 +21,13 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+#include "fmgr.h"
+#include "funcapi.h"
 #include "lib/ilist.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
+#include "nodes/execnodes.h"
 #include "nodes/memnodes.h"
 #include "pgstat.h"
 #include "storage/aio.h"
@@ -36,6 +39,8 @@
 #include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "storage/shmem.h"
+#include "utils/builtins.h"
+#include "utils/fmgrprotos.h"
 #include "utils/memutils.h"
 
 
@@ -314,7 +319,9 @@ typedef struct PgAioPerBackend
 	/*
 	 * Stats.
 	 */
-	uint64 issued_total_count;
+	uint64 executed_total_count; /* un-merged */
+	uint64 issued_total_count; /* merged */
+	uint64 submissions_total_count; /* number of submission syscalls */
 	uint64 foreign_completed_total_count;
 	uint64 retry_total_count;
 
@@ -604,6 +611,18 @@ pgaio_postmaster_child_init(void)
 	dlist_init(&local_recycle_requests);
 
 	on_shmem_exit(pgaio_postmaster_child_exit, 0);
+
+	Assert(my_aio->unused_count == 0);
+	Assert(my_aio->outstanding_count == 0);
+	Assert(my_aio->pending_count == 0);
+	Assert(my_aio->local_completed_count == 0);
+	Assert(my_aio->foreign_completed_count == 0);
+
+	my_aio->executed_total_count = 0;
+	my_aio->issued_total_count = 0;
+	my_aio->submissions_total_count = 0;
+	my_aio->foreign_completed_total_count = 0;
+	my_aio->retry_total_count = 0;
 }
 
 void
@@ -1174,6 +1193,9 @@ pgaio_submit_pending(bool drain)
 
 
 	total_submitted = pgaio_uring_submit(drain);
+
+	my_aio->executed_total_count += orig_total;
+	my_aio->issued_total_count += total_submitted;
 
 #ifdef PGAIO_VERBOSE
 	elog(DEBUG3, "submitted %d (orig %d)", total_submitted, orig_total);
@@ -1872,35 +1894,24 @@ pgaio_io_flag_string(PgAioIPFlags flags, StringInfo s)
 }
 
 static void
-pgaio_io_print_one(PgAioInProgress *io, StringInfo s)
+pgaio_io_action_desc(PgAioInProgress *io, StringInfo s)
 {
-	appendStringInfo(s, "aio %zu: ring: %d, init: %d, flags: ",
-					 io - aio_ctl->in_progress_io,
-					 io->ring,
-					 io->owner_id);
-	pgaio_io_flag_string(io->flags, s);
-	appendStringInfo(s, ", result: %d, user/system_referenced: %d/%d, action: %s",
-					 io->result,
-					 io->user_referenced,
-					 io->system_referenced,
-					 pgaio_io_action_string(io->type));
-
 	switch (io->type)
 	{
 		case PGAIO_FSYNC:
-			appendStringInfo(s, " (fd: %d, datasync: %d, barrier: %d)",
+			appendStringInfo(s, "fd: %d, datasync: %d, barrier: %d",
 							 io->d.fsync.fd,
 							 io->d.fsync.datasync,
 							 io->d.fsync.barrier);
 			break;
 		case PGAIO_FLUSH_RANGE:
-			appendStringInfo(s, " (fd: %d, offset: %llu, nbytes: %llu)",
+			appendStringInfo(s, "fd: %d, offset: %llu, nbytes: %llu",
 							 io->d.flush_range.fd,
 							 (unsigned long long) io->d.flush_range.offset,
 							 (unsigned long long) io->d.flush_range.nbytes);
 			break;
 		case PGAIO_READ_BUFFER:
-			appendStringInfo(s, " (fd: %d, mode: %d, offset: %d, nbytes: %d, already_done: %d, buf/data: %d/%p)",
+			appendStringInfo(s, "fd: %d, mode: %d, offset: %d, nbytes: %d, already_done: %d, buf/data: %d/%p",
 							 io->d.read_buffer.fd,
 							 io->d.read_buffer.mode,
 							 io->d.read_buffer.offset,
@@ -1910,7 +1921,7 @@ pgaio_io_print_one(PgAioInProgress *io, StringInfo s)
 							 io->d.read_buffer.bufdata);
 			break;
 		case PGAIO_WRITE_BUFFER:
-			appendStringInfo(s, " (fd: %d, offset: %d, nbytes: %d, already_done: %d, buf/data: %d/%p)",
+			appendStringInfo(s, "fd: %d, offset: %d, nbytes: %d, already_done: %d, buf/data: %d/%p",
 							 io->d.write_buffer.fd,
 							 io->d.write_buffer.offset,
 							 io->d.write_buffer.nbytes,
@@ -1919,7 +1930,7 @@ pgaio_io_print_one(PgAioInProgress *io, StringInfo s)
 							 io->d.write_buffer.bufdata);
 			break;
 		case PGAIO_WRITE_WAL:
-			appendStringInfo(s, " (fd: %d, offset: %d, nbytes: %d, already_done: %d, bufdata: %p, no-reorder: %d)",
+			appendStringInfo(s, "fd: %d, offset: %d, nbytes: %d, already_done: %d, bufdata: %p, no-reorder: %d",
 							 io->d.write_wal.fd,
 							 (int) io->d.write_wal.offset,
 							 (int) io->d.write_wal.nbytes,
@@ -1930,7 +1941,23 @@ pgaio_io_print_one(PgAioInProgress *io, StringInfo s)
 		default:
 			break;
 	}
+}
 
+static void
+pgaio_io_print_one(PgAioInProgress *io, StringInfo s)
+{
+	appendStringInfo(s, "aio %zu: ring: %d, init: %d, flags: ",
+					 io - aio_ctl->in_progress_io,
+					 io->ring,
+					 io->owner_id);
+	pgaio_io_flag_string(io->flags, s);
+	appendStringInfo(s, ", result: %d, user/system_referenced: %d/%d, action: %s (",
+					 io->result,
+					 io->user_referenced,
+					 io->system_referenced,
+					 pgaio_io_action_string(io->type));
+	pgaio_io_action_desc(io, s);
+	appendStringInfoString(s, ")");
 }
 
 void
@@ -2123,7 +2150,7 @@ pgaio_uring_submit(bool drain)
 			int ret;
 
 			pg_atomic_add_fetch_u32(&my_aio->inflight, inflight_add);
-			my_aio->issued_total_count++;
+			my_aio->submissions_total_count++;
 
 	again:
 			pgstat_report_wait_start(WAIT_EVENT_AIO_SUBMIT);
@@ -2874,4 +2901,160 @@ pgaio_complete_write_wal(PgAioInProgress *io)
 	/* FIXME: update xlog.c state */
 
 	return true;
+}
+
+
+/* --------------------------------------------------------------------------------
+ * SQL interface functions
+ * --------------------------------------------------------------------------------
+ */
+
+Datum
+pg_stat_get_aio_backends(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_AIO_BACKEND_COLS	12
+
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	for (int i = 0; i < aio_ctl->backend_state_count; i++)
+	{
+		PgAioPerBackend *bs = &aio_ctl->backend_state[i];
+		Datum		values[PG_STAT_GET_AIO_BACKEND_COLS];
+		bool		nulls[PG_STAT_GET_AIO_BACKEND_COLS];
+		int			pid = ProcGlobal->allProcs[i].pid;
+
+		if (pid == 0)
+			continue;
+
+		memset(nulls, 0, sizeof(nulls));
+
+		values[ 0] = Int32GetDatum(pid);
+		values[ 1] = Int64GetDatum(bs->executed_total_count);
+		values[ 2] = Int64GetDatum(bs->issued_total_count);
+		values[ 3] = Int64GetDatum(bs->submissions_total_count);
+		values[ 4] = Int64GetDatum(bs->foreign_completed_total_count);
+		values[ 5] = Int64GetDatum(bs->retry_total_count);
+		values[ 6] = Int64GetDatum(pg_atomic_read_u32(&bs->inflight));
+		values[ 7] = Int32GetDatum(bs->unused_count);
+		values[ 8] = Int32GetDatum(bs->outstanding_count);
+		values[ 9] = Int32GetDatum(bs->pending_count);
+		values[10] = Int32GetDatum(bs->local_completed_count);
+		values[11] = Int32GetDatum(bs->foreign_completed_count);
+
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
+}
+
+Datum
+pg_stat_get_aios(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_AIOS_COLS	8
+
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	StringInfoData tmps;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	initStringInfo(&tmps);
+
+	for (int i = 0; i < max_aio_in_progress; i++)
+	{
+		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
+		Datum		values[PG_STAT_GET_AIOS_COLS];
+		bool		nulls[PG_STAT_GET_AIOS_COLS];
+		int			owner_pid;
+		PgAioInProgressFlags flags = io->flags;
+
+		if (flags & PGAIOIP_UNUSED)
+			continue;
+
+		memset(nulls, 0, sizeof(nulls));
+
+		values[ 0] = Int32GetDatum(i);
+		values[ 1] = PointerGetDatum(cstring_to_text(pgaio_io_action_string(io->type)));
+
+		pgaio_io_flag_string(flags, &tmps);
+		values[ 2] = PointerGetDatum(cstring_to_text(tmps.data));
+		resetStringInfo(&tmps);
+
+		values[ 3] = Int32GetDatum(io->ring);
+
+		owner_pid = ProcGlobal->allProcs[io->owner_id].pid;
+		values[ 4] = Int32GetDatum(owner_pid);
+
+		values[ 5] = Int64GetDatum(io->generation);
+
+		values[ 6] = Int32GetDatum(io->result);
+
+		pgaio_io_action_desc(io, &tmps);
+		values[ 7] = PointerGetDatum(cstring_to_text(tmps.data));
+		resetStringInfo(&tmps);
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
 }

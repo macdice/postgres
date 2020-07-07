@@ -976,6 +976,16 @@ CREATE VIEW pg_stat_bgwriter AS
         pg_stat_get_buf_alloc() AS buffers_alloc,
         pg_stat_get_bgwriter_stat_reset_time() AS stats_reset;
 
+CREATE VIEW pg_stat_aio_backends AS
+    /* FIXME: easier to maintain without column names during development */
+    SELECT s.*
+    FROM pg_stat_get_aio_backends() s;
+
+CREATE VIEW pg_stat_aios AS
+    /* FIXME: easier to maintain without column names during development */
+    SELECT s.*
+    FROM pg_stat_get_aios() s;
+
 CREATE VIEW pg_stat_progress_analyze AS
     SELECT
         S.pid AS pid, S.datid AS datid, D.datname AS datname,
