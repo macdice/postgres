@@ -151,6 +151,24 @@ static inline int _mdfd_open_flags(void)
 	return flags;
 }
 
+static inline void mdfd_post_open(int fd)
+{
+#if !defined(O_DIRECT) && defined(F_NOCACHE)
+	/*
+	 * macOS didn't adopt IRIX's O_DIRECT like everyone else, and instead
+	 * requires a separate system call to ask for that.
+	 */
+	if (io_data_direct && fcntl(fd, F_NOCACHE, 1) == -1)
+	{
+		int save_errno = errno;
+
+		close(fd);
+		errno = save_errno;
+		elog(ERROR, "could not disable caching: %m");
+	}
+#endif
+}
+
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.
  */
@@ -230,6 +248,8 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	}
 
 	pfree(path);
+
+	mdfd_post_open(FileGetRawDesc(fd));
 
 	_fdvec_resize(reln, forkNum, 1);
 	mdfd = &reln->md_seg_fds[forkNum][0];
@@ -541,12 +561,17 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		seekpos = (off_t) BLCKSZ * segstartblock;
 
 		fd = FileGetRawDesc(v->mdfd_vfd);
+#ifdef HAVE_POSIX_FALLOCATE
 		ret = posix_fallocate(fd,
 							  seekpos,
 							  (off_t) BLCKSZ * (segendblock - segstartblock));
 
-		if (ret != 0)
+		if (ret != 0 && ret != EINVAL && ret != EOPNOTSUPP)
+		{
+			errno = ret;
 			elog(ERROR, "fallocate failed: %m");
+		}
+#endif
 
 		for (BlockNumber i = segstartblock; i < segendblock; i++)
 		{
@@ -639,6 +664,8 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 	}
 
 	pfree(path);
+
+	mdfd_post_open(FileGetRawDesc(fd));
 
 	_fdvec_resize(reln, forknum, 1);
 	mdfd = &reln->md_seg_fds[forknum][0];
@@ -1388,6 +1415,8 @@ _mdfd_openseg(SMgrRelation reln, ForkNumber forknum, BlockNumber segno,
 
 	if (fd < 0)
 		return NULL;
+
+	mdfd_post_open(FileGetRawDesc(fd));
 
 	/*
 	 * Segments are always opened in order from lowest to highest, so we must
