@@ -1,0 +1,36 @@
+# Special .appveyor.yml file to test combination of AIO/DIO features.  WIP.
+
+# This exists because Cirrus CI doesn't currently seem to be offering
+# free-for-open-source Linux VMs (?), so you're stuck with containers that run
+# under a Linux 4.19 kernel, but we need 5.1+ for io_uring.  So let's use
+# Appveyor to run the aio_type=io_uring mode under their Ubuntu2004 image which
+# has Linux 5.4 kernel.  Unfortunately Ubuntu2004 doesn't ship liburing, so
+# we also have to build that.
+
+image: Ubuntu2004
+install:
+  - uname -a
+  - sudo apt-get --yes update
+  - DEBIAN_FRONTEND=noninteractive sudo apt-get --yes install gcc libreadline-dev flex bison make perl libipc-run-perl clang llvm-dev libperl-dev libpython3-dev tcl-dev libldap2-dev libicu-dev docbook-xml docbook-xsl fop libxml2-utils xsltproc krb5-admin-server krb5-kdc krb5-user slapd ldap-utils libssl-dev pkg-config locales-all linux-headers-generic
+  - git clone https://github.com/axboe/liburing.git
+  - ( cd liburing && ./configure && make && sudo make install )
+build_script:
+  - ./configure --enable-cassert --enable-debug --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-openssl --with-icu --with-llvm --with-liburing
+  - make -s -j4
+test_script:
+    - echo aio_type=worker > /tmp/extra.conf
+    - echo io_data_direct=off >> /tmp/extra.conf
+    - echo io_wal_direct=off >> /tmp/extra.conf
+    - TEMP_CONFIG=/tmp/extra.conf make -s check || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
+    - echo aio_type=worker > /tmp/extra.conf
+    - echo io_data_direct=on >> /tmp/extra.conf
+    - echo io_wal_direct=on >> /tmp/extra.conf
+    - TEMP_CONFIG=/tmp/extra.conf make -s check || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
+    - echo aio_type=io_uring > /tmp/extra.conf
+    - echo io_data_direct=off >> /tmp/extra.conf
+    - echo io_wal_direct=off >> /tmp/extra.conf
+    - TEMP_CONFIG=/tmp/extra.conf make -s check || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
+    - echo aio_type=io_uring > /tmp/extra.conf
+    - echo io_data_direct=on >> /tmp/extra.conf
+    - echo io_wal_direct=on >> /tmp/extra.conf
+    - TEMP_CONFIG=/tmp/extra.conf make -s check || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
