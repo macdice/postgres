@@ -124,8 +124,7 @@ extern void pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb
 extern PgAioBounceBuffer *pgaio_bounce_buffer_get(void);
 extern char *pgaio_bounce_buffer_buffer(PgAioBounceBuffer *bb);
 
-extern void AioWorkerMain(Datum datum);
-extern void AioWorkerRegister(void);
+extern void AioWorkerMain(void);
 
 /*
  * Helpers. In aio_util.c.

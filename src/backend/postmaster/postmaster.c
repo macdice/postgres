@@ -333,8 +333,8 @@ typedef enum
 	PM_WAIT_BACKENDS,			/* waiting for live backends to exit */
 	PM_SHUTDOWN,				/* waiting for checkpointer to do shutdown
 								 * ckpt */
-	PM_SHUTDOWN_2,				/* waiting for archiver and walsenders to
-								 * finish */
+	PM_SHUTDOWN_2,				/* waiting for archiver, walsenders and
+								 * aio workers to finish */
 	PM_WAIT_DEAD_END,			/* waiting for dead_end children to exit */
 	PM_NO_CHILDREN				/* all important children have exited */
 } PMState;
@@ -376,6 +376,11 @@ static bool LoadedSSL = false;
 #ifdef USE_BONJOUR
 static DNSServiceRef bonjour_sdref = NULL;
 #endif
+
+/* State for AIO worker management. */
+static int num_aio_workers = 0;
+static bool aio_worker_wait_start = false;
+static bool aio_worker_wait_stop = false;
 
 /*
  * postmaster.c - function prototypes
@@ -421,6 +426,7 @@ static void TerminateChildren(int signal);
 static int	CountChildren(int target);
 static bool assign_backendlist_entry(RegisteredBgWorker *rw);
 static void maybe_start_bgworkers(void);
+static void maybe_adjust_aio_workers(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
 static pid_t StartChildProcess(AuxProcType type);
 static void StartAutovacuumWorker(void);
@@ -544,6 +550,7 @@ static void ShmemBackendArrayRemove(Backend *bn);
 #define StartCheckpointer()		StartChildProcess(CheckpointerProcess)
 #define StartWalWriter()		StartChildProcess(WalWriterProcess)
 #define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
+#define StartAioWorker()		StartChildProcess(AioWorkerProcess)
 
 /* Macros to check exit status of a child process */
 #define EXIT_STATUS_0(st)  ((st) == 0)
@@ -1010,9 +1017,6 @@ PostmasterMain(int argc, char *argv[])
 	 */
 	pgaio_postmaster_init();
 
-	/* Register the AIO workers, if configured. */
-	AioWorkerRegister();
-
 	/*
 	 * Set up shared memory and semaphores.
 	 */
@@ -1396,6 +1400,9 @@ PostmasterMain(int argc, char *argv[])
 	 * see what's happening.
 	 */
 	AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STARTING);
+
+	/* Make sure we can perform I/O while starting up. */
+	maybe_adjust_aio_workers();
 
 	/*
 	 * We're ready to rock and roll...
@@ -2805,6 +2812,7 @@ pmdie(SIGNAL_ARGS)
 				pmState == PM_HOT_STANDBY || pmState == PM_STARTUP)
 			{
 				/* autovac workers are told to shut down immediately */
+				/* and bgworkers too; does this need tweaking? */
 				SignalSomeChildren(SIGTERM,
 								   BACKEND_TYPE_AUTOVAC | BACKEND_TYPE_BGWORKER);
 				/* and the autovac launcher too */
@@ -3917,8 +3925,8 @@ PostmasterStateMachine(void)
 		/*
 		 * PM_SHUTDOWN_2 state ends when there's no other children than
 		 * dead_end children left. There shouldn't be any regular backends
-		 * left by now anyway; what we're really waiting for is walsenders and
-		 * archiver.
+		 * left by now anyway; what we're really waiting for is walsenders,
+		 * aio workers and archiver.
 		 */
 		if (PgArchPID == 0 && CountChildren(BACKEND_TYPE_ALL) == 0)
 		{
@@ -5811,7 +5819,7 @@ do_start_bgworker(RegisteredBgWorker *rw)
 	pid_t		worker_pid;
 
 	Assert(rw->rw_pid == 0);
-
+elog(LOG, "do_start_bgworker");
 	/*
 	 * Allocate and assign the Backend element.  Note we must do this before
 	 * forking, so that we can handle failures (out of memory or child-process
@@ -5825,6 +5833,7 @@ do_start_bgworker(RegisteredBgWorker *rw)
 	if (!assign_backendlist_entry(rw))
 	{
 		rw->rw_crashed_at = GetCurrentTimestamp();
+elog(LOG, "XXX failed do_start_bgworker");
 		return false;
 	}
 
@@ -6084,7 +6093,6 @@ maybe_start_bgworkers(void)
 
 		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time))
 		{
-elog(LOG, "worker %s should start now -> 1", rw->rw_worker.bgw_name);
 			/* reset crash time before trying to start worker */
 			rw->rw_crashed_at = 0;
 
@@ -6117,8 +6125,45 @@ elog(LOG, "worker %s should start now -> 1", rw->rw_worker.bgw_name);
 				return;
 			}
 		}
-else
-elog(LOG, "worker %s should start now -> 0", rw->rw_worker.bgw_name);
+	}
+}
+
+static void
+maybe_adjust_aio_workers(void)
+{
+	if (aio_type != AIOTYPE_BGWORKER)
+		return;
+
+	/*
+	 * If we're in final shutting down state, then we're just waiting for all
+	 * processes to exit.
+	 */
+	if (pmState == PM_SHUTDOWN_2)
+		return;
+
+	/* Still waiting for our last adjustment to take effect? */
+	if (aio_worker_wait_start || aio_worker_wait_stop)
+		return;
+
+	/* Need to create more? */
+	if (num_aio_workers < aio_bgworkers)
+	{
+		int pid;
+
+elog(LOG, "XXX i want to make one more aio worker");
+		/* Launch one. */
+		pid = StartAioWorker();
+		/* XXX push onto list */
+		aio_worker_wait_start = true;
+		return;
+	}
+
+	/* Too many? */
+	if (num_aio_workers > aio_bgworkers)
+	{
+		/* Find one, and ask it to quit. */
+		/* TODO! */
+		aio_worker_wait_stop = true;
 	}
 }
 

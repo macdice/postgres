@@ -1374,6 +1374,7 @@ pgaio_bgworker_submit(bool drain)
 			while (!squeue32_enqueue(aio_submission_queue, io_index))
 				ConditionVariableSleep(&aio_ctl->submission_queue_not_full,
 									   WAIT_EVENT_AIO_SUBMIT);
+elog(LOG, "enqueued %u", io_index);
 			ConditionVariableCancelSleep();
 			ConditionVariableSignal(&aio_ctl->submission_queue_not_empty);
 		}
@@ -3346,15 +3347,17 @@ fprintf(stderr, "[pgaio_bgworker_process_io %zu complete, type = %d, result = %d
 }
 
 void
-AioWorkerMain(Datum datum)
+AioWorkerMain(void)
 {
 	PgAioWorkerState state;
 
+	MyBackendType = B_AIO_WORKER;
+
 	pqsignal(SIGTERM, die);
+	pqsignal(SIGUSR2, die);
 	BackgroundWorkerUnblockSignals();
 
-	/* Connect, just so we can appear in pg_stat_activity. */
-	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+	/* XXX Install setjmp handler to log errors and exit */
 
 	pgaio_bgworker_process_init(&state);
 	for (;;)
@@ -3363,6 +3366,7 @@ AioWorkerMain(Datum datum)
 
 		if (squeue32_dequeue(aio_submission_queue, &io_index))
 		{
+elog(LOG, "dequeued %u", io_index);
 			ConditionVariableCancelSleep();
 			ConditionVariableBroadcast(&aio_ctl->submission_queue_not_full);
 
@@ -3381,44 +3385,10 @@ AioWorkerMain(Datum datum)
 		{
 			ConditionVariableSleep(&aio_ctl->submission_queue_not_empty,
 								   0 /* XXX wait event */);
-			ConditionVariableCancelSleep();
 		}
 	}
 	/* XXX not reached, but if we had nice shutdown signalling... */
 	pgaio_bgworker_process_close(&state);
-}
-
-void
-AioWorkerRegister(void)
-{
-	if (aio_type != AIOTYPE_BGWORKER)
-		return;
-
-	/*
-	 * XXX For now we have a static number of AIO workers, but ideally they'd
-	 * be dynamic and you could adjust the number at runtime.
-	 *
-	 * XXX Plain old bgworkers are not good enough; we need workers with a
-	 * higher priority that the postmaster knows about, so that during
-	 * shutdown, they shut down after things like the checkpointer!
-	 */
-	for (int i = 0; i < aio_bgworkers; ++i)
-	{
-		BackgroundWorker bgw;
-
-		memset(&bgw, 0, sizeof(bgw));
-		bgw.bgw_flags = BGWORKER_SHMEM_ACCESS;
-		bgw.bgw_start_time = BgWorkerStart_PostmasterStart;
-		snprintf(bgw.bgw_library_name, BGW_MAXLEN, "postgres");
-		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "AioWorkerMain");
-		snprintf(bgw.bgw_name, BGW_MAXLEN, "aio worker %d", i + 1);
-		snprintf(bgw.bgw_type, BGW_MAXLEN, "aio worker");
-		bgw.bgw_restart_time = 5;
-		bgw.bgw_notify_pid = 0;
-		bgw.bgw_main_arg = (Datum) 0;
-
-		RegisterBackgroundWorker(&bgw);
-	}
 }
 
 /* --------------------------------------------------------------------------------

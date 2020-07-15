@@ -1276,7 +1276,7 @@ ParallelWorkerMain(Datum main_arg)
 	CurrentMemoryContext = AllocSetContextCreate(TopMemoryContext,
 												 "Parallel worker",
 												 ALLOCSET_DEFAULT_SIZES);
-
+elog(LOG, "XXX parallel main");
 	/*
 	 * Attach to the dynamic shared memory segment for the parallel query, and
 	 * find its table of contents.

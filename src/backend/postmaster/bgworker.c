@@ -130,9 +130,6 @@ static const struct
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
 	},
-	{
-		"AioWorkerMain", AioWorkerMain
-	}
 };
 
 /* Private functions. */
