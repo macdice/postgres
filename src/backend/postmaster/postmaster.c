@@ -1010,6 +1010,9 @@ PostmasterMain(int argc, char *argv[])
 	 */
 	pgaio_postmaster_init();
 
+	/* Register the AIO workers, if configured. */
+	AioWorkerRegister();
+
 	/*
 	 * Set up shared memory and semaphores.
 	 */
@@ -2802,7 +2805,6 @@ pmdie(SIGNAL_ARGS)
 				pmState == PM_HOT_STANDBY || pmState == PM_STARTUP)
 			{
 				/* autovac workers are told to shut down immediately */
-				/* and bgworkers too; does this need tweaking? */
 				SignalSomeChildren(SIGTERM,
 								   BACKEND_TYPE_AUTOVAC | BACKEND_TYPE_BGWORKER);
 				/* and the autovac launcher too */
@@ -6082,6 +6084,7 @@ maybe_start_bgworkers(void)
 
 		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time))
 		{
+elog(LOG, "worker %s should start now -> 1", rw->rw_worker.bgw_name);
 			/* reset crash time before trying to start worker */
 			rw->rw_crashed_at = 0;
 
@@ -6114,6 +6117,8 @@ maybe_start_bgworkers(void)
 				return;
 			}
 		}
+else
+elog(LOG, "worker %s should start now -> 0", rw->rw_worker.bgw_name);
 	}
 }
 

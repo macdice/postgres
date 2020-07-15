@@ -15,21 +15,23 @@
 //#define ILIST_DEBUG 1
 
 #include <fcntl.h>
-#include <liburing.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
+#include "access/xlog.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "lib/ilist.h"
+#include "lib/squeue32.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
 #include "nodes/memnodes.h"
 #include "pgstat.h"
+#include "postmaster/bgworker.h"
 #include "storage/aio.h"
 #include "storage/buf.h"
 #include "storage/buf_internals.h"
@@ -39,10 +41,15 @@
 #include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "storage/shmem.h"
+#include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/fmgrprotos.h"
+#include "utils/guc.h"
 #include "utils/memutils.h"
 
+#ifdef USE_LIBURING
+#include <liburing.h>
+#endif
 
 #define PGAIO_VERBOSE
 
@@ -183,6 +190,8 @@ struct PgAioInProgress
 		struct
 		{
 			int fd;
+			TimeLineID tli;
+			XLogSegNo segno;
 			bool barrier;
 			bool datasync;
 		} fsync;
@@ -192,6 +201,7 @@ struct PgAioInProgress
 			int fd;
 			off_t nbytes;
 			off_t offset;
+			AioBufferTag tag;
 		} flush_range;
 
 		struct
@@ -220,6 +230,8 @@ struct PgAioInProgress
 		struct
 		{
 			int fd;
+			TimeLineID tli;
+			XLogSegNo segno;
 			uint32 offset;
 			uint32 nbytes;
 			uint32 already_done;
@@ -342,6 +354,7 @@ typedef struct PgAioCtl
 
 	dlist_head reaped_uncompleted;
 
+#ifdef USE_LIBURING
 	/*
 	 * FIXME: there should be multiple rings, at least one for data integrity
 	 * writes, allowing efficient interleaving with WAL writes, and one for
@@ -353,6 +366,14 @@ typedef struct PgAioCtl
 	 * limiting queue/inflight operations size).
 	 */
 	struct io_uring shared_ring;
+#endif
+
+	/*
+	 * When using bgworker mode, these condition variables are used for
+	 * sleeping on aio_submission_queue.
+	 */
+	ConditionVariable submission_queue_not_empty;
+	ConditionVariable submission_queue_not_full;
 
 	dlist_head bounce_buffers;
 
@@ -362,13 +383,25 @@ typedef struct PgAioCtl
 	PgAioInProgress in_progress_io[FLEXIBLE_ARRAY_MEMBER];
 } PgAioCtl;
 
+/* Used for caching file descriptors between invocation. */
+typedef struct PgAioWorkerState {
+	int wal_fd;
+	XLogSegNo wal_segno;
+	TimeLineID wal_tli;
+} PgAioWorkerState;
+
 /* general pgaio helper functions */
 static void pgaio_complete_ios(bool in_error);
+#ifdef USE_LIBURING
 static void pgaio_backpressure(struct io_uring *ring, const char *loc);
+#endif
 static void pgaio_prepare_io(PgAioInProgress *io, PgAioAction action);
 static void pgaio_finish_io(PgAioInProgress *io);
 static void pgaio_bounce_buffer_release_locked(PgAioInProgress *io);
+static void pgaio_transfer_foreign_to_local(void);
+static void pgaio_call_pending_local_callbacks(void);
 
+#ifdef USE_LIBURING
 /* io_uring related functions */
 static int pgaio_uring_submit(bool drain);
 static int pgaio_uring_drain(struct io_uring *ring);
@@ -379,6 +412,11 @@ static void pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe);
 
 static int __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
 								unsigned flags, sigset_t *sig);
+#endif
+
+static void pgaio_bgworker_process_init(PgAioWorkerState *state);
+static void pgaio_bgworker_process_io(PgAioWorkerState *state, PgAioInProgress *io);
+static void pgaio_bgworker_process_close(PgAioWorkerState *state);
 
 /* io completions */
 static bool pgaio_complete_nop(PgAioInProgress *io);
@@ -408,6 +446,10 @@ static const PgAioCompletedCB completion_callbacks[] =
 	[PGAIO_WRITE_WAL] = pgaio_complete_write_wal,
 };
 
+/* GUCs */
+int aio_type;
+int aio_bgworker_queue_size;
+int aio_bgworkers;
 
 /* (future) GUC controlling global MAX number of in-progress IO entries */
 extern int max_aio_in_progress;
@@ -428,11 +470,25 @@ static int my_aio_id;
 static dlist_head local_recycle_requests;
 
 
+#ifdef USE_LIBURING
 /* io_uring local state */
 struct io_uring local_ring;
+#endif
+
+/* Submission queue, used if aio_type is bgworker. */
+squeue32 *aio_submission_queue;
 
 #define PGAIO_URING_SUBMIT_MAX_IOVEC (PGAIO_SUBMIT_BATCH_SIZE * PGAIO_MAX_COMBINE)
 struct iovec pgaio_uring_submit_iovecs[PGAIO_URING_SUBMIT_MAX_IOVEC];
+
+/* Options for aio_type. */
+const struct config_enum_entry aio_type_options[] = {
+	{"bgworker", AIOTYPE_BGWORKER, false},
+#ifdef USE_LIBURING
+	{"io_uring", AIOTYPE_LIBURING, false},
+#endif
+	{NULL, 0, false}
+};
 
 static Size
 AioCtlShmemSize(void)
@@ -463,11 +519,30 @@ AioBounceShmemSize(void)
 					mul_size(BLCKSZ, max_aio_bounce_buffers));
 }
 
+static Size
+AioSubmissionQueueShmemSize(void)
+{
+	/*
+	 * For bgworker mode, we need a submission queue.  XXX We should probably
+	 * have more than one.
+	 */
+	if (aio_type == AIOTYPE_BGWORKER)
+		return sizeof(uint32) * aio_bgworker_queue_size;
+	else
+		return 0;
+}
+
 Size
 AioShmemSize(void)
 {
-	return add_size(add_size(AioCtlShmemSize(), AioBounceShmemSize()),
-					AioCtlBackendShmemSize());
+	Size size = 0;
+
+	size = add_size(size, AioCtlShmemSize());
+	size = add_size(size, AioCtlBackendShmemSize());
+	size = add_size(size, AioSubmissionQueueShmemSize());
+	size = add_size(size, AioBounceShmemSize());
+
+	return size;
 }
 
 void
@@ -533,6 +608,19 @@ AioShmemInit(void)
 			}
 		}
 
+		if (aio_type == AIOTYPE_BGWORKER)
+		{
+			aio_submission_queue =
+				ShmemInitStruct("aio submission queue",
+								AioSubmissionQueueShmemSize(),
+								&found);
+			Assert(!found);
+			squeue32_init(aio_submission_queue, aio_bgworker_queue_size);
+			ConditionVariableInit(&aio_ctl->submission_queue_not_full);
+			ConditionVariableInit(&aio_ctl->submission_queue_not_empty);
+		}
+#ifdef USE_LIBURING
+		else if (aio_type == AIOTYPE_LIBURING)
 		{
 			int ret;
 
@@ -540,6 +628,7 @@ AioShmemInit(void)
 			if (ret < 0)
 				elog(ERROR, "io_uring_queue_init failed: %s", strerror(-ret));
 		}
+#endif
 
 	}
 }
@@ -569,10 +658,11 @@ pgaio_postmaster_init(void)
 void
 pgaio_postmaster_child_init_local(void)
 {
+#ifdef USE_LIBURING
 	/*
 	 *
 	 */
-	{
+	if (aio_type == AIOTYPE_LIBURING) {
 		int ret;
 
 		ret = io_uring_queue_init(32, &local_ring, 0);
@@ -581,6 +671,7 @@ pgaio_postmaster_child_init_local(void)
 			elog(ERROR, "io_uring_queue_init failed: %s", strerror(-ret));
 		}
 	}
+#endif
 }
 
 static void
@@ -602,8 +693,13 @@ pgaio_postmaster_child_exit(int code, Datum arg)
 void
 pgaio_postmaster_child_init(void)
 {
-	/* no locking needed here, only affects this process */
-	io_uring_ring_dontfork(&aio_ctl->shared_ring);
+#ifdef USE_LIBURING
+	if (aio_type == AIOTYPE_LIBURING)
+	{
+		/* no locking needed here, only affects this process */
+		io_uring_ring_dontfork(&aio_ctl->shared_ring);
+	}
+#endif
 
 	my_aio_id = MyProc->pgprocno;
 	my_aio = &aio_ctl->backend_state[my_aio_id];
@@ -955,11 +1051,13 @@ pgaio_complete_ios(bool in_error)
 	END_CRIT_SECTION();
 }
 
+#ifdef USE_LIBURING
 /*
  * Receive completions in ring.
  */
+ /* XXX rename me */
 static int  __attribute__((noinline))
-pgaio_drain(struct io_uring *ring)
+pgaio_uring_drain2(struct io_uring *ring)
 {
 	int ndrained = 0;
 
@@ -973,7 +1071,50 @@ pgaio_drain(struct io_uring *ring)
 	END_CRIT_SECTION();
 
 	pgaio_complete_ios(false);
+	pgaio_transfer_foreign_to_local();
+	pgaio_call_pending_local_callbacks();
 
+	return ndrained;
+}
+#endif
+
+static int
+pgaio_bgworker_drain(void)
+{
+	/*
+	 * For bgworker mode, completion functions are normally run by workers.
+	 * However, there might still be things on our own reaped list, if we ever
+	 * had to run synchronous IO, so we still need to call
+	 * pgaio_complete_ios() to run the shared completion callbacks.
+	 */
+	pgaio_complete_ios(false);
+	/*
+	 * Completions run by workers might have resulted in queued
+	 * local callbacks, so we'll need to call those too.
+	 */
+	pgaio_transfer_foreign_to_local();
+	pgaio_call_pending_local_callbacks();
+
+	return 0;
+}
+
+/* XXX This should take a ring number? */
+static int
+pgaio_drain_shared(void)
+{
+	if (aio_type == AIOTYPE_BGWORKER)
+		return pgaio_bgworker_drain();
+#ifdef USE_LIBURING
+	if (aio_type == AIOTYPE_LIBURING)
+		return pgaio_uring_drain2(aio_ctl->shared_ring);
+#endif
+
+	return 0;
+}
+
+static void
+pgaio_transfer_foreign_to_local(void)
+{
 	/*
 	 * Transfer all the foreign completions into the local queue.
 	 */
@@ -995,7 +1136,11 @@ pgaio_drain(struct io_uring *ring)
 		}
 		SpinLockRelease(&my_aio->foreign_completed_lock);
 	}
+}
 
+static void
+pgaio_call_pending_local_callbacks(void)
+{
 	/*
 	 * Call all pending local callbacks.
 	 */
@@ -1025,8 +1170,6 @@ pgaio_drain(struct io_uring *ring)
 			recursion_count--;
 		}
 	}
-
-	return ndrained;
 }
 
 static bool
@@ -1104,6 +1247,10 @@ pgaio_combine_pending(void)
 
 	Assert(my_aio->pending_count > 1);
 
+	/* XXX Not all AIO types support combining, yet. */
+	if (aio_type == AIOTYPE_BGWORKER)
+		return;
+
 	dlist_foreach_modify(iter, &my_aio->pending)
 	{
 		PgAioInProgress *cur = dlist_container(PgAioInProgress, io_node, iter.cur);
@@ -1152,6 +1299,91 @@ pgaio_combine_pending(void)
 	}
 }
 
+static bool
+pgaio_bgworker_need_synchronous(PgAioInProgress *io)
+{
+	char *buf;
+	size_t size;
+
+	/* Single user mode doesn't have any background workers. */
+	if (!IsUnderPostmaster)
+		return true;
+
+	switch (io->type)
+	{
+	case PGAIO_FSYNC:
+		/* We can't open WAL files that don't have a regular name yet. */
+		return io->d.fsync.segno == -1;
+	case PGAIO_WRITE_WAL:
+		/* We can't open WAL files that don't have a regular name yet. */
+		return io->d.write_wal.segno == -1;
+	case PGAIO_READ_BUFFER:
+		buf = io->d.read_buffer.bufdata;
+		size = io->d.read_buffer.nbytes;
+		break;
+	case PGAIO_WRITE_BUFFER:
+		buf = io->d.write_buffer.bufdata;
+		size = io->d.write_buffer.nbytes;
+		break;
+	default:
+		return false;
+	}
+
+	/*
+	 * XXX Sometimes we receive pointers to private memory.  Oops.  There's
+	 * probably some solution involving bounce buffers?  For now, range-check
+	 * it and fall back to synchronous operation for that case.
+	 */
+	if (buf < BufferBlocks || (buf + size) > (BufferBlocks + BLCKSZ * NBuffers))
+		return true;
+
+	return false;
+}
+
+static int
+pgaio_bgworker_submit(bool drain)
+{
+	int nsubmitted = 0;
+
+	while (!dlist_is_empty(&my_aio->pending))
+	{
+		dlist_node *node;
+		PgAioInProgress *io;
+		uint32 io_index;
+
+		node = dlist_pop_head_node(&my_aio->pending);
+		io = dlist_container(PgAioInProgress, io_node, node);
+		io_index = io - aio_ctl->in_progress_io;
+		Assert(io->flags & PGAIOIP_PENDING);
+		io->flags = (io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
+		my_aio->pending_count--;
+
+		if (pgaio_bgworker_need_synchronous(io))
+		{
+			PgAioWorkerState state;
+
+			/* Perform the IO synchronously in this process. */
+			pgaio_bgworker_process_init(&state);
+			pgaio_bgworker_process_io(&state, io);
+			pgaio_bgworker_process_close(&state);
+		}
+		else
+		{
+			/* Push it on the submission queue and wake a worker. */
+			/* XXX Think about interruptions! */
+			while (!squeue32_enqueue(aio_submission_queue, io_index))
+				ConditionVariableSleep(&aio_ctl->submission_queue_not_full,
+									   WAIT_EVENT_AIO_SUBMIT);
+			ConditionVariableCancelSleep();
+			ConditionVariableSignal(&aio_ctl->submission_queue_not_empty);
+		}
+
+		nsubmitted++;
+	}
+
+	return nsubmitted;
+}
+
 void  __attribute__((noinline))
 pgaio_submit_pending(bool drain)
 {
@@ -1192,7 +1424,12 @@ pgaio_submit_pending(bool drain)
 #endif /* COMBINE_ENABLED */
 
 
-	total_submitted = pgaio_uring_submit(drain);
+	if (aio_type == AIOTYPE_BGWORKER)
+		total_submitted = pgaio_bgworker_submit(drain);
+#ifdef USE_LIBURING
+	else if (aio_type == AIOTYPE_LIBURING)
+		total_submitted = pgaio_uring_submit(drain);
+#endif
 
 	my_aio->executed_total_count += orig_total;
 	my_aio->issued_total_count += total_submitted;
@@ -1204,6 +1441,7 @@ pgaio_submit_pending(bool drain)
 	RESUME_INTERRUPTS();
 }
 
+#ifdef LIBURING
 static void  __attribute__((noinline))
 pgaio_backpressure(struct io_uring *ring, const char *loc)
 {
@@ -1292,6 +1530,7 @@ pgaio_backpressure(struct io_uring *ring, const char *loc)
 		}
 	}
 }
+#endif
 
 /*
  * FIXME: The !holding_reference implementation is a really ugly crock. It's
@@ -1398,7 +1637,7 @@ again:
 			(flags & done_flags))
 			break;
 
-		pgaio_drain(&aio_ctl->shared_ring);
+		pgaio_drain_shared();
 
 		current_generation = *(volatile uint64*) &io->generation;
 		flags = *(volatile PgAioIPFlags*) &io->flags;
@@ -1420,8 +1659,13 @@ again:
 		else if (flags & PGAIOIP_INFLIGHT)
 		{
 			/* note that this is allowed to spuriously return */
-			pgaio_uring_wait_one(&aio_ctl->shared_ring, io,
-								 WAIT_EVENT_AIO_IO_COMPLETE_ANY);
+			if (aio_type == AIOTYPE_BGWORKER)
+				ConditionVariableSleep(&io->cv, WAIT_EVENT_AIO_IO_COMPLETE_ONE);
+#ifdef USE_LIBURING
+			else if (aio_type == AIOTYPE_LIBURING)
+				pgaio_uring_wait_one(&aio_ctl->shared_ring, io,
+									 WAIT_EVENT_AIO_IO_COMPLETE_ANY);
+#endif
 		}
 		else
 		{
@@ -1477,7 +1721,7 @@ out:
 		!(flags & PGAIOIP_LOCAL_CALLBACK_CALLED) &&
 		io->on_completion_local)
 	{
-		pgaio_drain(&aio_ctl->shared_ring);
+		pgaio_drain_shared();
 	}
 }
 
@@ -1507,7 +1751,7 @@ pgaio_io_get(void)
 		 *
 		 * Also, need to protect against too many ios handed out but not used.
 		 */
-		pgaio_drain(&aio_ctl->shared_ring);
+		pgaio_drain_shared();
 
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
 	}
@@ -1755,8 +1999,10 @@ pgaio_finish_io(PgAioInProgress *io)
 {
 	if (my_aio->pending_count >= PGAIO_SUBMIT_BATCH_SIZE)
 		pgaio_submit_pending(true);
+#ifdef USE_LIBURING
 	else
 		pgaio_backpressure(&aio_ctl->shared_ring, "get_io");
+#endif
 }
 
 
@@ -1830,6 +2076,8 @@ pgaio_print_queues(void)
 		inflight += pg_atomic_read_u32(&bs->inflight);
 	}
 
+#ifdef USE_LIBURING
+	/* XXX check aio_type and do something useful */
 	ereport(LOG,
 			errmsg("shared queue: space: %d ready: %d, we think: %u inflight",
 				   io_uring_sq_space_left(&aio_ctl->shared_ring),
@@ -1838,6 +2086,7 @@ pgaio_print_queues(void)
 			errhidestmt(true),
 			errhidecontext(true)
 		);
+#endif
 }
 
 static const char *
@@ -2061,7 +2310,7 @@ pgaio_bounce_buffer_get(void)
 		LWLockRelease(SharedAIOCtlLock);
 
 		if (!bb)
-			pgaio_drain(&aio_ctl->shared_ring);
+			pgaio_drain_shared();
 		else
 			break;
 	}
@@ -2097,6 +2346,8 @@ pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb)
 
 	io->bb = bb;
 }
+
+#ifdef USE_LIBURING
 
 /* --------------------------------------------------------------------------------
  * io_uring related code
@@ -2185,7 +2436,7 @@ pgaio_uring_submit(bool drain)
 
 		/* check if there are completions we could process */
 		if (drain)
-			pgaio_drain(&aio_ctl->shared_ring);
+			pgaio_drain_shared();
 	}
 
 	return total_submitted;
@@ -2483,6 +2734,7 @@ __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
 			flags, sig, _NSIG / 8);
 }
 
+#endif
 
 
 /* --------------------------------------------------------------------------------
@@ -2564,11 +2816,13 @@ pgaio_io_start_write_buffer(PgAioInProgress *io, const AioBufferTag *tag, int fd
 }
 
 void
-pgaio_io_start_write_wal(PgAioInProgress *io, int fd, uint32 offset, uint32 nbytes, char *bufdata, bool no_reorder)
+pgaio_io_start_write_wal(PgAioInProgress *io, int fd, XLogSegNo segno, uint32 offset, uint32 nbytes, char *bufdata, bool no_reorder)
 {
 	pgaio_prepare_io(io, PGAIO_WRITE_WAL);
 
 	io->d.write_wal.fd = fd;
+	io->d.write_wal.tli = ThisTimeLineID;
+	io->d.write_wal.segno = segno;
 	io->d.write_wal.no_reorder = no_reorder;
 	io->d.write_wal.offset = offset;
 	io->d.write_wal.nbytes = nbytes;
@@ -2597,10 +2851,12 @@ pgaio_io_start_nop(PgAioInProgress *io)
 }
 
 void
-pgaio_io_start_fsync(PgAioInProgress *io, int fd, bool barrier)
+pgaio_io_start_fsync(PgAioInProgress *io, int fd, XLogSegNo segno, bool barrier)
 {
 	pgaio_prepare_io(io, PGAIO_FSYNC);
 	io->d.fsync.fd = fd;
+	io->d.fsync.tli = ThisTimeLineID;
+	io->d.fsync.segno = segno;
 	io->d.fsync.barrier = barrier;
 	io->d.fsync.datasync = false;
 	pgaio_finish_io(io);
@@ -2616,10 +2872,12 @@ pgaio_io_start_fsync(PgAioInProgress *io, int fd, bool barrier)
 }
 
 void
-pgaio_io_start_fdatasync(PgAioInProgress *io, int fd, bool barrier)
+pgaio_io_start_fdatasync(PgAioInProgress *io, int fd, XLogSegNo segno, bool barrier)
 {
 	pgaio_prepare_io(io, PGAIO_FSYNC);
 	io->d.fsync.fd = fd;
+	io->d.fsync.tli = ThisTimeLineID;
+	io->d.fsync.segno = segno;
 	io->d.fsync.barrier = barrier;
 	io->d.fsync.datasync = true;
 	pgaio_finish_io(io);
@@ -2903,6 +3161,265 @@ pgaio_complete_write_wal(PgAioInProgress *io)
 	return true;
 }
 
+static void
+pgaio_bgworker_process_init(PgAioWorkerState *state)
+{
+	state->wal_fd = -1;
+	state->wal_segno = -1;
+	state->wal_tli = -1;
+}
+
+static void
+pgaio_bgworker_process_close(PgAioWorkerState *state)
+{
+	if (state->wal_fd >= 0)
+		close(state->wal_fd);
+	pgaio_bgworker_process_init(state);
+}
+
+static void
+pgaio_bgworker_process_io(PgAioWorkerState *state, PgAioInProgress *io)
+{
+	SMgrRelation reln;
+	AioBufferTag *tag = NULL;
+	ssize_t result;
+	size_t already_done;
+	uint32 off;
+	int fd = -1;
+	XLogSegNo segno = -1;
+
+	Assert(io->flags & PGAIOIP_INFLIGHT);
+
+fprintf(stderr, "[pgaio_bgworker_process_io %zu begin]\n", io - aio_ctl->in_progress_io);
+	/* Handle easy cases, and extract tag. */
+	switch (io->type)
+	{
+	case PGAIO_NOP:
+		break;
+	case PGAIO_FLUSH_RANGE:
+		/* XXX not supported yet */
+		result = 0;
+		goto done;
+	case PGAIO_READ_BUFFER:
+		tag = &io->d.read_buffer.tag;
+		fd = io->d.read_buffer.fd;
+		break;
+	case PGAIO_WRITE_BUFFER:
+		tag = &io->d.write_buffer.tag;
+		fd = io->d.write_buffer.fd;
+		break;
+	case PGAIO_FSYNC:
+		fd = io->d.fsync.fd;
+		segno = io->d.fsync.segno;
+		ThisTimeLineID = io->d.fsync.tli;
+		break;
+	case PGAIO_WRITE_WAL:
+		fd = io->d.write_wal.fd;
+		segno = io->d.write_wal.segno;
+		ThisTimeLineID = io->d.write_wal.tli;
+		break;
+		break;
+	default:
+		result = -1;
+		errno = EOPNOTSUPP;
+		goto done;
+	}
+
+	/* Get our hands on the file descriptor. */
+	switch (io->type)
+	{
+	case PGAIO_READ_BUFFER:
+	case PGAIO_WRITE_BUFFER:
+		if (IsUnderPostmaster)
+		{
+			/* Open the relation. */
+			reln = smgropen(tag->rnode.node, tag->rnode.backend);
+			fd = smgrfd(reln, tag->forkNum, tag->blockNum, &off);
+			if (fd < 0)
+			{
+				errno = EBADF;		/* ??? */
+				result = -1;
+				goto done;
+			}
+		}
+		else
+		{
+			/* Otherwise running synchronously, and we use the IO's fd. */
+			/* XXX: assert that I am not a bgworker */
+		}
+		break;
+	case PGAIO_FSYNC:
+	case PGAIO_WRITE_WAL:
+		if (segno != -1)
+		{
+			/* Do we already have this WAL segment open? */
+			if (state->wal_fd < 0 ||
+				state->wal_tli != ThisTimeLineID ||
+				state->wal_segno != segno)
+			{
+				if (state->wal_fd < 0)
+				{
+					close(state->wal_fd);
+					state->wal_fd = -1;
+				}
+				/* XXX panics on failure! */
+				state->wal_fd = XLogFileOpen(segno);
+				Assert(state->wal_fd >= 0);
+				state->wal_tli = ThisTimeLineID;
+				state->wal_segno = segno;
+			}
+			fd = state->wal_fd;
+		}
+		else
+		{
+			/* Otherwise running synchronously, and we use the IO's fd. */
+			/* XXX: assert that I am not a bgworker */
+		}
+		break;
+	default:
+		break;
+	}
+
+	/* Perform IO. */
+	switch (io->type)
+	{
+	case PGAIO_FLUSH_RANGE:
+		/* XXX not implemented */
+		result = 0;
+		break;
+	case PGAIO_FSYNC:
+		pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC);
+		if (io->d.fsync.datasync)
+			result = fdatasync(fd);
+		else
+			result = fsync(fd);
+		pgstat_report_wait_end();
+		break;
+	case PGAIO_READ_BUFFER:
+		already_done = io->d.read_buffer.already_done;
+		pgstat_report_wait_start(WAIT_EVENT_DATA_FILE_READ);
+fprintf(stderr, "[pgaio_bgworker_process_io %zu pread %p + %zu, size %zu]\n", io - aio_ctl->in_progress_io, io->d.read_buffer.bufdata, already_done, io->d.read_buffer.nbytes - already_done);
+		result = pg_pread(fd,
+						  io->d.read_buffer.bufdata + already_done,
+						  io->d.read_buffer.nbytes - already_done,
+						  io->d.read_buffer.offset + already_done);
+		pgstat_report_wait_end();
+		break;
+	case PGAIO_WRITE_BUFFER:
+		already_done = io->d.write_buffer.already_done;
+		pgstat_report_wait_start(WAIT_EVENT_DATA_FILE_WRITE);
+fprintf(stderr, "[pgaio_bgworker_process_io %zu pwrite %p + %zu, size %zu]\n", io - aio_ctl->in_progress_io, io->d.write_buffer.bufdata, already_done, io->d.write_buffer.nbytes - already_done);
+		result = pg_pwrite(fd,
+						   io->d.write_buffer.bufdata + already_done,
+						   io->d.write_buffer.nbytes - already_done,
+						   io->d.write_buffer.offset + already_done);
+		pgstat_report_wait_end();
+		break;
+	case PGAIO_WRITE_WAL:
+		already_done = io->d.write_wal.already_done;
+		pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
+		result = pg_pwrite(fd,
+						   io->d.write_wal.bufdata + already_done,
+						   io->d.write_wal.nbytes - already_done,
+						   io->d.write_wal.offset + already_done);
+		pgstat_report_wait_end();
+		break;
+	default:
+		result = -1;
+		errno = EOPNOTSUPP;
+		break;
+	}
+
+done:
+	/* Encode result and error into io->result. */
+	io->result = result < 0 ? -errno : result;
+
+fprintf(stderr, "[pgaio_bgworker_process_io %zu complete, type = %d, result = %d]\n", io - aio_ctl->in_progress_io, io->type, io->result);
+	/*
+	 * We'll read the IO immediately.  This might be running in a regular
+	 * worker or a background worker, so we can't actually complete reaped IOs
+	 * just yet, because a regular backend might not be in the right context
+	 * for that.  (???)
+	 */
+	io->flags = (io->flags & ~PGAIOIP_INFLIGHT) | PGAIOIP_REAPED;
+	dlist_push_tail(&my_aio->reaped, &io->io_node);
+}
+
+void
+AioWorkerMain(Datum datum)
+{
+	PgAioWorkerState state;
+
+	pqsignal(SIGTERM, die);
+	BackgroundWorkerUnblockSignals();
+
+	/* Connect, just so we can appear in pg_stat_activity. */
+	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
+
+	pgaio_bgworker_process_init(&state);
+	for (;;)
+	{
+		uint32 io_index;
+
+		if (squeue32_dequeue(aio_submission_queue, &io_index))
+		{
+			ConditionVariableCancelSleep();
+			ConditionVariableBroadcast(&aio_ctl->submission_queue_not_full);
+
+			/* Perform the IO. */
+			pgaio_bgworker_process_io(&state,
+									  &aio_ctl->in_progress_io[io_index]);
+
+			/*
+			 * XXX We could theoretically push this into a shared queue for regular
+			 * backends to drain, like the other AIO implementations, but for
+			 * now we'll run the completion events directly in the AIO worker.
+			 */
+			pgaio_complete_ios(false);
+		}
+		else
+		{
+			ConditionVariableSleep(&aio_ctl->submission_queue_not_empty,
+								   0 /* XXX wait event */);
+			ConditionVariableCancelSleep();
+		}
+	}
+	/* XXX not reached, but if we had nice shutdown signalling... */
+	pgaio_bgworker_process_close(&state);
+}
+
+void
+AioWorkerRegister(void)
+{
+	if (aio_type != AIOTYPE_BGWORKER)
+		return;
+
+	/*
+	 * XXX For now we have a static number of AIO workers, but ideally they'd
+	 * be dynamic and you could adjust the number at runtime.
+	 *
+	 * XXX Plain old bgworkers are not good enough; we need workers with a
+	 * higher priority that the postmaster knows about, so that during
+	 * shutdown, they shut down after things like the checkpointer!
+	 */
+	for (int i = 0; i < aio_bgworkers; ++i)
+	{
+		BackgroundWorker bgw;
+
+		memset(&bgw, 0, sizeof(bgw));
+		bgw.bgw_flags = BGWORKER_SHMEM_ACCESS;
+		bgw.bgw_start_time = BgWorkerStart_PostmasterStart;
+		snprintf(bgw.bgw_library_name, BGW_MAXLEN, "postgres");
+		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "AioWorkerMain");
+		snprintf(bgw.bgw_name, BGW_MAXLEN, "aio worker %d", i + 1);
+		snprintf(bgw.bgw_type, BGW_MAXLEN, "aio worker");
+		bgw.bgw_restart_time = 5;
+		bgw.bgw_notify_pid = 0;
+		bgw.bgw_main_arg = (Datum) 0;
+
+		RegisterBackgroundWorker(&bgw);
+	}
+}
 
 /* --------------------------------------------------------------------------------
  * SQL interface functions

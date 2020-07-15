@@ -72,6 +72,7 @@
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
@@ -502,6 +503,7 @@ extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
+extern const struct config_enum_entry aio_type_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -3018,7 +3020,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL,
 		},
 		&max_worker_processes,
-		8, 0, MAX_BACKENDS,
+		16, 0, MAX_BACKENDS,
 		check_max_worker_processes, NULL, NULL
 	},
 
@@ -3043,6 +3045,30 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_sync_workers_per_subscription,
 		2, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"aio_bgworkers",
+			PGC_POSTMASTER,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Number of aio workers, for aio_type=bgworker."),
+			NULL,
+		},
+		&aio_bgworkers,
+		8, 1, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"aio_bgworker_queue_size",
+			PGC_POSTMASTER,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Size of the request queue, for aio_type=bgworker."),
+			NULL,
+		},
+		&aio_bgworker_queue_size,
+		64, 1, 4096,
 		NULL, NULL, NULL
 	},
 
@@ -4799,6 +4825,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		&ssl_max_protocol_version,
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"aio_type", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Selects the asynchronous I/O type used."),
+			NULL
+		},
+		&aio_type,
+		DEFAULT_AIO_TYPE, aio_type_options,
 		NULL, NULL, NULL
 	},
 

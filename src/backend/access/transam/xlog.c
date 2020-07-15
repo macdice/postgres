@@ -2870,7 +2870,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 					 * such. And then only wait before fsyncing. And do that
 					 * under a separate lock.
 					 */
-					pgaio_io_start_write_wal(aio, openLogFile, startoffset,
+					pgaio_io_start_write_wal(aio, openLogFile, openLogSegNo, startoffset,
 										  nleft,
 										  from,
 										  false /* ispartialpage */);
@@ -3740,7 +3740,7 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 				 * processes. So retries wouldn't work right. But since we
 				 * don't implement those for wal writes yet...
 				 */
-				pgaio_io_start_write_wal(aio, fd, nbytes, XLOG_BLCKSZ, zbuffer.data, false);
+				pgaio_io_start_write_wal(aio, fd, -1, nbytes, XLOG_BLCKSZ, zbuffer.data, false);
 				pg_streaming_write_write(pgsw, aio, NULL);
 #else
 				errno = 0;
@@ -3790,7 +3790,13 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	{
 		PgAioInProgress *aio = pg_streaming_write_get_io(pgsw);
 
-		pgaio_io_start_fsync(aio, fd, /* barrier = */ true);
+		/*
+		 * XXX We pass in invalid segment number -1, because aio_type=bgworker
+		 * can't open this file, so we force it to handle the IO synchronously
+		 * in this process.  Other aio_type modes are OK because they work with
+		 * the fd directly.
+		 */
+		pgaio_io_start_fsync(aio, fd, -1, /* barrier = */ true);
 		pg_streaming_write_write(pgsw, aio, NULL);
 		pg_streaming_write_wait_all(pgsw);
 		pg_streaming_write_free(pgsw);
@@ -10868,7 +10874,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 			{
 				PgAioInProgress *aio = pgaio_io_get();
 
-				pgaio_io_start_fsync(aio, fd, false);
+				pgaio_io_start_fsync(aio, fd, segno, false);
 				pgaio_io_wait(aio, true);
 				pgaio_io_release(aio);
 			}
@@ -10890,7 +10896,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 			{
 				PgAioInProgress *aio = pgaio_io_get();
 
-				pgaio_io_start_fdatasync(aio, fd, false);
+				pgaio_io_start_fdatasync(aio, fd, segno, false);
 				pgaio_io_wait(aio, true);
 				pgaio_io_release(aio);
 			}

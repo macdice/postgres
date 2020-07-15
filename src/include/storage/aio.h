@@ -14,6 +14,7 @@
 #ifndef AIO_H
 #define AIO_H
 
+#include "access/xlogdefs.h"
 #include "common/relpath.h"
 #include "storage/block.h"
 #include "storage/buf.h"
@@ -22,6 +23,20 @@
 
 typedef struct PgAioInProgress PgAioInProgress;
 typedef struct PgAioBounceBuffer PgAioBounceBuffer;
+
+/* Enum for aio_type GUC. */
+enum AioType {
+	AIOTYPE_BGWORKER = 0,
+	AIOTYPE_LIBURING,
+};
+
+/* We'll default to bgworker. */
+#define DEFAULT_AIO_TYPE AIOTYPE_BGWORKER
+
+/* GUCs */
+extern int aio_type;
+extern int aio_bgworkers;
+extern int aio_bgworker_queue_size;
 
 /* initialization */
 extern void pgaio_postmaster_init(void);
@@ -84,14 +99,14 @@ struct buftag;
 
 extern void pgaio_io_start_flush_range(PgAioInProgress *io, int fd, off_t offset, off_t nbytes);
 extern void pgaio_io_start_nop(PgAioInProgress *io);
-extern void pgaio_io_start_fsync(PgAioInProgress *io, int fd, bool barrier);
-extern void pgaio_io_start_fdatasync(PgAioInProgress *io, int fd, bool barrier);
+extern void pgaio_io_start_fsync(PgAioInProgress *io, int fd, XLogSegNo segno, bool barrier);
+extern void pgaio_io_start_fdatasync(PgAioInProgress *io, int fd, XLogSegNo segno, bool barrier);
 
 extern void pgaio_io_start_read_buffer(PgAioInProgress *io, const AioBufferTag *tag, int fd, uint32 offset, uint32 nbytes,
 									   char *bufdata, int buffno, int mode);
 extern void pgaio_io_start_write_buffer(PgAioInProgress *io, const AioBufferTag *tag, int fd, uint32 offset, uint32 nbytes,
 										char *bufdata, int buffno);
-extern void pgaio_io_start_write_wal(PgAioInProgress *io, int fd,
+extern void pgaio_io_start_write_wal(PgAioInProgress *io, int fd, XLogSegNo segno,
 									 uint32 offset, uint32 nbytes,
 									 char *bufdata, bool no_reorder);
 
@@ -109,6 +124,8 @@ extern void pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb
 extern PgAioBounceBuffer *pgaio_bounce_buffer_get(void);
 extern char *pgaio_bounce_buffer_buffer(PgAioBounceBuffer *bb);
 
+extern void AioWorkerMain(Datum datum);
+extern void AioWorkerRegister(void);
 
 /*
  * Helpers. In aio_util.c.
