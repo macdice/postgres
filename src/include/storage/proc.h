@@ -378,6 +378,11 @@ extern PGPROC *PreparedXactProcs;
  * Background writer, checkpointer and WAL writer run during normal operation.
  * Startup process and WAL receiver also consume 2 slots, but WAL writer is
  * launched only after startup has exited, so we only need 4 slots.
+ *
+ * AIO workers are not counted here; they have to compete with regular backends
+ * for slots, as their number can be changed at runtime.
+ * XXX fix that!  Otherwise they could be starved.
+ * XXX invent a new kind of lightweight process that doesn't need a PGPROC?
  */
 #define NUM_AUXILIARY_PROCS		4
 

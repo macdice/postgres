@@ -14,6 +14,7 @@
 #ifndef AIO_H
 #define AIO_H
 
+#include "access/xlogdefs.h"
 #include "common/relpath.h"
 #include "storage/block.h"
 #include "storage/buf.h"
@@ -31,6 +32,20 @@ typedef struct PgAioIoRef
 	uint32 generation_upper;
 	uint32 generation_lower;
 } PgAioIoRef;
+
+/* Enum for aio_type GUC. */
+enum AioType {
+	AIOTYPE_WORKER = 0,
+	AIOTYPE_LIBURING,
+};
+
+/* We'll default to bgworker. */
+#define DEFAULT_AIO_TYPE AIOTYPE_WORKER
+
+/* GUCs */
+extern int aio_type;
+extern int aio_workers;
+extern int aio_worker_queue_size;
 
 /* initialization */
 extern void pgaio_postmaster_init(void);
@@ -107,21 +122,23 @@ struct buftag;
 
 extern void pgaio_io_start_flush_range(PgAioInProgress *io, int fd, uint64 offset, uint32 nbytes);
 extern void pgaio_io_start_nop(PgAioInProgress *io);
-extern void pgaio_io_start_fsync(PgAioInProgress *io, int fd, bool barrier);
-extern void pgaio_io_start_fdatasync(PgAioInProgress *io, int fd, bool barrier);
+extern void pgaio_io_start_fsync(PgAioInProgress *io, int fd, XLogSegNo segno, bool barrier);
+extern void pgaio_io_start_fdatasync(PgAioInProgress *io, int fd, XLogSegNo segno, bool barrier);
 
 extern void pgaio_io_start_read_buffer(PgAioInProgress *io, const AioBufferTag *tag, int fd, uint32 offset, uint32 nbytes,
 									   char *bufdata, int buffno, int mode);
 extern void pgaio_io_start_write_buffer(PgAioInProgress *io, const AioBufferTag *tag, int fd, uint32 offset, uint32 nbytes,
 										char *bufdata, int buffno);
-extern void pgaio_io_start_write_wal(PgAioInProgress *io, int fd,
+extern void pgaio_io_start_write_wal(PgAioInProgress *io, int fd, XLogSegNo segno,
 									 uint32 offset, uint32 nbytes,
 									 char *bufdata, bool no_reorder,
 									 uint32 write_no);
 extern void pgaio_io_start_write_generic(PgAioInProgress *io, int fd,
 										 uint64 offset, uint32 nbytes,
 										 char *bufdata, bool no_reorder);
-extern void pgaio_io_start_fsync_wal(PgAioInProgress *io, int fd, bool barrier,
+extern void pgaio_io_start_fsync_wal(PgAioInProgress *io, int fd,
+									 XLogSegNo segno,
+									 bool barrier,
 									 bool datasync_only, uint32 sync_no);
 
 extern void pgaio_io_retry(PgAioInProgress *io);
@@ -139,6 +156,7 @@ extern PgAioBounceBuffer *pgaio_bounce_buffer_get(void);
 extern void pgaio_bounce_buffer_release(PgAioBounceBuffer *bb);
 extern char *pgaio_bounce_buffer_buffer(PgAioBounceBuffer *bb);
 
+extern void AioWorkerMain(void);
 
 /*
  * Helpers. In aio_util.c.

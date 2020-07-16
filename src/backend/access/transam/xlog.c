@@ -3030,7 +3030,7 @@ XLogWriteIssueWrites(XLogwrtRqst *WriteRqst, bool flexible)
 
 			/* FIXME: recycle */
 			aio = pgaio_io_get();
-			pgaio_io_start_write_wal(aio, openLogFile, startoffset,
+			pgaio_io_start_write_wal(aio, openLogFile, openLogSegNo, startoffset,
 									 nbytes, from, prevent_reordering,
 									 XLogCtl->writes->next % XLogCtl->writes->num_ios);
 
@@ -3100,7 +3100,7 @@ XLogWriteIssueWrites(XLogwrtRqst *WriteRqst, bool flexible)
 							fdatasync = true;
 #endif
 						aio = pgaio_io_get();
-						pgaio_io_start_fsync_wal(aio, openLogFile,
+						pgaio_io_start_fsync_wal(aio, openLogFile, openLogSegNo,
 												 /* barrier = */ false,
 												 fdatasync,
 												 XLogCtl->flushes->next % XLogCtl->flushes->num_ios);
@@ -3223,7 +3223,7 @@ XLogWriteIssueFlushes(XLogwrtRqst WriteRqst)
 				fdatasync = true;
 #endif
 			aio = pgaio_io_get();
-			pgaio_io_start_fsync_wal(aio, openLogFile,
+			pgaio_io_start_fsync_wal(aio, openLogFile, openLogSegNo,
 									 /* barrier = */ false,
 									 fdatasync,
 									 XLogCtl->flushes->next % XLogCtl->flushes->num_ios);
@@ -4284,7 +4284,13 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	{
 		PgAioInProgress *aio = pg_streaming_write_get_io(pgsw);
 
-		pgaio_io_start_fsync(aio, fd, /* barrier = */ true);
+		/*
+		 * XXX We pass in invalid segment number -1, because aio_type=worker
+		 * can't open this file, so we force it to handle the IO synchronously
+		 * in this process.  Other aio_type modes are OK because they work with
+		 * the fd directly.
+		 */
+		pgaio_io_start_fsync(aio, fd, -1, /* barrier = */ true);
 		pg_streaming_write_write(pgsw, aio, NULL);
 		pg_streaming_write_wait_all(pgsw);
 		pg_streaming_write_free(pgsw);
@@ -11434,7 +11440,7 @@ start_xlog_fsync(PgAioInProgress *aio, int fd, XLogSegNo segno)
 	switch (sync_method)
 	{
 		case SYNC_METHOD_FSYNC:
-			pgaio_io_start_fsync(aio, fd, false);
+			pgaio_io_start_fsync(aio, fd, segno, false);
 			break;
 
 #ifdef HAVE_FSYNC_WRITETHROUGH
@@ -11454,7 +11460,7 @@ start_xlog_fsync(PgAioInProgress *aio, int fd, XLogSegNo segno)
 
 #ifdef HAVE_FDATASYNC
 		case SYNC_METHOD_FDATASYNC:
-			pgaio_io_start_fdatasync(aio, fd, false);
+			pgaio_io_start_fdatasync(aio, fd, segno, false);
 			break;
 #endif
 		case SYNC_METHOD_OPEN:

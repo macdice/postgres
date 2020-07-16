@@ -37,6 +37,7 @@
 #include "postmaster/startup.h"
 #include "postmaster/walwriter.h"
 #include "replication/walreceiver.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/condition_variable.h"
@@ -329,6 +330,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case WalReceiverProcess:
 			MyBackendType = B_WAL_RECEIVER;
 			break;
+		case AioWorkerProcess:
+			MyBackendType = B_AIO_WORKER;
+			break;
 		default:
 			MyBackendType = B_INVALID;
 	}
@@ -461,6 +465,11 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case WalReceiverProcess:
 			/* don't set signals, walreceiver has its own agenda */
 			WalReceiverMain();
+			proc_exit(1);		/* should never return */
+
+		case AioWorkerProcess:
+			/* don't set signals, aio worker has its own agenda */
+			AioWorkerMain();
 			proc_exit(1);		/* should never return */
 
 		default:
