@@ -37,6 +37,7 @@ typedef struct PgAioIoRef
 enum AioType {
 	AIOTYPE_WORKER = 0,
 	AIOTYPE_LIBURING,
+	AIOTYPE_POSIX,
 };
 
 /* We'll default to bgworker. */

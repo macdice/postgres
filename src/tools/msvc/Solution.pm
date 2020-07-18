@@ -484,6 +484,7 @@ sub GenerateFiles
 		USE_NAMED_POSIX_SEMAPHORES => undef,
 		USE_OPENSSL                => undef,
 		USE_PAM                    => undef,
+		USE_POSIX_AIO              => undef,
 		USE_SLICING_BY_8_CRC32C    => undef,
 		USE_SSE42_CRC32C           => undef,
 		USE_SSE42_CRC32C_WITH_RUNTIME_CHECK => 1,

@@ -911,6 +911,15 @@ AC_MSG_RESULT([$with_liburing])
 AC_SUBST(with_liburing)
 
 #
+# POSIX AIO
+#
+AC_MSG_CHECKING([whether to build with POSIX AIO support])
+PGAC_ARG_BOOL(with, posix-aio, no, [use POSIX AIO for async io],
+              [AC_DEFINE([USE_POSIX_AIO], 1, [Define to build with POSIX AIO support. (--with-posix-aio)])])
+AC_MSG_RESULT([$with_posix_aio])
+AC_SUBST(with_posix_aio)
+
+#
 # UUID library
 #
 # There are at least three UUID libraries in common use: the FreeBSD/NetBSD
