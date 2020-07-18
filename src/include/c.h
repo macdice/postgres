@@ -1137,7 +1137,11 @@ typedef union PGAlignedBlock
 	char		data[BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
-} PGAlignedBlock __attribute__((aligned(4096)));
+} PGAlignedBlock
+#ifdef pg_attribute_aligned
+pg_attribute_aligned(4096)
+#endif
+;
 
 /* Same, but for an XLOG_BLCKSZ-sized buffer */
 typedef union PGAlignedXLogBlock
@@ -1145,7 +1149,11 @@ typedef union PGAlignedXLogBlock
 	char		data[XLOG_BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
-} PGAlignedXLogBlock  __attribute__((aligned(4096)));
+} PGAlignedXLogBlock
+#ifdef pg_attribute_aligned
+pg_attribute_aligned(4096)
+#endif
+;
 
 /* msb for char */
 #define HIGHBIT					(0x80)
