@@ -14,6 +14,7 @@
 
 #include "postgres.h"
 
+#include "lib/qunique.h"
 #include "libpq/pqformat.h"
 #include "tsearch/ts_locale.h"
 #include "tsearch/ts_utils.h"
@@ -37,45 +38,38 @@ compareWordEntryPos(const void *a, const void *b)
 
 	if (apos == bpos)
 		return 0;
+
+	return (apos > bpos) ? 1 : -1;
+}
+
+/* Compare two WordEntryPos values, higher weight comes first */
+static int
+compareWordEntryPosWithWeight(const void *a, const void *b)
+{
+	int			apos = WEP_GETPOS(*(const WordEntryPos *) a);
+	int			bpos = WEP_GETPOS(*(const WordEntryPos *) b);
+
+	if (apos == bpos)
+	{
+		int			aweight = WEP_GETWEIGHT(*(const WordEntryPos *) a);
+		int			bweight = WEP_GETWEIGHT(*(const WordEntryPos *) b);
+
+		return aweight == bweight ? 0 : aweight > bweight ? -1 : 1;
+	}
 	return (apos > bpos) ? 1 : -1;
 }
 
 /*
  * Removes duplicate pos entries. If there's two entries with same pos but
- * different weight, the higher weight is retained, so we can't use
- * qunique here.
+ * different weight, the higher weight is retained.
  *
  * Returns new length.
  */
 static int
 uniquePos(WordEntryPos *a, int l)
 {
-	WordEntryPos *ptr,
-			   *res;
-
-	if (l <= 1)
-		return l;
-
-	qsort((void *) a, l, sizeof(WordEntryPos), compareWordEntryPos);
-
-	res = a;
-	ptr = a + 1;
-	while (ptr - a < l)
-	{
-		if (WEP_GETPOS(*ptr) != WEP_GETPOS(*res))
-		{
-			res++;
-			*res = *ptr;
-			if (res - a >= MAXNUMPOS - 1 ||
-				WEP_GETPOS(*res) == MAXENTRYPOS - 1)
-				break;
-		}
-		else if (WEP_GETWEIGHT(*ptr) > WEP_GETWEIGHT(*res))
-			WEP_SETWEIGHT(*res, WEP_GETWEIGHT(*ptr));
-		ptr++;
-	}
-
-	return res + 1 - a;
+	qsort((void *) a, l, sizeof(WordEntryPos), compareWordEntryPosWithWeight);
+	return qunique((void *) a, l, sizeof(WordEntryPos), compareWordEntryPos);
 }
 
 /* Compare two WordEntryIN values for qsort */
