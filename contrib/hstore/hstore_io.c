@@ -10,6 +10,7 @@
 #include "common/jsonapi.h"
 #include "funcapi.h"
 #include "hstore.h"
+#include "lib/qunique.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
 #include "utils/builtins.h"
@@ -309,58 +310,36 @@ comparePairs(const void *a, const void *b)
 	return (pa->keylen > pb->keylen) ? 1 : -1;
 }
 
+static void
+freePairs(void *a)
+{
+	Pairs *ptr = (Pairs *) a;
+
+	if (ptr->needfree)
+	{
+		pfree(ptr->key);
+		pfree(ptr->val);
+	}
+}
+
 /*
  * this code still respects pairs.needfree, even though in general
  * it should never be called in a context where anything needs freeing.
  * we keep it because (a) those calls are in a rare code path anyway,
  * and (b) who knows whether they might be needed by some caller.
+ * Also computes the buffer length required by hstoreStorePairs().
  */
 int
 hstoreUniquePairs(Pairs *a, int32 l, int32 *buflen)
 {
-	Pairs	   *ptr,
-			   *res;
+	qsort((void *) a, l, sizeof(Pairs), comparePairs);
+	l = qunique_dtor((void *) a, l, sizeof(Pairs), comparePairs, freePairs);
 
 	*buflen = 0;
-	if (l < 2)
-	{
-		if (l == 1)
-			*buflen = a->keylen + ((a->isnull) ? 0 : a->vallen);
-		return l;
-	}
+	for (size_t i = 0; i < l; ++i)
+		*buflen += a[i].keylen + ((a[i].isnull) ? 0 : a[i].vallen);
 
-	qsort((void *) a, l, sizeof(Pairs), comparePairs);
-
-	/*
-	 * We can't use qunique here because we have some clean-up code to run on
-	 * removed elements.
-	 */
-	ptr = a + 1;
-	res = a;
-	while (ptr - a < l)
-	{
-		if (ptr->keylen == res->keylen &&
-			memcmp(ptr->key, res->key, res->keylen) == 0)
-		{
-			if (ptr->needfree)
-			{
-				pfree(ptr->key);
-				pfree(ptr->val);
-			}
-		}
-		else
-		{
-			*buflen += res->keylen + ((res->isnull) ? 0 : res->vallen);
-			res++;
-			if (res != ptr)
-				memcpy(res, ptr, sizeof(Pairs));
-		}
-
-		ptr++;
-	}
-
-	*buflen += res->keylen + ((res->isnull) ? 0 : res->vallen);
-	return res + 1 - a;
+	return l;
 }
 
 size_t
