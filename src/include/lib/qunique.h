@@ -18,8 +18,9 @@
  * the same arguments.  Return the new size.
  */
 static inline size_t
-qunique(void *array, size_t elements, size_t width,
-		int (*compare) (const void *, const void *))
+qunique_dtor(void *array, size_t elements, size_t width,
+			 int (*compare) (const void *, const void *),
+			 void (*dtor) (void *))
 {
 	char	   *bytes = (char *) array;
 	size_t		i,
@@ -30,12 +31,26 @@ qunique(void *array, size_t elements, size_t width,
 
 	for (i = 1, j = 0; i < elements; ++i)
 	{
-		if (compare(bytes + i * width, bytes + j * width) != 0 &&
-			++j != i)
-			memcpy(bytes + j * width, bytes + i * width, width);
+		if (compare(bytes + i * width, bytes + j * width) != 0)
+		{
+			if (++j != i)
+				memcpy(bytes + j * width, bytes + i * width, width);
+		}
+		else if (dtor)
+			dtor(bytes + i * width);
 	}
 
 	return j + 1;
+}
+
+/*
+ * Like qunique_dtor(), but without a destructor callback for removed elements.
+ */
+static inline size_t
+qunique(void *array, size_t elements, size_t width,
+			 int (*compare) (const void *, const void *))
+{
+	return qunique_dtor(array, elements, width, compare, NULL);
 }
 
 /*
