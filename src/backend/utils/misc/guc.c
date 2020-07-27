@@ -2241,6 +2241,17 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"min_dynamic_shared_memory", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Amount of dynamic shared memory reserved at startup."),
+			NULL,
+			GUC_UNIT_MB
+		},
+		&min_dynamic_shared_memory,
+		0, 0, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
 	/*
 	 * We sometimes multiply the number of shared buffers by two without
 	 * checking for overflow, so we mustn't allow more than INT_MAX / 2.
