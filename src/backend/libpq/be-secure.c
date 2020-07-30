@@ -146,9 +146,25 @@ secure_read(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
 	int			waitfor;
+	int			waited = false;
 
 	/* Deal with any already-pending interrupt condition. */
 	ProcessClientReadInterrupt(false);
+
+	/*
+	 * If we had to sleep last time we needed data, assume the same thing will
+	 * happen for the next few reads.  If we predicted correctly, we save a
+	 * system call; if we're wrong, we pay an extra system call, but we'll
+	 * eventually revert to trying to read immediately.
+	 */
+	if (port->predict_eagain > 0)
+	{
+		port->predict_eagain--;
+		waitfor = WL_SOCKET_READABLE;
+		n = -1;
+		errno = EAGAIN;
+		goto wait_until_readable;
+	}
 
 retry:
 #ifdef USE_SSL
@@ -172,6 +188,18 @@ retry:
 		waitfor = WL_SOCKET_READABLE;
 	}
 
+	/*
+	 * If we read without having to wait first, we can now make a prediction
+	 * about future reads.
+	 */
+	if (!waited)
+	{
+		/* If we didn't manage to read, predict the same for a while. */
+		if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN))
+			port->predict_eagain = 10;
+	}
+
+wait_until_readable:
 	/* In blocking mode, wait until the socket is ready */
 	if (n < 0 && !port->noblock && (errno == EWOULDBLOCK || errno == EAGAIN))
 	{
@@ -183,6 +211,7 @@ retry:
 
 		WaitEventSetWait(FeBeWaitSet, -1 /* no timeout */ , &event, 1,
 						 WAIT_EVENT_CLIENT_READ);
+		waited = true;
 
 		/*
 		 * If the postmaster has died, it's not safe to continue running,
