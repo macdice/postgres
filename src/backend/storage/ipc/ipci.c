@@ -120,6 +120,7 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, SpinlockSemaSize());
 		size = add_size(size, hash_estimate_size(SHMEM_INDEX_SIZE,
 												 sizeof(ShmemIndexEnt)));
+		size = add_size(size, smgr_shmem_estimate_size());
 		size = add_size(size, dsm_estimate_size());
 		size = add_size(size, BufferShmemSize());
 		size = add_size(size, LockShmemSize());
@@ -220,6 +221,7 @@ CreateSharedMemoryAndSemaphores(void)
 	CommitTsShmemInit();
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
+	smgr_shmem_init();
 	InitBufferPool();
 
 	/*

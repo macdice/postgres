@@ -528,7 +528,7 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 	else
 		newnblocks = truncBlock;
 
-	if (smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM) <= newnblocks)
+	if (smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM, 0) <= newnblocks)
 	{
 		/* nothing to do, the file was already smaller than requested size */
 		return InvalidBlockNumber;
@@ -564,7 +564,7 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	if (rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] == InvalidBlockNumber)
 	{
 		if (smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
-			smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
+			smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM, 0);
 		else
 			rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = 0;
 	}
@@ -647,7 +647,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 
 	/* Invalidate cache so that smgrnblocks() asks the kernel. */
 	rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = InvalidBlockNumber;
-	vm_nblocks_now = smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
+	vm_nblocks_now = smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM, 0);
 
 	/* Now extend the file */
 	while (vm_nblocks_now < vm_nblocks)

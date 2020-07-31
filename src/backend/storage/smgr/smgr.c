@@ -22,9 +22,16 @@
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/md.h"
+#include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
+
+/* Control object in shared memory. */
+typedef struct SMgrShared
+{
+	pg_atomic_uint64 nblocks_inval[1024];
+} SMgrShared;
 
 
 /*
@@ -98,6 +105,50 @@ static dlist_head unowned_relns;
 /* local function prototypes */
 static void smgrshutdown(int code, Datum arg);
 
+static SMgrShared *smgr_shared;
+
+size_t
+smgr_shmem_estimate_size(void)
+{
+	return sizeof(*smgr_shared);
+}
+
+void
+smgr_shmem_init(void)
+{
+	bool		found;
+
+	smgr_shared = ShmemInitStruct("SMgr", sizeof(*smgr_shared), &found);
+	if (!found)
+	{
+		for (size_t i = 0; i < lengthof(smgr_shared->nblocks_inval); ++i)
+			pg_atomic_init_u64(&smgr_shared->nblocks_inval[i], 0);
+	}
+}
+
+/*
+ * Read the invalidation counter that a given relation maps to.
+ */
+static uint64
+smgrnblocks_get_inval(SMgrRelation reln)
+{
+	size_t		slot;
+
+	slot = reln->smgr_rnode.node.relNode % lengthof(smgr_shared->nblocks_inval);
+	return pg_atomic_read_u64(&smgr_shared->nblocks_inval[slot]);
+}
+
+/*
+ * Increment the invalidation counter that a given relation maps to.
+ */
+static uint64
+smgrnblocks_inc_inval(SMgrRelation reln)
+{
+	size_t		slot;
+
+	slot = reln->smgr_rnode.node.relNode % lengthof(smgr_shared->nblocks_inval);
+	return pg_atomic_fetch_add_u64(&smgr_shared->nblocks_inval[slot], 1) + 1;
+}
 
 /*
  *	smgrinit(), smgrshutdown() -- Initialize or shut down storage
@@ -475,6 +526,7 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
 	else
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+	smgrnblocks_inc_inval(reln);
 }
 
 /*
@@ -543,23 +595,35 @@ smgrwriteback(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 /*
  *	smgrnblocks() -- Calculate the number of blocks in the
- *					 supplied relation.
+ *					 supplied relation, optionally returning a relaxed value
+ *					 that already out of date, but not older than the most
+ *					 recent read barrier that pairs with the most recent
+ * 					 write barrier in any process that earlier changed the
+ *					 true value.
  */
 BlockNumber
-smgrnblocks(SMgrRelation reln, ForkNumber forknum)
+smgrnblocks(SMgrRelation reln, ForkNumber forknum, int flags)
 {
 	BlockNumber result;
+	uint64		inval;
 
 	/*
-	 * For now, we only use cached values in recovery due to lack of a shared
-	 * invalidation mechanism for changes in file size.
+	 * We can use cached values in recovery since no other process can change
+	 * the size of a relation.  Otherwise, we only use a cached value if the
+	 * caller said that a relaxed value is OK, and the shared invalidation
+	 * counter hasn't moved.
 	 */
-	if (InRecovery && reln->smgr_cached_nblocks[forknum] != InvalidBlockNumber)
+	inval = smgrnblocks_get_inval(reln);
+	if ((InRecovery ||
+		 ((flags & SMGRNBLOCKS_RELAXED) &&
+		  inval == reln->smgr_cached_nblocks_inval[forknum])) &&
+		reln->smgr_cached_nblocks[forknum] != InvalidBlockNumber)
 		return reln->smgr_cached_nblocks[forknum];
 
 	result = smgrsw[reln->smgr_which].smgr_nblocks(reln, forknum);
 
 	reln->smgr_cached_nblocks[forknum] = result;
+	reln->smgr_cached_nblocks_inval[forknum] = inval;
 
 	return result;
 }
@@ -614,6 +678,7 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 		 */
 		reln->smgr_cached_nblocks[forknum[i]] = nblocks[i];
 	}
+	smgrnblocks_inc_inval(reln);
 }
 
 /*

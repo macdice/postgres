@@ -317,7 +317,7 @@ FreeSpaceMapPrepareTruncateRel(Relation rel, BlockNumber nblocks)
 	else
 	{
 		new_nfsmblocks = fsm_logical_to_physical(first_removed_address);
-		if (smgrnblocks(rel->rd_smgr, FSM_FORKNUM) <= new_nfsmblocks)
+		if (smgrnblocks(rel->rd_smgr, FSM_FORKNUM, 0) <= new_nfsmblocks)
 			return InvalidBlockNumber;	/* nothing to do; the FSM was already
 										 * smaller */
 	}
@@ -547,7 +547,7 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 		/* Invalidate the cache so smgrnblocks asks the kernel. */
 		rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] = InvalidBlockNumber;
 		if (smgrexists(rel->rd_smgr, FSM_FORKNUM))
-			smgrnblocks(rel->rd_smgr, FSM_FORKNUM);
+			smgrnblocks(rel->rd_smgr, FSM_FORKNUM, 0);
 		else
 			rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] = 0;
 	}
@@ -633,7 +633,7 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 
 	/* Invalidate cache so that smgrnblocks() asks the kernel. */
 	rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] = InvalidBlockNumber;
-	fsm_nblocks_now = smgrnblocks(rel->rd_smgr, FSM_FORKNUM);
+	fsm_nblocks_now = smgrnblocks(rel->rd_smgr, FSM_FORKNUM, 0);
 
 	while (fsm_nblocks_now < fsm_nblocks)
 	{

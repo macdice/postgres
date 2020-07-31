@@ -739,7 +739,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	/* Substitute proper block number if caller asked for P_NEW */
 	if (isExtend)
-		blockNum = smgrnblocks(smgr, forkNum);
+		blockNum = smgrnblocks(smgr, forkNum, 0);
 
 	if (isLocalBuf)
 	{
@@ -2862,7 +2862,7 @@ RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 			/* Open it at the smgr level if not already done */
 			RelationOpenSmgr(relation);
 
-			return smgrnblocks(relation->rd_smgr, forkNum);
+			return smgrnblocks(relation->rd_smgr, forkNum, 0);
 
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:

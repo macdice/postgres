@@ -434,7 +434,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	use_wal = XLogIsNeeded() &&
 		(relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork);
 
-	nblocks = smgrnblocks(src, forkNum);
+	nblocks = smgrnblocks(src, forkNum, 0);
 
 	for (blkno = 0; blkno < nblocks; blkno++)
 	{
@@ -721,7 +721,7 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 			{
 				if (smgrexists(srel, fork))
 				{
-					BlockNumber n = smgrnblocks(srel, fork);
+					BlockNumber n = smgrnblocks(srel, fork, 0);
 
 					/* we shouldn't come here for unlogged relations */
 					Assert(fork != INIT_FORKNUM);

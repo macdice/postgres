@@ -461,7 +461,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	 */
 	smgrcreate(smgr, forknum, true);
 
-	lastblock = smgrnblocks(smgr, forknum);
+	lastblock = smgrnblocks(smgr, forknum, 0);
 
 	if (blkno < lastblock)
 	{
