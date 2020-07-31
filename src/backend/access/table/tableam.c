@@ -631,7 +631,7 @@ table_block_relation_size(Relation rel, ForkNumber forkNumber)
 			nblocks += smgrnblocks(rel->rd_smgr, i, 0);
 	}
 	else
-		nblocks = smgrnblocks(rel->rd_smgr, forkNumber, 0);
+		nblocks = smgrnblocks(rel->rd_smgr, forkNumber, SMGRNBLOCKS_RELAXED);
 
 	return nblocks * BLCKSZ;
 }
