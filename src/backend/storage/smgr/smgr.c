@@ -523,10 +523,12 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	 * kernel.
 	 */
 	if (reln->smgr_cached_nblocks[forknum] == blocknum)
+	{
+		reln->smgr_cached_nblocks_inval[forknum] = smgrnblocks_inc_inval(reln);
 		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
+	}
 	else
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
-	smgrnblocks_inc_inval(reln);
 }
 
 /*
