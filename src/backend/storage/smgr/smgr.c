@@ -517,18 +517,8 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
 										 buffer, skipFsync);
 
-	/*
-	 * Normally we expect this to increase nblocks by one, but if the cached
-	 * value isn't as expected, just invalidate it so the next call asks the
-	 * kernel.
-	 */
-	if (reln->smgr_cached_nblocks[forknum] == blocknum)
-	{
-		reln->smgr_cached_nblocks_inval[forknum] = smgrnblocks_inc_inval(reln);
-		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
-	}
-	else
-		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+	reln->smgr_cached_nblocks_inval[forknum] = smgrnblocks_inc_inval(reln);
+	reln->smgr_cached_nblocks[forknum] = blocknum + 1;
 }
 
 /*
