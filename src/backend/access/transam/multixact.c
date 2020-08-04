@@ -1831,11 +1831,13 @@ MultiXactShmemInit(void)
 	SimpleLruInit(MultiXactOffsetCtl,
 				  "MultiXactOffset", NUM_MULTIXACTOFFSET_BUFFERS, 0,
 				  MultiXactOffsetSLRULock, "pg_multixact/offsets",
-				  LWTRANCHE_MULTIXACTOFFSET_BUFFER);
+				  LWTRANCHE_MULTIXACTOFFSET_BUFFER,
+				  SYNC_HANDLER_MULTIXACT_OFFSET);
 	SimpleLruInit(MultiXactMemberCtl,
 				  "MultiXactMember", NUM_MULTIXACTMEMBER_BUFFERS, 0,
 				  MultiXactMemberSLRULock, "pg_multixact/members",
-				  LWTRANCHE_MULTIXACTMEMBER_BUFFER);
+				  LWTRANCHE_MULTIXACTMEMBER_BUFFER,
+				  SYNC_HANDLER_MULTIXACT_MEMBER);
 
 	/* Initialize our shared state struct */
 	MultiXactState = ShmemInitStruct("Shared MultiXact State",
@@ -3385,4 +3387,22 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
 	}
 
 	SRF_RETURN_DONE(funccxt);
+}
+
+/*
+ * Entrypoint for sync.c to sync offsets files.
+ */
+int
+multixactoffsetssyncfiletag(const FileTag *ftag, char *path)
+{
+	return slrusyncfiletag(MultiXactOffsetCtl, ftag, path);
+}
+
+/*
+ * Entrypoint for sync.c to sync members files.
+ */
+int
+multixactmemberssyncfiletag(const FileTag *ftag, char *path)
+{
+	return slrusyncfiletag(MultiXactMemberCtl, ftag, path);
 }

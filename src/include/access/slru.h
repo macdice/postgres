@@ -15,6 +15,7 @@
 
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
+#include "storage/sync.h"
 
 
 /*
@@ -111,10 +112,10 @@ typedef struct SlruCtlData
 	SlruShared	shared;
 
 	/*
-	 * This flag tells whether to fsync writes (true for pg_xact and multixact
-	 * stuff, false for pg_subtrans and pg_notify).
+	 * Which sync handler function to use when handing sync requests over to
+	 * the checkpointer.  SYNC_HANDLER_NONE to disable fsync (eg pg_notify).
 	 */
-	bool		do_fsync;
+	SyncRequestHandler sync_handler;
 
 	/*
 	 * Decide which of two page numbers is "older" for truncation purposes. We
@@ -135,7 +136,8 @@ typedef SlruCtlData *SlruCtl;
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-						  LWLock *ctllock, const char *subdir, int tranche_id);
+						  LWLock *ctllock, const char *subdir, int tranche_id,
+						  SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
@@ -150,6 +152,8 @@ typedef bool (*SlruScanCallback) (SlruCtl ctl, char *filename, int segpage,
 								  void *data);
 extern bool SlruScanDirectory(SlruCtl ctl, SlruScanCallback callback, void *data);
 extern void SlruDeleteSegment(SlruCtl ctl, int segno);
+
+extern int slrusyncfiletag(SlruCtl ctl, const FileTag *ftag, char *path);
 
 /* SlruScanDirectory public callbacks */
 extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
