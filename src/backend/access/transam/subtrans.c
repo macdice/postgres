@@ -193,9 +193,7 @@ SUBTRANSShmemInit(void)
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
 	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
 				  SubtransSLRULock, "pg_subtrans",
-				  LWTRANCHE_SUBTRANS_BUFFER);
-	/* Override default assumption that writes should be fsync'd */
-	SubTransCtl->do_fsync = false;
+				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
 }
 
 /*

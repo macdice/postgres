@@ -821,9 +821,7 @@ SerialInit(void)
 	SerialSlruCtl->PagePrecedes = SerialPagePrecedesLogically;
 	SimpleLruInit(SerialSlruCtl, "Serial",
 				  NUM_SERIAL_BUFFERS, 0, SerialSLRULock, "pg_serial",
-				  LWTRANCHE_SERIAL_BUFFER);
-	/* Override default assumption that writes should be fsync'd */
-	SerialSlruCtl->do_fsync = false;
+				  LWTRANCHE_SERIAL_BUFFER, SYNC_HANDLER_NONE);
 
 	/*
 	 * Create or attach to the SerialControl structure.
