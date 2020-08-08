@@ -274,6 +274,7 @@ void
 InitLatch(Latch *latch)
 {
 	latch->is_set = false;
+	latch->maybe_sleeping = false;
 	latch->owner_pid = MyProcPid;
 	latch->is_shared = false;
 
@@ -321,6 +322,7 @@ InitSharedLatch(Latch *latch)
 #endif
 
 	latch->is_set = false;
+	latch->maybe_sleeping = false;
 	latch->owner_pid = 0;
 	latch->is_shared = true;
 }
@@ -523,6 +525,10 @@ SetLatch(Latch *latch)
 
 	latch->is_set = true;
 
+	pg_memory_barrier();
+	if (!latch->maybe_sleeping)
+		return;
+
 #ifndef WIN32
 
 	/*
@@ -589,6 +595,7 @@ ResetLatch(Latch *latch)
 {
 	/* Only the owner should reset the latch */
 	Assert(latch->owner_pid == MyProcPid);
+	Assert(latch->maybe_sleeping == false);
 
 	latch->is_set = false;
 
@@ -1289,6 +1296,14 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 		 * ordering, so that we cannot miss seeing is_set if a notification
 		 * has already been queued.
 		 */
+		if (set->latch && !set->latch->is_set)
+		{
+			/* about to sleep on a latch */
+			set->latch->maybe_sleeping = true;
+			pg_memory_barrier();
+			/* and recheck */
+		}
+
 		if (set->latch && set->latch->is_set)
 		{
 			occurred_events->fd = PGINVALID_SOCKET;
@@ -1298,6 +1313,9 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 			occurred_events->events = WL_LATCH_SET;
 			occurred_events++;
 			returned_events++;
+
+			/* could have been set above */
+			set->latch->maybe_sleeping = false;
 
 			break;
 		}
@@ -1309,6 +1327,12 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 		 */
 		rc = WaitEventSetWaitBlock(set, cur_timeout,
 								   occurred_events, nevents);
+
+		if (set->latch)
+		{
+			Assert(set->latch->maybe_sleeping);
+			set->latch->maybe_sleeping = false;
+		}
 
 		if (rc == -1)
 			break;				/* timeout occurred */
