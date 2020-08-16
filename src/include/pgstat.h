@@ -957,7 +957,8 @@ typedef enum
  */
 typedef enum
 {
-	WAIT_EVENT_BACKUP_WAIT_WAL_ARCHIVE = PG_WAIT_IPC,
+	WAIT_EVENT_ADMISSION_CONTROL = PG_WAIT_IPC,
+	WAIT_EVENT_BACKUP_WAIT_WAL_ARCHIVE,
 	WAIT_EVENT_BGWORKER_SHUTDOWN,
 	WAIT_EVENT_BGWORKER_STARTUP,
 	WAIT_EVENT_BTREE_PAGE,
@@ -1252,6 +1253,10 @@ typedef struct PgBackendStatus
 	ProgressCommandType st_progress_command;
 	Oid			st_progress_command_target;
 	int64		st_progress_param[PGSTAT_NUM_PROGRESS_PARAM];
+
+	/* Memory usage. */
+	size_t		st_exec_mem_reserved;
+	size_t		st_exec_mem_allocated;
 } PgBackendStatus;
 
 /*
@@ -1446,6 +1451,8 @@ extern void pgstat_initialize(void);
 extern void pgstat_bestart(void);
 
 extern void pgstat_report_activity(BackendState state, const char *cmd_str);
+extern void pgstat_report_exec_mem_reserved(size_t size);
+extern void pgstat_report_exec_mem_allocated(size_t size);
 extern void pgstat_report_tempfile(size_t filesize);
 extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);

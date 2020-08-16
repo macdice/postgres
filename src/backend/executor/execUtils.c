@@ -59,6 +59,7 @@
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "storage/lmgr.h"
+#include "utils/admission.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -121,6 +122,15 @@ CreateExecutorState(void)
 									 ALLOCSET_DEFAULT_SIZES);
 
 	/*
+	 * Underlying memory allocated by this context and all children should be
+	 * counted as executor memory against this session, for admission control
+	 * purposes.
+	 */
+	MemoryContextSetMemAllocatedCB(qcontext,
+								   AdmissionControlExecMemChanged,
+								   NULL);
+
+	/*
 	 * Make the EState node within the per-query context.  This way, we don't
 	 * need a separate pfree() operation for it at shutdown.
 	 */
@@ -161,6 +171,8 @@ CreateExecutorState(void)
 	estate->es_queryEnv = NULL;
 
 	estate->es_query_cxt = qcontext;
+
+	estate->es_mem_reserved = 0;
 
 	estate->es_tupleTable = NIL;
 
@@ -240,6 +252,13 @@ FreeExecutorState(EState *estate)
 	{
 		DestroyPartitionDirectory(estate->es_partition_directory);
 		estate->es_partition_directory = NULL;
+	}
+
+	/* Return our memory reservation, if we had one. */
+	if (estate->es_mem_reserved > 0)
+	{
+		AdmissionControlEndQuery(estate->es_mem_reserved);
+		estate->es_mem_reserved = 0;
 	}
 
 	/*

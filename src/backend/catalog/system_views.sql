@@ -765,7 +765,9 @@ CREATE VIEW pg_stat_activity AS
             S.backend_xid,
             s.backend_xmin,
             S.query,
-            S.backend_type
+            S.backend_type,
+            S.exec_mem_reserved,
+            S.exec_mem_allocated
     FROM pg_stat_get_activity(NULL) AS S
         LEFT JOIN pg_database AS D ON (S.datid = D.oid)
         LEFT JOIN pg_authid AS U ON (S.usesysid = U.oid);

@@ -31,6 +31,10 @@ typedef struct Session
 	struct SharedRecordTypmodRegistry *shared_typmod_registry;
 	dshash_table *shared_record_table;
 	dshash_table *shared_typmod_table;
+
+	/* State managed by admission.c. */
+	size_t		exec_mem_reserved;
+	size_t		exec_mem_allocated;
 } Session;
 
 extern void InitializeSession(void);

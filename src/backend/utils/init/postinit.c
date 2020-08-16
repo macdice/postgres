@@ -53,6 +53,7 @@
 #include "storage/sync.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
+#include "utils/admission.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -1065,6 +1066,9 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 
 	/* Initialize this backend's session state. */
 	InitializeSession();
+
+	/* Initialize admission control for this session, if configured. */
+	AdmissionControlBeginSession();
 
 	/* report this backend in the PgBackendStatus array */
 	if (!bootstrap)

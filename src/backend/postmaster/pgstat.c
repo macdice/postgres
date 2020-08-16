@@ -3259,6 +3259,9 @@ pgstat_bestart(void)
 	 * than PROGRESS_COMMAND_INVALID
 	 */
 
+	lbeentry.st_exec_mem_allocated = 0;
+	lbeentry.st_exec_mem_reserved = 0;
+
 	/*
 	 * We're ready to enter the critical section that fills the shared-memory
 	 * status entry.  We follow the protocol of bumping st_changecount before
@@ -3444,6 +3447,44 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	}
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+void
+pgstat_report_exec_mem_allocated(size_t size)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry)
+		return;
+
+	/*
+	 * We'll only bother with the change counting procotol if this platform
+	 * can't read and write 8 byte values without tearing.
+	 */
+#ifndef PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+#endif
+	beentry->st_exec_mem_allocated = size;
+#ifndef PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+#endif
+}
+
+void
+pgstat_report_exec_mem_reserved(size_t size)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry)
+		return;
+
+#ifndef PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+#endif
+	beentry->st_exec_mem_reserved = size;
+#ifndef PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+#endif
 }
 
 /*-----------
@@ -3999,6 +4040,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 
 	switch (w)
 	{
+		case WAIT_EVENT_ADMISSION_CONTROL:
+			event_name = "AdmissionControl";
+			break;
 		case WAIT_EVENT_BACKUP_WAIT_WAL_ARCHIVE:
 			event_name = "BackupWaitWalArchive";
 			break;

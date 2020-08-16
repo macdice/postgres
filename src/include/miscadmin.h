@@ -243,6 +243,9 @@ extern PGDLLIMPORT int IntervalStyle;
 
 extern bool enableFsync;
 extern PGDLLIMPORT bool allowSystemTableMods;
+extern PGDLLIMPORT int cluster_work_mem_limit;
+extern PGDLLIMPORT int session_work_mem_limit;
+extern PGDLLIMPORT int session_work_mem_reservation;
 extern PGDLLIMPORT int work_mem;
 extern PGDLLIMPORT double hash_mem_multiplier;
 extern PGDLLIMPORT int maintenance_work_mem;

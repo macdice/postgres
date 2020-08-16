@@ -610,6 +610,12 @@ typedef struct EState
 	struct dsa_area *es_query_dsa;
 
 	/*
+	 * The amount of memory reserved for admission control purposes.  This must
+	 * be returned.
+	 */
+	size_t		es_mem_reserved;
+
+	/*
 	 * JIT information. es_jit_flags indicates whether JIT should be performed
 	 * and with which options.  es_jit is created on-demand when JITing is
 	 * performed.

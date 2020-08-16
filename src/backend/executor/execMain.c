@@ -58,6 +58,7 @@
 #include "storage/lmgr.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
+#include "utils/admission.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/partcache.h"
@@ -245,6 +246,12 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	 */
 	if (!(eflags & (EXEC_FLAG_SKIP_TRIGGERS | EXEC_FLAG_EXPLAIN_ONLY)))
 		AfterTriggerBeginQuery();
+
+	/*
+	 * Reserve the amount of memory that this plan claims to need to run.
+	 * This may block or error out depending on settings.
+	 */
+	estate->es_mem_reserved = AdmissionControlBeginQuery(queryDesc);
 
 	/*
 	 * Initialize the plan state tree

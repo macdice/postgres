@@ -2335,6 +2335,40 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"cluster_work_mem_limit", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the total amount of memory that can be used by all queries."),
+			gettext_noop("This much memory can be used by all concurrent queries "
+						 "before new queries must wait before they can start."),
+			GUC_UNIT_KB
+		},
+		&cluster_work_mem_limit,
+		-1, -1, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"session_work_mem_limit", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the total amount of memory that can be used by a single session."),
+			gettext_noop("This much memory can be used by one backend."),
+			GUC_UNIT_KB
+		},
+		&session_work_mem_limit,
+		-1, -1, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"session_work_mem_reservation", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the total amount of memory that a session is initially granted to use."),
+			gettext_noop("This much memory can be used by one backend without waiting."),
+			GUC_UNIT_KB
+		},
+		&session_work_mem_reservation,
+		-1, -1, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"work_mem", PGC_USERSET, RESOURCES_MEM,
 			gettext_noop("Sets the maximum memory to be used for query workspaces."),
 			gettext_noop("This much memory can be used by each internal "

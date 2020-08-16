@@ -569,7 +569,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_activity(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_ACTIVITY_COLS	30
+#define PG_STAT_GET_ACTIVITY_COLS	32
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
@@ -915,34 +915,17 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 				values[28] = BoolGetDatum(false);	/* GSS Encryption not in
 													 * use */
 			}
+
+			/* Memory information */
+			values[30] = Int8GetDatum(beentry->st_exec_mem_reserved);
+			values[31] = Int8GetDatum(beentry->st_exec_mem_allocated);
 		}
 		else
 		{
 			/* No permissions to view data about this session */
 			values[5] = CStringGetTextDatum("<insufficient privilege>");
-			nulls[4] = true;
-			nulls[6] = true;
-			nulls[7] = true;
-			nulls[8] = true;
-			nulls[9] = true;
-			nulls[10] = true;
-			nulls[11] = true;
-			nulls[12] = true;
-			nulls[13] = true;
-			nulls[14] = true;
-			nulls[17] = true;
-			nulls[18] = true;
-			nulls[19] = true;
-			nulls[20] = true;
-			nulls[21] = true;
-			nulls[22] = true;
-			nulls[23] = true;
-			nulls[24] = true;
-			nulls[25] = true;
-			nulls[26] = true;
-			nulls[27] = true;
-			nulls[28] = true;
-			nulls[29] = true;
+			for (int i = 4; i < PG_STAT_GET_ACTIVITY_COLS; ++i)
+				nulls[i] = true;
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
