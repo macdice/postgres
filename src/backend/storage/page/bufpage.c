@@ -421,13 +421,13 @@ typedef struct itemIdSortData
 } itemIdSortData;
 typedef itemIdSortData *itemIdSort;
 
-static int
-itemoffcompare(const void *itemidp1, const void *itemidp2)
-{
-	/* Sort in decreasing itemoff order */
-	return ((itemIdSort) itemidp2)->itemoff -
-		((itemIdSort) itemidp1)->itemoff;
-}
+/* Create a specialized sort function for descending offset order. */
+#define ST_SORT qsort_itemoff
+#define ST_ELEMENT_TYPE itemIdSortData
+#define ST_COMPARE(a, b) ((b)->itemoff - (a)->itemoff)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
 
 /*
  * After removing or marking some line pointers unused, move the tuples to
@@ -441,8 +441,7 @@ compactify_tuples(itemIdSort itemidbase, int nitems, Page page)
 	int			i;
 
 	/* sort itemIdSortData array into decreasing itemoff order */
-	qsort((char *) itemidbase, nitems, sizeof(itemIdSortData),
-		  itemoffcompare);
+	qsort_itemoff(itemidbase, nitems);
 
 	upper = phdr->pd_special;
 	for (i = 0; i < nitems; i++)
