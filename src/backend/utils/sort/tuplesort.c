@@ -103,6 +103,7 @@
 #include "catalog/pg_am.h"
 #include "commands/tablespace.h"
 #include "executor/executor.h"
+#include "lib/gen_sort.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "utils/datum.h"
@@ -676,8 +677,36 @@ static void tuplesort_updatemax(Tuplesortstate *state);
  * reduces to ApplySortComparator(), that is single-key MinimalTuple sorts
  * and Datum sorts.
  */
-#include "qsort_tuple.c"
 
+static void
+qsort_tuple(SortTuple *a, size_t n, SortTupleComparator cmp_tuple,
+			Tuplesortstate *state)
+{
+	pg_sort_cmparg(a, n, sizeof(SortTuple),
+				   (compare_arg_fun) cmp_tuple,
+				   (sort_cmparg_fun) qsort_tuple,
+				   state);
+}
+
+static inline int
+compare_ssup(const void *a, const void *b, void *arg)
+{
+	SortTuple *aa = (SortTuple *) a;
+	SortTuple *bb = (SortTuple *) b;
+	SortSupport ssup = (SortSupport) arg;
+
+	return ApplySortComparator(aa->datum1, aa->isnull1,
+							   bb->datum1, bb->isnull1, ssup);
+}
+
+static void
+qsort_ssup(SortTuple *a, size_t n, SortSupport ssup)
+{
+	pg_sort_arg(a, n, sizeof(SortTuple),
+				compare_ssup,
+				(sort_arg_fun) qsort_ssup,
+				ssup);
+}
 
 /*
  *		tuplesort_begin_xxx
