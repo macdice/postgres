@@ -472,16 +472,57 @@ extern int	pqGethostbyname(const char *name,
 							struct hostent **result,
 							int *herrno);
 
-extern void pg_qsort(void *base, size_t nel, size_t elsize,
-					 int (*cmp) (const void *, const void *));
+extern void qsort_8(void *base, size_t nel,
+					int (*cmp) (const void *, const void *));
+extern void qsort_4(void *base, size_t nel,
+					int (*cmp) (const void *, const void *));
+extern void qsort_x(void *base, size_t nel, size_t elsize,
+					int (*cmp) (const void *, const void *));
 extern int	pg_qsort_strcmp(const void *a, const void *b);
+
+/*
+ * Function compatible with traditional qsort(3).  We'll attempt to use a
+ * version specialized for the element size, since that's almost always
+ * known at compile time.
+ */
+static pg_attribute_always_inline void
+pg_qsort(void *base, size_t nel, size_t elsize,
+		 int (*cmp) (const void *, const void *))
+{
+	if (elsize == 8)
+		qsort_8(base, nel, cmp);
+	else if (elsize == 4)
+		qsort_4(base, nel, cmp);
+	else
+		qsort_x(base, nel, elsize, cmp);
+}
 
 #define qsort(a,b,c,d) pg_qsort(a,b,c,d)
 
 typedef int (*qsort_arg_comparator) (const void *a, const void *b, void *arg);
 
-extern void qsort_arg(void *base, size_t nel, size_t elsize,
-					  qsort_arg_comparator cmp, void *arg);
+extern void qsort_8_arg(void *base, size_t nel,
+						qsort_arg_comparator cmp, void *arg);
+extern void qsort_4_arg(void *base, size_t nel,
+						qsort_arg_comparator cmp, void *arg);
+extern void qsort_x_arg(void *base, size_t nel, size_t elsize,
+						qsort_arg_comparator cmp, void *arg);
+
+/*
+ * Variant of pg_qsort() that takes a user-supplied extra argument and
+ * passes it to the comparator function.
+ */
+static pg_attribute_always_inline void
+qsort_arg(void *base, size_t nel, size_t elsize,
+		  qsort_arg_comparator cmp, void *arg)
+{
+	if (elsize == 8)
+		qsort_8_arg(base, nel, cmp, arg);
+	else if (elsize == 4)
+		qsort_4_arg(base, nel, cmp, arg);
+	else
+		qsort_x_arg(base, nel, elsize, cmp, arg);
+}
 
 /* port/chklocale.c */
 extern int	pg_get_encoding_from_locale(const char *ctype, bool write_message);
