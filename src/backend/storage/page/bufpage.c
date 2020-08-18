@@ -17,6 +17,7 @@
 #include "access/htup_details.h"
 #include "access/itup.h"
 #include "access/xlog.h"
+#include "lib/gen_sort.h"
 #include "pgstat.h"
 #include "storage/checksum.h"
 #include "utils/memdebug.h"
@@ -430,6 +431,16 @@ itemoffcompare(const void *itemidp1, const void *itemidp2)
 }
 
 /*
+ * Define a sorting routine specialized on comparator and size.
+ */
+static void
+qsort_itemoff(void *itemidbase, size_t n)
+{
+	pg_sort(itemidbase, n, sizeof(itemIdSortData), itemoffcompare,
+			qsort_itemoff);
+}
+
+/*
  * After removing or marking some line pointers unused, move the tuples to
  * remove the gaps caused by the removed items.
  */
@@ -441,8 +452,7 @@ compactify_tuples(itemIdSort itemidbase, int nitems, Page page)
 	int			i;
 
 	/* sort itemIdSortData array into decreasing itemoff order */
-	qsort((char *) itemidbase, nitems, sizeof(itemIdSortData),
-		  itemoffcompare);
+	qsort_itemoff(itemidbase, nitems);
 
 	upper = phdr->pd_special;
 	for (i = 0; i < nitems; i++)
