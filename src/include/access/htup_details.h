@@ -808,6 +808,12 @@ extern void heap_deform_tuple(HeapTuple tuple, TupleDesc tupleDesc,
 extern void heap_freetuple(HeapTuple htup);
 extern MinimalTuple heap_form_minimal_tuple(TupleDesc tupleDescriptor,
 											Datum *values, bool *isnull);
+extern size_t heap_size_minimal_tuple(TupleDesc tupleDescriptor,
+									  Datum *values, bool *isnull);
+extern void heap_form_minimal_tuple_in_place(MinimalTuple tuple,
+											 TupleDesc tupleDescriptor,
+											 Datum *values,
+											 bool *isnull);
 extern void heap_free_minimal_tuple(MinimalTuple mtup);
 extern MinimalTuple heap_copy_minimal_tuple(MinimalTuple mtup);
 extern HeapTuple heap_tuple_from_minimal_tuple(MinimalTuple mtup);

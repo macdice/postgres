@@ -214,6 +214,17 @@ struct TupleTableSlotOps
 	 * consumed by the slot.
 	 */
 	MinimalTuple (*copy_minimal_tuple) (TupleTableSlot *slot);
+
+	/*
+	 * What size would a minimal tuple be?
+	 */
+	size_t (*size_minimal_tuple) (TupleTableSlot *slot);
+
+	/*
+	 * Copy a minimal tuple into a user-supplied buffer.
+	 */
+	void (*copy_minimal_tuple_in_place) (MinimalTuple mtup,
+										 TupleTableSlot *slot);
 };
 
 /*
@@ -480,6 +491,31 @@ ExecCopySlot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 	dstslot->tts_ops->copyslot(dstslot, srcslot);
 
 	return dstslot;
+}
+
+/*
+ * ExecSizeSlotMinimalTuple - how big would a minimal tuple be?
+ */
+static inline size_t
+ExecSizeSlotMinimalTuple(TupleTableSlot *slot)
+{
+	Assert(!TTS_EMPTY(slot));
+
+	return slot->tts_ops->size_minimal_tuple(slot);
+}
+
+/*
+ * ExecFetchSlotMinimalTupleInPlace - copy into caller's buffer.
+ *
+ * The output buffer must be of the size returned by
+ * ExecSizeSlotMinimalTuple().
+ */
+static inline void
+ExecCopySlotMinimalTupleInPlace(MinimalTuple mtup, TupleTableSlot *slot)
+{
+	Assert(!TTS_EMPTY(slot));
+
+	return slot->tts_ops->copy_minimal_tuple_in_place(mtup, slot);
 }
 
 #endif							/* FRONTEND */

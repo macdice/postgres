@@ -284,6 +284,28 @@ tts_virtual_copy_minimal_tuple(TupleTableSlot *slot)
 								   slot->tts_isnull);
 }
 
+static size_t
+tts_virtual_size_minimal_tuple(TupleTableSlot *slot)
+{
+	Assert(!TTS_EMPTY(slot));
+
+	return heap_size_minimal_tuple(slot->tts_tupleDescriptor,
+								   slot->tts_values,
+								   slot->tts_isnull);
+}
+
+static void
+tts_virtual_copy_minimal_tuple_in_place(MinimalTuple mtup,
+										TupleTableSlot *slot)
+{
+	Assert(!TTS_EMPTY(slot));
+elog(LOG, "tts_virtual_copy_minimal_tuple_in_place");
+	heap_form_minimal_tuple_in_place(mtup,
+									 slot->tts_tupleDescriptor,
+									 slot->tts_values,
+									 slot->tts_isnull);
+}
+
 
 /*
  * TupleTableSlotOps implementation for HeapTupleTableSlot.
@@ -425,6 +447,37 @@ tts_heap_copy_minimal_tuple(TupleTableSlot *slot)
 		tts_heap_materialize(slot);
 
 	return minimal_tuple_from_heap_tuple(hslot->tuple);
+}
+
+static size_t
+tts_heap_size_minimal_tuple(TupleTableSlot *slot)
+{
+	HeapTupleTableSlot *hslot = (HeapTupleTableSlot *) slot;
+
+	Assert(!TTS_EMPTY(slot));
+
+	if (!hslot->tuple)
+		tts_heap_materialize(slot);
+
+	return hslot->tuple->t_len - MINIMAL_TUPLE_OFFSET;
+}
+
+static void
+tts_heap_copy_minimal_tuple_in_place(MinimalTuple mtup,
+									 TupleTableSlot *slot)
+{
+	HeapTupleTableSlot *hslot = (HeapTupleTableSlot *) slot;
+	HeapTuple htup;
+	size_t size;
+
+elog(LOG, "tts_heap_copy_minimal_tuple_in_place");
+	Assert(!TTS_EMPTY(slot));
+	Assert(hslot->tuple);		/* must have requested size */
+
+	htup = hslot->tuple;
+	size = htup->t_len - MINIMAL_TUPLE_OFFSET;
+	memcpy(mtup, (char *) htup->t_data + MINIMAL_TUPLE_OFFSET, size);
+	mtup->t_len = size;
 }
 
 static void
@@ -594,6 +647,39 @@ tts_minimal_copy_minimal_tuple(TupleTableSlot *slot)
 
 	return heap_copy_minimal_tuple(mslot->mintuple);
 }
+
+static size_t
+tts_minimal_size_minimal_tuple(TupleTableSlot *slot)
+{
+	MinimalTupleTableSlot *mslot = (MinimalTupleTableSlot *) slot;
+
+	if (mslot->mintuple)
+		tts_minimal_materialize(slot);
+#if 0
+		return mslot->mintuple->t_len;
+	else
+		return tts_virtual_size_minimal_tuple(slot);
+#endif
+	return mslot->mintuple->t_len;
+}
+
+static void
+tts_minimal_copy_minimal_tuple_in_place(MinimalTuple mtup,
+										TupleTableSlot *slot)
+{
+	MinimalTupleTableSlot *mslot = (MinimalTupleTableSlot *) slot;
+
+elog(LOG, "tts_minimal_copy_minimal_tuple_in_place");
+	if (mslot->mintuple)
+		tts_minimal_materialize(slot);
+#if 0
+		memcpy(mtup, mslot->mintuple, mslot->mintuple->t_len);
+	else
+		return tts_virtual_copy_minimal_tuple_in_place(mtup, slot);
+#endif
+	memcpy(mtup, mslot->mintuple, mslot->mintuple->t_len);
+}
+
 
 static void
 tts_minimal_store_tuple(TupleTableSlot *slot, MinimalTuple mtup, bool shouldFree)
@@ -825,6 +911,37 @@ tts_buffer_heap_copy_minimal_tuple(TupleTableSlot *slot)
 	return minimal_tuple_from_heap_tuple(bslot->base.tuple);
 }
 
+static size_t
+tts_buffer_heap_size_minimal_tuple(TupleTableSlot *slot)
+{
+	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
+
+	Assert(!TTS_EMPTY(slot));
+
+	if (!bslot->base.tuple)
+		tts_buffer_heap_materialize(slot);
+
+	return bslot->base.tuple->t_len - MINIMAL_TUPLE_OFFSET;
+}
+
+static void
+tts_buffer_heap_copy_minimal_tuple_in_place(MinimalTuple mtup,
+											TupleTableSlot *slot)
+{
+	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
+	HeapTuple htup;
+	size_t size;
+
+elog(LOG, "tts_buffer_heap_copy_minimal_tuple_in_place");
+	Assert(!TTS_EMPTY(slot));
+	Assert(bslot->base.tuple);	/* must have requested size */
+
+	htup = bslot->base.tuple;
+	size = htup->t_len - MINIMAL_TUPLE_OFFSET;
+	memcpy(mtup, (char *) htup->t_data + MINIMAL_TUPLE_OFFSET, size);
+	mtup->t_len = size;
+}
+
 static inline void
 tts_buffer_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple,
 							Buffer buffer, bool transfer_pin)
@@ -1009,7 +1126,9 @@ const TupleTableSlotOps TTSOpsVirtual = {
 	.get_heap_tuple = NULL,
 	.get_minimal_tuple = NULL,
 	.copy_heap_tuple = tts_virtual_copy_heap_tuple,
-	.copy_minimal_tuple = tts_virtual_copy_minimal_tuple
+	.copy_minimal_tuple = tts_virtual_copy_minimal_tuple,
+	.copy_minimal_tuple_in_place = tts_virtual_copy_minimal_tuple_in_place,
+	.size_minimal_tuple = tts_virtual_size_minimal_tuple
 };
 
 const TupleTableSlotOps TTSOpsHeapTuple = {
@@ -1026,7 +1145,9 @@ const TupleTableSlotOps TTSOpsHeapTuple = {
 	/* A heap tuple table slot can not "own" a minimal tuple. */
 	.get_minimal_tuple = NULL,
 	.copy_heap_tuple = tts_heap_copy_heap_tuple,
-	.copy_minimal_tuple = tts_heap_copy_minimal_tuple
+	.copy_minimal_tuple = tts_heap_copy_minimal_tuple,
+	.copy_minimal_tuple_in_place = tts_heap_copy_minimal_tuple_in_place,
+	.size_minimal_tuple = tts_heap_size_minimal_tuple
 };
 
 const TupleTableSlotOps TTSOpsMinimalTuple = {
@@ -1043,7 +1164,9 @@ const TupleTableSlotOps TTSOpsMinimalTuple = {
 	.get_heap_tuple = NULL,
 	.get_minimal_tuple = tts_minimal_get_minimal_tuple,
 	.copy_heap_tuple = tts_minimal_copy_heap_tuple,
-	.copy_minimal_tuple = tts_minimal_copy_minimal_tuple
+	.copy_minimal_tuple = tts_minimal_copy_minimal_tuple,
+	.copy_minimal_tuple_in_place = tts_minimal_copy_minimal_tuple_in_place,
+	.size_minimal_tuple = tts_minimal_size_minimal_tuple
 };
 
 const TupleTableSlotOps TTSOpsBufferHeapTuple = {
@@ -1060,7 +1183,9 @@ const TupleTableSlotOps TTSOpsBufferHeapTuple = {
 	/* A buffer heap tuple table slot can not "own" a minimal tuple. */
 	.get_minimal_tuple = NULL,
 	.copy_heap_tuple = tts_buffer_heap_copy_heap_tuple,
-	.copy_minimal_tuple = tts_buffer_heap_copy_minimal_tuple
+	.copy_minimal_tuple = tts_buffer_heap_copy_minimal_tuple,
+	.copy_minimal_tuple_in_place = tts_buffer_heap_copy_minimal_tuple_in_place,
+	.size_minimal_tuple = tts_buffer_heap_size_minimal_tuple
 };
 
 

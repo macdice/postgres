@@ -1341,6 +1341,50 @@ heap_freetuple(HeapTuple htup)
 }
 
 
+size_t
+heap_size_minimal_tuple(TupleDesc tupleDescriptor,
+						Datum *values,
+						bool *isnull)
+{
+	size_t		len,
+				data_len;
+	bool		hasnull = false;
+	int			numberOfAttributes = tupleDescriptor->natts;
+	int			i;
+
+	if (numberOfAttributes > MaxTupleAttributeNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_TOO_MANY_COLUMNS),
+				 errmsg("number of columns (%d) exceeds limit (%d)",
+						numberOfAttributes, MaxTupleAttributeNumber)));
+
+	/*
+	 * Check for nulls
+	 */
+	for (i = 0; i < numberOfAttributes; i++)
+	{
+		if (isnull[i])
+		{
+			hasnull = true;
+			break;
+		}
+	}
+
+	/*
+	 * Determine total space needed
+	 */
+	len = SizeofMinimalTupleHeader;
+
+	if (hasnull)
+		len += BITMAPLEN(numberOfAttributes);
+
+	data_len = heap_compute_data_size(tupleDescriptor, values, isnull);
+
+	len += data_len;
+
+	return len;
+}
+
 /*
  * heap_form_minimal_tuple
  *		construct a MinimalTuple from the given values[] and isnull[] arrays,
@@ -1419,6 +1463,72 @@ heap_form_minimal_tuple(TupleDesc tupleDescriptor,
 
 	return tuple;
 }
+
+void
+heap_form_minimal_tuple_in_place(MinimalTuple tuple,
+								 TupleDesc tupleDescriptor,
+								 Datum *values,
+								 bool *isnull)
+{
+	Size		len,
+				data_len;
+	int			hoff;
+	bool		hasnull = false;
+	int			numberOfAttributes = tupleDescriptor->natts;
+	int			i;
+
+	if (numberOfAttributes > MaxTupleAttributeNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_TOO_MANY_COLUMNS),
+				 errmsg("number of columns (%d) exceeds limit (%d)",
+						numberOfAttributes, MaxTupleAttributeNumber)));
+
+	/*
+	 * Check for nulls
+	 */
+	for (i = 0; i < numberOfAttributes; i++)
+	{
+		if (isnull[i])
+		{
+			hasnull = true;
+			break;
+		}
+	}
+
+	/*
+	 * Determine total space needed
+	 */
+	len = SizeofMinimalTupleHeader;
+
+	if (hasnull)
+		len += BITMAPLEN(numberOfAttributes);
+
+	hoff = len = MAXALIGN(len); /* align user data safely */
+
+	/*
+	 * XXX how can we avoid doing this if we already did it in
+	 * heap_size_minimal_tuple()?!
+	 */
+	data_len = heap_compute_data_size(tupleDescriptor, values, isnull);
+
+	len += data_len;
+
+	/*
+	 * And fill in the information.
+	 */
+	tuple->t_len = len;
+	HeapTupleHeaderSetNatts(tuple, numberOfAttributes);
+	tuple->t_hoff = hoff + MINIMAL_TUPLE_OFFSET;
+
+	heap_fill_tuple(tupleDescriptor,
+					values,
+					isnull,
+					(char *) tuple + hoff,
+					data_len,
+					&tuple->t_infomask,
+					(hasnull ? tuple->t_bits : NULL));
+}
+
 
 /*
  * heap_free_minimal_tuple
