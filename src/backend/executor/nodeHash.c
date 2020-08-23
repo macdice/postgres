@@ -1597,8 +1597,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 					TupleTableSlot *slot,
 					uint32 hashvalue)
 {
-	bool		shouldFree;
-	MinimalTuple tuple = ExecFetchSlotMinimalTuple(slot, &shouldFree);
+	size_t		min_tuple_size = ExecSizeSlotMinimalTuple(slot);
 	int			bucketno;
 	int			batchno;
 
@@ -1618,11 +1617,11 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		double		ntuples = (hashtable->totalTuples - hashtable->skewTuples);
 
 		/* Create the HashJoinTuple */
-		hashTupleSize = HJTUPLE_OVERHEAD + tuple->t_len;
+		hashTupleSize = HJTUPLE_OVERHEAD + min_tuple_size;
 		hashTuple = (HashJoinTuple) dense_alloc(hashtable, hashTupleSize);
 
 		hashTuple->hashvalue = hashvalue;
-		memcpy(HJTUPLE_MINTUPLE(hashTuple), tuple, tuple->t_len);
+		ExecCopySlotMinimalTupleInPlace(HJTUPLE_MINTUPLE(hashTuple), slot);
 
 		/*
 		 * We always reset the tuple-matched flag on insertion.  This is okay
@@ -1664,6 +1663,9 @@ ExecHashTableInsert(HashJoinTable hashtable,
 	}
 	else
 	{
+		bool shouldFree;
+		MinimalTuple tuple = ExecFetchSlotMinimalTuple(slot, &shouldFree);
+
 		/*
 		 * put the tuple into a temp file for later batches
 		 */
@@ -1671,10 +1673,10 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		ExecHashJoinSaveTuple(tuple,
 							  hashvalue,
 							  &hashtable->innerBatchFile[batchno]);
-	}
 
-	if (shouldFree)
-		heap_free_minimal_tuple(tuple);
+		if (shouldFree)
+			heap_free_minimal_tuple(tuple);
+	}
 }
 
 /*
