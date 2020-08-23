@@ -299,7 +299,7 @@ tts_virtual_copy_minimal_tuple_in_place(MinimalTuple mtup,
 										TupleTableSlot *slot)
 {
 	Assert(!TTS_EMPTY(slot));
-elog(LOG, "tts_virtual_copy_minimal_tuple_in_place");
+//elog(LOG, "tts_virtual_copy_minimal_tuple_in_place");
 	heap_form_minimal_tuple_in_place(mtup,
 									 slot->tts_tupleDescriptor,
 									 slot->tts_values,
@@ -470,7 +470,7 @@ tts_heap_copy_minimal_tuple_in_place(MinimalTuple mtup,
 	HeapTuple htup;
 	size_t size;
 
-elog(LOG, "tts_heap_copy_minimal_tuple_in_place");
+//elog(LOG, "tts_heap_copy_minimal_tuple_in_place");
 	Assert(!TTS_EMPTY(slot));
 	Assert(hslot->tuple);		/* must have requested size */
 
@@ -669,7 +669,7 @@ tts_minimal_copy_minimal_tuple_in_place(MinimalTuple mtup,
 {
 	MinimalTupleTableSlot *mslot = (MinimalTupleTableSlot *) slot;
 
-elog(LOG, "tts_minimal_copy_minimal_tuple_in_place");
+//elog(LOG, "tts_minimal_copy_minimal_tuple_in_place");
 	if (mslot->mintuple)
 		tts_minimal_materialize(slot);
 #if 0
@@ -932,7 +932,7 @@ tts_buffer_heap_copy_minimal_tuple_in_place(MinimalTuple mtup,
 	HeapTuple htup;
 	size_t size;
 
-elog(LOG, "tts_buffer_heap_copy_minimal_tuple_in_place");
+//elog(LOG, "tts_buffer_heap_copy_minimal_tuple_in_place");
 	Assert(!TTS_EMPTY(slot));
 	Assert(bslot->base.tuple);	/* must have requested size */
 
