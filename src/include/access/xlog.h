@@ -131,6 +131,7 @@ extern int	recovery_min_apply_delay;
 extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
+extern bool end_of_recovery_checkpoint_wait;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
