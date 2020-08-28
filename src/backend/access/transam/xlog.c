@@ -111,6 +111,7 @@ int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
+bool		end_of_recovery_checkpoint_wait = true;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -7874,6 +7875,18 @@ StartupXLOG(void)
 
 	if (InRecovery)
 	{
+		int		checkpoint_flags = CHECKPOINT_IMMEDIATE;
+
+		/*
+		 * Should we wait for the end-of-recovery checkpoint to complete?
+		 * Traditionally we do this, but it may be useful to allow connections
+		 * sooner.
+		 */
+		if (end_of_recovery_checkpoint_wait)
+			checkpoint_flags |= CHECKPOINT_END_OF_RECOVERY | CHECKPOINT_WAIT;
+		else
+			checkpoint_flags |= CHECKPOINT_FORCE;
+
 		/*
 		 * Perform a checkpoint to update all our recovery activity to disk.
 		 *
@@ -7919,16 +7932,10 @@ StartupXLOG(void)
 			}
 
 			if (!promoted)
-				RequestCheckpoint(CHECKPOINT_END_OF_RECOVERY |
-								  CHECKPOINT_IMMEDIATE |
-								  CHECKPOINT_WAIT);
+				RequestCheckpoint(checkpoint_flags);
 		}
 		else
-		{
-			RequestCheckpoint(CHECKPOINT_END_OF_RECOVERY |
-							  CHECKPOINT_IMMEDIATE |
-							  CHECKPOINT_WAIT);
-		}
+			RequestCheckpoint(checkpoint_flags);
 	}
 
 	if (ArchiveRecoveryRequested)
