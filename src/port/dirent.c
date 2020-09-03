@@ -69,6 +69,7 @@ opendir(const char *dirname)
 	d->handle = INVALID_HANDLE_VALUE;
 	d->ret.d_ino = 0;			/* no inodes on win32 */
 	d->ret.d_reclen = 0;		/* not used on win32 */
+	d->ret.d_type = DT_UNKNOWN;
 
 	return d;
 }
@@ -77,6 +78,7 @@ struct dirent *
 readdir(DIR *d)
 {
 	WIN32_FIND_DATA fd;
+	DWORD			attrib;
 
 	if (d->handle == INVALID_HANDLE_VALUE)
 	{
@@ -105,6 +107,19 @@ readdir(DIR *d)
 	}
 	strcpy(d->ret.d_name, fd.cFileName);	/* Both strings are MAX_PATH long */
 	d->ret.d_namlen = strlen(d->ret.d_name);
+	/*
+	 * The only identifed types are: directory, regular file or symbolic link.
+	 * Errors are treated as a file type that could not be determined.
+	 */
+	attrib = GetFileAttributes(d->ret.d_name);
+	if (attrib == INVALID_FILE_ATTRIBUTES)
+		d->ret.d_type = DT_UNKNOWN;
+	else if ((attrib & FILE_ATTRIBUTE_DIRECTORY) != 0)
+		d->ret.d_type = DT_DIR;
+	else if ((attrib & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+		d->ret.d_type = DT_LNK;
+	else
+		d->ret.d_type = DT_REG;
 
 	return &d->ret;
 }
