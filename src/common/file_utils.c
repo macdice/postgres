@@ -2,7 +2,7 @@
  *
  * File-processing utility routines.
  *
- * Assorted utility functions to work on files.
+ * Assorted utility functions to work on files, frontend only.
  *
  *
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
@@ -167,8 +167,6 @@ walkdir(const char *path,
 	while (errno = 0, (de = readdir(dir)) != NULL)
 	{
 		char		subpath[MAXPGPATH * 2];
-		struct stat fst;
-		int			sret;
 
 		if (strcmp(de->d_name, ".") == 0 ||
 			strcmp(de->d_name, "..") == 0)
@@ -176,21 +174,23 @@ walkdir(const char *path,
 
 		snprintf(subpath, sizeof(subpath), "%s/%s", path, de->d_name);
 
-		if (process_symlinks)
-			sret = stat(subpath, &fst);
-		else
-			sret = lstat(subpath, &fst);
-
-		if (sret < 0)
+		switch (get_dirent_type(subpath, de, process_symlinks, PG_LOG_ERROR))
 		{
-			pg_log_error("could not stat file \"%s\": %m", subpath);
-			continue;
-		}
+			case PGFILETYPE_REG:
+				(*action) (subpath, false);
+				break;
+			case PGFILETYPE_DIR:
+				walkdir(subpath, action, false);
+				break;
+			default:
 
-		if (S_ISREG(fst.st_mode))
-			(*action) (subpath, false);
-		else if (S_ISDIR(fst.st_mode))
-			walkdir(subpath, action, false);
+				/*
+				 * Errors are already reported directly by get_dirent_type(),
+				 * and any remaining symlinks and unknown file types are
+				 * ignored.
+				 */
+				break;
+		}
 	}
 
 	if (errno)

@@ -56,6 +56,7 @@ OBJS_COMMON = \
 	exec.o \
 	f2s.o \
 	file_perm.o \
+	file_utils_febe.o \
 	hashfn.o \
 	ip.o \
 	jsonapi.o \
