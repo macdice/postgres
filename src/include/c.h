@@ -1207,11 +1207,13 @@ typedef union PGAlignedXLogBlock
 #define PG_BINARY_A "ab"
 #define PG_BINARY_R "rb"
 #define PG_BINARY_W "wb"
+#define PG_SHORT_LIVED _O_SHORT_LIVED
 #else
 #define PG_BINARY	0
 #define PG_BINARY_A "a"
 #define PG_BINARY_R "r"
 #define PG_BINARY_W "w"
+#define PG_SHORT_LIVED 0
 #endif
 
 /*
