@@ -575,11 +575,11 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 	 * our queue became saturated, so we need to start where we left off.
 	 */
 	for (int block_id = prefetcher->next_block_id;
-		 block_id <= reader->max_block_id;
+		 block_id <= XLogRecMaxBlockId(reader);
 		 ++block_id)
 	{
 		PrefetchBufferResult prefetch;
-		DecodedBkpBlock *block = &reader->blocks[block_id];
+		DecodedBkpBlock *block = XLogRecGetBlock(reader, block_id);
 		SMgrRelation reln;
 
 		/* Ignore everything but the main fork for now. */
