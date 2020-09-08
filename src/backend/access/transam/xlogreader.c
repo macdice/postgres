@@ -379,6 +379,24 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	return NULL;
 }
 
+XLogDecodedRecord *
+XLogReadAhead(XLogReaderState *state, char **errormsg)
+{
+	DecodedXLogRecord *result = XLogReadRecordInternal(state, false);
+
+	if (state->errormsg_deferred)
+	{
+		/* Report, but don't consume, the error. */
+		if (state->errormsg_buf[0] != '\0')
+			*errormsg = state->errormsg_buf;
+		else
+			*errormsg = NULL;		
+		return NULL;
+	}
+
+	return result;
+}
+
 /*
  * Allocate space for a decoded record.  The only member of the returned
  * object that is initialized is the 'oversized' flag, indicating that the

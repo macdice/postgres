@@ -305,17 +305,12 @@ XLogPrefetchEnd(XLogPrefetchState *state)
  * WAL that is ahead of the given lsn.
  */
 XLogPrefetcher *
-XLogPrefetcherAllocate(TimeLineID tli, XLogRecPtr lsn, bool streaming)
+XLogPrefetcherAllocate(XLogReaderState *reader)
 {
 	XLogPrefetcher *prefetcher;
 	static HASHCTL hash_table_ctl = {
 		.keysize = sizeof(RelFileNode),
 		.entrysize = sizeof(XLogPrefetcherFilter)
-	};
-	XLogReaderRoutine reader_routines = {
-		.page_read = read_local_xlog_page,
-		.segment_open = wal_segment_try_open,
-		.segment_close = wal_segment_close
 	};
 
 	/*
@@ -328,38 +323,11 @@ XLogPrefetcherAllocate(TimeLineID tli, XLogRecPtr lsn, bool streaming)
 	prefetcher = palloc0(offsetof(XLogPrefetcher, prefetch_queue) +
 						 sizeof(XLogRecPtr) * (maintenance_io_concurrency + 1));
 	prefetcher->prefetch_queue_size = maintenance_io_concurrency + 1;
-	prefetcher->options.tli = tli;
-	prefetcher->options.nowait = true;
-	if (streaming)
-	{
-		/*
-		 * We're only allowed to read as far as the WAL receiver has written.
-		 * We don't have to wait for it to be flushed, though, as recovery
-		 * does, so that gives us a chance to get a bit further ahead.
-		 */
-		prefetcher->options.read_upto_policy = XLRO_WALRCV_WRITTEN;
-	}
-	else
-	{
-		/* Read as far as we can. */
-		prefetcher->options.read_upto_policy = XLRO_END;
-	}
-	reader_routines.page_read_private = &prefetcher->options;
-	prefetcher->reader = XLogReaderAllocate(wal_segment_size,
-											NULL,
-											&reader_routines,
-											NULL);
+	prefetcher->reader = reader;
 	prefetcher->filter_table = hash_create("XLogPrefetcherFilterTable", 1024,
 										   &hash_table_ctl,
 										   HASH_ELEM | HASH_BLOBS);
 	dlist_init(&prefetcher->filter_queue);
-
-	/* Prepare to read at the given LSN. */
-	ereport(LOG,
-			(errmsg("recovery started prefetching on timeline %u at %X/%X",
-					tli,
-					(uint32) (lsn << 32), (uint32) lsn)));
-	XLogBeginRead(prefetcher->reader, lsn);
 
 	Stats->queue_depth = 0;
 	Stats->distance = 0;
@@ -392,7 +360,6 @@ XLogPrefetcherFree(XLogPrefetcher *prefetcher)
 			 pg_atomic_read_u64(&Stats->skip_seq),
 			 Stats->avg_distance,
 			 Stats->avg_queue_depth)));
-	XLogReaderFree(prefetcher->reader);
 	hash_destroy(prefetcher->filter_table);
 	pfree(prefetcher);
 }
@@ -468,7 +435,8 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 		/* If we don't already have a record, then try to read one. */
 		if (!prefetcher->have_record)
 		{
-			if (!XLogReadRecord(reader, &error))
+			/* XXX tell it max lsn? */
+			if (!XLogReadAhead(reader, &error))
 			{
 				/* If we got an error, log it and give up. */
 				if (error)

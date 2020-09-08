@@ -310,7 +310,8 @@ extern struct XLogRecord *XLogReadRecord(XLogReaderState *state,
 										 char **errormsg);
 
 /* Try to read ahead, if there is space in the decoding buffer. */
-extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state);
+extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state,
+										char **errormsg);
 
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
