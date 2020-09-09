@@ -7184,7 +7184,7 @@ StartupXLOG(void)
 							(uint32) (ReadRecPtr >> 32), (uint32) ReadRecPtr)));
 
 			/* Prepare to prefetch, if configured. */
-			XLogPrefetchBegin(&prefetch);
+			XLogPrefetchBegin(&prefetch, xlogreader);
 
 			/*
 			 * main redo apply loop

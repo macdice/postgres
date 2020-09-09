@@ -26,6 +26,7 @@ extern int XLogPrefetchReconfigureCount;
 
 typedef struct XLogPrefetchState
 {
+	XLogReaderState *reader;
 	XLogPrefetcher *prefetcher;
 	int			reconfigure_count;
 } XLogPrefetchState;
@@ -36,13 +37,11 @@ extern void XLogPrefetchShmemInit(void);
 extern void XLogPrefetchReconfigure(void);
 extern void XLogPrefetchRequestResetStats(void);
 
-extern void XLogPrefetchBegin(XLogPrefetchState *state);
+extern void XLogPrefetchBegin(XLogPrefetchState *state, XLogReaderState *reader);
 extern void XLogPrefetchEnd(XLogPrefetchState *state);
 
 /* Functions exposed only for the use of XLogPrefetch(). */
-extern XLogPrefetcher *XLogPrefetcherAllocate(TimeLineID tli,
-											  XLogRecPtr lsn,
-											  bool streaming);
+extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader);
 extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
 extern void XLogPrefetcherReadAhead(XLogPrefetcher *prefetch,
 									XLogRecPtr replaying_lsn);
@@ -72,9 +71,7 @@ XLogPrefetch(XLogPrefetchState *state,
 		}
 		/* If we want a prefetcher, set it up. */
 		if (max_recovery_prefetch_distance > 0)
-			state->prefetcher = XLogPrefetcherAllocate(replaying_tli,
-													   replaying_lsn,
-													   from_stream);
+			state->prefetcher = XLogPrefetcherAllocate(state->reader);
 		state->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
 

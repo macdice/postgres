@@ -351,6 +351,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 
 			/* XXX can't return pointer to header, will be given back to XLogDecodeRecord()! */
 			*errormsg = NULL;
+			fprintf(stderr, "XLogReadRecord returning %p\n", state->record);
 			return &state->record->header;
 		}
 		else if (state->errormsg_deferred)
@@ -379,11 +380,12 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	return NULL;
 }
 
-XLogDecodedRecord *
+DecodedXLogRecord *
 XLogReadAhead(XLogReaderState *state, char **errormsg)
 {
-	DecodedXLogRecord *result = XLogReadRecordInternal(state, false);
+	DecodedXLogRecord *record;
 
+	record = XLogReadRecordInternal(state, false);
 	if (state->errormsg_deferred)
 	{
 		/* Report, but don't consume, the error. */
@@ -393,8 +395,9 @@ XLogReadAhead(XLogReaderState *state, char **errormsg)
 			*errormsg = NULL;		
 		return NULL;
 	}
+	fprintf(stderr, "XLogReadAhead returning %p\n", record);
 
-	return result;
+	return record;
 }
 
 /*

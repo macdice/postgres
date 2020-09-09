@@ -275,11 +275,12 @@ XLogPrefetchRestoreStats(void)
  * statistics from disk.
  */
 void
-XLogPrefetchBegin(XLogPrefetchState *state)
+XLogPrefetchBegin(XLogPrefetchState *state, XLogReaderState *reader)
 {
 	XLogPrefetchRestoreStats();
 
 	/* We'll reconfigure on the first call to XLogPrefetch(). */
+	state->reader = reader;
 	state->prefetcher = NULL;
 	state->reconfigure_count = XLogPrefetchReconfigureCount - 1;
 }
