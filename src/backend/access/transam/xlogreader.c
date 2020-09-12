@@ -341,6 +341,8 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			 * move to the new location.
 			 */
 			/* XXX TODO! */
+
+
 			/*
 			 * Record this as the most recent record returned, so that we'll
 			 * release it next time.  This also exposes it to the
@@ -348,6 +350,15 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			 * than the record for historical reasons.
 			 */
 			state->record = state->read_queue_tail;
+
+			/*
+			 * Note that we are potentially returning a decoded record that
+			 * hasn't been flushed to disk yet, during streaming.
+			 * ReadRecord() in xlog.c can deal with that by waiting for the
+			 * flush location to advance, if necessary.
+			 */
+
+			/* XXX TODO!  Set EndPtr etc so it can do that correctly! */
 
 			/* XXX can't return pointer to header, will be given back to XLogDecodeRecord()! */
 			*errormsg = NULL;
