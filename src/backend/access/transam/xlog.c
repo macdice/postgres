@@ -212,7 +212,8 @@ static XLogRecPtr LastRec;
 
 /* Local copy of WalRcv->flushedUpto */
 static XLogRecPtr flushedUpto = 0;
-static TimeLineID receiveTLI = 0;
+static XLogRecPtr writtenUpto = 0;
+static TimeLineID writtenTLI = 0;
 
 /*
  * During recovery, lastFullPageWrites keeps track of full_page_writes that
@@ -4415,7 +4416,7 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 				 * XXX Are there any circumstances in which this should be
 				 * interruptible?
 				 *
-				 * XXX We don't replicate the XLogReciptTime etc logic from
+				 * XXX We don't replicate the XLogReceiptTime etc logic from
 				 * WaitForWALToBecomeAvailable() here...  probably need to
 				 * refactor/share code?
 				 */
@@ -11950,13 +11951,14 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
 
 	/*
-	 * If streaming and were asked not to wait (a mode used when trying to
-	 * read ahead), return as quickly as possible if the data we want isn't
-	 * available immediately.
+	 * If streaming and were asked not to wait, a mode used when trying to
+	 * read ahead, return as quickly as possible if the data we want isn't
+	 * available immediately.  Use an unlocked read of the latest written
+	 * position.
 	 */
 	if (readSource == XLOG_FROM_STREAM &&
 		!private->wait_for_wal &&
-		GetWalRcvWriteRecPtr() < targetPagePtr + reqLen)
+		GetWalRcvWriteRecPtrUnlocked() < targetPagePtr + reqLen)
 		return -1;
 	
 	/*
@@ -11994,7 +11996,7 @@ retry:
 	/* See if we need to retrieve more data */
 	if (readFile < 0 ||
 		(readSource == XLOG_FROM_STREAM &&
-		 flushedUpto < targetPagePtr + reqLen))
+		 writtenUpto < targetPagePtr + reqLen))
 	{
 		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 										 private->randAccess,
@@ -12025,8 +12027,6 @@ retry:
 	 */
 	if (readSource == XLOG_FROM_STREAM)
 	{
-		XLogRecPtr writtenUpto = GetWalRcvWriteRecPtr();
-
 		if (((targetPagePtr) / XLOG_BLCKSZ) != (writtenUpto / XLOG_BLCKSZ))
 			readLen = XLOG_BLCKSZ;
 		else
@@ -12379,7 +12379,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			case XLOG_FROM_STREAM:
 				{
 					bool		havedata;
-					XLogRecPtr writtenUpto;
 
 					/*
 					 * We should be able to move to XLOG_FROM_STREAM only in
@@ -12448,7 +12447,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
 											 PrimarySlotName,
 											 wal_receiver_create_temp_slot);
-						flushedUpto = 0;
+						writtenUpto = 0;
 					}
 
 					/*
@@ -12473,24 +12472,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * allotted to conflicting queries will decrease.
 					 *
 					 */
-					writtenUpto = GetWalRcvWriteRecPtr();
 					if (RecPtr < writtenUpto)
 						havedata = true;
 					else
-						havedata = false;
-#if 0
-					/*
-					 * XXX Is this still in the right place, considering that
-					 * in read-ahead, we haven't yet "processed" (applied) the
-					 * records?  Does it matter that we don't consider the
-					 * timeline (where the previous coding based on flushed
-					 * position did)?
-					 */
 					{
 						XLogRecPtr	latestChunkStart;
 
-						flushedUpto = GetWalRcvFlushRecPtr(&latestChunkStart, &receiveTLI);
-						if (RecPtr < flushedUpto && receiveTLI == curFileTLI)
+						writtenUpto = GetWalRcvWriteRecPtr(&latestChunkStart, &writtenTLI);
+						if (RecPtr < writtenUpto && writtenTLI == curFileTLI)
 						{
 							havedata = true;
 							if (latestChunkStart <= RecPtr)
@@ -12502,7 +12491,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						else
 							havedata = false;
 					}
-#endif
+
 					if (havedata)
 					{
 						/*
@@ -12517,9 +12506,9 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						if (readFile < 0)
 						{
 							if (!expectedTLEs)
-								expectedTLEs = readTimeLineHistory(receiveTLI);
+								expectedTLEs = readTimeLineHistory(writtenTLI);
 							readFile = XLogFileRead(readSegNo, PANIC,
-													receiveTLI,
+													writtenTLI,
 													XLOG_FROM_STREAM, false);
 							Assert(readFile >= 0);
 						}
