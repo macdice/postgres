@@ -436,7 +436,11 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 		/* If we don't already have a record, then try to read one. */
 		if (!prefetcher->have_record)
 		{
-			/* XXX tell it max lsn? */
+			/*
+			 * If we're streaming, we don't want XLogPageRead() to block
+			 * waiting for more data.
+			 */
+			
 			if (!XLogReadAhead(reader, &error))
 			{
 				/* If we got an error, log it and give up. */

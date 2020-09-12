@@ -835,6 +835,7 @@ typedef struct XLogPageReadPrivate
 	int			emode;
 	bool		fetching_ckpt;	/* are we fetching a checkpoint record? */
 	bool		randAccess;
+	bool		wait_for_wal;
 } XLogPageReadPrivate;
 
 /*
@@ -4343,6 +4344,12 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	{
 		char	   *errormsg;
 
+		/*
+		 * If we're streaming, we need to tell XLogPageRead() to wait for more
+		 * data to arrive.
+		 */
+		private->wait_for_wal = true;
+
 		record = XLogReadRecord(xlogreader, &errormsg);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
@@ -7251,7 +7258,12 @@ StartupXLOG(void)
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
 
-				/* Peform WAL prefetching, if enabled. */
+				/*
+				 * Perform WAL prefetching, if enabled.  If it reaches
+				 * XLogPageRead() due to lack of data, make sure that doesn't
+				 * block.
+				 */
+				private.wait_for_wal = false;
 				XLogPrefetch(&prefetch,
 							 ThisTimeLineID,
 							 xlogreader->ReadRecPtr,
@@ -11938,6 +11950,16 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
 
 	/*
+	 * If streaming and were asked not to wait (a mode used when trying to
+	 * read ahead), return as quickly as possible if the data we want isn't
+	 * available immediately.
+	 */
+	if (readSource == XLOG_FROM_STREAM &&
+		!private->wait_for_wal &&
+		GetWalRcvWriteRecPtr() < targetPagePtr + reqLen)
+		return -1;
+	
+	/*
 	 * See if we need to switch to a new segment because the requested record
 	 * is not in the currently open one.
 	 */
@@ -11947,6 +11969,9 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 		/*
 		 * Request a restartpoint if we've replayed too much xlog since the
 		 * last one.
+		 *
+		 * XXX Why is this here?  Move it to recovery loop, since it's based
+		 * on replay position, not read position?
 		 */
 		if (bgwriterLaunched)
 		{
@@ -12000,10 +12025,12 @@ retry:
 	 */
 	if (readSource == XLOG_FROM_STREAM)
 	{
-		if (((targetPagePtr) / XLOG_BLCKSZ) != (flushedUpto / XLOG_BLCKSZ))
+		XLogRecPtr writtenUpto = GetWalRcvWriteRecPtr();
+
+		if (((targetPagePtr) / XLOG_BLCKSZ) != (writtenUpto / XLOG_BLCKSZ))
 			readLen = XLOG_BLCKSZ;
 		else
-			readLen = XLogSegmentOffset(flushedUpto, wal_segment_size) -
+			readLen = XLogSegmentOffset(writtenUpto, wal_segment_size) -
 				targetPageOff;
 	}
 	else
@@ -12352,6 +12379,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			case XLOG_FROM_STREAM:
 				{
 					bool		havedata;
+					XLogRecPtr writtenUpto;
 
 					/*
 					 * We should be able to move to XLOG_FROM_STREAM only in
@@ -12443,10 +12471,21 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * be updated on each cycle. When we are behind,
 					 * XLogReceiptTime will not advance, so the grace time
 					 * allotted to conflicting queries will decrease.
+					 *
 					 */
-					if (RecPtr < flushedUpto)
+					writtenUpto = GetWalRcvWriteRecPtr();
+					if (RecPtr < writtenUpto)
 						havedata = true;
 					else
+						havedata = false;
+#if 0
+					/*
+					 * XXX Is this still in the right place, considering that
+					 * in read-ahead, we haven't yet "processed" (applied) the
+					 * records?  Does it matter that we don't consider the
+					 * timeline (where the previous coding based on flushed
+					 * position did)?
+					 */
 					{
 						XLogRecPtr	latestChunkStart;
 
@@ -12463,6 +12502,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						else
 							havedata = false;
 					}
+#endif
 					if (havedata)
 					{
 						/*
@@ -12518,6 +12558,9 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * tell the upstream server our replay location now so
 					 * that pg_stat_replication doesn't show stale
 					 * information.
+					 *
+					 * XXX We'd only be here for wait_for_wal=true, so this is
+					 * still true right?
 					 */
 					if (!streaming_reply_sent)
 					{
@@ -12529,6 +12572,8 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * Wait for more WAL to arrive. Time out after 5 seconds
 					 * to react to a trigger file promptly and to check if the
 					 * WAL receiver is still active.
+					 *
+					 * XXX This is signalled on *flush*, not on write.  Oops.
 					 */
 					(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
 									 WL_LATCH_SET | WL_TIMEOUT |
