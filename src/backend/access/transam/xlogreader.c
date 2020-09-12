@@ -285,16 +285,22 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 {
 	DecodedXLogRecord *record;
 
+	fprintf(stderr, "XLogReadRecord begin: decode_queue_tail = %p, decode_queue_head = %p, last record = %p\n", state->decode_queue_tail, state->decode_queue_head, state->record);
 	/* We can release the most recently returned record. */
 	if (state->record)
 	{
-		/* Pop it from the read queue.  It must be the oldest item. */
-		Assert(state->record == state->read_queue_tail);
+		/*
+		 * Remove it from the decoded record queue.  It must be the oldest
+		 * item decoded, decode_queue_tail.
+		 */
 		record = state->record;
+		Assert(record == state->decode_queue_tail);
 		state->record = NULL;
-		state->read_queue_tail = record->next;
-		if (state->read_queue_head == record)
-			state->read_queue_head = NULL;
+		state->decode_queue_tail = record->next;
+
+		/* It might also be the newest item decoded, decode_queue_head. */
+		if (state->decode_queue_head == record)
+			state->decode_queue_head = NULL;
 
 		/* Release the space. */
 		if (unlikely(record->oversized))
@@ -323,6 +329,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			else
 			{
 				/* Nothing else in the decode buffer, so just reset it. */
+				fprintf(stderr, "XLogReadRecord XXXX resetting decode_buffer_tail, decode_buffer_head\n");
 				state->decode_buffer_tail = state->decode_buffer;
 				state->decode_buffer_head = state->decode_buffer;
 			}
@@ -332,7 +339,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	for (;;)
 	{
 		/* We can now return the tail item in the read queue, if there is one. */
-		if (state->read_queue_tail)
+		if (state->decode_queue_tail)
 		{
 			/*
 			 * Is this record at the LSN that the caller expects?  If it
@@ -349,7 +356,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			 * XLogRecXXX(decoder) macros, which pass in the decode rather
 			 * than the record for historical reasons.
 			 */
-			state->record = state->read_queue_tail;
+			state->record = state->decode_queue_tail;
 
 			/*
 			 * Note that we are potentially returning a decoded record that
@@ -362,7 +369,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 
 			/* XXX can't return pointer to header, will be given back to XLogDecodeRecord()! */
 			*errormsg = NULL;
-			fprintf(stderr, "XLogReadRecord returning %p, lsn = %zx\n", state->record, state->record->lsn);
+			fprintf(stderr, "XLogReadRecord returning %p, lsn = %zx, next = %p\n", state->record, state->record->lsn, state->record->next);
 			return &state->record->header;
 		}
 		else if (state->errormsg_deferred)
@@ -384,7 +391,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 		XLogReadRecordInternal(state, true /* wait */ );
 
 		/* Shouldn't need to go around more than once to get a record or an error. */
-		//Assert(state->read_queue_tail || state->errormsg_buf[0] != '\0');
+		//Assert(state->decode_queue_tail || state->errormsg_buf[0] != '\0');
 	}
 
 	/* unreachable */
@@ -444,7 +451,7 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 		state->decode_buffer_tail = state->decode_buffer;
 		state->free_decode_buffer = true;
 	}
-
+	fprintf(stderr, "XLogReadRecordAlloc decode_buffer=%p, decode_buffer_head=%p, decode_buffer_tail=%p\n", state->decode_buffer, state->decode_buffer_head, state->decode_buffer_tail);
 	if (state->decode_buffer_head >= state->decode_buffer_tail)
 	{
 		/* Empty, or head is to the right of tail. */
@@ -454,6 +461,7 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 			/* There is space between head and end. */
 			decoded = (DecodedXLogRecord *) state->decode_buffer_head;
 			decoded->oversized = false;
+			fprintf(stderr, "XXX 1\n");
 			return decoded;
 		}
 		else if (state->decode_buffer + required_space <
@@ -462,6 +470,7 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 			/* There is space between start and tail. */
 			decoded = (DecodedXLogRecord *) state->decode_buffer;
 			decoded->oversized = false;
+			fprintf(stderr, "XXX 2\n");
 			return decoded;
 		}
 	}
@@ -474,6 +483,7 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 			/* There is space between head and tail. */
 			decoded = (DecodedXLogRecord *) state->decode_buffer_head;
 			decoded->oversized = false;
+			fprintf(stderr, "XXX 3\n");
 			return decoded;
 		}
 	}
@@ -481,6 +491,7 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 	/* Not enough space in the decode buffer.  Are we allowed to allocate? */
 	if (allow_oversized)
 	{
+		fprintf(stderr, "XXX 4\n");
 		decoded = palloc_extended(required_space, MCXT_ALLOC_NO_OOM);
 		if (decoded == NULL)
 			return NULL;
@@ -492,8 +503,8 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 }
 
 /*
- * Try to read and decode the next record and add it to the head of the read
- * queue.
+ * Try to read and decode the next record and add it to the head of the
+ * decoded record queue.
  *
  * If "force" is true, then wait for data to become available, and read a
  * record even if it doesn't fit in the decode buffer, using overflow storage.
@@ -569,7 +580,10 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	readOff = ReadPageInternal(state, targetPagePtr,
 							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ));
 	if (readOff < 0)
+	{
+		fprintf(stderr, "ERROR 1\n");
 		goto err;
+	}
 
 	/*
 	 * ReadPageInternal always returns at least the page header, so we can
@@ -588,6 +602,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	{
 		report_invalid_record(state, "invalid record offset at %X/%X",
 							  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		fprintf(stderr, "ERROR 2\n");
 		goto err;
 	}
 
@@ -596,6 +611,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	{
 		report_invalid_record(state, "contrecord is requested by %X/%X",
 							  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		fprintf(stderr, "ERROR 3\n");
 		goto err;
 	}
 
@@ -618,8 +634,14 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	decoded = XLogReadRecordAlloc(state, total_len, force);
 	if (decoded == NULL)
 	{
-		/* We couldn't get space. */
-		/* XXX */
+		/*
+		 * We couldn't get space.  Usually this means that the decode buffer
+		 * was full, while trying to read ahead.  It's also remotely possible
+		 * for palloc to have failed to allocate memory for an oversized
+		 * record.
+		 */
+		Assert(!force);
+		fprintf(stderr, "ERROR 4 couldn't get space\n");
 		goto err;
 	}
 
@@ -635,7 +657,10 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	{
 		if (!ValidXLogRecordHeader(state, RecPtr, state->ReadRecPtr, record,
 								   randAccess))
+		{
+		fprintf(stderr, "ERROR 5\n");
 			goto err;
+		}
 		gotheader = true;
 	}
 	else
@@ -647,6 +672,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 								  "invalid record length at %X/%X: wanted %u, got %u",
 								  (uint32) (RecPtr >> 32), (uint32) RecPtr,
 								  (uint32) SizeOfXLogRecord, total_len);
+		fprintf(stderr, "ERROR 6\n");
 			goto err;
 		}
 		gotheader = false;
@@ -671,6 +697,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 			report_invalid_record(state, "record length %u at %X/%X too long",
 								  total_len,
 								  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		fprintf(stderr, "ERROR 7\n");
 			goto err;
 		}
 
@@ -691,7 +718,10 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 										   XLOG_BLCKSZ));
 
 			if (readOff < 0)
+			{
+				fprintf(stderr, "ERROR 8, errormsg_buf = [%s]\n", state->errormsg_buf);
 				goto err;
+			}
 
 			Assert(SizeOfXLogShortPHD <= readOff);
 
@@ -702,6 +732,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 				report_invalid_record(state,
 									  "there is no contrecord flag at %X/%X",
 									  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		fprintf(stderr, "ERROR 9\n");
 				goto err;
 			}
 
@@ -717,6 +748,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 									  pageHeader->xlp_rem_len,
 									  ((long long) total_len) - gotlen,
 									  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		fprintf(stderr, "ERROR 10\n");
 				goto err;
 			}
 
@@ -748,7 +780,10 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 				record = (XLogRecord *) state->readRecordBuf;
 				if (!ValidXLogRecordHeader(state, RecPtr, state->ReadRecPtr,
 										   record, randAccess))
+				{
+		fprintf(stderr, "ERROR 11\n");
 					goto err;
+				}
 				gotheader = true;
 			}
 		} while (gotlen < total_len);
@@ -770,11 +805,17 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 		readOff = ReadPageInternal(state, targetPagePtr,
 								   Min(targetRecOff + total_len, XLOG_BLCKSZ));
 		if (readOff < 0)
+		{
+		fprintf(stderr, "ERROR 12\n");
 			goto err;
+		}
 
 		/* Record does not cross a page boundary */
 		if (!ValidXLogRecord(state, record, RecPtr))
+		{
+		fprintf(stderr, "ERROR 13\n");
 			goto err;
+		}
 
 		state->EndRecPtr = RecPtr + MAXALIGN(total_len);
 
@@ -800,17 +841,22 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 		 */
 		if (!decoded->oversized)
 		{
-			/* The new decode buffer head will be MAXALIGNed. */
+			/* The new decode buffer head must be MAXALIGNed. */
 			Assert(decoded->size == MAXALIGN(decoded->size));
-			state->decode_buffer_head += decoded->size;
+			if ((char *) decoded == state->decode_buffer)
+				state->decode_buffer_head = state->decode_buffer + decoded->size;
+			else
+				state->decode_buffer_head += decoded->size;
 		}
 
-		/* Push it onto the head end of the read queue. */
-		if (state->read_queue_head)
-			state->read_queue_head->next = decoded;
-		state->read_queue_head = decoded;
-		if (!state->read_queue_tail)
-			state->read_queue_tail = decoded;
+		/* Insert it into the queue of decoded records. */
+		Assert(state->decode_queue_head != decoded);
+		if (state->decode_queue_head)
+			state->decode_queue_head->next = decoded;
+		state->decode_queue_head = decoded;
+		fprintf(stderr, "XLogReadRecordInternal -- installing new decode_queue_head %p\n", decoded);
+		if (!state->decode_queue_tail)
+			state->decode_queue_tail = decoded;
 		return decoded;
 	}
 
@@ -940,7 +986,12 @@ err:
 	if (readLen == XLOGPAGEREAD_WOULDBLOCK)
 		return XLOGPAGEREAD_WOULDBLOCK;
 
-	state->errormsg_deferred = true;
+	/*
+	 * If we reached this point without an error message, it means ...
+	 */
+	if (state->errormsg_buf[0] != '\0')
+		state->errormsg_deferred = true;
+
 	XLogReaderInvalReadState(state);
 	return XLOGPAGEREAD_ERROR;
 }
@@ -1442,14 +1493,15 @@ ResetDecoder(XLogReaderState *state)
 {
 	DecodedXLogRecord *r;
 
-	/* Reset the read queue, freeing any oversized records. */
-	while ((r = state->read_queue_tail))
+	/* Reset the decoded record queue, freeing any oversized records. */
+	while ((r = state->decode_queue_tail))
 	{
-		state->read_queue_tail = r->next;
+		state->decode_queue_tail = r->next;
 		if (r->oversized)
 			pfree(r);
 	}
-	state->read_queue_head = NULL;
+	state->decode_queue_head = NULL;
+	state->decode_queue_tail = NULL;
 	state->record = NULL;
 
 	/* Reset the decode buffer to empty. */

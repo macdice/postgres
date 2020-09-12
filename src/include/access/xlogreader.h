@@ -221,8 +221,8 @@ struct XLogReaderState
 	/*
 	 * Buffer for decoded records.  This is a circular buffer, though
 	 * individual records can't be split in the middle, so some space is often
-	 * wasted at the end.  Records that don't fit in this space are allocated
-	 * and freed individually.
+	 * wasted at the end.  Oversized records that don't fit in this space are
+	 * allocated separately.
 	 */
 	char	   *decode_buffer;
 	size_t		decode_buffer_size;
@@ -231,13 +231,12 @@ struct XLogReaderState
 	char	   *decode_buffer_tail;		/* read head */
 
 	/*
-	 * Queue of records that have been decoded but not yet returned.  This is
-	 * a linked list that usually consists of consecutive records in
-	 * decode_buffer, but may also contain pointers to oversized records
-	 * allocated with palloc().
+	 * Queue of records that have been decoded.  This is a linked list that
+	 * usually consists of consecutive records in decode_buffer, but may also
+	 * contain oversized records allocated with palloc().
 	 */
-	DecodedXLogRecord *read_queue_head;	/* newest decoded record */
-	DecodedXLogRecord *read_queue_tail;	/* oldest decoded record */
+	DecodedXLogRecord *decode_queue_head;	/* newest decoded record */
+	DecodedXLogRecord *decode_queue_tail;	/* oldest decoded record */
 
 	/* last read XLOG position for data currently in readBuf */
 	WALSegmentContext segcxt;
