@@ -7374,7 +7374,6 @@ StartupXLOG(void)
 					RecordKnownAssignedTransactionIds(record->xl_xid);
 
 				/* Now apply the WAL record itself */
-				fprintf(stderr, "XXXX recovery executing record at lsn %zx\n", xlogreader->record->lsn);
 				RmgrTable[record->xl_rmid].rm_redo(xlogreader);
 
 				/*
@@ -11947,10 +11946,7 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	 */
 	if (readSource == XLOG_FROM_STREAM && nowait &&
 		GetWalRcvWriteRecPtrUnlocked() < targetPagePtr + reqLen)
-	{
-		fprintf(stderr, "XLogPageRead() XXXXXXX would block!\n");
 		return -1;
-	}
 
 	/*
 	 * See if we need to switch to a new segment because the requested record
