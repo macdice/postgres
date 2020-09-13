@@ -11951,7 +11951,7 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 		fprintf(stderr, "XLogPageRead() XXXXXXX would block!\n");
 		return -1;
 	}
-	
+
 	/*
 	 * See if we need to switch to a new segment because the requested record
 	 * is not in the currently open one.
