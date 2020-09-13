@@ -456,8 +456,8 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 		else
 		{
 			/*
-			 * Must have run out of I/O queue while part way through a record.
-			 * We'll carry on where we left off, according to next_block_id.
+			 * We ran out of I/O queue while part way through a record.  We'll
+			 * carry on where we left off, according to next_block_id.
 			 */
 			record = prefetcher->record;
 		}
@@ -499,10 +499,6 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 				replaying_lsn + XLOGPREFETCHER_SAMPLE_DISTANCE;
 		}
 
-		/* Are we too far ahead of replay? */
-		if (distance >= max_recovery_prefetch_distance)
-			break;
-
 		/* Are we not far enough ahead? */
 		if (distance <= 0)
 		{
@@ -543,7 +539,6 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 static bool
 XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 {
-	XLogReaderState *reader = prefetcher->reader;
 	DecodedXLogRecord *record = prefetcher->record;
 
 	Assert(!XLogPrefetcherSaturated(prefetcher));
@@ -556,8 +551,8 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 		 block_id <= record->max_block_id;
 		 ++block_id)
 	{
-		PrefetchBufferResult prefetch;
 		DecodedBkpBlock *block = &record->blocks[block_id];
+		PrefetchBufferResult prefetch;
 		SMgrRelation reln;
 
 		/* Ignore everything but the main fork for now. */
@@ -578,15 +573,15 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 		}
 
 		/*
-		 * If this block will initialize a new page then it's probably an
-		 * extension.  Since it might create a new segment, we can't try
-		 * to prefetch this block until the record has been replayed, or we
-		 * might try to open a file that doesn't exist yet.
+		 * If this block will initialize a new page then it's probably a
+		 * relation extension.  Since that might create a new segment, we
+		 * can't try to prefetch this block until the record has been
+		 * replayed, or we might try to open a file that doesn't exist yet.
 		 */
 		if (block->flags & BKPBLOCK_WILL_INIT)
 		{
 			XLogPrefetcherAddFilter(prefetcher, block->rnode, block->blkno,
-									reader->ReadRecPtr);
+									record->lsn);
 			pg_atomic_unlocked_add_fetch_u64(&Stats->skip_new, 1);
 			continue;
 		}
@@ -647,7 +642,7 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 			 * LSN.
 			 */
 			pg_atomic_unlocked_add_fetch_u64(&Stats->prefetch, 1);
-			XLogPrefetcherInitiatedIO(prefetcher, reader->ReadRecPtr);
+			XLogPrefetcherInitiatedIO(prefetcher, record->lsn);
 			/*
 			 * If the queue is now full, we'll have to wait before processing
 			 * any more blocks from this record, or move to a new record if
@@ -672,7 +667,7 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 			 * something is wrong.
 			 */
 			XLogPrefetcherAddFilter(prefetcher, block->rnode, 0,
-									reader->ReadRecPtr);
+									record->lsn);
 			pg_atomic_unlocked_add_fetch_u64(&Stats->skip_new, 1);
 		}
 	}

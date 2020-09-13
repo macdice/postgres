@@ -6534,6 +6534,12 @@ StartupXLOG(void)
 	xlogreader->system_identifier = ControlFile->system_identifier;
 
 	/*
+	 * Set the WAL decode buffer size.  This is imprecise as the decode buffer
+	 * contains extra headers and padding compared to the raw WAL data.
+	 */
+	XLogReaderSetDecodeBuffer(xlogreader, NULL, max_recovery_prefetch_distance);
+
+	/*
 	 * Allocate two page buffers dedicated to WAL consistency checks.  We do
 	 * it this way, rather than just making static arrays, for two reasons:
 	 * (1) no need to waste the storage in most instantiations of the backend;
