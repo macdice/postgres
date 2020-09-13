@@ -37,7 +37,7 @@ static void report_invalid_record(XLogReaderState *state, const char *fmt,...)
 			pg_attribute_printf(2, 3);
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
-							 int reqLen);
+							 int reqLen, bool nowait);
 size_t DecodeXLogRecordRequiredSpace(size_t xl_tot_len);
 static DecodedXLogRecord *XLogReadRecordInternal(XLogReaderState *state, bool force);
 static void XLogReaderInvalReadState(XLogReaderState *state);
@@ -617,7 +617,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	 * fits on the same page.
 	 */
 	readOff = ReadPageInternal(state, targetPagePtr,
-							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ));
+							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ),
+							   !force);
 	if (readOff < 0)
 	{
 		fprintf(stderr, "ERROR 1\n");
@@ -753,7 +754,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 			/* Wait for the next page to become available */
 			readOff = ReadPageInternal(state, targetPagePtr,
 									   Min(total_len - gotlen + SizeOfXLogShortPHD,
-										   XLOG_BLCKSZ));
+										   XLOG_BLCKSZ),
+									   !force);
 
 			if (readOff < 0)
 			{
@@ -795,7 +797,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 
 			if (readOff < pageHeaderSize)
 				readOff = ReadPageInternal(state, targetPagePtr,
-										   pageHeaderSize);
+										   pageHeaderSize, !force);
 
 			Assert(pageHeaderSize <= readOff);
 
@@ -806,7 +808,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 
 			if (readOff < pageHeaderSize + len)
 				readOff = ReadPageInternal(state, targetPagePtr,
-										   pageHeaderSize + len);
+										   pageHeaderSize + len,
+										   !force);
 
 			memcpy(buffer, (char *) contdata, len);
 			buffer += len;
@@ -841,7 +844,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	{
 		/* Wait for the record data to become available */
 		readOff = ReadPageInternal(state, targetPagePtr,
-								   Min(targetRecOff + total_len, XLOG_BLCKSZ));
+								   Min(targetRecOff + total_len, XLOG_BLCKSZ),
+								   !force);
 		if (readOff < 0)
 		{
 		fprintf(stderr, "ERROR 12\n");
@@ -933,7 +937,8 @@ err:
  * data and if there hasn't been any error since caching the data.
  */
 static int
-ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
+ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
+				 bool nowait)
 {
 	int			readLen;
 	uint32		targetPageOff;
@@ -968,7 +973,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 
 		readLen = state->routine.page_read(state, targetSegmentPtr, XLOG_BLCKSZ,
 										   state->currRecPtr,
-										   state->readBuf);
+										   state->readBuf,
+										   nowait);
 		if (readLen < 0)
 			goto err;
 
@@ -986,7 +992,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	 */
 	readLen = state->routine.page_read(state, pageptr, Max(reqLen, SizeOfXLogShortPHD),
 									   state->currRecPtr,
-									   state->readBuf);
+									   state->readBuf,
+									   nowait);
 	if (readLen < 0)
 		goto err;
 
@@ -1005,7 +1012,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	{
 		readLen = state->routine.page_read(state, pageptr, XLogPageHeaderSize(hdr),
 										   state->currRecPtr,
-										   state->readBuf);
+										   state->readBuf,
+										   nowait);
 		if (readLen < 0)
 			goto err;
 	}
@@ -1343,7 +1351,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		targetPagePtr = tmpRecPtr - targetRecOff;
 
 		/* Read the page containing the record */
-		readLen = ReadPageInternal(state, targetPagePtr, targetRecOff);
+		readLen = ReadPageInternal(state, targetPagePtr, targetRecOff, false);
 		if (readLen < 0)
 			goto err;
 
@@ -1352,7 +1360,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		pageHeaderSize = XLogPageHeaderSize(header);
 
 		/* make sure we have enough data for the page header */
-		readLen = ReadPageInternal(state, targetPagePtr, pageHeaderSize);
+		readLen = ReadPageInternal(state, targetPagePtr, pageHeaderSize, false);
 		if (readLen < 0)
 			goto err;
 

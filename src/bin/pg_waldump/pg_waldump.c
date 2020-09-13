@@ -333,7 +333,7 @@ WALDumpCloseSegment(XLogReaderState *state)
 /* pg_waldump's XLogReaderRoutine->page_read callback */
 static int
 WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
-				XLogRecPtr targetPtr, char *readBuff)
+				XLogRecPtr targetPtr, char *readBuff, bool nowait)
 {
 	XLogDumpPrivate *private = state->private_data;
 	int			count = XLOG_BLCKSZ;

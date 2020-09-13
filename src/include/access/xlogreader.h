@@ -66,7 +66,8 @@ typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen,
 							   XLogRecPtr targetRecPtr,
-							   char *readBuf);
+							   char *readBuf,
+							   bool nowait);
 typedef void (*WALSegmentOpenCB) (XLogReaderState *xlogreader,
 								  XLogSegNo nextSegNo,
 								  TimeLineID *tli_p);
@@ -153,18 +154,18 @@ typedef struct
 /*
  * The decoded contents of a record.  This occupies a contiguous region of
  * memory, with main_data and blocks[n].data pointing to memory after the
- * member declared here.
+ * members declared here.
  */
 typedef struct DecodedXLogRecord
 {
 	/* Private member used for resource management. */
 	size_t		size;			/* total size of decoded record */
 	bool		oversized;		/* outside the regular decode buffer? */
-	XLogRecPtr	lsn;			/* location */
-	XLogRecPtr	next_lsn;		/* location of next record */
-	struct DecodedXLogRecord *next;	/* read queue link */
+	struct DecodedXLogRecord *next;	/* decoded record queue  link */
 
 	/* Public members. */
+	XLogRecPtr	lsn;			/* location */
+	XLogRecPtr	next_lsn;		/* location of next record */
 	XLogRecord	header;			/* header */
 	RepOriginId record_origin;
 	TransactionId toplevel_xid; /* XID of top-level transaction */

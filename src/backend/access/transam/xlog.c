@@ -836,7 +836,6 @@ typedef struct XLogPageReadPrivate
 	int			emode;
 	bool		fetching_ckpt;	/* are we fetching a checkpoint record? */
 	bool		randAccess;
-	bool		wait_for_wal;
 } XLogPageReadPrivate;
 
 /*
@@ -914,7 +913,8 @@ static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 						 XLogSource source, bool notfoundOk);
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
 static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
-						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
+						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf,
+						 bool nowait);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 										bool fetching_ckpt, XLogRecPtr tliRecPtr);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
@@ -4345,12 +4345,6 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	{
 		char	   *errormsg;
 
-		/*
-		 * If we're streaming, we need to tell XLogPageRead() to wait for more
-		 * data to arrive.
-		 */
-		private->wait_for_wal = true;
-
 		record = XLogReadRecord(xlogreader, &errormsg);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
@@ -7259,12 +7253,7 @@ StartupXLOG(void)
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
 
-				/*
-				 * Perform WAL prefetching, if enabled.  If prefetching
-				 * reaches our XLogPageRead() callback due to lack of data,
-				 * make sure that doesn't block.
-				 */
-				private.wait_for_wal = false;
+				/* Perform WAL prefetching, if enabled. */
 				XLogPrefetch(&prefetch,
 							 ThisTimeLineID,
 							 xlogreader->ReadRecPtr,
@@ -11939,7 +11928,7 @@ CancelBackup(void)
  */
 static int
 XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
-			 XLogRecPtr targetRecPtr, char *readBuf)
+			 XLogRecPtr targetRecPtr, char *readBuf, bool nowait)
 {
 	XLogPageReadPrivate *private =
 	(XLogPageReadPrivate *) xlogreader->private_data;
@@ -11952,13 +11941,11 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
 
 	/*
-	 * If streaming and were asked not to wait, a mode used when trying to
-	 * read ahead, return as quickly as possible if the data we want isn't
-	 * available immediately.  Use an unlocked read of the latest written
-	 * position.
+	 * If streaming and asked not to wait, return as quickly as possible if
+	 * the data we want isn't available immediately.  Use an unlocked read of
+	 * the latest written position.
 	 */
-	if (readSource == XLOG_FROM_STREAM &&
-		!private->wait_for_wal &&
+	if (readSource == XLOG_FROM_STREAM && nowait &&
 		GetWalRcvWriteRecPtrUnlocked() < targetPagePtr + reqLen)
 	{
 		fprintf(stderr, "XLogPageRead() XXXXXXX would block!\n");

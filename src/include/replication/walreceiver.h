@@ -86,11 +86,10 @@ typedef struct
 	/*
 	 * writtenUpto-1 is like as flushedUpto-1, except that it's updated
 	 * without waiting for the flush, after the data has been written to disk
-	 * and available for reading.  It is an atomic type.  We want to support
-	 * unlocked reading of this value, but not all builds can do that for 64
-	 * bit values to get emulation where necessary.  We still acquire the
-	 * spinlock in cases where it is written or read so that the associated
-	 * TLI can be consistent.
+	 * and available for reading.  It is an atomic type so that we can read it
+	 * without locks.  We still acquire the spinlock in cases where it is
+	 * written or read along with the TLI, so that they can be accessed
+	 * together consistently.
 	 */
 	pg_atomic_uint64 writtenUpto;
 	TimeLineID	writtenTLI;
