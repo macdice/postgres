@@ -84,10 +84,9 @@ struct XLogPrefetcher
 {
 	/* Reader and current reading state. */
 	XLogReaderState *reader;
-	XLogReadLocalOptions options;
-	bool			have_record;
-	bool			shutdown;
+	DecodedXLogRecord *record;
 	int				next_block_id;
+	bool			shutdown;
 
 	/* Details of last prefetch to skip repeats and seq scans. */
 	SMgrRelation	last_reln;
@@ -425,6 +424,7 @@ static void
 XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 {
 	XLogReaderState *reader = prefetcher->reader;
+	DecodedXLogRecord *record;
 
 	Assert(!XLogPrefetcherSaturated(prefetcher));
 
@@ -434,14 +434,10 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 		int64		distance;
 
 		/* If we don't already have a record, then try to read one. */
-		if (!prefetcher->have_record)
+		if (prefetcher->record == NULL)
 		{
-			/*
-			 * If we're streaming, we don't want XLogPageRead() to block
-			 * waiting for more data.
-			 */
-
-			if (!XLogReadAhead(reader, &error))
+			record = XLogReadAhead(reader, &error);
+			if (record == NULL)
 			{
 				/* If we got an error, log it and give up. */
 				if (error)
@@ -454,12 +450,20 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 				/* Otherwise, we'll try again later when more data is here. */
 				return;
 			}
-			prefetcher->have_record = true;
+			prefetcher->record = record;
 			prefetcher->next_block_id = 0;
+		}
+		else
+		{
+			/*
+			 * Must have run out of I/O queue while part way through a record.
+			 * We'll carry on where we left off, according to next_block_id.
+			 */
+			record = prefetcher->record;
 		}
 
 		/* How far ahead of replay are we now? */
-		distance = prefetcher->reader->ReadRecPtr - replaying_lsn;
+		distance = record->lsn - replaying_lsn;
 
 		/* Update distance shown in shm. */
 		Stats->distance = distance;
@@ -502,7 +506,8 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 		/* Are we not far enough ahead? */
 		if (distance <= 0)
 		{
-			prefetcher->have_record = false;	/* skip this record */
+			/* XXX Is this still possible? */
+			prefetcher->record = NULL;		/* skip this record */
 			continue;
 		}
 
@@ -510,14 +515,13 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 		 * If this is a record that creates a new SMGR relation, we'll avoid
 		 * prefetching anything from that rnode until it has been replayed.
 		 */
-		if (replaying_lsn < reader->ReadRecPtr &&
-			XLogRecGetRmid(reader) == RM_SMGR_ID &&
-			(XLogRecGetInfo(reader) & ~XLR_INFO_MASK) == XLOG_SMGR_CREATE)
+		if (replaying_lsn < record->lsn &&
+			record->header.xl_rmid == RM_SMGR_ID &&
+			(record->header.xl_info & ~XLR_INFO_MASK) == XLOG_SMGR_CREATE)
 		{
-			xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(reader);
+			xl_smgr_create *xlrec = (xl_smgr_create *) record->main_data;
 
-			XLogPrefetcherAddFilter(prefetcher, xlrec->rnode, 0,
-									reader->ReadRecPtr);
+			XLogPrefetcherAddFilter(prefetcher, xlrec->rnode, 0, record->lsn);
 		}
 
 		/* Scan the record's block references. */
@@ -525,7 +529,7 @@ XLogPrefetcherScanRecords(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 			return;
 
 		/* Advance to the next record. */
-		prefetcher->have_record = false;
+		prefetcher->record = NULL;
 	}
 }
 
@@ -540,6 +544,7 @@ static bool
 XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 {
 	XLogReaderState *reader = prefetcher->reader;
+	DecodedXLogRecord *record = prefetcher->record;
 
 	Assert(!XLogPrefetcherSaturated(prefetcher));
 
@@ -548,11 +553,11 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 	 * our queue became saturated, so we need to start where we left off.
 	 */
 	for (int block_id = prefetcher->next_block_id;
-		 block_id <= XLogRecMaxBlockId(reader);
+		 block_id <= record->max_block_id;
 		 ++block_id)
 	{
 		PrefetchBufferResult prefetch;
-		DecodedBkpBlock *block = XLogRecGetBlock(reader, block_id);
+		DecodedBkpBlock *block = &record->blocks[block_id];
 		SMgrRelation reln;
 
 		/* Ignore everything but the main fork for now. */
