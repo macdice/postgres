@@ -1504,6 +1504,10 @@ ResetDecoder(XLogReaderState *state)
 	/* Reset the decode buffer to empty. */
 	state->decode_buffer_head = state->decode_buffer;
 	state->decode_buffer_tail = state->decode_buffer;
+
+	/* Clear error state. */
+	state->errormsg_buf[0] = '\0';
+	state->errormsg_deferred = false;
 }
 
 /*
