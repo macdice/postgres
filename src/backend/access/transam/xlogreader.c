@@ -377,11 +377,13 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			/*
 			 * It should be immediately after the last the record returned by
 			 * XLogReadRecord(), or at the position set by XLogBeginRead() if
-			 * XLogReadRecord() hasn't been called yet.
+			 * XLogReadRecord() hasn't been called yet.  It may be after a
+			 * page header, though.
 			 */
-			fprintf(stderr, "XLogReadRecord will assert that %zx == %zx\n", state->record->lsn, state->EndRecPtr);
-			//Assert(state->record->lsn == state->EndRecPtr ||
-			//	   (state->record->lsn & 
+			Assert(state->record->lsn == state->EndRecPtr ||
+				   (state->EndRecPtr % XLOG_BLCKSZ == 0 &&
+					(state->record->lsn == state->EndRecPtr + SizeOfXLogShortPHD ||
+					 state->record->lsn == state->EndRecPtr + SizeOfXLogLongPHD)));
 			
 			/*
 			 * Likewise, set ReadRecPtr and EndRecPtr to correspond to that
