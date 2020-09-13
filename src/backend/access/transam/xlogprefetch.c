@@ -12,9 +12,7 @@
  *
  * The goal of this module is to read future WAL records and issue
  * PrefetchSharedBuffer() calls for referenced blocks, so that we avoid I/O
- * stalls in the main recovery loop.  Currently, this is achieved by using a
- * separate XLogReader to read ahead.  In future, we should find a way to
- * avoid reading and decoding each record twice.
+ * stalls in the main recovery loop.
  *
  * When examining a WAL record from the future, we need to consider that a
  * referenced block or segment file might not exist on disk until this record
@@ -33,12 +31,12 @@
  * stall; this is counted with "skip_fpw".
  *
  * The only way we currently have to know that an I/O initiated with
- * PrefetchSharedBuffer() has completed is to call ReadBuffer().  Therefore,
- * we track the number of potentially in-flight I/Os by using a circular
- * buffer of LSNs.  When it's full, we have to wait for recovery to replay
- * records so that the queue depth can be reduced, before we can do any more
- * prefetching.  Ideally, this keeps us the right distance ahead to respect
- * maintenance_io_concurrency.
+ * PrefetchSharedBuffer() has that recovery will eventually call ReadBuffer(),
+ * and perform a synchronous read.  Therefore, we track the number of
+ * potentially in-flight I/Os by using a circular buffer of LSNs.  When it's
+ * full, we have to wait for recovery to replay records so that the queue
+ * depth can be reduced, before we can do any more prefetching.  Ideally, this
+ * keeps us the right distance ahead to respect maintenance_io_concurrency.
  *
  *-------------------------------------------------------------------------
  */
