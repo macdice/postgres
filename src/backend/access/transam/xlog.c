@@ -11960,7 +11960,10 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	if (readSource == XLOG_FROM_STREAM &&
 		!private->wait_for_wal &&
 		GetWalRcvWriteRecPtrUnlocked() < targetPagePtr + reqLen)
+	{
+		fprintf(stderr, "XLogPageRead() XXXXXXX would block!\n");
 		return -1;
+	}
 	
 	/*
 	 * See if we need to switch to a new segment because the requested record

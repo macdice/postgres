@@ -675,11 +675,10 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	{
 		/*
 		 * We couldn't get space.  Usually this means that the decode buffer
-		 * was full, while trying to read ahead.  It's also remotely possible
-		 * for palloc to have failed to allocate memory for an oversized
-		 * record.
+		 * was full, while trying to read ahead (that is, !force).  It's also
+		 * remotely possible for palloc to have failed to allocate memory for
+		 * an oversized record.
 		 */
-		Assert(!force);
 		fprintf(stderr, "ERROR 4 couldn't get space\n");
 		goto err;
 	}
@@ -694,7 +693,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	 */
 	if (targetRecOff <= XLOG_BLCKSZ - SizeOfXLogRecord)
 	{
-		if (!ValidXLogRecordHeader(state, RecPtr, state->ReadRecPtr, record,
+		if (!ValidXLogRecordHeader(state, RecPtr, state->DecodeRecPtr, record,
 								   randAccess))
 		{
 		fprintf(stderr, "ERROR 5\n");
@@ -817,7 +816,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 			if (!gotheader)
 			{
 				record = (XLogRecord *) state->readRecordBuf;
-				if (!ValidXLogRecordHeader(state, RecPtr, state->ReadRecPtr,
+				if (!ValidXLogRecordHeader(state, RecPtr, state->DecodeRecPtr,
 										   record, randAccess))
 				{
 		fprintf(stderr, "ERROR 11\n");
