@@ -7260,9 +7260,9 @@ StartupXLOG(void)
 				HandleStartupProcInterrupts();
 
 				/*
-				 * Perform WAL prefetching, if enabled.  If it reaches
-				 * XLogPageRead() due to lack of data, make sure that doesn't
-				 * block.
+				 * Perform WAL prefetching, if enabled.  If prefetching
+				 * reaches our XLogPageRead() callback due to lack of data,
+				 * make sure that doesn't block.
 				 */
 				private.wait_for_wal = false;
 				XLogPrefetch(&prefetch,
@@ -7385,6 +7385,7 @@ StartupXLOG(void)
 					RecordKnownAssignedTransactionIds(record->xl_xid);
 
 				/* Now apply the WAL record itself */
+				fprintf(stderr, "XXXX recovery executing record at lsn %zx\n", xlogreader->record->lsn);
 				RmgrTable[record->xl_rmid].rm_redo(xlogreader);
 
 				/*

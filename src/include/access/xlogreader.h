@@ -161,6 +161,7 @@ typedef struct DecodedXLogRecord
 	size_t		size;			/* total size of decoded record */
 	bool		oversized;		/* outside the regular decode buffer? */
 	XLogRecPtr	lsn;			/* location */
+	XLogRecPtr	next_lsn;		/* location of next record */
 	struct DecodedXLogRecord *next;	/* read queue link */
 
 	/* Public members. */
@@ -197,13 +198,24 @@ struct XLogReaderState
 	void	   *private_data;
 
 	/*
-	 * Start and end point of last record read.  EndRecPtr is also used as the
-	 * position to read next.  Calling XLogBeginRead() sets EndRecPtr to the
-	 * starting position and ReadRecPtr to invalid.
+	 * Start and end point of last record returned by XLogReadRecord().
+	 *
+	 * XXX These are also available as record->lsn and record->next_lsn,
+	 * but since these were part of the public interface...
 	 */
 	XLogRecPtr	ReadRecPtr;		/* start of last record read */
 	XLogRecPtr	EndRecPtr;		/* end+1 of last record read */
 
+	/*
+	 * Start and end point of the last record read and decoded by
+	 * XLogReadRecordInternal().  NextRecPtr is also used as the position to
+	 * decode next.  Calling XLogBeginRead() sets NextRecPtr and EndRecPtr to
+	 * the requested starting position.
+	 */
+	XLogRecPtr	DecodeRecPtr;	/* start of last record decoded */
+	XLogRecPtr	NextRecPtr;		/* end+1 of last record decoded */
+
+	/* Last record returned by XLogReadRecord. */
 	DecodedXLogRecord *record;
 
 	/* ----------------------------------------

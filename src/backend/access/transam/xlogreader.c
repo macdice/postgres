@@ -258,7 +258,24 @@ XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
 
 	/* Begin at the passed-in record pointer. */
 	state->EndRecPtr = RecPtr;
+	state->NextRecPtr = RecPtr;
 	state->ReadRecPtr = InvalidXLogRecPtr;
+	state->DecodeRecPtr = InvalidXLogRecPtr;
+}
+
+static void
+DUMP(XLogReaderState *state)
+{
+	fprintf(stderr, "decode_queue looks like this:\n");
+	for (DecodedXLogRecord *record = state->decode_queue_tail; record; record = record->next)
+	{
+		uint32 checksum = 0;
+		for (int i = 0; i < record->size; ++i)
+			checksum += ((char *) record)[i];
+		fprintf(stderr, "  lsn = %zx, address = %p, checksum = %x\n", record->lsn, record, checksum);
+		if (record->next == NULL)
+			Assert(record == state->decode_queue_head);
+	}
 }
 
 /*
@@ -347,7 +364,6 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			 * position by the caller, so we'd better reset our read queue and
 			 * move to the new location.
 			 */
-			/* XXX TODO! */
 
 
 			/*
@@ -359,17 +375,30 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			state->record = state->decode_queue_tail;
 
 			/*
-			 * Note that we are potentially returning a decoded record that
-			 * hasn't been flushed to disk yet, during streaming.
-			 * ReadRecord() in xlog.c can deal with that by waiting for the
-			 * flush location to advance, if necessary.
+			 * It should be immediately after the last the record returned by
+			 * XLogReadRecord(), or at the position set by XLogBeginRead() if
+			 * XLogReadRecord() hasn't been called yet.
 			 */
-
-			/* XXX TODO!  Set EndPtr etc so it can do that correctly! */
+			fprintf(stderr, "XLogReadRecord will assert that %zx == %zx\n", state->record->lsn, state->EndRecPtr);
+			//Assert(state->record->lsn == state->EndRecPtr ||
+			//	   (state->record->lsn & 
+			
+			/*
+			 * Likewise, set ReadRecPtr and EndRecPtr to correspond to that
+			 * record.
+			 *
+			 * XXX Calling code should perhaps access these through the
+			 * returned decoded record, but for now we'll update them directly
+			 * here, for the benefit of existing code that thinks there's only
+			 * one record in the decoder.
+			 */
+			state->ReadRecPtr = state->record->lsn;
+			state->EndRecPtr = state->record->next_lsn;
 
 			/* XXX can't return pointer to header, will be given back to XLogDecodeRecord()! */
 			*errormsg = NULL;
-			fprintf(stderr, "XLogReadRecord returning %p, lsn = %zx, next = %p\n", state->record, state->record->lsn, state->record->next);
+			fprintf(stderr, "XLogReadRecord returning %p, lsn = %zx, next_lsn = %zx, next = %p\n", state->record, state->record->lsn, state->record->next_lsn, state->record->next);
+			DUMP(state);
 			return &state->record->header;
 		}
 		else if (state->errormsg_deferred)
@@ -383,11 +412,15 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 			else
 				*errormsg = NULL;
 			state->errormsg_deferred = false;
-			/* XXX TODO set ReadRecPtr and EndRecPtr? */
+
+			/* Report the location of the error. */
+			state->ReadRecPtr = state->DecodeRecPtr;
+			state->EndRecPtr = state->NextRecPtr;
+
 			return NULL;
 		}
 
-		/* We need to get a decoded record into our read queue first. */
+		/* We need to get a decoded record into our queue first. */
 		XLogReadRecordInternal(state, true /* wait */ );
 
 		/* Shouldn't need to go around more than once to get a record or an error. */
@@ -412,17 +445,21 @@ XLogReadAhead(XLogReaderState *state, char **errormsg)
 		record = XLogReadRecordInternal(state, false);
 		if (state->errormsg_deferred)
 		{
-			/* Report, but don't consume, the error. */
+			/*
+			 * Report the error once, but don't consume it, so that
+			 * XLogReadRecord() can report it too.
+			 */
 			if (state->errormsg_buf[0] != '\0')
 				*errormsg = state->errormsg_buf;
 			else
 				*errormsg = NULL;
 			return NULL;
 		}
-		*errormsg = NULL;
 	}
+	*errormsg = NULL;
 	fprintf(stderr, "XLogReadAhead returning %p, lsn = %zx\n", record, record ? record->lsn : 0);
-
+	DUMP(state);
+	
 	return record;
 }
 
@@ -542,14 +579,14 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 	state->errormsg_buf[0] = '\0';
 	decoded = NULL;
 
-	RecPtr = state->EndRecPtr;
+	RecPtr = state->NextRecPtr;
 
-	if (state->ReadRecPtr != InvalidXLogRecPtr)
+	if (state->DecodeRecPtr != InvalidXLogRecPtr)
 	{
 		/* read the record after the one we just read */
 
 		/*
-		 * EndRecPtr is pointing to end+1 of the previous WAL record.  If
+		 * NextRecPtr is pointing to end+1 of the previous WAL record.  If
 		 * we're at a page boundary, no more records can fit on the current
 		 * page. We must skip over the page header, but we can't do that until
 		 * we've read in the page, since the header size is variable.
@@ -560,7 +597,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 		/*
 		 * Caller supplied a position to start at.
 		 *
-		 * In this case, EndRecPtr should already be pointing to a valid
+		 * In this case, NextRecPtr should already be pointing to a valid
 		 * record starting position.
 		 */
 		Assert(XRecOffIsValid(RecPtr));
@@ -795,8 +832,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 			goto err;
 
 		pageHeaderSize = XLogPageHeaderSize((XLogPageHeader) state->readBuf);
-		state->ReadRecPtr = RecPtr;
-		state->EndRecPtr = targetPagePtr + pageHeaderSize
+		state->DecodeRecPtr = RecPtr;
+		state->NextRecPtr = targetPagePtr + pageHeaderSize
 			+ MAXALIGN(pageHeader->xlp_rem_len);
 	}
 	else
@@ -817,9 +854,9 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 			goto err;
 		}
 
-		state->EndRecPtr = RecPtr + MAXALIGN(total_len);
+		state->NextRecPtr = RecPtr + MAXALIGN(total_len);
 
-		state->ReadRecPtr = RecPtr;
+		state->DecodeRecPtr = RecPtr;
 	}
 
 	/*
@@ -829,12 +866,15 @@ XLogReadRecordInternal(XLogReaderState *state, bool force)
 		(record->xl_info & ~XLR_INFO_MASK) == XLOG_SWITCH)
 	{
 		/* Pretend it extends to end of segment */
-		state->EndRecPtr += state->segcxt.ws_segsize - 1;
-		state->EndRecPtr -= XLogSegmentOffset(state->EndRecPtr, state->segcxt.ws_segsize);
+		state->NextRecPtr += state->segcxt.ws_segsize - 1;
+		state->NextRecPtr -= XLogSegmentOffset(state->NextRecPtr, state->segcxt.ws_segsize);
 	}
 
 	if (DecodeXLogRecord(state, decoded, record, RecPtr, &errormsg))
 	{
+		/* Record the location of the next record. */
+		decoded->next_lsn = state->NextRecPtr;
+
 		/*
 		 * If it's in the decode buffer, mark the decode buffer space as
 		 * occupied.
