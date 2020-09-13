@@ -858,6 +858,7 @@ XLogPrefetcherCompletedIO(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 static inline bool
 XLogPrefetcherSaturated(XLogPrefetcher *prefetcher)
 {
+	/* XXX:TM avoid mod? */
 	return (prefetcher->prefetch_head + 1) % prefetcher->prefetch_queue_size ==
 		prefetcher->prefetch_tail;
 }
@@ -865,6 +866,7 @@ XLogPrefetcherSaturated(XLogPrefetcher *prefetcher)
 void
 assign_max_recovery_prefetch_distance(int new_value, void *extra)
 {
+	/* XXX:TM can't actually change this anymore...  fixable? */
 	/* Reconfigure prefetching, because a setting it depends on changed. */
 	max_recovery_prefetch_distance = new_value;
 	if (AmStartupProcess())

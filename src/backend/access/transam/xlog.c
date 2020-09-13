@@ -7260,10 +7260,7 @@ StartupXLOG(void)
 				HandleStartupProcInterrupts();
 
 				/* Perform WAL prefetching, if enabled. */
-				XLogPrefetch(&prefetch,
-							 ThisTimeLineID,
-							 xlogreader->ReadRecPtr,
-							 currentSource == XLOG_FROM_STREAM);
+				XLogPrefetch(&prefetch, xlogreader->ReadRecPtr);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via

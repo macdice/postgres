@@ -51,10 +51,7 @@ extern void XLogPrefetcherReadAhead(XLogPrefetcher *prefetch,
  * it can decide how far ahead to read in the WAL, if configured.
  */
 static inline void
-XLogPrefetch(XLogPrefetchState *state,
-			 TimeLineID replaying_tli,
-			 XLogRecPtr replaying_lsn,
-			 bool from_stream)
+XLogPrefetch(XLogPrefetchState *state, XLogRecPtr replaying_lsn)
 {
 	/*
 	 * Handle any configuration changes.  Rather than trying to deal with
