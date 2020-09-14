@@ -12247,6 +12247,10 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * hope...
 					 */
 
+					/* If we were asked not to wait, give up immediately. */
+					if (nowait)
+						return false;
+
 					/*
 					 * We should be able to move to XLOG_FROM_STREAM only in
 					 * standby mode.
@@ -12518,6 +12522,10 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						}
 						break;
 					}
+
+					/* If we were asked not to wait, give up immediately. */
+					if (nowait)
+						return false;
 
 					/*
 					 * Data not here yet. Check for trigger, then wait for
