@@ -406,8 +406,17 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 		/* We need to get a decoded record into our queue first. */
 		XLogReadRecordInternal(state, true /* wait */ );
 
-		/* Shouldn't need to go around more than once to get a record or an error. */
-		//Assert(state->decode_queue_tail || state->errormsg_buf[0] != '\0');
+		/*
+		 * If that produced neither a queued record nor a queued error, then
+		 * we're at the end (for example, archive recovery with no more files
+		 * available).
+		 */
+		if (state->decode_queue_tail == NULL && !state->errormsg_deferred)
+		{
+			state->EndRecPtr = state->NextRecPtr;
+			*errormsg = NULL;
+			return NULL;
+		}
 	}
 
 	/* unreachable */
