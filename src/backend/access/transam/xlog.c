@@ -916,7 +916,8 @@ static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf,
 						 bool nowait);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-										bool fetching_ckpt, XLogRecPtr tliRecPtr);
+										bool fetching_ckpt, XLogRecPtr tliRecPtr,
+										bool nowait);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
 static void PreallocXlogFiles(XLogRecPtr endptr);
@@ -11991,7 +11992,8 @@ retry:
 		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 										 private->randAccess,
 										 private->fetching_ckpt,
-										 targetRecPtr))
+										 targetRecPtr,
+										 nowait))
 		{
 			if (readFile >= 0)
 				close(readFile);
@@ -12140,7 +12142,8 @@ next_record_is_invalid:
  */
 static bool
 WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-							bool fetching_ckpt, XLogRecPtr tliRecPtr)
+							bool fetching_ckpt, XLogRecPtr tliRecPtr,
+							bool nowait)
 {
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
@@ -12360,6 +12363,10 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				if (readFile >= 0)
 					return true;	/* success! */
 
+				/* If we were asked not to wait, give up immediately. */
+				if (nowait)
+					return false;
+
 				/*
 				 * Nope, not found in archive or pg_wal.
 				 */
@@ -12537,9 +12544,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * tell the upstream server our replay location now so
 					 * that pg_stat_replication doesn't show stale
 					 * information.
-					 *
-					 * XXX We'd only be here for wait_for_wal=true, so this is
-					 * still true right?
 					 */
 					if (!streaming_reply_sent)
 					{
