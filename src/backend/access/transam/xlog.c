@@ -1463,7 +1463,7 @@ checkXLogConsistency(XLogReaderState *record)
 		 * temporary page.
 		 */
 		buf = XLogReadBufferExtended(rnode, forknum, blkno,
-									 RBM_NORMAL_NO_LOG);
+									 RBM_NORMAL_NO_LOG, InvalidBuffer);
 		if (!BufferIsValid(buf))
 			continue;
 
