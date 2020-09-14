@@ -39,6 +39,7 @@
 #endif
 
 #include "access/xlogrecord.h"
+#include "storage/buf.h"
 
 /* WALOpenSegment represents a WAL segment being read. */
 typedef struct WALOpenSegment
@@ -131,6 +132,9 @@ typedef struct
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
+
+	/* Workspace for remembering last known buffer holding this block. */
+	Buffer		recent_buffer;
 
 	/* copy of the fork_flags field from the XLogRecordBlockHeader */
 	uint8		flags;
