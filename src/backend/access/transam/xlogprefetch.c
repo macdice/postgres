@@ -739,6 +739,18 @@ pg_stat_get_prefetch_recovery(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Compute (n + 1) % prefetch_queue_size, assuming n < prefetch_queue_size,
+ * without using division.
+ */
+static inline int
+XLogPrefetcherNext(XLogPrefetcher *prefetcher, int n)
+{
+	int		next = n + 1;
+
+	return next == prefetcher->prefetch_queue_size ? 0 : next;
+}
+
+/*
  * Don't prefetch any blocks >= 'blockno' from a given 'rnode', until 'lsn'
  * has been replayed.
  */
@@ -827,8 +839,9 @@ XLogPrefetcherInitiatedIO(XLogPrefetcher *prefetcher,
 						  XLogRecPtr prefetching_lsn)
 {
 	Assert(!XLogPrefetcherSaturated(prefetcher));
-	prefetcher->prefetch_queue[prefetcher->prefetch_head++] = prefetching_lsn;
-	prefetcher->prefetch_head %= prefetcher->prefetch_queue_size;
+	prefetcher->prefetch_queue[prefetcher->prefetch_head] = prefetching_lsn;
+	prefetcher->prefetch_head =
+		XLogPrefetcherNext(prefetcher, prefetcher->prefetch_head);
 	Stats->queue_depth++;
 	Assert(Stats->queue_depth <= prefetcher->prefetch_queue_size);
 }
@@ -845,8 +858,8 @@ XLogPrefetcherCompletedIO(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 	while (prefetcher->prefetch_head != prefetcher->prefetch_tail &&
 		   prefetcher->prefetch_queue[prefetcher->prefetch_tail] < replaying_lsn)
 	{
-		prefetcher->prefetch_tail++;
-		prefetcher->prefetch_tail %= prefetcher->prefetch_queue_size;
+		prefetcher->prefetch_tail =
+			XLogPrefetcherNext(prefetcher, prefetcher->prefetch_tail);
 		Stats->queue_depth--;
 		Assert(Stats->queue_depth >= 0);
 	}
@@ -858,9 +871,9 @@ XLogPrefetcherCompletedIO(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
 static inline bool
 XLogPrefetcherSaturated(XLogPrefetcher *prefetcher)
 {
-	/* XXX:TM avoid mod? */
-	return (prefetcher->prefetch_head + 1) % prefetcher->prefetch_queue_size ==
-		prefetcher->prefetch_tail;
+	int		next = XLogPrefetcherNext(prefetcher, prefetcher->prefetch_head);
+
+	return next == prefetcher->prefetch_tail;
 }
 
 void
