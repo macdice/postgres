@@ -869,8 +869,10 @@ err:
 	/*
 	 * Invalidate the read state, if this was an error. We might read from a
 	 * different source after failure.
+	 *
+	 * XXX !?!
 	 */
-	if (readOff != XLOGPAGEREAD_WOULDBLOCK)
+	if (readOff < 0)
 		XLogReaderInvalReadState(state);
 
 	/*
@@ -910,11 +912,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 	/* check whether we have all the requested data already */
 	if (targetSegNo == state->seg.ws_segno &&
 		targetPageOff == state->segoff && reqLen <= state->readLen)
-	{
-		fprintf(stderr, "XXX ReadPageInternal has the data already\n");
 		return state->readLen;
-	}
-	fprintf(stderr, "XXX ReadPageInternal doesn't have the data, time for slog, need %zu, len %d\n", pageptr, reqLen);
 
 	/*
 	 * Data is not in our buffer.
