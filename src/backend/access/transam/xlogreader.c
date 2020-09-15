@@ -910,7 +910,11 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 	/* check whether we have all the requested data already */
 	if (targetSegNo == state->seg.ws_segno &&
 		targetPageOff == state->segoff && reqLen <= state->readLen)
+	{
+		fprintf(stderr, "XXX ReadPageInternal has the data already\n");
 		return state->readLen;
+	}
+	fprintf(stderr, "XXX ReadPageInternal doesn't have the data, time for slog, need %zu, len %d\n", pageptr, reqLen);
 
 	/*
 	 * Data is not in our buffer.
@@ -989,17 +993,12 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 	return readLen;
 
 err:
-	if (readLen == XLOGPAGEREAD_WOULDBLOCK)
-		return XLOGPAGEREAD_WOULDBLOCK;
-
-	/*
-	 * If we reached this point without an error message, it means ...
-	 */
 	if (state->errormsg_buf[0] != '\0')
+	{
 		state->errormsg_deferred = true;
-
-	XLogReaderInvalReadState(state);
-	return XLOGPAGEREAD_ERROR;
+		XLogReaderInvalReadState(state);
+	}
+	return -1;
 }
 
 /*
