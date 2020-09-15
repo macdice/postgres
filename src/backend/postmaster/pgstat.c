@@ -5895,6 +5895,13 @@ backend_read_statsfile(void)
 		if (ok && file_ts >= min_ts)
 			break;
 
+		/*
+		 * If we're in crash recovery, the collector may not even be running,
+		 * so work with what we have.
+		 */
+		if (InRecovery)
+			break;
+
 		/* Not there or too old, so kick the collector and wait a bit */
 		if ((count % PGSTAT_INQ_LOOP_COUNT) == 0)
 			pgstat_send_inquiry(cur_ts, min_ts, inquiry_db);
