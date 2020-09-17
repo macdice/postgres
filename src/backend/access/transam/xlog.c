@@ -3719,10 +3719,19 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 		/* Success! */
 		curFileTLI = tli;
 
-		/* Report recovery progress in PS display */
+		/*
+		 * Report recovery progress in PS display.  Until we've reached
+		 * consistency, force the PS display to be updated even if that is
+		 * disabled, because there may be no other way to see recovery progress
+		 * and the updates are relatively infrequent so performance shouldn't
+		 * be a problem.
+		 */
 		snprintf(activitymsg, sizeof(activitymsg), "recovering %s",
 				 xlogfname);
-		set_ps_display(activitymsg);
+		if (!reachedConsistency)
+			set_ps_display_always(activitymsg);
+		else
+			set_ps_display(activitymsg);
 
 		/* Track source of data in assorted state variables */
 		readSource = source;
@@ -8029,6 +8038,13 @@ CheckRecoveryConsistency(void)
 		 */
 		XLogCheckInvalidPages();
 
+		/*
+		 * If we can been forcing recovery progress to be shown in the process
+		 * title, we can now clear it.
+		 */
+		if (!update_process_title)
+			set_ps_display_always("");
+
 		reachedConsistency = true;
 		ereport(LOG,
 				(errmsg("consistent recovery state reached at %X/%X",
@@ -8051,6 +8067,7 @@ CheckRecoveryConsistency(void)
 		SpinLockRelease(&XLogCtl->info_lck);
 
 		LocalHotStandbyActive = true;
+
 
 		SendPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY);
 	}

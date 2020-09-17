@@ -257,10 +257,6 @@ save_ps_display_args(int argc, char **argv)
 void
 init_ps_display(const char *fixed_part)
 {
-#ifndef PS_USE_NONE
-	bool		save_update_process_title;
-#endif
-
 	Assert(fixed_part || MyBackendType);
 	if (!fixed_part)
 		fixed_part = GetBackendTypeDesc(MyBackendType);
@@ -332,10 +328,7 @@ init_ps_display(const char *fixed_part)
 	/*
 	 * On the first run, force the update.
 	 */
-	save_update_process_title = update_process_title;
-	update_process_title = true;
-	set_ps_display("");
-	update_process_title = save_update_process_title;
+	set_ps_display_always("");
 #endif							/* not PS_USE_NONE */
 }
 
@@ -419,6 +412,21 @@ set_ps_display(const char *activity)
 #endif							/* not PS_USE_NONE */
 }
 
+/*
+ * Like set_ps_display_always(), but update the display even if
+ * update_process_title is set to off.  This is used only for infrequent
+ * updates such as the initial display.
+ */
+void
+set_ps_display_always(const char *activity)
+{
+	bool		save_update_process_title;
+
+	save_update_process_title = update_process_title;
+	update_process_title = true;
+	set_ps_display(activity);
+	update_process_title = save_update_process_title;
+}
 
 /*
  * Returns what's currently in the ps display, in case someone needs
