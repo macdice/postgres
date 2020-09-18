@@ -872,7 +872,7 @@ err:
 	 *
 	 * XXX !?!
 	 */
-	if (readOff < 0)
+	if (readOff < 0 || state->errormsg_buf[0] != '\0')
 		XLogReaderInvalReadState(state);
 
 	/*
