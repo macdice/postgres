@@ -453,6 +453,15 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 
 	Assert(blkno != P_NEW);
 
+	/* Do we have a clue where the buffer might be already? */
+	if (BufferIsValid(recent_buffer) &&
+		mode == RBM_NORMAL &&
+		ReadRecentBuffer(rnode, forknum, blkno, recent_buffer))
+	{
+		buffer = recent_buffer;
+		goto recent_buffer_fast_path;
+	}
+
 	/* Open the relation at smgr level */
 	smgr = smgropen(rnode, InvalidBackendId);
 
@@ -471,12 +480,8 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	if (blkno < lastblock)
 	{
 		/* page exists in file */
-		if (BufferIsValid(recent_buffer) &&
-			ReadRecentBuffer(rnode, forknum, blkno, recent_buffer))
-			buffer = recent_buffer;
-		else
-			buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno,
-											   mode, NULL);
+		buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno,
+										   mode, NULL);
 	}
 	else
 	{
@@ -515,6 +520,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 		}
 	}
 
+recent_buffer_fast_path:
 	if (mode == RBM_NORMAL)
 	{
 		/* check that page has been initialized */
