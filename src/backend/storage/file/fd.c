@@ -330,10 +330,6 @@ static void walkdir(const char *path,
 					void (*action) (const char *fname, bool isdir, int elevel),
 					bool process_symlinks,
 					int elevel);
-#ifdef PG_FLUSH_DATA_WORKS
-static void pre_sync_fname(const char *fname, bool isdir, int elevel);
-#endif
-static void datadir_fsync_fname(const char *fname, bool isdir, int elevel);
 static void unlink_if_exists_fname(const char *fname, bool isdir, int elevel);
 
 static int	fsync_parent_path(const char *fname, int elevel);
@@ -3233,86 +3229,6 @@ looks_like_temp_rel_name(const char *name)
 
 
 /*
- * Issue fsync recursively on PGDATA and all its contents.
- *
- * We fsync regular files and directories wherever they are, but we
- * follow symlinks only for pg_wal and immediately under pg_tblspc.
- * Other symlinks are presumed to point at files we're not responsible
- * for fsyncing, and might not have privileges to write at all.
- *
- * Errors are logged but not considered fatal; that's because this is used
- * only during database startup, to deal with the possibility that there are
- * issued-but-unsynced writes pending against the data directory.  We want to
- * ensure that such writes reach disk before anything that's done in the new
- * run.  However, aborting on error would result in failure to start for
- * harmless cases such as read-only files in the data directory, and that's
- * not good either.
- *
- * Note that if we previously crashed due to a PANIC on fsync(), we'll be
- * rewriting all changes again during recovery.
- *
- * Note we assume we're chdir'd into PGDATA to begin with.
- */
-void
-SyncDataDirectory(void)
-{
-	bool		xlog_is_symlink;
-
-	/* We can skip this whole thing if fsync is disabled. */
-	if (!enableFsync)
-		return;
-
-	/*
-	 * If pg_wal is a symlink, we'll need to recurse into it separately,
-	 * because the first walkdir below will ignore it.
-	 */
-	xlog_is_symlink = false;
-
-#ifndef WIN32
-	{
-		struct stat st;
-
-		if (lstat("pg_wal", &st) < 0)
-			ereport(LOG,
-					(errcode_for_file_access(),
-					 errmsg("could not stat file \"%s\": %m",
-							"pg_wal")));
-		else if (S_ISLNK(st.st_mode))
-			xlog_is_symlink = true;
-	}
-#else
-	if (pgwin32_is_junction("pg_wal"))
-		xlog_is_symlink = true;
-#endif
-
-	/*
-	 * If possible, hint to the kernel that we're soon going to fsync the data
-	 * directory and its contents.  Errors in this step are even less
-	 * interesting than normal, so log them only at DEBUG1.
-	 */
-#ifdef PG_FLUSH_DATA_WORKS
-	walkdir(".", pre_sync_fname, false, DEBUG1);
-	if (xlog_is_symlink)
-		walkdir("pg_wal", pre_sync_fname, false, DEBUG1);
-	walkdir("pg_tblspc", pre_sync_fname, true, DEBUG1);
-#endif
-
-	/*
-	 * Now we do the fsync()s in the same order.
-	 *
-	 * The main call ignores symlinks, so in addition to specially processing
-	 * pg_wal if it's a symlink, pg_tblspc has to be visited separately with
-	 * process_symlinks = true.  Note that if there are any plain directories
-	 * in pg_tblspc, they'll get fsync'd twice.  That's not an expected case
-	 * so we don't worry about optimizing it.
-	 */
-	walkdir(".", datadir_fsync_fname, false, LOG);
-	if (xlog_is_symlink)
-		walkdir("pg_wal", datadir_fsync_fname, false, LOG);
-	walkdir("pg_tblspc", datadir_fsync_fname, true, LOG);
-}
-
-/*
  * walkdir: recursively walk a directory, applying the action to each
  * regular file and directory (including the named directory itself).
  *
@@ -3381,59 +3297,6 @@ walkdir(const char *path,
 		(*action) (path, true, elevel);
 }
 
-
-/*
- * Hint to the OS that it should get ready to fsync() this file.
- *
- * Ignores errors trying to open unreadable files, and logs other errors at a
- * caller-specified level.
- */
-#ifdef PG_FLUSH_DATA_WORKS
-
-static void
-pre_sync_fname(const char *fname, bool isdir, int elevel)
-{
-	int			fd;
-
-	/* Don't try to flush directories, it'll likely just fail */
-	if (isdir)
-		return;
-
-	fd = OpenTransientFile(fname, O_RDONLY | PG_BINARY);
-
-	if (fd < 0)
-	{
-		if (errno == EACCES)
-			return;
-		ereport(elevel,
-				(errcode_for_file_access(),
-				 errmsg("could not open file \"%s\": %m", fname)));
-		return;
-	}
-
-	/*
-	 * pg_flush_data() ignores errors, which is ok because this is only a
-	 * hint.
-	 */
-	pg_flush_data(fd, 0, 0);
-
-	if (CloseTransientFile(fd) != 0)
-		ereport(elevel,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", fname)));
-}
-
-#endif							/* PG_FLUSH_DATA_WORKS */
-
-static void
-datadir_fsync_fname(const char *fname, bool isdir, int elevel)
-{
-	/*
-	 * We want to silently ignoring errors about unreadable files.  Pass that
-	 * desire on to fsync_fname_ext().
-	 */
-	fsync_fname_ext(fname, isdir, true, elevel);
-}
 
 static void
 unlink_if_exists_fname(const char *fname, bool isdir, int elevel)
