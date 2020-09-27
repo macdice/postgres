@@ -72,9 +72,11 @@
 
 #include "postgres.h"
 
+#include <dirent.h>
 #include <sys/file.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #ifndef WIN32
 #include <sys/mman.h>
 #endif
@@ -330,10 +332,12 @@ static void walkdir(const char *path,
 					void (*action) (const char *fname, bool isdir, int elevel),
 					bool process_symlinks,
 					int elevel);
+#ifndef HAVE_SYNCFS
 #ifdef PG_FLUSH_DATA_WORKS
 static void pre_sync_fname(const char *fname, bool isdir, int elevel);
 #endif
 static void datadir_fsync_fname(const char *fname, bool isdir, int elevel);
+#endif
 static void unlink_if_exists_fname(const char *fname, bool isdir, int elevel);
 
 static int	fsync_parent_path(const char *fname, int elevel);
@@ -3231,6 +3235,23 @@ looks_like_temp_rel_name(const char *name)
 	return true;
 }
 
+#ifdef HAVE_SYNCFS
+static void
+do_syncfs(const char *path)
+{
+	int		fd;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+	{
+		elog(LOG, "could not open %s: %m", path);
+		return;
+	}
+	if (syncfs(fd) < 0)
+		elog(LOG, "syncfs failed for %s: %m", path);
+	close(fd);
+}
+#endif
 
 /*
  * Issue fsync recursively on PGDATA and all its contents.
@@ -3257,6 +3278,10 @@ void
 SyncDataDirectory(void)
 {
 	bool		xlog_is_symlink;
+#ifdef HAVE_SYNCFS
+	DIR		   *dir;
+	struct dirent *de;
+#endif
 
 	/* We can skip this whole thing if fsync is disabled. */
 	if (!enableFsync)
@@ -3285,6 +3310,36 @@ SyncDataDirectory(void)
 		xlog_is_symlink = true;
 #endif
 
+#ifdef HAVE_SYNCFS
+
+	/*
+	 * On Linux, we don't have to open every single file one by one.  We can
+	 * use syncfs() to sync whole filesystems.  We only expect filesystem
+	 * boundaries to exist where we tolerate symlinks, namely pg_wal and the
+	 * tablespaces, so we call syncfs() for each of those directories.
+	 */
+
+	/* Sync the top level pgdata directory. */
+	do_syncfs(".");
+	/* If any tablespaces are configured, sync each of those. */
+	dir = AllocateDir("pg_tblspc");
+	while ((de = ReadDir(dir, "pg_tblspc")))
+	{
+		char		path[MAXPGPATH];
+
+		if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+			continue;
+
+		snprintf(path, MAXPGPATH, "pg_tblspc/%s", de->d_name);
+		do_syncfs(path);
+	}
+	FreeDir(dir);
+	/* If pg_wal is a symlink, process that too. */
+	if (xlog_is_symlink)
+		do_syncfs("pg_wal");
+
+#else
+
 	/*
 	 * If possible, hint to the kernel that we're soon going to fsync the data
 	 * directory and its contents.  Errors in this step are even less
@@ -3310,6 +3365,8 @@ SyncDataDirectory(void)
 	if (xlog_is_symlink)
 		walkdir("pg_wal", datadir_fsync_fname, false, LOG);
 	walkdir("pg_tblspc", datadir_fsync_fname, true, LOG);
+
+#endif		/* !HAVE_SYNCFS */
 }
 
 /*
@@ -3381,7 +3438,7 @@ walkdir(const char *path,
 		(*action) (path, true, elevel);
 }
 
-
+#ifndef HAVE_SYNCFS
 /*
  * Hint to the OS that it should get ready to fsync() this file.
  *
@@ -3434,6 +3491,7 @@ datadir_fsync_fname(const char *fname, bool isdir, int elevel)
 	 */
 	fsync_fname_ext(fname, isdir, true, elevel);
 }
+#endif
 
 static void
 unlink_if_exists_fname(const char *fname, bool isdir, int elevel)
