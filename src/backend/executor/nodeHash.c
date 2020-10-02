@@ -25,6 +25,7 @@
 
 #include <math.h>
 #include <limits.h>
+#include <unistd.h>
 
 #include "access/htup_details.h"
 #include "access/parallel.h"
@@ -584,6 +585,13 @@ ExecHashTableCreate(HashState *state, List *hashOperators, List *hashCollations,
 	{
 		ParallelHashJoinState *pstate = hashtable->parallel_state;
 		Barrier    *build_barrier;
+
+		if (ParallelWorkerNumber >= 1)
+		{
+			elog(LOG, "a short nap before attaching to build_barrier...");
+			sleep(2);
+			elog(LOG, "nap finished");
+		}
 
 		/*
 		 * Attach to the build barrier.  The corresponding detach operation is
@@ -3198,6 +3206,9 @@ ExecHashTableDetach(HashJoinTable hashtable)
 			if (DsaPointerIsValid(pstate->batches))
 			{
 				dsa_free(hashtable->area, pstate->batches);
+				elog(LOG, "batch array freed, taking a long nap...");
+				sleep(5);
+				elog(LOG, "finished nap, clearing pointer");
 				pstate->batches = InvalidDsaPointer;
 			}
 		}
