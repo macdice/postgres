@@ -23,6 +23,7 @@
 #include "access/session.h"
 #include "storage/lwlock.h"
 #include "storage/shm_toc.h"
+#include "utils/combocid.h"
 #include "utils/memutils.h"
 #include "utils/typcache.h"
 
@@ -43,6 +44,7 @@
  */
 #define SESSION_KEY_DSA						UINT64CONST(0xFFFFFFFFFFFF0001)
 #define SESSION_KEY_RECORD_TYPMOD_REGISTRY	UINT64CONST(0xFFFFFFFFFFFF0002)
+#define SESSION_KEY_FIXED					UINT64CONST(0xFFFFFFFFFFFF0003)
 
 /* This backend's current session. */
 Session    *CurrentSession = NULL;
@@ -74,8 +76,10 @@ GetSessionDsmHandle(void)
 	dsm_segment *seg;
 	size_t		typmod_registry_size;
 	size_t		size;
+	void	   *fixed_space;
 	void	   *dsa_space;
 	void	   *typmod_registry_space;
+	SessionFixed *fixed;
 	dsa_area   *dsa;
 	MemoryContext old_context;
 
@@ -90,6 +94,10 @@ GetSessionDsmHandle(void)
 	/* Otherwise, prepare to set one up. */
 	old_context = MemoryContextSwitchTo(TopMemoryContext);
 	shm_toc_initialize_estimator(&estimator);
+
+	/* Estimate size for the fixed-sized per-session state. */
+	shm_toc_estimate_keys(&estimator, 1);
+	shm_toc_estimate_chunk(&estimator, sizeof(SessionFixed));
 
 	/* Estimate space for the per-session DSA area. */
 	shm_toc_estimate_keys(&estimator, 1);
@@ -113,6 +121,14 @@ GetSessionDsmHandle(void)
 						 dsm_segment_address(seg),
 						 size);
 
+	/* Create the simple fixed-sized session state. */
+	fixed_space = shm_toc_allocate(toc, sizeof(SessionFixed));
+	fixed = (SessionFixed *) fixed_space;
+	memset(fixed, 0, sizeof(*fixed));
+	LWLockInitialize(&fixed->shared_combocid_lock, LWTRANCHE_SHARED_COMBOCID);
+	shm_toc_insert(toc, SESSION_KEY_FIXED, fixed_space);
+	CurrentSession->fixed = fixed;
+
 	/* Create per-session DSA area. */
 	dsa_space = shm_toc_allocate(toc, SESSION_DSA_SIZE);
 	dsa = dsa_create_in_place(dsa_space,
@@ -121,13 +137,15 @@ GetSessionDsmHandle(void)
 							  seg);
 	shm_toc_insert(toc, SESSION_KEY_DSA, dsa_space);
 
-
 	/* Create session-scoped shared record typmod registry. */
 	typmod_registry_space = shm_toc_allocate(toc, typmod_registry_size);
 	SharedRecordTypmodRegistryInit((SharedRecordTypmodRegistry *)
 								   typmod_registry_space, seg, dsa);
 	shm_toc_insert(toc, SESSION_KEY_RECORD_TYPMOD_REGISTRY,
 				   typmod_registry_space);
+
+	/* Initialize shared commmand ids. */
+	SharedComboCidRegistryInit(seg, dsa);
 
 	/*
 	 * If we got this far, we can pin the shared memory so it stays mapped for
@@ -156,6 +174,7 @@ AttachSession(dsm_handle handle)
 {
 	dsm_segment *seg;
 	shm_toc    *toc;
+	void	   *fixed_space;
 	void	   *dsa_space;
 	void	   *typmod_registry_space;
 	dsa_area   *dsa;
@@ -177,11 +196,18 @@ AttachSession(dsm_handle handle)
 	CurrentSession->segment = seg;
 	CurrentSession->area = dsa;
 
+	/* Attach to the "fixed sized" data region. */
+	fixed_space = shm_toc_lookup(toc, SESSION_KEY_FIXED, false);
+	CurrentSession->fixed = (SessionFixed *) fixed_space;
+
 	/* Attach to the shared record typmod registry. */
 	typmod_registry_space =
 		shm_toc_lookup(toc, SESSION_KEY_RECORD_TYPMOD_REGISTRY, false);
 	SharedRecordTypmodRegistryAttach((SharedRecordTypmodRegistry *)
 									 typmod_registry_space);
+
+	/* Attach to the shared combo CID registry. */
+	SharedComboCidRegistryAttach();
 
 	/* Remain attached until end of backend or DetachSession(). */
 	dsm_pin_mapping(seg);

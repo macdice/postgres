@@ -14,6 +14,9 @@
 #ifndef COMBOCID_H
 #define COMBOCID_H
 
+#include "storage/dsm.h"
+#include "utils/dsa.h"
+
 /*
  * HeapTupleHeaderGetCmin and HeapTupleHeaderGetCmax function prototypes
  * are in access/htup.h, because that's where the macro definitions that
@@ -21,8 +24,7 @@
  */
 
 extern void AtEOXact_ComboCid(void);
-extern void RestoreComboCIDState(char *comboCIDstate);
-extern void SerializeComboCIDState(Size maxsize, char *start_address);
-extern Size EstimateComboCIDStateSpace(void);
+extern void SharedComboCidRegistryInit(dsm_segment *seg, dsa_area *area);
+extern void SharedComboCidRegistryAttach(void);
 
 #endif							/* COMBOCID_H */

@@ -42,6 +42,8 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/parallel.h"
+#include "access/session.h"
 #include "access/xact.h"
 #include "miscadmin.h"
 #include "storage/shmem.h"
@@ -61,6 +63,19 @@ typedef struct
 
 typedef ComboCidKeyData *ComboCidKey;
 
+/*
+ * Shared memory version of the array for use in parallel queries.  For now we
+ * don't have a shared memory hash table, we just let each backend deduplicate
+ * as much as it can, but all participating backends can decode each other's
+ * combo CIDs through this structure.  It is protected by shared_combocid_lock.
+ */
+typedef struct SharedComboCidRegistry
+{
+	size_t		size;
+	size_t		used;
+	ComboCidKeyData	combocids[FLEXIBLE_ARRAY_MEMBER];
+} SharedComboCidRegistry;
+
 typedef struct
 {
 	ComboCidKeyData key;
@@ -68,6 +83,7 @@ typedef struct
 } ComboCidEntryData;
 
 typedef ComboCidEntryData *ComboCidEntry;
+
 
 /* Initial size of the hash table */
 #define CCID_HASH_SIZE			100
@@ -81,12 +97,19 @@ static ComboCidKey comboCids = NULL;
 static int	usedComboCids = 0;	/* number of elements in comboCids */
 static int	sizeComboCids = 0;	/* allocated size of array */
 
+/*
+ * For the shared memory version of the above, used for parallel queries, see
+ * session.h.
+ */
+
 /* Initial size of the array */
 #define CCID_ARRAY_SIZE			100
 
 
 /* prototypes for internal functions */
 static CommandId GetComboCommandId(CommandId cmin, CommandId cmax);
+static CommandId GetSharedComboCommandId(CommandId cmin, CommandId cmax);
+static CommandId GetLocalComboCommandId(CommandId cmin, CommandId cmax);
 static CommandId GetRealCmin(CommandId combocid);
 static CommandId GetRealCmax(CommandId combocid);
 
@@ -190,6 +213,15 @@ AtEOXact_ComboCid(void)
 	comboCids = NULL;
 	usedComboCids = 0;
 	sizeComboCids = 0;
+
+	/*
+	 * If we're attached a shared registry, the leader marks it empty, but
+	 * we'll keep the memory around for use by future transactions.
+	 */
+	if (!IsParallelWorker() &&
+		CurrentSession &&
+		CurrentSession->shared_combocid_registry)
+		CurrentSession->shared_combocid_registry->used = 0;
 }
 
 
@@ -198,16 +230,15 @@ AtEOXact_ComboCid(void)
 /*
  * Get a combo command id that maps to cmin and cmax.
  *
- * We try to reuse old combo command ids when possible.
+ * We try to reuse old combo command ids when possible, but for now we only
+ * consider combos created by this backend.  Another process in the same
+ * parallel query could generate a distinct different combo command IDs for the
+ * same transaction, but all processes will be able to understand that combo
+ * command ID.
  */
 static CommandId
 GetComboCommandId(CommandId cmin, CommandId cmax)
 {
-	CommandId	combocid;
-	ComboCidKeyData key;
-	ComboCidEntry entry;
-	bool		found;
-
 	/*
 	 * Create the hash table and array the first time we need to use combo
 	 * cids in the transaction.
@@ -233,6 +264,99 @@ GetComboCommandId(CommandId cmin, CommandId cmax)
 								&hash_ctl,
 								HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 	}
+
+	if (CurrentSession->shared_combocid_registry)
+		return GetSharedComboCommandId(cmin, cmax);
+	else
+		return GetLocalComboCommandId(cmin, cmax);
+}
+
+static CommandId
+GetSharedComboCommandId(CommandId cmin, CommandId cmax)
+{
+	CommandId	combocid;
+	ComboCidKeyData key;
+	ComboCidEntry entry;
+	bool		found;
+
+	/* Check if we already have it before taking any locks. */
+	key.cmin = cmin;
+	key.cmax = cmax;
+	entry = (ComboCidEntry) hash_search(comboHash,
+										&key,
+										HASH_ENTER,
+										&found);
+	if (found)
+		return entry->combocid;
+
+	/* We'll create a new one in shared memory. */
+	LWLockAcquire(&CurrentSession->fixed->shared_combocid_lock, LW_EXCLUSIVE);
+
+	/* If the shared memory array is already full, we'll have to expand it. */
+	if (CurrentSession->shared_combocid_registry->used ==
+		CurrentSession->shared_combocid_registry->size)
+	{
+		SharedComboCidRegistry *old_data;
+		SharedComboCidRegistry *new_data;
+		dsa_pointer	new_data_dsa;
+		size_t		new_size;
+
+		/* Double the size of the array. */
+		new_size = CurrentSession->shared_combocid_registry->size * 2;
+		new_data_dsa = dsa_allocate_extended(CurrentSession->area,
+											 offsetof(SharedComboCidRegistry,
+													  combocids) +
+											 sizeof(ComboCidKeyData) *
+											 new_size,
+											 DSA_ALLOC_NO_OOM);
+		if (new_data_dsa == InvalidDsaPointer)
+		{
+			/* Undo the new hash table entry. */
+			hash_search(comboHash, &key, HASH_REMOVE, &found);
+			LWLockRelease(&CurrentSession->fixed->shared_combocid_lock);
+			elog(ERROR, "out of memory");
+		}
+
+		/* Copy the old contents into the new array. */
+		old_data = CurrentSession->shared_combocid_registry;
+		new_data = (SharedComboCidRegistry *)
+			dsa_get_address(CurrentSession->area, new_data_dsa);
+		memcpy(new_data, old_data, offsetof(SharedComboCidRegistry,
+											combocids) +
+											sizeof(ComboCidKeyData) *
+											old_data->used);
+		new_data->size = new_size;
+
+		/* Free the old array. */
+		dsa_free(CurrentSession->area,
+				 CurrentSession->fixed->shared_combocid_registry_dsa);
+
+		/* Advertise the new array for other backends to notice. */
+		CurrentSession->fixed->shared_combocid_registry_dsa = new_data_dsa;
+		CurrentSession->fixed->shared_combocid_change++;
+
+		/* Set our own local pointer so we can access it. */
+		CurrentSession->shared_combocid_registry = new_data;
+	}
+
+	/* Now we can add a new entry. */
+	combocid = CurrentSession->shared_combocid_registry->used++;
+	CurrentSession->shared_combocid_registry->combocids[combocid].cmin = cmin;
+	CurrentSession->shared_combocid_registry->combocids[combocid].cmax = cmax;
+	entry->combocid = combocid;
+
+	LWLockRelease(&CurrentSession->fixed->shared_combocid_lock);
+
+	return combocid;
+}
+
+static CommandId
+GetLocalComboCommandId(CommandId cmin, CommandId cmax)
+{
+	CommandId	combocid;
+	ComboCidKeyData key;
+	ComboCidEntry entry;
+	bool		found;
 
 	/*
 	 * Grow the array if there's not at least one free slot.  We must do this
@@ -276,90 +400,107 @@ GetComboCommandId(CommandId cmin, CommandId cmax)
 	return combocid;
 }
 
+/*
+ * Another backend could have replaced the array in order to expand it.  Make
+ * sure that CurrentSession->shared_combocid_registry points to the current
+ * one.
+ */
+static inline void
+ensure_shared_combocid_registry(void)
+{
+	if (unlikely(CurrentSession->fixed->shared_combocid_change !=
+				 CurrentSession->shared_combocid_change))
+	{
+		CurrentSession->shared_combocid_registry = (SharedComboCidRegistry *)
+			dsa_get_address(CurrentSession->area,
+							CurrentSession->fixed->shared_combocid_registry_dsa);
+		CurrentSession->shared_combocid_change =
+			CurrentSession->fixed->shared_combocid_change;
+	}
+}
+
 static CommandId
 GetRealCmin(CommandId combocid)
 {
-	Assert(combocid < usedComboCids);
-	return comboCids[combocid].cmin;
+	if (CurrentSession->shared_combocid_registry)
+	{
+		CommandId	result;
+
+		LWLockAcquire(&CurrentSession->fixed->shared_combocid_lock, LW_SHARED);
+		ensure_shared_combocid_registry();
+		result = CurrentSession->shared_combocid_registry->combocids[combocid].cmin;
+		LWLockRelease(&CurrentSession->fixed->shared_combocid_lock);
+
+		return result;
+
+	}
+	else
+	{
+		Assert(combocid < usedComboCids);
+		return comboCids[combocid].cmin;
+	}
 }
 
 static CommandId
 GetRealCmax(CommandId combocid)
 {
-	Assert(combocid < usedComboCids);
-	return comboCids[combocid].cmax;
-}
-
-/*
- * Estimate the amount of space required to serialize the current ComboCID
- * state.
- */
-Size
-EstimateComboCIDStateSpace(void)
-{
-	Size		size;
-
-	/* Add space required for saving usedComboCids */
-	size = sizeof(int);
-
-	/* Add space required for saving the combocids key */
-	size = add_size(size, mul_size(sizeof(ComboCidKeyData), usedComboCids));
-
-	return size;
-}
-
-/*
- * Serialize the ComboCID state into the memory, beginning at start_address.
- * maxsize should be at least as large as the value returned by
- * EstimateComboCIDStateSpace.
- */
-void
-SerializeComboCIDState(Size maxsize, char *start_address)
-{
-	char	   *endptr;
-
-	/* First, we store the number of currently-existing ComboCIDs. */
-	*(int *) start_address = usedComboCids;
-
-	/* If maxsize is too small, throw an error. */
-	endptr = start_address + sizeof(int) +
-		(sizeof(ComboCidKeyData) * usedComboCids);
-	if (endptr < start_address || endptr > start_address + maxsize)
-		elog(ERROR, "not enough space to serialize ComboCID state");
-
-	/* Now, copy the actual cmin/cmax pairs. */
-	if (usedComboCids > 0)
-		memcpy(start_address + sizeof(int), comboCids,
-			   (sizeof(ComboCidKeyData) * usedComboCids));
-}
-
-/*
- * Read the ComboCID state at the specified address and initialize this
- * backend with the same ComboCIDs.  This is only valid in a backend that
- * currently has no ComboCIDs (and only makes sense if the transaction state
- * is serialized and restored as well).
- */
-void
-RestoreComboCIDState(char *comboCIDstate)
-{
-	int			num_elements;
-	ComboCidKeyData *keydata;
-	int			i;
-	CommandId	cid;
-
-	Assert(!comboCids && !comboHash);
-
-	/* First, we retrieve the number of ComboCIDs that were serialized. */
-	num_elements = *(int *) comboCIDstate;
-	keydata = (ComboCidKeyData *) (comboCIDstate + sizeof(int));
-
-	/* Use GetComboCommandId to restore each ComboCID. */
-	for (i = 0; i < num_elements; i++)
+	if (CurrentSession->shared_combocid_registry)
 	{
-		cid = GetComboCommandId(keydata[i].cmin, keydata[i].cmax);
+		CommandId	result;
 
-		/* Verify that we got the expected answer. */
-		if (cid != i)
-			elog(ERROR, "unexpected command ID while restoring combo CIDs");
+		LWLockAcquire(&CurrentSession->fixed->shared_combocid_lock, LW_SHARED);
+		ensure_shared_combocid_registry();
+		result = CurrentSession->shared_combocid_registry->combocids[combocid].cmax;
+		LWLockRelease(&CurrentSession->fixed->shared_combocid_lock);
+
+		return result;
 	}
+	else
+	{
+		Assert(combocid < usedComboCids);
+		return comboCids[combocid].cmax;
+	}
+}
+
+void
+SharedComboCidRegistryInit(dsm_segment *seg, dsa_area *area)
+{
+	SharedComboCidRegistry *new_data;
+	dsa_pointer		new_data_dsa;
+
+	/*
+	 * No need to acquire the lock, because during initialization no workers
+	 * are running yet.
+	 */
+
+	new_data_dsa = dsa_allocate(area,
+								offsetof(SharedComboCidRegistry,
+										 combocids) +
+								sizeof(ComboCidKeyData) * sizeComboCids);
+	new_data = (SharedComboCidRegistry *) dsa_get_address(area, new_data_dsa);
+
+	/* Copy all existing combos into shared memory. */
+	new_data->size = sizeComboCids;
+	new_data->used = usedComboCids;
+	memcpy(&new_data->combocids, comboCids,
+		   sizeof(ComboCidKeyData) * usedComboCids);
+
+	/* Advertise the new array for other backends to notice. */
+	CurrentSession->fixed->shared_combocid_registry_dsa = new_data_dsa;
+	CurrentSession->fixed->shared_combocid_change = 1;
+
+	/* Set our own local pointer so we can access it. */
+	CurrentSession->shared_combocid_registry = new_data;
+
+	/* XXX install cleanup callback */
+}
+
+void
+SharedComboCidRegistryAttach(void)
+{
+	LWLockAcquire(&CurrentSession->fixed->shared_combocid_lock, LW_SHARED);
+	ensure_shared_combocid_registry();
+	LWLockRelease(&CurrentSession->fixed->shared_combocid_lock);
+
+	/* XXX install cleanup callback */
 }

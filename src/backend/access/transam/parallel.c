@@ -204,7 +204,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	MemoryContext oldcontext;
 	Size		library_len = 0;
 	Size		guc_len = 0;
-	Size		combocidlen = 0;
 	Size		tsnaplen = 0;
 	Size		asnaplen = 0;
 	Size		tstatelen = 0;
@@ -252,8 +251,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		shm_toc_estimate_chunk(&pcxt->estimator, library_len);
 		guc_len = EstimateGUCStateSpace();
 		shm_toc_estimate_chunk(&pcxt->estimator, guc_len);
-		combocidlen = EstimateComboCIDStateSpace();
-		shm_toc_estimate_chunk(&pcxt->estimator, combocidlen);
 		tsnaplen = EstimateSnapshotSpace(transaction_snapshot);
 		shm_toc_estimate_chunk(&pcxt->estimator, tsnaplen);
 		asnaplen = EstimateSnapshotSpace(active_snapshot);
@@ -338,7 +335,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	{
 		char	   *libraryspace;
 		char	   *gucspace;
-		char	   *combocidspace;
 		char	   *tsnapspace;
 		char	   *asnapspace;
 		char	   *tstatespace;
@@ -360,11 +356,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		gucspace = shm_toc_allocate(pcxt->toc, guc_len);
 		SerializeGUCState(guc_len, gucspace);
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_GUC, gucspace);
-
-		/* Serialize combo CID state. */
-		combocidspace = shm_toc_allocate(pcxt->toc, combocidlen);
-		SerializeComboCIDState(combocidlen, combocidspace);
-		shm_toc_insert(pcxt->toc, PARALLEL_KEY_COMBO_CID, combocidspace);
 
 		/* Serialize transaction snapshot and active snapshot. */
 		tsnapspace = shm_toc_allocate(pcxt->toc, tsnaplen);
@@ -1250,7 +1241,6 @@ ParallelWorkerMain(Datum main_arg)
 	char	   *function_name;
 	parallel_worker_main_type entrypt;
 	char	   *gucspace;
-	char	   *combocidspace;
 	char	   *tsnapspace;
 	char	   *asnapspace;
 	char	   *tstatespace;
@@ -1397,10 +1387,6 @@ ParallelWorkerMain(Datum main_arg)
 	/* Crank up a transaction state appropriate to a parallel worker. */
 	tstatespace = shm_toc_lookup(toc, PARALLEL_KEY_TRANSACTION_STATE, false);
 	StartParallelWorkerTransaction(tstatespace);
-
-	/* Restore combo CID state. */
-	combocidspace = shm_toc_lookup(toc, PARALLEL_KEY_COMBO_CID, false);
-	RestoreComboCIDState(combocidspace);
 
 	/* Attach to the per-session DSM segment and contained objects. */
 	session_dsm_handle_space =

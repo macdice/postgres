@@ -13,9 +13,21 @@
 #define SESSION_H
 
 #include "lib/dshash.h"
+#include "storage/lwlock.h"
 
-/* Avoid including typcache.h */
+struct SharedComboCidLock;
 struct SharedRecordTypmodRegistry;
+
+/*
+ * Part of the session object that is of fixed size in shared memory.
+ */
+typedef struct SessionFixed
+{
+	/* State managed by combocid.c. */
+	LWLock		shared_combocid_lock;
+	dsa_pointer	shared_combocid_registry_dsa;
+	int			shared_combocid_change;
+} SessionFixed;
 
 /*
  * A struct encapsulating some elements of a user's session.  For now this
@@ -26,6 +38,12 @@ typedef struct Session
 {
 	dsm_segment *segment;		/* The session-scoped DSM segment. */
 	dsa_area   *area;			/* The session-scoped DSA area. */
+
+	SessionFixed *fixed;
+
+	/* State managed by combocid.c. */
+	struct SharedComboCidRegistry *shared_combocid_registry;
+	int			shared_combocid_change;
 
 	/* State managed by typcache.c. */
 	struct SharedRecordTypmodRegistry *shared_typmod_registry;

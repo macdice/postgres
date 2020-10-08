@@ -170,6 +170,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"PerSessionRecordType",
 	/* LWTRANCHE_PER_SESSION_RECORD_TYPMOD: */
 	"PerSessionRecordTypmod",
+	/* LWTRANCHE_SHARED_COMBOCID: */
+	"SharedComboCid",
 	/* LWTRANCHE_SHARED_TUPLESTORE: */
 	"SharedTupleStore",
 	/* LWTRANCHE_SHARED_TIDBITMAP: */
