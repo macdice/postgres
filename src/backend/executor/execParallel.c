@@ -176,8 +176,11 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	 */
 	pstmt = makeNode(PlannedStmt);
 	Assert(estate->es_plannedstmt->commandType == CMD_SELECT ||
-			estate->es_plannedstmt->commandType == CMD_INSERT);
-	pstmt->commandType = IsA(plan, ModifyTable) ? CMD_INSERT : CMD_SELECT;
+			estate->es_plannedstmt->commandType == CMD_INSERT ||
+			estate->es_plannedstmt->commandType == CMD_UPDATE ||
+			estate->es_plannedstmt->commandType == CMD_DELETE);
+	//pstmt->commandType = IsA(plan, ModifyTable) ? CMD_INSERT : CMD_SELECT;
+	pstmt->commandType = estate->es_plannedstmt->commandType;
 	pstmt->queryId = UINT64CONST(0);
 	pstmt->hasReturning = estate->es_plannedstmt->hasReturning;
 	pstmt->hasModifyingCTE = estate->es_plannedstmt->hasModifyingCTE;
@@ -1438,8 +1441,13 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 										 true);
 	queryDesc = ExecParallelGetQueryDesc(toc, receiver, instrument_options);
 
-	Assert(queryDesc->operation == CMD_SELECT || queryDesc->operation == CMD_INSERT);
-	if (queryDesc->operation == CMD_INSERT)
+	Assert(queryDesc->operation == CMD_SELECT ||
+		   queryDesc->operation == CMD_INSERT ||
+		   queryDesc->operation == CMD_UPDATE ||
+		   queryDesc->operation == CMD_DELETE);
+	if (queryDesc->operation == CMD_INSERT ||
+		queryDesc->operation == CMD_UPDATE ||
+		queryDesc->operation == CMD_DELETE)
 	{
 		/*
 		 * Record that the CurrentCommandId is used, at the start of

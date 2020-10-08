@@ -790,8 +790,8 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		PreventCommandIfReadOnly(CreateCommandName((Node *) plannedstmt));
 	}
 
-	if (plannedstmt->commandType != CMD_SELECT || plannedstmt->hasModifyingCTE)
-		PreventCommandIfParallelMode(CreateCommandName((Node *) plannedstmt));
+//	if (plannedstmt->commandType != CMD_SELECT || plannedstmt->hasModifyingCTE)
+//		PreventCommandIfParallelMode(CreateCommandName((Node *) plannedstmt));
 }
 
 

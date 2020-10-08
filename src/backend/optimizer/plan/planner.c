@@ -339,7 +339,10 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 */
 	if ((cursorOptions & CURSOR_OPT_PARALLEL_OK) != 0 &&
 		IsUnderPostmaster &&
-		(parse->commandType == CMD_SELECT || parse->commandType == CMD_INSERT) &&
+		(parse->commandType == CMD_SELECT ||
+		 parse->commandType == CMD_INSERT ||
+		 parse->commandType == CMD_UPDATE ||
+		 parse->commandType == CMD_DELETE) &&
 		!parse->hasModifyingCTE &&
 		max_parallel_workers_per_gather > 0 &&
 		!IsParallelWorker())

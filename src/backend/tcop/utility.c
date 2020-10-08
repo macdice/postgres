@@ -425,7 +425,7 @@ void
 PreventCommandIfParallelMode(const char *cmdname)
 {
 	if (IsInParallelMode())
-		ereport(ERROR,
+		ereport(PANIC,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 		/* translator: %s is name of a SQL command, eg CREATE */
 				 errmsg("cannot execute %s during a parallel operation",

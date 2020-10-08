@@ -157,7 +157,10 @@ ExecGather(PlanState *pstate)
 	if (IsA(outerPlanState(pstate), ModifyTableState))
 	{
 		nodeModifyTableState = castNode(ModifyTableState, outerPlanState(pstate));
-		isParallelInsertLeader = nodeModifyTableState->operation == CMD_INSERT;
+		isParallelInsertLeader =
+			(nodeModifyTableState->operation == CMD_INSERT ||
+			 nodeModifyTableState->operation == CMD_UPDATE ||
+			 nodeModifyTableState->operation == CMD_DELETE);
 		isParallelInsertWithReturning = isParallelInsertLeader && nodeModifyTableState->ps.plan->targetlist != NIL;
 	}
 
@@ -188,7 +191,10 @@ ExecGather(PlanState *pstate)
 			 * attempt on INSERT to assign the FullTransactionId whilst in
 			 * parallel mode, we similarly assign the FullTransactionId here.
 			 */
-			if (isParallelInsertLeader || estate->es_plannedstmt->commandType == CMD_INSERT)
+			if (isParallelInsertLeader ||
+				estate->es_plannedstmt->commandType == CMD_INSERT ||
+				estate->es_plannedstmt->commandType == CMD_UPDATE ||
+				estate->es_plannedstmt->commandType == CMD_DELETE)
 			{
 				/*
 				 * Assign FullTransactionId and CurrentCommandId, to be

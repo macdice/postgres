@@ -2929,6 +2929,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 
 	Assert(ItemPointerIsValid(otid));
 
+#if 0
 	/*
 	 * Forbid this during a parallel operation, lest it allocate a combocid.
 	 * Other workers might need that combocid for visibility checks, and we
@@ -2938,6 +2939,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("cannot update tuples during a parallel operation")));
+#endif
 
 	/*
 	 * Fetch the list of attributes to be checked for various operations.
