@@ -1,4 +1,4 @@
-/*-------------------------------------------------------------------------
+/*------------------------------------------------------------------------
  *
  * nodeGatherMerge.c
  *		Scan a plan in multiple workers, and do order-preserving merge.
@@ -209,6 +209,21 @@ ExecGatherMerge(PlanState *pstate)
 		if (gm->num_workers > 0 && estate->es_use_parallel_mode)
 		{
 			ParallelContext *pcxt;
+
+			if (estate->es_plannedstmt->commandType == CMD_INSERT)
+			{
+				/*
+				 * We need to avoid an attempt on INSERT to assign a
+				 * FullTransactionId whilst in parallel mode (which is in
+				 * effect due to the underlying parallel query) - so the
+				 * FullTransactionId is assigned here. Parallel mode must
+				 * be temporarily escaped in order for this to be possible.
+				*/
+				Assert(IsInParallelMode());
+				ExitParallelMode();
+				GetCurrentFullTransactionId();
+				EnterParallelMode();
+			}
 
 			/* Initialize, or re-initialize, shared state needed by workers. */
 			if (!node->pei)

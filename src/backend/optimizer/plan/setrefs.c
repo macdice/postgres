@@ -252,6 +252,7 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 	PlannerGlobal *glob = root->glob;
 	int			rtoffset = list_length(glob->finalrtable);
 	ListCell   *lc;
+	Plan		*finalPlan;
 
 	/*
 	 * Add all the query's RTEs to the flattened rangetable.  The live ones
@@ -302,7 +303,16 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 	}
 
 	/* Now fix the Plan tree */
-	return set_plan_refs(root, plan, rtoffset);
+	finalPlan = set_plan_refs(root, plan, rtoffset);
+	if (finalPlan != NULL && IsA(finalPlan, Gather))
+	{
+		Plan *subplan = outerPlan(finalPlan);
+		if (IsA(subplan, ModifyTable) && castNode(ModifyTable, subplan)->returningLists != NULL)
+		{
+			finalPlan->targetlist = outerPlan(finalPlan)->targetlist;
+		}
+	}
+	return finalPlan;
 }
 
 /*

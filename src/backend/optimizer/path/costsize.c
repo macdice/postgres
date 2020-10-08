@@ -179,6 +179,7 @@ static void set_rel_width(PlannerInfo *root, RelOptInfo *rel);
 static double relation_byte_size(double tuples, int width);
 static double page_size(double tuples, int width);
 static double get_parallel_divisor(Path *path);
+static double get_modifytable_parallel_divisor(ModifyTablePath *path);
 
 
 /*
@@ -201,6 +202,66 @@ clamp_row_est(double nrows)
 	return nrows;
 }
 
+
+/*
+ * cost_modifytable
+ *    Determines and returns the cost of a ModifyTable node.
+ */
+void
+cost_modifytable(ModifyTablePath *path)
+{
+	double      total_size;
+	double      total_rows;
+	ListCell   *lc;
+
+	/*
+	 * Compute cost & rowcount as sum of subpath costs & rowcounts.
+	 */
+	path->path.startup_cost = 0;
+	path->path.total_cost = 0;
+	path->path.rows = 0;
+	total_size = 0;
+	total_rows = 0;
+	foreach(lc, path->subpaths)
+	{
+		Path       *subpath = (Path *) lfirst(lc);
+
+		if (lc == list_head(path->subpaths))  /* first node? */
+			path->path.startup_cost = subpath->startup_cost;
+		path->path.total_cost += subpath->total_cost;
+		total_rows += subpath->rows;
+		total_size += subpath->pathtarget->width * subpath->rows;
+	}
+
+	/* Adjust costing for parallelism, if used. */
+	if (path->path.parallel_workers > 0)
+	{
+		double	parallel_divisor = get_modifytable_parallel_divisor(path);
+
+		/* The total cost is divided among all the workers. */
+		path->path.total_cost /= parallel_divisor;
+
+		/*
+		 * In the case of a parallel plan, the row count needs to represent
+		 * the number of tuples processed per worker.
+		 */
+		path->path.rows = clamp_row_est(total_rows / parallel_divisor);
+	}
+	else
+	{
+		path->path.rows = total_rows;
+	}
+
+	/*
+	 * Set width to the average width of the subpath outputs.  XXX this is
+	 * totally wrong: we should report zero if no RETURNING, else an average
+	 * of the RETURNING tlist widths.  But it's what happened historically,
+	 * and improving it is a task for another day.
+	 */
+	if (total_rows > 0)
+		total_size /= total_rows;
+	path->path.pathtarget->width = rint(total_size);
+}
 
 /*
  * cost_seqscan
@@ -383,7 +444,21 @@ cost_gather(GatherPath *path, PlannerInfo *root,
 
 	/* Parallel setup and communication cost. */
 	startup_cost += parallel_setup_cost;
-	run_cost += parallel_tuple_cost * path->path.rows;
+
+	/*
+	 * For Parallel INSERT, provided no tuples are returned from workers
+	 * to gather/leader node, don't add a cost-per-row, as each worker
+	 * parallelly inserts the tuples that result from its chunk of plan
+	 * execution. This change may make the parallel plan cheap among all
+	 * other plans, and influence the planner to consider this parallel
+	 * plan.
+	 */
+	if (!(IsA(path->subpath, ModifyTablePath) &&
+		castNode(ModifyTablePath, path->subpath)->operation == CMD_INSERT &&
+		castNode(ModifyTablePath, path->subpath)->returningLists != NULL))
+	{
+		run_cost += parallel_tuple_cost * path->path.rows;
+	}
 
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = (startup_cost + run_cost);
@@ -5729,6 +5804,29 @@ get_parallel_divisor(Path *path)
 		double		leader_contribution;
 
 		leader_contribution = 1.0 - (0.3 * path->parallel_workers);
+		if (leader_contribution > 0)
+			parallel_divisor += leader_contribution;
+	}
+
+	return parallel_divisor;
+}
+
+/*
+ * Divisor for ModifyTable (currently only Parallel Insert).
+ * Estimate the fraction of the work that each worker will do given the
+ * number of workers budgeted for the path.
+ * TODO: Needs revising based on further experience.
+ */
+static double
+get_modifytable_parallel_divisor(ModifyTablePath *path)
+{
+	double		parallel_divisor = path->path.parallel_workers;
+
+	if (parallel_leader_participation && path->returningLists != NIL)
+	{
+		double		leader_contribution;
+
+		leader_contribution = 1.0 - (0.3 * path->path.parallel_workers);
 		if (leader_contribution > 0)
 			parallel_divisor += leader_contribution;
 	}

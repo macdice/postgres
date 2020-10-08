@@ -39,6 +39,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/parallel.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
@@ -1734,7 +1735,7 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 /*
  * Process BEFORE EACH STATEMENT triggers
  */
-static void
+void
 fireBSTriggers(ModifyTableState *node)
 {
 	ModifyTable *plan = (ModifyTable *) node->ps.plan;
@@ -1793,7 +1794,7 @@ getTargetResultRelInfo(ModifyTableState *node)
 /*
  * Process AFTER EACH STATEMENT triggers
  */
-static void
+void
 fireASTriggers(ModifyTableState *node)
 {
 	ModifyTable *plan = (ModifyTable *) node->ps.plan;
@@ -2281,7 +2282,11 @@ ExecModifyTable(PlanState *pstate)
 	/*
 	 * We're done, but fire AFTER STATEMENT triggers before exiting.
 	 */
-	fireASTriggers(node);
+	if (node->fireASTriggers)
+	{
+		fireASTriggers(node);
+		node->fireASTriggers = false;
+	}
 
 	node->mt_done = true;
 
@@ -2335,7 +2340,9 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	/* set up epqstate with dummy subplan data for the moment */
 	EvalPlanQualInit(&mtstate->mt_epqstate, estate, NULL, NIL, node->epqParam);
-	mtstate->fireBSTriggers = true;
+	/* Statement-level triggers must not be fired by parallel workers */
+	mtstate->fireBSTriggers = !IsParallelWorker();
+	mtstate->fireASTriggers = !IsParallelWorker();
 
 	/*
 	 * call ExecInitNode on each of the plans to be executed and save the

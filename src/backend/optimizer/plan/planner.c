@@ -28,6 +28,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/trigger.h"
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
 #include "foreign/fdwapi.h"
@@ -58,6 +59,7 @@
 #include "parser/parse_agg.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
+#include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
 #include "storage/dsm_impl.h"
 #include "utils/lsyscache.h"
@@ -337,7 +339,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 */
 	if ((cursorOptions & CURSOR_OPT_PARALLEL_OK) != 0 &&
 		IsUnderPostmaster &&
-		parse->commandType == CMD_SELECT &&
+		(parse->commandType == CMD_SELECT || parse->commandType == CMD_INSERT) &&
 		!parse->hasModifyingCTE &&
 		max_parallel_workers_per_gather > 0 &&
 		!IsParallelWorker())
@@ -371,6 +373,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 * parallel-unsafe, or else the query planner itself has a bug.
 	 */
 	glob->parallelModeNeeded = glob->parallelModeOK &&
+		(parse->commandType == CMD_SELECT) &&
 		(force_parallel_mode != FORCE_PARALLEL_OFF);
 
 	/* Determine what fraction of the plan is likely to be scanned */
@@ -425,7 +428,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 * Optionally add a Gather node for testing purposes, provided this is
 	 * actually a safe thing to do.
 	 */
-	if (force_parallel_mode != FORCE_PARALLEL_OFF && top_plan->parallel_safe)
+	if (force_parallel_mode != FORCE_PARALLEL_OFF && parse->commandType == CMD_SELECT && top_plan->parallel_safe)
 	{
 		Gather	   *gather = makeNode(Gather);
 
@@ -1797,7 +1800,8 @@ inheritance_planner(PlannerInfo *root)
 									 returningLists,
 									 rowMarks,
 									 NULL,
-									 assign_special_exec_param(root)));
+									 assign_special_exec_param(root),
+									 0));
 }
 
 /*--------------------
@@ -1845,6 +1849,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 	RelOptInfo *final_rel;
 	FinalPathExtraData extra;
 	ListCell   *lc;
+	int parallel_insert_partial_path_count = 0;
 
 	/* Tweak caller-supplied tuple_fraction if have LIMIT/OFFSET */
 	if (parse->limitCount || parse->limitOffset)
@@ -2381,11 +2386,100 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 										returningLists,
 										rowMarks,
 										parse->onConflict,
-										assign_special_exec_param(root));
+										assign_special_exec_param(root),
+										0);
 		}
 
 		/* And shove it into final_rel */
 		add_path(final_rel, path);
+	}
+
+	/* Consider Parallel INSERT */
+	if (parse->commandType == CMD_INSERT &&
+		 !inheritance_update &&
+		 final_rel->consider_parallel &&
+		 parse->rowMarks == NIL)
+	{
+		Index		rootRelation;
+		List	   *withCheckOptionLists;
+		List	   *returningLists;
+		int			parallelInsertWorkers;
+
+		/*
+		 * Generate partial paths for the final_rel. Insert all surviving paths, with
+		 * Limit, and/or ModifyTable steps added if needed.
+		 */
+		foreach(lc, current_rel->partial_pathlist)
+		{
+			Path	   *path = (Path *) lfirst(lc);
+
+			/*
+			 * If there is a LIMIT/OFFSET clause, add the LIMIT node.
+			 */
+			if (limit_needed(parse))
+			{
+				path = (Path *) create_limit_path(root, final_rel, path,
+												  parse->limitOffset,
+												  parse->limitCount,
+												  parse->limitOption,
+												  offset_est, count_est);
+			}
+
+			/*
+			 * Add the ModifyTable node.
+			 */
+
+			/*
+			 * If target is a partition root table, we need to mark the
+			 * ModifyTable node appropriately for that.
+			 */
+			if (rt_fetch(parse->resultRelation, parse->rtable)->relkind ==
+				RELKIND_PARTITIONED_TABLE)
+				rootRelation = parse->resultRelation;
+			else
+				rootRelation = 0;
+
+			/*
+			 * Set up the WITH CHECK OPTION and RETURNING lists-of-lists, if
+			 * needed.
+			 */
+			if (parse->withCheckOptions)
+				withCheckOptionLists = list_make1(parse->withCheckOptions);
+			else
+				withCheckOptionLists = NIL;
+
+			if (parse->returningList)
+				returningLists = list_make1(parse->returningList);
+			else
+				returningLists = NIL;
+
+			/*
+			 * For the number of workers to use for a parallel INSERT, it
+			 * seems resonable to use the same number of workers as estimated
+			 * for the underlying query.
+			 */
+			parallelInsertWorkers = path->parallel_workers;
+
+			path = (Path *)
+				create_modifytable_path(root, final_rel,
+										parse->commandType,
+										parse->canSetTag,
+										parse->resultRelation,
+										rootRelation,
+										false,
+										list_make1_int(parse->resultRelation),
+										list_make1(path),
+										list_make1(root),
+										withCheckOptionLists,
+										returningLists,
+										root->rowMarks,
+										parse->onConflict,
+										assign_special_exec_param(root),
+										parallelInsertWorkers);
+
+			add_partial_path(final_rel, path);
+			parallel_insert_partial_path_count++;
+		}
 	}
 
 	/*
@@ -2402,6 +2496,12 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 
 			add_partial_path(final_rel, partial_path);
 		}
+	}
+
+	if (parallel_insert_partial_path_count > 0)
+	{
+		final_rel->rows = current_rel->rows;		/* ??? why hasn't this been set above somewhere ???? */
+		generate_useful_gather_paths(root, final_rel, false);
 	}
 
 	extra.limit_needed = limit_needed(parse);
@@ -7355,6 +7455,163 @@ can_partial_agg(PlannerInfo *root, const AggClauseCosts *agg_costs)
 }
 
 /*
+ * IsTriggerDataParallelInsertSafe
+ *
+ * Checks if the specified trigger data is parallel safe.
+ * Returns false if any one of the triggers are not safe
+ * for parallel insert.
+ */
+static pg_attribute_always_inline bool
+IsTriggerDataParallelInsertSafe(TriggerDesc *trigdesc)
+{
+	int	i;
+
+	/*
+	 * Can't support execution of the following triggers during
+	 * insert by parallel workers:
+	 * - before/after statement trigger
+	 * - before/after row trigger
+	 * - instead of trigger
+	 * - transition table trigger
+	 * Note however that for parallel INSERT, any before/after
+	 * Insert statement triggers are executed in the leader only
+	 * (not the workers), so checks for those types of triggers
+	 * are not included here.
+	 */
+	if (trigdesc != NULL &&
+		 (trigdesc->trig_insert_instead_row ||
+		  trigdesc->trig_insert_before_row ||
+		  trigdesc->trig_insert_after_row ||
+		  trigdesc->trig_insert_new_table))
+	{
+		return false;
+	}
+
+	for (i = 0; i < trigdesc->numtriggers; i++)
+	{
+		Trigger    *trigger = &trigdesc->triggers[i];
+		int 		trigtype;
+
+		if (func_parallel(trigger->tgfoid) != PROPARALLEL_SAFE)
+			return false;
+
+		/* If the trigger type is RI_TRIGGER_FK, this indicates a FK
+		 * exists in the relation, and this is not parallel-safe for
+		 * insert, as it would result in creation of new CommandIds,
+		 * and this isn't supported by parallel workers.
+		 */
+		trigtype = RI_FKey_trigger_type(trigger->tgfoid);
+		if (trigtype == RI_TRIGGER_FK)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * IsParallelInsertSafe
+ *
+ * Determines whether a specified INSERT statement is parallel safe.
+ */
+static bool
+IsParallelInsertSafe(Query *parse)
+{
+	Relation        rel;
+	RangeTblEntry   *rte;
+	TupleDesc		tupdesc;
+	int				attnum;
+
+	/*
+	 * It's not safe to create a parallel Insert plan if
+	 * ON CONFLICT ... DO UPDATE ... has been specified, because
+	 * parallel UPDATE is not supported.
+	 */
+	if (parse->onConflict != NULL && parse->onConflict->action == ONCONFLICT_UPDATE)
+		return false;
+
+	rte = rt_fetch(parse->resultRelation, parse->rtable);
+	rel = table_open(rte->relid, NoLock);
+
+	/*
+	 * We can't support insert by parallel workers on certain table types:
+	 * - foreign table (no FDW API for supporting parallel insert)
+	 * - temporary table (may not be accessible by parallel workers)
+	 */
+	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+		RelationUsesLocalBuffers(rel))
+	{
+		table_close(rel, NoLock);
+		return false;
+	}
+
+	/* If any triggers, check they are parallel safe. */
+	if (rel->trigdesc != NULL &&
+		!IsTriggerDataParallelInsertSafe(rel->trigdesc))
+	{
+		table_close(rel, NoLock);
+		return false;
+	}
+
+	/*
+	 * Check if any of the columns has a non-parallel-safe
+	 * volatile default expression.
+	 */
+	tupdesc = RelationGetDescr(rel);
+	for (attnum = 0; attnum < tupdesc->natts; attnum++)
+	{
+		Expr *defexpr;
+		bool isVolatileExpr;
+
+		Form_pg_attribute att = TupleDescAttr(tupdesc, attnum);
+
+		/* We don't need info for dropped or generated attributes */
+		if (att->attisdropped || att->attgenerated)
+			continue;
+
+		if (att->atthasdef)
+		{
+			defexpr = (Expr *)build_column_default(rel, attnum + 1);
+
+			/* Run the expression through planner */
+			defexpr = expression_planner(defexpr);
+
+			isVolatileExpr = contain_volatile_functions((Node *)defexpr);
+			if (isVolatileExpr &&
+				(max_parallel_hazard((Query *)defexpr)) != PROPARALLEL_SAFE)
+			{
+				table_close(rel, NoLock);
+				return false;
+			}
+		}
+	}
+
+	/*
+	 * Check if there are any CHECK constraints which are not parallel-safe.
+	 */
+	if (tupdesc->constr != NULL && tupdesc->constr->num_check > 0)
+	{
+		int i;
+
+		ConstrCheck *check = tupdesc->constr->check;
+
+		for (i = 0; i < tupdesc->constr->num_check; i++)
+		{
+			Expr *checkExpr = stringToNode(check->ccbin);
+			bool isVolatileExpr = contain_volatile_functions((Node *)checkExpr);
+			if (isVolatileExpr &&
+				(max_parallel_hazard((Query *)checkExpr)) != PROPARALLEL_SAFE)
+			{
+				table_close(rel, NoLock);
+				return false;
+			}
+		}
+	}
+
+	table_close(rel, NoLock);
+	return true;
+}
+
+/*
  * apply_scanjoin_target_to_paths
  *
  * Adjust the final scan/join relation, and recursively all of its children,
@@ -7573,7 +7830,24 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * one of the generated paths may turn out to be the cheapest one.
 	 */
 	if (rel->consider_parallel && !IS_OTHER_REL(rel))
-		generate_useful_gather_paths(root, rel, false);
+	{
+		if (root->parse->commandType == CMD_INSERT)
+		{
+			if (!IsParallelInsertSafe(root->parse))
+			{
+				/*
+				 * Don't allow parallel insert bacause it's not safe, but do
+				 * allow any underlying query to be run by parallel workers.
+				 */
+				generate_useful_gather_paths(root, rel, false);
+				rel->consider_parallel = false;
+			}
+		}
+		else
+		{
+			generate_useful_gather_paths(root, rel, false);
+		}
+	}
 
 	/*
 	 * Reassess which paths are the cheapest, now that we've potentially added

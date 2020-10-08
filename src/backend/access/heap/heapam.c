@@ -2049,11 +2049,6 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 	 * inserts in general except for the cases where inserts generate a new
 	 * CommandId (eg. inserts into a table having a foreign key column).
 	 */
-	if (IsParallelWorker())
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
-				 errmsg("cannot insert tuples in a parallel worker")));
-
 	tup->t_data->t_infomask &= ~(HEAP_XACT_MASK);
 	tup->t_data->t_infomask2 &= ~(HEAP2_XACT_MASK);
 	tup->t_data->t_infomask |= HEAP_XMAX_INVALID;

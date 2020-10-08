@@ -35,6 +35,7 @@
 #include "executor/execdebug.h"
 #include "executor/execParallel.h"
 #include "executor/nodeGather.h"
+#include "executor/nodeModifyTable.h"
 #include "executor/nodeSubplan.h"
 #include "executor/tqueue.h"
 #include "miscadmin.h"
@@ -60,6 +61,7 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	GatherState *gatherstate;
 	Plan	   *outerNode;
 	TupleDesc	tupDesc;
+	Index		varno;
 
 	/* Gather node doesn't have innerPlan node. */
 	Assert(innerPlan(node) == NULL);
@@ -104,7 +106,9 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	 * Initialize result type and projection.
 	 */
 	ExecInitResultTypeTL(&gatherstate->ps);
-	ExecConditionalAssignProjectionInfo(&gatherstate->ps, tupDesc, OUTER_VAR);
+	varno = (IsA(outerNode, ModifyTable) && castNode(ModifyTable, outerNode)->returningLists != NULL) ?
+					castNode(ModifyTableState, outerPlanState(gatherstate))->resultRelInfo->ri_RangeTableIndex : OUTER_VAR;
+	ExecConditionalAssignProjectionInfo(&gatherstate->ps, tupDesc, varno);
 
 	/*
 	 * Without projections result slot type is not trivially known, see
@@ -144,8 +148,18 @@ ExecGather(PlanState *pstate)
 	GatherState *node = castNode(GatherState, pstate);
 	TupleTableSlot *slot;
 	ExprContext *econtext;
+	ModifyTableState *nodeModifyTableState = NULL;
+	bool isParallelInsertLeader = false;
+	bool isParallelInsertWithReturning = false;
 
 	CHECK_FOR_INTERRUPTS();
+
+	if (IsA(outerPlanState(pstate), ModifyTableState))
+	{
+		nodeModifyTableState = castNode(ModifyTableState, outerPlanState(pstate));
+		isParallelInsertLeader = nodeModifyTableState->operation == CMD_INSERT;
+		isParallelInsertWithReturning = isParallelInsertLeader && nodeModifyTableState->ps.plan->targetlist != NIL;
+	}
 
 	/*
 	 * Initialize the parallel context and workers on first execution. We do
@@ -166,6 +180,28 @@ ExecGather(PlanState *pstate)
 		{
 			ParallelContext *pcxt;
 
+			/* For parallel INSERT, assign FullTransactionId and CurrentCommandId,
+			 * to be included in the transaction state that is serialized in the
+			 * parallel DSM. We need to temporarily escape parallel mode in order
+			 * for this to be possible.
+			 * For parallel SELECT (as part of non-parallel INSERT), to avoid an
+			 * attempt on INSERT to assign the FullTransactionId whilst in
+			 * parallel mode, we similarly assign the FullTransactionId here.
+			 */
+			if (isParallelInsertLeader || estate->es_plannedstmt->commandType == CMD_INSERT)
+			{
+				/*
+				 * Assign FullTransactionId and CurrentCommandId, to be
+				 * included in the transaction state that is serialized in the DSM.
+				 */
+				if (isParallelInsertLeader)
+					GetCurrentCommandId(true);
+				Assert(IsInParallelMode());
+				ExitParallelMode();
+				GetCurrentFullTransactionId();
+				EnterParallelMode();
+			}
+
 			/* Initialize, or re-initialize, shared state needed by workers. */
 			if (!node->pei)
 				node->pei = ExecInitParallelPlan(node->ps.lefttree,
@@ -178,6 +214,25 @@ ExecGather(PlanState *pstate)
 										 node->pei,
 										 gather->initParam);
 
+			if (isParallelInsertLeader)
+			{
+				/* For Parallel INSERT, if there are BEFORE STATEMENT triggers,
+				 * these must be fired by the leader, not the parallel workers.
+				 */
+				if (nodeModifyTableState->fireBSTriggers)
+				{
+					fireBSTriggers(nodeModifyTableState);
+					nodeModifyTableState->fireBSTriggers = false;
+
+					/*
+					 * Disable firing of AFTER STATEMENT triggers by local
+					 * plan execution (ModifyTable processing). These will be
+					 * fired at end of Gather processing.
+					*/
+					nodeModifyTableState->fireASTriggers = false;
+				}
+			}
+
 			/*
 			 * Register backend workers. We might not get as many as we
 			 * requested, or indeed any at all.
@@ -188,7 +243,7 @@ ExecGather(PlanState *pstate)
 			node->nworkers_launched = pcxt->nworkers_launched;
 
 			/* Set up tuple queue readers to read the results. */
-			if (pcxt->nworkers_launched > 0)
+			if (pcxt->nworkers_launched > 0 && !(isParallelInsertLeader && !isParallelInsertWithReturning))
 			{
 				ExecParallelCreateReaders(node->pei);
 				/* Make a working array showing the active readers */
@@ -200,7 +255,10 @@ ExecGather(PlanState *pstate)
 			}
 			else
 			{
-				/* No workers?	Then never mind. */
+				/*
+				 * No workers were launched, or this is a parallel INSERT
+				 * without a RETURNING clause - no readers are required.
+				 */
 				node->nreaders = 0;
 				node->reader = NULL;
 			}
@@ -208,7 +266,7 @@ ExecGather(PlanState *pstate)
 		}
 
 		/* Run plan locally if no workers or enabled and not single-copy. */
-		node->need_to_scan_locally = (node->nreaders == 0)
+		node->need_to_scan_locally = (node->nworkers_launched <= 0)
 			|| (!gather->single_copy && parallel_leader_participation);
 		node->initialized = true;
 	}
@@ -418,14 +476,25 @@ ExecShutdownGatherWorkers(GatherState *node)
 void
 ExecShutdownGather(GatherState *node)
 {
+	if (node->pei == NULL)
+		return;
+
+	bool isParallelInsertLeader = IsA(outerPlanState(node), ModifyTableState) &&
+									castNode(ModifyTableState, outerPlanState(node))->operation == CMD_INSERT;
+	if (isParallelInsertLeader)
+	{
+		/* For Parallel INSERT, if there are AFTER STATEMENT triggers, these must be
+		 * fired by the leader, not the parallel workers.
+		 */
+		ModifyTableState *nodeMTS = castNode(ModifyTableState, outerPlanState(node));
+		fireASTriggers(nodeMTS);
+	}
+
 	ExecShutdownGatherWorkers(node);
 
 	/* Now destroy the parallel context. */
-	if (node->pei != NULL)
-	{
-		ExecParallelCleanup(node->pei);
-		node->pei = NULL;
-	}
+	ExecParallelCleanup(node->pei);
+	node->pei = NULL;
 }
 
 /* ----------------------------------------------------------------

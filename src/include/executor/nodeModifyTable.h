@@ -20,5 +20,6 @@ extern void ExecComputeStoredGenerated(EState *estate, TupleTableSlot *slot, Cmd
 extern ModifyTableState *ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags);
 extern void ExecEndModifyTable(ModifyTableState *node);
 extern void ExecReScanModifyTable(ModifyTableState *node);
-
+extern void fireBSTriggers(ModifyTableState *node);
+extern void fireASTriggers(ModifyTableState *node);
 #endif							/* NODEMODIFYTABLE_H */

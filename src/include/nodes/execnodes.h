@@ -1163,7 +1163,8 @@ typedef struct ModifyTableState
 										 * table root) */
 	List	  **mt_arowmarks;	/* per-subplan ExecAuxRowMark lists */
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
-	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
+	bool		fireBSTriggers; /* do we need to fire before stmt triggers? */
+	bool		fireASTriggers; /* do we need to fire after stmt triggers? */
 
 	/*
 	 * Slot for storing tuples in the root partitioned table's rowtype during
