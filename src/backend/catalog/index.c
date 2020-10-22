@@ -1142,7 +1142,7 @@ index_create(Relation heapRelation,
 				Assert(i < indexTupDesc->natts);
 
 				colls = list_concat(colls,
-									GetTypeCollations(att->atttypid, false));
+									GetTypeCollations(att->atttypid));
 			}
 		}
 

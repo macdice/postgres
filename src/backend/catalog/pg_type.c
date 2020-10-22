@@ -513,9 +513,11 @@ TypeCreate(Oid newTypeOid,
 	return address;
 }
 
-/* Get a list of all distinct collations oid that the given type depends on. */
+/*
+ * Get a list of all distinct collations oid that the given type depends on.
+ */
 List *
-GetTypeCollations(Oid typeoid, bool non_deterministic_only)
+GetTypeCollations(Oid typeoid)
 {
 	List	   *result = NIL;
 	HeapTuple	tuple;
@@ -527,11 +529,7 @@ GetTypeCollations(Oid typeoid, bool non_deterministic_only)
 	typeTup = (Form_pg_type) GETSTRUCT(tuple);
 
 	if (OidIsValid(typeTup->typcollation))
-	{
-		if (!non_deterministic_only ||
-			!get_collation_isdeterministic(typeTup->typcollation))
-			result = list_append_unique_oid(result, typeTup->typcollation);
-	}
+		result = list_append_unique_oid(result, typeTup->typcollation);
 	else if (typeTup->typtype == TYPTYPE_COMPOSITE)
 	{
 		Relation	rel = relation_open(typeTup->typrelid, AccessShareLock);
@@ -542,15 +540,10 @@ GetTypeCollations(Oid typeoid, bool non_deterministic_only)
 			Form_pg_attribute att = TupleDescAttr(desc, i);
 
 			if (OidIsValid(att->attcollation))
-			{
-				if (!non_deterministic_only ||
-					!get_collation_isdeterministic(att->attcollation))
-					result = list_append_unique_oid(result, att->attcollation);
-			}
+				result = list_append_unique_oid(result, att->attcollation);
 			else
 				result = list_concat_unique_oid(result,
-												GetTypeCollations(att->atttypid,
-																  non_deterministic_only));
+												GetTypeCollations(att->atttypid));
 		}
 
 		relation_close(rel, NoLock);
@@ -560,8 +553,7 @@ GetTypeCollations(Oid typeoid, bool non_deterministic_only)
 		Assert(OidIsValid(typeTup->typbasetype));
 
 		result = list_concat_unique_oid(result,
-										GetTypeCollations(typeTup->typbasetype,
-														  non_deterministic_only));
+										GetTypeCollations(typeTup->typbasetype));
 	}
 	else if (typeTup->typtype == TYPTYPE_RANGE)
 	{
@@ -569,12 +561,11 @@ GetTypeCollations(Oid typeoid, bool non_deterministic_only)
 
 		Assert(OidIsValid(rangeid));
 
-		result = list_concat_unique_oid(result,
-										GetTypeCollations(rangeid, non_deterministic_only));
+		result = list_concat_unique_oid(result, GetTypeCollations(rangeid));
 	}
 	else if (OidIsValid(typeTup->typelem))
 		result = list_concat_unique_oid(result,
-										GetTypeCollations(typeTup->typelem, non_deterministic_only));
+										GetTypeCollations(typeTup->typelem));
 
 	ReleaseSysCache(tuple);
 

@@ -1908,21 +1908,19 @@ find_expr_references_walker(Node *node,
 			{
 				/* type's collation if valid */
 				if (OidIsValid(var->varcollid))
-				{
 					add_object_address(OCLASS_COLLATION, var->varcollid, 0,
 									   context->addrs);
-				}
 
 				/*
-				 * otherwise, it may be a composite type having underlying
-				 * collations
+				 * Otherwise, it may be a composite type having underlying
+				 * collations.
 				 */
 				else if (var->vartype >= FirstNormalObjectId)
 				{
-					List	   *collations = NIL;
+					List	   *collations;
 					ListCell   *lc;
 
-					collations = GetTypeCollations(var->vartype, false);
+					collations = GetTypeCollations(var->vartype);
 
 					foreach(lc, collations)
 					{
