@@ -54,6 +54,7 @@
 #include "postmaster/postmaster.h"
 #include "replication/slot.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/backendid.h"
 #include "storage/dsm.h"
 #include "storage/fd.h"
@@ -110,13 +111,12 @@
 /* ----------
  * Total number of backends including auxiliary
  *
- * We reserve a slot for each possible BackendId, plus one for each
- * possible auxiliary process type.  (This scheme assumes there is not
- * more than one of any auxiliary process type at a time.) MaxBackends
- * includes autovacuum workers and background workers as well.
+ * We reserve a slot for each possible BackendId, plus one for each possible
+ * auxiliary process type, except for AIO workers that get a plurality.
+ * MaxBackends includes autovacuum workers and background workers as well.
  * ----------
  */
-#define NumBackendStatSlots (MaxBackends + NUM_AUXPROCTYPES)
+#define NumBackendStatSlots (MaxBackends + MAX_AIO_WORKERS + NUM_AUXPROCTYPES)
 
 
 /* ----------
@@ -3110,11 +3110,13 @@ pgstat_initialize(void)
 		 * Assign the MyBEEntry for an auxiliary process.  Since it doesn't
 		 * have a BackendId, the slot is statically allocated based on the
 		 * auxiliary process type (MyAuxProcType).  Backends use slots indexed
-		 * in the range from 1 to MaxBackends (inclusive), so we use
-		 * MaxBackends + AuxBackendType + 1 as the index of the slot for an
-		 * auxiliary process.
+		 * in the range from 1 to MaxBackends (inclusive), so we use slots
+		 * beyond that.
 		 */
-		MyBEEntry = &BackendStatusArray[MaxBackends + MyAuxProcType];
+		if (AmAioWorkerProcess())
+			MyBEEntry = &BackendStatusArray[MaxBackends + MyAioWorkerId];
+		else
+			MyBEEntry = &BackendStatusArray[MaxBackends + MAX_AIO_WORKERS + MyAuxProcType];
 	}
 
 	/*
@@ -3895,6 +3897,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 
 	switch (w)
 	{
+		case WAIT_EVENT_AIO_WORKER_MAIN:
+			event_name = "AioWorkerMain";
+			break;
 		case WAIT_EVENT_ARCHIVER_MAIN:
 			event_name = "ArchiverMain";
 			break;
@@ -4388,8 +4393,14 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN:
 			event_name = "WALSyncMethodAssign";
 			break;
+		case WAIT_EVENT_WAL_WAIT_FLUSH:
+			event_name = "WALWaitFlush";
+			break;
 		case WAIT_EVENT_WAL_WAIT_INSERT:
 			event_name = "WALWaitInsert";
+			break;
+		case WAIT_EVENT_WAL_WAIT_WRITE:
+			event_name = "WALWaitWrite";
 			break;
 		case WAIT_EVENT_WAL_WRITE:
 			event_name = "WALWrite";
@@ -4405,6 +4416,21 @@ pgstat_get_wait_io(WaitEventIO w)
 			break;
 		case WAIT_EVENT_LOGICAL_SUBXACT_WRITE:
 			event_name = "LogicalSubxactWrite";
+			break;
+		case WAIT_EVENT_AIO_SUBMIT:
+			event_name = "AIOSubmit";
+			break;
+		case WAIT_EVENT_AIO_IO_COMPLETE_ANY:
+			event_name = "AIOCompleteAny";
+			break;
+		case WAIT_EVENT_AIO_IO_COMPLETE_ONE:
+			event_name = "AIOCompleteOne";
+			break;
+		case WAIT_EVENT_AIO_REFS:
+			event_name = "AIORefs";
+			break;
+		case WAIT_EVENT_AIO_BACKPRESSURE:
+			event_name = "AIOBackpressure";
 			break;
 
 			/* no default case, so that compiler will warn */

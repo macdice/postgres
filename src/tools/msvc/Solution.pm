@@ -483,6 +483,7 @@ sub GenerateFiles
 		USE_BONJOUR         => undef,
 		USE_BSD_AUTH        => undef,
 		USE_ICU => $self->{options}->{icu} ? 1 : undef,
+		USE_LIBURING               => undef,
 		USE_LIBXML                 => undef,
 		USE_LIBXSLT                => undef,
 		USE_LDAP                   => $self->{options}->{ldap} ? 1 : undef,

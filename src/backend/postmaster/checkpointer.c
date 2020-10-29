@@ -47,6 +47,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/interrupt.h"
 #include "replication/syncrep.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
@@ -707,12 +708,19 @@ CheckpointWriteDelay(int flags, double progress)
 		pgstat_send_bgwriter();
 
 		/*
+		 * Ensure all pending IO is submitted to avoid unnecessary delays
+		 * for other processes.
+		 */
+		pgaio_submit_pending(true);
+
+		/*
 		 * This sleep used to be connected to bgwriter_delay, typically 200ms.
 		 * That resulted in more frequent wakeups if not much work to do.
 		 * Checkpointer and bgwriter are no longer related so take the Big
 		 * Sleep.
 		 */
-		pg_usleep(100000L);
+		if (IsCheckpointOnSchedule(progress))
+			pg_usleep(100000L);
 	}
 	else if (--absorb_counter <= 0)
 	{

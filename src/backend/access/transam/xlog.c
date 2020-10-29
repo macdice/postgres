@@ -59,6 +59,7 @@
 #include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -2447,6 +2448,17 @@ XLogCheckpointNeeded(XLogSegNo new_segno)
 	return false;
 }
 
+
+void
+XLogWriteComplete(PgAioInProgress *aio, uint32 write_no)
+{
+}
+
+void
+XLogFlushComplete(struct PgAioInProgress *aio, uint32 flush_no)
+{
+}
+
 /*
  * Write and/or fsync the log at least as far as WriteRqst indicates.
  *
@@ -3280,6 +3292,11 @@ XLogNeedsFlush(XLogRecPtr record)
 	return true;
 }
 
+static void
+XLogFileInitComplete(void *pgsw_private, void *write_private)
+{
+}
+
 /*
  * Create a new XLOG file segment, or open a pre-existing one.
  *
@@ -3310,6 +3327,7 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	XLogSegNo	max_segno;
 	int			fd;
 	int			save_errno;
+	int			open_flags = O_RDWR | O_CREAT | O_EXCL | PG_BINARY;
 
 	XLogFilePath(path, ThisTimeLineID, logsegno, wal_segment_size);
 
@@ -3342,8 +3360,11 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 
 	unlink(tmppath);
 
+	if (io_wal_init_direct)
+		open_flags |= PG_O_DIRECT;
+
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
-	fd = BasicOpenFile(tmppath, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	fd = BasicOpenFile(tmppath, open_flags);
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -3926,7 +3947,7 @@ XLogFileClose(void)
 	 * use the cache to read the WAL segment.
 	 */
 #if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_DONTNEED)
-	if (!XLogIsNeeded())
+	if (!XLogIsNeeded() && !io_wal_direct)
 		(void) posix_fadvise(openLogFile, 0, 0, POSIX_FADV_DONTNEED);
 #endif
 
@@ -10489,10 +10510,17 @@ get_sync_bit(int method)
 {
 	int			o_direct_flag = 0;
 
+	/* make O_DIRECT setting only depend on GUC */
+	if (io_wal_direct)
+		o_direct_flag |= PG_O_DIRECT;
+
+#if 0
 	/* If fsync is disabled, never open in sync mode */
 	if (!enableFsync)
 		return 0;
+#endif
 
+#if 0
 	/*
 	 * Optimize writes by bypassing kernel cache with O_DIRECT when using
 	 * O_SYNC/O_FSYNC and O_DSYNC.  But only if archiving and streaming are
@@ -10501,14 +10529,19 @@ get_sync_bit(int method)
 	 * read if we bypassed the kernel cache. We also skip the
 	 * posix_fadvise(POSIX_FADV_DONTNEED) call in XLogFileClose() for the same
 	 * reason.
-	 *
+	 */
+	if (!XLogIsNeeded())
+		o_direct_flag = PG_O_DIRECT;
+#endif
+
+	/*
 	 * Never use O_DIRECT in walreceiver process for similar reasons; the WAL
 	 * written by walreceiver is normally read by the startup process soon
 	 * after it's written. Also, walreceiver performs unaligned writes, which
 	 * don't work with O_DIRECT, so it is required for correctness too.
 	 */
-	if (!XLogIsNeeded() && !AmWalReceiverProcess())
-		o_direct_flag = PG_O_DIRECT;
+	if (AmWalReceiverProcess())
+		return 0;
 
 	switch (method)
 	{
@@ -10521,7 +10554,7 @@ get_sync_bit(int method)
 		case SYNC_METHOD_FSYNC:
 		case SYNC_METHOD_FSYNC_WRITETHROUGH:
 		case SYNC_METHOD_FDATASYNC:
-			return 0;
+			return o_direct_flag;
 #ifdef OPEN_SYNC_FLAG
 		case SYNC_METHOD_OPEN:
 			return OPEN_SYNC_FLAG | o_direct_flag;

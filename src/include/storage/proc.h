@@ -372,7 +372,8 @@ extern PGPROC *PreparedXactProcs;
  * Startup process and WAL receiver also consume 2 slots, but WAL writer is
  * launched only after startup has exited, so we only need 4 slots.
  */
-#define NUM_AUXILIARY_PROCS		4
+#define MAX_AIO_WORKERS			32
+#define NUM_AUXILIARY_PROCS		4 + MAX_AIO_WORKERS
 
 /* configurable options */
 extern PGDLLIMPORT int DeadlockTimeout;

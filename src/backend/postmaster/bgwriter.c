@@ -97,6 +97,7 @@ BackgroundWriterMain(void)
 	MemoryContext bgwriter_context;
 	bool		prev_hibernate;
 	WritebackContext wb_context;
+	pg_streaming_write *pgsw;
 
 	/*
 	 * Properly accept or ignore signals that might be sent to us.
@@ -133,6 +134,8 @@ BackgroundWriterMain(void)
 	MemoryContextSwitchTo(bgwriter_context);
 
 	WritebackContextInit(&wb_context, &bgwriter_flush_after);
+
+	pgsw = pg_streaming_write_alloc(128, &wb_context);
 
 	/*
 	 * If an exception is encountered, processing resumes here.
@@ -236,12 +239,24 @@ BackgroundWriterMain(void)
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
 
+		/*
+		 * XXX: Before exiting, wait for all IO to finish. That's only
+		 * important to avoid spurious PrintBufferLeakWarning() calls,
+		 * triggered by ReleaseAuxProcessResources() being called with
+		 * isCommit=true.
+		 *
+		 * FIXME: this is theoretically racy, but I didn't want to copy
+		 * HandleMainLoopInterrupts() remaining body here.
+		 */
+		if (ShutdownRequestPending)
+			pg_streaming_write_wait_all(pgsw);
+
 		HandleMainLoopInterrupts();
 
 		/*
 		 * Do one cycle of dirty-buffer writing.
 		 */
-		can_hibernate = BgBufferSync(&wb_context);
+		can_hibernate = BgBufferSync(pgsw, &wb_context);
 
 		/*
 		 * Send off activity statistics to the stats collector
@@ -337,6 +352,9 @@ BackgroundWriterMain(void)
 		{
 			/* Ask for notification at next buffer allocation */
 			StrategyNotifyBgWriter(MyProc->pgprocno);
+
+			pg_streaming_write_wait_all(pgsw);
+
 			/* Sleep ... */
 			(void) WaitLatch(MyLatch,
 							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
