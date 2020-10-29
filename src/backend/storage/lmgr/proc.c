@@ -44,6 +44,7 @@
 #include "replication/slot.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/condition_variable.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
@@ -463,6 +464,8 @@ InitProcess(void)
 	 */
 	InitLWLockAccess();
 	InitDeadLockChecking();
+
+	pgaio_postmaster_child_init();
 }
 
 /*
@@ -600,6 +603,8 @@ InitAuxiliaryProcess(void)
 	/* Check that group locking fields are in a proper initial state. */
 	Assert(MyProc->lockGroupLeader == NULL);
 	Assert(dlist_is_empty(&MyProc->lockGroupMembers));
+
+	pgaio_postmaster_child_init();
 
 	/*
 	 * We might be reusing a semaphore that belonged to a failed process. So

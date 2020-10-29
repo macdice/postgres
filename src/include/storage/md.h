@@ -28,10 +28,18 @@ extern bool mdexists(SMgrRelation reln, ForkNumber forknum);
 extern void mdunlink(RelFileNodeBackend rnode, ForkNumber forknum, bool isRedo);
 extern void mdextend(SMgrRelation reln, ForkNumber forknum,
 					 BlockNumber blocknum, char *buffer, bool skipFsync);
+extern BlockNumber mdzeroextend(SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool mdprefetch(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber blocknum);
 extern void mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 				   char *buffer);
+extern void mdstartread(struct PgAioInProgress *,
+						SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+						char *buffer, int bufno, int mode);
+extern void mdstartwrite(struct PgAioInProgress *,
+						 SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+						 char *buffer, int bufno, bool skipFsync);
 extern void mdwrite(SMgrRelation reln, ForkNumber forknum,
 					BlockNumber blocknum, char *buffer, bool skipFsync);
 extern void mdwriteback(SMgrRelation reln, ForkNumber forknum,
@@ -40,6 +48,7 @@ extern BlockNumber mdnblocks(SMgrRelation reln, ForkNumber forknum);
 extern void mdtruncate(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber nblocks);
 extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern int mdfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off);
 
 extern void ForgetDatabaseSyncRequests(Oid dbid);
 extern void DropRelationFiles(RelFileNode *delrels, int ndelrels, bool isRedo);

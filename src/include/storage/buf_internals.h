@@ -185,7 +185,7 @@ typedef struct BufferDesc
 
 	int			wait_backend_pid;	/* backend PID of pin-count waiter */
 	int			freeNext;		/* link in freelist chain */
-
+	struct PgAioInProgress *io_in_progress; // FIXME, should just be an integer
 	LWLock		content_lock;	/* to lock access to buffer contents */
 } BufferDesc;
 
@@ -304,6 +304,10 @@ extern CkptSortItem *CkptBufferIds;
 extern void WritebackContextInit(WritebackContext *context, int *max_pending);
 extern void IssuePendingWritebacks(WritebackContext *context);
 extern void ScheduleBufferTagForWriteback(WritebackContext *context, BufferTag *tag);
+
+extern void ReadBufferCompleteRead(Buffer buffer, int mode, bool failed);
+extern void ReadBufferCompleteWrite(Buffer buffer, bool failed);
+
 
 /* freelist.c */
 extern BufferDesc *StrategyGetBuffer(BufferAccessStrategy strategy,

@@ -50,10 +50,20 @@ typedef struct f_smgr
 								bool isRedo);
 	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
 								BlockNumber blocknum, char *buffer, bool skipFsync);
+	BlockNumber	(*smgr_zeroextend) (SMgrRelation reln, ForkNumber forknum,
+									BlockNumber blocknum, int nblocks, bool skipFsync);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber blocknum);
 	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
 							  BlockNumber blocknum, char *buffer);
+	void		(*smgr_startread) (struct PgAioInProgress *io ,
+								   SMgrRelation reln, ForkNumber forknum,
+								   BlockNumber blocknum, char *buffer,
+								   int bufno, int mode);
+	void		(*smgr_startwrite) (struct PgAioInProgress *io,
+									SMgrRelation reln, ForkNumber forknum,
+									BlockNumber blocknum, char *buffer,
+									int bufno, bool skipFsync);
 	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
 							   BlockNumber blocknum, char *buffer, bool skipFsync);
 	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
@@ -62,6 +72,7 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	int			(*smgr_fd) (SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off);
 } f_smgr;
 
 static const f_smgr smgrsw[] = {
@@ -75,13 +86,17 @@ static const f_smgr smgrsw[] = {
 		.smgr_exists = mdexists,
 		.smgr_unlink = mdunlink,
 		.smgr_extend = mdextend,
+		.smgr_zeroextend = mdzeroextend,
 		.smgr_prefetch = mdprefetch,
 		.smgr_read = mdread,
+		.smgr_startread = mdstartread,
 		.smgr_write = mdwrite,
+		.smgr_startwrite = mdstartwrite,
 		.smgr_writeback = mdwriteback,
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+		.smgr_fd = mdfd,
 	}
 };
 
@@ -477,6 +492,14 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
 }
 
+BlockNumber
+smgrzeroextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			   int nblocks, bool skipFsync)
+{
+	return smgrsw[reln->smgr_which].smgr_zeroextend(reln, forknum, blocknum,
+													nblocks, skipFsync);
+}
+
 /*
  *	smgrprefetch() -- Initiate asynchronous read of the specified block of a relation.
  *
@@ -505,6 +528,13 @@ smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
 }
 
+void
+smgrstartread(struct PgAioInProgress *io, SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			  char *buffer, int bufno, int mode)
+{
+	return smgrsw[reln->smgr_which].smgr_startread(io, reln, forknum, blocknum, buffer, bufno, mode);
+}
+
 /*
  *	smgrwrite() -- Write the supplied buffer out.
  *
@@ -526,6 +556,16 @@ smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	smgrsw[reln->smgr_which].smgr_write(reln, forknum, blocknum,
 										buffer, skipFsync);
+}
+
+void
+smgrstartwrite(struct PgAioInProgress *io,
+			   SMgrRelation reln, ForkNumber forknum,
+			   BlockNumber blocknum, char *buffer,
+			   int bufno, bool skipFsync)
+{
+	smgrsw[reln->smgr_which].smgr_startwrite(io, reln, forknum, blocknum,
+											 buffer, bufno, skipFsync);
 }
 
 
@@ -643,6 +683,12 @@ void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
+}
+
+int
+smgrfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
+{
+	return smgrsw[reln->smgr_which].smgr_fd(reln, forknum, blocknum, off);
 }
 
 /*

@@ -93,6 +93,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "portability/mem.h"
+#include "storage/aio.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
@@ -468,6 +469,15 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 	 * We compile all alternatives that are supported on the current platform,
 	 * to find portability problems more easily.
 	 */
+#if USE_LIBURING
+	{
+		PgAioInProgress *aio = pgaio_io_get();
+
+		pgaio_io_start_flush_range(aio, fd, offset, nbytes);
+		pgaio_io_release(aio);
+		return;
+	}
+#endif
 #if defined(HAVE_SYNC_FILE_RANGE)
 	{
 		int			rc;
@@ -1040,7 +1050,11 @@ tryAgain:
 	fd = open(fileName, fileFlags, fileMode);
 
 	if (fd >= 0)
+	{
+		//elog(DEBUG1, "opening file %s fd %d", fileName, fd);
+
 		return fd;				/* success! */
+	}
 
 	if (errno == EMFILE || errno == ENFILE)
 	{
@@ -1183,6 +1197,8 @@ LruDelete(File file)
 			   file, VfdCache[file].fileName));
 
 	vfdP = &VfdCache[file];
+
+	pgaio_submit_pending(false);
 
 	/*
 	 * Close the file.  We aren't expecting this to fail; if it does, better
@@ -1863,6 +1879,8 @@ FileClose(File file)
 
 	if (!FileIsNotOpen(file))
 	{
+		pgaio_submit_pending(false);
+
 		/* close the file */
 		if (close(vfdP->fd) != 0)
 		{
@@ -1991,6 +2009,10 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	if (nbytes <= 0)
 		return;
 
+	/* no point */
+	if (VfdCache[file].fileFlags & O_DIRECT)
+		return;
+
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return;
@@ -2054,6 +2076,30 @@ retry:
 	}
 
 	return returnCode;
+}
+
+bool
+FileStartRead(struct PgAioInProgress *io, File file, char *buffer, int amount, off_t offset, const AioBufferTag *tag, int bufid, int mode)
+{
+	int			returnCode;
+	Vfd		   *vfdP;
+
+	Assert(FileIsValid(file));
+
+	DO_DB(elog(LOG, "FileStartRead: %d (%s) " INT64_FORMAT " %d %p",
+			   file, VfdCache[file].fileName,
+			   (int64) offset,
+			   amount, buffer));
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return false;
+
+	vfdP = &VfdCache[file];
+
+	pgaio_io_start_read_buffer(io, tag, vfdP->fd, offset, amount, buffer, bufid, mode);
+
+	return true;
 }
 
 int
@@ -2154,6 +2200,30 @@ retry:
 	return returnCode;
 }
 
+bool
+FileStartWrite(struct PgAioInProgress *io, File file, char *buffer, int amount, off_t offset, const AioBufferTag *tag, int bufid)
+{
+	int			returnCode;
+	Vfd		   *vfdP;
+
+	Assert(FileIsValid(file));
+
+	DO_DB(elog(LOG, "FileStartWrite: %d (%s) " INT64_FORMAT " %d %p",
+			   file, VfdCache[file].fileName,
+			   (int64) offset,
+			   amount, buffer));
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return false;
+
+	vfdP = &VfdCache[file];
+
+	pgaio_io_start_write_buffer(io, tag, vfdP->fd, offset, amount, buffer, bufid);
+
+	return true;
+}
+
 int
 FileSync(File file, uint32 wait_event_info)
 {
@@ -2246,7 +2316,14 @@ FilePathName(File file)
 int
 FileGetRawDesc(File file)
 {
+	int			returnCode;
+
 	Assert(FileIsValid(file));
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return returnCode;
+
 	return VfdCache[file].fd;
 }
 
@@ -2527,6 +2604,7 @@ FreeDesc(AllocateDesc *desc)
 			result = closedir(desc->desc.dir);
 			break;
 		case AllocateDescRawFD:
+			pgaio_submit_pending(false);
 			result = close(desc->desc.fd);
 			break;
 		default:
@@ -2594,6 +2672,8 @@ CloseTransientFile(int fd)
 
 	/* Only get here if someone passes us a file not in allocatedDescs */
 	elog(WARNING, "fd passed to CloseTransientFile was not obtained from OpenTransientFile");
+
+	pgaio_submit_pending(false);
 
 	return close(fd);
 }
