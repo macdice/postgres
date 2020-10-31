@@ -19,7 +19,8 @@
 
 
 /* Global variables */
-sigset_t	UnBlockSig,
+sigset_t	SleepSig,
+			UnBlockSig,
 			BlockSig,
 			StartupBlockSig;
 
@@ -40,6 +41,7 @@ sigset_t	UnBlockSig,
 void
 pqinitmask(void)
 {
+	sigemptyset(&SleepSig);
 	sigemptyset(&UnBlockSig);
 
 	/* First set all signals, then clear some. */
@@ -94,6 +96,8 @@ pqinitmask(void)
 #ifdef SIGALRM
 	sigdelset(&StartupBlockSig, SIGALRM);
 #endif
+
+	sigaddset(&UnBlockSig, SIGURG);
 }
 
 /*

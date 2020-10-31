@@ -30,7 +30,8 @@ extern int	pqsigsetmask(int mask);
 #define sigdelset(set, signum)	(*(set) &= ~(sigmask(signum)))
 #endif							/* WIN32 */
 
-extern sigset_t UnBlockSig,
+extern sigset_t SleepSig,
+			UnBlockSig,
 			BlockSig,
 			StartupBlockSig;
 

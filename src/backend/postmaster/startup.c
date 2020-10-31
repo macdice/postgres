@@ -166,6 +166,7 @@ StartupProcessMain(void)
 	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	pqsignal(SIGUSR2, StartupProcTriggerHandler);
+	pqsignal(SIGURG, latch_sigurg_handler);
 
 	/*
 	 * Reset some signals that are accepted by postmaster but not here

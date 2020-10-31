@@ -110,6 +110,7 @@
 typedef struct Latch
 {
 	sig_atomic_t is_set;
+	sig_atomic_t maybe_sleeping;
 	bool		is_shared;
 	int			owner_pid;
 #ifdef WIN32
@@ -184,8 +185,10 @@ extern void InitializeLatchWaitSet(void);
  */
 #ifndef WIN32
 extern void latch_sigusr1_handler(void);
+extern void latch_sigurg_handler(SIGNAL_ARGS);
 #else
 #define latch_sigusr1_handler()  ((void) 0)
+static inline void latch_sigurg_handler(SIGNAL_ARGS) {}
 #endif
 
 #endif							/* LATCH_H */
