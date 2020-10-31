@@ -2515,7 +2515,8 @@ pgaio_uring_wait_one(PgAioContext *context, PgAioInProgress *io, uint32 wait_eve
 	{
 		ConditionVariablePrepareToSleep(&io->cv);
 		ResetLatch(MyLatch);
-		PG_SETMASK(&BlockSig);
+		MyLatch->maybe_sleeping = true;
+		pg_memory_barrier();
 	}
 
 	/*
@@ -2540,7 +2541,7 @@ pgaio_uring_wait_one(PgAioContext *context, PgAioInProgress *io, uint32 wait_eve
 		pgstat_report_wait_start(wait_event_info);
 		ret = __sys_io_uring_enter(context->io_uring_ring.ring_fd,
 								   0, 1,
-								   IORING_ENTER_GETEVENTS, &UnBlockSig);
+								   IORING_ENTER_GETEVENTS, &SleepSig);
 		pgstat_report_wait_end();
 
 		if (ret < 0 && errno == EINTR)
@@ -2553,8 +2554,9 @@ pgaio_uring_wait_one(PgAioContext *context, PgAioInProgress *io, uint32 wait_eve
 
 	if (IsUnderPostmaster)
 	{
-		PG_SETMASK(&UnBlockSig);
 		ConditionVariableCancelSleep();
+		Assert(MyLatch->maybe_sleeping);
+		MyLatch->maybe_sleeping = false;
 	}
 }
 
