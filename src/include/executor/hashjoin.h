@@ -205,6 +205,15 @@ typedef struct ParallelHashJoinBatchAccessor
 	bool		at_least_one_chunk; /* has this backend allocated a chunk? */
 
 	bool		done;			/* flag to remember that a batch is done */
+
+	/*
+	 * While doing the unmatched inner scan, the assigned worker may emit
+	 * tuples. Thus, we must keep track of where it was in the hashtable so it
+	 * can return to the correct offset within the correct chunk.
+	 */
+	dsa_pointer shared_chunk;
+	HashMemoryChunk current_chunk;
+	size_t		current_chunk_idx;
 	SharedTuplestoreAccessor *inner_tuples;
 	SharedTuplestoreAccessor *outer_tuples;
 } ParallelHashJoinBatchAccessor;
@@ -266,7 +275,8 @@ typedef struct ParallelHashJoinState
 #define PHJ_BATCH_ALLOCATE				1
 #define PHJ_BATCH_LOAD					2
 #define PHJ_BATCH_PROBE					3
-#define PHJ_BATCH_FREE					4
+#define PHJ_BATCH_SCAN					4
+#define PHJ_BATCH_FREE					5
 
 /* The phases of batch growth while hashing, for grow_batches_barrier. */
 #define PHJ_GROW_BATCHES_ELECT			0
@@ -351,6 +361,9 @@ typedef struct HashJoinTableData
 
 	/* used for dense allocation of tuples (into linked chunks) */
 	HashMemoryChunk chunks;		/* one list for the whole batch */
+
+	/* index of tuple within current chunk for serial unmatched inner scan */
+	size_t		current_chunk_idx;
 
 	/* Shared and private state for Parallel Hash. */
 	HashMemoryChunk current_chunk;	/* this backend's current chunk */
