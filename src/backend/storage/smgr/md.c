@@ -499,7 +499,7 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 static void
 zeroextend_complete(void *pgsw_private, void *write_private)
 {
-	BlockNumber *latest = (BlockNumber *) write_private;
+	//BlockNumber *latest = (BlockNumber *) write_private;
 }
 
 BlockNumber
