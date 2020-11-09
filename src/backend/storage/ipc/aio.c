@@ -1401,6 +1401,8 @@ pgaio_can_be_combined(PgAioInProgress *last, PgAioInProgress *cur)
 			return true;
 
 		case PGAIO_WRITE_WAL:
+			/* FIXME: XLOG sometimes intentionally does smaller writes - this would undo that */
+			return false;
 			if (last->d.write_wal.fd != cur->d.write_wal.fd)
 				return false;
 			if ((last->d.write_wal.offset + last->d.write_wal.nbytes) != cur->d.write_wal.offset)

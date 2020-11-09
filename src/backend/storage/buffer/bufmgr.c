@@ -163,6 +163,8 @@ bool		io_data_direct = 0;
 bool		io_data_force_async = 1;
 bool		io_wal_direct = 0;
 bool		io_wal_init_direct = 0;
+int			io_wal_concurrency = 32;
+int			io_wal_target_blocks = 8;
 
 /* local state for StartBufferIO and related functions */
 static BufferDesc *InProgressBuf = NULL;
