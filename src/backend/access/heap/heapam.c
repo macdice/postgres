@@ -446,9 +446,16 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	 */
 	all_visible = PageIsAllVisible(dp) && !snapshot->takenDuringRecovery;
 
-	for (lineoff = FirstOffsetNumber, lpp = PageGetItemId(dp, lineoff);
-		 lineoff <= lines;
-		 lineoff++, lpp++)
+//#define FASTORDER
+#ifdef FASTORDER
+    for (lineoff = lines, lpp = PageGetItemId(dp, lineoff);
+         lineoff >= FirstOffsetNumber;
+         lineoff--, lpp--)
+#else
+    for (lineoff = FirstOffsetNumber, lpp = PageGetItemId(dp, lineoff);
+          lineoff <= lines;
+          lineoff++, lpp++)
+#endif
 	{
 		if (ItemIdIsNormal(lpp))
 		{
