@@ -97,7 +97,7 @@ pqinitmask(void)
 	sigdelset(&StartupBlockSig, SIGALRM);
 #endif
 
-	sigaddset(&UnBlockSig, SIGURG);
+	//sigaddset(&UnBlockSig, SIGURG);
 }
 
 /*
