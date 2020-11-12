@@ -11440,7 +11440,15 @@ start_xlog_fsync(PgAioInProgress *aio, int fd, XLogSegNo segno)
 #ifdef HAVE_FSYNC_WRITETHROUGH
 		case SYNC_METHOD_FSYNC_WRITETHROUGH:
 			if (pg_fsync_writethrough(fd) != 0)
-				msg = _("could not fsync write-through file \"%s\": %m");
+			{
+				char		path[MAXFNAMELEN];
+				int			save_errno = errno;
+
+				XLogFileName(path, ThisTimeLineID, segno, wal_segment_size);
+				errno = save_errno;
+				elog(PANIC, "could not fsync write-through file \"%s\": %m",
+					 path);
+			}
 			break;
 #endif
 
