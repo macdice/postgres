@@ -1605,8 +1605,7 @@ out:
 
 	if (init_generation == current_generation &&
 		holding_reference &&
-		!(flags & PGAIOIP_LOCAL_CALLBACK_CALLED) &&
-		io->on_completion_local)
+		!(flags & PGAIOIP_LOCAL_CALLBACK_CALLED))
 	{
 		pgaio_drain(context, in_error);
 	}
@@ -1719,8 +1718,16 @@ pgaio_io_done(PgAioInProgress *io)
 	if (io->flags & PGAIOIP_SOFT_FAILURE)
 		return false;
 
-	if (io->flags & (PGAIOIP_DONE | PGAIOIP_IDLE))
+	if (io->flags & (PGAIOIP_IDLE | PGAIOIP_HARD_FAILURE))
 		return true;
+
+	if (io->flags & PGAIOIP_DONE)
+	{
+		if (io->owner_id == my_aio_id &&
+			!(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED))
+			return false;
+		return true;
+	}
 
 	return false;
 }
@@ -1844,6 +1851,7 @@ pgaio_io_recycle(PgAioInProgress *io)
 
 	Assert(init_flags & (PGAIOIP_IDLE | PGAIOIP_DONE));
 	Assert(io->user_referenced);
+	Assert(io->owner_id == my_aio_id);
 	Assert(!io->system_referenced);
 	Assert(io->merge_with == NULL);
 
@@ -1856,27 +1864,17 @@ pgaio_io_recycle(PgAioInProgress *io)
 
 	if (io->flags & PGAIOIP_DONE)
 	{
-		if (io->flags & PGAIOIP_FOREIGN_DONE)
-		{
-			SpinLockAcquire(&my_aio->foreign_completed_lock);
-			dlist_delete_from(&my_aio->foreign_completed, &io->io_node);
-			io->flags &= ~PGAIOIP_FOREIGN_DONE;
-			my_aio->foreign_completed_count--;
-			SpinLockRelease(&my_aio->foreign_completed_lock);
-		}
-		else if (!(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED))
-		{
-			dlist_delete_from(&my_aio->local_completed, &io->io_node);
-			my_aio->local_completed_count--;
-		}
+		/* request needs to actually be done, including local callbacks */
+		Assert(!(io->flags & PGAIOIP_FOREIGN_DONE));
+		Assert(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED);
+
 		io->flags &= ~PGAIOIP_DONE;
 		io->flags |= PGAIOIP_IDLE;
 
 		io->generation++;
 	}
 
-	io->flags &= ~(PGAIOIP_DONE |
-				   PGAIOIP_MERGE |
+	io->flags &= ~(PGAIOIP_MERGE |
 				   PGAIOIP_SHARED_CALLBACK_CALLED |
 				   PGAIOIP_LOCAL_CALLBACK_CALLED |
 				   PGAIOIP_RETRY |
