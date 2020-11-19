@@ -157,6 +157,7 @@ struct PgAioInProgress
 	 * PgAioCtl->unused,
 	 * PgAioPerBackend->unused,
 	 * PgAioPerBackend->outstanding,
+	 * PgAioPerBackend->issued,
 	 */
 	dlist_node owner_node;
 
@@ -303,6 +304,14 @@ typedef struct PgAioPerBackend
 	 */
 	dlist_head pending;
 	uint32 pending_count;
+
+	/*
+	 * Requests still owned by the backend that have been issued to the
+	 * kernel, but have not yet locally completed (but may be
+	 * foreign_completed).
+	 */
+	dlist_head issued;
+	uint32 issued_count;
 
 	/*
 	 * PgAioInProgress that are issued to the ringbuffer, and have not yet
@@ -553,6 +562,7 @@ AioShmemInit(void)
 			dlist_init(&bs->unused);
 			dlist_init(&bs->outstanding);
 			dlist_init(&bs->pending);
+			dlist_init(&bs->issued);
 			pg_atomic_init_u32(&bs->inflight_count, 0);
 			dlist_init(&bs->reaped);
 
@@ -698,6 +708,9 @@ pgaio_postmaster_child_exit(int code, Datum arg)
 	Assert(my_aio->pending_count == 0);
 	Assert(dlist_is_empty(&my_aio->pending));
 
+	Assert(my_aio->issued_count == 0);
+	Assert(dlist_is_empty(&my_aio->issued));
+
 	Assert(pg_atomic_read_u32(&my_aio->inflight_count) == 0);
 
 	Assert(dlist_is_empty(&my_aio->reaped));
@@ -744,6 +757,15 @@ pgaio_at_abort(void)
 
 	pgaio_submit_pending(false);
 
+	while (!dlist_is_empty(&my_aio->issued))
+	{
+		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued);
+
+		if (!pgaio_io_done(io))
+			pgaio_io_wait_internal(io, true, /* in_error = */ true);
+		pgaio_io_release(io);
+	}
+
 	while (!dlist_is_empty(&my_aio->outstanding))
 	{
 		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->outstanding);
@@ -752,6 +774,9 @@ pgaio_at_abort(void)
 			pgaio_io_wait_internal(io, true, /* in_error = */ true);
 		pgaio_io_release(io);
 	}
+
+	Assert(dlist_is_empty(&my_aio->issued));
+	Assert(dlist_is_empty(&my_aio->outstanding));
 }
 
 void
@@ -759,15 +784,33 @@ pgaio_at_commit(void)
 {
 	Assert(dlist_is_empty(&local_recycle_requests));
 
-	while (!dlist_is_empty(&my_aio->outstanding))
+	if (my_aio->pending_count != 0)
 	{
-		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->outstanding);
+		elog(WARNING, "unsubmitted IOs %d", my_aio->pending_count);
+		pgaio_submit_pending(false);
+	}
+
+	while (!dlist_is_empty(&my_aio->issued))
+	{
+		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued);
 
 		elog(WARNING, "leaked io %zu", io - aio_ctl->in_progress_io);
 		if (!pgaio_io_done(io))
 			pgaio_io_wait(io, true);
 		pgaio_io_release(io);
 	}
+
+	while (!dlist_is_empty(&my_aio->outstanding))
+	{
+		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->outstanding);
+
+		if (!pgaio_io_done(io))
+			pgaio_io_wait_internal(io, true, /* in_error = */ true);
+		pgaio_io_release(io);
+	}
+
+	Assert(dlist_is_empty(&my_aio->outstanding));
+	Assert(dlist_is_empty(&my_aio->issued));
 }
 
 static int
@@ -939,6 +982,10 @@ pgaio_complete_ios(bool in_error)
 			PgAioCompletedCB cb;
 			bool finished;
 
+			/*
+			 * Set flag before calling callback, otherwise we could easily end
+			 * up looping forever.
+			 */
 			*(volatile PgAioIPFlags*) &io->flags |= PGAIOIP_SHARED_CALLBACK_CALLED;
 
 			cb = completion_callbacks[io->type];
@@ -1144,6 +1191,12 @@ pgaio_drain(PgAioContext *context, bool in_error)
 				PgAioInProgress *io = dlist_container(PgAioInProgress, io_node, node);
 
 				Assert(!(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED));
+
+				dlist_delete_from(&my_aio->issued, &io->owner_node);
+				my_aio->issued_count--;
+				dlist_push_tail(&my_aio->outstanding, &io->owner_node);
+				my_aio->outstanding_count++;
+
 				io->flags |= PGAIOIP_LOCAL_CALLBACK_CALLED;
 				my_aio->local_completed_count--;
 
@@ -1247,13 +1300,13 @@ pgaio_io_merge(PgAioInProgress *into, PgAioInProgress *tomerge)
 static void
 pgaio_combine_pending(void)
 {
-	dlist_mutable_iter iter;
+	dlist_iter iter;
 	PgAioInProgress *last = NULL;
 	int combined = 1;
 
 	Assert(my_aio->pending_count > 1);
 
-	dlist_foreach_modify(iter, &my_aio->pending)
+	dlist_foreach(iter, &my_aio->pending)
 	{
 		PgAioInProgress *cur = dlist_container(PgAioInProgress, io_node, iter.cur);
 
@@ -1277,11 +1330,6 @@ pgaio_combine_pending(void)
 		if (pgaio_can_be_combined(last, cur))
 		{
 			combined++;
-
-			dlist_delete_from(&my_aio->pending, &cur->io_node);
-
-			cur->flags &= ~PGAIOIP_PENDING;
-			my_aio->pending_count--;
 
 			pgaio_io_merge(last, cur);
 		}
@@ -1928,8 +1976,22 @@ pgaio_io_release(PgAioInProgress *io)
 
 	io->user_referenced = false;
 
-	dlist_delete_from(&my_aio->outstanding, &io->owner_node);
-	my_aio->outstanding_count--;
+	if (io->flags & (PGAIOIP_IDLE |
+					 PGAIOIP_PENDING |
+					 PGAIOIP_LOCAL_CALLBACK_CALLED))
+	{
+		Assert(!(io->flags & PGAIOIP_INFLIGHT));
+
+		Assert(my_aio->outstanding_count > 0);
+		dlist_delete_from(&my_aio->outstanding, &io->owner_node);
+		my_aio->outstanding_count--;
+	}
+	else
+	{
+		/* FIXME: should likely track this separately */
+		dlist_delete_from(&my_aio->issued, &io->owner_node);
+		my_aio->issued_count--;
+	}
 
 	if (!io->system_referenced)
 	{
@@ -2384,7 +2446,7 @@ pgaio_uring_submit(bool drain)
 			if (!sqe[nios])
 				break;
 
-			node = dlist_pop_head_node(&my_aio->pending);
+			node = dlist_head_node(&my_aio->pending);
 			io = dlist_container(PgAioInProgress, io_node, node);
 
 			Assert(io->flags & PGAIOIP_PENDING);
@@ -2396,13 +2458,32 @@ pgaio_uring_submit(bool drain)
 
 			while (cur)
 			{
+				Assert(cur->flags & PGAIOIP_PENDING);
+
 				cur->ring = context - aio_ctl->contexts;
+
+				*(volatile PgAioIPFlags*) &cur->flags =
+					(cur->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
+
+				dlist_delete_from(&my_aio->pending, &cur->io_node);
+				my_aio->pending_count--;
+
+				if (cur->user_referenced)
+				{
+					Assert(my_aio->outstanding_count > 0);
+					dlist_delete_from(&my_aio->outstanding, &cur->owner_node);
+					my_aio->outstanding_count--;
+
+					dlist_push_tail(&my_aio->issued, &cur->owner_node);
+					my_aio->issued_count++;
+				}
+
 				cur = cur->merge_with;
+
+				if (cur)
+					i++;
 			}
 
-			*(volatile PgAioIPFlags*) &io->flags =
-				(io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
-			my_aio->pending_count--;
 			nios++;
 			total_submitted++;
 		}
