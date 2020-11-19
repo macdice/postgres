@@ -51,6 +51,10 @@ typedef struct SMgrRelationData
 	/* pointer to owning pointer, or NULL if none */
 	struct SMgrRelationData **smgr_owner;
 
+	/* pointer to shared object, valid if non-NULL and generation matches */
+	SMgrSharedRelation *smgr_shared;
+	uint64		smgr_shared_generation;
+
 	BlockNumber smgr_targblock; /* current insertion target block */
 
 	/* additional public fields may someday exist here */

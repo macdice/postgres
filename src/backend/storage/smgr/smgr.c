@@ -50,6 +50,7 @@ struct SMgrSharedRelation
 	RelFileNodeBackend rnode;
 	BlockNumber		nblocks[MAX_FORKNUM + 1];
 	pg_atomic_uint32 flags;
+	pg_atomic_uint64 generation;		/* mapping change */
 };
 
 /* For now, we borrow the buffer managers array of locks.  XXX fixme */
@@ -157,6 +158,40 @@ static void smgrshutdown(int code, Datum arg);
 int smgr_shared_relations = 1000;
 
 /*
+ * Try to get the size of a relation's fork without locking.
+ */
+static BlockNumber
+smgrnblocks_fast(SMgrRelation reln, ForkNumber forknum)
+{
+	SMgrSharedRelation *sr = reln->smgr_shared;
+	BlockNumber result;
+
+	if (sr)
+	{
+		pg_read_barrier();
+
+		/* We can load int-sized values atomically without special measures. */
+		Assert(sizeof(sr->nblocks[forknum]) == sizeof(uint32));
+		result = sr->nblocks[forknum];
+
+		/*
+		 * With a read barrier between the loads, we can check that the object
+		 * still refers to the same rnode before trusting the answer.
+		 */
+		pg_read_barrier();
+		if (pg_atomic_read_u64(&sr->generation) == reln->smgr_shared_generation)
+			return result;
+
+		/*
+		 * The generation doesn't match, the shared relation must have been
+		 * evicted since we got a pointer to it.  We'll need to do more work.
+		 */
+	}
+
+	return InvalidBlockNumber;
+}
+
+/*
  * Try to get the size of a relation's fork by looking it up in the mapping
  * table with a shared lock.  This will succeed if the SMgrRelation already
  * exists.
@@ -183,6 +218,10 @@ smgrnblocks_shared(SMgrRelation reln, ForkNumber forknum)
 	{
 		sr = &sr_pool->objects[mapping->index];
 		result = sr->nblocks[forknum];
+
+		/* We can take the fast path until this SR is eventually evicted. */
+		reln->smgr_shared = sr;
+		reln->smgr_shared_generation = pg_atomic_read_u64(&sr->generation);
 	}
 	LWLockRelease(mapping_lock);
 
@@ -344,9 +383,14 @@ smgr_alloc_sr(void)
 
 	/*
 	 * If we made it this far, there are no dirty forks, so we're now allowed
-	 * to evict the SR from the pool and the mapping table.
+	 * to evict the SR from the pool and the mapping table.  Make sure that
+	 * smgrnblocks_fast() sees that its pointer is now invalid by bumping the
+	 * generation.
 	 */
 	flags &= ~SR_VALID;
+	pg_atomic_write_u64(&sr->generation,
+						pg_atomic_read_u64(&sr->generation) + 1);
+	pg_write_barrier();
 	smgr_unlock_sr(sr, flags);
 
 	/*
@@ -460,6 +504,8 @@ smgrnblocks_update(SMgrRelation reln,
 			mapping->index = sr - sr_pool->objects;
 			smgr_unlock_sr(sr, SR_VALID);
 			sr->rnode = reln->smgr_rnode;
+			pg_atomic_write_u64(&sr->generation,
+								pg_atomic_read_u64(&sr->generation) + 1);
 			for (int i = 0; i <= MAX_FORKNUM; ++i)
 				sr->nblocks[i] = InvalidBlockNumber;
 			LWLockRelease(mapping_lock);
@@ -514,6 +560,11 @@ retry:
 		}
 		ConditionVariableCancelSleep();
 
+		/* Make sure smgrnblocks_fast() knows it's invalidated. */
+		pg_atomic_write_u64(&sr->generation,
+							pg_atomic_read_u64(&sr->generation) + 1);
+		pg_write_barrier();
+
 		/* Mark it invalid and drop the mapping. */
 		smgr_unlock_sr(sr, ~SR_VALID);
 		hash_search_with_hash_value(sr_mapping_table,
@@ -566,6 +617,7 @@ smgr_shmem_init(void)
 		for (uint32 i = 0; i < smgr_shared_relations; ++i)
 		{
 			pg_atomic_init_u32(&sr_pool->objects[i].flags, 0);
+			pg_atomic_init_u64(&sr_pool->objects[i].generation, 0);
 		}
 	}
 }
@@ -645,6 +697,8 @@ smgropen(RelFileNode rnode, BackendId backend)
 		/* hash_search already filled in the lookup key */
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
+		reln->smgr_shared = NULL;
+		reln->smgr_shared_generation = 0;
 		reln->smgr_which = 0;	/* we only have md.c at present */
 
 		/* implementation-specific initialization */
@@ -715,7 +769,7 @@ smgrclearowner(SMgrRelation *owner, SMgrRelation reln)
 bool
 smgrexists(SMgrRelation reln, ForkNumber forknum)
 {
-	if (smgrnblocks_shared(reln, forknum) != InvalidBlockNumber)
+	if (smgrnblocks_fast(reln, forknum) != InvalidBlockNumber)
 		return true;
 
 	return smgrsw[reln->smgr_which].smgr_exists(reln, forknum);
@@ -1014,6 +1068,11 @@ BlockNumber
 smgrnblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	BlockNumber result;
+
+	/* Can we get the answer from shared memory without locking? */
+	result = smgrnblocks_fast(reln, forknum);
+	if (result != InvalidBlockNumber)
+		return result;
 
 	/* Can we get the answer from shared memory with only a share lock? */
 	result = smgrnblocks_shared(reln, forknum);
