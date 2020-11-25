@@ -306,12 +306,24 @@ typedef struct PgAioPerBackend
 	uint32 pending_count;
 
 	/*
-	 * Requests still owned by the backend that have been issued to the
-	 * kernel, but have not yet locally completed (but may be
-	 * foreign_completed).
+	 * Requests issued by backend that have not yet completed yet (but may be
+	 * foreign_completed) and are still referenced by backend code (see
+	 * issued_abandoned for those).
+	 *
+	 * PgAioInProgress->owner_node
 	 */
 	dlist_head issued;
 	uint32 issued_count;
+
+	/*
+	 * Requests issued by backend that have not yet completed yet (but may be
+	 * foreign_completed) and that are not referenced by backend code anymore (see
+	 * issued for those).
+	 *
+	 * PgAioInProgress->owner_node
+	 */
+	dlist_head issued_abandoned;
+	uint32 issued_abandoned_count;
 
 	/*
 	 * PgAioInProgress that are issued to the ringbuffer, and have not yet
@@ -563,6 +575,7 @@ AioShmemInit(void)
 			dlist_init(&bs->outstanding);
 			dlist_init(&bs->pending);
 			dlist_init(&bs->issued);
+			dlist_init(&bs->issued_abandoned);
 			pg_atomic_init_u32(&bs->inflight_count, 0);
 			dlist_init(&bs->reaped);
 
@@ -668,34 +681,45 @@ pgaio_postmaster_child_init_local(void)
 static void
 pgaio_postmaster_before_child_exit(int code, Datum arg)
 {
-	elog(LOG, "before shmem exit: start");
+	elog(DEBUG2, "aio before shmem exit: start");
 
 	/*
-	 * This is a very dirty hack to work around the issue that linux 5.10
-	 * cancels IO requests issued by this process when the process exits.
+	 * Need to wait for in-progress IOs initiated by this backend to
+	 * finish. Some operating systems, like linux w/ io_uring, cancel IOs that
+	 * are still in progress when exiting. Other's don't provide access to the
+	 * results of such IOs.
 	 */
-	while (pg_atomic_read_u32(&my_aio->inflight_count) != 0)
+	while (!dlist_is_empty(&my_aio->issued))
 	{
-		int waited = 0;
+		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued);
 
-		for (int i = 0; i < max_aio_in_progress; i++)
-		{
-			PgAioInProgress *io = &aio_ctl->in_progress_io[i];
-
-			if (io->owner_id == my_aio_id)
-			{
-				pgaio_io_wait(io, false);
-				waited++;
-				elog(DEBUG2, "waited for in-progress IO %zu",
-					 io - aio_ctl->in_progress_io);
-			}
-		}
-
-		if (waited == 0)
-			elog(DEBUG2, "waited for inflight IOs to finish, without success");
+		pgaio_io_release(io);
 	}
 
-	elog(DEBUG2, "before shmem exit: end");
+	Assert(my_aio->issued_count == 0);
+	Assert(dlist_is_empty(&my_aio->issued));
+
+	while (!dlist_is_empty(&my_aio->issued_abandoned))
+	{
+		PgAioInProgress *io = NULL;
+
+		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
+		if (!dlist_is_empty(&my_aio->issued_abandoned))
+			io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued_abandoned);
+		LWLockRelease(SharedAIOCtlLock);
+
+		if (!io)
+		{
+			elog(LOG, "skipped exit wait for abandoned IO %zu", io - aio_ctl->in_progress_io);
+			break;
+		}
+
+		elog(LOG, "exit wait for abandoned IO %zu", io - aio_ctl->in_progress_io);
+		pgaio_io_print(io, NULL);
+		pgaio_io_wait_internal(io, false, /* in_error = */ true);
+	}
+
+	elog(DEBUG2, "aio before shmem exit: end");
 }
 
 static void
@@ -710,6 +734,9 @@ pgaio_postmaster_child_exit(int code, Datum arg)
 
 	Assert(my_aio->issued_count == 0);
 	Assert(dlist_is_empty(&my_aio->issued));
+
+	Assert(my_aio->issued_abandoned_count == 0);
+	Assert(dlist_is_empty(&my_aio->issued_abandoned));
 
 	Assert(pg_atomic_read_u32(&my_aio->inflight_count) == 0);
 
@@ -739,6 +766,8 @@ pgaio_postmaster_child_init(void)
 
 	Assert(my_aio->unused_count == 0);
 	Assert(my_aio->outstanding_count == 0);
+	Assert(my_aio->issued_count == 0);
+	Assert(my_aio->issued_abandoned_count == 0);
 	Assert(my_aio->pending_count == 0);
 	Assert(my_aio->local_completed_count == 0);
 	Assert(my_aio->foreign_completed_count == 0);
@@ -1101,6 +1130,20 @@ pgaio_complete_ios(bool in_error)
 			}
 			else
 			{
+				PgAioPerBackend *other = &aio_ctl->backend_state[cur->owner_id];
+
+#ifdef PGAIO_VERBOSE
+				ereport(DEBUG2,
+						errmsg("removing aio %zu from issued_abandoned complete_ios",
+							   cur - aio_ctl->in_progress_io),
+						errhidecontext(1),
+						errhidestmt(1));
+#endif
+
+				dlist_delete_from(&other->issued_abandoned, &cur->owner_node);
+				Assert(other->issued_abandoned_count > 0);
+				other->issued_abandoned_count--;
+
 				cur->flags = PGAIOIP_UNUSED;
 
 				pgaio_bounce_buffer_release_locked(cur);
@@ -1131,6 +1174,27 @@ pgaio_complete_ios(bool in_error)
 	}
 
 	END_CRIT_SECTION();
+}
+
+static void
+pgaio_io_call_local_callback(PgAioInProgress *io, bool in_error)
+{
+	Assert(!(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED));
+	Assert(io->user_referenced);
+
+	dlist_delete_from(&my_aio->issued, &io->owner_node);
+	my_aio->issued_count--;
+	dlist_push_tail(&my_aio->outstanding, &io->owner_node);
+	my_aio->outstanding_count++;
+
+	io->flags |= PGAIOIP_LOCAL_CALLBACK_CALLED;
+
+	if (!io->on_completion_local)
+		return;
+
+	if (!in_error)
+		io->on_completion_local->callback(io->on_completion_local, io);
+
 }
 
 /*
@@ -1190,21 +1254,10 @@ pgaio_drain(PgAioContext *context, bool in_error)
 				dlist_node *node = dlist_pop_head_node(&my_aio->local_completed);
 				PgAioInProgress *io = dlist_container(PgAioInProgress, io_node, node);
 
-				Assert(!(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED));
-
-				dlist_delete_from(&my_aio->issued, &io->owner_node);
-				my_aio->issued_count--;
-				dlist_push_tail(&my_aio->outstanding, &io->owner_node);
-				my_aio->outstanding_count++;
-
-				io->flags |= PGAIOIP_LOCAL_CALLBACK_CALLED;
+				Assert(my_aio->local_completed_count > 0);
 				my_aio->local_completed_count--;
 
-				if (!io->on_completion_local)
-					continue;
-
-				if (!in_error)
-					io->on_completion_local->callback(io->on_completion_local, io);
+				pgaio_io_call_local_callback(io, in_error);
 			}
 
 			recursion_count--;
@@ -1532,7 +1585,12 @@ again:
 
 	flags = *(volatile PgAioIPFlags*) &io->flags;
 
-	if (!holding_reference)
+	if (in_error && !holding_reference)
+	{
+		if (flags & (PGAIOIP_UNUSED))
+			goto out;
+	}
+	else if (!holding_reference)
 	{
 		/* possible due to racyness */
 		done_flags |= PGAIOIP_UNUSED;
@@ -1655,7 +1713,22 @@ out:
 		holding_reference &&
 		!(flags & PGAIOIP_LOCAL_CALLBACK_CALLED))
 	{
-		pgaio_drain(context, in_error);
+		if (flags & PGAIOIP_FOREIGN_DONE)
+		{
+			SpinLockAcquire(&my_aio->foreign_completed_lock);
+			dlist_delete_from(&my_aio->foreign_completed, &io->io_node);
+			io->flags &= ~PGAIOIP_FOREIGN_DONE;
+			my_aio->foreign_completed_count--;
+			SpinLockRelease(&my_aio->foreign_completed_lock);
+		}
+		else
+		{
+			Assert(my_aio->local_completed_count > 0);
+			dlist_delete_from(&my_aio->local_completed, &io->io_node);
+			my_aio->local_completed_count--;
+		}
+
+		pgaio_io_call_local_callback(io, in_error);
 	}
 }
 
@@ -1728,6 +1801,8 @@ pgaio_io_get(void)
 
 	Assert(io->flags == PGAIOIP_UNUSED);
 	Assert(io->system_referenced);
+	Assert(io->on_completion_local == NULL);
+
 	io->user_referenced = true;
 	io->system_referenced = false;
 
@@ -1985,12 +2060,42 @@ pgaio_io_release(PgAioInProgress *io)
 		Assert(my_aio->outstanding_count > 0);
 		dlist_delete_from(&my_aio->outstanding, &io->owner_node);
 		my_aio->outstanding_count--;
+
+#ifdef PGAIO_VERBOSE
+		ereport(DEBUG3, errmsg("releasing plain user reference to %zu",
+							   io - aio_ctl->in_progress_io),
+				errhidecontext(1),
+				errhidestmt(1));
+#endif
 	}
 	else
 	{
-		/* FIXME: should likely track this separately */
 		dlist_delete_from(&my_aio->issued, &io->owner_node);
 		my_aio->issued_count--;
+
+		if (io->system_referenced)
+		{
+#ifdef PGAIO_VERBOSE
+			ereport(DEBUG2, errmsg("putting aio %zu onto issued_abandoned during release",
+								   io - aio_ctl->in_progress_io),
+					errhidecontext(1),
+					errhidestmt(1));
+#endif
+
+			dlist_push_tail(&my_aio->issued_abandoned, &io->owner_node);
+			my_aio->issued_abandoned_count++;
+		}
+		else
+		{
+			Assert(io->flags & (PGAIOIP_DONE | PGAIOIP_SHARED_CALLBACK_CALLED));
+
+#ifdef PGAIO_VERBOSE
+			ereport(DEBUG2, errmsg("not putting aio %zu onto issued_abandoned during release",
+								   io - aio_ctl->in_progress_io),
+					errhidecontext(1),
+					errhidestmt(1));
+#endif
+		}
 	}
 
 	if (!io->system_referenced)
@@ -2014,6 +2119,7 @@ pgaio_io_release(PgAioInProgress *io)
 			{
 				dlist_delete_from(&my_aio->local_completed, &io->io_node);
 				my_aio->local_completed_count--;
+				io->on_completion_local = NULL;
 			}
 
 			io->generation++;
@@ -2476,6 +2582,21 @@ pgaio_uring_submit(bool drain)
 
 					dlist_push_tail(&my_aio->issued, &cur->owner_node);
 					my_aio->issued_count++;
+				}
+				else
+				{
+#ifdef PGAIO_VERBOSE
+					ereport(DEBUG2,
+							errmsg("putting aio %zu onto issued_abandoned during submit",
+								   cur - aio_ctl->in_progress_io),
+							errhidecontext(1),
+							errhidestmt(1));
+#endif
+
+					LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
+					dlist_push_tail(&my_aio->issued_abandoned, &cur->owner_node);
+					my_aio->issued_abandoned_count++;
+					LWLockRelease(SharedAIOCtlLock);
 				}
 
 				cur = cur->merge_with;
