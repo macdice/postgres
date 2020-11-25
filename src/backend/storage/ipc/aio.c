@@ -1241,7 +1241,7 @@ pgaio_drain(PgAioContext *context, bool in_error)
 	/*
 	 * Call all pending local callbacks.
 	 */
-	if (my_aio->local_completed_count != 0)
+	if (my_aio->local_completed_count != 0 && CritSectionCount == 0)
 	{
 		static int recursion_count  = 0;
 
