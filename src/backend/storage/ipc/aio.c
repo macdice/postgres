@@ -786,26 +786,19 @@ pgaio_at_abort(void)
 
 	pgaio_submit_pending(false);
 
-	while (!dlist_is_empty(&my_aio->issued))
-	{
-		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued);
-
-		if (!pgaio_io_done(io))
-			pgaio_io_wait_internal(io, true, /* in_error = */ true);
-		pgaio_io_release(io);
-	}
-
 	while (!dlist_is_empty(&my_aio->outstanding))
 	{
 		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->outstanding);
 
-		if (!pgaio_io_done(io))
-			pgaio_io_wait_internal(io, true, /* in_error = */ true);
 		pgaio_io_release(io);
 	}
 
-	Assert(dlist_is_empty(&my_aio->issued));
-	Assert(dlist_is_empty(&my_aio->outstanding));
+	while (!dlist_is_empty(&my_aio->issued))
+	{
+		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued);
+
+		pgaio_io_release(io);
+	}
 }
 
 void
@@ -819,27 +812,23 @@ pgaio_at_commit(void)
 		pgaio_submit_pending(false);
 	}
 
-	while (!dlist_is_empty(&my_aio->issued))
-	{
-		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued);
-
-		elog(WARNING, "leaked io %zu", io - aio_ctl->in_progress_io);
-		if (!pgaio_io_done(io))
-			pgaio_io_wait(io, true);
-		pgaio_io_release(io);
-	}
-
 	while (!dlist_is_empty(&my_aio->outstanding))
 	{
 		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->outstanding);
 
-		if (!pgaio_io_done(io))
-			pgaio_io_wait_internal(io, true, /* in_error = */ true);
+		elog(WARNING, "leaked outstanding io %zu", io - aio_ctl->in_progress_io);
+
 		pgaio_io_release(io);
 	}
 
-	Assert(dlist_is_empty(&my_aio->outstanding));
-	Assert(dlist_is_empty(&my_aio->issued));
+	while (!dlist_is_empty(&my_aio->issued))
+	{
+		PgAioInProgress *io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued);
+
+		elog(WARNING, "leaked issued io %zu", io - aio_ctl->in_progress_io);
+
+		pgaio_io_release(io);
+	}
 }
 
 static int
