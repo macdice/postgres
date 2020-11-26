@@ -524,7 +524,7 @@ static int pgaio_uncombine_one(PgAioInProgress *io);
 static void pgaio_call_local_callbacks(bool in_error);
 
 /* aio worker related functions */
-static int pgaio_worker_submit(bool drain);
+static int pgaio_worker_submit(bool drain, bool will_wait);
 static void pgaio_worker_state_init(PgAioWorkerState *state);
 static void pgaio_worker_do(PgAioWorkerState *state, PgAioInProgress *io);
 static void pgaio_worker_state_close(PgAioWorkerState *state);
@@ -2015,9 +2015,24 @@ pgaio_worker_need_synchronous(PgAioInProgress *io)
 }
 
 static int
-pgaio_worker_submit(bool drain)
+pgaio_worker_submit(bool drain, bool will_wait)
 {
 	int nsubmitted = 0;
+	bool force_synchronous = false;
+
+	/*
+	 * If we've received a hint that the caller intends to wait for completion
+	 * immediately, and there is exactly one thing in the pending list, then we
+	 * might as well perform the operation synchronously and skip all the
+	 * interprocess overheads.
+	 *
+	 * XXX Huh, wouldn't we want to be able to do this for uring and posix
+	 * modes too?!  How can we share the code?
+	*/
+	if (will_wait &&
+		!dlist_is_empty(&my_aio->pending) &&
+		dlist_head_node(&my_aio->pending) == dlist_tail_node(&my_aio->pending))
+		force_synchronous = true;
 
 	while (!dlist_is_empty(&my_aio->pending))
 	{
@@ -2059,7 +2074,7 @@ pgaio_worker_submit(bool drain)
 			}
 		}
 
-		if (pgaio_worker_need_synchronous(io))
+		if (force_synchronous || pgaio_worker_need_synchronous(io))
 		{
 			PgAioWorkerState state;
 
@@ -2085,8 +2100,8 @@ pgaio_worker_submit(bool drain)
 	return nsubmitted;
 }
 
-void  __attribute__((noinline))
-pgaio_submit_pending(bool drain)
+static void
+pgaio_submit_pending_internal(bool drain, bool will_wait)
 {
 	int total_submitted = 0;
 	uint32 orig_total;
@@ -2148,7 +2163,7 @@ pgaio_submit_pending(bool drain)
 
 		START_CRIT_SECTION();
 		if (aio_type == AIOTYPE_WORKER)
-			did_submit = pgaio_worker_submit(drain);
+			did_submit = pgaio_worker_submit(drain, will_wait);
 #ifdef USE_LIBURING
 		else if (aio_type == AIOTYPE_LIBURING)
 			did_submit = pgaio_uring_submit(max_submit, drain);
@@ -2178,6 +2193,12 @@ pgaio_submit_pending(bool drain)
 
 	if (drain)
 		pgaio_call_local_callbacks(/* in_error = */ false);
+}
+
+void  __attribute__((noinline))
+pgaio_submit_pending(bool drain)
+{
+	pgaio_submit_pending_internal(drain, false);
 }
 
 #if defined(USE_POSIX_AIO)
