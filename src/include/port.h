@@ -17,6 +17,10 @@
 #include <netdb.h>
 #include <pwd.h>
 
+#ifdef HAVE_SYS_UIO_H
+#include <sys/uio.h>
+#endif
+
 /*
  * Windows has enough specialized port stuff that we push most of it off
  * into another file.
@@ -429,6 +433,39 @@ extern ssize_t pg_pread(int fd, void *buf, size_t nbyte, off_t offset);
 #define pg_pwrite pwrite
 #else
 extern ssize_t pg_pwrite(int fd, const void *buf, size_t nbyte, off_t offset);
+#endif
+
+/*
+ * Likewise for the non-standard but common extensions preadv(2) and
+ * pwritev(2).  If sys/uio.h is also missing, define a POSIX-compatible iovec
+ * struct here.
+ */
+#ifndef HAVE_SYS_UIO_H
+struct iovec
+{
+	void	   *iov_base;
+	size_t		iov_len;
+};
+#endif
+
+/*
+ * If <limits.h> didn't define IOV_MAX, we'll define our own for the purposes
+ * of our replacement implementations.
+ */
+#ifndef IOV_MAX
+#define IOV_MAX 16
+#endif
+
+#ifdef HAVE_PREADV
+#define pg_preadv preadv
+#else
+extern ssize_t pg_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset);
+#endif
+
+#ifdef HAVE_PWRITEV
+#define pg_pwritev pwritev
+#else
+extern ssize_t pg_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset);
 #endif
 
 #if !HAVE_DECL_STRLCAT

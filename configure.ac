@@ -1342,6 +1342,7 @@ AC_CHECK_HEADERS(m4_normalize([
 	sys/shm.h
 	sys/sockio.h
 	sys/tas.h
+	sys/uio.h
 	sys/un.h
 	termios.h
 	ucred.h
@@ -1671,9 +1672,14 @@ AC_CHECK_FUNCS(m4_normalize([
 	poll
 	posix_fallocate
 	ppoll
+	pread
+	preadv
 	pstat
 	pthread_is_threaded_np
+	pwrite
+	pwritev
 	readlink
+	readv
 	setproctitle
 	setproctitle_fast
 	setsid
@@ -1684,6 +1690,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	sync_file_range
 	uselocale
 	wcstombs_l
+	writev
 ]))
 
 # These typically are compiler builtins, for which AC_CHECK_FUNCS fails.
@@ -1744,8 +1751,6 @@ AC_REPLACE_FUNCS(m4_normalize([
 	inet_aton
 	link
 	mkdtemp
-	pread
-	pwrite
 	random
 	srandom
 	strlcat

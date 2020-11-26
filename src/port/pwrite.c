@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pwrite.c
- *	  Implementation of pwrite(2) for platforms that lack one.
+ *	  Implementation of pwrite[v](2) for platforms that lack one.
  *
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  *
@@ -9,7 +9,8 @@
  *	  src/port/pwrite.c
  *
  * Note that this implementation changes the current file position, unlike
- * the POSIX function, so we use the name pg_pwrite().
+ * the POSIX function, so we use the name pg_pwrite().  Likewise for the
+ * iovec version.
  *
  *-------------------------------------------------------------------------
  */
@@ -23,6 +24,7 @@
 #include <unistd.h>
 #endif
 
+#ifndef HAVE_PWRITE
 ssize_t
 pg_pwrite(int fd, const void *buf, size_t size, off_t offset)
 {
@@ -53,3 +55,36 @@ pg_pwrite(int fd, const void *buf, size_t size, off_t offset)
 	return write(fd, buf, size);
 #endif
 }
+#endif
+
+#ifndef HAVE_PWRITEV
+ssize_t
+pg_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+{
+#ifdef HAVE_WRITEV
+	if (lseek(fd, offset, SEEK_SET) < 0)
+		return -1;
+	return writev(fd, iov, iovcnt);
+#else
+	ssize_t 	sum = 0;
+	ssize_t 	part;
+
+	for (int i = 0; i < iovcnt; ++i)
+	{
+		part = pg_pwrite(fd, iov[i].iov_base, iov[i].iov_len, offset);
+		if (part < 0)
+		{
+			if (i == 0)
+				return -1;
+			else
+				return sum;
+		}
+		sum += part;
+		offset += part;
+		if (part < iov[i].iov_len)
+			return sum;
+	}
+	return sum;
+#endif
+}
+#endif
