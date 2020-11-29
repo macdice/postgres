@@ -51,7 +51,6 @@
  * pending requests, rather than when staging them.
  */
 #define PGAIO_SUBMIT_BATCH_SIZE 256
-#define PGAIO_BACKPRESSURE_LIMIT (max_aio_in_flight - 128)
 #define PGAIO_MAX_LOCAL_REAPED 128
 #define PGAIO_MAX_COMBINE 16
 
@@ -411,18 +410,18 @@ typedef struct PgAioCtl
 
 /* general pgaio helper functions */
 static void pgaio_complete_ios(bool in_error);
-static void pgaio_backpressure(PgAioContext *context, const char *loc);
+static void pgaio_apply_backend_limit(void);
 static void pgaio_prepare_io(PgAioInProgress *io, PgAioAction action);
 static void pgaio_finish_io(PgAioInProgress *io);
 static void pgaio_bounce_buffer_release_locked(PgAioInProgress *io);
-static void pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_error);
+static void pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_error, bool call_local);
 
 /* io_uring related functions */
-static int pgaio_uring_submit(bool drain);
+static int pgaio_uring_submit(int max_submit, bool drain);
 static int pgaio_uring_drain(PgAioContext *context);
 static void pgaio_uring_wait_one(PgAioContext *context, PgAioInProgress *io, uint32 wait_event_info);
 
-static int pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs);
+static void pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs);
 static void pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe);
 
 static int __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
@@ -462,12 +461,19 @@ static const PgAioCompletedCB completion_callbacks[] =
 
 
 /* (future) GUC controlling global MAX number of in-progress IO entries */
+/* FIXME: find a good naming pattern */
 extern int max_aio_in_progress;
+/* FIXME: this is per context right now */
 extern int max_aio_in_flight;
 extern int max_aio_bounce_buffers;
+
+/* max per backend concurrency */
+extern int io_max_concurrency;
+
 int max_aio_in_progress = 32768; /* XXX: Multiple of MaxBackends instead? */
 int max_aio_in_flight = 4096;
 int max_aio_bounce_buffers = 1024;
+int io_max_concurrency = 128;
 
 /* global list of in-progress IO */
 static PgAioCtl *aio_ctl;
@@ -716,7 +722,9 @@ pgaio_postmaster_before_child_exit(int code, Datum arg)
 
 		elog(LOG, "exit wait for abandoned IO %zu", io - aio_ctl->in_progress_io);
 		pgaio_io_print(io, NULL);
-		pgaio_io_wait_internal(io, false, /* in_error = */ true);
+		pgaio_io_wait_internal(io, false,
+							   /* in_error = */ true,
+							   /* call_local = */ false);
 	}
 
 	elog(DEBUG2, "aio before shmem exit: end");
@@ -969,12 +977,7 @@ pgaio_uncombine(void)
 		if (io->flags & PGAIOIP_MERGE)
 			extracted += pgaio_uncombine_one(io);
 
-		/*
-		 * FIXME: this should a) probably not be here, b) only once for all
-		 * the received IOs.
-		 */
-		pg_atomic_fetch_sub_u32(&aio_ctl->backend_state[io->owner_id].inflight_count,
-								extracted);
+		pg_atomic_fetch_sub_u32(&aio_ctl->backend_state[io->owner_id].inflight_count, 1);
 	}
 }
 
@@ -1187,10 +1190,42 @@ pgaio_io_call_local_callback(PgAioInProgress *io, bool in_error)
 }
 
 /*
+ * Call all pending local callbacks.
+ */
+static void
+pgaio_call_local_callbacks(bool in_error)
+{
+	if (my_aio->local_completed_count != 0 &&
+		CritSectionCount == 0)
+	{
+		/* FIXME: this isn't safe against errors */
+		static int local_callback_depth = 0;
+
+		if (local_callback_depth == 0)
+		{
+			local_callback_depth++;
+
+			while (!dlist_is_empty(&my_aio->local_completed))
+			{
+				dlist_node *node = dlist_pop_head_node(&my_aio->local_completed);
+				PgAioInProgress *io = dlist_container(PgAioInProgress, io_node, node);
+
+				Assert(my_aio->local_completed_count > 0);
+				my_aio->local_completed_count--;
+
+				pgaio_io_call_local_callback(io, in_error);
+			}
+
+			local_callback_depth--;
+		}
+	}
+}
+
+/*
  * Receive completions in ring.
  */
 static int  __attribute__((noinline))
-pgaio_drain(PgAioContext *context, bool in_error)
+pgaio_drain(PgAioContext *context, bool in_error, bool call_local)
 {
 	int ndrained = 0;
 
@@ -1230,28 +1265,8 @@ pgaio_drain(PgAioContext *context, bool in_error)
 	/*
 	 * Call all pending local callbacks.
 	 */
-	if (my_aio->local_completed_count != 0 && CritSectionCount == 0)
-	{
-		static int recursion_count  = 0;
-
-		if (recursion_count == 0)
-		{
-			recursion_count++;
-
-			while (!dlist_is_empty(&my_aio->local_completed))
-			{
-				dlist_node *node = dlist_pop_head_node(&my_aio->local_completed);
-				PgAioInProgress *io = dlist_container(PgAioInProgress, io_node, node);
-
-				Assert(my_aio->local_completed_count > 0);
-				my_aio->local_completed_count--;
-
-				pgaio_io_call_local_callback(io, in_error);
-			}
-
-			recursion_count--;
-		}
-	}
+	if (call_local && CritSectionCount == 0)
+		pgaio_call_local_callbacks(in_error);
 
 	return ndrained;
 }
@@ -1433,8 +1448,33 @@ pgaio_submit_pending(bool drain)
 #endif
 #endif /* COMBINE_ENABLED */
 
+	/*
+	 * Loop until all pending IOs are submitted. Throttle max in-flight before
+	 * calling into the IO implementation specific routine, so this code can
+	 * be shared.
+	 */
+	while (!dlist_is_empty(&my_aio->pending))
+	{
+		int max_submit;
+		int did_submit;
 
-	total_submitted = pgaio_uring_submit(drain);
+		Assert(my_aio->pending_count > 0);
+		pgaio_apply_backend_limit();
+
+		Assert(my_aio->pending_count > 0);
+		if (my_aio->pending_count == 0)
+			break;
+
+		max_submit = Min(my_aio->pending_count, PGAIO_SUBMIT_BATCH_SIZE);
+		max_submit = Min(max_submit, io_max_concurrency - pg_atomic_read_u32(&my_aio->inflight_count));
+		Assert(max_submit > 0);
+
+		START_CRIT_SECTION();
+		did_submit = pgaio_uring_submit(max_submit, drain);
+		total_submitted += did_submit;
+		Assert(did_submit > 0 && did_submit <= max_submit);
+		END_CRIT_SECTION();
+	}
 
 	my_aio->executed_total_count += orig_total;
 	my_aio->issued_total_count += total_submitted;
@@ -1447,99 +1487,150 @@ pgaio_submit_pending(bool drain)
 #endif
 
 	RESUME_INTERRUPTS();
+
+	if (drain)
+		pgaio_call_local_callbacks(/* in_error = */ false);
 }
 
-static void  __attribute__((noinline))
-pgaio_backpressure(PgAioContext *context, const char *loc)
+static void
+pgaio_io_prepare_submit(PgAioInProgress *io, uint32 ring)
 {
-	pgaio_drain(context, false);
+	PgAioInProgress *cur;
 
-	while (true)
+	cur = io;
+
+	while (cur)
 	{
-		uint32 inflight_before = pg_atomic_read_u32(&my_aio->inflight_count);
+		Assert(cur->flags & PGAIOIP_PENDING);
 
-		if (inflight_before < PGAIO_BACKPRESSURE_LIMIT)
-			break;
+		cur->ring = ring;
 
-		/* first drain */
+		*(volatile PgAioIPFlags*) &cur->flags =
+			(cur->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
+
+		dlist_delete_from(&my_aio->pending, &cur->io_node);
+		my_aio->pending_count--;
+
+		if (cur->user_referenced)
 		{
-			int total;
-			int cqr_before = io_uring_cq_ready(&context->io_uring_ring);
-			int used_before = aio_ctl->used_count;
+			Assert(my_aio->outstanding_count > 0);
+			dlist_delete_from(&my_aio->outstanding, &cur->owner_node);
+			my_aio->outstanding_count--;
 
-			total = pgaio_drain(context, false);
-
-			elog(DEBUG1, "backpressure drain at %s:"
-				 " cqr before/after: %d/%d"
-				 ", my inflight b/a: %d/%d"
-				 ", used b/a: %d/%d, processed %d",
-				 loc,
-				 cqr_before, io_uring_cq_ready(&context->io_uring_ring),
-				 inflight_before, pg_atomic_read_u32(&my_aio->inflight_count),
-				 used_before, aio_ctl->used_count,
-				 total);
-
+			dlist_push_tail(&my_aio->issued, &cur->owner_node);
+			my_aio->issued_count++;
 		}
-
-		/* recheck */
-		inflight_before = pg_atomic_read_u32(&my_aio->inflight_count);
-		if (inflight_before < PGAIO_BACKPRESSURE_LIMIT)
-			break;
+		else
 		{
-			int ret;
-			int waitfor;
-			int cqr_after;
-			int cqr_before = io_uring_cq_ready(&context->io_uring_ring);
-			int used_before = aio_ctl->used_count;
-
-			/*
-			 * FIXME: This code likely has a race condition, where the queue
-			 * might be emptied after our check, but before we wait for events
-			 * to be completed.  Using a lock around this could fix that, but
-			 * we dont want that (both because others should be able to add
-			 * requests, and because we'd rather have the kernel wake everyone
-			 * up, if there's some readiness - it's quite likely multiple
-			 * backends may wait for the same IO).
-			 *
-			 * Possible fix: While holding lock, register for CV for one of
-			 * the inflight requests. Then, using appropriate sigmask'ery,
-			 * wait until either that request is processed by somebody else,
-			 * or a new completion is ready. The latter is much more likely.
-			 */
-			cqr_before = io_uring_cq_ready(&context->io_uring_ring);
-
-			//waitfor = inflight_before - PGAIO_BACKPRESSURE_LIMIT;
-			waitfor = 1;
-
-			pgstat_report_wait_start(WAIT_EVENT_AIO_BACKPRESSURE);
-			ret = __sys_io_uring_enter(context->io_uring_ring.ring_fd,
-									   0, waitfor,
-									   IORING_ENTER_GETEVENTS, NULL);
-			pgstat_report_wait_end();
-			if (ret < 0 && errno != EINTR)
-				elog(WARNING, "enter failed: %d/%s", ret, strerror(-ret));
-
-			cqr_after = io_uring_cq_ready(&context->io_uring_ring);
-#if 1
-			elog(DEBUG2, "backpressure wait at %s waited for %d, "
-				 "for inflight b/a: %d/%d, used b/a: %d/%d, "
-				 "cqr before %d after %d "
-				 "space left: %d, sq ready: %d",
-				 loc, waitfor,
-				 inflight_before, pg_atomic_read_u32(&my_aio->inflight_count),
-				 used_before, aio_ctl->used_count,
-				 cqr_before, io_uring_cq_ready(&context->io_uring_ring),
-				 io_uring_sq_space_left(&context->io_uring_ring),
-				 io_uring_sq_ready(&context->io_uring_ring));
+#ifdef PGAIO_VERBOSE
+			ereport(DEBUG2,
+					errmsg("putting aio %zu onto issued_abandoned during submit",
+						   cur - aio_ctl->in_progress_io),
+					errhidecontext(1),
+					errhidestmt(1));
 #endif
-			if (cqr_after)
-				pgaio_drain(context, false);
+
+			LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
+			dlist_push_tail(&my_aio->issued_abandoned, &cur->owner_node);
+			my_aio->issued_abandoned_count++;
+			LWLockRelease(SharedAIOCtlLock);
 		}
+
+		cur = cur->merge_with;
 	}
 }
 
 static void
-pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_error)
+pgaio_apply_backend_limit(void)
+{
+	uint32 current_inflight = pg_atomic_read_u32(&my_aio->inflight_count);
+
+	while (current_inflight >= io_max_concurrency)
+	{
+		PgAioInProgress *io;
+
+		/*
+		 * XXX: Should we be a bit fairer and check the "oldest" in-flight IO
+		 * between issued and issued_abandoned?
+		 */
+
+		if (my_aio->issued_count > 0)
+		{
+			dlist_iter iter;
+
+			Assert(!dlist_is_empty(&my_aio->issued));
+
+			dlist_foreach(iter, &my_aio->issued)
+			{
+				io = dlist_container(PgAioInProgress, owner_node, iter.cur);
+
+				if (io->flags & PGAIOIP_INFLIGHT)
+				{
+					ereport(DEBUG2,
+							errmsg("applying per-backend limit to issued IO %zu/%llu (current %d in %d, target %d)",
+								   io - aio_ctl->in_progress_io,
+								   (unsigned long long) io->generation,
+								   my_aio->issued_count + my_aio->issued_abandoned_count,
+								   current_inflight,
+								   io_max_concurrency),
+							errhidestmt(true),
+							errhidecontext(true));
+					pgaio_io_wait_internal(io,
+										   /* holding_reference = */ true,
+										   /* in_error = */ false,
+										   /* call_local = */ false);
+					current_inflight = pg_atomic_read_u32(&my_aio->inflight_count);
+					break;
+				}
+			}
+		}
+
+		if (current_inflight < io_max_concurrency)
+			break;
+
+		if (my_aio->issued_abandoned_count > 0)
+		{
+			dlist_iter iter;
+
+			io = NULL;
+
+			LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
+			dlist_foreach(iter, &my_aio->issued_abandoned)
+			{
+				io = dlist_container(PgAioInProgress, owner_node, iter.cur);
+
+				if (io->flags & PGAIOIP_INFLIGHT)
+					break;
+				else
+					io = NULL;
+			}
+			LWLockRelease(SharedAIOCtlLock);
+
+			if (io == NULL)
+				continue;
+
+			ereport(DEBUG2,
+					errmsg("applying per-backend limit to issued_abandoned IO %zu/%llu (current %d in %d, target %d)",
+						   io - aio_ctl->in_progress_io,
+						   (unsigned long long) io->generation,
+						   my_aio->issued_count + my_aio->issued_abandoned_count,
+						   current_inflight,
+						   io_max_concurrency),
+					errhidestmt(true),
+					errhidecontext(true));
+
+			pgaio_io_wait_internal(io,
+								   /* holding_reference = */ false,
+								   /* in_error = */ false,
+								   /* call_local = */ false);
+		}
+
+		current_inflight = pg_atomic_read_u32(&my_aio->inflight_count);
+	}
+}
+
+static void
+pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_error, bool call_local)
 {
 	PgAioIPFlags init_flags;
 	PgAioIPFlags flags;
@@ -1565,6 +1656,7 @@ pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_erro
 	if ((init_flags & PGAIOIP_PENDING) &&
 		(!IsUnderPostmaster || io->owner_id == my_aio_id))
 	{
+		Assert(call_local);
 		pgaio_submit_pending(false);
 	}
 
@@ -1624,7 +1716,7 @@ again:
 			(flags & done_flags))
 			break;
 
-		pgaio_drain(context, in_error);
+		pgaio_drain(context, in_error, call_local);
 
 		current_generation = *(volatile uint64*) &io->generation;
 		flags = *(volatile PgAioIPFlags*) &io->flags;
@@ -1633,7 +1725,7 @@ again:
 			(flags & done_flags))
 			break;
 
-		if (my_aio->pending_count > 0)
+		if (my_aio->pending_count > 0 && call_local)
 		{
 			/*
 			 * If we otherwise would have to sleep submit all pending
@@ -1699,6 +1791,7 @@ out:
 	current_generation = *(volatile uint64*) &io->generation;
 
 	if (init_generation == current_generation &&
+		call_local &&
 		holding_reference &&
 		!(flags & PGAIOIP_LOCAL_CALLBACK_CALLED))
 	{
@@ -1746,7 +1839,7 @@ out:
 void
 pgaio_io_wait(PgAioInProgress *io, bool holding_reference)
 {
-	pgaio_io_wait_internal(io, holding_reference, /* in_error = */ false);
+	pgaio_io_wait_internal(io, holding_reference, /* in_error = */ false, true);
 }
 
 PgAioInProgress *
@@ -1776,7 +1869,7 @@ pgaio_io_get(void)
 		 * Also, need to protect against too many ios handed out but not used.
 		 */
 		for (int i = 0; i < aio_ctl->num_contexts; i++)
-			pgaio_drain(&aio_ctl->contexts[i], false);
+			pgaio_drain(&aio_ctl->contexts[i], false, true);
 
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
 	}
@@ -2025,8 +2118,6 @@ pgaio_finish_io(PgAioInProgress *io)
 {
 	if (my_aio->pending_count >= PGAIO_SUBMIT_BATCH_SIZE)
 		pgaio_submit_pending(true);
-	else
-		pgaio_backpressure(&aio_ctl->contexts[0], "get_io");
 }
 
 
@@ -2423,7 +2514,7 @@ pgaio_bounce_buffer_get(void)
 		if (!bb)
 		{
 			for (int i = 0; i < aio_ctl->num_contexts; i++)
-				pgaio_drain(&aio_ctl->contexts[i], false);
+				pgaio_drain(&aio_ctl->contexts[i], false, true);
 		}
 		else
 			break;
@@ -2515,134 +2606,94 @@ pgaio_acquire_context(void)
  */
 
 static int
-pgaio_uring_submit(bool drain)
+pgaio_uring_submit(int max_submit, bool drain)
 {
 	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
 	struct io_uring_sqe *sqe[PGAIO_SUBMIT_BATCH_SIZE];
-	int total_submitted = 0;
+	struct iovec *iovs = pgaio_uring_submit_iovecs;
+	PgAioContext *context;
+	int nios = 0;
+
+	context = pgaio_acquire_context();
+
+	Assert(max_submit != 0 && max_submit <= my_aio->pending_count);
 
 	while (!dlist_is_empty(&my_aio->pending))
 	{
-		int nios = 0;
-		int nsubmit = Min(my_aio->pending_count, PGAIO_SUBMIT_BATCH_SIZE);
-		int inflight_add = 0;
-		struct iovec *iovs = pgaio_uring_submit_iovecs;
+		dlist_node *node;
+		PgAioInProgress *io;
 
-		PgAioContext *context = pgaio_acquire_context();
-
-		Assert(nsubmit != 0 && nsubmit <= my_aio->pending_count);
-
-		for (int i = 0; i < nsubmit; i++)
-		{
-			dlist_node *node;
-			PgAioInProgress *io, *cur;
-
-			sqe[nios] = io_uring_get_sqe(&context->io_uring_ring);
-
-			if (!sqe[nios])
-				break;
-
-			node = dlist_head_node(&my_aio->pending);
-			io = dlist_container(PgAioInProgress, io_node, node);
-
-			Assert(io->flags & PGAIOIP_PENDING);
-
-			ios[nios] = io;
-			inflight_add += pgaio_uring_sq_from_io(ios[nios], sqe[nios], &iovs);
-
-			cur = io;
-
-			while (cur)
-			{
-				Assert(cur->flags & PGAIOIP_PENDING);
-
-				cur->ring = context - aio_ctl->contexts;
-
-				*(volatile PgAioIPFlags*) &cur->flags =
-					(cur->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
-
-				dlist_delete_from(&my_aio->pending, &cur->io_node);
-				my_aio->pending_count--;
-
-				if (cur->user_referenced)
-				{
-					Assert(my_aio->outstanding_count > 0);
-					dlist_delete_from(&my_aio->outstanding, &cur->owner_node);
-					my_aio->outstanding_count--;
-
-					dlist_push_tail(&my_aio->issued, &cur->owner_node);
-					my_aio->issued_count++;
-				}
-				else
-				{
-#ifdef PGAIO_VERBOSE
-					ereport(DEBUG2,
-							errmsg("putting aio %zu onto issued_abandoned during submit",
-								   cur - aio_ctl->in_progress_io),
-							errhidecontext(1),
-							errhidestmt(1));
-#endif
-
-					LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
-					dlist_push_tail(&my_aio->issued_abandoned, &cur->owner_node);
-					my_aio->issued_abandoned_count++;
-					LWLockRelease(SharedAIOCtlLock);
-				}
-
-				cur = cur->merge_with;
-
-				if (cur)
-					i++;
-			}
-
-			nios++;
-			total_submitted++;
-		}
-
-		if (nios > 0)
-		{
-			int ret;
-
-			pg_atomic_add_fetch_u32(&my_aio->inflight_count, inflight_add);
-			my_aio->submissions_total_count++;
-
-	again:
-			pgstat_report_wait_start(WAIT_EVENT_AIO_SUBMIT);
-			ret = io_uring_submit(&context->io_uring_ring);
-			pgstat_report_wait_end();
-
-			if (ret == -EINTR)
-				goto again;
-
-			if (ret < 0)
-				elog(PANIC, "failed: %d/%s",
-					 ret, strerror(-ret));
-		}
-
-		LWLockRelease(&context->submission_lock);
+		if (nios == max_submit)
+			break;
 
 		/*
-		 * Others might have been waiting for this IO. Because it wasn't
-		 * marked as in-flight until now, they might be waiting for the
-		 * CV. Wake'em up.
+		 * XXX: Should there be a per-ring limit? If so, we'd probably best
+		 * apply it here.
 		 */
-		for (int i = 0; i < nios; i++)
-		{
-			PgAioInProgress *cur = ios[i];
 
-			while (cur)
-			{
-				ConditionVariableBroadcast(&cur->cv);
-				cur = cur->merge_with;
-			}
+		sqe[nios] = io_uring_get_sqe(&context->io_uring_ring);
+
+		if (!sqe[nios])
+		{
+			Assert(nios != 0);
+			elog(WARNING, "io_uring_get_sqe() returned NULL?");
+			break;
 		}
 
-		/* check if there are completions we could process */
-		if (drain)
-			pgaio_drain(context, false);
+		node = dlist_head_node(&my_aio->pending);
+		io = dlist_container(PgAioInProgress, io_node, node);
+		ios[nios] = io;
+
+		pgaio_io_prepare_submit(io, context - aio_ctl->contexts);
+
+		pgaio_uring_sq_from_io(ios[nios], sqe[nios], &iovs);
+
+		nios++;
 	}
 
-	return total_submitted;
+	Assert(nios > 0);
+
+	{
+		int ret;
+
+		pg_atomic_add_fetch_u32(&my_aio->inflight_count, nios);
+		my_aio->submissions_total_count++;
+
+again:
+		pgstat_report_wait_start(WAIT_EVENT_AIO_SUBMIT);
+		ret = io_uring_submit(&context->io_uring_ring);
+		pgstat_report_wait_end();
+
+		if (ret == -EINTR)
+			goto again;
+
+		if (ret < 0)
+			elog(PANIC, "failed: %d/%s",
+				 ret, strerror(-ret));
+	}
+
+	LWLockRelease(&context->submission_lock);
+
+	/*
+	 * Others might have been waiting for this IO. Because it wasn't
+	 * marked as in-flight until now, they might be waiting for the
+	 * CV. Wake'em up.
+	 */
+	for (int i = 0; i < nios; i++)
+	{
+		PgAioInProgress *cur = ios[i];
+
+		while (cur)
+		{
+			ConditionVariableBroadcast(&cur->cv);
+			cur = cur->merge_with;
+		}
+	}
+
+	if (drain)
+		pgaio_drain(context, false, false);
+
+	return nios;
 }
 
 static int
@@ -2763,7 +2814,6 @@ pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe)
 	*(volatile PgAioIPFlags*) &io->flags = (io->flags & ~PGAIOIP_INFLIGHT) | PGAIOIP_REAPED;
 	io->result = cqe->res;
 
-	// FIXME: can't do that currently, in other backends list
 	dlist_push_tail(&my_aio->reaped, &io->io_node);
 
 	/*
@@ -2798,10 +2848,6 @@ prep_read_buffer_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec
 		iovs[niov].iov_len = cur->d.read_buffer.nbytes - cur->d.read_buffer.already_done;
 
 		niov++;
-
-		if (niov > 0)
-			cur->flags |= PGAIOIP_INFLIGHT;
-
 		cur = cur->merge_with;
 	}
 
@@ -2829,10 +2875,6 @@ prep_write_buffer_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iove
 		iovs[niov].iov_len = cur->d.write_buffer.nbytes - cur->d.write_buffer.already_done;
 
 		niov++;
-
-		if (niov > 0)
-			cur->flags |= PGAIOIP_INFLIGHT;
-
 		cur = cur->merge_with;
 	}
 
@@ -2859,10 +2901,6 @@ prep_write_wal_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *
 		iovs[niov].iov_len = cur->d.write_wal.nbytes - cur->d.write_wal.already_done;
 
 		niov++;
-
-		if (niov > 0)
-			cur->flags |= PGAIOIP_INFLIGHT;
-
 		cur = cur->merge_with;
 	}
 
@@ -2889,10 +2927,6 @@ prep_write_generic_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iov
 		iovs[niov].iov_len = cur->d.write_generic.nbytes - cur->d.write_generic.already_done;
 
 		niov++;
-
-		if (niov > 0)
-			cur->flags |= PGAIOIP_INFLIGHT;
-
 		cur = cur->merge_with;
 	}
 
@@ -2904,7 +2938,7 @@ prep_write_generic_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iov
 	return niov;
 }
 
-static int
+static void
 pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs)
 {
 	int submitted = 1;
@@ -2971,8 +3005,6 @@ pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iov
 	}
 
 	io_uring_sqe_set_data(sqe, io);
-
-	return submitted;
 }
 
 static int
