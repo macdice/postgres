@@ -249,6 +249,13 @@ pg_streaming_read_alloc(uint32 iodepth, uintptr_t pgsr_private,
 void
 pg_streaming_read_free(PgStreamingRead *pgsr)
 {
+	/*
+	 * Prevent further read-ahead from being queued in the completion
+	 * callback. We'd not necessarily wait for them in this loop, leaving
+	 * their completion callbacks point to already freed memory.
+	 */
+	pgsr->hit_end = true;
+
 	for (int i = 0; i < pgsr->all_items_count; i++)
 	{
 		PgStreamingReadItem *this_read = &pgsr->all_items[i];
@@ -289,6 +296,7 @@ pg_streaming_read_complete(PgAioOnCompletionLocalContext *ocb, PgAioInProgress *
 
 	Assert(this_read->in_progress);
 	Assert(this_read->valid);
+	Assert(this_read->aio == io);
 	Assert(pgsr->inflight_count > 0);
 	Assert(pgaio_io_done(io));
 	Assert(pgaio_io_success(io));
