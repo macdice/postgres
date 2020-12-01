@@ -172,6 +172,9 @@ struct PgAioInProgress
 
 	ConditionVariable cv;
 
+	/* index into context->iovec, or -1 */
+	int32 used_iovec;
+
 	PgAioBounceBuffer *bb;
 
 	PgAioInProgress *merge_with;
@@ -260,6 +263,17 @@ struct PgAioBounceBuffer
 	dlist_node node;
 	char *buffer;
 };
+
+/*
+ * An iovec that can represent the biggest possible iovec (due to combining)
+ * we may need for a single IO submission.
+ */
+typedef struct PgAioIovec
+{
+	slist_node node;
+	struct iovec iovec[PGAIO_MAX_COMBINE];
+} PgAioIovec;
+
 
 /*
  * XXX: Really want a proclist like structure that works with integer
@@ -375,7 +389,25 @@ typedef struct PgAioContext
 {
 	LWLock submission_lock;
 	LWLock completion_lock;
+
 	struct io_uring io_uring_ring;
+
+	/*
+	 * For many versions of io_uring iovecs need to be in shared memory. The
+	 * lists of available iovecs are split to be under the submission /
+	 * completion locks - that allows to avoid additional lock acquisitions in
+	 * the common cases.
+	 */
+	PgAioIovec *iovecs;
+
+	/* locked by submission lock */
+	slist_head unused_iovecs;
+	uint32 unused_iovecs_count;
+
+	/* locked by completion lock */
+	slist_head reaped_iovecs;
+	uint32 reaped_iovecs_count;
+
 	/* XXX: probably worth padding to a cacheline boundary here */
 } PgAioContext;
 
@@ -421,8 +453,9 @@ static int pgaio_uring_submit(int max_submit, bool drain);
 static int pgaio_uring_drain(PgAioContext *context);
 static void pgaio_uring_wait_one(PgAioContext *context, PgAioInProgress *io, uint32 wait_event_info);
 
-static void pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs);
-static void pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe);
+static void pgaio_uring_sq_from_io(PgAioContext *context, PgAioInProgress *io, struct io_uring_sqe *sqe);
+static void pgaio_uring_io_from_cqe(PgAioContext *context, struct io_uring_cqe *cqe);
+static void pgaio_uring_iovec_transfer(PgAioContext *context);
 
 static int __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
 								unsigned flags, sigset_t *sig);
@@ -489,9 +522,6 @@ static dlist_head local_recycle_requests;
 /* io_uring local state */
 struct io_uring local_ring;
 
-#define PGAIO_URING_SUBMIT_MAX_IOVEC (PGAIO_SUBMIT_BATCH_SIZE * PGAIO_MAX_COMBINE)
-struct iovec pgaio_uring_submit_iovecs[PGAIO_URING_SUBMIT_MAX_IOVEC];
-
 static Size
 AioCtlShmemSize(void)
 {
@@ -532,14 +562,28 @@ AioBounceShmemSize(void)
 static Size
 AioContextShmemSize(void)
 {
-	return mul_size(PGAIO_NUM_CONTEXTS, sizeof(PgAioContext));
+	return mul_size(PGAIO_NUM_CONTEXTS,	sizeof(PgAioContext));
+}
+
+static Size
+AioContextIovecsShmemSize(void)
+{
+	return mul_size(PGAIO_NUM_CONTEXTS,
+					mul_size(sizeof(PgAioIovec), max_aio_in_flight));
 }
 
 Size
 AioShmemSize(void)
 {
-	return add_size(add_size(AioCtlShmemSize(), AioBounceShmemSize()),
-					add_size(AioCtlBackendShmemSize(), AioContextShmemSize()));
+	Size		sz = 0;
+
+	sz = add_size(sz, AioCtlShmemSize());
+	sz = add_size(sz, AioBounceShmemSize());
+	sz = add_size(sz, AioCtlBackendShmemSize());
+	sz = add_size(sz, AioContextShmemSize());
+	sz = add_size(sz, AioContextIovecsShmemSize());
+
+	return sz;
 }
 
 void
@@ -618,8 +662,16 @@ AioShmemInit(void)
 		}
 
 		{
+			PgAioIovec *iovecs;
+
 			aio_ctl->num_contexts = PGAIO_NUM_CONTEXTS;
 			aio_ctl->contexts = ShmemInitStruct("PgAioContexts", AioContextShmemSize(), &found);
+			Assert(!found);
+
+			iovecs = (PgAioIovec *)
+			ShmemInitStruct("PgAioContextsIovecs", AioContextIovecsShmemSize(), &found);
+			Assert(!found);
+			memset(iovecs, 0, AioContextIovecsShmemSize());
 
 			for (int contextno = 0; contextno < aio_ctl->num_contexts; contextno++)
 			{
@@ -628,6 +680,18 @@ AioShmemInit(void)
 
 				LWLockInitialize(&context->submission_lock, LWTRANCHE_AIO_CONTEXT_SUBMISSION);
 				LWLockInitialize(&context->completion_lock, LWTRANCHE_AIO_CONTEXT_COMPLETION);
+
+				slist_init(&context->unused_iovecs);
+				slist_init(&context->reaped_iovecs);
+
+				context->iovecs = iovecs;
+				iovecs += max_aio_in_flight;
+
+				for (uint32 i = 0; i < io_max_concurrency; i++)
+				{
+					slist_push_head(&context->unused_iovecs, &context->iovecs[i].node);
+					context->unused_iovecs_count++;
+				}
 
 				/*
 				 * XXX: Probably worth sharing the WQ between the different
@@ -2610,7 +2674,6 @@ pgaio_uring_submit(int max_submit, bool drain)
 {
 	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
 	struct io_uring_sqe *sqe[PGAIO_SUBMIT_BATCH_SIZE];
-	struct iovec *iovs = pgaio_uring_submit_iovecs;
 	PgAioContext *context;
 	int nios = 0;
 
@@ -2646,7 +2709,7 @@ pgaio_uring_submit(int max_submit, bool drain)
 
 		pgaio_io_prepare_submit(io, context - aio_ctl->contexts);
 
-		pgaio_uring_sq_from_io(ios[nios], sqe[nios], &iovs);
+		pgaio_uring_sq_from_io(context, ios[nios], sqe[nios]);
 
 		nios++;
 	}
@@ -2734,10 +2797,23 @@ pgaio_uring_drain(PgAioContext *context)
 		{
 			struct io_uring_cqe *cqe = reaped_cqes[i];
 
-			pgaio_uring_io_from_cqe(cqe);
+			pgaio_uring_io_from_cqe(context, cqe);
 
 			io_uring_cqe_seen(&context->io_uring_ring, cqe);
 		}
+	}
+
+	if (context->reaped_iovecs_count > context->unused_iovecs_count &&
+		LWLockConditionalAcquire(&context->submission_lock, LW_EXCLUSIVE))
+	{
+		ereport(DEBUG4,
+				errmsg("plenty reaped iovecs (%d), transferring",
+					   context->reaped_iovecs_count),
+				errhidestmt(true),
+				errhidecontext(true));
+
+		pgaio_uring_iovec_transfer(context);
+		LWLockRelease(&context->submission_lock);
 	}
 
 	LWLockRelease(&context->completion_lock);
@@ -2802,7 +2878,7 @@ pgaio_uring_wait_one(PgAioContext *context, PgAioInProgress *io, uint32 wait_eve
 }
 
 static void
-pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe)
+pgaio_uring_io_from_cqe(PgAioContext *context, struct io_uring_cqe *cqe)
 {
 	PgAioInProgress *io;
 
@@ -2815,6 +2891,14 @@ pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe)
 	io->result = cqe->res;
 
 	dlist_push_tail(&my_aio->reaped, &io->io_node);
+
+	if (io->used_iovec != -1)
+	{
+		PgAioIovec *iovec = &context->iovecs[io->used_iovec];
+
+		slist_push_head(&context->reaped_iovecs, &iovec->node);
+		context->reaped_iovecs_count++;
+	}
 
 	/*
 	 * FIXME: needs to be removed at some point, this is effectively a
@@ -2833,7 +2917,7 @@ pgaio_uring_io_from_cqe(struct io_uring_cqe *cqe)
 /*
  * FIXME: These need to be deduplicated.
  */
-static int
+static void
 prep_read_buffer_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *iovs)
 {
 	PgAioInProgress *cur;
@@ -2856,11 +2940,9 @@ prep_read_buffer_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec
 						iovs,
 						niov,
 						offset);
-
-	return niov;
 }
 
-static int
+static void
 prep_write_buffer_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *iovs)
 {
 	PgAioInProgress *cur;
@@ -2883,10 +2965,9 @@ prep_write_buffer_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iove
 						 iovs,
 						 niov,
 						 offset);
-	return niov;
 }
 
-static int
+static void
 prep_write_wal_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *iovs)
 {
 	PgAioInProgress *cur;
@@ -2909,10 +2990,9 @@ prep_write_wal_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *
 						iovs,
 						niov,
 						offset);
-	return niov;
 }
 
-static int
+static void
 prep_write_generic_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *iovs)
 {
 	PgAioInProgress *cur;
@@ -2935,13 +3015,58 @@ prep_write_generic_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iov
 						iovs,
 						niov,
 						offset);
-	return niov;
 }
 
 static void
-pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec **iovs)
+pgaio_uring_iovec_transfer(PgAioContext *context)
 {
-	int submitted = 1;
+	Assert(LWLockHeldByMe(&context->submission_lock));
+	Assert(LWLockHeldByMe(&context->completion_lock));
+
+	while (!slist_is_empty(&context->reaped_iovecs))
+	{
+		slist_push_head(&context->unused_iovecs, slist_pop_head_node(&context->reaped_iovecs));
+	}
+
+	context->unused_iovecs_count += context->reaped_iovecs_count;
+	context->reaped_iovecs_count = 0;
+}
+
+static struct PgAioIovec *
+pgaio_uring_iovec_get(PgAioContext *context, PgAioInProgress *io)
+{
+	slist_node *node;
+	PgAioIovec *iov;
+
+	if (context->unused_iovecs_count == 0)
+	{
+		ereport(DEBUG2,
+				errmsg("out of unused iovecs, transferring %d reaped ones",
+					   context->reaped_iovecs_count),
+				errhidestmt(true),
+				errhidecontext(true));
+		LWLockAcquire(&context->completion_lock, LW_EXCLUSIVE);
+		Assert(context->reaped_iovecs_count > 0);
+		pgaio_uring_iovec_transfer(context);
+		LWLockRelease(&context->completion_lock);
+		Assert(context->unused_iovecs_count > 0);
+	}
+
+	context->unused_iovecs_count--;
+	node = slist_pop_head_node(&context->unused_iovecs);
+	iov = slist_container(PgAioIovec, node, node);
+
+	io->used_iovec = iov - context->iovecs;
+
+	return iov;
+}
+
+static void
+pgaio_uring_sq_from_io(PgAioContext *context, PgAioInProgress *io, struct io_uring_sqe *sqe)
+{
+	PgAioIovec *iovec;
+
+	io->used_iovec = -1;
 
 	switch (io->type)
 	{
@@ -2962,14 +3087,14 @@ pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iov
 			break;
 
 		case PGAIO_READ_BUFFER:
-			submitted = prep_read_buffer_iov(io, sqe, *iovs);
-			*iovs += submitted;
+			iovec = pgaio_uring_iovec_get(context, io);
+			prep_read_buffer_iov(io, sqe, iovec->iovec);
 			//sqe->flags |= IOSQE_ASYNC;
 			break;
 
 		case PGAIO_WRITE_BUFFER:
-			submitted = prep_write_buffer_iov(io, sqe, *iovs);
-			*iovs += submitted;
+			iovec = pgaio_uring_iovec_get(context, io);
+			prep_write_buffer_iov(io, sqe, iovec->iovec);
 			break;
 
 		case PGAIO_FLUSH_RANGE:
@@ -2983,15 +3108,15 @@ pgaio_uring_sq_from_io(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iov
 			break;
 
 		case PGAIO_WRITE_WAL:
-			submitted = prep_write_wal_iov(io, sqe, *iovs);
-			*iovs += submitted;
+			iovec = pgaio_uring_iovec_get(context, io);
+			prep_write_wal_iov(io, sqe, iovec->iovec);
 			if (io->d.write_wal.no_reorder)
 				sqe->flags = IOSQE_IO_DRAIN;
 			break;
 
 		case PGAIO_WRITE_GENERIC:
-			submitted = prep_write_generic_iov(io, sqe, *iovs);
-			*iovs += submitted;
+			iovec = pgaio_uring_iovec_get(context, io);
+			prep_write_generic_iov(io, sqe, iovec->iovec);
 			if (io->d.write_generic.no_reorder)
 				sqe->flags = IOSQE_IO_DRAIN;
 			break;
