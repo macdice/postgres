@@ -2303,16 +2303,17 @@ pgaio_io_action_desc(PgAioInProgress *io, StringInfo s)
 static void
 pgaio_io_print_one(PgAioInProgress *io, StringInfo s)
 {
-	appendStringInfo(s, "aio %zu: ring: %d, init: %d, flags: ",
+	appendStringInfo(s, "aio %zu/"UINT64_FORMAT": action: %s, ring: %d, init: %d, flags: ",
 					 io - aio_ctl->in_progress_io,
+					 io->generation,
+					 pgaio_io_action_string(io->type),
 					 io->ring,
 					 io->owner_id);
 	pgaio_io_flag_string(io->flags, s);
-	appendStringInfo(s, ", result: %d, user/system_referenced: %d/%d, action: %s (",
+	appendStringInfo(s, ", result: %d, user/system_referenced: %d/%d (",
 					 io->result,
 					 io->user_referenced,
-					 io->system_referenced,
-					 pgaio_io_action_string(io->type));
+					 io->system_referenced);
 	pgaio_io_action_desc(io, s);
 	appendStringInfoString(s, ")");
 }
