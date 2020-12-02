@@ -13,10 +13,20 @@ jobs:
       run: ./configure --enable-cassert --enable-debug --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-openssl --with-icu --with-llvm
     - name: Build
       run: echo "COPT=-Wall -Werror" > src/Makefile.custom && make -s -j3
-    - name: Check
-      run: make -s check-world' || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
+    - name: Check world
+      run: make -s check-world || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
       env:
         PG_TEST_EXTRA: "ssl ldap kerberos"
+    - name: Look for clues 
+      if: ${{ failure() }}
+      run: |
+        # dump useful logs (TODO: what else needs to be here?)
+        for F in ` find . -name initdb.log -o -name regression.diffs ` ; do
+          echo === $F ===
+          head -1000 $F
+        done
+        # look for core files
+        # TODO
     - name: Documentation
       run: make -s docs
 
