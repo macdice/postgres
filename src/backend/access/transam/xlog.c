@@ -684,6 +684,11 @@ typedef struct XLogCtlData
 	int			XLogCacheBlck;	/* highest allocated xlog buffer index */
 
 	/*
+	 * One reusable buffer for zeroing out WAL files.
+	 */
+	char	   *zerobuf;
+
+	/*
 	 * Shared copy of ThisTimeLineID. Does not change after end-of-recovery.
 	 * If we created a new timeline when the system was started up,
 	 * PrevTimeLineID is the old timeline's ID that we forked off from.
@@ -4144,7 +4149,6 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 {
 	char		path[MAXPGPATH];
 	char		tmppath[MAXPGPATH];
-	PGAlignedXLogBlock zbuffer;
 	XLogSegNo	installed_segno;
 	XLogSegNo	max_segno;
 	int			fd;
@@ -4202,7 +4206,6 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 				(errcode_for_file_access(),
 				 errmsg("could not create file \"%s\": %m", tmppath)));
 
-	memset(zbuffer.data, 0, XLOG_BLCKSZ);
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
 	save_errno = 0;
@@ -4225,27 +4228,16 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 		}
 		else
 		{
-#if 1
-			PgAioBounceBuffer *bb;
-			char	   *zerobuf;
-			bb = pgaio_bounce_buffer_get();
-			zerobuf = pgaio_bounce_buffer_buffer(bb);
-			memset(zerobuf, 0, BLCKSZ);
-
-			StaticAssertStmt(BLCKSZ == XLOG_BLCKSZ, "mismatch not supported");
-#endif
-
 			for (nbytes = 0; nbytes < wal_segment_size; nbytes += XLOG_BLCKSZ)
 			{
 #if 1
 				PgAioInProgress *aio = pg_streaming_write_get_io(pgsw);
 
-				pgaio_assoc_bounce_buffer(aio, bb);
-				pgaio_io_start_write_generic(aio, fd, nbytes, XLOG_BLCKSZ, zerobuf, false);
+				pgaio_io_start_write_generic(aio, fd, nbytes, XLOG_BLCKSZ, XLogCtl->zerobuf, false);
 				pg_streaming_write_write(pgsw, aio, NULL);
 #else
 				errno = 0;
-				if (write(fd, zbuffer.data, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+				if (write(fd, XLogCtl->zerobuf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
 				{
 					/* if write didn't set errno, assume no disk space */
 					save_errno = errno ? errno : ENOSPC;
@@ -4262,7 +4254,7 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 		 * enough.
 		 */
 		errno = 0;
-		if (pg_pwrite(fd, zbuffer.data, 1, wal_segment_size - 1) != 1)
+		if (pg_pwrite(fd, XLogCtl->zerobuf, 1, wal_segment_size - 1) != 1)
 		{
 			/* if write didn't set errno, assume no disk space */
 			save_errno = errno ? errno : ENOSPC;
@@ -6027,6 +6019,8 @@ XLOGShmemSize(void)
 	size = add_size(size, XLOG_BLCKSZ);
 	/* and the buffers themselves */
 	size = add_size(size, mul_size(XLOG_BLCKSZ, XLOGbuffers));
+	/* and zerobuf */
+	size = add_size(size, XLOG_BLCKSZ);
 
 	size = add_size(size, XLogIOQueueSize());
 
@@ -6128,6 +6122,11 @@ XLOGShmemInit(void)
 	allocptr = (char *) TYPEALIGN(XLOG_BLCKSZ, allocptr);
 	XLogCtl->pages = allocptr;
 	memset(XLogCtl->pages, 0, (Size) XLOG_BLCKSZ * XLOGbuffers);
+	allocptr += XLOG_BLCKSZ * XLOGbuffers;
+
+	XLogCtl->zerobuf = allocptr;
+	memset(XLogCtl->zerobuf, 0, XLOG_BLCKSZ);
+	allocptr += XLOG_BLCKSZ;
 
 	/*
 	 * Do basic initialization of XLogCtl shared data. (StartupXLOG will fill
