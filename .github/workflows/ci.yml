@@ -14,7 +14,7 @@ jobs:
     - name: Build
       run: echo "COPT=-Wall -Werror" > src/Makefile.custom && make -s -j3
     - name: Check world
-      run: make -s check-world || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
+      run: make -s check-world
       env:
         PG_TEST_EXTRA: "ssl ldap kerberos"
     - name: Look for clues 
