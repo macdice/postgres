@@ -57,8 +57,18 @@
 
 #define PGAIO_NUM_CONTEXTS 8
 
-
-typedef enum PgAioAction
+/*
+ * The type of AIO.
+ *
+ * To keep PgAioInProgress smaller try to tell the compiler to only use the
+ * minimal space. We could alternatively just use a uint8, but then we'd need
+ * casts in more places...
+ */
+typedef enum
+#ifdef pg_attribute_packed
+pg_attribute_packed()
+#endif
+	PgAioAction
 {
 	/* intentionally the zero value, to help catch zeroed memory etc */
 	PGAIO_INVALID = 0,
