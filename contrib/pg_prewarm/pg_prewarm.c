@@ -48,6 +48,7 @@ typedef struct prefetch
 	ForkNumber forkNumber;
 	int64 curblock;
 	int64 lastblock;
+	List *bbs;
 } prefetch;
 
 static PgStreamingReadNextStatus
@@ -114,12 +115,20 @@ prewarm_smgr_next(uintptr_t pgsr_private, PgAioInProgress *aio, uintptr_t *read_
 {
 	prefetch *p = (prefetch *) pgsr_private;
 	BlockNumber blockno;
-	PgAioBounceBuffer *bb = pgaio_bounce_buffer_get();
+	PgAioBounceBuffer *bb;
 
 	if (p->curblock <= p->lastblock)
 		blockno = p->curblock++;
 	else
 		return PGSR_NEXT_END;
+
+	if (p->bbs != NIL)
+	{
+		bb = lfirst(list_tail(p->bbs));
+		p->bbs = list_delete_last(p->bbs);
+	}
+	else
+		bb = pgaio_bounce_buffer_get();
 
 	pgaio_assoc_bounce_buffer(aio, bb);
 
@@ -308,6 +317,7 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		p.forkNumber = forkNumber;
 		p.curblock = 0;
 		p.lastblock = last_block;
+		p.bbs = NIL;
 
 		pgsr = pg_streaming_read_alloc(512, (uintptr_t) &p,
 									   prewarm_buffer_next,
@@ -337,11 +347,13 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	{
 		PgStreamingRead *pgsr;
 		prefetch p;
+		ListCell *lc;
 
 		p.rel = rel;
 		p.forkNumber = forkNumber;
 		p.curblock = 0;
 		p.lastblock = last_block;
+		p.bbs = NIL;
 
 		pgsr = pg_streaming_read_alloc(512, (uintptr_t) &p,
 									   prewarm_smgr_next,
@@ -349,13 +361,15 @@ pg_prewarm(PG_FUNCTION_ARGS)
 
 		for (block = first_block; block <= last_block; ++block)
 		{
-			Page r;
+			PgAioBounceBuffer *bb;
 
 			CHECK_FOR_INTERRUPTS();
 
-			r = (Page) pg_streaming_read_get_next(pgsr);
-			if (r == 0)
+			bb = (PgAioBounceBuffer *) pg_streaming_read_get_next(pgsr);
+			if (bb == NULL)
 				elog(ERROR, "prefetch ended early");
+
+			p.bbs = lappend(p.bbs, (void *) bb);
 
 			++blocks_done;
 		}
@@ -364,6 +378,11 @@ pg_prewarm(PG_FUNCTION_ARGS)
 			elog(ERROR, "unexpected additional buffer");
 
 		pg_streaming_read_free(pgsr);
+
+		foreach(lc, p.bbs)
+		{
+			pgaio_bounce_buffer_release(lfirst(lc));
+		}
 	}
 
 	/* Close relation, release lock. */
