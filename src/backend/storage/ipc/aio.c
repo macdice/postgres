@@ -41,6 +41,7 @@
 #include "utils/builtins.h"
 #include "utils/fmgrprotos.h"
 #include "utils/memutils.h"
+#include "utils/resowner_private.h"
 
 
 #define PGAIO_VERBOSE
@@ -445,7 +446,7 @@ static void pgaio_complete_ios(bool in_error);
 static void pgaio_apply_backend_limit(void);
 static void pgaio_prepare_io(PgAioInProgress *io, PgAioAction action);
 static void pgaio_finish_io(PgAioInProgress *io);
-static void pgaio_bounce_buffer_release_locked(PgAioInProgress *io);
+static void pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, bool release_resowner);
 static void pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_error, bool call_local);
 
 /* io_uring related functions */
@@ -1202,7 +1203,13 @@ pgaio_complete_ios(bool in_error)
 
 				cur->flags = PGAIOIP_UNUSED;
 
-				pgaio_bounce_buffer_release_locked(cur);
+				if (cur->bb)
+				{
+					pgaio_bounce_buffer_release_internal(cur->bb,
+														 /* holding_lock = */ true,
+														 /* release_resowner = */ false);
+					cur->bb = NULL;
+				}
 
 				cur->type = 0;
 				cur->owner_id = INVALID_PGPROCNO;
@@ -2126,9 +2133,8 @@ pgaio_io_recycle(PgAioInProgress *io)
 
 	if (io->bb)
 	{
-		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
-		pgaio_bounce_buffer_release_locked(io);
-		LWLockRelease(SharedAIOCtlLock);
+		pgaio_bounce_buffer_release_internal(io->bb, false, false);
+		io->bb = NULL;
 	}
 
 	if (io->flags & PGAIOIP_DONE)
@@ -2279,7 +2285,13 @@ pgaio_io_release(PgAioInProgress *io)
 		Assert(io->merge_with == NULL);
 
 		/* could do this earlier or conditionally */
-		pgaio_bounce_buffer_release_locked(io);
+		if (io->bb)
+		{
+			pgaio_bounce_buffer_release_internal(io->bb,
+												 /* holding_lock = */ true,
+												 /* release_resowner = */ false);
+			io->bb = NULL;
+		}
 
 		dlist_push_tail(&aio_ctl->unused_ios, &io->owner_node);
 		aio_ctl->used_count--;
@@ -2562,6 +2574,8 @@ pgaio_bounce_buffer_get(void)
 {
 	PgAioBounceBuffer *bb = NULL;
 
+	ResourceOwnerEnlargeAioBB(CurrentResourceOwner);
+
 	while (true)
 	{
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
@@ -2584,24 +2598,38 @@ pgaio_bounce_buffer_get(void)
 			break;
 	}
 
+	pg_atomic_write_u32(&bb->refcount, 1);
+
+	ResourceOwnerRememberAioBB(CurrentResourceOwner, bb);
+
 	return bb;
 }
 
 static void
-pgaio_bounce_buffer_release_locked(PgAioInProgress *io)
+pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, bool release_resowner)
 {
-	PgAioBounceBuffer *bb = io->bb;
+	Assert(holding_lock == LWLockHeldByMe(SharedAIOCtlLock));
+	Assert(bb != NULL);
 
-	Assert(LWLockHeldByMe(SharedAIOCtlLock));
-
-	if (!bb)
-		return;
-
-	io->bb = NULL;
 	if (pg_atomic_sub_fetch_u32(&bb->refcount, 1) != 0)
 		return;
 
+	if (!holding_lock)
+		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
 	dlist_push_tail(&aio_ctl->bounce_buffers, &bb->node);
+	if (!holding_lock)
+		LWLockRelease(SharedAIOCtlLock);
+
+	if (release_resowner)
+		ResourceOwnerForgetAioBB(CurrentResourceOwner, bb);
+}
+
+void
+pgaio_bounce_buffer_release(PgAioBounceBuffer *bb)
+{
+	pgaio_bounce_buffer_release_internal(bb,
+										 /* holding_lock = */ false,
+										 /* release_resowner */ true);
 }
 
 char *
@@ -2617,6 +2645,7 @@ pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb)
 	Assert(io->bb == NULL);
 	Assert(io->flags == PGAIOIP_IDLE);
 	Assert(io->user_referenced);
+	Assert(pg_atomic_read_u32(&bb->refcount) > 0);
 
 	io->bb = bb;
 	pg_atomic_fetch_add_u32(&bb->refcount, 1);

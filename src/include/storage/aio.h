@@ -115,6 +115,7 @@ extern void pgaio_print_list(struct dlist_head *head, struct StringInfoData *s, 
 
 extern void pgaio_assoc_bounce_buffer(PgAioInProgress *io, PgAioBounceBuffer *bb);
 extern PgAioBounceBuffer *pgaio_bounce_buffer_get(void);
+extern void pgaio_bounce_buffer_release(PgAioBounceBuffer *bb);
 extern char *pgaio_bounce_buffer_buffer(PgAioBounceBuffer *bb);
 
 
