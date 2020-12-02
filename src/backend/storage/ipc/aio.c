@@ -207,8 +207,8 @@ struct PgAioInProgress
 		struct
 		{
 			int fd;
-			off_t nbytes;
-			off_t offset;
+			uint64 nbytes;
+			uint32 offset;
 		} flush_range;
 
 		struct
@@ -248,7 +248,7 @@ struct PgAioInProgress
 		struct
 		{
 			int fd;
-			uint32 offset;
+			uint64 offset;
 			uint32 nbytes;
 			uint32 already_done;
 			char *bufdata;
@@ -2426,7 +2426,7 @@ pgaio_io_action_desc(PgAioInProgress *io, StringInfo s)
 							 (unsigned long long) io->d.flush_range.nbytes);
 			break;
 		case PGAIO_READ_BUFFER:
-			appendStringInfo(s, "fd: %d, mode: %d, offset: %d, nbytes: %d, already_done: %d, buf/data: %d/%p",
+			appendStringInfo(s, "fd: %d, mode: %d, offset: %u, nbytes: %u, already_done: %u, buf/data: %d/%p",
 							 io->d.read_buffer.fd,
 							 io->d.read_buffer.mode,
 							 io->d.read_buffer.offset,
@@ -2436,7 +2436,7 @@ pgaio_io_action_desc(PgAioInProgress *io, StringInfo s)
 							 io->d.read_buffer.bufdata);
 			break;
 		case PGAIO_WRITE_BUFFER:
-			appendStringInfo(s, "fd: %d, offset: %d, nbytes: %d, already_done: %d, buf/data: %d/%p",
+			appendStringInfo(s, "fd: %d, offset: %u, nbytes: %u, already_done: %u, buf/data: %u/%p",
 							 io->d.write_buffer.fd,
 							 io->d.write_buffer.offset,
 							 io->d.write_buffer.nbytes,
@@ -2445,19 +2445,19 @@ pgaio_io_action_desc(PgAioInProgress *io, StringInfo s)
 							 io->d.write_buffer.bufdata);
 			break;
 		case PGAIO_WRITE_WAL:
-			appendStringInfo(s, "fd: %d, offset: %d, nbytes: %d, already_done: %d, bufdata: %p, no-reorder: %d",
+			appendStringInfo(s, "fd: %d, offset: %u, nbytes: %u, already_done: %u, bufdata: %p, no-reorder: %d",
 							 io->d.write_wal.fd,
-							 (int) io->d.write_wal.offset,
-							 (int) io->d.write_wal.nbytes,
+							 io->d.write_wal.offset,
+							 io->d.write_wal.nbytes,
 							 io->d.write_wal.already_done,
 							 io->d.write_wal.bufdata,
 							 io->d.write_wal.no_reorder);
 			break;
 		case PGAIO_WRITE_GENERIC:
-			appendStringInfo(s, "fd: %d, offset: %d, nbytes: %d, already_done: %d, bufdata: %p, no-reorder: %d",
+			appendStringInfo(s, "fd: %d, offset: %llu, nbytes: %u, already_done: %u, bufdata: %p, no-reorder: %d",
 							 io->d.write_generic.fd,
-							 (int) io->d.write_generic.offset,
-							 (int) io->d.write_generic.nbytes,
+							 (unsigned long long) io->d.write_generic.offset,
+							 io->d.write_generic.nbytes,
 							 io->d.write_generic.already_done,
 							 io->d.write_generic.bufdata,
 							 io->d.write_generic.no_reorder);
@@ -3025,7 +3025,7 @@ static void
 prep_write_generic_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec *iovs)
 {
 	PgAioInProgress *cur;
-	uint32 offset = io->d.write_generic.offset;
+	off_t offset = io->d.write_generic.offset;
 	int	niov = 0;
 
 	cur = io;
@@ -3182,7 +3182,7 @@ __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complete,
  */
 
 void
-pgaio_io_start_flush_range(PgAioInProgress *io, int fd, off_t offset, off_t nbytes)
+pgaio_io_start_flush_range(PgAioInProgress *io, int fd, uint64 offset, uint32 nbytes)
 {
 	pgaio_prepare_io(io, PGAIO_FLUSH_RANGE);
 
@@ -3297,7 +3297,7 @@ pgaio_io_start_write_wal(PgAioInProgress *io, int fd, uint32 offset, uint32 nbyt
 }
 
 void
-pgaio_io_start_write_generic(PgAioInProgress *io, int fd, uint32 offset, uint32 nbytes, char *bufdata, bool no_reorder)
+pgaio_io_start_write_generic(PgAioInProgress *io, int fd, uint64 offset, uint32 nbytes, char *bufdata, bool no_reorder)
 {
 	Assert(ShmemAddrIsValid(bufdata));
 

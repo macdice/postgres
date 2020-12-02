@@ -84,7 +84,7 @@ typedef struct AioBufferTag
 } AioBufferTag;
 struct buftag;
 
-extern void pgaio_io_start_flush_range(PgAioInProgress *io, int fd, off_t offset, off_t nbytes);
+extern void pgaio_io_start_flush_range(PgAioInProgress *io, int fd, uint64 offset, uint32 nbytes);
 extern void pgaio_io_start_nop(PgAioInProgress *io);
 extern void pgaio_io_start_fsync(PgAioInProgress *io, int fd, bool barrier);
 extern void pgaio_io_start_fdatasync(PgAioInProgress *io, int fd, bool barrier);
@@ -98,7 +98,7 @@ extern void pgaio_io_start_write_wal(PgAioInProgress *io, int fd,
 									 char *bufdata, bool no_reorder,
 									 uint32 write_no);
 extern void pgaio_io_start_write_generic(PgAioInProgress *io, int fd,
-										 uint32 offset, uint32 nbytes,
+										 uint64 offset, uint32 nbytes,
 										 char *bufdata, bool no_reorder);
 extern void pgaio_io_start_fsync_wal(PgAioInProgress *io, int fd, bool barrier,
 									 bool datasync_only, uint32 sync_no);
