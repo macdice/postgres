@@ -1,7 +1,7 @@
 name: ci-macos
 on: [push]
 jobs:
-  ci-linux:
+  ci-macos:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v2
@@ -27,7 +27,7 @@ jobs:
     - name: Look for clues
       if: ${{ failure() }}
       run: |
-        # dump useful logs (TODO: what else needs to be here?)
+        # dump useful logs
         for F in ` find . -name initdb.log -o -name regression.diffs ` ; do
           echo === $F ===
           head -1000 $F

@@ -28,7 +28,7 @@ jobs:
     - name: Look for clues
       if: ${{ failure() }}
       run: |
-        # dump useful logs (TODO: what else needs to be here?)
+        # dump useful logs
         for F in ` find . -name initdb.log -o -name regression.diffs ` ; do
           echo === $F ===
           head -1000 $F
