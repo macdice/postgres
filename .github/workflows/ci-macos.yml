@@ -1,0 +1,38 @@
+name: ci-macos
+on: [push]
+jobs:
+  ci-linux:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install packages
+      run: |
+        cpan -T IPC::Run
+    - name: Configure
+      run: ./configure --enable-cassert --enable-debug --enable-tap-tests --without-readline
+      env:
+        PERL5LIB: ~/perl5/lib/perl5
+    - name: Build
+      run: |
+        echo "COPT=-Wall -Werror" > src/Makefile.custom
+        make -s -j3
+      env:
+        PERL5LIB: ~/perl5/lib/perl5
+    - name: Check world
+      run: |
+        ulimit -c unlimited
+        make -s check-world
+      env:
+        PERL5LIB: ~/perl5/lib/perl5
+    - name: Look for clues
+      if: ${{ failure() }}
+      run: |
+        # dump useful logs (TODO: what else needs to be here?)
+        for F in ` find . -name initdb.log -o -name regression.diffs ` ; do
+          echo === $F ===
+          head -1000 $F
+        done
+        # look for core files and spit out backtraces
+        for corefile in $(find /cores/ -name 'core.*' 2>/dev/null) ; do
+          lldb -c $corefile --batch -o 'thread backtrace all' -o 'quit'
+        done
