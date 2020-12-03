@@ -9,8 +9,8 @@ jobs:
       shell: cmd
       run: |
         choco install -y winflexbison activeperl diffutils
-        move c:\ProgramData\chocolatey\bin\win_flex.exe c:\flex.exe
-        move c:\ProgramData\chocolatey\bin\win_bison.exe c:\bison.exe
+        move C:\lib\winflexbison\tools\win_flex.exe c:\flex.exe
+        move C:\lib\winflexbison\tools\win_bison.exe c:\bison.exe
     - name: Build
       shell: cmd
       run: |
