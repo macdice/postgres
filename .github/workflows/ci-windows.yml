@@ -8,15 +8,17 @@ jobs:
     - name: Install packages
       run: |
         choco install -y winflexbison activeperl diffutils
-        rename c:\ProgramData\chocolatey\bin\win_flex.exe flex.exe
-        rename c:\ProgramData\chocolatey\bin\win_bison.exe bison.exe
     - name: Build
       shell: cmd
       run: |
         SET PATH=%PATH%;C:\Perl64\bin
         call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        perl .github\workflows\ci-windows-buildsetup.pl
+        move .github\workflows\ci-windows-buildsetup.pl buildsetup.pl
+        perl buildsetup.pl
         msbuild pgsql.sln
+      env:
+        FLEX: c:\ProgramData\chocolatey\bin\win_flex.exe
+        BISON: c:\ProgramData\chocolatey\bin\win_bison.exe
     - name: Check
       run: |
         SET PATH=%PATH%;C:\Perl64\bin
