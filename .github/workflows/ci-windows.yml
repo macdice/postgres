@@ -9,12 +9,12 @@ jobs:
       shell: cmd
       run: |
         choco install -y winflexbison activeperl diffutils
-        move C:\lib\winflexbison\tools\win_flex.exe c:\flex.exe
-        move C:\lib\winflexbison\tools\win_bison.exe c:\bison.exe
+        rename "c:\ProgramData\chocolatey\bin\win_flex.exe" flex.exe
+        rename "c:\ProgramData\chocolatey\bin\win_bison.exe" bison.exe
     - name: Build
       shell: cmd
       run: |
-        SET PATH=%PATH%;C:\Perl64\bin;C:\
+        SET PATH=%PATH%;C:\Perl64\bin
         call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
         move .github\workflows\ci-windows-buildsetup.pl buildsetup.pl
         move .github\workflows\ci-windows-dumpregr.pl dumpregr.pl
@@ -23,7 +23,7 @@ jobs:
     - name: Check
       shell: cmd
       run: |
-        SET PATH=%PATH%;C:\Perl64\bin;C:\
+        SET PATH=%PATH%;C:\Perl64\bin
         cd src\tools\msvc && vcregress check
     - name: Look for clues
       if: ${{ failure() }}
