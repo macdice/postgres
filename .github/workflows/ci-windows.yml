@@ -6,20 +6,27 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Install packages
+      shell: cmd
       run: |
         choco install -y winflexbison activeperl diffutils
+        move c:\ProgramData\chocolatey\bin\win_flex.exe c:\flex.exe
+        move c:\ProgramData\chocolatey\bin\win_bison.exe c:\bison.exe
     - name: Build
       shell: cmd
       run: |
-        SET PATH=%PATH%;C:\Perl64\bin
+        SET PATH=%PATH%;C:\Perl64\bin;C:\
         call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
         move .github\workflows\ci-windows-buildsetup.pl buildsetup.pl
+        move .github\workflows\ci-windows-dumpregr.pl dumpregr.pl
         perl buildsetup.pl
         msbuild pgsql.sln
-      env:
-        FLEX: c:\ProgramData\chocolatey\bin\win_flex.exe
-        BISON: c:\ProgramData\chocolatey\bin\win_bison.exe
     - name: Check
+      shell: cmd
       run: |
-        SET PATH=%PATH%;C:\Perl64\bin
+        SET PATH=%PATH%;C:\Perl64\bin;C:\
         cd src\tools\msvc && vcregress check
+    - name: Look for clues
+      if: ${{ failure() }}
+      shell: cmd
+      run: |
+        perl dumpregr.pl
