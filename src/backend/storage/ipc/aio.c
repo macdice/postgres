@@ -457,7 +457,7 @@ static void pgaio_apply_backend_limit(void);
 static void pgaio_prepare_io(PgAioInProgress *io, PgAioAction action);
 static void pgaio_finish_io(PgAioInProgress *io);
 static void pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, bool release_resowner);
-static void pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_error, bool call_local);
+static void pgaio_io_ref_internal(PgAioInProgress *io, PgAioIoRef *ref);
 
 /* io_uring related functions */
 static int pgaio_uring_submit(int max_submit, bool drain);
@@ -621,6 +621,7 @@ AioShmemInit(void)
 			dlist_push_tail(&aio_ctl->unused_ios, &io->owner_node);
 			io->flags = PGAIOIP_UNUSED;
 			io->system_referenced = true;
+			io->generation = 1;
 		}
 
 		aio_ctl->backend_state_count = TotalProcs;
@@ -783,10 +784,14 @@ pgaio_postmaster_before_child_exit(int code, Datum arg)
 	while (!dlist_is_empty(&my_aio->issued_abandoned))
 	{
 		PgAioInProgress *io = NULL;
+		PgAioIoRef ref;
 
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
 		if (!dlist_is_empty(&my_aio->issued_abandoned))
+		{
 			io = dlist_head_element(PgAioInProgress, owner_node, &my_aio->issued_abandoned);
+			pgaio_io_ref_internal(io, &ref);
+		}
 		LWLockRelease(SharedAIOCtlLock);
 
 		if (!io)
@@ -797,9 +802,7 @@ pgaio_postmaster_before_child_exit(int code, Datum arg)
 
 		elog(LOG, "exit wait for abandoned IO %zu", io - aio_ctl->in_progress_io);
 		pgaio_io_print(io, NULL);
-		pgaio_io_wait_internal(io, false,
-							   /* in_error = */ true,
-							   /* call_local = */ false);
+		pgaio_io_wait_ref(&ref, false);
 	}
 
 	elog(DEBUG2, "aio before shmem exit: end");
@@ -1211,6 +1214,9 @@ pgaio_complete_ios(bool in_error)
 				Assert(other->issued_abandoned_count > 0);
 				other->issued_abandoned_count--;
 
+				cur->generation++;
+				pg_write_barrier();
+
 				cur->flags = PGAIOIP_UNUSED;
 
 				if (cur->bb)
@@ -1226,7 +1232,6 @@ pgaio_complete_ios(bool in_error)
 				cur->result = 0;
 				cur->system_referenced = true;
 				cur->on_completion_local = NULL;
-				cur->generation++;
 
 				dlist_push_tail(&aio_ctl->unused_ios, &cur->owner_node);
 				aio_ctl->used_count--;
@@ -1647,6 +1652,8 @@ pgaio_apply_backend_limit(void)
 
 				if (io->flags & PGAIOIP_INFLIGHT)
 				{
+					PgAioIoRef ref;
+
 					ereport(DEBUG2,
 							errmsg("applying per-backend limit to issued IO %zu/%llu (current %d in %d, target %d)",
 								   io - aio_ctl->in_progress_io,
@@ -1656,10 +1663,9 @@ pgaio_apply_backend_limit(void)
 								   io_max_concurrency),
 							errhidestmt(true),
 							errhidecontext(true));
-					pgaio_io_wait_internal(io,
-										   /* holding_reference = */ true,
-										   /* in_error = */ false,
-										   /* call_local = */ false);
+
+					pgaio_io_ref(io, &ref);
+					pgaio_io_wait_ref(&ref, /* call_local = */ false);
 					current_inflight = pg_atomic_read_u32(&my_aio->inflight_count);
 					break;
 				}
@@ -1672,6 +1678,7 @@ pgaio_apply_backend_limit(void)
 		if (my_aio->issued_abandoned_count > 0)
 		{
 			dlist_iter iter;
+			PgAioIoRef ref;
 
 			io = NULL;
 
@@ -1681,7 +1688,10 @@ pgaio_apply_backend_limit(void)
 				io = dlist_container(PgAioInProgress, owner_node, iter.cur);
 
 				if (io->flags & PGAIOIP_INFLIGHT)
+				{
+					pgaio_io_ref_internal(io, &ref);
 					break;
+				}
 				else
 					io = NULL;
 			}
@@ -1700,119 +1710,77 @@ pgaio_apply_backend_limit(void)
 					errhidestmt(true),
 					errhidecontext(true));
 
-			pgaio_io_wait_internal(io,
-								   /* holding_reference = */ false,
-								   /* in_error = */ false,
-								   /* call_local = */ false);
+			pgaio_io_wait_ref(&ref, false);
 		}
 
 		current_inflight = pg_atomic_read_u32(&my_aio->inflight_count);
 	}
 }
 
-static void
-pgaio_io_wait_internal(PgAioInProgress *io, bool holding_reference, bool in_error, bool call_local)
+void
+pgaio_io_wait_ref(PgAioIoRef *ref, bool call_local)
 {
-	PgAioIPFlags init_flags;
+	uint64 ref_generation;
+	PgAioInProgress *io;
+	uint32 done_flags = PGAIOIP_DONE;
 	PgAioIPFlags flags;
-	uint32 done_flags = PGAIOIP_DONE | PGAIOIP_IDLE;
-	uint64 init_generation = *(volatile uint64*) &io->generation;
-	uint64 current_generation;
 	PgAioContext *context;
+	bool am_owner;
 
-#ifdef PGAIO_VERBOSE
-	ereport(DEBUG3,
-			errmsg("waiting for %zu",
-				   io - aio_ctl->in_progress_io),
-			errhidestmt(true),
-			errhidecontext(true));
-#endif
+	Assert(ref->aio_index < max_aio_in_progress);
 
-	init_flags = *(volatile PgAioIPFlags*) &io->flags;
+	io = &aio_ctl->in_progress_io[ref->aio_index];
+	ref_generation = ((uint64) ref->generation_upper) << 32 |
+		ref->generation_lower;
 
-	/*
-	 * If the IO we're waiting for is ours and not yet submitted, submit
-	 * now.
-	 */
-	if ((init_flags & PGAIOIP_PENDING) &&
-		(!IsUnderPostmaster || io->owner_id == my_aio_id))
-	{
-		Assert(call_local);
+	Assert(ref_generation != 0);
+
+	am_owner = io->owner_id == my_aio_id;
+	flags = io->flags;
+	pg_read_barrier();
+
+	if (io->generation != ref_generation)
+		return;
+
+	if (am_owner && (flags & PGAIOIP_PENDING))
 		pgaio_submit_pending(false);
-	}
 
-again:
 	context = &aio_ctl->contexts[io->ring];
-	current_generation = *(volatile uint64*) &io->generation;
-
-	flags = *(volatile PgAioIPFlags*) &io->flags;
-
-	if (in_error && !holding_reference)
-	{
-		if (flags & (PGAIOIP_UNUSED))
-			goto out;
-	}
-	else if (!holding_reference)
-	{
-		/* possible due to racyness */
-		done_flags |= PGAIOIP_UNUSED;
-
-		if (!(flags & (PGAIOIP_IN_PROGRESS)))
-			goto out;
-	}
-	else
-	{
-		Assert(io->user_referenced);
-
-		/*
-		 * Shouldn't wait our own IO when it's not in progress (otherwise this
-		 * pgaio_io_function shouldn't have been called). We can however not
-		 * assert this for the current set of flags, because if the IO was
-		 * retried, the local completion callback could have been called, and
-		 * recycled the IO. Thus check that the initial set of flags didn't
-		 * include IDLE and that either the IO is IDLE or was recycled.
-		 */
-		Assert(!(init_flags & PGAIOIP_IDLE));
-		Assert(!(flags & PGAIOIP_IDLE) ||
-			   current_generation != init_generation);
-	}
-
-	/*
-	 * When holding a reference the IO can't become unused. And if we're not,
-	 * we should have exited above.
-	 */
-	Assert(!(flags & PGAIOIP_UNUSED));
-
-	if (flags & done_flags)
-	{
-		goto out;
-	}
+	Assert(!(flags & (PGAIOIP_UNUSED)));
 
 	while (true)
 	{
-		current_generation = *(volatile uint64*) &io->generation;
-		flags = *(volatile PgAioIPFlags*) &io->flags;
+		flags = io->flags;
+		pg_read_barrier();
 
-		if (current_generation != init_generation ||
-			(flags & done_flags))
-			break;
+		if (io->generation != ref_generation)
+			return;
 
-		pgaio_drain(context, in_error, call_local);
+		if (flags & done_flags)
+			goto wait_ref_out;
 
-		current_generation = *(volatile uint64*) &io->generation;
-		flags = *(volatile PgAioIPFlags*) &io->flags;
+		Assert(!(flags & (PGAIOIP_UNUSED)));
 
-		if (current_generation != init_generation ||
-			(flags & done_flags))
-			break;
+		pgaio_drain(context, false, call_local);
+
+		flags = io->flags;
+		pg_read_barrier();
+
+		if (io->generation != ref_generation)
+			return;
+
+		if (flags & done_flags)
+			goto wait_ref_out;
 
 		if (my_aio->pending_count > 0 && call_local)
 		{
+			/* FIXME: we should call this in a larger number of cases */
+
 			/*
 			 * If we otherwise would have to sleep submit all pending
 			 * requests, to avoid others having to wait for us to submit
-			 * them. Don't want to so when not needing to sleep, as submitting
-			 * IOs in smaller increments can be less efficient.
+			 * them. Don't want to do so when not needing to sleep, as
+			 * submitting IOs in smaller increments can be less efficient.
 			 */
 			pgaio_submit_pending(false);
 		}
@@ -1830,11 +1798,9 @@ again:
 			if (IsUnderPostmaster)
 				ConditionVariablePrepareToSleep(&io->cv);
 
-			current_generation = *(volatile uint64*) &io->generation;
-			flags = *(volatile PgAioIPFlags*) &io->flags;
-
-			if (!(current_generation != init_generation ||
-				  (flags & done_flags)))
+			flags = io->flags;
+			pg_read_barrier();
+			if (io->generation == ref_generation && !(flags & done_flags))
 				ConditionVariableSleep(&io->cv, WAIT_EVENT_AIO_IO_COMPLETE_ONE);
 
 			if (IsUnderPostmaster)
@@ -1842,39 +1808,35 @@ again:
 		}
 	}
 
-	flags = *(volatile PgAioIPFlags*) &io->flags;
-	current_generation = *(volatile uint64*) &io->generation;
+wait_ref_out:
 
-	Assert(init_generation != current_generation ||
-		   flags & done_flags);
+	flags = io->flags;
+	pg_read_barrier();
+	if (io->generation != ref_generation)
+		return;
 
-out:
-	if (!in_error &&
-		init_generation == current_generation &&
-		(flags & (PGAIOIP_SOFT_FAILURE | PGAIOIP_HARD_FAILURE)))
+	Assert(flags & PGAIOIP_DONE);
+
+	if (unlikely(flags & (PGAIOIP_SOFT_FAILURE | PGAIOIP_HARD_FAILURE)))
 	{
 		/* can retry soft failures, but not hard ones */
 		/* FIXME: limit number of soft retries */
 		if (flags & PGAIOIP_SOFT_FAILURE)
 		{
 			pgaio_io_retry(io);
-
-			goto again;
+			pgaio_io_wait_ref(ref, call_local);
 		}
 		else
 		{
+			pgaio_io_print(io, NULL);
 			elog(WARNING, "request %zd failed permanently",
 				 io - aio_ctl->in_progress_io);
 		}
+
+		return;
 	}
 
-	flags = *(volatile PgAioIPFlags*) &io->flags;
-	current_generation = *(volatile uint64*) &io->generation;
-
-	if (init_generation == current_generation &&
-		call_local &&
-		holding_reference &&
-		!(flags & PGAIOIP_LOCAL_CALLBACK_CALLED))
+	if (am_owner && call_local && !(flags & PGAIOIP_LOCAL_CALLBACK_CALLED))
 	{
 		if (flags & PGAIOIP_FOREIGN_DONE)
 		{
@@ -1891,36 +1853,22 @@ out:
 			my_aio->local_completed_count--;
 		}
 
-		pgaio_io_call_local_callback(io, in_error);
+		pgaio_io_call_local_callback(io, false);
 	}
+
 }
 
-
 /*
- * FIXME: The !holding_reference implementation is a really ugly crock. It's
- * needed for things like WaitIO(), where we can't ensure that the io hasn't
- * already been freed and recycled by the time we check. And locking
- * preventing that would be prohibitively expensive.
- *
- * It'd be much better to implement it as something like:
- *
- * aio = buf->io_in_progress;
- * if (buf->io_in_progress)
- * {
- *     pgaio_io_wait_prepare(io);
- *     if (!buf->io_in_progress)
- *         continue;
- *     pgaio_io_wait(io);
- * ...
-
- * where pgaio_io_wait_prepare would start to wait on the IO's condition
- * variable, and the subsequent check of buf->io_in_progress would ensure that
- * wait on the wrong buffer.
  */
 void
-pgaio_io_wait(PgAioInProgress *io, bool holding_reference)
+pgaio_io_wait(PgAioInProgress *io)
 {
-	pgaio_io_wait_internal(io, holding_reference, /* in_error = */ false, true);
+	PgAioIoRef ref;
+
+	Assert(io->user_referenced && io->owner_id == my_aio_id);
+
+	pgaio_io_ref(io, &ref);
+	pgaio_io_wait_ref(&ref, /* call_local = */ true);
 }
 
 PgAioInProgress *
@@ -2016,6 +1964,23 @@ pgaio_io_done(PgAioInProgress *io)
 	}
 
 	return false;
+}
+
+static void
+pgaio_io_ref_internal(PgAioInProgress *io, PgAioIoRef *ref)
+{
+	Assert(io->flags & (PGAIOIP_IDLE | PGAIOIP_IN_PROGRESS | PGAIOIP_DONE));
+
+	ref->aio_index = io - aio_ctl->in_progress_io;
+	ref->generation_upper = (uint32) (io->generation >> 32);
+	ref->generation_lower = (uint32) io->generation;
+}
+
+void
+pgaio_io_ref(PgAioInProgress *io, PgAioIoRef *ref)
+{
+	Assert(io->user_referenced);
+	pgaio_io_ref_internal(io, ref);
 }
 
 /*
@@ -2153,10 +2118,11 @@ pgaio_io_recycle(PgAioInProgress *io)
 		Assert(!(io->flags & PGAIOIP_FOREIGN_DONE));
 		Assert(io->flags & PGAIOIP_LOCAL_CALLBACK_CALLED);
 
+		io->generation++;
+		pg_write_barrier();
+
 		io->flags &= ~PGAIOIP_DONE;
 		io->flags |= PGAIOIP_IDLE;
-
-		io->generation++;
 	}
 
 	io->flags &= ~(PGAIOIP_MERGE |
@@ -2282,8 +2248,10 @@ pgaio_io_release(PgAioInProgress *io)
 				io->on_completion_local = NULL;
 			}
 
-			io->generation++;
 		}
+
+		io->generation++;
+		pg_write_barrier();
 
 		io->flags = PGAIOIP_UNUSED;
 		io->type = 0;
@@ -2792,6 +2760,7 @@ again:
 		}
 	}
 
+	/* callbacks will be called later by pgaio_submit() */
 	if (drain)
 		pgaio_drain(context, false, false);
 

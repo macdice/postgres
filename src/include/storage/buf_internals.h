@@ -17,6 +17,7 @@
 
 #include "port/atomics.h"
 #include "storage/buf.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "storage/latch.h"
@@ -185,7 +186,8 @@ typedef struct BufferDesc
 
 	int			wait_backend_pid;	/* backend PID of pin-count waiter */
 	int			freeNext;		/* link in freelist chain */
-	struct PgAioInProgress *io_in_progress; // FIXME, should just be an integer
+
+	PgAioIoRef	io_in_progress;
 	LWLock		content_lock;	/* to lock access to buffer contents */
 } BufferDesc;
 

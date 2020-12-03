@@ -109,7 +109,7 @@ pg_streaming_write_wait(pg_streaming_write *pgsw, uint32 wait_for)
 			continue;
 
 		if (wait_for > 0)
-			pgaio_io_wait(this_write->aio, true);
+			pgaio_io_wait(this_write->aio);
 		else if (!pgaio_io_done(this_write->aio))
 			break;
 
@@ -263,7 +263,7 @@ pg_streaming_read_free(PgStreamingRead *pgsr)
 		if (this_read->in_progress)
 		{
 			Assert(this_read->valid);
-			pgaio_io_wait(this_read->aio, true);
+			pgaio_io_wait(this_read->aio);
 			Assert(!this_read->in_progress);
 		}
 
@@ -476,7 +476,7 @@ pg_streaming_read_get_next(PgStreamingRead *pgsr)
 
 		if (this_read->in_progress)
 		{
-			pgaio_io_wait(this_read->aio, true);
+			pgaio_io_wait(this_read->aio);
 			/* callback should have updated */
 			Assert(!this_read->in_progress);
 			Assert(this_read->valid);

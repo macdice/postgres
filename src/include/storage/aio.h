@@ -25,6 +25,13 @@
 typedef struct PgAioInProgress PgAioInProgress;
 typedef struct PgAioBounceBuffer PgAioBounceBuffer;
 
+typedef struct PgAioIoRef
+{
+	uint32 aio_index;
+	uint32 generation_upper;
+	uint32 generation_lower;
+} PgAioIoRef;
+
 /* initialization */
 extern void pgaio_postmaster_init(void);
 extern Size AioShmemSize(void);
@@ -70,10 +77,24 @@ struct PgAioOnCompletionLocalContext
 	 ((type *) ((char *) (ptr) - offsetof(type, membername))))
 extern void pgaio_io_on_completion_local(PgAioInProgress *io, PgAioOnCompletionLocalContext *ocb);
 
-extern void pgaio_io_wait(PgAioInProgress *io, bool holding_reference);
+extern void pgaio_io_wait(PgAioInProgress *io);
+extern void pgaio_io_wait_ref(PgAioIoRef *ref, bool call_local);
 extern bool pgaio_io_success(PgAioInProgress *io);
 extern bool pgaio_io_done(PgAioInProgress *io);
 extern void pgaio_io_recycle(PgAioInProgress *io);
+extern void pgaio_io_ref(PgAioInProgress *io, PgAioIoRef *ref);
+
+static inline bool
+pgaio_io_ref_valid(const PgAioIoRef *ref)
+{
+	return ref->aio_index != PG_UINT32_MAX;
+}
+
+static inline void
+pgaio_io_ref_clear(PgAioIoRef *ref)
+{
+	ref->aio_index = PG_UINT32_MAX;
+}
 
 
 typedef struct AioBufferTag

@@ -718,7 +718,7 @@ ReadBufferInitRead(PgAioInProgress *aio,
 	/* FIXME: improve */
 	InProgressBuf = NULL;
 
-	bufHdr->io_in_progress = aio;
+	pgaio_io_ref(aio, &bufHdr->io_in_progress);
 
 	smgrstartread(aio, smgr, forkNum, blockNum,
 				  bufBlock, buf, mode);
@@ -1175,7 +1175,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		UnlockBufHdr(bufHdr, buf_state);
 
 		ReadBufferInitRead(aio, smgr, forkNum, blockNum, buf, bufHdr, mode);
-		pgaio_io_wait(aio, true);
+		pgaio_io_wait(aio);
 		pgaio_io_release(aio);
 	}
 
@@ -3612,7 +3612,8 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 
 		if (bb)
 			pgaio_assoc_bounce_buffer(aio, bb);
-		buf->io_in_progress = aio;
+
+		pgaio_io_ref(aio, &buf->io_in_progress);
 
 		smgrstartwrite(aio,
 					   reln,
@@ -3621,7 +3622,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 					   bufToWrite,
 					   BufferDescriptorGetBuffer(buf),
 					   false);
-		pgaio_io_wait(aio, true);
+		pgaio_io_wait(aio);
 		pgaio_io_release(aio);
 	}
 
@@ -3689,7 +3690,7 @@ AsyncFlushBuffer(PgAioInProgress *aio, BufferDesc *buf, SMgrRelation reln)
 	if (bb)
 		pgaio_assoc_bounce_buffer(aio, bb);
 
-	buf->io_in_progress = aio;
+	pgaio_io_ref(aio, &buf->io_in_progress);
 
 	smgrstartwrite(aio, reln,
 				   buf->tag.forkNum, buf->tag.blockNum,
@@ -4934,7 +4935,7 @@ WaitIO(BufferDesc *buf)
 	for (;;)
 	{
 		uint32		buf_state;
-		PgAioInProgress *aio;
+		PgAioIoRef  aio_ref;
 
 		/*
 		 * It may not be necessary to acquire the spinlock to check the flag
@@ -4942,15 +4943,15 @@ WaitIO(BufferDesc *buf)
 		 * play it safe.
 		 */
 		buf_state = LockBufHdr(buf);
-		aio = buf->io_in_progress;
+		aio_ref = buf->io_in_progress;
 		UnlockBufHdr(buf, buf_state);
 
 		if (!(buf_state & BM_IO_IN_PROGRESS))
 			break;
 
-		if (aio)
+		if (pgaio_io_ref_valid(&aio_ref))
 		{
-			pgaio_io_wait(aio, false);
+			pgaio_io_wait_ref(&aio_ref, true);
 			ConditionVariablePrepareToSleep(cv);
 			continue;
 		}
@@ -5068,7 +5069,7 @@ TerminateSharedBufferIO(BufferDesc *buf, bool syncio, bool clear_dirty, uint32 s
 	if (!syncio)
 	{
 		buf_state -= BUF_REFCOUNT_ONE;
-		buf->io_in_progress = NULL;
+		pgaio_io_ref_clear(&buf->io_in_progress);
 	}
 
 	UnlockBufHdr(buf, buf_state);
