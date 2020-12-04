@@ -610,7 +610,7 @@ typedef struct XLogIO
 {
 	XLogRecPtr upto; /* covers LSNs <= */
 	bool in_progress;
-	PgAioInProgress *aio;
+	PgAioIoRef aio_ref;
 } XLogIO;
 
 /*
@@ -2512,7 +2512,7 @@ XLogWriteComplete(PgAioInProgress *aio, uint32 write_no)
 	Assert(io->in_progress);
 	io->in_progress = false;
 	pg_write_barrier();
-	io->aio = NULL;
+	pgaio_io_ref_clear(&io->aio_ref);
 }
 
 void
@@ -2530,7 +2530,7 @@ XLogFlushComplete(struct PgAioInProgress *aio, uint32 flush_no)
 	Assert(io->in_progress);
 	io->in_progress = false;
 	pg_write_barrier();
-	io->aio = NULL;
+	pgaio_io_ref_clear(&io->aio_ref);
 }
 
 static void
@@ -2658,7 +2658,7 @@ XLogFlushQueueUpdate(bool has_exclusive)
 static bool
 XLogIOQueueWaitFor(XLogIOQueue *queue, XLogRecPtr lsn, bool wait_locked)
 {
-	PgAioInProgress *aios[128];
+	PgAioIoRef aio_refs[128];
 	uint32 waitcount = 0;
 
 	Assert(LWLockHeldByMe(WALWriteLock));
@@ -2666,16 +2666,16 @@ XLogIOQueueWaitFor(XLogIOQueue *queue, XLogRecPtr lsn, bool wait_locked)
 	for (uint16 cur = queue->tail; cur != queue->next; cur++)
 	{
 		XLogIO *curio = &queue->ios[cur % queue->num_ios];
-		PgAioInProgress *aio;
+		PgAioIoRef aio_ref;
 
 		Assert(curio->upto != 0);
 
-		aio = curio->aio;
+		aio_ref = curio->aio_ref;
 		pg_read_barrier();
 
 		if (curio->in_progress)
 		{
-			aios[waitcount++] = aio;
+			aio_refs[waitcount++] = aio_ref;
 		}
 		else
 		{
@@ -2700,7 +2700,7 @@ XLogIOQueueWaitFor(XLogIOQueue *queue, XLogRecPtr lsn, bool wait_locked)
 
 	//elog(LOG, "waiting for %d", waitcount);
 	for (int i = 0; i < waitcount; i++)
-		pgaio_io_wait(aios[i], false);
+		pgaio_io_wait_ref(&aio_refs[i], false);
 
 	return true;
 }
@@ -2720,7 +2720,7 @@ XLogIOQueueEnsureOne(XLogIOQueue *queue)
 	if ((uint16)(queue->next - queue->tail) == queue->num_ios)
 	{
 		XLogIO *io = &queue->ios[queue->tail % queue->num_ios];
-		PgAioInProgress *aio = io->aio;
+		PgAioIoRef aio_ref = io->aio_ref;
 
 		pg_read_barrier();
 		elog(DEBUG3, "queue full, checking whether to wait: %d",
@@ -2731,7 +2731,7 @@ XLogIOQueueEnsureOne(XLogIOQueue *queue)
 			LWLockRelease(WALWriteLock);
 
 			elog(DEBUG3, "waiting for full queue to empty");
-			pgaio_io_wait(aio, false);
+			pgaio_io_wait_ref(&aio_ref, false);
 
 			return true;
 		}
@@ -2750,12 +2750,12 @@ XLogIOQueueAdd(XLogIOQueue *queue, PgAioInProgress *aio, XLogRecPtr upto)
 
 	io = &queue->ios[queue->next % queue->num_ios];
 
-	Assert(io->aio == NULL);
+	Assert(!pgaio_io_ref_valid(&io->aio_ref));
 	Assert(io->upto == 0);
 
 	io->upto = upto;
 	io->in_progress = true;
-	io->aio = aio;
+	pgaio_io_ref(aio, &io->aio_ref);
 	queue->next++;
 
 	XLogIOQueueCheck(XLogCtl->writes);
@@ -2939,7 +2939,7 @@ XLogWriteIssueWrites(XLogwrtRqst *WriteRqst, bool flexible)
 			if (writes->tail + 1 != writes->next)
 			{
 				XLogIO *io = &writes->ios[(writes->next - 1) % writes->num_ios];
-				PgAioInProgress *aio = io->aio;
+				PgAioIoRef aio_ref = io->aio_ref;
 
 				pg_read_barrier();
 
@@ -2958,7 +2958,7 @@ XLogWriteIssueWrites(XLogwrtRqst *WriteRqst, bool flexible)
 							errhidestmt(true),
 							errhidecontext(true));
 
-					pgaio_io_wait(aio, false);
+					pgaio_io_wait_ref(&aio_ref, false);
 
 					goto write_out_wait;
 #else
@@ -6151,11 +6151,15 @@ XLOGShmemInit(void)
 		XLogCtl->writes = ShmemAlloc(sz);
 		memset(XLogCtl->writes, 0, sz);
 		XLogCtl->writes->num_ios = io_wal_concurrency;
+		for (int i = 0; i < io_wal_concurrency; i++)
+			pgaio_io_ref_clear(&XLogCtl->writes->ios[i].aio_ref);
 		// FIXME: check whether lock is needed and initialize if so
 
 		XLogCtl->flushes = ShmemAlloc(sz);
 		memset(XLogCtl->flushes, 0, sz);
 		XLogCtl->flushes->num_ios = io_wal_concurrency;
+		for (int i = 0; i < io_wal_concurrency; i++)
+			pgaio_io_ref_clear(&XLogCtl->flushes->ios[i].aio_ref);
 		// DITO
 	}
 }
@@ -11476,7 +11480,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 
 	aio = pgaio_io_get();
 	start_xlog_fsync(aio, fd, segno);
-	pgaio_io_wait(aio, true);
+	pgaio_io_wait(aio);
 	pgaio_io_release(aio);
 
 	pgstat_report_wait_end();
