@@ -2591,6 +2591,9 @@ pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, b
 	Assert(holding_lock == LWLockHeldByMe(SharedAIOCtlLock));
 	Assert(bb != NULL);
 
+	if (release_resowner)
+		ResourceOwnerForgetAioBB(CurrentResourceOwner, bb);
+
 	if (pg_atomic_sub_fetch_u32(&bb->refcount, 1) != 0)
 		return;
 
@@ -2599,9 +2602,6 @@ pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, b
 	dlist_push_tail(&aio_ctl->bounce_buffers, &bb->node);
 	if (!holding_lock)
 		LWLockRelease(SharedAIOCtlLock);
-
-	if (release_resowner)
-		ResourceOwnerForgetAioBB(CurrentResourceOwner, bb);
 }
 
 void

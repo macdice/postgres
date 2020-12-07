@@ -591,6 +591,8 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		curblocknum += segendblock - segstartblock;
 	}
 
+	pgaio_bounce_buffer_release(bb);
+
 	pg_streaming_write_wait_all(pgsw);
 	pg_streaming_write_free(pgsw);
 
