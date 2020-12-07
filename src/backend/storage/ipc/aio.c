@@ -516,6 +516,7 @@ typedef struct PgAioWorkerState {
 static void pgaio_complete_ios(bool in_error);
 static void pgaio_apply_backend_limit(void);
 static void pgaio_prepare_io(PgAioInProgress *io, PgAioAction action);
+static void pgaio_io_prepare_submit(PgAioInProgress *io, uint32 ring);
 static void pgaio_finish_io(PgAioInProgress *io);
 static void pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, bool release_resowner);
 static void pgaio_io_ref_internal(PgAioInProgress *io, PgAioIoRef *ref);
@@ -2044,35 +2045,7 @@ pgaio_worker_submit(bool drain, bool will_wait)
 		io = dlist_container(PgAioInProgress, io_node, node);
 		io_index = io - aio_ctl->in_progress_io;
 
-		/* Transfer this and all merged IOs to approprate lists. */
-		/* XXX Code stolen and hacked from pgaio_uring_submit(); need to share! */
-		for (PgAioInProgress *cur = io; cur; cur = cur->merge_with)
-		{
-			Assert(cur->flags & PGAIOIP_PENDING);
-
-			*(volatile PgAioIPFlags*) &cur->flags =
-				(cur->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
-
-			dlist_delete_from(&my_aio->pending, &cur->io_node);
-			my_aio->pending_count--;
-
-			if (cur->user_referenced)
-			{
-				Assert(my_aio->outstanding_count > 0);
-				dlist_delete_from(&my_aio->outstanding, &cur->owner_node);
-				my_aio->outstanding_count--;
-
-				dlist_push_tail(&my_aio->issued, &cur->owner_node);
-				my_aio->issued_count++;
-			}
-			else
-			{
-				LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
-				dlist_push_tail(&my_aio->issued_abandoned, &cur->owner_node);
-				my_aio->issued_abandoned_count++;
-				LWLockRelease(SharedAIOCtlLock);
-			}
-		}
+		pgaio_io_prepare_submit(io, 0);
 
 		if (force_synchronous || pgaio_worker_need_synchronous(io))
 		{
@@ -2356,7 +2329,6 @@ retry:
 }
 #endif
 
-#ifdef USE_LIBURING
 static void
 pgaio_io_prepare_submit(PgAioInProgress *io, uint32 ring)
 {
@@ -2409,7 +2381,6 @@ pgaio_io_prepare_submit(PgAioInProgress *io, uint32 ring)
 		cur = cur->merge_with;
 	}
 }
-#endif
 
 static void
 pgaio_apply_backend_limit(void)
