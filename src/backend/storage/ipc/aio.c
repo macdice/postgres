@@ -440,7 +440,9 @@ typedef struct PgAioCtl
 	 */
 	dlist_head reaped_uncompleted;
 
-	dlist_head bounce_buffers;
+	PgAioBounceBuffer *bounce_buffers;
+	dlist_head unused_bounce_buffers;
+	uint32 unused_bounce_buffers_count;
 
 	int backend_state_count;
 	PgAioPerBackend *backend_state;
@@ -647,13 +649,13 @@ AioShmemInit(void)
 
 		{
 			char *p;
-			PgAioBounceBuffer *buffers;
 			char *blocks;
 
-			dlist_init(&aio_ctl->bounce_buffers);
-			buffers = ShmemInitStruct("PgAioBounceBuffers",
-									   sizeof(PgAioBounceBuffer) * max_aio_bounce_buffers,
-									   &found);
+			dlist_init(&aio_ctl->unused_bounce_buffers);
+			aio_ctl->bounce_buffers =
+				ShmemInitStruct("PgAioBounceBuffers",
+								sizeof(PgAioBounceBuffer) * max_aio_bounce_buffers,
+								&found);
 			Assert(!found);
 
 			p = ShmemInitStruct("PgAioBounceBufferBlocks",
@@ -664,12 +666,13 @@ AioShmemInit(void)
 
 			for (int i = 0; i < max_aio_bounce_buffers; i++)
 			{
-				PgAioBounceBuffer *bb = &buffers[i];
+				PgAioBounceBuffer *bb = &aio_ctl->bounce_buffers[i];
 
 				bb->buffer = blocks + i * BLCKSZ;
 				memset(bb->buffer, 0, BLCKSZ);
 				pg_atomic_init_u32(&bb->refcount, 0);
-				dlist_push_tail(&aio_ctl->bounce_buffers, &bb->node);
+				dlist_push_tail(&aio_ctl->unused_bounce_buffers, &bb->node);
+				aio_ctl->unused_bounce_buffers_count++;
 			}
 		}
 
@@ -699,7 +702,7 @@ AioShmemInit(void)
 				context->iovecs = iovecs;
 				iovecs += max_aio_in_flight;
 
-				for (uint32 i = 0; i < io_max_concurrency; i++)
+				for (uint32 i = 0; i < max_aio_in_flight; i++)
 				{
 					slist_push_head(&context->unused_iovecs, &context->iovecs[i].node);
 					context->unused_iovecs_count++;
@@ -2559,10 +2562,11 @@ pgaio_bounce_buffer_get(void)
 	while (true)
 	{
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
-		if (!dlist_is_empty(&aio_ctl->bounce_buffers))
+		if (!dlist_is_empty(&aio_ctl->unused_bounce_buffers))
 		{
-			dlist_node *node = dlist_pop_head_node(&aio_ctl->bounce_buffers);
+			dlist_node *node = dlist_pop_head_node(&aio_ctl->unused_bounce_buffers);
 
+			aio_ctl->unused_bounce_buffers_count--;
 			bb = dlist_container(PgAioBounceBuffer, node, node);
 
 			Assert(pg_atomic_read_u32(&bb->refcount) == 0);
@@ -2599,7 +2603,8 @@ pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, b
 
 	if (!holding_lock)
 		LWLockAcquire(SharedAIOCtlLock, LW_EXCLUSIVE);
-	dlist_push_tail(&aio_ctl->bounce_buffers, &bb->node);
+	dlist_push_tail(&aio_ctl->unused_bounce_buffers, &bb->node);
+	aio_ctl->unused_bounce_buffers_count++;
 	if (!holding_lock)
 		LWLockRelease(SharedAIOCtlLock);
 }
