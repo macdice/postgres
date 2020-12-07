@@ -521,6 +521,7 @@ static void pgaio_finish_io(PgAioInProgress *io);
 static void pgaio_bounce_buffer_release_internal(PgAioBounceBuffer *bb, bool holding_lock, bool release_resowner);
 static void pgaio_io_ref_internal(PgAioInProgress *io, PgAioIoRef *ref);
 static void pgaio_transfer_foreign_to_local(void);
+static void pgaio_uncombine(void);
 static int pgaio_uncombine_one(PgAioInProgress *io);
 static void pgaio_call_local_callbacks(bool in_error);
 
@@ -807,8 +808,7 @@ pgaio_posix_aio_check(PgAioInProgress *io, bool to_shared_completion_queue)
 		 */
 		io->flags = (io->flags & ~PGAIOIP_INFLIGHT) | PGAIOIP_REAPED;
 		dlist_push_tail(&my_aio->reaped, &io->io_node);
-		if (io->flags & PGAIOIP_MERGE)
-			pgaio_uncombine_one(io);
+		pgaio_uncombine();
 		pgaio_complete_ios(false);
 		pgaio_transfer_foreign_to_local();
 		pgaio_call_local_callbacks(false);
@@ -2199,9 +2199,7 @@ pgaio_posix_submit(bool drain)
 		node = dlist_pop_head_node(&my_aio->pending);
 		io = dlist_container(PgAioInProgress, io_node, node);
 
-		Assert(io->flags & PGAIOIP_PENDING);
-		io->flags = (io->flags & ~PGAIOIP_PENDING) | PGAIOIP_INFLIGHT;
-		my_aio->pending_count--;
+		pgaio_io_prepare_submit(io, 0);
 
 		io->posix_aio_returned = false;
 		io->posix_aio_nocheck = false;
