@@ -2942,7 +2942,7 @@ prep_read_buffer_iov(PgAioInProgress *io, struct io_uring_sqe *sqe, struct iovec
 	cur = io;
 	while (cur)
 	{
-		offset += cur->d.write_buffer.already_done;
+		offset += cur->d.read_buffer.already_done;
 		iovs[niov].iov_base = cur->d.read_buffer.bufdata + cur->d.read_buffer.already_done;
 		iovs[niov].iov_len = cur->d.read_buffer.nbytes - cur->d.read_buffer.already_done;
 
