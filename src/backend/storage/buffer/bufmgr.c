@@ -3570,7 +3570,8 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * buffer, other processes might be updating hint bits in it, so we must
 	 * copy the page to private storage if we do checksumming.
 	 */
-	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum, &bb);
+	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum,
+									 io_data_force_async ? &bb : NULL);
 
 	if (!io_data_force_async)
 	{
@@ -3613,7 +3614,10 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 		InProgressBuf = NULL;
 
 		if (bb)
+		{
 			pgaio_assoc_bounce_buffer(aio, bb);
+			pgaio_bounce_buffer_release(bb);
+		}
 
 		pgaio_io_ref(aio, &buf->io_in_progress);
 
@@ -3690,7 +3694,10 @@ AsyncFlushBuffer(PgAioInProgress *aio, BufferDesc *buf, SMgrRelation reln)
 	pgBufferUsage.shared_blks_written++;
 
 	if (bb)
+	{
 		pgaio_assoc_bounce_buffer(aio, bb);
+		pgaio_bounce_buffer_release(bb);
+	}
 
 	pgaio_io_ref(aio, &buf->io_in_progress);
 

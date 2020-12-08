@@ -180,6 +180,7 @@ static void PrintSnapshotLeakWarning(Snapshot snapshot);
 static void PrintFileLeakWarning(File file);
 static void PrintDSMLeakWarning(dsm_segment *seg);
 static void PrintCryptoHashLeakWarning(Datum handle);
+static void PrintAioBBLeakWarning(Datum handle);
 
 
 /*****************************************************************************
@@ -576,6 +577,9 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 		while (ResourceArrayGetAny(&(owner->aiobbarr), &foundres))
 		{
 			PgAioBounceBuffer *bb = (PgAioBounceBuffer *) PointerGetDatum(foundres);
+
+			if (isCommit)
+				PrintAioBBLeakWarning(foundres);
 
 			pgaio_bounce_buffer_release(bb);
 		}
@@ -1462,4 +1466,11 @@ ResourceOwnerForgetAioBB(ResourceOwner owner, PgAioBounceBuffer *bb)
 	if (!ResourceArrayRemove(&(owner->aiobbarr), PointerGetDatum(bb)))
 		elog(ERROR, "aio BB %p is not owned by resource owner %s",
 			 DatumGetPointer(bb), owner->name);
+}
+
+static void
+PrintAioBBLeakWarning(Datum handle)
+{
+	elog(WARNING, "aio BB reference leak: bb %zu still referenced",
+		 handle);
 }
