@@ -1602,8 +1602,13 @@ pgaio_io_prepare_submit(PgAioInProgress *io, uint32 ring)
 		dlist_delete_from(&my_aio->pending, &cur->io_node);
 		my_aio->pending_count--;
 
-		if (cur->user_referenced)
+		if (cur->flags & PGAIOIP_RETRY)
 		{
+			/* XXX: more error checks */
+		}
+		else if (cur->user_referenced)
+		{
+			Assert(my_aio_id == cur->owner_id);
 			Assert(my_aio->outstanding_count > 0);
 			dlist_delete_from(&my_aio->outstanding, &cur->owner_node);
 			my_aio->outstanding_count--;
