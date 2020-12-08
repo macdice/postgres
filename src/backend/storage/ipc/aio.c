@@ -548,7 +548,7 @@ static int __sys_io_uring_enter(int fd, unsigned to_submit, unsigned min_complet
 #ifdef USE_POSIX_AIO
 /* POSIX AIO related functions */
 static int pgaio_posix_aio_drain(PgAioContext *context, bool in_error);
-static int pgaio_posix_submit(bool drain);
+static int pgaio_posix_submit(int max_submit, bool drain);
 #endif
 
 /* io completions */
@@ -2143,7 +2143,7 @@ pgaio_submit_pending_internal(bool drain, bool will_wait)
 #endif
 #ifdef USE_POSIX_AIO
 		else if (aio_type == AIOTYPE_POSIX)
-			did_submit = pgaio_posix_submit(drain);
+			did_submit = pgaio_posix_submit(max_submit, drain);
 #endif
 		else
 			elog(ERROR, "unexpected aio_type");
@@ -2177,7 +2177,7 @@ pgaio_submit_pending(bool drain)
 #if defined(USE_POSIX_AIO)
 
 static int
-pgaio_posix_submit(bool drain)
+pgaio_posix_submit(int max_submit, bool drain)
 {
 	int nsubmitted = 0;
 
@@ -2196,6 +2196,9 @@ pgaio_posix_submit(bool drain)
 		size_t nbytes;
 		PgAioInProgress *iter;
 
+		if (nsubmitted == max_submit)
+			break;
+
 		node = dlist_pop_head_node(&my_aio->pending);
 		io = dlist_container(PgAioInProgress, io_node, node);
 
@@ -2204,6 +2207,9 @@ pgaio_posix_submit(bool drain)
 		io->posix_aio_returned = false;
 		io->posix_aio_nocheck = false;
 		pgaio_posix_aio_preflight(io);
+
+		pg_atomic_add_fetch_u32(&my_aio->inflight_count, 1);
+		my_aio->submissions_total_count++;
 
 		/*
 		 * Request a signal on completion.
