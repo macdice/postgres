@@ -3260,20 +3260,18 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 	bool		only_wait;
 
 	/* normalize request */
-	if (WriteRqst.WriteInit < WriteRqst.WriteDone)
-		WriteRqst.WriteInit = WriteRqst.WriteDone;
 
-	if (WriteRqst.WriteDone < WriteRqst.FlushDone)
-		WriteRqst.WriteDone = WriteRqst.FlushDone;
-
+	/* need to start flush before finishing it */
 	if (WriteRqst.FlushInit < WriteRqst.FlushDone)
 		WriteRqst.FlushInit = WriteRqst.FlushDone;
 
-#if 0
 	/* need to complete all writes before flushing them */
-	if (WriteRqst.FlushInit < WriteRqst.WriteDone)
-		WriteRqst.FlushInit = WriteRqst.WriteDone;
-#endif
+	if (WriteRqst.WriteDone < WriteRqst.FlushInit)
+		WriteRqst.WriteDone = WriteRqst.FlushInit;
+
+	/* need to start write before finishing it */
+	if (WriteRqst.WriteInit < WriteRqst.WriteDone)
+		WriteRqst.WriteInit = WriteRqst.WriteDone;
 
 	Assert(XLogInsertionsKnownFinished(WriteRqst.WriteDone));
 
