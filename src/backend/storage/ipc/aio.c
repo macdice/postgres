@@ -2179,7 +2179,8 @@ pgaio_submit_pending(bool drain)
 static int
 pgaio_posix_submit(int max_submit, bool drain)
 {
-	int nsubmitted = 0;
+	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
+	int nios = 0;
 
 	/*
 	 * This implementation only supports combined IO for contiguous regions of
@@ -2196,7 +2197,7 @@ pgaio_posix_submit(int max_submit, bool drain)
 		size_t nbytes;
 		PgAioInProgress *iter;
 
-		if (nsubmitted == max_submit)
+		if (nios == max_submit)
 			break;
 
 		node = dlist_pop_head_node(&my_aio->pending);
@@ -2327,9 +2328,32 @@ retry:
 				elog(PANIC, "failed to submit IO type %s: %m",
 					 pgaio_io_action_string(io->type));
 		}
-		++nsubmitted;
+		ios[nios] = io;
+		++nios;
 	}
-	return nsubmitted;
+
+	/* XXXX copied from uring submit */
+	/*
+	 * Others might have been waiting for this IO. Because it wasn't
+	 * marked as in-flight until now, they might be waiting for the
+	 * CV. Wake'em up.
+	 */
+	for (int i = 0; i < nios; i++)
+	{
+		PgAioInProgress *cur = ios[i];
+
+		while (cur)
+		{
+			ConditionVariableBroadcast(&cur->cv);
+			cur = cur->merge_with;
+		}
+	}
+
+	/* callbacks will be called later by pgaio_submit() */
+	if (drain)
+		pgaio_drain(NULL, false, false);
+
+	return nios;
 }
 #endif
 
