@@ -2176,11 +2176,47 @@ pgaio_submit_pending(bool drain)
 
 #if defined(USE_POSIX_AIO)
 
+typedef struct pgaio_posix_listio_buffer
+{
+	int ncbs;
+	struct aiocb *cbs[AIO_LISTIO_MAX];
+} pgaio_posix_listio_buffer;
+
+static void
+pgaio_posix_flush_listio(pgaio_posix_listio_buffer *lb)
+{
+	int rc;
+
+	if (lb->ncbs == 0)
+		return;
+
+	rc = lio_listio(LIO_NOWAIT, lb->cbs, lb->ncbs, NULL);
+
+	if (rc < 0)
+	{
+		/*
+		 * XXX Figure out how to tidy up
+		 */
+		elog(PANIC, "blah: %m");
+	}
+
+	lb->ncbs = 0;
+}
+
+static void
+pgaio_posix_add_listio(pgaio_posix_listio_buffer *lb, struct aiocb *cb)
+{
+	if (lb->ncbs == AIO_LISTIO_MAX)
+		pgaio_posix_flush_listio(lb);
+	lb->cbs[lb->ncbs++] = cb;
+}
+
 static int
 pgaio_posix_submit(int max_submit, bool drain)
 {
 	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
 	int nios = 0;
+	pgaio_posix_listio_buffer listio_buffer = {0};
 
 	/*
 	 * This implementation only supports combined IO for contiguous regions of
@@ -2235,6 +2271,7 @@ retry:
 				rc = 0;
 				break;
 			case PGAIO_FLUSH_RANGE:
+				pgaio_posix_flush_listio(&listio_buffer);
 				io->posix_aiocb.aio_fildes = io->d.flush_range.fd;
 #ifdef O_DSYNC
 				rc = aio_fsync(O_DSYNC, &io->posix_aiocb);
@@ -2244,6 +2281,7 @@ retry:
 				break;
 			case PGAIO_FSYNC:
 			case PGAIO_FSYNC_WAL:
+				pgaio_posix_flush_listio(&listio_buffer);
 				io->posix_aiocb.aio_fildes = io->d.fsync.fd;
 #ifdef O_DSYNC
 				rc = aio_fsync(io->d.fsync.datasync ? O_DSYNC : O_SYNC,
@@ -2260,7 +2298,8 @@ retry:
 				io->posix_aiocb.aio_offset = io->d.read_buffer.offset + already_done;
 				io->posix_aiocb.aio_nbytes = nbytes - already_done;
 				io->posix_aiocb.aio_buf = io->d.read_buffer.bufdata + already_done;
-				rc = aio_read(&io->posix_aiocb);
+				io->posix_aiocb.aio_lio_opcode = LIO_READ;
+				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
 				break;
 			case PGAIO_WRITE_BUFFER:
 				already_done = io->d.write_buffer.already_done;
@@ -2270,7 +2309,8 @@ retry:
 				io->posix_aiocb.aio_offset = io->d.write_buffer.offset + already_done;
 				io->posix_aiocb.aio_nbytes = nbytes - already_done;
 				io->posix_aiocb.aio_buf = io->d.write_buffer.bufdata + already_done;
-				rc = aio_write(&io->posix_aiocb);
+				io->posix_aiocb.aio_lio_opcode = LIO_WRITE;
+				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
 				break;
 			case PGAIO_WRITE_WAL:
 				already_done = io->d.write_wal.already_done;
@@ -2280,7 +2320,8 @@ retry:
 				io->posix_aiocb.aio_offset = io->d.write_wal.offset + already_done;
 				io->posix_aiocb.aio_nbytes = nbytes - already_done;
 				io->posix_aiocb.aio_buf = io->d.write_wal.bufdata + already_done;
-				rc = aio_write(&io->posix_aiocb);
+				io->posix_aiocb.aio_lio_opcode = LIO_WRITE;
+				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
 				break;
 			case PGAIO_WRITE_GENERIC:
 				already_done = io->d.write_generic.already_done;
@@ -2290,47 +2331,15 @@ retry:
 				io->posix_aiocb.aio_offset = io->d.write_generic.offset + already_done;
 				io->posix_aiocb.aio_nbytes = nbytes - already_done;
 				io->posix_aiocb.aio_buf = io->d.write_generic.bufdata + already_done;
-				rc = aio_write(&io->posix_aiocb);
+				io->posix_aiocb.aio_lio_opcode = LIO_WRITE;
+				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
 				break;
 		}
 
-		if (rc != 0)
-		{
-			if (errno == EINTR)
-				goto retry;
-			else if (errno == EAGAIN)
-			{
-				/*
-				 * Kernel AIO resources exhausted, which might mean you need to
-				 * increase a system limit with sysctl, or decrease the
-				 * relevant GUCs so that we do less readahead, or it might mean
-				 * there is too much concurrent activity.  To carry on, we need
-				 * to wait for existing outstanding IOs to complete.  If
-				 * anything this process initiated completes, this'll return
-				 * immediate with EINTR so we can try again.
-				 *
-				 * XXX: But we might have missed it already!  The right
-				 * primitive here is: aio_suspend() on all this process's in
-				 * flight IOs, to close that race.  But, uhh, I was hoping to
-				 * avoid having to track those on non-macOS systems.
-				 *
-				 * XXX: We don't currently have a convenient way to wait for
-				 * any IO initiated by other backends (rather than a specific
-				 * IO, via the cv), so we fall back to polling...  which is not
-				 * great.  We'd need the timeout anyway as a last resort (see
-				 * also similar note in pgaio_io_wait()).
-				 */
-				usleep(100000);
-				pgaio_drain(NULL, false, true);
-				goto retry;
-			}
-			else
-				elog(PANIC, "failed to submit IO type %s: %m",
-					 pgaio_io_action_string(io->type));
-		}
 		ios[nios] = io;
 		++nios;
 	}
+	pgaio_posix_flush_listio(&listio_buffer);
 
 	/* XXXX copied from uring submit */
 	/*
