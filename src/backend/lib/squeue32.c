@@ -11,6 +11,10 @@
  * an occupied slot.  That way we reserve the full range of a uint32 for user
  * data.
  *
+ * XXX The "recheck" was added by me, and is needed to avoid skipping non-mepty
+ * entries that are inserted by the signal context after we read x as empty!
+ * Need to figure out why that isn't needed in the paper's algorithm...
+ *
  * XXX This algorithm does two CASs, has a limited data size and a limited ABA
  * counter, Perhaps this would be better, and could even be done as a kind of
  * pseudo-template to support different sizes:
@@ -113,7 +117,6 @@ enq_try_again:
 	slot = rear % queue->size;
 	x = pg_atomic_read_u64(&queue->data[slot]);
 	/* Are read and x consistent? */
-	pg_read_barrier();
 	if (rear != pg_atomic_read_u64(&queue->rear))
 		goto enq_try_again;
 	/* Is queue full? */
@@ -158,7 +161,6 @@ deq_try_again:
 	slot = front % queue->size;
 	x = pg_atomic_read_u64(&queue->data[slot]);
 	/* Are front and x consistent? */
-	pg_read_barrier();
 	if (front != pg_atomic_read_u64(&queue->front))
 		goto deq_try_again;
 	/* Is queue empty? */
@@ -178,7 +180,7 @@ deq_try_again:
 			return true;
 		}
 	}
-	else
+	else if (x == pg_atomic_read_u64(&queue->data[slot])) /* XXX recheck */
 	{
 		/* Help others increment FRONT. */
 		pg_atomic_compare_exchange_u64(&queue->front, &front, front + 1);
