@@ -62,6 +62,8 @@ ssize_t
 pg_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 {
 #ifdef HAVE_WRITEV
+	if (iovcnt == 1)
+		return pg_pwrite(fd, iov[0].iov_base, iov[i].iov_len, offset);
 	if (lseek(fd, offset, SEEK_SET) < 0)
 		return -1;
 	return writev(fd, iov, iovcnt);

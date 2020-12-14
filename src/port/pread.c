@@ -65,6 +65,8 @@ ssize_t
 pg_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 {
 #ifdef HAVE_READV
+	if (iovcnt == 1)
+		return pg_pread(fd, iov[0].iov_base, iov[0].iov_len, offset);
 	if (lseek(fd, offset, SEEK_SET) < 0)
 		return -1;
 	return readv(fd, iov, iovcnt);
