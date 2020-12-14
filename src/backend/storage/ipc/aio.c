@@ -1804,15 +1804,21 @@ pgaio_transfer_foreign_to_local(void)
 
 /*
  * Some AIO modes lack scatter/gather support, which limits I/O combining to
- * contiguous ranges of memory.  XXX Remove this
+ * contiguous ranges of memory.
  */
 static bool
 pgaio_can_scatter_gather(void)
 {
-#if defined(HAVE_PREADV) && defined(HAVE_PWRITEV)
 	if (aio_type == AIOTYPE_WORKER)
+	{
+		/*
+		 * We may not have true scatter/gather on this platform (see fallback
+		 * emulation in pg_preadv()/pg_pwritev()), but there may still be some
+		 * advantage to keeping sequential regions within the same process so
+		 * we'll say yes here.
+		 */
 		return true;
-#endif
+	}
 #ifdef USE_LIBURING
 	if (aio_type == AIOTYPE_LIBURING)
 		return true;
