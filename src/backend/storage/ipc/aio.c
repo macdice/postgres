@@ -494,7 +494,6 @@ typedef struct PgAioCtl
 	 * on aio_submission_queue.
 	 */
 	ConditionVariable submission_queue_not_empty;
-	ConditionVariable submission_queue_not_full;
 
 	int backend_state_count;
 	PgAioPerBackend *backend_state;
@@ -1046,7 +1045,6 @@ AioShmemInit(void)
 								&found);
 			Assert(!found);
 			squeue32_init(aio_submission_queue, aio_worker_queue_size);
-			ConditionVariableInit(&aio_ctl->submission_queue_not_full);
 			ConditionVariableInit(&aio_ctl->submission_queue_not_empty);
 		}
 #ifdef USE_LIBURING
@@ -2026,6 +2024,17 @@ pgaio_worker_need_synchronous(PgAioInProgress *io)
 	return false;
 }
 
+static void
+pgaio_process_io_synchronously(PgAioInProgress *io)
+{
+	PgAioWorkerState state;
+
+	/* Perform the IO synchronously in this process. */
+	pgaio_worker_state_init(&state);
+	pgaio_worker_do(&state, io);
+	pgaio_worker_state_close(&state);
+}
+
 static int
 pgaio_worker_submit(bool drain, bool will_wait)
 {
@@ -2060,22 +2069,20 @@ pgaio_worker_submit(bool drain, bool will_wait)
 
 		if (force_synchronous || pgaio_worker_need_synchronous(io))
 		{
-			PgAioWorkerState state;
-
 			/* Perform the IO synchronously in this process. */
-			pgaio_worker_state_init(&state);
-			pgaio_worker_do(&state, io);
-			pgaio_worker_state_close(&state);
+			pgaio_process_io_synchronously(io);
 		}
 		else
 		{
-			/* Push it on the submission queue and wake a worker. */
-			/* XXX Think about interruptions! */
-			while (!squeue32_enqueue(aio_submission_queue, io_index))
-				ConditionVariableSleep(&aio_ctl->submission_queue_not_full,
-									   WAIT_EVENT_AIO_SUBMIT);
-			ConditionVariableCancelSleep();
-			ConditionVariableSignal(&aio_ctl->submission_queue_not_empty);
+			/*
+			 * Push it on the submission queue and wake a worker, but if the
+			 * queue is full then handle it synchronously rather than waiting.
+			 * XXX Is this fair enough?
+			 */
+			if (squeue32_enqueue(aio_submission_queue, io_index))
+				ConditionVariableSignal(&aio_ctl->submission_queue_not_empty);
+			else
+				pgaio_process_io_synchronously(io);
 		}
 
 		nsubmitted++;
@@ -4960,7 +4967,6 @@ AioWorkerMain(void)
 		if (squeue32_dequeue(aio_submission_queue, &io_index))
 		{
 			ConditionVariableCancelSleep();
-			ConditionVariableBroadcast(&aio_ctl->submission_queue_not_full);
 
 			/* Perform the IO. */
 			pgaio_worker_do(&state, &aio_ctl->in_progress_io[io_index]);
