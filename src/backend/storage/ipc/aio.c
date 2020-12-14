@@ -524,9 +524,10 @@ static void pgaio_uncombine(void);
 static int pgaio_uncombine_one(PgAioInProgress *io);
 static void pgaio_call_local_callbacks(bool in_error);
 static int pgaio_fill_iov(struct iovec *iovs, const PgAioInProgress *io);
+static int pgaio_synchronous_submit(bool drain);
 
 /* aio worker related functions */
-static int pgaio_worker_submit(bool drain, bool will_wait);
+static int pgaio_worker_submit(bool drain);
 static void pgaio_worker_state_init(PgAioWorkerState *state);
 static void pgaio_worker_do(PgAioWorkerState *state, PgAioInProgress *io);
 static void pgaio_worker_state_close(PgAioWorkerState *state);
@@ -2036,24 +2037,31 @@ pgaio_process_io_synchronously(PgAioInProgress *io)
 }
 
 static int
-pgaio_worker_submit(bool drain, bool will_wait)
+pgaio_synchronous_submit(bool drain)
 {
 	int nsubmitted = 0;
-	bool force_synchronous = false;
 
-	/*
-	 * If we've received a hint that the caller intends to wait for completion
-	 * immediately, and there is exactly one thing in the pending list, then we
-	 * might as well perform the operation synchronously and skip all the
-	 * interprocess overheads.
-	 *
-	 * XXX Huh, wouldn't we want to be able to do this for uring and posix
-	 * modes too?!  How can we share the code?
-	*/
-	if (will_wait &&
-		!dlist_is_empty(&my_aio->pending) &&
-		dlist_head_node(&my_aio->pending) == dlist_tail_node(&my_aio->pending))
-		force_synchronous = true;
+	while (!dlist_is_empty(&my_aio->pending))
+	{
+		dlist_node *node;
+		PgAioInProgress *io;
+
+		node = dlist_head_node(&my_aio->pending);
+		io = dlist_container(PgAioInProgress, io_node, node);
+
+		pgaio_io_prepare_submit(io, 0);
+		pgaio_process_io_synchronously(io);
+
+		++nsubmitted;
+	}
+
+	return nsubmitted;
+}
+
+static int
+pgaio_worker_submit(bool drain)
+{
+	int nsubmitted = 0;
 
 	while (!dlist_is_empty(&my_aio->pending))
 	{
@@ -2067,7 +2075,7 @@ pgaio_worker_submit(bool drain, bool will_wait)
 
 		pgaio_io_prepare_submit(io, 0);
 
-		if (force_synchronous || pgaio_worker_need_synchronous(io))
+		if (pgaio_worker_need_synchronous(io))
 		{
 			/* Perform the IO synchronously in this process. */
 			pgaio_process_io_synchronously(io);
@@ -2153,8 +2161,10 @@ pgaio_submit_pending_internal(bool drain, bool will_wait)
 		Assert(max_submit > 0);
 
 		START_CRIT_SECTION();
-		if (aio_type == AIOTYPE_WORKER)
-			did_submit = pgaio_worker_submit(drain, will_wait);
+		if (my_aio->pending_count == 1 && will_wait)
+			did_submit = pgaio_synchronous_submit(drain);
+		else if (aio_type == AIOTYPE_WORKER)
+			did_submit = pgaio_worker_submit(drain);
 #ifdef USE_LIBURING
 		else if (aio_type == AIOTYPE_LIBURING)
 			did_submit = pgaio_uring_submit(max_submit, drain);
@@ -2691,7 +2701,7 @@ pgaio_io_wait_ref(PgAioIoRef *ref, bool call_local)
 			 * them. Don't want to do so when not needing to sleep, as
 			 * submitting IOs in smaller increments can be less efficient.
 			 */
-			pgaio_submit_pending(false);
+			pgaio_submit_pending_internal(false, true);
 		}
 		else if (flags & PGAIOIP_INFLIGHT)
 		{
