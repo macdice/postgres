@@ -524,6 +524,7 @@ static void pgaio_transfer_foreign_to_local(void);
 static void pgaio_uncombine(void);
 static int pgaio_uncombine_one(PgAioInProgress *io);
 static void pgaio_call_local_callbacks(bool in_error);
+static int pgaio_fill_iov(struct iovec *iovs, const PgAioInProgress *io);
 
 /* aio worker related functions */
 static int pgaio_worker_submit(bool drain, bool will_wait);
@@ -1816,6 +1817,10 @@ pgaio_can_scatter_gather(void)
 	if (aio_type == AIOTYPE_LIBURING)
 		return true;
 #endif
+#if defined(HAVE_AIO_READV) && defined(HAVE_AIO_WRITEV)
+	if (aio_type == AIOTYPE_POSIX)
+		return true;
+#endif
 	return false;
 }
 
@@ -2182,13 +2187,13 @@ typedef struct pgaio_posix_listio_buffer
 	struct aiocb *cbs[AIO_LISTIO_MAX];
 } pgaio_posix_listio_buffer;
 
-static void
+static int
 pgaio_posix_flush_listio(pgaio_posix_listio_buffer *lb)
 {
 	int rc;
 
 	if (lb->ncbs == 0)
-		return;
+		return 0;
 
 	rc = lio_listio(LIO_NOWAIT, lb->cbs, lb->ncbs, NULL);
 
@@ -2201,14 +2206,71 @@ pgaio_posix_flush_listio(pgaio_posix_listio_buffer *lb)
 	}
 
 	lb->ncbs = 0;
+
+	return 0;
 }
 
-static void
+static int
 pgaio_posix_add_listio(pgaio_posix_listio_buffer *lb, struct aiocb *cb)
 {
 	if (lb->ncbs == AIO_LISTIO_MAX)
-		pgaio_posix_flush_listio(lb);
+	{
+		int rc;
+
+		rc = pgaio_posix_flush_listio(lb);
+		if (rc < 0)
+			return rc;
+	}
 	lb->cbs[lb->ncbs++] = cb;
+
+	return 0;
+}
+
+/*
+ * Assumes that io->posix_aiocb is cleared, but has the aio_filedes and
+ * aio_offset already set.
+ */
+static int
+pgaio_posix_start_rw(pgaio_posix_listio_buffer *lb, PgAioInProgress *io,
+					 int lio_opcode)
+{
+	struct aiocb *cb = &io->posix_aiocb;
+	struct iovec iov[IOV_MAX];
+	int iovcnt;
+
+	iovcnt = pgaio_fill_iov(iov, io);
+
+#if defined(HAVE_AIO_READV) && defined(HAVE_AIO_WRITEV)
+	if (iovcnt > 1)
+	{
+		/*
+		 * We can't do scatter/gather in a listio on any known OS, but it's
+		 * better to use FreeBSD's nonstandard separate system calls than pass
+		 * up the opportunity for scatter/gather IO.  Note that this case
+		 * should only be reachable if pgaio_can_scatter_gather() returned
+		 * true.
+		 */
+		cb->aio_iov = iov;
+		cb->aio_iovcnt = iovcnt;
+
+		return lio_opcode == LIO_WRITE ? aio_writev(cb) : aio_readv(cb);
+	}
+	else
+#endif
+	{
+		Assert(iovcnt == 1);
+
+		/*
+		 * This might be a single PG IO, or a chain of reads into contiguous
+		 * memory, so that it takes only a single iovec.  We'll batch it up
+		 * with other such single iovec requests.
+		 */
+		cb->aio_buf = iov[0].iov_base;
+		cb->aio_nbytes = iov[0].iov_len;
+		cb->aio_lio_opcode = lio_opcode;
+
+		return pgaio_posix_add_listio(lb, cb);
+	}
 }
 
 static int
@@ -2229,9 +2291,6 @@ pgaio_posix_submit(int max_submit, bool drain)
 		dlist_node *node;
 		PgAioInProgress *io;
 		int rc;
-		size_t already_done;
-		size_t nbytes;
-		PgAioInProgress *iter;
 
 		if (nios == max_submit)
 			break;
@@ -2248,12 +2307,7 @@ pgaio_posix_submit(int max_submit, bool drain)
 		pg_atomic_add_fetch_u32(&my_aio->inflight_count, 1);
 		my_aio->submissions_total_count++;
 
-		/*
-		 * Request a signal on completion.
-		 *
-		 * XXX We could also group together up to AIO_LISTIO_MAX reads and
-		 * writes into a single lio_listio() call, to cut down on system calls.
-		 */
+		/* Request a signal on completion.  */
 		memset(&io->posix_aiocb, 0, sizeof(io->posix_aiocb));
 		io->posix_aiocb.aio_sigevent.sigev_notify = SIGEV_SIGNAL;
 		io->posix_aiocb.aio_sigevent.sigev_signo = SIGIO;
@@ -2263,7 +2317,6 @@ pgaio_posix_submit(int max_submit, bool drain)
 		io->posix_aiocb.aio_sigevent.sigev_value.sival_ptr = io;
 #endif
 
-retry:
 		switch (io->type)
 		{
 			case PGAIO_INVALID:
@@ -2271,8 +2324,13 @@ retry:
 				rc = 0;
 				break;
 			case PGAIO_FLUSH_RANGE:
-				pgaio_posix_flush_listio(&listio_buffer);
-				io->posix_aiocb.aio_fildes = io->d.flush_range.fd;
+				/*
+				 * This is supposed to represent Linux's sync_file_range(),
+				 * which initiates writeback for only a certain range of a
+				 * file.  On other systems, we could either initiate
+				 * fdatasync() or do nothing.  Initiating fdatasync() seems
+				 * closer to the intended behavior.  XXX review
+				 */
 #ifdef O_DSYNC
 				rc = aio_fsync(O_DSYNC, &io->posix_aiocb);
 #else
@@ -2281,58 +2339,49 @@ retry:
 				break;
 			case PGAIO_FSYNC:
 			case PGAIO_FSYNC_WAL:
-				pgaio_posix_flush_listio(&listio_buffer);
-				io->posix_aiocb.aio_fildes = io->d.fsync.fd;
+				/*
+				 * XXX Are we assuming that writes on our own pending list must
+				 * be included in any later fsync on our own pending list?  For
+				 * now, this preceding flush assumes yes (POSIX fsync will
+				 * include the effects of any writes initiated earlier, so we'd
+				 * make sure that whatever's in our listio buffer is submitted
+				 * first).  But perhaps that can be removed?
+				 */
+				rc = pgaio_posix_flush_listio(&listio_buffer);
+				if (rc == 0)
+				{
+					io->posix_aiocb.aio_fildes = io->d.fsync.fd;
 #ifdef O_DSYNC
-				rc = aio_fsync(io->d.fsync.datasync ? O_DSYNC : O_SYNC,
-							   &io->posix_aiocb);
+					rc = aio_fsync(io->d.fsync.datasync ? O_DSYNC : O_SYNC,
+								   &io->posix_aiocb);
 #else
-				rc = aio_fsync(O_SYNC, &io->posix_aiocb);
+					rc = aio_fsync(O_SYNC, &io->posix_aiocb);
 #endif
+				}
 				break;
 			case PGAIO_READ_BUFFER:
-				already_done = io->d.read_buffer.already_done;
-				for (nbytes = 0, iter = io; iter; iter = iter->merge_with)
-					nbytes += iter->d.read_buffer.nbytes;
 				io->posix_aiocb.aio_fildes = io->d.read_buffer.fd;
-				io->posix_aiocb.aio_offset = io->d.read_buffer.offset + already_done;
-				io->posix_aiocb.aio_nbytes = nbytes - already_done;
-				io->posix_aiocb.aio_buf = io->d.read_buffer.bufdata + already_done;
-				io->posix_aiocb.aio_lio_opcode = LIO_READ;
-				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
+				io->posix_aiocb.aio_offset = io->d.read_buffer.offset +
+					io->d.read_buffer.already_done;
+				rc = pgaio_posix_start_rw(&listio_buffer, io, LIO_READ);
 				break;
 			case PGAIO_WRITE_BUFFER:
-				already_done = io->d.write_buffer.already_done;
-				for (nbytes = 0, iter = io; iter; iter = iter->merge_with)
-					nbytes += iter->d.write_buffer.nbytes;
 				io->posix_aiocb.aio_fildes = io->d.write_buffer.fd;
-				io->posix_aiocb.aio_offset = io->d.write_buffer.offset + already_done;
-				io->posix_aiocb.aio_nbytes = nbytes - already_done;
-				io->posix_aiocb.aio_buf = io->d.write_buffer.bufdata + already_done;
-				io->posix_aiocb.aio_lio_opcode = LIO_WRITE;
-				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
+				io->posix_aiocb.aio_offset = io->d.write_buffer.offset +
+					io->d.write_buffer.already_done;
+				rc = pgaio_posix_start_rw(&listio_buffer, io, LIO_WRITE);
 				break;
 			case PGAIO_WRITE_WAL:
-				already_done = io->d.write_wal.already_done;
-				for (nbytes = 0, iter = io; iter; iter = iter->merge_with)
-					nbytes += iter->d.write_wal.nbytes;
 				io->posix_aiocb.aio_fildes = io->d.write_wal.fd;
-				io->posix_aiocb.aio_offset = io->d.write_wal.offset + already_done;
-				io->posix_aiocb.aio_nbytes = nbytes - already_done;
-				io->posix_aiocb.aio_buf = io->d.write_wal.bufdata + already_done;
-				io->posix_aiocb.aio_lio_opcode = LIO_WRITE;
-				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
+				io->posix_aiocb.aio_offset = io->d.write_wal.offset +
+					io->d.write_wal.already_done;
+				rc = pgaio_posix_start_rw(&listio_buffer, io, LIO_WRITE);
 				break;
 			case PGAIO_WRITE_GENERIC:
-				already_done = io->d.write_generic.already_done;
-				for (nbytes = 0, iter = io; iter; iter = iter->merge_with)
-					nbytes += iter->d.write_generic.nbytes;
 				io->posix_aiocb.aio_fildes = io->d.write_generic.fd;
-				io->posix_aiocb.aio_offset = io->d.write_generic.offset + already_done;
-				io->posix_aiocb.aio_nbytes = nbytes - already_done;
-				io->posix_aiocb.aio_buf = io->d.write_generic.bufdata + already_done;
-				io->posix_aiocb.aio_lio_opcode = LIO_WRITE;
-				pgaio_posix_add_listio(&listio_buffer, &io->posix_aiocb);
+				io->posix_aiocb.aio_offset = io->d.write_generic.offset +
+					io->d.write_generic.already_done;
+				rc = pgaio_posix_start_rw(&listio_buffer, io, LIO_WRITE);
 				break;
 		}
 
