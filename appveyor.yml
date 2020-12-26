@@ -1,6 +1,6 @@
 image:
   - Ubuntu
-  - Visual Studio 2017
+  - Visual Studio 2013
 
 for:
   -
@@ -8,7 +8,7 @@ for:
       only:
         - image: Ubuntu
     install:
-      - sudo apt-get install gdb libipc-run-perl libperl-dev libpython-dev tcl-dev libldap2-dev libicu-dev docbook-xml docbook-xsl libxml2-utils xsltproc krb5-admin-server krb5-kdc krb5-user slapd ldap-utils libssl-dev
+      - sudo apt-get -y install gdb libipc-run-perl libperl-dev libpython-dev tcl-dev libldap2-dev libicu-dev docbook-xml docbook-xsl libxml2-utils xsltproc krb5-admin-server krb5-kdc krb5-user slapd ldap-utils libssl-dev
     before_build:
       - echo '/tmp/%e-%s-%p.core' | sudo tee /proc/sys/kernel/core_pattern
     build: ./configure --prefix=$HOME/install --enable-debug --enable-cassert --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-openssl --with-gssapi --with-icu && echo "COPT=-Wall -Werror" > src/Makefile.custom && make -j4 all contrib docs && make install
@@ -21,7 +21,7 @@ for:
   -
     matrix:
       only:
-        - image: Visual Studio 2017
+        - image: Visual Studio 2013
     install:
       - '"C:\Program Files\Microsoft SDKs\Windows\v7.1\Bin\SetEnv.cmd" /x64'
       - '"C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\vcvarsall.bat" x86_amd64'
