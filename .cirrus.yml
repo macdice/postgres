@@ -1,13 +1,22 @@
-freebsd_instance:
-  image_family: freebsd-12-1
-
 task:
+  name: Windows
+  windows_container:
+    image: cirrusci/windowsservercore:cmake
   install_script:
-    pkg install -y gmake readline perl5 bison
-  create_user_script:
-    - pw useradd postgres
-    - chown -R postgres:postgres .
+    - choco list --localonly
+    - choco install -y winflexbison diffutils
+    - rename c:\ProgramData\chocolatey\bin\win_flex.exe flex.exe
+    - rename c:\ProgramData\chocolatey\bin\win_bison.exe bison.exe
+    - choco install -y strawberryperl
+    - choco install --force -y visualstudio2019-workload-vctools --package-parameters "--includeOptional"
+    - choco list --localonly
   build_script:
-    su postgres -c ./configure --enable-cassert --enable-debug --with-includes=/usr/local/include --with-libs=/usr/local/lib && gmake -s
-  test_script:
-    su postgres -c gmake -s check
+    - cd
+    - set
+    - cd "c:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build"
+    - vcvarsall x64
+    - echo on
+    - cd C:\Users\ContainerAdministrator\AppData\Local\Temp\cirrus-ci-build
+    - set
+    - perl -v
+    - msbuild pgsql.sln
