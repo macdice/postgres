@@ -19,4 +19,7 @@ task:
     - cd C:\Users\ContainerAdministrator\AppData\Local\Temp\cirrus-ci-build
     - set
     - perl -v
+    - perl buildsetup.pl
     - msbuild pgsql.sln
+  test_script:
+    - cd src\tools\msvc && vcregress check
