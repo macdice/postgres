@@ -290,10 +290,11 @@ test_sync(int writes_per_op)
 		for (ops = 0; alarm_triggered == false; ops++)
 		{
 			for (writes = 0; writes < writes_per_op; writes++)
-				if (write(tmpfile, buf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+				if (pg_pwrite(tmpfile,
+							  buf,
+							  XLOG_BLCKSZ,
+							  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
 					die("write failed");
-			if (lseek(tmpfile, 0, SEEK_SET) == -1)
-				die("seek failed");
 		}
 		STOP_TIMER;
 		close(tmpfile);
@@ -315,11 +316,12 @@ test_sync(int writes_per_op)
 	for (ops = 0; alarm_triggered == false; ops++)
 	{
 		for (writes = 0; writes < writes_per_op; writes++)
-			if (write(tmpfile, buf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+			if (pg_pwrite(tmpfile,
+						  buf,
+						  XLOG_BLCKSZ,
+						  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
 				die("write failed");
 		fdatasync(tmpfile);
-		if (lseek(tmpfile, 0, SEEK_SET) == -1)
-			die("seek failed");
 	}
 	STOP_TIMER;
 	close(tmpfile);
@@ -339,12 +341,13 @@ test_sync(int writes_per_op)
 	for (ops = 0; alarm_triggered == false; ops++)
 	{
 		for (writes = 0; writes < writes_per_op; writes++)
-			if (write(tmpfile, buf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+			if (pg_pwrite(tmpfile,
+						  buf,
+						  XLOG_BLCKSZ,
+						  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
 				die("write failed");
 		if (fsync(tmpfile) != 0)
 			die("fsync failed");
-		if (lseek(tmpfile, 0, SEEK_SET) == -1)
-			die("seek failed");
 	}
 	STOP_TIMER;
 	close(tmpfile);
@@ -362,12 +365,13 @@ test_sync(int writes_per_op)
 	for (ops = 0; alarm_triggered == false; ops++)
 	{
 		for (writes = 0; writes < writes_per_op; writes++)
-			if (write(tmpfile, buf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+			if (pg_pwrite(tmpfile,
+						  buf,
+						  XLOG_BLCKSZ,
+						  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
 				die("write failed");
 		if (pg_fsync_writethrough(tmpfile) != 0)
 			die("fsync failed");
-		if (lseek(tmpfile, 0, SEEK_SET) == -1)
-			die("seek failed");
 	}
 	STOP_TIMER;
 	close(tmpfile);
@@ -393,8 +397,10 @@ test_sync(int writes_per_op)
 		for (ops = 0; alarm_triggered == false; ops++)
 		{
 			for (writes = 0; writes < writes_per_op; writes++)
-				if (write(tmpfile, buf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
-
+				if (pg_pwrite(tmpfile,
+							  buf,
+							  XLOG_BLCKSZ,
+							  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
 					/*
 					 * This can generate write failures if the filesystem has
 					 * a large block size, e.g. 4k, and there is no support
@@ -402,8 +408,6 @@ test_sync(int writes_per_op)
 					 * size, e.g. XFS.
 					 */
 					die("write failed");
-			if (lseek(tmpfile, 0, SEEK_SET) == -1)
-				die("seek failed");
 		}
 		STOP_TIMER;
 		close(tmpfile);
@@ -457,11 +461,12 @@ test_open_sync(const char *msg, int writes_size)
 		for (ops = 0; alarm_triggered == false; ops++)
 		{
 			for (writes = 0; writes < 16 / writes_size; writes++)
-				if (write(tmpfile, buf, writes_size * 1024) !=
+				if (pg_pwrite(tmpfile,
+							  buf,
+							  writes_size * 1024,
+							  writes * writes_size * 1024) !=
 					writes_size * 1024)
 					die("write failed");
-			if (lseek(tmpfile, 0, SEEK_SET) == -1)
-				die("seek failed");
 		}
 		STOP_TIMER;
 		close(tmpfile);
