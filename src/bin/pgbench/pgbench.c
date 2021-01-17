@@ -125,9 +125,17 @@ typedef struct socket_set
 #define THREAD_JOIN(handle) \
 	(WaitForSingleObject(handle, INFINITE) != WAIT_OBJECT_0 ? \
 	GETERRNO() : CloseHandle(handle) ? 0 : GETERRNO())
+#define THREAD_BARRIER_T SYNCHRONIZATION_BARRIER
+#define THREAD_BARRIER_INIT(barrier, n) \
+	(InitializeSynchronizationBarrier((barrier), (n), 0) ? 0 : GETERRNO())
+#define THREAD_BARRIER_WAIT(barrier) \
+	(EnterSynchronizationBarrier((barrier), \
+								 SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY) ? \
+								 0 : GETERRNO())
+#define THREAD_BARRIER_DESTROY(barrier)
 #elif defined(ENABLE_THREAD_SAFETY)
 /* Use platform-dependent pthread capability */
-#include <pthread.h>
+#include "port/pg_pthread.h"
 #define THREAD_T pthread_t
 #define THREAD_FUNC_RETURN_TYPE void *
 #define THREAD_FUNC_RETURN return NULL
@@ -135,11 +143,20 @@ typedef struct socket_set
 	pthread_create((handle), NULL, (function), (arg))
 #define THREAD_JOIN(handle) \
 	pthread_join((handle), NULL)
+#define THREAD_BARRIER_T pthread_barrier_t
+#define THREAD_BARRIER_INIT(barrier, n) \
+	pthread_barrier_init((barrier), NULL, (n))
+#define THREAD_BARRIER_WAIT(barrier) pthread_barrier_wait((barrier))
+#define THREAD_BARRIER_DESTROY(barrier) pthread_barrier_destroy((barrier))
 #else
 /* No threads implementation, use none (-j 1) */
 #define THREAD_T void *
 #define THREAD_FUNC_RETURN_TYPE void *
 #define THREAD_FUNC_RETURN return NULL
+#define THREAD_BARRIER_T void *
+#define THREAD_BARRIER_INIT(barrier, n)
+#define THREAD_BARRIER_WAIT(barrier)
+#define THREAD_BARRIER_DESTROY(barrier)
 #endif
 
 
@@ -325,6 +342,9 @@ typedef struct RandomState
 /* Various random sequences are initialized from this one. */
 static RandomState base_random_sequence;
 
+/* Synchronization barrier for start and connection */
+static THREAD_BARRIER_T barrier;
+
 /*
  * Connection state machine states.
  */
@@ -467,8 +487,8 @@ typedef struct
 
 	/* per thread collected stats in microseconds */
 	pg_time_usec_t	create_time;	/* thread creation time */
-	pg_time_usec_t	started_time;	/* thread is running */
-	pg_time_usec_t	bench_start; 	/* thread is benchmarking */
+	pg_time_usec_t	started_time;	/* thread is running after start barrier */
+	pg_time_usec_t	bench_start; 	/* thread is benchmarking after connection barrier */
 	pg_time_usec_t	conn_duration;	/* cumulated connection and deconnection delays */
 
 	StatsData	stats;
@@ -6125,6 +6145,8 @@ main(int argc, char **argv)
 	if (duration > 0)
 		setalarm(duration);
 
+	THREAD_BARRIER_INIT(&barrier, nthreads);
+
 #ifdef ENABLE_THREAD_SAFETY
 	/* start all threads but thread 0 which is executed directly later */
 	for (i = 1; i < nthreads; i++)
@@ -6194,6 +6216,8 @@ main(int argc, char **argv)
 	printResults(&stats, pg_time_now() - bench_start, conn_total_duration,
 				 bench_start - start_time, latency_late);
 
+	THREAD_BARRIER_DESTROY(&barrier);
+
 	if (exit_code != 0)
 		pg_log_fatal("Run was aborted; the above results are incomplete.");
 
@@ -6240,6 +6264,8 @@ threadRun(void *arg)
 		state[i].state = CSTATE_CHOOSE_SCRIPT;
 
 	/* READY */
+	THREAD_BARRIER_WAIT(&barrier);
+
 	thread_start = pg_time_now();
 	thread->started_time = thread_start;
 	last_report = thread_start;
@@ -6252,7 +6278,18 @@ threadRun(void *arg)
 		for (int i = 0; i < nstate; i++)
 		{
 			if ((state[i].con = doConnect()) == NULL)
+			{
+				/*
+				 * On connection failure, we meet the barrier here in place of
+				 * GO before proceeding to the "done" path which will cleanup,
+				 * so as to avoid locking the process.
+				 *
+				 * It is unclear whether it is worth doing anything rather than
+				 * coldly exiting with an error message.
+				 */
+				THREAD_BARRIER_WAIT(&barrier);
 				goto done;
+			}
 		}
 
 		/* compute connection delay */
@@ -6264,6 +6301,8 @@ threadRun(void *arg)
 		thread->conn_duration = 0;
 	}
 
+	/* GO */
+	THREAD_BARRIER_WAIT(&barrier);
 
 	start = pg_time_now();
 	thread->bench_start = start;
