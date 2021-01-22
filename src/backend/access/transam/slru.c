@@ -56,6 +56,7 @@
 #include "access/xlog.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/aio.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
 
@@ -1582,30 +1583,36 @@ SlruScanDirectory(SlruCtl ctl, SlruScanCallback callback, void *data)
 	return retval;
 }
 
+static void
+SlruSyncFileTagComplete(pg_streaming_write *pgsw, void *pgsw_private, int result, void *write_private)
+{
+	InflightSyncEntry *entry = (InflightSyncEntry *) write_private;
+
+	CloseTransientFile((int) entry->handler_data);
+
+	SyncRequestCompleted(entry, result >= 0, result >= 0 ? 0 : -result);
+}
+
 /*
  * Individual SLRUs (clog, ...) have to provide a sync.c handler function so
  * that they can provide the correct "SlruCtl" (otherwise we don't know how to
  * build the path), but they just forward to this common implementation that
  * performs the fsync.
  */
-int
-SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path)
+void
+SlruSyncFileTag(SlruCtl ctl, struct pg_streaming_write *pgsw, InflightSyncEntry *entry)
 {
 	int			fd;
-	int			save_errno;
-	int			result;
+	PgAioInProgress *aio;
 
-	SlruFileName(ctl, path, ftag->segno);
+	SlruFileName(ctl, entry->path, entry->tag.segno);
 
-	fd = OpenTransientFile(path, O_RDWR | PG_BINARY);
+	fd = OpenTransientFile(entry->path, O_RDWR | PG_BINARY);
 	if (fd < 0)
-		return -1;
+		SyncRequestCompleted(entry, false, errno);
 
-	result = pg_fsync(fd);
-	save_errno = errno;
-
-	CloseTransientFile(fd);
-
-	errno = save_errno;
-	return result;
+	entry->handler_data = fd;
+	aio = pg_streaming_write_get_io(pgsw);
+	pgaio_io_start_fsync_raw(aio, fd, false);
+	pg_streaming_write_write(pgsw, aio, SlruSyncFileTagComplete, entry);
 }

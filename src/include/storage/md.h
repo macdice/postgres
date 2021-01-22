@@ -57,7 +57,7 @@ extern void ForgetDatabaseSyncRequests(Oid dbid);
 extern void DropRelationFiles(RelFileNode *delrels, int ndelrels, bool isRedo);
 
 /* md sync callbacks */
-extern int	mdsyncfiletag(const FileTag *ftag, char *path);
+extern void mdsyncfiletag(struct pg_streaming_write *pgsw, InflightSyncEntry *entry);
 extern int	mdunlinkfiletag(const FileTag *ftag, char *path);
 extern bool mdfiletagmatches(const FileTag *ftag, const FileTag *candidate);
 
