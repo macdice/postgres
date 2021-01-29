@@ -178,6 +178,20 @@ sub ecpgcheck
 sub isolationcheck
 {
 	chdir "../isolation";
+	rmtree "testtablespace";
+	mkdir "testtablespace";
+	my $abs_testtablespace = abs_path "testtablespace";
+	my @generated_specs = ("drop-tablespace.spec");
+	foreach(@generated_specs) {
+		my $spec = $_;
+		open(IN, '<specs/'.$spec.'.template') or die $!;
+		open(OUT, '>specs/'.$spec.'.template') or die $!;
+		while (<IN>) {
+			s|\@testtablespace\@|$abs_testtablespace|
+		}
+		close(OUT);
+		close(IN);
+	}
 	copy("../../../$Config/isolationtester/isolationtester.exe",
 		"../../../$Config/pg_isolation_regress");
 	my @args = (
