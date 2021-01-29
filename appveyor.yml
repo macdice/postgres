@@ -11,7 +11,7 @@ build:
   project: pgsql.sln
 
 test_script:
-  - cd src\tools\msvc && vcregress check isolationcheck
+  - cd src\tools\msvc && vcregress isolationcheck
 
 on_failure:
   - perl dumpregr.pl
