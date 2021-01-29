@@ -52,6 +52,7 @@ clean distclean:
 	rm -f isolationtester$(X) pg_isolation_regress$(X) $(OBJS) isolation_main.o
 	rm -f pg_regress.o
 	rm -rf $(pg_regress_clean_files)
+	rm -fr testtablespace
 
 maintainer-clean: distclean
 	rm -f specparse.c specscanner.c
@@ -60,6 +61,8 @@ installcheck: all
 	$(pg_isolation_regress_installcheck) --schedule=$(srcdir)/isolation_schedule
 
 check: all
+	rm -fr testtablespace
+	mkdir -p testtablespace
 	$(pg_isolation_regress_check) --schedule=$(srcdir)/isolation_schedule
 
 # Versions of the check tests that include the prepared-transactions test
@@ -71,3 +74,6 @@ installcheck-prepared-txns: all temp-install
 
 check-prepared-txns: all temp-install
 	$(pg_isolation_regress_check) --schedule=$(srcdir)/isolation_schedule prepared-transactions
+
+specs/%.spec: specs/%.spec.template
+	sed "s|@testtablespace@|$(abspath $(srcdir))/testtablespace|" < $< > $@

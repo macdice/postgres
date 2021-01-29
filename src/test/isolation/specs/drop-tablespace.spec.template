@@ -1,0 +1,17 @@
+# DROP TABLESPACE
+#
+# Check that we can drop a tablespace containing files to be unlinked at
+# the next checkpoint, including files that are currently open in another
+# process.
+
+session "s1"
+step "s1cts" { CREATE TABLESPACE ts LOCATION '@testtablespace@'; }
+step "s1ct" { CREATE TABLE t () TABLESPACE ts; }
+step "s1dt" { DROP TABLE t; }
+step "s1dts" { DROP TABLESPACE ts; }
+
+session "s2"
+step "s2r" { SELECT * FROM t; }
+
+permutation "s1cts" "s1ct" "s1dt" "s1dts"
+permutation "s1cts" "s1ct" "s2r" "s1dt" "s1dts"
