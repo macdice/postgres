@@ -180,7 +180,7 @@ sub isolationcheck
 	chdir "../isolation";
 	rmtree "testtablespace";
 	mkdir "testtablespace";
-	my $abs_testtablespace = abs_path("testtablespace");
+	my $abs_testtablespace = Cwd::abs_path("testtablespace");
 	my @generated_specs = ("drop-tablespace.spec");
 	foreach(@generated_specs) {
 		my $spec = $_;
