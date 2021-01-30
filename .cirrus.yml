@@ -1,0 +1,45 @@
+env:
+  # accelerate initial clone
+  CIRRUS_CLONE_DEPTH: 1
+
+task:
+  name: macOS
+  osx_instance:
+    image: catalina-base
+  install_script:
+    - sudo chmod 777 /cores
+    - uname -a
+    - cpan -T IPC::Run
+  build_script:
+    - export PERL5LIB=~/perl5/lib/perl5
+    - ./configure --prefix=$HOME/install --enable-cassert --enable-debug --enable-tap-tests --without-readline --with-posix-aio CFLAGS="-O0"
+    - make -s -j12
+    - make -s install
+  test_script:
+    - ulimit -c unlimited
+    - export PERL5LIB=~/perl5/lib/perl5
+    - make -s check
+    - make -s -C src/bin/pgbench check
+  on_failure:
+    debug_script:
+      - for F in ` find . -name initdb.log -o -name regression.diffs -o -name postmaster.log` ; do echo === $F === ; head -1000 $F ; done
+      - for corefile in $(find /cores/ -name 'core.*' 2>/dev/null) ; do lldb -c $corefile --batch -o 'thread backtrace all' -o 'quit' ; done
+
+task:
+  name: Windows
+  windows_container:
+    dockerfile: ci/WindowsDockerfile
+  build_script:
+    - cd "c:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Auxiliary/Build"
+    - vcvarsall x64
+    - echo on
+    - cd C:\Users\ContainerAdministrator\AppData\Local\Temp\cirrus-ci-build
+    - set PATH=C:\strawberry\perl\bin;%PATH%
+    - perl src/tools/msvc/mkvcbuild.pl
+    - set IgnoreWarnIntDirInTempDetected=true
+    - msbuild -m pgsql.sln
+  test_script:
+    - set PATH=C:\strawberry\perl\bin;%PATH%
+    - perl src/tools/msvc/vcregress.pl check
+  bincheck_script:
+    - perl src/tools/msvc/vcregress.pl bincheck
