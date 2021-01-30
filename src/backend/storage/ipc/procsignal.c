@@ -98,7 +98,7 @@ static volatile ProcSignalSlot *MyProcSignalSlot = NULL;
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
 static void ResetProcSignalBarrierBits(uint32 flags);
-static bool ProcessBarrierPlaceholder(void);
+static bool ProcessBarrierCatchup(void);
 
 /*
  * ProcSignalShmemSize
@@ -400,6 +400,9 @@ WaitForProcSignalBarrier(uint64 generation)
 		volatile ProcSignalSlot *slot = &ProcSignal->psh_slot[i];
 		uint64		oldval;
 
+		if (slot == MyProcSignalSlot)
+			continue;
+
 		/*
 		 * It's important that we check only pss_barrierGeneration here and
 		 * not pss_barrierCheckMask. Bits in pss_barrierCheckMask get cleared
@@ -538,8 +541,8 @@ ProcessProcSignalBarrier(void)
 				type = (ProcSignalBarrierType) pg_rightmost_one_pos32(flags);
 				switch (type)
 				{
-					case PROCSIGNAL_BARRIER_PLACEHOLDER:
-						processed = ProcessBarrierPlaceholder();
+					case PROCSIGNAL_BARRIER_CATCHUP:
+						processed = ProcessBarrierCatchup();
 						break;
 				}
 
@@ -605,20 +608,9 @@ ResetProcSignalBarrierBits(uint32 flags)
 }
 
 static bool
-ProcessBarrierPlaceholder(void)
+ProcessBarrierCatchup(void)
 {
-	/*
-	 * XXX. This is just a placeholder until the first real user of this
-	 * machinery gets committed. Rename PROCSIGNAL_BARRIER_PLACEHOLDER to
-	 * PROCSIGNAL_BARRIER_SOMETHING_ELSE where SOMETHING_ELSE is something
-	 * appropriately descriptive. Get rid of this function and instead have
-	 * ProcessBarrierSomethingElse. Most likely, that function should live in
-	 * the file pertaining to that subsystem, rather than here.
-	 *
-	 * The return value should be 'true' if the barrier was successfully
-	 * absorbed and 'false' if not. Note that returning 'false' can lead to
-	 * very frequent retries, so try hard to make that an uncommon case.
-	 */
+	ProcessCatchupInterrupt();
 	return true;
 }
 
