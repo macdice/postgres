@@ -1,0 +1,388 @@
+# Special .cirrus.yml file to test combination of AIO/DIO features.  WIP.
+
+env:
+  # accelerate initial clone
+  CIRRUS_CLONE_DEPTH: 1
+  # Useful to be able to analyse what in a script takes long
+  CIRRUS_LOG_TIMESTAMP: true
+  # target to test, for all but OSX and windows
+  CHECK: check-world
+  CHECKFLAGS: -Otarget
+  PGCTLTIMEOUT: 120
+
+task:
+  name: FreeBSD
+  compute_engine_instance:
+    image_project: pg-vm-images-aio
+    image: family/pg-aio-freebsd-13-0
+    platform: freebsd
+    cpu: 4
+    memory: 8G
+    disk: 50
+  env:
+    CCACHE_SIZE: "500M"
+    CCACHE_DIR: "/tmp/ccache_dir"
+  ccache_cache:
+    folder: "/tmp/ccache_dir"
+  sysconfig_script:
+    - sysctl kern.corefile='/tmp/%N.%P.core'
+    - sysctl kern.timecounter.hardware=TSC-low
+  create_partition_script:
+    - gpart recover da0 # fix backup partition table after resize
+    - gpart show da0
+    - swapoff -a || true # kill swap, so we can delete a partition
+    - gpart delete -i 3 da0 # (apparently we can only have 4!?)
+    - gpart add -t freebsd-ufs -l data8k -a 4096 da0
+    - gpart show da0
+    - newfs -U -b 8192 /dev/da0p3
+  migrate_working_dir_script:
+    - du -hs $CIRRUS_WORKING_DIR
+    - mv $CIRRUS_WORKING_DIR $CIRRUS_WORKING_DIR.orig
+    - mkdir $CIRRUS_WORKING_DIR
+    - mount /dev/da0p3 $CIRRUS_WORKING_DIR
+    - cp -r $CIRRUS_WORKING_DIR.orig/* $CIRRUS_WORKING_DIR/
+  create_user_script:
+    - pw useradd postgres
+    - chown -R postgres:postgres .
+    - mkdir -p /tmp/ccache_dir
+    - chown -R postgres:postgres /tmp/ccache_dir
+  configure_script:
+    - su postgres -c './configure --enable-cassert --enable-debug --enable-tap-tests --with-posix-aio --with-includes=/usr/local/include --with-libs=/usr/local/lib CC="ccache cc"'
+  build_script:
+    - su postgres -c 'gmake -s -j4 && gmake -s -j4 -C contrib'
+  worker_buf_script:
+    - su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_buf.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_buf.log 2>&1
+  worker_dio_script:
+    - su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_dio.log 2>&1
+  posix_aio_buf_script:
+    - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_buf.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_buf.log 2>&1
+  posix_aio_dio_script:
+    - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_dio.log 2>&1
+  on_failure:
+    core_script:
+      for corefile in $(find /tmp -name '*.core' 2>/dev/null) ; do binary=$(gdb -quiet -core $corefile -batch -ex 'info auxv' | grep AT_EXECPATH | perl -pe "s/^.*\"(.*)\"\$/\$1/g") ; echo dumping $corefile for $binary ; gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile ; done
+    debug_script:
+      - for F in ` find . -name initdb.log -o -name regression.diffs -o -name 'postmaster*.log'` ; do echo === $F === ; head -1000 $F ; done
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+
+task:
+  matrix:
+    - name: Linux
+      compute_engine_instance:
+        image_project: pg-vm-images-aio
+        image: family/pg-aio-bullseye
+        platform: linux
+        cpu: 4
+        memory: 8G
+        nested_virtualization: false
+    - name: Linux Uring Kernel
+      depends_on:
+        - Linux
+      compute_engine_instance:
+        image_project: pg-vm-images-aio
+        image: family/pg-aio-sid-newkernel-uring
+        platform: linux
+        cpu: 4
+        memory: 8G
+        nested_virtualization: false
+    - name: Linux Linus Kernel
+      depends_on:
+        - Linux
+      compute_engine_instance:
+        image_project: pg-vm-images-aio
+        image: family/pg-aio-sid-newkernel
+        platform: linux
+        cpu: 4
+        memory: 8G
+        nested_virtualization: false
+  env:
+    CCACHE_SIZE: "4GB"
+    CCACHE_DIR: "/tmp/ccache_dir"
+    DEBUGINFOD_URLS: "https://debuginfod.debian.net"
+    TIMEOUT_CMD: timeout -s KILL -v 25m
+  ccache_cache:
+    folder: "/tmp/ccache_dir"
+  test_script:
+    - id
+    - uname -a
+    - cat /proc/cmdline
+    - lsblk
+    - cat /proc/cmdline
+    - ulimit -a -H
+    - ulimit -a -S
+    - export
+  create_user_script:
+    - useradd -m postgres
+    - chown -R postgres:postgres .
+    - mkdir -p /tmp/ccache_dir
+    - chown -R postgres:postgres /tmp/ccache_dir
+    - echo '* - memlock 134217728' > /etc/security/limits.d/postgres.conf
+    - su postgres -c 'ulimit -l -H'
+    - su postgres -c 'ulimit -l -S'
+    - echo '/tmp/%e-%s-%p.core' > /proc/sys/kernel/core_pattern
+  configure_script:
+    - su postgres -c './configure --enable-cassert --enable-debug --enable-tap-tests --with-posix-aio --with-liburing --with-tcl --with-python --with-perl --with-ldap --with-openssl --with-icu --with-llvm CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang"'
+  build_script:
+    - su postgres -c 'make -s -j4 && make -s -j4 -C contrib'
+  io_uring_buf_script:
+    - su postgres -c 'ulimit -c unlimited ; TEMP_CONFIG=$(realpath ci/uring_buf.conf) ${TIMEOUT_CMD} make -s ${CHECK} ${CHECKFLAGS} -j8'
+  io_uring_dio_script:
+    - su postgres -c 'ulimit -c unlimited ; TEMP_CONFIG=$(realpath ci/uring_dio.conf) ${TIMEOUT_CMD} make -s ${CHECK} ${CHECKFLAGS} -j8'
+  worker_buf_script:
+    - su postgres -c 'ulimit -c unlimited ; TEMP_CONFIG=$(realpath ci/worker_buf.conf) ${TIMEOUT_CMD} make -s ${CHECK} ${CHECKFLAGS} -j8'
+  worker_dio_script:
+    - su postgres -c 'ulimit -c unlimited ; TEMP_CONFIG=$(realpath ci/worker_dio.conf) ${TIMEOUT_CMD} make -s ${CHECK} ${CHECKFLAGS} -j8'
+  posix_aio_buf_script:
+    - su postgres -c 'ulimit -c unlimited ; TEMP_CONFIG=$(realpath ci/posix_aio_buf.conf) ${TIMEOUT_CMD} make -s ${CHECK} ${CHECKFLAGS} -j8'
+  posix_aio_dio_script:
+    - su postgres -c 'ulimit -c unlimited ; TEMP_CONFIG=$(realpath ci/posix_aio_dio.conf) ${TIMEOUT_CMD} make -s ${CHECK} ${CHECKFLAGS} -j8'
+  on_failure:
+    cores_script:
+      - for corefile in $(find /tmp/ -name '*.core' 2>/dev/null) ; do binary=$(gdb -quiet -core $corefile -batch -ex 'info auxv' | grep AT_EXECFN | perl -pe "s/^.*\"(.*)\"\$/\$1/g") ; echo dumping $corefile for $binary ; gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile ; done
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+task:
+  name: macOS
+  osx_instance:
+    image: big-sur-base
+  env:
+    CIRRUS_WORKING_DIR: ${HOME}/pgsql/
+    CCACHE_SIZE: "500M"
+    CCACHE_DIR: ${HOME}/ccache
+    HOMEBREW_CACHE: ${HOME}/homebrew-cache
+    PERL5LIB: ${HOME}/perl5/lib/perl5
+  ccache_cache:
+    folder: ${CCACHE_DIR}
+  homebrew_cache:
+    folder: ${HOMEBREW_CACHE}
+  perl_cache:
+    folder: ~/perl5
+  info_script:
+    - id
+    - ulimit -a
+    - export
+
+  # An update to the cirrus OSX image removed passwordless sudo. Try to allow
+  # it again. The existing sudoers uses env_reset without secure_path,
+  # which means that 'sudo su' fails because 'su' isn't on PATH anymore.
+  # https://github.com/cirruslabs/osx-images/issues/38
+  fix_sudo_script:
+    - echo admin | sudo -S /bin/bash -c 'echo "admin ALL=(ALL:ALL) NOPASSWD: ALL"|tee /etc/sudoers.d/admin'
+    - echo 'Defaults        secure_path="/bin:/usr/bin:/usr/ucb:/usr/local/bin"'|sudo /usr/bin/tee /etc/sudoers.d/path
+
+  cpan_install_script:
+    - perl -mIPC::Run -e 1 || cpan -T IPC::Run
+  core_install_script:
+    - sudo chmod 777 /cores
+
+  homebrew_install_script:
+    - brew install make coreutils ccache
+  configure_script:
+    - ./configure --prefix=$HOME/install --enable-cassert --enable-debug --enable-tap-tests --without-readline --with-posix-aio CC="ccache gcc" CFLAGS="-O0"
+  build_script:
+    - gmake -s -j12 && gmake -s -j12 -C contrib
+    - gmake -s install
+
+  worker_buf_script:
+    - ulimit -c unlimited
+    - ulimit -n 1024
+    - TEMP_CONFIG=$(pwd)/ci/worker_buf.conf gtimeout -s KILL -v 30m gmake -s -j12 ${CHECK} ${CHECKFLAGS}
+  worker_dio_script:
+    - ulimit -c unlimited
+    - ulimit -n 1024
+    - TEMP_CONFIG=$(pwd)/ci/worker_dio.conf gmake -s -j12 ${CHECK} ${CHECKFLAGS}
+  posix_aio_buf_script:
+    - ulimit -c unlimited
+    - ulimit -n 1024
+    - TEMP_CONFIG=$(pwd)/ci/posix_aio_buf.conf gmake -s -j12 ${CHECK} ${CHECKFLAGS}
+  posix_aio_dio_script:
+    - ulimit -c unlimited
+    - ulimit -n 1024
+    - TEMP_CONFIG=$(pwd)/ci/posix_aio_dio.conf gmake -s -j12 ${CHECK} ${CHECKFLAGS}
+  on_failure:
+    cores_script:
+      - for corefile in $(find /cores/ -name 'core.*' 2>/dev/null) ; do lldb -c $corefile --batch -o 'thread backtrace all' -o 'quit' ; done
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+task:
+  windows_container:
+    dockerfile: ci/WindowsDockerfile
+    cpu: 4
+    memory: 4G
+  env:
+    PROVE_FLAGS: -j10
+    # Avoid re-installing over and over
+    NO_TEMP_INSTALL: 1
+    TIMEOUT_CMD: timeout -k60s 30m
+
+  matrix:
+    - name: Windows Worker Buf
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\worker_buf.conf
+    - name: Windows Worker DIO
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\worker_dio.conf
+  test_script:
+    - powershell -Command get-psdrive -psprovider filesystem
+    - set
+
+  configure_script:
+    - copy ci\windows_build_config.pl src\tools\msvc\config.pl
+    - vcvarsall x64
+    - perl src/tools/msvc/mkvcbuild.pl
+  build_script:
+    - vcvarsall x64
+    # Disable file tracker, we're never going to rebuild...
+    - msbuild -m /p:TrackFileAccess=false pgsql.sln
+  install_script:
+    - perl src\tools\msvc\install.pl tmp_install
+
+  check_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl check parallel
+
+  ecpgcheck_script:
+    # tries to build additional stuff
+    - vcvarsall x64
+    # References ecpg_regression.proj in the current dir
+    - cd src\tools\msvc
+    - timeout -k60s 30m perl vcregress.pl ecpgcheck
+
+  startcreate_script:
+    - tmp_install\bin\pg_ctl.exe initdb -D tmp_check\db -l tmp_check\initdb.log
+    - tmp_install\bin\pg_ctl.exe start -D tmp_check\db -l tmp_check\postmaster.log
+  modulescheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl modulescheck
+  isolationcheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl isolationcheck
+  contribcheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl contribcheck
+  plcheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl plcheck
+  stop_script:
+    # XXX: should ensure this gets called if previous steps fail
+    - tmp_install\bin\pg_ctl.exe stop -D tmp_check\db -l tmp_check\postmaster.log
+  recoverycheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl recoverycheck
+  bincheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl bincheck
+  upgradecheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl upgradecheck
+  on_failure:
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+task:
+  name: CompilerWarnings
+  depends_on:
+  - Linux
+  container:
+    dockerfile: ci/LinuxDockerfile
+  env:
+    CCACHE_SIZE: "4GB"
+    CCACHE_DIR: "/tmp/ccache_dir"
+  ccache_cache:
+    folder: "/tmp/ccache_dir"
+  setup_script:
+    - echo "COPT=-Werror" > src/Makefile.custom
+    - gcc -v
+    - clang -v
+  # gcc with asserts disabled
+  always:
+    gcc_warning_script:
+      - ./configure --cache gcc.cache CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    gcc_p_warning_script:
+      - ./configure --cache gcc.cache --with-posix-aio CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    gcc_u_warning_script:
+      - ./configure --cache gcc.cache --with-liburing CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    gcc_pu_warning_script:
+      - ./configure --cache gcc.cache --with-posix-aio --with-liburing CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  # gcc with asserts enabled
+  always:
+    gcc_a_warning_script:
+      - ./configure --cache gcc.cache --enable-cassert CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    gcc_ap_warning_script:
+      - ./configure --cache gcc.cache --enable-cassert --with-posix-aio CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    gcc_au_warning_script:
+      - ./configure --cache gcc.cache --enable-cassert --with-liburing CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    gcc_apu_warning_script:
+      - ./configure --cache gcc.cache --enable-cassert --with-posix-aio --with-liburing CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  # clang with asserts disabled
+  always:
+    clang_warning_script:
+      - ./configure --cache clang.cache CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    clang_p_warning_script:
+      - ./configure --cache clang.cache --with-posix-aio CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    clang_u_warning_script:
+      - ./configure --cache clang.cache --with-liburing CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    clang_pu_warning_script:
+      - ./configure --cache clang.cache --with-posix-aio --with-liburing CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  # clang with asserts enabled
+  always:
+    clang_a_warning_script:
+      - ./configure --cache clang.cache --enable-cassert CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    clang_ap_warning_script:
+      - ./configure --cache clang.cache --enable-cassert --with-posix-aio CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    clang_au_warning_script:
+      - ./configure --cache clang.cache --enable-cassert --with-liburing CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  always:
+    clang_apu_warning_script:
+      - ./configure --cache clang.cache --enable-cassert --with-posix-aio --with-liburing CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4

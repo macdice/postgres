@@ -1,0 +1,17 @@
+FROM cirrusci/windowsservercore:visualstudio2019
+
+SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command"]
+
+RUN powershell -NoLogo -NoProfile -Command \
+  choco install -y --no-progress strawberryperl ; \
+  choco install -y --no-progress winflexbison diffutils ; \
+  Rename-Item -Path c:\ProgramData\chocolatey\bin\win_flex.exe flex.exe ; \
+  Rename-Item -Path c:\ProgramData\chocolatey\bin\win_bison.exe bison.exe ; \
+  Remove-Item C:\ProgramData\chocolatey\logs\*.* -Force -Recurse ; \
+  Remove-Item C:\Users\ContainerAdministrator\AppData\Local\Temp\*.* -Force -Recurse
+
+SHELL ["cmd", "/s", "/c"]
+
+# Adding VS path to vcvarsall.bat so user of container doesn't need to know the full path
+# Ordered so strawberry perl wins over git perl
+RUN setx path /m "C:\strawberry\perl\bin;C:\Program Files\Git\usr\bin;c:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build;%PATH%"
