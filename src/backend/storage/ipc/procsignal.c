@@ -23,6 +23,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/walsender.h"
+#include "storage/condition_variable.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/proc.h"
@@ -60,10 +61,11 @@
  */
 typedef struct
 {
-	pid_t		pss_pid;
-	sig_atomic_t pss_signalFlags[NUM_PROCSIGNALS];
+	volatile pid_t		pss_pid;
+	volatile sig_atomic_t pss_signalFlags[NUM_PROCSIGNALS];
 	pg_atomic_uint64 pss_barrierGeneration;
 	pg_atomic_uint32 pss_barrierCheckMask;
+	ConditionVariable pss_barrierCV;
 } ProcSignalSlot;
 
 /*
@@ -94,7 +96,7 @@ typedef struct
 	((flags) &= ~(((uint32) 1) << (uint32) (type)))
 
 static ProcSignalHeader *ProcSignal = NULL;
-static volatile ProcSignalSlot *MyProcSignalSlot = NULL;
+static ProcSignalSlot *MyProcSignalSlot = NULL;
 
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
@@ -143,6 +145,7 @@ ProcSignalShmemInit(void)
 			MemSet(slot->pss_signalFlags, 0, sizeof(slot->pss_signalFlags));
 			pg_atomic_init_u64(&slot->pss_barrierGeneration, PG_UINT64_MAX);
 			pg_atomic_init_u32(&slot->pss_barrierCheckMask, 0);
+			ConditionVariableInit(&slot->pss_barrierCV);
 		}
 	}
 }
@@ -157,7 +160,7 @@ ProcSignalShmemInit(void)
 void
 ProcSignalInit(int pss_idx)
 {
-	volatile ProcSignalSlot *slot;
+	ProcSignalSlot *slot;
 	uint64		barrier_generation;
 
 	Assert(pss_idx >= 1 && pss_idx <= NumProcSignalSlots);
@@ -392,13 +395,11 @@ EmitProcSignalBarrier(ProcSignalBarrierType type)
 void
 WaitForProcSignalBarrier(uint64 generation)
 {
-	long		timeout = 125L;
-
 	Assert(generation <= pg_atomic_read_u64(&ProcSignal->psh_barrierGeneration));
 
 	for (int i = NumProcSignalSlots - 1; i >= 0; i--)
 	{
-		volatile ProcSignalSlot *slot = &ProcSignal->psh_slot[i];
+		ProcSignalSlot *slot = &ProcSignal->psh_slot[i];
 		uint64		oldval;
 
 		/*
@@ -410,26 +411,11 @@ WaitForProcSignalBarrier(uint64 generation)
 		oldval = pg_atomic_read_u64(&slot->pss_barrierGeneration);
 		while (oldval < generation)
 		{
-			int			events;
-
-			CHECK_FOR_INTERRUPTS();
-
-			/*
-			 * Since interrupts may be held, also process barrier requests.
-			 * This avoids (self) deadlocks.
-			 */
-			ProcessProcSignalBarrier();
-
-			events =
-				WaitLatch(MyLatch,
-						  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						  timeout, WAIT_EVENT_PROC_SIGNAL_BARRIER);
-			ResetLatch(MyLatch);
-
+			ConditionVariableSleep(&slot->pss_barrierCV,
+								   WAIT_EVENT_PROC_SIGNAL_BARRIER);
 			oldval = pg_atomic_read_u64(&slot->pss_barrierGeneration);
-			if (events & WL_TIMEOUT)
-				timeout = Min(timeout * 2, 1000L);
 		}
+		ConditionVariableCancelSleep();
 	}
 
 	/*
@@ -596,6 +582,7 @@ ProcessProcSignalBarrier(void)
 	 * next called.
 	 */
 	pg_atomic_write_u64(&MyProcSignalSlot->pss_barrierGeneration, shared_gen);
+	ConditionVariableBroadcast(&MyProcSignalSlot->pss_barrierCV);
 }
 
 /*
