@@ -252,6 +252,9 @@ struct XLogReaderState
 
 	/* Buffer to hold error message */
 	char	   *errormsg_buf;
+
+	/* Private storage workspace for xlogutil.c. */
+	int			kept_buffer;	/* XXX should be Buffer, but ... ugh */
 };
 
 /* Get a new XLogReader */

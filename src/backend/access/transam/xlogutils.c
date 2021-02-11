@@ -25,6 +25,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/buf_internals.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -297,6 +298,26 @@ XLogReadBufferForRedo(XLogReaderState *record, uint8 block_id,
 }
 
 /*
+ * Keep a buffer pinned and locked, so that we can perhaps use it directly when
+ * processing the next record.  This can be used instead of
+ * UnlockReleaseBuffer() during recovery, in simple redo routines that don't
+ * take cleanup locks and only touch one buffer.  Call with InvalidBuffer to
+ * release.
+ */
+void
+XLogKeepBufferForRedo(XLogReaderState *record, Buffer buffer)
+{
+	Assert(!BufferIsValid(buffer) ||
+		   LWLockHeldByMeInMode(BufferDescriptorGetContentLock(GetBufferDescriptor(buffer - 1)),
+								LW_EXCLUSIVE));
+
+	/* Release any buffer we might already be holding onto. */
+	if (BufferIsValid(record->kept_buffer) && record->kept_buffer != buffer)
+		UnlockReleaseBuffer(record->kept_buffer);
+	record->kept_buffer = buffer;
+}
+
+/*
  * Pin and lock a buffer referenced by a WAL record, for the purpose of
  * re-initializing it.
  */
@@ -345,6 +366,27 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		elog(PANIC, "failed to locate backup block with ID %d", block_id);
 	}
 
+	/* Do we already have this buffer pinned and suitably locked? */
+	if (BufferIsValid(record->kept_buffer))
+	{
+		bool 	can_reuse = false;
+
+		if (mode == RBM_NORMAL && !get_cleanup_lock)
+		{
+			BufferDesc *bufHdr;
+			BufferTag	tag;
+
+			bufHdr = GetBufferDescriptor(record->kept_buffer - 1);
+			Assert(LWLockHeldByMeInMode(BufferDescriptorGetContentLock(bufHdr),
+				   LW_EXCLUSIVE));
+			INIT_BUFFERTAG(tag, rnode, forknum, blkno);
+			if (BUFFERTAGS_EQUAL(tag, bufHdr->tag))
+				can_reuse = true;
+		}
+		if (!can_reuse)
+			XLogKeepBufferForRedo(record, InvalidBuffer);
+	}
+
 	/*
 	 * Make sure that if the block is marked with WILL_INIT, the caller is
 	 * going to initialize it. And vice versa.
@@ -360,8 +402,14 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	if (XLogRecBlockImageApply(record, block_id))
 	{
 		Assert(XLogRecHasBlockImage(record, block_id));
-		*buf = XLogReadBufferExtended(rnode, forknum, blkno,
-									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK);
+		if (BufferIsValid(record->kept_buffer))
+		{
+			*buf = record->kept_buffer;				/* XXX and zero? */
+			record->kept_buffer = InvalidBuffer;	/* transferring ownership */
+		}
+		else
+			*buf = XLogReadBufferExtended(rnode, forknum, blkno,
+										  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK);
 		page = BufferGetPage(*buf);
 		if (!RestoreBlockImage(record, block_id, page))
 			elog(ERROR, "failed to restore block image");
@@ -390,16 +438,30 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	}
 	else
 	{
-		*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode);
+		if (BufferIsValid(record->kept_buffer))
+		{
+			*buf = record->kept_buffer;
+			record->kept_buffer = InvalidBuffer;	/* transferring ownership */
+			Assert(LWLockHeldByMeInMode(BufferDescriptorGetContentLock(GetBufferDescriptor(*buf - 1)), LW_EXCLUSIVE));
+			Assert(!get_cleanup_lock);
+			Assert(mode == RBM_NORMAL);
+		}
+		else
+		{
+			*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode);
+			if (BufferIsValid(*buf))
+			{
+				if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
+				{
+					if (get_cleanup_lock)
+						LockBufferForCleanup(*buf);
+					else
+						LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
+				}
+			}
+		}
 		if (BufferIsValid(*buf))
 		{
-			if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
-			{
-				if (get_cleanup_lock)
-					LockBufferForCleanup(*buf);
-				else
-					LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
-			}
 			if (lsn <= PageGetLSN(BufferGetPage(*buf)))
 				return BLK_DONE;
 			else

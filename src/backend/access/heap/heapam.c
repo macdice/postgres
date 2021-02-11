@@ -8448,7 +8448,7 @@ heap_xlog_clean(XLogReaderState *record)
 	{
 		Size		freespace = PageGetHeapFreeSpace(BufferGetPage(buffer));
 
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 
 		/*
 		 * After cleaning records from a page, it's useful to update the FSM
@@ -8660,7 +8660,7 @@ heap_xlog_freeze_page(XLogReaderState *record)
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 }
 
 /*
@@ -8760,7 +8760,7 @@ heap_xlog_delete(XLogReaderState *record)
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 }
 
 static void
@@ -8869,7 +8869,7 @@ heap_xlog_insert(XLogReaderState *record)
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 
 	/*
 	 * If the page is running low on free space, update the FSM as well.
@@ -9410,7 +9410,7 @@ heap_xlog_lock(XLogReaderState *record)
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 }
 
 static void
@@ -9511,7 +9511,7 @@ heap_xlog_inplace(XLogReaderState *record)
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 }
 
 void

@@ -132,6 +132,8 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 		return NULL;
 	}
 
+	state->kept_buffer = InvalidBuffer;
+
 	return state;
 }
 

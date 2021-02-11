@@ -237,7 +237,7 @@ btree_xlog_insert(bool isleaf, bool ismeta, bool posting,
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 
 	/*
 	 * Note: in normal operation, we'd update the metapage while still holding
@@ -553,7 +553,7 @@ btree_xlog_dedup(XLogReaderState *record)
 	}
 
 	if (BufferIsValid(buf))
-		UnlockReleaseBuffer(buf);
+		XLogKeepBufferForRedo(record, buf);
 }
 
 static void
@@ -647,7 +647,7 @@ btree_xlog_vacuum(XLogReaderState *record)
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 }
 
 static void
@@ -707,7 +707,7 @@ btree_xlog_delete(XLogReaderState *record)
 		MarkBufferDirty(buffer);
 	}
 	if (BufferIsValid(buffer))
-		UnlockReleaseBuffer(buffer);
+		XLogKeepBufferForRedo(record, buffer);
 }
 
 static void

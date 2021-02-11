@@ -906,6 +906,9 @@ smgr_redo(XLogReaderState *record)
 	XLogRecPtr	lsn = record->EndRecPtr;
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
+	/* Make sure we don't have any buffers pinned. */
+	XLogKeepBufferForRedo(record, InvalidBuffer);
+
 	/* Backup blocks are not used in smgr records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 

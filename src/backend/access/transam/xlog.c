@@ -7469,6 +7469,9 @@ StartupXLOG(void)
 				record = ReadRecord(xlogreader, LOG, false);
 			} while (record != NULL);
 
+			/* Release any buffer cached by xlogutil.c. */
+			XLogKeepBufferForRedo(xlogreader, InvalidBuffer);
+
 			/*
 			 * end of main redo apply loop
 			 */
@@ -12016,6 +12019,9 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	uint32		targetPageOff;
 	XLogSegNo	targetSegNo PG_USED_FOR_ASSERTS_ONLY;
 	int			r;
+
+	/* Release any buffer we might be holding onto while we do I/O. */
+	XLogKeepBufferForRedo(xlogreader, InvalidBuffer);
 
 	XLByteToSeg(targetPagePtr, targetSegNo, wal_segment_size);
 	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
