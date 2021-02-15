@@ -17,6 +17,11 @@
 #include "storage/lwlock.h"
 #include "storage/sync.h"
 
+/*
+ * To avoid overflowing internal arithmetic and the size_t data type, the
+ * number of buffers should not exceed this number.
+ */
+#define SLRU_MAX_ALLOWED_BUFFERS ((1024 * 1024 * 1024) / BLCKSZ)
 
 /*
  * Define SLRU segment size.  A page is the same BLCKSZ as is used everywhere
