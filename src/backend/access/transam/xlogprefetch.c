@@ -620,7 +620,7 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 		prefetcher->last_blkno = block->blkno;
 
 		/* Try to prefetch this block! */
-		prefetch = PrefetchSharedBuffer(reln, block->forknum, block->blkno);
+		prefetch = PrefetchSharedBuffer(NULL, reln, block->forknum, block->blkno);
 		if (BufferIsValid(prefetch.recent_buffer))
 		{
 			/*
