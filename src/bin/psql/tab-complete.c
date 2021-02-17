@@ -2433,6 +2433,20 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("CREATE", "ACCESS", "METHOD", MatchAny, "TYPE", MatchAny))
 		COMPLETE_WITH("HANDLER");
 
+	/* CREATE COLLATION */
+	else if (Matches("CREATE", "COLLATION", MatchAny))
+		COMPLETE_WITH("(");
+	else if (HeadMatches("CREATE", "COLLATION"))
+	{
+		if (TailMatches("(|*,"))
+			COMPLETE_WITH("LOCALE =", "LC_COLLATE =", "LC_CTYPE =",
+						  "PROVIDER =", "DETERMINISTIC =");
+		else if (TailMatches("PROVIDER", "="))
+			COMPLETE_WITH("libc", "icu");
+		else if (TailMatches("DETERMINISTIC", "="))
+			COMPLETE_WITH("true", "false");
+	}
+
 	/* CREATE DATABASE */
 	else if (Matches("CREATE", "DATABASE", MatchAny))
 		COMPLETE_WITH("OWNER", "TEMPLATE", "ENCODING", "TABLESPACE",
