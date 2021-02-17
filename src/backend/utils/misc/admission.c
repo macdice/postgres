@@ -270,8 +270,8 @@ AdmissionControlEndQuery(size_t reserved)
 
 /*
  * At session start, we try to reserve the memory configured by
- * session_init_mem.  This will allow us to begin smaller queries without
- * having to reserve more memory.
+ * session_work_mem_reservation.  This will allow us to begin smaller queries
+ * without having to reserve more memory.
  */
 void
 AdmissionControlBeginSession(void)
