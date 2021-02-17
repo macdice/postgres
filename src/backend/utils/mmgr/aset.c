@@ -690,8 +690,8 @@ AllocSetDelete(MemoryContext context)
 
 		/*
 		 * Behave as if we'd destroyed it.  Perhaps we should have separate
-		 * accounting for memory chunks on free lists, but their existence
-		 * shouldn't prevent new queries from starting.
+		 * accounting for memory chunks on free lists, but for now we don't
+		 * count that as memory currently allocated.
 		 */
 		if (context->mem_allocated_cb)
 			context->mem_allocated_cb(-(ssize_t) set->initBlockSize,

@@ -88,6 +88,9 @@ ExecutorStateMemCB(ssize_t delta, void *data)
 			estate->es_query_peak_mem = current;
 	}
 	estate->es_query_current_mem = current;
+
+	/* Tell the admission control system. */
+	AdmissionControlExecMemChanged(delta, NULL);
 }
 
 /* ----------------------------------------------------------------
@@ -120,15 +123,6 @@ CreateExecutorState(void)
 	qcontext = AllocSetContextCreate(CurrentMemoryContext,
 									 "ExecutorState",
 									 ALLOCSET_DEFAULT_SIZES);
-
-	/*
-	 * Underlying memory allocated by this context and all children should be
-	 * counted as executor memory against this session, for admission control
-	 * purposes.
-	 */
-	MemoryContextSetMemAllocatedCB(qcontext,
-								   AdmissionControlExecMemChanged,
-								   NULL);
 
 	/*
 	 * Make the EState node within the per-query context.  This way, we don't

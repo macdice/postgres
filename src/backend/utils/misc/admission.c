@@ -24,19 +24,19 @@
 #include "storage/ipc.h"
 #include "storage/spin.h"
 
-typedef struct AdmissionControlShared
+typedef struct AdmissionControlSharedData
 {
 	size_t		mem_used;
 	slock_t		mutex;
 	ConditionVariable mem_freed_cv;
-} AdmissionControlShared;
+} AdmissionControlSharedData;
 
-static AdmissionControlShared *Shared;
+static AdmissionControlSharedData *AdmissionControlShared;
 
 Size
 AdmissionControlShmemSize(void)
 {
-	return sizeof(*Shared);
+	return sizeof(*AdmissionControlShared);
 }
 
 void
@@ -44,14 +44,14 @@ AdmissionControlShmemInit(void)
 {
 	bool		found;
 
-	Shared = ShmemInitStruct("AdmissionControl",
-							 AdmissionControlShmemSize(),
-							 &found);
+	AdmissionControlShared = ShmemInitStruct("AdmissionControl",
+											 AdmissionControlShmemSize(),
+											 &found);
 	if (!found)
 	{
-		Shared->mem_used = 0;
-		SpinLockInit(&Shared->mutex);
-		ConditionVariableInit(&Shared->mem_freed_cv);
+		AdmissionControlShared->mem_used = 0;
+		SpinLockInit(&AdmissionControlShared->mutex);
+		ConditionVariableInit(&AdmissionControlShared->mem_freed_cv);
 	}
 }
 
@@ -77,9 +77,9 @@ AdmissionControlTrackMemAllocated(size_t size)
 	 */
 	if (new_used > old_used)
 	{
-		SpinLockAcquire(&Shared->mutex);
-		Shared->mem_used += (new_used - old_used);
-		SpinLockRelease(&Shared->mutex);
+		SpinLockAcquire(&AdmissionControlShared->mutex);
+		AdmissionControlShared->mem_used += (new_used - old_used);
+		SpinLockRelease(&AdmissionControlShared->mutex);
 	}
 
 	pgstat_report_exec_mem_allocated(CurrentSession->exec_mem_allocated);
@@ -100,16 +100,16 @@ AdmissionControlTrackMemFreed(size_t size)
 
 	if (new_used < old_used)
 	{
-		SpinLockAcquire(&Shared->mutex);
-		Shared->mem_used -= (old_used - new_used);
-		SpinLockRelease(&Shared->mutex);
+		SpinLockAcquire(&AdmissionControlShared->mutex);
+		AdmissionControlShared->mem_used -= (old_used - new_used);
+		SpinLockRelease(&AdmissionControlShared->mutex);
 
 		/*
 		 * XXX This is too primitive: we need a fair queue, more like
 		 * heavyweight locks.  What we have here is a thundering herd of wakers
 		 * who get the memory in whatever order.
 		 */
-		ConditionVariableBroadcast(&Shared->mem_freed_cv);
+		ConditionVariableBroadcast(&AdmissionControlShared->mem_freed_cv);
 	}
 
 	pgstat_report_exec_mem_allocated(CurrentSession->exec_mem_allocated);
@@ -167,9 +167,9 @@ AdmissionControlBeginQuery(QueryDesc *queryDesc)
 	 */
 	plan = queryDesc->plannedstmt->planTree;
 	if (queryDesc->estate->es_top_eflags & EXEC_FLAG_REWIND)
-		estimate = (plan->mem_random_freed + plan->mem_random_held) * work_mem;
+		estimate = (plan->mem_random_freed + plan->mem_random_held) * work_mem * 1024;
 	else
-		estimate = (plan->mem_seq_freed + plan->mem_seq_held) * work_mem;
+		estimate = (plan->mem_seq_freed + plan->mem_seq_held) * work_mem * 1024;
 
 	/*
 	 * Are we trying to ask for more memory than any one session is allowed?
@@ -181,8 +181,9 @@ AdmissionControlBeginQuery(QueryDesc *queryDesc)
 		using + estimate > session_work_mem_limit * (size_t) 1024)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-				 errmsg("query estimated to required %zu kB of memory but session_work_mem_limit would be exceeded",
-						estimate / 1024),
+				 errmsg("query estimated to require %zu kB of executor memory but %zu kB is already in use by the session and session_work_mem_limit would be exceeded",
+						estimate / 1024,
+						using),
 				 errhint("Consider reducing work_mem, increasing session_work_mem_limit or run fewer cursors concurrently.")));
 
 	/*
@@ -205,7 +206,7 @@ AdmissionControlBeginQuery(QueryDesc *queryDesc)
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
 				 errmsg("query estimated to required %zu kB of memory but session_work_mem_limit would be exceeded",
 						estimate / 1024),
-				 errhint("Consider reducing work_mem, increasing cluster_work_mem_limit or running fewer cursors concurrently.")));
+				 errhint("Consider reducing work_mem, increasing cluster_work_mem_limit or running fewer queries concurrently.")));
 
 	/*
 	 * Register our new memory requirement, or wait until we can.  Another way
@@ -216,19 +217,19 @@ AdmissionControlBeginQuery(QueryDesc *queryDesc)
 		bool		success = false;
 		size_t		new_mem_used;
 
-		SpinLockAcquire(&Shared->mutex);
-		new_mem_used = Shared->mem_used + want;
+		SpinLockAcquire(&AdmissionControlShared->mutex);
+		new_mem_used = AdmissionControlShared->mem_used + want;
 		if (new_mem_used <= cluster_work_mem_limit * (size_t) 1024)
 		{
-			Shared->mem_used = new_mem_used;
+			AdmissionControlShared->mem_used = new_mem_used;
 			success = true;
 		}
-		SpinLockRelease(&Shared->mutex);
+		SpinLockRelease(&AdmissionControlShared->mutex);
 
 		if (success)
 			break;
 
-		ConditionVariableSleep(&Shared->mem_freed_cv,
+		ConditionVariableSleep(&AdmissionControlShared->mem_freed_cv,
 							   WAIT_EVENT_ADMISSION_CONTROL);
 	}
 	ConditionVariableCancelSleep();
@@ -257,12 +258,12 @@ AdmissionControlEndQuery(size_t reserved)
 
 	if (new_used < old_used)
 	{
-		SpinLockAcquire(&Shared->mutex);
-		Shared->mem_used -= (old_used - new_used);
-		SpinLockRelease(&Shared->mutex);
+		SpinLockAcquire(&AdmissionControlShared->mutex);
+		AdmissionControlShared->mem_used -= (old_used - new_used);
+		SpinLockRelease(&AdmissionControlShared->mutex);
 
 		/* XXX Need fair queue */
-		ConditionVariableBroadcast(&Shared->mem_freed_cv);
+		ConditionVariableBroadcast(&AdmissionControlShared->mem_freed_cv);
 	}
 
 	pgstat_report_exec_mem_reserved(CurrentSession->exec_mem_reserved);
@@ -281,16 +282,17 @@ AdmissionControlBeginSession(void)
 	if (session_work_mem_reservation <= 0)
 		return;
 
-	SpinLockAcquire(&Shared->mutex);
-	new_used = Shared->mem_used + session_work_mem_reservation * (size_t) 1024;
+	SpinLockAcquire(&AdmissionControlShared->mutex);
+	new_used = AdmissionControlShared->mem_used +
+		session_work_mem_reservation * (size_t) 1024;
 	if (cluster_work_mem_limit < 0 ||
 		new_used <= cluster_work_mem_limit * (size_t) 1024)
 	{
-		Shared->mem_used = new_used;
+		AdmissionControlShared->mem_used = new_used;
 		CurrentSession->exec_mem_reserved +=
 			session_work_mem_reservation * (size_t) 1024;
 	}
-	SpinLockRelease(&Shared->mutex);
+	SpinLockRelease(&AdmissionControlShared->mutex);
 
 	pgstat_report_exec_mem_reserved(CurrentSession->exec_mem_reserved);
 
