@@ -204,7 +204,7 @@ AdmissionControlBeginQuery(QueryDesc *queryDesc)
 	if (estimate > cluster_work_mem_limit * (size_t) 1024)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-				 errmsg("query estimated to required %zu kB of memory but session_work_mem_limit would be exceeded",
+				 errmsg("query estimated to required %zu kB of memory but cluster_work_mem_limit would be exceeded",
 						estimate / 1024),
 				 errhint("Consider reducing work_mem, increasing cluster_work_mem_limit or running fewer queries concurrently.")));
 
