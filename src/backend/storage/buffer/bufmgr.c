@@ -488,7 +488,7 @@ static void FindAndDropRelFileNodeBuffers(RelFileNode rnode,
 static void AtProcExit_Buffers(int code, Datum arg);
 static void CheckForBufferLeaks(void);
 static int	rnode_comparator(const void *p1, const void *p2);
-static int	buffertag_comparator(const void *p1, const void *p2);
+static inline int buffertag_comparator(const BufferTag *a, const BufferTag *b);
 static inline int ckpt_buforder_comparator(const CkptSortItem *a, const CkptSortItem *b);
 static int	ts_ckpt_progress_comparator(Datum a, Datum b, void *arg);
 
@@ -4601,11 +4601,9 @@ WaitBufHdrUnlocked(BufferDesc *buf)
 /*
  * BufferTag comparator.
  */
-static int
-buffertag_comparator(const void *a, const void *b)
+static inline int
+buffertag_comparator(const BufferTag *ba, const BufferTag *bb)
 {
-	const BufferTag *ba = (const BufferTag *) a;
-	const BufferTag *bb = (const BufferTag *) b;
 	int			ret;
 
 	ret = rnode_comparator(&ba->rnode, &bb->rnode);
@@ -4725,6 +4723,13 @@ ScheduleBufferTagForWriteback(WritebackContext *context, BufferTag *tag)
 		IssuePendingWritebacks(context);
 }
 
+#define ST_SORT sort_pending_writebacks
+#define ST_ELEMENT_TYPE PendingWriteback
+#define ST_COMPARE(a, b) buffertag_comparator(&a->tag, &b->tag)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include <lib/sort_template.h>
+
 /*
  * Issue all pending writeback requests, previously scheduled with
  * ScheduleBufferTagForWriteback, to the OS.
@@ -4744,8 +4749,7 @@ IssuePendingWritebacks(WritebackContext *context)
 	 * Executing the writes in-order can make them a lot faster, and allows to
 	 * merge writeback requests to consecutive blocks into larger writebacks.
 	 */
-	qsort(&context->pending_writebacks, context->nr_pending,
-		  sizeof(PendingWriteback), buffertag_comparator);
+	sort_pending_writebacks(context->pending_writebacks, context->nr_pending);
 
 	/*
 	 * Coalesce neighbouring writes, but nothing else. For that we iterate
