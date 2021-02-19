@@ -3681,6 +3681,7 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.rows = subpath->rows;
 	pathnode->path.startup_cost = subpath->startup_cost;
 	pathnode->path.total_cost = subpath->total_cost;
+	pathnode->path.memory = subpath->memory;
 	pathnode->path.pathkeys = subpath->pathkeys;
 	pathnode->subpath = subpath;
 	pathnode->limitOffset = limitOffset;
