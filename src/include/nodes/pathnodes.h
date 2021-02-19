@@ -1620,7 +1620,7 @@ typedef struct HashPath
 	List	   *path_hashclauses;	/* join clauses used for hashing */
 	int			num_batches;	/* number of batches expected */
 	double		inner_rows_total;	/* total inner rows expected */
-	double		hashtable_mem;		/* work_mem used by the hash table */
+	PathMemory	hash_memory;	/* display only: the hash node's memory */
 } HashPath;
 
 /*

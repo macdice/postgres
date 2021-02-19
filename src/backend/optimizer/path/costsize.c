@@ -4041,6 +4041,7 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 		 */
 		AddSequentialMemory(path->jpath.path.memory, inner_path->memory);
 		AddSequentialMemory(path->jpath.path.memory, outer_path->memory);
+
 	}
 	else
 	{
@@ -4053,6 +4054,9 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 		AddConcurrentMemory(path->jpath.path.memory, outer_path->memory);
 	}
 
+	/* EXPLAIN display only: isolate the hash node's memory */
+	path->hash_memory = inner_path->memory;
+
 	/*
 	 * The hashtable is only preserved across rescans for single batch
 	 * non-parallel joins when EXEC_FLAG_REWIND is passed down; otherwise it's
@@ -4063,18 +4067,20 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	{
 		path->jpath.path.memory.seq_freed += workspace->hashtable_mem;
 		path->jpath.path.memory.random_held += workspace->hashtable_mem;
+
+		/* EXPLAIN display only: isolate the hash node's memory */
+		path->hash_memory.seq_freed += workspace->hashtable_mem;
+		path->hash_memory.random_held += workspace->hashtable_mem;
 	}
 	else
 	{
 		path->jpath.path.memory.seq_freed += workspace->hashtable_mem;
 		path->jpath.path.memory.random_freed += workspace->hashtable_mem;
-	}
 
-	/*
-	 * createplan.c needs this to create the synthetic Hash node for EXPLAIN
-	 * display only.
-	 */
-	path->hashtable_mem = workspace->hashtable_mem;
+		/* EXPLAIN display only: isolate the hash node's memory */
+		path->hash_memory.seq_freed += workspace->hashtable_mem;
+		path->hash_memory.random_freed += workspace->hashtable_mem;
+	}
 }
 
 /*

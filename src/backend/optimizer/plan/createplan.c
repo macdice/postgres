@@ -4630,25 +4630,6 @@ create_hashjoin_plan(PlannerInfo *root,
 	hash_plan->plan.startup_cost = hash_plan->plan.total_cost;
 
 	/*
-	 * Likewise for memory.  This has to be recreated just for EXPLAIN display,
-	 * duplicating logic in costsize.c, since there is no "hash" path.  The
-	 * memory numbers computed for the Hash Join node include the outer plan's
-	 * memory costs, but here we only want the Hash node's numbers for display.
-	 */
-	copy_plan_memory_from_path(&hash_plan->plan,
-							   &best_path->jpath.innerjoinpath->memory);
-	if (!best_path->jpath.path.parallel_aware && best_path->num_batches == 1)
-	{
-		hash_plan->plan.mem_seq_held += best_path->hashtable_mem;
-		hash_plan->plan.mem_random_held += best_path->hashtable_mem;
-	}
-	else
-	{
-		hash_plan->plan.mem_seq_freed += best_path->hashtable_mem;
-		hash_plan->plan.mem_random_freed += best_path->hashtable_mem;
-	}
-
-	/*
 	 * If parallel-aware, the executor will also need an estimate of the total
 	 * number of rows expected from all participants so that it can size the
 	 * shared hash table.
@@ -4672,6 +4653,24 @@ create_hashjoin_plan(PlannerInfo *root,
 							  best_path->jpath.inner_unique);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
+
+	copy_plan_memory_from_path(&hash_plan->plan,
+							   &best_path->hash_memory);
+	copy_plan_memory_from_path(&join_plan->join.plan,
+							   &best_path->jpath.path.memory);
+
+#if 0
+// TPCH2 shows something fishy here for the outermost hash join, all zeroes
+elog(NOTICE, "hash: %f %f %f %f, hash join: %f %f %f %f",
+hash_plan->plan.mem_seq_freed,
+hash_plan->plan.mem_seq_held,
+hash_plan->plan.mem_random_freed,
+hash_plan->plan.mem_random_held,
+join_plan->join.plan.mem_seq_freed,
+join_plan->join.plan.mem_seq_held,
+join_plan->join.plan.mem_random_freed,
+join_plan->join.plan.mem_random_held);
+#endif
 
 	return join_plan;
 }
