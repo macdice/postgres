@@ -485,7 +485,7 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 	 * messy and seems to be historical noise (mentioned at top of file).
 	 */
 	AddConcurrentWorkerMemory(path->path.memory, *input_memory,
-							  path->path.parallel_workers);
+							  path->num_workers);
 	if (parallel_leader_participation)
 		AddConcurrentMemory(path->path.memory, *input_memory);
 }
