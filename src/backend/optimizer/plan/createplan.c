@@ -4630,9 +4630,10 @@ create_hashjoin_plan(PlannerInfo *root,
 	hash_plan->plan.startup_cost = hash_plan->plan.total_cost;
 
 	/*
-	 * Likewise for memory.  This has to be recreated just for EXPLAIN
-	 * display, duplicating logic in costsize.c, since there is no "hash"
-	 * path.
+	 * Likewise for memory.  This has to be recreated just for EXPLAIN display,
+	 * duplicating logic in costsize.c, since there is no "hash" path.  The
+	 * memory numbers computed for the Hash Join node include the outer plan's
+	 * memory costs, but here we only want the Hash node's numbers for display.
 	 */
 	copy_plan_memory_from_path(&hash_plan->plan,
 							   &best_path->jpath.innerjoinpath->memory);
