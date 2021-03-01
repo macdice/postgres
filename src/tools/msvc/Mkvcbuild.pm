@@ -51,7 +51,9 @@ my @contrib_excludes = (
 	'pgcrypto',         'sepgsql',
 	'brin',             'test_extensions',
 	'test_misc',        'test_pg_dump',
-	'snapshot_too_old', 'unsafe_tests');
+	'snapshot_too_old', 'unsafe_tests',
+	'connection'
+);
 
 # Set of variables for frontend modules
 my $frontend_defines = { 'initdb' => 'FRONTEND' };

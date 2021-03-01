@@ -998,6 +998,42 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-client-connection-check-interval" xreflabel="client_connection_check_interval">
+      <term><varname>client_connection_check_interval</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>client_connection_check_interval</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the time interval between checks that the client is still
+        connected, while running queries.  The check is performed by testing
+        whether one byte could be read from the socket with
+        <symbol>MSG_PEEK</symbol>.  If the kernel reports that the connection
+        has been closed or lost, a long running query can abort immediately,
+        rather than discovering the problem when it eventually tries to send
+        the response.
+       </para>
+       <para>
+        If this value is specified without units, it is taken as milliseconds.  
+        The default value is <literal>0</literal>, which disables connection
+        checks.  Without connection checks, the server will detect the loss of
+        the connection only when it is waiting for a new request, receiving a
+        request or sending a response.
+       </para>
+       <para>
+        For the kernel itself to detect lost TCP connections reliably and
+        within a known timeframe in all scenarios including network failure, it
+        may also be necessary to adjust the default TCP keepalive settings of
+        the operating system, or the
+        <xref linkend="guc-tcp-keepalives-idle"/>,
+        <xref linkend="guc-tcp-keepalives-idle"/> and
+        <xref linkend="guc-tcp-keepalives-count"/> settings of
+        <productname>PostgreSQL</productname>.
+       </para>
+      </listitem>
+     </varlistentry>
+ 
      </variablelist>
      </sect2>
 

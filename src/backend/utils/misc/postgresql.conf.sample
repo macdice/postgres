@@ -718,6 +718,9 @@
 
 #dynamic_library_path = '$libdir'
 
+#client_connection_check_interval = 0	# set time interval between
+					# checks for client disconnection while
+					# running long queries; 0 for never
 
 #------------------------------------------------------------------------------
 # LOCK MANAGEMENT

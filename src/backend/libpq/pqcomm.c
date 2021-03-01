@@ -79,6 +79,7 @@
 #include "storage/ipc.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
+#include "utils/timeout.h"
 
 /*
  * Cope with the various platform-specific ways to spell TCP keepalive socket
@@ -104,6 +105,7 @@
  */
 int			Unix_socket_permissions;
 char	   *Unix_socket_group;
+int			client_connection_check_interval;
 
 /* Where the Unix socket files are (list of palloc'd strings) */
 static List *sock_paths = NIL;
@@ -1920,4 +1922,93 @@ pq_settcpusertimeout(int timeout, Port *port)
 #endif
 
 	return STATUS_OK;
+}
+
+/* --------------------------------
+ *	pq_check_client_connection - check if client is still connected
+ * --------------------------------
+ */
+void
+pq_check_client_connection(void)
+{
+	CheckClientConnectionPending = false;
+
+	/*
+	 * We were called from CHECK_FOR_INTERRUPTS(), because
+	 * client_connection_check_interval is set and the timer recently fired, so
+	 * it's time to check if the kernel thinks the client is still there.  This
+	 * is a useful thing to do while the executor is doing busy work for a long
+	 * time without any other kind of interaction with the socket.
+	 *
+	 * We'll only perform the check and re-arm the timer if we're possibly
+	 * still running a query.  We don't need to do any checks when we're
+	 * sitting idle between queries, because in that case the FeBeWaitSet will
+	 * wake up when the socket becomes ready to read, including lost
+	 * connections.  If a later query begins, the timer will be enabled afresh.
+	 */
+	if (IsUnderPostmaster &&
+		MyProcPort != NULL &&
+		!PqCommReadingMsg &&
+		!PqCommBusy)
+	{
+		bool		connection_lost = false;
+		char		nextbyte;
+		int			r;
+
+retry:
+#ifdef WIN32
+		pgwin32_noblock = 1;
+#endif
+		r = recv(MyProcPort->sock, &nextbyte, 1, MSG_PEEK);
+#ifdef WIN32
+		pgwin32_noblock = 0;
+#endif
+
+		if (r == 0)
+		{
+			/* EOF detected. */
+			connection_lost = true;
+		}
+		else if (r > 0)
+		{
+			/* Data available to read.  Connection looks good. */
+		}
+		else if (errno == EINTR)
+		{
+			/* Interrupted by a signal, so retry. */
+			goto retry;
+		}
+		else if (errno == EAGAIN || errno == EWOULDBLOCK)
+		{
+			/* No data available to read.  Connection looks good. */
+		}
+		else
+		{
+			/* Got some other error.  We'd better log the reason. */
+			ereport(COMMERROR,
+					(errcode(ERRCODE_CONNECTION_EXCEPTION),
+					 errmsg("could not check client connection: %m")));
+			connection_lost = true;
+		}
+
+		if (connection_lost)
+		{
+			/*
+			 * We're already in ProcessInterrupts(), and its check for
+			 * ClientConnectionLost comes after the check for
+			 * CheckClientConnectionPending.  It seems a little fragile to
+			 * rely on that here, so we'll also set InterruptPending to make
+			 * sure that the next CHECK_FOR_INTERRUPTS() could handle it too
+			 * if the code moves around.
+			 */
+			ClientConnectionLost = true;
+			InterruptPending = true;
+		}
+		else if (client_connection_check_interval > 0)
+		{
+			/* Schedule the next check, because the GUC is still enabled. */
+			enable_timeout_after(CLIENT_CONNECTION_CHECK_TIMEOUT,
+								 client_connection_check_interval);
+		}
+	}
 }
