@@ -31,6 +31,21 @@
 static ConditionVariable *cv_sleep_target = NULL;
 
 /*
+ * Check if the wait queue is empty without acquiring the mutex.  Backends that
+ * are waiting for a condition need to add themselves to the queue before
+ * checking the monitored state, so all we have to do here is make sure the
+ * caller's write to the monitored state is ordered before our check for an
+ * empty list.  The list is made of 32 bit values that we can read atomically
+ * on all supported platforms.
+ */
+static inline bool
+ConditionVariableIsEmpty(ConditionVariable *cv)
+{
+	pg_memory_barrier();
+	return proclist_is_empty(&cv->wakeup);
+}
+
+/*
  * Initialize a condition variable.
  */
 void
@@ -264,6 +279,10 @@ ConditionVariableSignal(ConditionVariable *cv)
 {
 	PGPROC	   *proc = NULL;
 
+	/* Fast path for empty wakeup queue without acquiring spinlock. */
+	if (ConditionVariableIsEmpty(cv))
+		return;
+
 	/* Remove the first process from the wakeup queue (if any). */
 	SpinLockAcquire(&cv->mutex);
 	if (!proclist_is_empty(&cv->wakeup))
@@ -288,6 +307,10 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 	int			pgprocno = MyProc->pgprocno;
 	PGPROC	   *proc = NULL;
 	bool		have_sentinel = false;
+
+	/* Fast path for empty wakeup queue without acquiring spinlock. */
+	if (ConditionVariableIsEmpty(cv))
+		return;
 
 	/*
 	 * In some use-cases, it is common for awakened processes to immediately
