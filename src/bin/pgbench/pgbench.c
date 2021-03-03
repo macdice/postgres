@@ -119,14 +119,13 @@ typedef struct socket_set
 #define THREAD_T HANDLE
 #define THREAD_FUNC_RETURN_TYPE void
 #define THREAD_FUNC_RETURN return
-#define SETERRNO() _doserrmap(GetLastError())
-#define GETERRNO() (SETERRNO(), errno)
 #define THREAD_CREATE(handle, function, arg) \
 	((*(handle) = _beginthread((function), 0, (arg))) == (HANDLE) -1 ? \
-	(SETERRNO(), 1) : 0)
+	(_doserrmap(GetLastError()), 1) : 0)
 #define THREAD_JOIN(handle) \
 	(WaitForSingleObject(handle, INFINITE) != WAIT_FOR_OBJECT_0 ? \
-	GETERRNO() : CloseHandle(handle) ? 0 : GETERRNO())
+	(_doserrmap(GetLastError()), errno) : CloseHandle(handle) ? \
+	0 : (_doserrmap(GetLastError()), errno))
 #elif defined(ENABLE_THREAD_SAFETY)
 /* Use platform-dependent pthread capability */
 #include <pthread.h>
