@@ -1,45 +1,3 @@
-# A list of things that could be improved:
-#
-# - We should use ccache, and Cirrus's ability to keep a named cache folder
-#   around from run to run.  Is there a Windows thing like ccache?
-# - We should show backtraces for any dumped cores.
-# - We should try harder to find the interesting files to dump out on failure
-#   (right now Windows isn't doing it at all!).
-# - We should enable assertions on Windows.
-# - Can we get rid of "buildsetup.pl", the extra file required for Windows?
-#   (Reduce it to its essence, pass it to perl as a heredoc from in here?)
-# - We should do a documentation build, if anything under doc changed.
-# - FreeBSD isn't running with many configure options enabled, yet.
-# - macOS doesn't run check-world because it fails with a pathname that is
-#   too long (see below); that's silly -- how can we arrange to have a shorter
-#   Unix socket path?
-# - Windows is very slow at installing activeperl; can we get an image that
-#   has it already, but also has Visual Studio?  Are flex and bison already
-#   on the image (perhaps under msys)?
-# - Windows doesn't run check-world because I don't know how (that's not
-#   an argument that vcregress understands; should we list all the arguments
-#   that it does understand?).
-
-task:
-  name: FreeBSD
-  freebsd_instance:
-    image_family: freebsd-12-1
-  install_script:
-    - pkg install -y readline flex bison gmake perl5 p5-IPC-Run
-  create_user_script:
-    - pw useradd postgres
-    - chown -R postgres:postgres .
-  build_script:
-    - su postgres -c './configure --enable-cassert --enable-debug --enable-tap-tests --with-includes=/usr/local/include --with-libs=/usr/local/lib'
-    - su postgres -c 'echo "COPT=-Wall -Werror" > src/Makefile.custom'
-    - su postgres -c 'make -s -j4'
-  test_script:
-    - su postgres -c 'make -s check-world' || su postgres -c '( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )'
-
-# On macOS, "check" only for now, because "check-world" fails with this stupid
-# error:
-# connection to database failed: Unix-domain socket path "/private/var/folders/3y/l0z1x3693dl_8n0qybp4dqwh0000gn/T/cirrus-ci-build/src/bin/pg_upgrade/.s.PGSQL.58080" is too long (maximum 103 bytes)
-
 task:
   name: macOS
   osx_instance:
@@ -53,23 +11,6 @@ task:
   test_script:
     - export PERL5LIB=~/perl5/lib/perl5
     - make -s check || ( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )
-
-task:
-  name: Linux
-  container:
-    image: debian:latest
-  install_script:
-    - apt-get --yes update
-    - DEBIAN_FRONTEND=noninteractive apt-get --yes install gcc libreadline-dev flex bison make perl libipc-run-perl clang llvm-dev libperl-dev libpython-dev tcl-dev libldap2-dev libicu-dev docbook-xml docbook-xsl fop libxml2-utils xsltproc krb5-admin-server krb5-kdc krb5-user slapd ldap-utils libssl-dev pkg-config locales-all
-  create_user_script:
-    - useradd -m postgres
-    - chown -R postgres:postgres .
-  build_script:
-    - su postgres -c './configure --enable-cassert --enable-debug --enable-tap-tests --with-tcl --with-python --with-perl --with-ldap --with-openssl --with-icu --with-llvm'
-    - su postgres -c 'echo "COPT=-Wall -Werror" > src/Makefile.custom'
-    - su postgres -c 'make -s -j4'
-  test_script:
-    - su postgres -c 'PG_TEST_EXTRA="ssl ldap kerberos" make -s check-world' || su postgres -c '( for F in ` find . -name initdb.log -o -name regression.diffs ` ; do echo === $F === ; head -1000 $F ; done ; exit 1 )'
 
 task:
   name: Windows
