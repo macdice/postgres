@@ -49,7 +49,7 @@ win32_file_opened_by(const char *path)
 			dwError = RmGetList(dwSession, &nProcInfoNeeded,
 								&nProcInfo, &rgpi, &dwReason);
 			if (dwError == ERROR_SUCCESS && nProcInfo > 0)
-				result = rgpi[0].Process.dwProcessId;
+				result = rgpi.Process.dwProcessId;
 		}
 		RmEndSession(dwSession);
 	}
