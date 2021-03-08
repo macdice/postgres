@@ -16,9 +16,7 @@
 
 /*
  * Try to report the PID of an arbitrary process that currently has a given
- * file open, if there is one.  Return false if there is none or the
- * information can't be obtained.  Output buffer name must have space for
- * MAX_PATH bytes.
+ * file open, if there is one.
  */
 int
 win32_file_opened_by(const char *path)
@@ -41,7 +39,6 @@ win32_file_opened_by(const char *path)
 		if (dwError == ERROR_SUCCESS)
 		{
 			DWORD dwReason;
-			UINT i;
 			UINT nProcInfoNeeded;
 			UINT nProcInfo = 1;
 			RM_PROCESS_INFO rgpi;
