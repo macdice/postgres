@@ -18,13 +18,13 @@
  * Try to report the PID of an arbitrary process that currently has a given
  * file open, if there is one.
  */
-int
-win32_file_opened_by(const char *path)
+size_t
+win32_file_opened_by(const char *path, int *pids, size_t npids)
 {
 	DWORD dwSession;
 	WCHAR szSessionKey[CCH_RM_SESSION_KEY + 1] = {0};
 	DWORD dwError;
-	int result = -1;
+	size_t result = 0;
 
 	dwError = RmStartSession(&dwSession, 0, szSessionKey);
 	if (dwError == ERROR_SUCCESS)
@@ -40,13 +40,19 @@ win32_file_opened_by(const char *path)
 		{
 			DWORD dwReason;
 			UINT nProcInfoNeeded;
-			UINT nProcInfo = 1;
-			RM_PROCESS_INFO rgpi;
+			UINT nProcInfo = npids;
+			RM_PROCESS_INFO *rgpi;
 
+			rgpi = palloc(sizeof(RM_PROCESS_INFO) * npids);
 			dwError = RmGetList(dwSession, &nProcInfoNeeded,
-								&nProcInfo, &rgpi, &dwReason);
-			if (dwError == ERROR_SUCCESS && nProcInfo > 0)
-				result = rgpi.Process.dwProcessId;
+								&nProcInfo, rpgi, &dwReason);
+			if (dwError == ERROR_SUCCESS)
+			{
+				for (size_t i = 0; i < nProcInfo; ++i)
+					pids[i] = rgpi[i].Process.dwProcessId;
+				result = nProcInfo;
+			}
+			pfree(rgpi);
 		}
 		RmEndSession(dwSession);
 	}
