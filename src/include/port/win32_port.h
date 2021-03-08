@@ -497,6 +497,9 @@ extern int	pgwin32_unsetenv(const char *name);
 #define setenv(x,y,z) pgwin32_setenv(x,y,z)
 #define unsetenv(x) pgwin32_unsetenv(x)
 
+/* in port/win32_file_opened_by.c */
+extern int win32_file_opened_by(const char *path);
+
 /* in port/win32security.c */
 extern int	pgwin32_is_service(void);
 extern int	pgwin32_is_admin(void);

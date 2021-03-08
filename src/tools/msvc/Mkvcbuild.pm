@@ -103,6 +103,7 @@ sub mkvcbuild
 	  pg_strong_random.c pgcheckdir.c pgmkdirp.c pgsleep.c pgstrcasecmp.c
 	  pqsignal.c mkdtemp.c qsort.c qsort_arg.c quotes.c system.c
 	  strerror.c tar.c thread.c
+	  win32_file_opened_by.c
 	  win32env.c win32error.c win32security.c win32setlocale.c win32stat.c);
 
 	push(@pgportfiles, 'strtof.c') if ($vsVersion < '14.00');
@@ -193,6 +194,7 @@ sub mkvcbuild
 	$postgres->AddLibrary('secur32.lib');
 	$postgres->AddLibrary('ws2_32.lib');
 	$postgres->AddLibrary('wldap32.lib') if ($solution->{options}->{ldap});
+	$postgres->AddLibrary('rstrtmgr.lib');
 	$postgres->FullExportDLL('postgres.lib');
 
 	# The OBJS scraper doesn't know about ifdefs, so remove appropriate files

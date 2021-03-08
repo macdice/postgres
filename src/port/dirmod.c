@@ -85,7 +85,16 @@ pgrename(const char *from, const char *to)
 #endif
 
 		if (++loops > 100)		/* time out after 10 sec */
+		{
+			int		pid;
+
+			if ((pid = win32_file_opened_by(from)) != -1)
+				elog(LOG, "file \"%s\" is opened by pid %d", from, pid);
+			if ((pid = win32_file_opened_by(to)) != -1)
+				elog(LOG, "file \"%s\" is opened by pid %d", to, pid);
+
 			return -1;
+		}
 		pg_usleep(100000);		/* us */
 	}
 	return 0;
