@@ -2677,6 +2677,16 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"smgr_pool_sweep_times", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Sets the times for smgr pool to clock sweep"),
+			NULL
+		},
+		&smgr_pool_sweep_times,
+		32, 16, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/*
 	 * See also CheckRequiredParameterValues() if this parameter changes
 	 */

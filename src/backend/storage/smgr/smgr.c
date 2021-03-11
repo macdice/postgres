@@ -51,6 +51,7 @@ struct SMgrSharedRelation
 	BlockNumber		nblocks[MAX_FORKNUM + 1];
 	pg_atomic_uint32 flags;
 	pg_atomic_uint64 generation;		/* mapping change */
+	int64 usecount;     /* used for clock sweep */
 };
 
 /* For now, we borrow the buffer managers array of locks.  XXX fixme */
@@ -155,7 +156,8 @@ static dlist_head unowned_relns;
 static void smgrshutdown(int code, Datum arg);
 
 /* GUCs. */
-int smgr_shared_relations = 1000;
+int smgr_shared_relations = 10000;
+int smgr_pool_sweep_times = 32;
 
 /*
  * Try to get the size of a relation's fork without locking.
@@ -179,8 +181,13 @@ smgrnblocks_fast(SMgrRelation reln, ForkNumber forknum)
 		 * still refers to the same rnode before trusting the answer.
 		 */
 		pg_read_barrier();
+
 		if (pg_atomic_read_u64(&sr->generation) == reln->smgr_shared_generation)
+		{
+			/* no necessary to use a atomic operation, usecount can be imprecisely */
+			sr->usecount++;
 			return result;
+		}
 
 		/*
 		 * The generation doesn't match, the shared relation must have been
@@ -218,6 +225,9 @@ smgrnblocks_shared(SMgrRelation reln, ForkNumber forknum)
 	{
 		sr = &sr_pool->objects[mapping->index];
 		result = sr->nblocks[forknum];
+
+		/* no necessary to use a atomic operation, usecount can be imprecisely */
+		sr->usecount++;
 
 		/* We can take the fast path until this SR is eventually evicted. */
 		reln->smgr_shared = sr;
@@ -269,6 +279,36 @@ smgr_unlock_sr(SMgrSharedRelation *sr, uint32 flags)
 	pg_atomic_write_u32(&sr->flags, flags & ~SR_LOCKED);
 }
 
+/* LRU: sweep to find a sr to use. Just lock the sr when it returns */
+static SMgrSharedRelation *
+smgr_pool_sweep(void)
+{
+	SMgrSharedRelation *sr;
+	uint32 index;
+	uint32 flags;
+	int sr_used_count = 0;
+
+	for (;;)
+	{
+		/* Lock the next one in clock-hand order. */
+		index = pg_atomic_fetch_add_u32(&sr_pool->next, 1) % smgr_shared_relations;
+		sr = &sr_pool->objects[index];
+		flags = smgr_lock_sr(sr);
+		if (--(sr->usecount) <= 0)
+		{
+			elog(DEBUG5, "find block cache in sweep cache, use it");
+			return sr;
+		}
+		if (++sr_used_count >= smgr_shared_relations * smgr_pool_sweep_times)
+		{
+			elog(LOG, "all the block caches are used frequently, use a random one");
+			sr = &sr_pool->objects[random() % smgr_shared_relations];
+			return sr;
+		}
+		smgr_unlock_sr(sr, flags);
+	}
+}
+
 /*
  * Allocate a new invalid SMgrSharedRelation, and return it locked.
  *
@@ -287,11 +327,8 @@ smgr_alloc_sr(void)
 	uint32 hash;
 
  retry:
-	/* Lock the next one in clock-hand order. */
-	index = pg_atomic_fetch_add_u32(&sr_pool->next, 1) % smgr_shared_relations;
-	sr = &sr_pool->objects[index];
-	flags = smgr_lock_sr(sr);
-
+	sr = smgr_pool_sweep();
+	flags = pg_atomic_read_u32(&sr->flags);
 	/* If it's unused, can return it, still locked, immediately. */
 	if (!(flags & SR_VALID))
 		return sr;
@@ -301,6 +338,7 @@ smgr_alloc_sr(void)
 	 * locks, but we need to do it in that order, so we'll unlock the SR
 	 * first.
 	 */
+	index = sr - sr_pool->objects;
 	rnode = sr->rnode;
 	smgr_unlock_sr(sr, flags);
 
@@ -480,6 +518,8 @@ smgrnblocks_update(SMgrRelation reln,
 			 */
 			sr->nblocks[forknum] = nblocks;
 		}
+		if (sr->usecount < smgr_pool_sweep_times)
+			sr->usecount++;
 		smgr_unlock_sr(sr, flags);
 	}
 	LWLockRelease(mapping_lock);
@@ -502,6 +542,7 @@ smgrnblocks_update(SMgrRelation reln,
 		{
 			/* Success!  Initialize. */
 			mapping->index = sr - sr_pool->objects;
+			sr->usecount = 1;
 			smgr_unlock_sr(sr, SR_VALID);
 			sr->rnode = reln->smgr_rnode;
 			pg_atomic_write_u64(&sr->generation,
@@ -566,6 +607,7 @@ retry:
 		pg_write_barrier();
 
 		/* Mark it invalid and drop the mapping. */
+		sr->usecount = 0;
 		smgr_unlock_sr(sr, ~SR_VALID);
 		hash_search_with_hash_value(sr_mapping_table,
 									rnode,
@@ -618,6 +660,7 @@ smgr_shmem_init(void)
 		{
 			pg_atomic_init_u32(&sr_pool->objects[i].flags, 0);
 			pg_atomic_init_u64(&sr_pool->objects[i].generation, 0);
+			sr_pool->objects[i].usecount = 0;
 		}
 	}
 }

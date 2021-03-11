@@ -20,6 +20,7 @@
 
 /* GUCs. */
 extern int smgr_shared_relations;
+extern int smgr_pool_sweep_times;
 
 /* Definition private to smgr.c. */
 struct SMgrSharedRelation;
