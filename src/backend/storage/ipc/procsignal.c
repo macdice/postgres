@@ -240,6 +240,7 @@ CleanupProcSignalState(int status, Datum arg)
 	 * no barrier waits block on it.
 	 */
 	pg_atomic_write_u64(&slot->pss_barrierGeneration, PG_UINT64_MAX);
+	pg_memory_barrier();
 	ConditionVariableBroadcast(&slot->pss_barrierCV);
 
 	slot->pss_pid = 0;
@@ -577,6 +578,7 @@ ProcessProcSignalBarrier(void)
 	 * next called.
 	 */
 	pg_atomic_write_u64(&MyProcSignalSlot->pss_barrierGeneration, shared_gen);
+	pg_memory_barrier();
 	ConditionVariableBroadcast(&MyProcSignalSlot->pss_barrierCV);
 }
 

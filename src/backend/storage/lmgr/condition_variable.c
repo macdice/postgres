@@ -254,6 +254,11 @@ ConditionVariableCancelSleep(void)
 /*
  * Wake up the oldest process sleeping on the CV, if there is any.
  *
+ * Caller must separate this call from the state change being advertised with a
+ * an explicit full memory barrier or an operation that has implicit full
+ * barrier semantics, so that that store precedes the first load performed
+ * here.
+ *
  * Note: it's difficult to tell whether this has any real effect: we know
  * whether we took an entry off the list, but the entry might only be a
  * sentinel.  Hence, think twice before proposing that this should return
@@ -263,6 +268,10 @@ void
 ConditionVariableSignal(ConditionVariable *cv)
 {
 	PGPROC	   *proc = NULL;
+
+	/* Fast exit for empty list. */
+	if (proclist_is_empty(&cv->wakeup))
+		return;
 
 	/* Remove the first process from the wakeup queue (if any). */
 	SpinLockAcquire(&cv->mutex);
@@ -278,6 +287,8 @@ ConditionVariableSignal(ConditionVariable *cv)
 /*
  * Wake up all processes sleeping on the given CV.
  *
+ * See note in ConditionVariableSignal() about memory barrier requirements.
+ *
  * This guarantees to wake all processes that were sleeping on the CV
  * at time of call, but processes that add themselves to the list mid-call
  * will typically not get awakened.
@@ -288,6 +299,10 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 	int			pgprocno = MyProc->pgprocno;
 	PGPROC	   *proc = NULL;
 	bool		have_sentinel = false;
+
+	/* Fast exit for empty queue. */
+	if (proclist_is_empty(&cv->wakeup))
+		return;
 
 	/*
 	 * In some use-cases, it is common for awakened processes to immediately
