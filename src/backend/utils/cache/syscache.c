@@ -76,6 +76,7 @@
 #include "lib/qunique.h"
 #include "utils/catcache.h"
 #include "utils/rel.h"
+#include "utils/sortscalar.h"
 #include "utils/syscache.h"
 
 /*---------------------------------------------------------------------------
@@ -1006,8 +1007,6 @@ static int	SysCacheRelationOidSize;
 static Oid	SysCacheSupportingRelOid[SysCacheSize * 2];
 static int	SysCacheSupportingRelOidSize;
 
-static int	oid_compare(const void *a, const void *b);
-
 
 /*
  * InitCatalogCache - initialize the caches
@@ -1055,17 +1054,13 @@ InitCatalogCache(void)
 	Assert(SysCacheSupportingRelOidSize <= lengthof(SysCacheSupportingRelOid));
 
 	/* Sort and de-dup OID arrays, so we can use binary search. */
-	pg_qsort(SysCacheRelationOid, SysCacheRelationOidSize,
-			 sizeof(Oid), oid_compare);
+	qsort_oid(SysCacheRelationOid, SysCacheRelationOidSize);
 	SysCacheRelationOidSize =
-		qunique(SysCacheRelationOid, SysCacheRelationOidSize, sizeof(Oid),
-				oid_compare);
+		unique_oid(SysCacheRelationOid, SysCacheRelationOidSize);
 
-	pg_qsort(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize,
-			 sizeof(Oid), oid_compare);
+	qsort_oid(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize);
 	SysCacheSupportingRelOidSize =
-		qunique(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize,
-				sizeof(Oid), oid_compare);
+		unique_oid(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize);
 
 	CacheInitialized = true;
 }
@@ -1547,19 +1542,4 @@ RelationSupportsSysCache(Oid relid)
 	}
 
 	return false;
-}
-
-
-/*
- * OID comparator for pg_qsort
- */
-static int
-oid_compare(const void *a, const void *b)
-{
-	Oid			oa = *((const Oid *) a);
-	Oid			ob = *((const Oid *) b);
-
-	if (oa == ob)
-		return 0;
-	return (oa > ob) ? 1 : -1;
 }
