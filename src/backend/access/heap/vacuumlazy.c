@@ -370,7 +370,6 @@ static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks);
 static void lazy_record_dead_tuple(LVDeadTuples *dead_tuples,
 								   ItemPointer itemptr);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
-static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(Relation rel, Buffer buf,
 									 LVRelStats *vacrelstats,
 									 TransactionId *visibility_cutoff_xid, bool *all_frozen);
@@ -2965,6 +2964,20 @@ lazy_record_dead_tuple(LVDeadTuples *dead_tuples, ItemPointer itemptr)
 }
 
 /*
+ * Define a search function with a branchless comparator.  The encoded form of
+ * an item pointer uses only the lower 48 bits, so we can compare them with
+ * subtraction if we are careful to make sure the result is an int64 rather
+ * than the usual int.
+ */
+#define ST_SEARCH bsearch_itemptr
+#define ST_SCOPE static inline
+#define ST_ELEMENT_TYPE ItemPointerData
+#define ST_COMPARE(a, b) (itemptr_encode(a) - itemptr_encode(b))
+#define ST_COMPARE_TYPE int64
+#define ST_DEFINE
+#include "lib/sort_template.h"
+
+/*
  *	lazy_tid_reaped() -- is a particular tid deletable?
  *
  *		This has the right signature to be an IndexBulkDeleteCallback.
@@ -2993,43 +3006,11 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 	if (item < litem || item > ritem)
 		return false;
 
-	res = (ItemPointer) bsearch((void *) itemptr,
-								(void *) dead_tuples->itemptrs,
-								dead_tuples->num_tuples,
-								sizeof(ItemPointerData),
-								vac_cmp_itemptr);
+	res = bsearch_itemptr(itemptr,
+						  dead_tuples->itemptrs,
+						  dead_tuples->num_tuples);
 
 	return (res != NULL);
-}
-
-/*
- * Comparator routines for use with qsort() and bsearch().
- */
-static int
-vac_cmp_itemptr(const void *left, const void *right)
-{
-	BlockNumber lblk,
-				rblk;
-	OffsetNumber loff,
-				roff;
-
-	lblk = ItemPointerGetBlockNumber((ItemPointer) left);
-	rblk = ItemPointerGetBlockNumber((ItemPointer) right);
-
-	if (lblk < rblk)
-		return -1;
-	if (lblk > rblk)
-		return 1;
-
-	loff = ItemPointerGetOffsetNumber((ItemPointer) left);
-	roff = ItemPointerGetOffsetNumber((ItemPointer) right);
-
-	if (loff < roff)
-		return -1;
-	if (loff > roff)
-		return 1;
-
-	return 0;
 }
 
 /*
