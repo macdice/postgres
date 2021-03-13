@@ -508,6 +508,37 @@ typedef int (*qsort_arg_comparator) (const void *a, const void *b, void *arg);
 extern void qsort_arg(void *base, size_t nel, size_t elsize,
 					  qsort_arg_comparator cmp, void *arg);
 
+static inline void *
+pg_bsearch(const void *key, const void *base, size_t nmemb, size_t size,
+		   int (*compar)(const void *, const void *))
+{
+	size_t		l,
+				u,
+				idx;
+	const void *p;
+	int         comparison;
+
+	l = 0;
+	u = nmemb;
+	while (l < u)
+	{
+		idx = (l + u) / 2;
+		p = (void *) (((const char *) base) + (idx * size));
+		comparison = (*compar) (key, p);
+
+		if (comparison < 0)
+			u = idx;
+		else if (comparison > 0)
+			l = idx + 1;
+		else
+			return (void *) p;
+	}
+
+	return NULL;
+}
+
+#define bsearch(a,b,c,d,e) pg_bsearch((a),(b),(c),(d),(e))
+
 /* port/chklocale.c */
 extern int	pg_get_encoding_from_locale(const char *ctype, bool write_message);
 
