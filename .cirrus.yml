@@ -1,0 +1,395 @@
+env:
+  # accelerate initial clone, but a bit of depth so that concurrent tasks work
+  CIRRUS_CLONE_DEPTH: 100
+  # Useful to be able to analyse what in a script takes long
+  CIRRUS_LOG_TIMESTAMP: true
+  # target to test, for all but windows
+  CHECK: check-world
+  CHECKFLAGS: -Otarget
+  PGCTLTIMEOUT: 120
+  CCACHE_MAXSIZE: "500M"
+  TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/ci/pg_ci_base.conf
+  PG_TEST_EXTRA: kerberos ldap ssl
+
+
+task:
+  name: FreeBSD
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*freebsd.*'
+  compute_engine_instance:
+    image_project: pg-vm-images-aio
+    image: family/pg-aio-freebsd-13-0
+    platform: freebsd
+    cpu: 2
+    memory: 2G
+    disk: 50
+  env:
+    CCACHE_DIR: "/tmp/ccache_dir"
+
+  ccache_cache:
+    folder: "/tmp/ccache_dir"
+  sysinfo_script:
+    - export || true
+  sysconfig_script:
+    - sudo sysctl kern.corefile='/tmp/%N.%P.core'
+  repartition_script:
+    - ci/freebsd_gcp_repartition.sh
+  create_user_script:
+    - pw useradd postgres
+    - chown -R postgres:postgres .
+    - mkdir -p /tmp/ccache_dir
+    - chown -R postgres:postgres /tmp/ccache_dir
+
+  configure_script: |
+    su postgres -c './configure \
+      --enable-cassert --enable-debug --enable-tap-tests \
+      --enable-nls \
+      \
+      --with-icu \
+      --with-ldap \
+      --with-libxml \
+      --with-libxslt \
+      \
+      --with-lz4 \
+      --with-pam \
+      --with-perl \
+      --with-python \
+      --with-ssl=openssl \
+      --with-tcl --with-tclconfig=/usr/local/lib/tcl8.6/ \
+      --with-uuid=bsd \
+      \
+      --with-includes=/usr/local/include --with-libs=/usr/local/lib \
+      CC="ccache cc"'
+  build_script:
+    - su postgres -c 'gmake -s -j3 && gmake -s -j3 -C contrib'
+  upload_caches:
+    - ccache
+
+  tests_script:
+    - su postgres -c 'time gmake -s -j2 ${CHECK} ${CHECKFLAGS}'
+
+  on_failure:
+    cores_script: |
+      for corefile in $(find /tmp -name '*.core' 2>/dev/null) ; do
+        binary=$(gdb -quiet -core $corefile -batch -ex 'info auxv' | grep AT_EXECPATH | perl -pe "s/^.*\"(.*)\"\$/\$1/g") ;
+        echo dumping $corefile for $binary ;
+        gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile;
+      done
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+
+task:
+  name: Linux
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*linux.*'
+  compute_engine_instance:
+    image_project: pg-vm-images-aio
+    image: family/pg-aio-bullseye
+    platform: linux
+    cpu: 4
+    memory: 2G
+    nested_virtualization: false
+  env:
+    CCACHE_DIR: "/tmp/ccache_dir"
+    DEBUGINFOD_URLS: "https://debuginfod.debian.net"
+
+  ccache_cache:
+    folder: "/tmp/ccache_dir"
+
+  sysinfo_script:
+    - id
+    - uname -a
+    - cat /proc/cmdline
+    - lsblk
+    - ulimit -a -H
+    - ulimit -a -S
+    - export
+  sysconfig_script:
+    - useradd -m postgres
+    - chown -R postgres:postgres .
+    - mkdir -p /tmp/ccache_dir
+    - chown -R postgres:postgres /tmp/ccache_dir
+    - echo '* - memlock 134217728' > /etc/security/limits.d/postgres.conf
+    - su postgres -c 'ulimit -l -H'
+    - su postgres -c 'ulimit -l -S'
+    - echo '/tmp/%e-%s-%p.core' > /proc/sys/kernel/core_pattern
+
+  configure_script: |
+    su postgres -c './configure \
+      --enable-cassert --enable-debug --enable-tap-tests \
+      --enable-nls \
+      \
+      --with-gssapi \
+      --with-icu \
+      --with-ldap \
+      --with-libxml \
+      --with-libxslt \
+      --with-llvm \
+      --with-lz4 \
+      --with-pam \
+      --with-perl \
+      --with-python \
+      --with-ssl=openssl \
+      --with-systemd \
+      --with-tcl --with-tclconfig=/usr/lib/tcl8.6/ \
+      --with-uuid=e2fs \
+      \
+      CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang" CFLAGS="-O0 -ggdb"'
+  build_script:
+    - su postgres -c 'make -s -j4 && make -s -j4 -C contrib'
+  upload_caches:
+    - ccache
+
+  tests_script: |
+    su postgres -c '\
+      ulimit -c unlimited; \
+      make -s ${CHECK} ${CHECKFLAGS} -j8 \
+      '
+
+  on_failure:
+    cores_script: |
+      for corefile in $(find /tmp -name '*.core' 2>/dev/null) ; do
+        binary=$(gdb -quiet -core $corefile -batch -ex 'info auxv' | grep AT_EXECFN | perl -pe "s/^.*\"(.*)\"\$/\$1/g") ;
+        echo dumping $corefile for $binary ;
+        gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile ;
+      done
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+
+task:
+  name: macOS
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*(macos|darwin|osx).*'
+  osx_instance:
+    image: big-sur-base
+  env:
+    CIRRUS_WORKING_DIR: ${HOME}/pgsql/
+    TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/ci/pg_ci_base.conf
+    CCACHE_DIR: ${HOME}/ccache
+    HOMEBREW_CACHE: ${HOME}/homebrew-cache
+    PERL5LIB: ${HOME}/perl5/lib/perl5
+
+  sysinfo_script:
+    - id
+    - export
+  ccache_cache:
+    folder: ${CCACHE_DIR}
+  homebrew_cache:
+    folder: ${HOMEBREW_CACHE}
+  perl_cache:
+    folder: ~/perl5
+
+  cpan_install_script:
+    - perl -mIPC::Run -e 1 || cpan -T IPC::Run
+    - perl -mIO::Pty -e 1 || cpan -T IO::Pty
+  upload_caches:
+    - perl
+  core_install_script:
+    - sudo chmod 777 /cores
+  homebrew_install_script:
+    - brew install make coreutils ccache icu4c lz4 tcl-tk openldap
+  upload_caches:
+    - homebrew
+
+  configure_script: |
+    LIBS="/usr/local/lib:$LIBS"
+    INCLUDES="/usr/local/include:$INCLUDES"
+
+    INCLUDES="/usr/local/opt/openssl/include:$INCLUDES"
+    LIBS="/usr/local/opt/openssl/lib:$LIBS"
+
+    PKG_CONFIG_PATH="/usr/local/opt/icu4c/lib/pkgconfig:$PKG_CONFIG_PATH"
+    INCLUDES="/usr/local/opt/icu4c/include:$INCLUDES"
+    LIBS="/usr/local/opt/icu4c/lib:$LIBS"
+
+    LIBS="/usr/local/opt/openldap/lib:$LIBS"
+    INCLUDES="/usr/local/opt/openldap/include:$INCLUDES"
+
+    export PKG_CONFIG_PATH
+
+    ./configure \
+      --prefix=$HOME/install \
+      --with-includes="$INCLUDES" \
+      --with-libs="$LIBS" \
+      \
+      --enable-cassert --enable-debug --enable-tap-tests \
+      --enable-nls \
+      \
+      --with-icu \
+      --with-ldap \
+      --with-libxml \
+      --with-libxslt \
+      \
+      --with-lz4 \
+      --with-perl \
+      --with-python \
+      --with-ssl=openssl \
+      --with-tcl --with-tclconfig=/usr/local/opt/tcl-tk/lib/ \
+      --with-uuid=e2fs \
+      \
+      CC="ccache gcc" CFLAGS="-O0 -ggdb"
+  build_script:
+    - gmake -s -j12 && gmake -s -j12 -C contrib
+  upload_caches:
+    - ccache
+
+  tests_script:
+    - ulimit -c unlimited
+    - ulimit -n 1024
+    - gmake -s -j12 ${CHECK} ${CHECKFLAGS}
+
+  on_failure:
+    cores_script: |
+      for corefile in $(find /cores/ -name 'core.*' 2>/dev/null) ; do
+        lldb -c $corefile --batch -o 'thread backtrace all' -o 'quit' ;
+      done
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+
+task:
+  name: Windows
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*windows.*'
+  windows_container:
+    dockerfile: ci/docker/windows_vs_2019
+    cpu: 4
+    memory: 4G
+  env:
+    PROVE_FLAGS: -j10
+    # The default working dir is in a directory msbuild complains about
+    CIRRUS_WORKING_DIR: "c:/cirrus"
+    TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/ci/pg_ci_base.conf
+    # Avoid re-installing over and over
+    NO_TEMP_INSTALL: 1
+
+  sysinfo_script:
+    - chcp
+    - systeminfo
+    - powershell -Command get-psdrive -psprovider filesystem
+    - ps: Get-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug'
+    - set
+
+  configure_script:
+    - copy ci\windows_build_config.pl src\tools\msvc\config.pl
+    - vcvarsall x64
+    - perl src/tools/msvc/mkvcbuild.pl
+  build_script:
+    - vcvarsall x64
+    # Disable file tracker, we're never going to rebuild...
+    - msbuild -m /p:TrackFileAccess=false pgsql.sln
+  tempinstall_script:
+    # Installation on windows currently only completely works from src\tools\msvc
+    - cd src\tools\msvc && perl .\install.pl %CIRRUS_WORKING_DIR%\tmp_install
+
+  check_test_script:
+    - perl src/tools/msvc/vcregress.pl check parallel
+  startcreate_test_script:
+    - tmp_install\bin\pg_ctl.exe initdb -D tmp_check\db -l tmp_check\initdb.log
+    - echo include '%TEMP_CONFIG%' >> tmp_check\db\postgresql.conf
+    - tmp_install\bin\pg_ctl.exe start -D tmp_check\db -l tmp_check\postmaster.log
+  plcheck_test_script:
+    - perl src/tools/msvc/vcregress.pl plcheck
+  isolationcheck_test_script:
+    - perl src/tools/msvc/vcregress.pl isolationcheck
+  modulescheck_test_script:
+    - perl src/tools/msvc/vcregress.pl modulescheck
+  contribcheck_test_script:
+    - perl src/tools/msvc/vcregress.pl contribcheck
+  stop_test_script:
+    - tmp_install\bin\pg_ctl.exe stop -D tmp_check\db -l tmp_check\postmaster.log
+  ssl_test_script:
+    - set with_ssl=openssl
+    - perl src/tools/msvc/vcregress.pl taptest .\src\test\ssl\
+  subscriptioncheck_test_script:
+    - perl src/tools/msvc/vcregress.pl taptest .\src\test\subscription\
+  authentication_test_script:
+    - perl src/tools/msvc/vcregress.pl taptest .\src\test\authentication\
+  recoverycheck_test_script:
+    - perl src/tools/msvc/vcregress.pl recoverycheck
+  bincheck_test_script:
+    - perl src/tools/msvc/vcregress.pl bincheck
+  upgradecheck_test_script:
+    - perl src/tools/msvc/vcregress.pl upgradecheck
+  ecpgcheck_test_script:
+    # tries to build additional stuff
+    - vcvarsall x64
+    # References ecpg_regression.proj in the current dir
+    - cd src\tools\msvc
+    - perl vcregress.pl ecpgcheck
+
+  always:
+    cores_script:
+      - cat crashlog.txt || true
+    dump_artifacts:
+      path: "crashlog.txt"
+      type: text/plain
+
+  on_failure:
+    log_artifacts:
+      path: "**/**.log"
+      type: text/plain
+    regress_diffs_artifacts:
+      path: "**/**.diffs"
+      type: text/plain
+    tap_artifacts:
+      path: "**/regress_log_*"
+      type: text/plain
+
+
+task:
+  name: CompilerWarnings
+  depends_on:
+    - Linux
+  # task that did not run count as a success, so we need to recheck Linux' condition here :/
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*linux.*'
+  container:
+    dockerfile: ci/docker/linux_debian_bullseye
+  env:
+    CCACHE_SIZE: "4GB"
+    CCACHE_DIR: "/tmp/ccache_dir"
+  ccache_cache:
+    folder: "/tmp/ccache_dir"
+  setup_script:
+    - echo "COPT=-Werror" > src/Makefile.custom
+    - gcc -v
+    - clang -v
+  # gcc with asserts disabled
+  always:
+    gcc_warning_script:
+      - ./configure --cache gcc.cache CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  # gcc with asserts enabled
+  always:
+    gcc_a_warning_script:
+      - ./configure --cache gcc.cache --enable-cassert CC="ccache gcc"
+      - time make -s -j4 clean && time make -s -j4
+  # clang with asserts disabled
+  always:
+    clang_warning_script:
+      - ./configure --cache clang.cache CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
+  # clang with asserts enabled
+  always:
+    clang_a_warning_script:
+      - ./configure --cache clang.cache --enable-cassert CC="ccache clang"
+      - time make -s -j4 clean && time make -s -j4
