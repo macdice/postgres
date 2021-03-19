@@ -493,6 +493,7 @@ static struct config_enum_entry recovery_init_sync_method_options[] = {
 #ifdef HAVE_SYNCFS
 	{"syncfs", RECOVERY_INIT_SYNC_METHOD_SYNCFS, false},
 #endif
+	{"wal", RECOVERY_INIT_SYNC_METHOD_WAL, false},
 	{NULL, 0, false}
 };
 

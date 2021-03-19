@@ -9753,6 +9753,18 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
         <productname>PostgreSQL</productname>, and relevant error messages may
         appear only in kernel logs.
        </para>
+       <para>
+        When set to <literal>wal</literal>,
+        <productname>PostgreSQL</productname> will synchronize all WAL files
+        before recovery begins, and then rely on WAL replay to synchronize all
+        data files modified since the last checkpoint.  Data files that are not
+        modified by WAL replay are not synchronized, which is sufficient if
+        recovering from a crash or a copy made with
+        <application>pg_basebackup</application> (without
+        <literal>--no-sync</literal>), but may be insufficient if
+        the data directory was copied from its original location without taking
+        extra measures to ensure that it has reached the disk.
+       </para>
       </listitem>
      </varlistentry>
 

@@ -46,6 +46,7 @@
 #include <dirent.h>
 
 typedef enum RecoveryInitSyncMethod {
+	RECOVERY_INIT_SYNC_METHOD_WAL,
 	RECOVERY_INIT_SYNC_METHOD_FSYNC,
 	RECOVERY_INIT_SYNC_METHOD_SYNCFS
 } RecoveryInitSyncMethod;

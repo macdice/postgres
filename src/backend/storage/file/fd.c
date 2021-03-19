@@ -336,6 +336,7 @@ static void walkdir(const char *path,
 					void (*action) (const char *fname, bool isdir, int elevel),
 					bool process_symlinks,
 					int elevel);
+
 #ifdef PG_FLUSH_DATA_WORKS
 static void pre_sync_fname(const char *fname, bool isdir, int elevel);
 #endif
@@ -3293,8 +3294,9 @@ do_syncfs(const char *path)
 #endif
 
 /*
- * Issue fsync recursively on PGDATA and all its contents, or issue syncfs for
- * all potential filesystem, depending on recovery_init_sync_method setting.
+ * Issue fsync recursively on PGDATA and all its contents, issue syncfs for all
+ * potential filesystem, or do nothing, depending on the
+ * recovery_init_sync_method setting.
  *
  * We fsync regular files and directories wherever they are, but we
  * follow symlinks only for pg_wal and immediately under pg_tblspc.
@@ -3321,6 +3323,10 @@ SyncDataDirectory(void)
 
 	/* We can skip this whole thing if fsync is disabled. */
 	if (!enableFsync)
+		return;
+
+	/* Likewise if we're using WAL analysis instead. */
+	if (recovery_init_sync_method == RECOVERY_INIT_SYNC_METHOD_WAL)
 		return;
 
 	/*
@@ -3477,7 +3483,6 @@ walkdir(const char *path,
 	if (dir)
 		(*action) (path, true, elevel);
 }
-
 
 /*
  * Hint to the OS that it should get ready to fsync() this file.
