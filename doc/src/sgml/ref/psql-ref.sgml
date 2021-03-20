@@ -2994,6 +2994,11 @@ lo_import 152801
           </para>
 
           <para>
+          When the ennvironment variable <envar>PSQL_WATCH_PAGER</envar> is set, then
+          the output of repeated execution of query is piped to the specified program.
+          </para>
+
+          <para>
           When the <literal>pager</literal> option is <literal>off</literal>, the pager
           program is not used. When the <literal>pager</literal> option is
           <literal>on</literal>, the pager is used when appropriate, i.e., when the
@@ -3003,6 +3008,13 @@ lo_import 152801
           of whether it fits on the screen.  <literal>\pset pager</literal>
           without a <replaceable class="parameter">value</replaceable>
           toggles pager use on and off.
+          </para>
+
+          <para>
+          When an command <command>\watch</command> is executed, and environment
+          variable <envar>PSQL_WATCH_PAGER</envar> is defined, but the value of
+          the option <literal>pager</literal> is <literal>off</literal>, then the
+          pager is not used.
           </para>
           </listitem>
           </varlistentry>
@@ -4658,6 +4670,21 @@ PSQL_EDITOR_LINENUMBER_ARG='--line '
       the first that is set is used.
       If none of them is set, the default is to use <literal>more</literal> on most
       platforms, but <literal>less</literal> on Cygwin.
+     </para>
+
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><envar>PSQL_WATCH_PAGER</envar></term>
+
+    <listitem>
+     <para>
+      When an statement is evaluated repeatedly because <command>\watch</command>
+      was used, then an pager is not used. This behaviour can be changed by
+      setting <envar>PSQL_WATCH_PAGER</envar> to pager with necessary options.
+      Currently only <literal>pspg</literal> pager (version 3.0+) supports this
+      functionality (with an option <literal>--stream</literal>).
      </para>
 
     </listitem>

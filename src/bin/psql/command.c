@@ -13,6 +13,7 @@
 #include <utime.h>
 #ifndef WIN32
 #include <sys/stat.h>			/* for stat() */
+#include <sys/wait.h>			/* for waitpid() */
 #include <fcntl.h>				/* open() flags */
 #include <unistd.h>				/* for geteuid(), getpid(), stat() */
 #else
@@ -4787,6 +4788,8 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	const char *strftime_fmt;
 	const char *user_title;
 	char	   *title;
+	const char *pagerprog = NULL;
+	FILE	   *pagerpipe = NULL;
 	int			title_len;
 	int			res = 0;
 
@@ -4797,6 +4800,25 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	}
 
 	/*
+	 * For usual queries, the pager can be used always, or
+	 * newer, or when then content is larger than screen. In this case,
+	 * the decision based on then content size has not sense, because the
+	 * content can be different any time, but pager (in this case) is
+	 * used longer time. So we use pager if the variable PSQL_WATCH_PAGER
+	 * is defined and if pager is not disabled.
+	 */
+	pagerprog = getenv("PSQL_WATCH_PAGER");
+	if (pagerprog && myopt.topt.pager)
+	{
+		disable_sigpipe_trap();
+		pagerpipe = popen(pagerprog, "w");
+
+		if (!pagerpipe)
+			/*silently proceed without pager */
+			restore_sigpipe_trap();
+	}
+
+	/*
 	 * Choose format for timestamps.  We might eventually make this a \pset
 	 * option.  In the meantime, using a variable for the format suppresses
 	 * overly-anal-retentive gcc warnings about %c being Y2K sensitive.
@@ -4804,10 +4826,12 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	strftime_fmt = "%c";
 
 	/*
-	 * Set up rendering options, in particular, disable the pager, because
-	 * nobody wants to be prompted while watching the output of 'watch'.
+	 * Set up rendering options, in particular, disable the pager, when
+	 * there an pipe to pager is not available.
 	 */
-	myopt.topt.pager = 0;
+	if (!pagerpipe)
+		myopt.topt.pager = 0;
+
 
 	/*
 	 * If there's a title in the user configuration, make sure we have room
@@ -4841,13 +4865,16 @@ do_watch(PQExpBuffer query_buf, double sleep)
 		myopt.title = title;
 
 		/* Run the query and print out the results */
-		res = PSQLexecWatch(query_buf->data, &myopt);
+		res = PSQLexecWatch(query_buf->data, &myopt, pagerpipe);
 
 		/*
 		 * PSQLexecWatch handles the case where we can no longer repeat the
 		 * query, and returns 0 or -1.
 		 */
 		if (res <= 0)
+			break;
+
+		if (pagerpipe && ferror(pagerpipe))
 			break;
 
 		/*
@@ -4860,21 +4887,61 @@ do_watch(PQExpBuffer query_buf, double sleep)
 
 		/*
 		 * Enable 'watch' cancellations and wait a while before running the
-		 * query again.  Break the sleep into short intervals (at most 1s)
-		 * since pg_usleep isn't interruptible on some platforms.
+		 * query again.  Break the sleep into short intervals (at most 100ms)
+		 * since pg_usleep isn't interruptible on some platforms. The overhead
+		 * of 100ms interval is compromise between overhead and ergonomentry
+		 * (we don't want to wait long time after pager was ended).
 		 */
 		sigint_interrupt_enabled = true;
 		i = sleep_ms;
 		while (i > 0)
 		{
+#ifdef WIN32
 			long		s = Min(i, 1000L);
 
-			pg_usleep(s * 1000L);
+			pg_usleep(1000L * s);
+
+#else
+			long		s = Min(i, 100L);
+
+			pg_usleep(1000L * s);
+
+			/*
+			 * in this moment an pager process can be only one child of
+			 * psql process. There cannot be other processes. So we can
+			 * detect end of any child process for fast detection of
+			 * pager process.
+			 *
+			 * This simple detection doesn't work on WIN32, because we
+			 * don't know handle of process created by _popen function.
+			 * Own implementation of _popen function based on CreateProcess
+			 * looks like overkill in this moment.
+			 */
+			if (pagerpipe)
+			{
+
+				int		status;
+				pid_t	pid;
+
+				pid = waitpid(-1, &status, WNOHANG);
+				if (pid)
+					break;
+			}
+
+#endif
+
 			if (cancel_pressed)
 				break;
+
 			i -= s;
 		}
 		sigint_interrupt_enabled = false;
+	}
+
+	if (pagerpipe)
+	{
+		pclose(pagerpipe);
+		restore_sigpipe_trap();
 	}
 
 	pg_free(title);
