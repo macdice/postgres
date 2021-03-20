@@ -9,10 +9,14 @@
 #define COMMON_H
 
 #include <setjmp.h>
+#include <signal.h>
 
 #include "fe_utils/print.h"
 #include "fe_utils/psqlscan.h"
 #include "libpq-fe.h"
+
+extern volatile sig_atomic_t received_sigchld;
+extern void handle_sigchld(SIGNAL_ARGS);
 
 extern bool openQueryOutputFile(const char *fname, FILE **fout, bool *is_pipe);
 extern bool setQFout(const char *fname);

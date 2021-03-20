@@ -13,7 +13,7 @@
 #include <utime.h>
 #ifndef WIN32
 #include <sys/stat.h>			/* for stat() */
-#include <sys/wait.h>			/* for waitpid() */
+#include <sys/time.h>			/* for setitimer() */
 #include <fcntl.h>				/* open() flags */
 #include <unistd.h>				/* for geteuid(), getpid(), stat() */
 #else
@@ -4792,12 +4792,43 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	FILE	   *pagerpipe = NULL;
 	int			title_len;
 	int			res = 0;
+#ifndef WIN32
+	sigset_t	sigset;
+	struct itimerval interval;
+	bool		done = false;
+#endif
 
 	if (!query_buf || query_buf->len <= 0)
 	{
 		pg_log_error("\\watch cannot be used with an empty query");
 		return false;
 	}
+
+#ifndef WIN32
+	/*
+	 * Block the signals we're interested in before we start the watch pager,
+	 * if configured, to avoid races.  sigwait() will receive them.
+	 */
+	sigemptyset(&sigset);
+	sigaddset(&sigset, SIGINT);
+	sigaddset(&sigset, SIGCHLD);
+	sigaddset(&sigset, SIGALRM);
+	sigprocmask(SIG_BLOCK, &sigset, NULL);
+
+	/*
+	 * Set a timer to interrupt sigwait() at the right intervals to run the
+	 * query again.  We can't use the obvious sigtimedwait() instead, because
+	 * macOS hasn't got it.
+	 */
+	interval.it_value.tv_sec = sleep_ms / 1000;
+	interval.it_value.tv_usec = (sleep_ms % 1000) * 1000;
+	interval.it_interval = interval.it_value;
+	if (setitimer(ITIMER_REAL, &interval, NULL) < 0)
+	{
+		pg_log_error("could not set timer: %m");
+		done = true;
+	}
+#endif
 
 	/*
 	 * For usual queries, the pager can be used always, or
@@ -4846,7 +4877,6 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	{
 		time_t		timer;
 		char		timebuf[128];
-		long		i;
 
 		/*
 		 * Prepare title for output.  Note that we intentionally include a
@@ -4877,6 +4907,7 @@ do_watch(PQExpBuffer query_buf, double sleep)
 		if (pagerpipe && ferror(pagerpipe))
 			break;
 
+#ifdef WIN32
 		/*
 		 * Set up cancellation of 'watch' via SIGINT.  We redo this each time
 		 * through the loop since it's conceivable something inside
@@ -4893,42 +4924,11 @@ do_watch(PQExpBuffer query_buf, double sleep)
 		 * (we don't want to wait long time after pager was ended).
 		 */
 		sigint_interrupt_enabled = true;
-		i = sleep_ms;
-		while (i > 0)
+		for (int i = sleep_ms; i > 0;)
 		{
-#ifdef WIN32
-			long		s = Min(i, 1000L);
+			int			s = Min(i, 1000L);
 
 			pg_usleep(1000L * s);
-
-#else
-			long		s = Min(i, 100L);
-
-			pg_usleep(1000L * s);
-
-			/*
-			 * in this moment an pager process can be only one child of
-			 * psql process. There cannot be other processes. So we can
-			 * detect end of any child process for fast detection of
-			 * pager process.
-			 *
-			 * This simple detection doesn't work on WIN32, because we
-			 * don't know handle of process created by _popen function.
-			 * Own implementation of _popen function based on CreateProcess
-			 * looks like overkill in this moment.
-			 */
-			if (pagerpipe)
-			{
-
-				int		status;
-				pid_t	pid;
-
-				pid = waitpid(-1, &status, WNOHANG);
-				if (pid)
-					break;
-			}
-
-#endif
 
 			if (cancel_pressed)
 				break;
@@ -4936,6 +4936,33 @@ do_watch(PQExpBuffer query_buf, double sleep)
 			i -= s;
 		}
 		sigint_interrupt_enabled = false;
+#else
+		/* Wait for SIGINT, SIGCHLD or SIGALRM. */
+		while (!done)
+		{
+			int signal_received;
+
+			if (sigwait(&sigset, &signal_received) < 0)
+			{
+				/* Some other signal arrived? */
+				if (errno == EINTR)
+					continue;
+				else
+				{
+					pg_log_error("could not wait for signals: %m");
+					done = true;
+					break;
+				}
+			}
+			/* On ^C or pager exit, it's time to stop running the query. */
+			if (signal_received == SIGINT || signal_received == SIGCHLD)
+				done = true;
+			/* Otherwise, we must have SIGALRM.  Time to run the query again. */
+			break;
+		}
+		if (done)
+			break;
+#endif
 	}
 
 	if (pagerpipe)
@@ -4943,6 +4970,14 @@ do_watch(PQExpBuffer query_buf, double sleep)
 		pclose(pagerpipe);
 		restore_sigpipe_trap();
 	}
+
+#ifndef WIN32
+	/* Disable the interval timer. */
+	memset(&interval, 0, sizeof(interval));
+	setitimer(ITIMER_REAL, &interval, NULL);
+	/* Unblock SIGINT, SIGCHLD and SIGALRM. */
+	sigprocmask(SIG_UNBLOCK, &sigset, NULL);
+#endif
 
 	pg_free(title);
 	return (res >= 0);
