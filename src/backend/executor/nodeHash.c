@@ -1135,6 +1135,8 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					double		dtuples;
 					double		dbuckets;
 					int			new_nbuckets;
+					long		max_pointers;
+					long		mppow2;
 
 					/*
 					 * We probably also need a smaller bucket array.  How many
@@ -1146,10 +1148,25 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					 * batches and it would be wasteful to keep the large
 					 * array.
 					 */
+					max_pointers = MaxAllocSize / sizeof(dsa_pointer_atomic);
+					/*
+					 * If max_pointers isn't a power of 2, must round it down
+					 * to one.
+					 */
+					mppow2 = 1L << my_log2(max_pointers);
+					if (max_pointers != mppow2)
+						max_pointers = mppow2 / 2;
+
+					/*
+					 * Also ensure we avoid integer overflow in nbuckets (this
+					 * step is redundant given the current value of
+					 * MaxAllocSize).
+					 */
+					max_pointers = Min(max_pointers, INT_MAX / 2);
+
 					dtuples = (old_batch0->ntuples * 2.0) / new_nbatch;
 					dbuckets = ceil(dtuples / NTUP_PER_BUCKET);
-					dbuckets = Min(dbuckets,
-								   MaxAllocSize / sizeof(dsa_pointer_atomic));
+					dbuckets = Min(dbuckets, max_pointers);
 					new_nbuckets = (int) dbuckets;
 					new_nbuckets = Max(new_nbuckets, 1024);
 					new_nbuckets = 1 << my_log2(new_nbuckets);
