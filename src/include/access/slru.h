@@ -14,8 +14,10 @@
 #define SLRU_H
 
 #include "access/xlogdefs.h"
+#include "storage/car.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+#include "utils/hsearch.h"
 
 /*
  * To avoid overflowing internal arithmetic and the size_t data type, the
@@ -47,6 +49,7 @@
 typedef enum
 {
 	SLRU_PAGE_EMPTY,			/* buffer is not in use */
+	SLRU_PAGE_ALLOCATED,		/* buffer newly allocated for page */
 	SLRU_PAGE_READ_IN_PROGRESS, /* page is being read in */
 	SLRU_PAGE_VALID,			/* page is valid and not being written */
 	SLRU_PAGE_WRITE_IN_PROGRESS /* page is being written out */
@@ -61,6 +64,9 @@ typedef struct SlruSharedData
 
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
+
+	/* Where to start buffer replacement search. */
+	int			search_slotno;
 
 	/*
 	 * Arrays holding info for each buffer slot.  Page number is undefined
@@ -115,6 +121,8 @@ typedef SlruSharedData *SlruShared;
 typedef struct SlruCtlData
 {
 	SlruShared	shared;
+	HTAB	   *mapping_table;
+	car_control *car;
 
 	/*
 	 * Which sync handler function to use when handing sync requests over to

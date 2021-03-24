@@ -1,17 +1,9 @@
 /*-------------------------------------------------------------------------
  *
  * slru.c
- *		Simple LRU buffering for transaction status logfiles
+ *		Special buffer pool and storage manager for transaction status
  *
- * We use a simple least-recently-used scheme to manage a pool of page
- * buffers.  Under ordinary circumstances we expect that write
- * traffic will occur mostly to the latest page (and to the just-prior
- * page, soon after a page transition).  Read traffic will probably touch
- * a larger span of pages, but in any case a fairly small number of page
- * buffers should be sufficient.  So, we just search the buffers using plain
- * linear search; there's no need for a hashtable or anything fancy.
- * The management algorithm is straight LRU except that we will never swap
- * out the latest page (since we know it's going to be hit again eventually).
+ * We defer to car.c for buffer replacement logic.
  *
  * We use a control LWLock to protect the shared data structures, plus
  * per-buffer LWLocks that synchronize I/O for each buffer.  The control lock
@@ -56,8 +48,10 @@
 #include "access/xlog.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/car.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
+#include "utils/hsearch.h"
 
 #define SlruFileName(ctl, path, seg) \
 	snprintf(path, MAXPGPATH, "%s/%04X", (ctl)->Dir, seg)
@@ -79,6 +73,12 @@ typedef struct SlruWriteAllData
 
 typedef struct SlruWriteAllData *SlruWriteAll;
 
+typedef struct SlruMappingTableEntry
+{
+	int			pageno;
+	car_mapping	mapping;
+} SlruMappingTableEntry;
+
 /*
  * Populate a file tag describing a segment file.  We only use the segment
  * number, since we can derive everything else we need by having separate
@@ -90,34 +90,6 @@ typedef struct SlruWriteAllData *SlruWriteAll;
 	(a).handler = (xx_handler), \
 	(a).segno = (xx_segno) \
 )
-
-/*
- * Macro to mark a buffer slot "most recently used".  Note multiple evaluation
- * of arguments!
- *
- * The reason for the if-test is that there are often many consecutive
- * accesses to the same page (particularly the latest page).  By suppressing
- * useless increments of cur_lru_count, we reduce the probability that old
- * pages' counts will "wrap around" and make them appear recently used.
- *
- * We allow this code to be executed concurrently by multiple processes within
- * SimpleLruReadPage_ReadOnly().  As long as int reads and writes are atomic,
- * this should not cause any completely-bogus values to enter the computation.
- * However, it is possible for either cur_lru_count or individual
- * page_lru_count entries to be "reset" to lower values than they should have,
- * in case a process is delayed while it executes this macro.  With care in
- * SlruSelectLRUPage(), this does little harm, and in any case the absolute
- * worst possible consequence is a nonoptimal choice of page to evict.  The
- * gain from allowing concurrent reads of SLRU pages seems worth it.
- */
-#define SlruRecentlyUsed(shared, slotno)	\
-	do { \
-		int		new_lru_count = (shared)->cur_lru_count; \
-		if (new_lru_count != (shared)->page_lru_count[slotno]) { \
-			(shared)->cur_lru_count = ++new_lru_count; \
-			(shared)->page_lru_count[slotno] = new_lru_count; \
-		} \
-	} while (0)
 
 /* Saved info for SlruReportIOError */
 typedef enum
@@ -146,13 +118,29 @@ static int	SlruSelectLRUPage(SlruCtl ctl, int pageno);
 static bool SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename,
 									  int segpage, void *data);
 static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
+static car_mapping *SlruMappingAdd(SlruCtl ctl, int pageno);
+static void	SlruMappingRemove(SlruCtl ctl, int pageno);
+static car_mapping *SlruMappingFind(SlruCtl ctl, int pageno);
+
+static inline SlruMappingTableEntry *
+SlruMappingTableEntryFromCarMapping(car_mapping *mapping)
+{
+	return (SlruMappingTableEntry *)
+		((char *) mapping - offsetof(SlruMappingTableEntry, mapping));
+}
+
+static inline int
+SlruPageNoFromCarMapping(car_mapping *mapping)
+{
+	return SlruMappingTableEntryFromCarMapping(mapping)->pageno;
+}
 
 /*
  * Initialization of shared memory
  */
 
-Size
-SimpleLruShmemSize(int nslots, int nlsns)
+static Size
+SimpleLruStructSize(int nslots, int nlsns)
 {
 	Size		sz;
 
@@ -167,8 +155,19 @@ SimpleLruShmemSize(int nslots, int nlsns)
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
-
 	return BUFFERALIGN(sz) + BLCKSZ * nslots;
+}
+
+Size
+SimpleLruShmemSize(int nslots, int nlsns)
+{
+	/*
+	 * CAR needs twice as many hash table entries as we have buffers, and then
+	 * we add one because an extra mapping temporarily exists during eviction.
+	 */
+	return SimpleLruStructSize(nslots, nlsns) +
+		car_estimate_size(nslots) +
+		hash_estimate_size(nslots * 2 + 1, sizeof(SlruMappingTableEntry));
 }
 
 /*
@@ -187,11 +186,15 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 			  LWLock *ctllock, const char *subdir, int tranche_id,
 			  SyncRequestHandler sync_handler)
 {
+	char		mapping_table_name[SHMEM_INDEX_KEYSIZE];
+	HASHCTL		mapping_table_info;
+	HTAB	   *mapping_table;
 	SlruShared	shared;
+	car_control *car;
 	bool		found;
 
 	shared = (SlruShared) ShmemInitStruct(name,
-										  SimpleLruShmemSize(nslots, nlsns),
+										  SimpleLruStructSize(nslots, nlsns),
 										  &found);
 
 	if (!IsUnderPostmaster)
@@ -258,11 +261,31 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	else
 		Assert(found);
 
+	/* Create or find the buffer mapping table. */
+	memset(&mapping_table_info, 0, sizeof(mapping_table_info));
+	mapping_table_info.keysize = sizeof(int);
+	mapping_table_info.entrysize = sizeof(SlruMappingTableEntry);
+	snprintf(mapping_table_name, sizeof(mapping_table_name),
+			 "%s Lookup Table", name);
+	mapping_table = ShmemInitHash(mapping_table_name, nslots, nslots,
+								  &mapping_table_info, HASH_ELEM | HASH_BLOBS);
+
+	/* Create or find the CAR control object. */
+	snprintf(mapping_table_name, sizeof(mapping_table_name),
+			 "%s CAR", name);
+	car = ShmemInitStruct(mapping_table_name,
+						  car_estimate_size(nslots),
+						  &found);
+	if (!found)
+		car_init(car, nslots);
+	
 	/*
 	 * Initialize the unshared control struct, including directory path. We
 	 * assume caller set PagePrecedes.
 	 */
 	ctl->shared = shared;
+	ctl->mapping_table = mapping_table;
+	ctl->car = car;
 	ctl->sync_handler = sync_handler;
 	strlcpy(ctl->Dir, subdir, sizeof(ctl->Dir));
 }
@@ -283,16 +306,14 @@ SimpleLruZeroPage(SlruCtl ctl, int pageno)
 
 	/* Find a suitable buffer slot for the page */
 	slotno = SlruSelectLRUPage(ctl, pageno);
-	Assert(shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
-		   (shared->page_status[slotno] == SLRU_PAGE_VALID &&
-			!shared->page_dirty[slotno]) ||
+	Assert((shared->page_status[slotno] == SLRU_PAGE_ALLOCATED ||
+			shared->page_status[slotno] == SLRU_PAGE_VALID) &&
+		   !shared->page_dirty[slotno] &&
 		   shared->page_number[slotno] == pageno);
 
 	/* Mark the slot as containing this page */
-	shared->page_number[slotno] = pageno;
 	shared->page_status[slotno] = SLRU_PAGE_VALID;
 	shared->page_dirty[slotno] = true;
-	SlruRecentlyUsed(shared, slotno);
 
 	/* Set the buffer to zeroes */
 	MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
@@ -347,6 +368,7 @@ SimpleLruWaitIO(SlruCtl ctl, int slotno)
 	LWLockRelease(&shared->buffer_locks[slotno].lock);
 	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
 
+#if 0
 	/*
 	 * If the slot is still in an io-in-progress state, then either someone
 	 * already started a new I/O on the slot, or a previous I/O failed and
@@ -362,7 +384,10 @@ SimpleLruWaitIO(SlruCtl ctl, int slotno)
 		{
 			/* indeed, the I/O must have failed */
 			if (shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS)
+			{
+				SlruMappingRemove(ctl, shared->page_number[slotno]);
 				shared->page_status[slotno] = SLRU_PAGE_EMPTY;
+			}
 			else				/* write_in_progress */
 			{
 				shared->page_status[slotno] = SLRU_PAGE_VALID;
@@ -371,6 +396,7 @@ SimpleLruWaitIO(SlruCtl ctl, int slotno)
 			LWLockRelease(&shared->buffer_locks[slotno].lock);
 		}
 	}
+#endif
 }
 
 /*
@@ -406,8 +432,7 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 		slotno = SlruSelectLRUPage(ctl, pageno);
 
 		/* Did we find the page in memory? */
-		if (shared->page_number[slotno] == pageno &&
-			shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+		if (shared->page_status[slotno] != SLRU_PAGE_ALLOCATED)
 		{
 			/*
 			 * If page is still being read in, we must wait for I/O.  Likewise
@@ -421,8 +446,6 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 				/* Now we must recheck state from the top */
 				continue;
 			}
-			/* Otherwise, it's ready to use */
-			SlruRecentlyUsed(shared, slotno);
 
 			/* update the stats counter of pages found in the SLRU */
 			pgstat_count_slru_page_hit(shared->slru_stats_idx);
@@ -430,13 +453,9 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 			return slotno;
 		}
 
-		/* We found no match; assert we selected a freeable slot */
-		Assert(shared->page_status[slotno] == SLRU_PAGE_EMPTY ||
-			   (shared->page_status[slotno] == SLRU_PAGE_VALID &&
-				!shared->page_dirty[slotno]));
-
 		/* Mark the slot read-busy */
-		shared->page_number[slotno] = pageno;
+		Assert(shared->page_status[slotno] != SLRU_PAGE_ALLOCATED);
+		Assert(shared->page_number[slotno] == pageno);
 		shared->page_status[slotno] = SLRU_PAGE_READ_IN_PROGRESS;
 		shared->page_dirty[slotno] = false;
 
@@ -459,15 +478,20 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 			   shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS &&
 			   !shared->page_dirty[slotno]);
 
-		shared->page_status[slotno] = ok ? SLRU_PAGE_VALID : SLRU_PAGE_EMPTY;
+		if (ok)
+			shared->page_status[slotno] = SLRU_PAGE_VALID;
+		else
+		{
+			// XXX!
+			//SlruMappingRemove(ctl, pageno);
+			shared->page_status[slotno] =  SLRU_PAGE_EMPTY;
+		}
 
 		LWLockRelease(&shared->buffer_locks[slotno].lock);
 
 		/* Now it's okay to ereport if we failed */
 		if (!ok)
 			SlruReportIOError(ctl, pageno, xid);
-
-		SlruRecentlyUsed(shared, slotno);
 
 		/* update the stats counter of pages not found in SLRU */
 		pgstat_count_slru_page_read(shared->slru_stats_idx);
@@ -494,26 +518,26 @@ int
 SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 {
 	SlruShared	shared = ctl->shared;
+	car_mapping *mapping;
 	int			slotno;
 
 	/* Try to find the page while holding only shared lock */
 	LWLockAcquire(shared->ControlLock, LW_SHARED);
 
 	/* See if page is already in a buffer */
-	for (slotno = 0; slotno < shared->num_slots; slotno++)
+	mapping = SlruMappingFind(ctl, pageno);
+	if (mapping &&
+		(slotno = car_access(mapping)) >= 0 &&
+		shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 	{
-		if (shared->page_number[slotno] == pageno &&
-			shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
-			shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
-		{
-			/* See comments for SlruRecentlyUsed macro */
-			SlruRecentlyUsed(shared, slotno);
+		Assert(shared->page_status[slotno] != SLRU_PAGE_EMPTY);
+		Assert(shared->page_number[slotno] == pageno);
 
-			/* update the stats counter of pages found in the SLRU */
-			pgstat_count_slru_page_hit(shared->slru_stats_idx);
+elog(LOG, "readonly found page %d in slot %d", pageno, slotno);
+		/* update the stats counter of pages found in the SLRU */
+		pgstat_count_slru_page_hit(shared->slru_stats_idx);
 
-			return slotno;
-		}
+		return slotno;
 	}
 
 	/* No luck, so switch to normal exclusive lock and do regular read */
@@ -999,15 +1023,9 @@ SlruReportIOError(SlruCtl ctl, int pageno, TransactionId xid)
 }
 
 /*
- * Select the slot to re-use when we need a free slot.
- *
- * The target page number is passed because we need to consider the
- * possibility that some other process reads in the target page while
- * we are doing I/O to free a slot.  Hence, check or recheck to see if
- * any slot already holds the target page, and return that slot if so.
- * Thus, the returned slot is *either* a slot already holding the pageno
- * (could be any state except EMPTY), *or* a freeable slot (state EMPTY
- * or CLEAN).
+ * Select the slot to re-use when we need a free slot.  The returned slotno
+ * has status SLRU_PAGE_EMPTY if the buffer has been newly assigned for this
+ * page, and any other status if the page was already cached.
  *
  * Control lock must be held at entry, and will be held at exit.
  */
@@ -1019,129 +1037,109 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 	/* Outer loop handles restart after I/O */
 	for (;;)
 	{
+		bool		new_mapping = false;
+		car_mapping *mapping;
+		car_mapping *replace;
 		int			slotno;
-		int			cur_count;
-		int			bestvalidslot = 0;	/* keep compiler quiet */
-		int			best_valid_delta = -1;
-		int			best_valid_page_number = 0; /* keep compiler quiet */
-		int			bestinvalidslot = 0;	/* keep compiler quiet */
-		int			best_invalid_delta = -1;
-		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/* See if page already has a buffer assigned */
-		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		mapping = SlruMappingFind(ctl, pageno);
+		if (mapping)
 		{
-			if (shared->page_number[slotno] == pageno &&
-				shared->page_status[slotno] != SLRU_PAGE_EMPTY)
+			slotno = car_access(mapping);
+
+			/* Is this mapping currently cached? */
+			if (slotno >= 0)
+			{
+				Assert(shared->page_number[slotno] == pageno);
+				Assert(shared->page_status[slotno] != SLRU_PAGE_EMPTY);
 				return slotno;
+			}
+
+			/* Nope, but it's in the mapping table and known to CAR. */
+		}
+		else
+		{
+			/* Unknown to CAR.  We'll create a new mapping. */
+			mapping = SlruMappingAdd(ctl, pageno);
+			new_mapping = true;
 		}
 
-		/*
-		 * If we find any EMPTY slot, just select that one. Else choose a
-		 * victim page to replace.  We normally take the least recently used
-		 * valid page, but we will never take the slot containing
-		 * latest_page_number, even if it appears least recently used.  We
-		 * will select a slot that is already I/O busy only if there is no
-		 * other choice: a read-busy slot will not be least recently used once
-		 * the read finishes, and waiting for an I/O on a write-busy slot is
-		 * inferior to just picking some other slot.  Testing shows the slot
-		 * we pick instead will often be clean, allowing us to begin a read at
-		 * once.
-		 *
-		 * Normally the page_lru_count values will all be different and so
-		 * there will be a well-defined LRU page.  But since we allow
-		 * concurrent execution of SlruRecentlyUsed() within
-		 * SimpleLruReadPage_ReadOnly(), it is possible that multiple pages
-		 * acquire the same lru_count values.  In that case we break ties by
-		 * choosing the furthest-back page.
-		 *
-		 * Notice that this next line forcibly advances cur_lru_count to a
-		 * value that is certainly beyond any value that will be in the
-		 * page_lru_count array after the loop finishes.  This ensures that
-		 * the next execution of SlruRecentlyUsed will mark the page newly
-		 * used, even if it's for a page that has the current counter value.
-		 * That gets us back on the path to having good data when there are
-		 * multiple pages with the same lru_count.
-		 */
-		cur_count = (shared->cur_lru_count)++;
-		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		/* Inner loop handles CAR allocation retries. */
+		do
 		{
-			int			this_delta;
-			int			this_page_number;
-
-			if (shared->page_status[slotno] == SLRU_PAGE_EMPTY)
-				return slotno;
-			this_delta = cur_count - shared->page_lru_count[slotno];
-			if (this_delta < 0)
+			switch (car_allocate(ctl->car, mapping, &replace))
 			{
+			case CAR_ALLOCATE_OK:
 				/*
-				 * Clean up in case shared updates have caused cur_count
-				 * increments to get "lost".  We back off the page counts,
-				 * rather than trying to increase cur_count, to avoid any
-				 * question of infinite loops or failure in the presence of
-				 * wrapped-around counts.
+				 * Success.  Record that this page is empty, for the caller to
+				 * populate.
 				 */
-				shared->page_lru_count[slotno] = cur_count;
-				this_delta = 0;
-			}
-			this_page_number = shared->page_number[slotno];
-			if (this_page_number == shared->latest_page_number)
-				continue;
-			if (shared->page_status[slotno] == SLRU_PAGE_VALID)
-			{
-				if (this_delta > best_valid_delta ||
-					(this_delta == best_valid_delta &&
-					 ctl->PagePrecedes(this_page_number,
-									   best_valid_page_number)))
+				slotno = car_mapping_index(mapping);
+elog(LOG, "CAR_ALLOCATE_OK slotno %d", slotno);
+				shared->page_number[slotno] = pageno;
+				shared->page_status[slotno] = SLRU_PAGE_EMPTY;
+				shared->page_dirty[slotno] = false;
+				return slotno;
+
+			case CAR_ALLOCATE_REPLACE:
+				/* We have to evict a page to make room in the cache. */
+				slotno = car_mapping_index(replace);
+elog(LOG, "CAR_ALLOCATE_REPLACE slotno %d", slotno);
+				if (slotno == shared->latest_page_number ||
+					shared->page_status[slotno] == SLRU_PAGE_WRITE_IN_PROGRESS ||
+					shared->page_status[slotno] == SLRU_PAGE_READ_IN_PROGRESS)
 				{
-					bestvalidslot = slotno;
-					best_valid_delta = this_delta;
-					best_valid_page_number = this_page_number;
+					/*
+					 * We refuse to evict the latest page or any page where
+					 * I/O is in progress.  Tell CAR to pick on some other
+					 * page.
+					 */
+					car_complete_replace(ctl->car, replace, false);
 				}
-			}
-			else
-			{
-				if (this_delta > best_invalid_delta ||
-					(this_delta == best_invalid_delta &&
-					 ctl->PagePrecedes(this_page_number,
-									   best_invalid_page_number)))
+				else if (shared->page_dirty[slotno])
 				{
-					bestinvalidslot = slotno;
-					best_invalid_delta = this_delta;
-					best_invalid_page_number = this_page_number;
+					/*
+					 * There is only space for one excess mapping at a time.
+					 * If we created a new one above, we have to free it
+					 * before writing data back (which releases the lock while
+					 * performing I/O).  After that, we'll go around the outer
+					 * loop again.
+					 */					
+					if (new_mapping)
+					{
+						SlruMappingRemove(ctl, pageno);
+						mapping = false;		/* exit to outer loop */
+					}
+					SlruInternalWritePage(ctl, slotno, NULL);
+					car_complete_replace(ctl->car, replace, true);
+				}				
+				else
+				{
+					/*
+					 * Clean pages can be replaced immediately.  Note that the
+					 * mapping is retained.
+					 */
+					shared->page_status[slotno] = SLRU_PAGE_EMPTY;
+					car_complete_replace(ctl->car, replace, true);
 				}
+				break;
+			case CAR_ALLOCATE_FORGET:
+				/* 
+				 * CAR told us to drop an existing mapping for an object that
+				 * is not currently in our cache.
+				 */
+elog(LOG, "CAR_ALLOCATE_OK pageno %d", SlruPageNoFromCarMapping(replace));
+				SlruMappingRemove(ctl, SlruPageNoFromCarMapping(replace));
+				break;
+			case CAR_ALLOCATE_FAIL:
+				/* XXX Presumably all pages are being written back right now,
+				 * and we should probably somehow wait for I/O... */
+				elog(PANIC, "CAR_ALLOCATE_FAIL");
+				break;
 			}
 		}
-
-		/*
-		 * If all pages (except possibly the latest one) are I/O busy, we'll
-		 * have to wait for an I/O to complete and then retry.  In that
-		 * unhappy case, we choose to wait for the I/O on the least recently
-		 * used slot, on the assumption that it was likely initiated first of
-		 * all the I/Os in progress and may therefore finish first.
-		 */
-		if (best_valid_delta < 0)
-		{
-			SimpleLruWaitIO(ctl, bestinvalidslot);
-			continue;
-		}
-
-		/*
-		 * If the selected page is clean, we're set.
-		 */
-		if (!shared->page_dirty[bestvalidslot])
-			return bestvalidslot;
-
-		/*
-		 * Write the page.
-		 */
-		SlruInternalWritePage(ctl, bestvalidslot, NULL);
-
-		/*
-		 * Now loop back and try again.  This is the easiest way of dealing
-		 * with corner cases such as the victim page being re-dirtied while we
-		 * wrote it.
-		 */
+		while (mapping);
 	}
 }
 
@@ -1266,6 +1264,7 @@ restart:;
 		if (shared->page_status[slotno] == SLRU_PAGE_VALID &&
 			!shared->page_dirty[slotno])
 		{
+			SlruMappingRemove(ctl, shared->page_number[slotno]);
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			continue;
 		}
@@ -1348,6 +1347,7 @@ restart:
 		if (shared->page_status[slotno] == SLRU_PAGE_VALID &&
 			!shared->page_dirty[slotno])
 		{
+			SlruMappingRemove(ctl, shared->page_number[slotno]);
 			shared->page_status[slotno] = SLRU_PAGE_EMPTY;
 			continue;
 		}
@@ -1608,4 +1608,39 @@ SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path)
 
 	errno = save_errno;
 	return result;
+}
+
+static car_mapping *
+SlruMappingFind(SlruCtl ctl, int pageno)
+{
+	SlruMappingTableEntry *mapping;
+
+	mapping = hash_search(ctl->mapping_table, &pageno, HASH_FIND, NULL);
+	if (mapping)
+		return &mapping->mapping;
+
+	return NULL;
+}
+
+static car_mapping *
+SlruMappingAdd(SlruCtl ctl, int pageno)
+{
+	SlruMappingTableEntry *mapping;
+	bool		found PG_USED_FOR_ASSERTS_ONLY;
+
+	mapping = hash_search(ctl->mapping_table, &pageno, HASH_ENTER, &found);
+	Assert(!found);
+	car_mapping_init(&mapping->mapping);
+
+	return &mapping->mapping;
+}
+
+static void
+SlruMappingRemove(SlruCtl ctl, int pageno)
+{
+	bool		found PG_USED_FOR_ASSERTS_ONLY;
+
+	hash_search(ctl->mapping_table, &pageno, HASH_REMOVE, &found);
+
+	Assert(found);
 }
