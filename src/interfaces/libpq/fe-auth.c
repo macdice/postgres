@@ -1116,11 +1116,10 @@ pg_fe_getusername(uid_t user_id, PQExpBuffer errorMessage)
 #endif
 
 	/*
-	 * Some users are using configure --enable-thread-safety-force, so we
-	 * might as well do the locking within our library to protect getpwuid().
-	 * In fact, application developers can use getpwuid() in their application
-	 * if they use the locking call we provide, or install their own locking
-	 * function using PQregisterThreadLock().
+	 * We do the locking within our library to protect getpwuid().  Application
+	 * developers can use getpwuid() in their application if they use the
+	 * locking call we provide, or install their own locking function using
+	 * PQregisterThreadLock().
 	 */
 	pglock_thread();
 

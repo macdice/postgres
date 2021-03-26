@@ -71,9 +71,7 @@ ifeq ($(PORTNAME), win32)
 OBJS += \
 	win32.o
 
-ifeq ($(enable_thread_safety), yes)
 OBJS += pthread-win32.o
-endif
 endif
 
 

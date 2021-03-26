@@ -414,7 +414,7 @@ pqGethostbyname(const char *name,
 				struct hostent **result,
 				int *herrno)
 {
-#if defined(ENABLE_THREAD_SAFETY) && defined(HAVE_GETHOSTBYNAME_R)
+#if defined(HAVE_GETHOSTBYNAME_R)
 
 	/*
 	 * broken (well early POSIX draft) gethostbyname_r() which returns 'struct

@@ -8837,7 +8837,8 @@ int PQisthreadsafe();
 
      <para>
       Returns 1 if the <application>libpq</application> is thread-safe
-      and 0 if it is not.
+      and 0 if it is not.  Since <productname>PostgreSQL</productname> version
+      16, this function always returns 1.
      </para>
     </listitem>
    </varlistentry>
