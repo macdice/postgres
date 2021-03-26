@@ -1683,6 +1683,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	posix_fallocate
 	ppoll
 	pstat
+	pthread_barrier_wait
 	pthread_is_threaded_np
 	readlink
 	readv
@@ -1760,7 +1761,6 @@ AC_REPLACE_FUNCS(m4_normalize([
 	mkdtemp
 	pread
 	preadv
-	pthread_barrier_wait
 	pwrite
 	pwritev
 	random
