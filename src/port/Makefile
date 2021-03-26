@@ -48,6 +48,13 @@ OBJS = \
 	path.o \
 	pg_bitutils.o \
 	pg_strong_random.o \
+	pg_thread.o \
+	pg_thread_barrier.o \
+	pg_thread_cond.o \
+	pg_thread_mutex.o \
+	pg_thread_once.o \
+	pg_thread_rwlock.o \
+	pg_thread_specific.o \
 	pgcheckdir.o \
 	pgmkdirp.o \
 	pgsleep.o \

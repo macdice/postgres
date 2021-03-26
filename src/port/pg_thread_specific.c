@@ -1,0 +1,62 @@
+#include "postgres.h"
+
+#include "port/pg_thread_specific.h"
+
+#if defined(WIN32)
+#include <fibersapi.h>
+#endif
+
+int
+pg_thread_key_create(pg_thread_key_t *key, void (*destructor)(void *))
+{
+#if defined(WIN32)
+	if ((*key = FlsAlloc(destructor)) == FLS_OUT_OF_INDEXES)
+	{
+		_dosmaperr(GetLastError());
+		return errno;
+	}
+	return 0;
+#else
+	return pthread_key_create(key, destructor);
+#endif
+}
+
+int
+pg_thread_key_delete(pg_thread_key_t key)
+{
+#if defined(WIN32)
+	if (!TlsFree(key))
+	{
+		_dosmaperr(GetLastError());
+		return errno;
+	}
+	return 0;
+#else
+	return pthread_key_delete(key);
+#endif
+}
+
+int
+pg_thread_setspecific(pg_thread_key_t key, const void *value)
+{
+#if defined(WIN32)
+	if (!FlsSetValue(key, (void *) value))
+	{
+		_dosmaperr(GetLastError());
+		return errno;
+	}
+	return 0;
+#else
+	return pthread_setspecific(key, value);
+#endif
+}
+
+void *
+pg_thread_getspecific(pg_thread_key_t key)
+{
+#if defined(WIN32)
+	return FlsGetValue(key);
+#else
+	return pthread_getspecific(key);
+#endif
+}
