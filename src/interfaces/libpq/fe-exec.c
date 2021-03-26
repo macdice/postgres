@@ -3753,11 +3753,7 @@ PQisnonblocking(const PGconn *conn)
 int
 PQisthreadsafe(void)
 {
-#ifdef ENABLE_THREAD_SAFETY
 	return true;
-#else
-	return false;
-#endif
 }
 
 

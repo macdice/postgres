@@ -65,7 +65,7 @@ int
 pqGetpwuid(uid_t uid, struct passwd *resultbuf, char *buffer,
 		   size_t buflen, struct passwd **result)
 {
-#if defined(FRONTEND) && defined(ENABLE_THREAD_SAFETY) && defined(HAVE_GETPWUID_R)
+#if defined(FRONTEND) && defined(HAVE_GETPWUID_R)
 	return getpwuid_r(uid, resultbuf, buffer, buflen, result);
 #else
 	/* no getpwuid_r() available, just use getpwuid() */
@@ -90,7 +90,7 @@ pqGethostbyname(const char *name,
 				struct hostent **result,
 				int *herrno)
 {
-#if defined(FRONTEND) && defined(ENABLE_THREAD_SAFETY) && defined(HAVE_GETHOSTBYNAME_R)
+#if defined(FRONTEND) && defined(HAVE_GETHOSTBYNAME_R)
 
 	/*
 	 * broken (well early POSIX draft) gethostbyname_r() which returns 'struct
