@@ -43,6 +43,7 @@ OBJS = \
 	legacy-pqsignal.o \
 	libpq-events.o \
 	pqexpbuffer.o \
+	pthread-win32.o \
 	fe-auth.o
 
 # File shared across all SSL implementations supported.
@@ -70,9 +71,6 @@ ifeq ($(PORTNAME), win32)
 OBJS += \
 	win32.o
 
-ifeq ($(enable_thread_safety), yes)
-OBJS += pthread-win32.o
-endif
 endif
 
 

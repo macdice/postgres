@@ -2005,9 +2005,7 @@ ecpg_do_prologue(int lineno, const int compat, const int force_indicator,
 	setlocale(LC_NUMERIC, "C");
 #endif
 
-#ifdef ENABLE_THREAD_SAFETY
 	ecpg_pthreads_init();
-#endif
 
 	con = ecpg_get_connection(connection_name);
 

@@ -739,18 +739,6 @@ done
 IFS=$ac_save_IFS
 
 #
-# Enable thread-safe client libraries
-#
-AC_MSG_CHECKING([allow thread-safe client libraries])
-PGAC_ARG_BOOL(enable, thread-safety, yes, [disable thread-safety in client libraries])
-if test "$enable_thread_safety" = yes; then
-  AC_DEFINE([ENABLE_THREAD_SAFETY], 1,
-          [Define to 1 to build client libraries as thread-safe code. (--enable-thread-safety)])
-fi
-AC_MSG_RESULT([$enable_thread_safety])
-AC_SUBST(enable_thread_safety)
-
-#
 # ICU
 #
 AC_MSG_CHECKING([whether to build with ICU support])
@@ -1123,7 +1111,7 @@ dnl note: We have to use AS_IF here rather than plain if. The AC_CHECK_HEADER
 dnl invocation below is the first one in the script, and autoconf generates
 dnl additional code for that, which must not be inside the if-block. AS_IF
 dnl knows how to do that.
-AS_IF([test "$enable_thread_safety" = yes -a "$PORTNAME" != "win32"],
+AS_IF(["$PORTNAME" != "win32"],
 [ # then
 AX_PTHREAD	# set thread flags
 
@@ -1138,7 +1126,7 @@ CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
 LIBS="$LIBS $PTHREAD_LIBS"
 
 AC_CHECK_HEADER(pthread.h, [], [AC_MSG_ERROR([
-pthread.h not found;  use --disable-thread-safety to disable thread safety])])
+pthread.h not found])])
 
 AC_CHECK_FUNCS([strerror_r getpwuid_r gethostbyname_r])
 
@@ -1183,10 +1171,8 @@ AC_SEARCH_LIBS(shmget, cygipc)
 # *BSD:
 AC_SEARCH_LIBS(backtrace_symbols, execinfo)
 
-if test "$enable_thread_safety" = yes; then
-  AC_SEARCH_LIBS(gethostbyname_r, nsl)
-  AC_SEARCH_LIBS(pthread_barrier_wait, pthread)
-fi
+AC_SEARCH_LIBS(gethostbyname_r, nsl)
+AC_SEARCH_LIBS(pthread_barrier_wait, pthread)
 
 if test "$with_readline" = yes; then
   PGAC_CHECK_READLINE
@@ -1300,17 +1286,13 @@ if test "$with_ldap" = yes ; then
     LDAP_LIBS_BE="-lldap $EXTRA_LDAP_LIBS"
     # This test is carried out against libldap.
     AC_CHECK_FUNCS([ldap_initialize])
-    if test "$enable_thread_safety" = yes; then
-      # Use ldap_r for FE if available, else assume ldap is thread-safe.
-      # On some platforms ldap_r fails to link without PTHREAD_LIBS.
-      LIBS="$_LIBS"
-      AC_CHECK_LIB(ldap_r, ldap_bind,
-		   [LDAP_LIBS_FE="-lldap_r $EXTRA_LDAP_LIBS"],
-		   [LDAP_LIBS_FE="-lldap $EXTRA_LDAP_LIBS"],
-		   [$PTHREAD_CFLAGS $PTHREAD_LIBS $EXTRA_LDAP_LIBS])
-    else
-      LDAP_LIBS_FE="-lldap $EXTRA_LDAP_LIBS"
-    fi
+    # Use ldap_r for FE if available, else assume ldap is thread-safe.
+    # On some platforms ldap_r fails to link without PTHREAD_LIBS.
+    LIBS="$_LIBS"
+    AC_CHECK_LIB(ldap_r, ldap_bind,
+	   [LDAP_LIBS_FE="-lldap_r $EXTRA_LDAP_LIBS"],
+	   [LDAP_LIBS_FE="-lldap $EXTRA_LDAP_LIBS"],
+	   [$PTHREAD_CFLAGS $PTHREAD_LIBS $EXTRA_LDAP_LIBS])
   else
     AC_CHECK_LIB(wldap32, ldap_bind, [], [AC_MSG_ERROR([library 'wldap32' is required for LDAP])])
     LDAP_LIBS_FE="-lwldap32"
@@ -1763,9 +1745,9 @@ if test "x$pgac_cv_have_posix_decl_sigwait" = xyes; then
   AC_DEFINE(HAVE_POSIX_DECL_SIGWAIT, 1,
             [Define to 1 if you have a POSIX-conforming sigwait declaration.])
 else
-  # On non-Windows, libpq requires POSIX sigwait() for thread safety.
-  if test "$enable_thread_safety" = yes -a "$PORTNAME" != "win32"; then
-    AC_MSG_ERROR([POSIX-conforming sigwait is required to enable thread safety.])
+  # On non-Windows, libpq requires POSIX sigwait().
+  if test "$PORTNAME" != "win32"; then
+    AC_MSG_ERROR([POSIX-conforming sigwait is required.])
   fi
 fi
 
@@ -1830,9 +1812,7 @@ AC_REPLACE_FUNCS(m4_normalize([
 	strtof
 ]))
 
-if test "$enable_thread_safety" = yes; then
-  AC_REPLACE_FUNCS(pthread_barrier_wait)
-fi
+AC_REPLACE_FUNCS(pthread_barrier_wait)
 
 if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
 	# Cygwin and (apparently, based on test results) Mingw both
