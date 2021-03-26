@@ -723,7 +723,6 @@ with_tcl
 ICU_LIBS
 ICU_CFLAGS
 with_icu
-enable_thread_safety
 INCLUDES
 autodepend
 PKG_CONFIG_LIBDIR
@@ -845,7 +844,6 @@ with_CC
 with_llvm
 enable_depend
 enable_cassert
-enable_thread_safety
 with_icu
 with_tcl
 with_tclconfig
@@ -1531,7 +1529,6 @@ Optional Features:
   --enable-tap-tests      enable TAP tests (requires Perl and IPC::Run)
   --enable-depend         turn on automatic dependency tracking
   --enable-cassert        enable assertion checks (for debugging)
-  --disable-thread-safety disable thread-safety in client libraries
   --disable-largefile     omit support for large files
 
 Optional Packages:
@@ -7575,43 +7572,6 @@ done
 IFS=$ac_save_IFS
 
 #
-# Enable thread-safe client libraries
-#
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking allow thread-safe client libraries" >&5
-$as_echo_n "checking allow thread-safe client libraries... " >&6; }
-
-
-# Check whether --enable-thread-safety was given.
-if test "${enable_thread_safety+set}" = set; then :
-  enableval=$enable_thread_safety;
-  case $enableval in
-    yes)
-      :
-      ;;
-    no)
-      :
-      ;;
-    *)
-      as_fn_error $? "no argument expected for --enable-thread-safety option" "$LINENO" 5
-      ;;
-  esac
-
-else
-  enable_thread_safety=yes
-
-fi
-
-
-if test "$enable_thread_safety" = yes; then
-
-$as_echo "#define ENABLE_THREAD_SAFETY 1" >>confdefs.h
-
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $enable_thread_safety" >&5
-$as_echo "$enable_thread_safety" >&6; }
-
-
-#
 # ICU
 #
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with ICU support" >&5
@@ -10559,7 +10519,7 @@ fi
 done
 
 
-if test "$enable_thread_safety" = yes -a "$PORTNAME" != "win32"; then :
+if "$PORTNAME" != "win32"; then :
    # then
 
 
@@ -11219,7 +11179,7 @@ if test "x$ac_cv_header_pthread_h" = xyes; then :
 
 else
   as_fn_error $? "
-pthread.h not found;  use --disable-thread-safety to disable thread safety" "$LINENO" 5
+pthread.h not found" "$LINENO" 5
 fi
 
 
@@ -11842,64 +11802,6 @@ if test "$ac_res" != no; then :
 
 fi
 
-# Required for thread_test.c on Solaris
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing sched_yield" >&5
-$as_echo_n "checking for library containing sched_yield... " >&6; }
-if ${ac_cv_search_sched_yield+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_func_search_save_LIBS=$LIBS
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char sched_yield ();
-int
-main ()
-{
-return sched_yield ();
-  ;
-  return 0;
-}
-_ACEOF
-for ac_lib in '' rt; do
-  if test -z "$ac_lib"; then
-    ac_res="none required"
-  else
-    ac_res=-l$ac_lib
-    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
-  fi
-  if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_search_sched_yield=$ac_res
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext
-  if ${ac_cv_search_sched_yield+:} false; then :
-  break
-fi
-done
-if ${ac_cv_search_sched_yield+:} false; then :
-
-else
-  ac_cv_search_sched_yield=no
-fi
-rm conftest.$ac_ext
-LIBS=$ac_func_search_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_sched_yield" >&5
-$as_echo "$ac_cv_search_sched_yield" >&6; }
-ac_res=$ac_cv_search_sched_yield
-if test "$ac_res" != no; then :
-  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
-
-fi
-
-# Required for thread_test.c on Solaris 2.5:
 # Other ports use it too (HP-UX) so test unconditionally
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing gethostbyname_r" >&5
 $as_echo_n "checking for library containing gethostbyname_r... " >&6; }
@@ -12071,9 +11973,8 @@ if test "$ac_res" != no; then :
 
 fi
 
-
-if test "$enable_thread_safety" = yes; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing pthread_barrier_wait" >&5
+# macOS
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing pthread_barrier_wait" >&5
 $as_echo_n "checking for library containing pthread_barrier_wait... " >&6; }
 if ${ac_cv_search_pthread_barrier_wait+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -12129,7 +12030,6 @@ if test "$ac_res" != no; then :
 
 fi
 
-fi
 
 if test "$with_readline" = yes; then
 
@@ -12928,9 +12828,8 @@ else
 fi
 
     LDAP_LIBS_BE="-lldap $EXTRA_LDAP_LIBS"
-    if test "$enable_thread_safety" = yes; then
-      # on some platforms ldap_r fails to link without PTHREAD_LIBS
-      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ldap_simple_bind in -lldap_r" >&5
+    # on some platforms ldap_r fails to link without PTHREAD_LIBS
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ldap_simple_bind in -lldap_r" >&5
 $as_echo_n "checking for ldap_simple_bind in -lldap_r... " >&6; }
 if ${ac_cv_lib_ldap_r_ldap_simple_bind+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -12977,10 +12876,7 @@ else
   as_fn_error $? "library 'ldap_r' is required for LDAP" "$LINENO" 5
 fi
 
-      LDAP_LIBS_FE="-lldap_r $EXTRA_LDAP_LIBS"
-    else
-      LDAP_LIBS_FE="-lldap $EXTRA_LDAP_LIBS"
-    fi
+    LDAP_LIBS_FE="-lldap_r $EXTRA_LDAP_LIBS"
     for ac_func in ldap_initialize
 do :
   ac_fn_c_check_func "$LINENO" "ldap_initialize" "ac_cv_func_ldap_initialize"
@@ -16159,6 +16055,19 @@ esac
 
 fi
 
+ac_fn_c_check_func "$LINENO" "pthread_barrier_wait" "ac_cv_func_pthread_barrier_wait"
+if test "x$ac_cv_func_pthread_barrier_wait" = xyes; then :
+  $as_echo "#define HAVE_PTHREAD_BARRIER_WAIT 1" >>confdefs.h
+
+else
+  case " $LIBOBJS " in
+  *" pthread_barrier_wait.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS pthread_barrier_wait.$ac_objext"
+ ;;
+esac
+
+fi
+
 ac_fn_c_check_func "$LINENO" "pwrite" "ac_cv_func_pwrite"
 if test "x$ac_cv_func_pwrite" = xyes; then :
   $as_echo "#define HAVE_PWRITE 1" >>confdefs.h
@@ -16264,23 +16173,6 @@ esac
 fi
 
 
-
-if test "$enable_thread_safety" = yes; then
-  ac_fn_c_check_func "$LINENO" "pthread_barrier_wait" "ac_cv_func_pthread_barrier_wait"
-if test "x$ac_cv_func_pthread_barrier_wait" = xyes; then :
-  $as_echo "#define HAVE_PTHREAD_BARRIER_WAIT 1" >>confdefs.h
-
-else
-  case " $LIBOBJS " in
-  *" pthread_barrier_wait.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS pthread_barrier_wait.$ac_objext"
- ;;
-esac
-
-fi
-
-
-fi
 
 if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
 	# Cygwin and (apparently, based on test results) Mingw both
@@ -19286,7 +19178,6 @@ fi
 # We have to run the thread test near the end so we have all our symbols
 # defined.  Cross compiling throws a warning.
 #
-if test "$enable_thread_safety" = yes; then
 if test "$PORTNAME" != "win32"
 then
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking thread safety of required library functions" >&5
@@ -19296,40 +19187,11 @@ _CFLAGS="$CFLAGS"
 _LIBS="$LIBS"
 CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
 LIBS="$LIBS $PTHREAD_LIBS"
-if test "$cross_compiling" = yes; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: maybe" >&5
-$as_echo "maybe" >&6; }
-  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING:
-*** Skipping thread test program because of cross-compile build.
-" >&5
-$as_echo "$as_me: WARNING:
-*** Skipping thread test program because of cross-compile build.
-" >&2;}
-else
-  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-#include "$srcdir/config/thread_test.c"
-_ACEOF
-if ac_fn_c_try_run "$LINENO"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-  as_fn_error $? "thread test program failed
-This platform is not thread-safe.  Check the file 'config.log' for the
-exact reason, or use --disable-thread-safety to disable thread safety." "$LINENO" 5
-fi
-rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
-  conftest.$ac_objext conftest.beam conftest.$ac_ext
-fi
-
 CFLAGS="$_CFLAGS"
 LIBS="$_LIBS"
 else
 { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: *** skipping thread test on Win32" >&5
 $as_echo "$as_me: WARNING: *** skipping thread test on Win32" >&2;}
-fi
 fi
 
 # If compiler will take -Wl,--as-needed (or various platform-specific

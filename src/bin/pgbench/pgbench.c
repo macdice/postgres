@@ -135,7 +135,7 @@ typedef struct socket_set
 	EnterSynchronizationBarrier((barrier), \
 								SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY)
 #define THREAD_BARRIER_DESTROY(barrier)
-#elif defined(ENABLE_THREAD_SAFETY)
+#else
 /* Use POSIX threads */
 #include "port/pg_pthread.h"
 #define THREAD_T pthread_t
@@ -151,16 +151,6 @@ typedef struct socket_set
 	pthread_barrier_init((barrier), NULL, (n))
 #define THREAD_BARRIER_WAIT(barrier) pthread_barrier_wait((barrier))
 #define THREAD_BARRIER_DESTROY(barrier) pthread_barrier_destroy((barrier))
-#else
-/* No threads implementation, use none (-j 1) */
-#define THREAD_T void *
-#define THREAD_FUNC_RETURN_TYPE void *
-#define THREAD_FUNC_RETURN return NULL
-#define THREAD_FUNC_CC
-#define THREAD_BARRIER_T int
-#define THREAD_BARRIER_INIT(barrier, n) (*(barrier) = 0)
-#define THREAD_BARRIER_WAIT(barrier)
-#define THREAD_BARRIER_DESTROY(barrier)
 #endif
 
 
@@ -5869,13 +5859,6 @@ main(int argc, char **argv)
 					pg_log_fatal("invalid number of threads: \"%s\"", optarg);
 					exit(1);
 				}
-#ifndef ENABLE_THREAD_SAFETY
-				if (nthreads != 1)
-				{
-					pg_log_fatal("threads are not supported on this platform; use -j1");
-					exit(1);
-				}
-#endif							/* !ENABLE_THREAD_SAFETY */
 				break;
 			case 'C':
 				benchmarking_option_set = true;
@@ -6439,7 +6422,6 @@ main(int argc, char **argv)
 	if (errno != 0)
 		pg_log_fatal("could not initialize barrier: %m");
 
-#ifdef ENABLE_THREAD_SAFETY
 	/* start all threads but thread 0 which is executed directly later */
 	for (i = 1; i < nthreads; i++)
 	{
@@ -6454,9 +6436,6 @@ main(int argc, char **argv)
 			exit(1);
 		}
 	}
-#else
-	Assert(nthreads == 1);
-#endif							/* ENABLE_THREAD_SAFETY */
 
 	/* compute when to stop */
 	threads[0].create_time = pg_time_now();
@@ -6474,10 +6453,6 @@ main(int argc, char **argv)
 	{
 		TState	   *thread = &threads[i];
 
-#ifdef ENABLE_THREAD_SAFETY
-		if (i > 0)
-			THREAD_JOIN(thread->thread);
-#endif							/* ENABLE_THREAD_SAFETY */
 
 		for (int j = 0; j < thread->nstate; j++)
 			if (thread->state[j].state == CSTATE_ABORTED)

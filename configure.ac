@@ -730,18 +730,6 @@ done
 IFS=$ac_save_IFS
 
 #
-# Enable thread-safe client libraries
-#
-AC_MSG_CHECKING([allow thread-safe client libraries])
-PGAC_ARG_BOOL(enable, thread-safety, yes, [disable thread-safety in client libraries])
-if test "$enable_thread_safety" = yes; then
-  AC_DEFINE([ENABLE_THREAD_SAFETY], 1,
-          [Define to 1 to build client libraries as thread-safe code. (--enable-thread-safety)])
-fi
-AC_MSG_RESULT([$enable_thread_safety])
-AC_SUBST(enable_thread_safety)
-
-#
 # ICU
 #
 AC_MSG_CHECKING([whether to build with ICU support])
@@ -1114,7 +1102,7 @@ dnl note: We have to use AS_IF here rather than plain if. The AC_CHECK_HEADER
 dnl invocation below is the first one in the script, and autoconf generates
 dnl additional code for that, which must not be inside the if-block. AS_IF
 dnl knows how to do that.
-AS_IF([test "$enable_thread_safety" = yes -a "$PORTNAME" != "win32"],
+AS_IF(["$PORTNAME" != "win32"],
 [ # then
 AX_PTHREAD	# set thread flags
 
@@ -1130,7 +1118,7 @@ CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
 LIBS="$LIBS $PTHREAD_LIBS"
 
 AC_CHECK_HEADER(pthread.h, [], [AC_MSG_ERROR([
-pthread.h not found;  use --disable-thread-safety to disable thread safety])])
+pthread.h not found])])
 
 AC_CHECK_FUNCS([strerror_r getpwuid_r gethostbyname_r])
 
@@ -1170,19 +1158,14 @@ AC_SEARCH_LIBS(shm_unlink, rt)
 AC_SEARCH_LIBS(clock_gettime, [rt posix4])
 # Solaris:
 AC_SEARCH_LIBS(fdatasync, [rt posix4])
-# Required for thread_test.c on Solaris
-AC_SEARCH_LIBS(sched_yield, rt)
-# Required for thread_test.c on Solaris 2.5:
 # Other ports use it too (HP-UX) so test unconditionally
 AC_SEARCH_LIBS(gethostbyname_r, nsl)
 # Cygwin:
 AC_SEARCH_LIBS(shmget, cygipc)
 # *BSD:
 AC_SEARCH_LIBS(backtrace_symbols, execinfo)
-
-if test "$enable_thread_safety" = yes; then
-  AC_SEARCH_LIBS(pthread_barrier_wait, pthread)
-fi
+# macOS
+AC_SEARCH_LIBS(pthread_barrier_wait, pthread)
 
 if test "$with_readline" = yes; then
   PGAC_CHECK_READLINE
@@ -1293,15 +1276,11 @@ if test "$with_ldap" = yes ; then
 		 [AC_MSG_ERROR([library 'ldap' is required for LDAP])],
 		 [$EXTRA_LDAP_LIBS])
     LDAP_LIBS_BE="-lldap $EXTRA_LDAP_LIBS"
-    if test "$enable_thread_safety" = yes; then
-      # on some platforms ldap_r fails to link without PTHREAD_LIBS
-      AC_CHECK_LIB(ldap_r, ldap_simple_bind, [],
+    # on some platforms ldap_r fails to link without PTHREAD_LIBS
+    AC_CHECK_LIB(ldap_r, ldap_simple_bind, [],
 		   [AC_MSG_ERROR([library 'ldap_r' is required for LDAP])],
 		   [$PTHREAD_CFLAGS $PTHREAD_LIBS $EXTRA_LDAP_LIBS])
-      LDAP_LIBS_FE="-lldap_r $EXTRA_LDAP_LIBS"
-    else
-      LDAP_LIBS_FE="-lldap $EXTRA_LDAP_LIBS"
-    fi
+    LDAP_LIBS_FE="-lldap_r $EXTRA_LDAP_LIBS"
     AC_CHECK_FUNCS([ldap_initialize])
   else
     AC_CHECK_LIB(wldap32, ldap_bind, [], [AC_MSG_ERROR([library 'wldap32' is required for LDAP])])
@@ -1781,6 +1760,7 @@ AC_REPLACE_FUNCS(m4_normalize([
 	mkdtemp
 	pread
 	preadv
+	pthread_barrier_wait
 	pwrite
 	pwritev
 	random
@@ -1790,10 +1770,6 @@ AC_REPLACE_FUNCS(m4_normalize([
 	strnlen
 	strtof
 ]))
-
-if test "$enable_thread_safety" = yes; then
-  AC_REPLACE_FUNCS(pthread_barrier_wait)
-fi
 
 if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
 	# Cygwin and (apparently, based on test results) Mingw both
@@ -2324,7 +2300,6 @@ fi
 # We have to run the thread test near the end so we have all our symbols
 # defined.  Cross compiling throws a warning.
 #
-if test "$enable_thread_safety" = yes; then
 if test "$PORTNAME" != "win32"
 then
 AC_MSG_CHECKING([thread safety of required library functions])
@@ -2333,22 +2308,10 @@ _CFLAGS="$CFLAGS"
 _LIBS="$LIBS"
 CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
 LIBS="$LIBS $PTHREAD_LIBS"
-AC_RUN_IFELSE(
-  [AC_LANG_SOURCE([[#include "$srcdir/config/thread_test.c"]])],
-  [AC_MSG_RESULT(yes)],
-  [AC_MSG_RESULT(no)
-  AC_MSG_ERROR([thread test program failed
-This platform is not thread-safe.  Check the file 'config.log' for the
-exact reason, or use --disable-thread-safety to disable thread safety.])],
-  [AC_MSG_RESULT(maybe)
-  AC_MSG_WARN([
-*** Skipping thread test program because of cross-compile build.
-])])
 CFLAGS="$_CFLAGS"
 LIBS="$_LIBS"
 else
 AC_MSG_WARN([*** skipping thread test on Win32])
-fi
 fi
 
 # If compiler will take -Wl,--as-needed (or various platform-specific
