@@ -10,12 +10,13 @@
 #include <signal.h>
 
 #if defined(HAVE_LINUX_FUTEX_H) || \
+	defined(HAVE_SYS_FUTEX_H) || \
 	defined(HAVE_SYS_UMTX_H)
 
 #define HAVE_PG_FUTEX_T
 
-#if defined(HAVE_LINUX_FUTEX_H)
-/* Linux's futexes use uint32_t, even on 64 bit systems. */
+#if defined(HAVE_LINUX_FUTEX_H) || defined(HAVE_SYS_FUTEX_H)
+/* Linux and OpenBSD's futexes use uint32_t, even on 64 bit systems. */
 typedef uint32 pg_futex_t;
 #define SIZEOF_PG_FUTEX_T 4
 #elif defined(HAVE_SYS_UMTX_H)

@@ -1360,6 +1360,7 @@ AC_CHECK_HEADERS(m4_normalize([
 	poll.h
 	sys/epoll.h
 	sys/event.h
+	sys/futex.h
 	sys/ipc.h
 	sys/prctl.h
 	sys/procctl.h

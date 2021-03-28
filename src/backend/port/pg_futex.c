@@ -35,6 +35,28 @@ pg_futex_wake(volatile pg_atomic_futex_t *fut, int nwaiters)
 
 #endif
 
+#if defined(HAVE_SYS_FUTEX_H)
+
+/* OpenBSD 6.2+ */
+
+#include <sys/futex.h>
+
+int
+pg_futex_wait(volatile pg_atomic_futex_t *word,
+			  pg_futex_t value,
+			  struct timespec *timeout)
+{
+	return futex(fut, FUTEX_WAIT, value, timeout, 0);
+}
+
+int
+pg_futex_wake(volatile pg_atomic_futex_t *fut, int nwaiters)
+{
+	return futex(fut, FUTEX_WAKE, nwaiters, NULL, 0);
+}
+
+#endif
+
 #if defined(HAVE_SYS_UMTX_H)
 
 #include <sys/types.h>
