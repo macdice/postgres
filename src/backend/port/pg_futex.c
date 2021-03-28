@@ -34,3 +34,24 @@ pg_futex_wake(volatile pg_atomic_futex_t *fut, int nwaiters)
 }
 
 #endif
+
+#if defined(HAVE_SYS_UMTX_H)
+
+#include <sys/types.h>
+#include <sys/umtx.h>
+
+int
+pg_futex_wait(volatile pg_atomic_futex_t *fut,
+			 pg_futex_t value,
+			 struct timespec *timeout)
+{
+	return _umtx_op((void *) fut, UMTX_OP_WAIT, value, 0, timeout);
+}
+
+int
+pg_futex_wake(volatile pg_atomic_futex_t *fut, int nwaiters)
+{
+	return _umtx_op((void *) fut, UMTX_OP_WAKE, nwaiters, 0, 0);
+}
+
+#endif
