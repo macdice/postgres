@@ -85,6 +85,13 @@
 #include <sys/signalfd.h>
 #endif
 
+/* Value used to advertise how to wake up a sleeping process. */
+enum MaybeSleeping {
+	NOT_SLEEPING,
+	SLEEPING_ON_SIGNAL,
+	SLEEPING_ON_FUTEX
+};
+
 /* typedef in latch.h */
 struct WaitEventSet
 {
@@ -112,6 +119,8 @@ struct WaitEventSet
 	 * instead of returning.
 	 */
 	bool		exit_on_postmaster_death;
+
+	bool		has_sockets;
 
 #if defined(WAIT_USE_EPOLL)
 	int			epoll_fd;
@@ -338,7 +347,7 @@ void
 InitLatch(Latch *latch)
 {
 	latch->is_set = false;
-	latch->maybe_sleeping = false;
+	latch->maybe_sleeping = NOT_SLEEPING;
 	latch->owner_pid = MyProcPid;
 	latch->is_shared = false;
 
@@ -386,7 +395,7 @@ InitSharedLatch(Latch *latch)
 #endif
 
 	latch->is_set = false;
-	latch->maybe_sleeping = false;
+	latch->maybe_sleeping = NOT_SLEEPING;
 	latch->owner_pid = 0;
 	latch->is_shared = true;
 }
@@ -571,6 +580,7 @@ SetLatch(Latch *latch)
 #else
 	HANDLE		handle;
 #endif
+	int			maybe_sleeping;
 
 	/*
 	 * The memory barrier has to be placed here to ensure that any flag
@@ -586,7 +596,8 @@ SetLatch(Latch *latch)
 	latch->is_set = true;
 
 	pg_memory_barrier();
-	if (!latch->maybe_sleeping)
+	maybe_sleeping = latch->maybe_sleeping;
+	if (maybe_sleeping == NOT_SLEEPING)
 		return;
 
 #ifndef WIN32
@@ -616,6 +627,14 @@ SetLatch(Latch *latch)
 	owner_pid = latch->owner_pid;
 	if (owner_pid == 0)
 		return;
+#ifdef HAVE_PG_FUTEX_T
+	else if (maybe_sleeping == SLEEPING_ON_FUTEX)
+	{
+		pg_atomic_fetch_add_futex(&latch->futex, 1);
+		if (owner_pid != MyProcPid)
+			pg_futex_wake(&latch->futex, INT_MAX);
+	}
+#endif
 	else if (owner_pid == MyProcPid)
 	{
 #if defined(WAIT_USE_POLL)
@@ -661,7 +680,7 @@ ResetLatch(Latch *latch)
 {
 	/* Only the owner should reset the latch */
 	Assert(latch->owner_pid == MyProcPid);
-	Assert(latch->maybe_sleeping == false);
+	Assert(latch->maybe_sleeping == NOT_SLEEPING);
 
 	latch->is_set = false;
 
@@ -732,6 +751,7 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	set->latch = NULL;
 	set->nevents_space = nevents;
 	set->exit_on_postmaster_death = false;
+	set->has_sockets = false;
 
 #if defined(WAIT_USE_EPOLL)
 	if (!AcquireExternalFD())
@@ -891,6 +911,9 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	/* waiting for socket readiness without a socket indicates a bug */
 	if (fd == PGINVALID_SOCKET && (events & WL_SOCKET_MASK))
 		elog(ERROR, "cannot wait on socket event without a socket");
+
+	if (events & WL_SOCKET_MASK)
+		set->has_sockets = true;
 
 	event = &set->events[set->nevents];
 	event->pos = set->nevents++;
@@ -1369,7 +1392,70 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 		if (set->latch && !set->latch->is_set)
 		{
 			/* about to sleep on a latch */
-			set->latch->maybe_sleeping = true;
+#ifdef HAVE_PG_FUTEX_T
+			/* Can we use a faster wakeup mechanism without signals? */
+			if (!set->has_sockets)
+			{
+				pg_futex_t futex;
+
+				futex = pg_atomic_read_futex(&set->latch->futex);
+				set->latch->maybe_sleeping = SLEEPING_ON_FUTEX;
+				pg_prepare_futex(&set->latch->futex);
+				pg_memory_barrier();
+
+				/*
+				 * Before we sleep, we have to recheck in case it was set
+				 * before the "prepare" step.
+				 */
+				if (!set->latch->is_set)
+				{
+					struct timespec ts;
+					struct timespec *use_ts;
+
+					if (timeout >= 0)
+					{
+						ts.tv_sec = timeout / 1000;
+						ts.tv_nsec = (timeout % 1000) * 1000000;
+						use_ts = &ts;
+					}
+					else
+						use_ts = NULL;
+
+					if (pg_futex_wait(&set->latch->futex, futex, use_ts) < 0)
+					{
+						pg_finish_futex();
+						if (errno == ETIMEDOUT)
+						{
+							set->latch->maybe_sleeping = NOT_SLEEPING;
+							break;
+						}
+						if (errno != EAGAIN && errno != EINTR)
+							elog(ERROR, "could not wait on futex: %m");
+					}
+					pg_finish_futex();
+					/* XXX only do this if PM death is in the set... */
+					if (!PostmasterIsAlive())
+					{
+						if (set->exit_on_postmaster_death)
+							proc_exit(1);
+						occurred_events->fd = PGINVALID_SOCKET;
+						occurred_events->events = WL_POSTMASTER_DEATH;
+						occurred_events++;
+						returned_events++;
+						break;
+					}
+				}
+			}
+			else
+#endif
+			{
+				/*
+				 * We have to use signals for wakeups, because we're
+				 * multiplexing with other kinds of events (or we're on a
+				 * platform without a more efficient wakeup mechanism).
+				 */
+				set->latch->maybe_sleeping = SLEEPING_ON_SIGNAL;
+			}
 			pg_memory_barrier();
 			/* and recheck */
 		}
@@ -1385,10 +1471,16 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 			returned_events++;
 
 			/* could have been set above */
-			set->latch->maybe_sleeping = false;
+			set->latch->maybe_sleeping = NOT_SLEEPING;
 
 			break;
 		}
+
+#ifdef HAVE_PG_FUTEX_T
+		/* XXX yeah this is terrible, need to restructure */
+		if (!set->has_sockets)
+			goto skip;
+#endif
 
 		/*
 		 * Wait for events using the readiness primitive chosen at the top of
@@ -1400,8 +1492,8 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 
 		if (set->latch)
 		{
-			Assert(set->latch->maybe_sleeping);
-			set->latch->maybe_sleeping = false;
+			Assert(set->latch->maybe_sleeping != NOT_SLEEPING);
+			set->latch->maybe_sleeping = NOT_SLEEPING;
 		}
 
 		if (rc == -1)
@@ -1409,6 +1501,7 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 		else
 			returned_events = rc;
 
+skip:
 		/* If we're not done, update cur_timeout for next iteration */
 		if (returned_events == 0 && timeout >= 0)
 		{
