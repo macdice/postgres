@@ -19,13 +19,19 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "port/pg_futex.h"
 #include "portability/instr_time.h"
 #include "storage/condition_variable.h"
 #include "storage/ipc.h"
+#include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/proclist.h"
 #include "storage/spin.h"
 #include "utils/memutils.h"
+
+#ifdef HAVE_PG_FUTEX_T
+static pg_futex_t futex_observed;
+#endif
 
 /* Initially, we are not prepared to sleep on any condition variable. */
 static ConditionVariable *cv_sleep_target = NULL;
@@ -36,8 +42,13 @@ static ConditionVariable *cv_sleep_target = NULL;
 void
 ConditionVariableInit(ConditionVariable *cv)
 {
+#ifdef HAVE_PG_FUTEX_T
+	pg_atomic_init_u32(&cv->nwaiters, 0);
+	pg_atomic_init_futex(&cv->futex, 0);
+#else
 	SpinLockInit(&cv->mutex);
 	proclist_init(&cv->wakeup);
+#endif
 }
 
 /*
@@ -57,6 +68,14 @@ ConditionVariableInit(ConditionVariable *cv)
 void
 ConditionVariablePrepareToSleep(ConditionVariable *cv)
 {
+#ifdef HAVE_PG_FUTEX_T
+	if (cv_sleep_target != NULL)
+		ConditionVariableCancelSleep();
+	futex_observed = pg_atomic_read_futex(&cv->futex);
+	pg_futex_set_interruptible(&cv->futex, PG_FUTEX_INTERRUPT_OP_INC);
+	cv_sleep_target = cv;
+	pg_atomic_fetch_add_u32(&cv->nwaiters, 1);
+#else
 	int			pgprocno = MyProc->pgprocno;
 
 	/*
@@ -77,6 +96,7 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 	SpinLockAcquire(&cv->mutex);
 	proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
 	SpinLockRelease(&cv->mutex);
+#endif
 }
 
 /*
@@ -115,7 +135,9 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 	long		cur_timeout = -1;
 	instr_time	start_time;
 	instr_time	cur_time;
+#ifndef HAVE_PG_FUTEX_T
 	int			wait_events;
+#endif
 
 	/*
 	 * If the caller didn't prepare to sleep explicitly, then do so now and
@@ -147,15 +169,56 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 		INSTR_TIME_SET_CURRENT(start_time);
 		Assert(timeout >= 0 && timeout <= INT_MAX);
 		cur_timeout = timeout;
-		wait_events = WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH;
 	}
+#ifndef HAVE_PG_FUTEX_T
+	if (timeout >= 0)
+		wait_events = WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH;
 	else
 		wait_events = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH;
+#endif
 
 	while (true)
 	{
 		bool		done = false;
 
+#ifdef HAVE_PG_FUTEX_T
+		struct timespec ts;
+		struct timespec *use_ts;
+
+		if (cur_timeout == -1)
+			use_ts = NULL;
+		else
+		{
+			ts.tv_sec = cur_timeout / 1000;
+			ts.tv_nsec = (cur_timeout % 1000) * 1000000;
+			use_ts = &ts;
+		}
+
+		if (pg_futex_wait(&cv->futex, futex_observed, use_ts) < 0)
+		{
+			if (errno == ETIMEDOUT)
+				return true;		/* timeout reached */
+			if (errno == EAGAIN)
+			{
+				/* We might have been woken by the postmaster death signal. */
+				if (!PostmasterIsAlive())	/* XXX refactor all this!*/
+					proc_exit(1);
+				futex_observed = pg_atomic_read_futex(&cv->futex);
+				return false;		/* already woken before sleeping */
+			}
+			if (errno != EINTR)
+				elog(ERROR, "could not sleep on wait futex: %m");
+			/* if EINTR, we'll loop again after processing interrupts */
+		}
+		else
+		{
+			/* We might have been woken by the postmaster death signal. */
+			if (!PostmasterIsAlive())
+				proc_exit(1);
+			futex_observed = pg_atomic_read_futex(&cv->futex);
+			return false;			/* woken up, possibly spuriously */
+		}
+#else
 		/*
 		 * Wait for latch to be set.  (If we're awakened for some other
 		 * reason, the code below will cope anyway.)
@@ -164,6 +227,7 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 
 		/* Reset latch before examining the state of the wait list. */
 		ResetLatch(MyLatch);
+
 
 		/*
 		 * If this process has been taken out of the wait list, then we know
@@ -187,6 +251,7 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 			proclist_push_tail(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
 		}
 		SpinLockRelease(&cv->mutex);
+#endif
 
 		/*
 		 * Check for interrupts, and return spuriously if that caused the
@@ -227,6 +292,11 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 void
 ConditionVariableCancelSleep(void)
 {
+#ifdef HAVE_PG_FUTEX_T
+	pg_futex_clear_interruptible();
+	if (cv_sleep_target)
+		pg_atomic_fetch_sub_u32(&cv_sleep_target->nwaiters, 1);
+#else
 	ConditionVariable *cv = cv_sleep_target;
 	bool		signaled = false;
 
@@ -247,12 +317,13 @@ ConditionVariableCancelSleep(void)
 	 */
 	if (signaled)
 		ConditionVariableSignal(cv);
+#endif
 
 	cv_sleep_target = NULL;
 }
 
 /*
- * Wake up the oldest process sleeping on the CV, if there is any.
+ * Wake up one process sleeping on the CV, if there is any.
  *
  * Note: it's difficult to tell whether this has any real effect: we know
  * whether we took an entry off the list, but the entry might only be a
@@ -262,6 +333,14 @@ ConditionVariableCancelSleep(void)
 void
 ConditionVariableSignal(ConditionVariable *cv)
 {
+#ifdef HAVE_PG_FUTEX_T
+	pg_memory_barrier();
+	if (pg_atomic_read_u32(&cv->nwaiters) > 0)
+	{
+		pg_atomic_fetch_add_futex(&cv->futex, 1);
+		pg_futex_wake(&cv->futex, 1);
+	}
+#else
 	PGPROC	   *proc = NULL;
 
 	/* Remove the first process from the wakeup queue (if any). */
@@ -273,6 +352,7 @@ ConditionVariableSignal(ConditionVariable *cv)
 	/* If we found someone sleeping, set their latch to wake them up. */
 	if (proc != NULL)
 		SetLatch(&proc->procLatch);
+#endif
 }
 
 /*
@@ -285,6 +365,14 @@ ConditionVariableSignal(ConditionVariable *cv)
 void
 ConditionVariableBroadcast(ConditionVariable *cv)
 {
+#ifdef HAVE_PG_FUTEX_T
+	pg_memory_barrier();
+	if (pg_atomic_read_u32(&cv->nwaiters) > 0)
+	{
+		pg_atomic_fetch_add_futex(&cv->futex, 1);
+		pg_futex_wake(&cv->futex, INT_MAX);
+	}
+#else
 	int			pgprocno = MyProc->pgprocno;
 	PGPROC	   *proc = NULL;
 	bool		have_sentinel = false;
@@ -361,4 +449,5 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 		if (proc != NULL && proc != MyProc)
 			SetLatch(&proc->procLatch);
 	}
+#endif
 }
