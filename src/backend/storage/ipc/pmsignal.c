@@ -22,6 +22,7 @@
 #endif
 
 #include "miscadmin.h"
+#include "port/pg_futex.h"
 #include "postmaster/postmaster.h"
 #include "replication/walsender.h"
 #include "storage/pmsignal.h"
@@ -91,6 +92,10 @@ static void
 postmaster_death_handler(int signo)
 {
 	postmaster_possibly_dead = true;
+
+#ifdef HAVE_PG_FUTEX_T
+	pg_signal_handler_futex_interrupt();
+#endif
 }
 
 /*

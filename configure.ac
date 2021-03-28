@@ -1355,6 +1355,7 @@ AC_CHECK_HEADERS(m4_normalize([
 	getopt.h
 	ifaddrs.h
 	langinfo.h
+	linux/futex.h
 	mbarrier.h
 	poll.h
 	sys/epoll.h
