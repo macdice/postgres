@@ -24,6 +24,7 @@ include $(top_builddir)/src/Makefile.global
 OBJS = \
 	$(TAS) \
 	atomics.o \
+	pg_futex.o \
 	pg_sema.o \
 	pg_shmem.o
 

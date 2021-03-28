@@ -19,9 +19,11 @@
 
 #include "access/parallel.h"
 #include "port/pg_bitutils.h"
+#include "port/pg_futex.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_futex.h"
 #include "replication/walsender.h"
 #include "storage/condition_variable.h"
 #include "storage/ipc.h"
@@ -680,6 +682,10 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
 
 	SetLatch(MyLatch);
+
+#ifdef HAVE_PG_FUTEX_T
+	pg_signal_handler_futex_interrupt();
+#endif
 
 	errno = save_errno;
 }
