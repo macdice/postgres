@@ -22,6 +22,17 @@
 #ifndef CONDITION_VARIABLE_H
 #define CONDITION_VARIABLE_H
 
+#include "port/pg_futex.h"
+
+#ifdef HAVE_PG_FUTEX_T
+
+typedef struct
+{
+	volatile pg_atomic_futex_t word;
+} ConditionVariable;
+
+#else
+
 #include "storage/proclist_types.h"
 #include "storage/spin.h"
 
@@ -30,6 +41,8 @@ typedef struct
 	slock_t		mutex;			/* spinlock protecting the wakeup list */
 	proclist_head wakeup;		/* list of wake-able processes */
 } ConditionVariable;
+
+#endif
 
 /*
  * Pad a condition variable to a power-of-two size so that an array of

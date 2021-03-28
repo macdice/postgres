@@ -17,6 +17,7 @@
 #include "access/clog.h"
 #include "access/xlogdefs.h"
 #include "lib/ilist.h"
+#include "port/pg_futex.h"
 #include "storage/latch.h"
 #include "storage/lock.h"
 #include "storage/pg_sema.h"
@@ -171,8 +172,10 @@ struct PGPROC
 	uint8		lwWaitMode;		/* lwlock mode being waited for */
 	proclist_node lwWaitLink;	/* position in LW lock wait list */
 
+#ifndef HAVE_PG_FUTEX_T
 	/* Support for condition variables. */
 	proclist_node cvWaitLink;	/* position in CV wait list */
+#endif
 
 	/* Info about lock the process is currently waiting for, if any. */
 	/* waitLock and waitProcLock are NULL if not currently waiting. */
