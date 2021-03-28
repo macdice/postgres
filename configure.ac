@@ -1371,6 +1371,7 @@ AC_CHECK_HEADERS(m4_normalize([
 	sys/sockio.h
 	sys/tas.h
 	sys/uio.h
+	sys/umtx.h
 	sys/un.h
 	termios.h
 	ucred.h

@@ -9,18 +9,32 @@
 
 #include <signal.h>
 
-#if defined(HAVE_LINUX_FUTEX_H)
+#if defined(HAVE_LINUX_FUTEX_H) || \
+	defined(HAVE_SYS_UMTX_H)
 
 #define HAVE_PG_FUTEX_T
 
+#if defined(HAVE_LINUX_FUTEX_H)
 /* Linux's futexes use uint32_t, even on 64 bit systems. */
 typedef uint32 pg_futex_t;
 #define SIZEOF_PG_FUTEX_T 4
+#elif defined(HAVE_SYS_UMTX_H)
+/* FreeBSD's user space mutexes use long. */
+typedef long pg_futex_t;
+#define SIZEOF_PG_FUTEX_T SIZEOF_LONG
+#endif
 
+#if SIZEOF_PG_FUTEX_T == 4
 typedef pg_atomic_uint32 pg_atomic_futex_t;
 #define pg_atomic_init_futex pg_atomic_init_u32
 #define pg_atomic_read_futex pg_atomic_read_u32
 #define pg_atomic_fetch_add_futex pg_atomic_fetch_add_u32
+#else
+typedef pg_atomic_uint64 pg_atomic_futex_t;
+#define pg_atomic_init_futex pg_atomic_init_u64
+#define pg_atomic_read_futex pg_atomic_read_u64
+#define pg_atomic_fetch_add_futex pg_atomic_fetch_add_u64
+#endif
 
 #endif
 
