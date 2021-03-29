@@ -4430,42 +4430,6 @@ ReadRecord(XLogReaderState *xlogreader, int emode, bool fetching_ckpt)
 
 		if (record)
 		{
-			if (readSource == XLOG_FROM_STREAM)
-			{
-				/*
-				 * In streaming mode, we allow ourselves to read records that
-				 * have been written but not yet flushed, for increased
-				 * concurrency.  We still have to wait until the record has
-				 * been flushed before allowing it to be replayed.
-				 *
-				 * XXX This logic preserves the traditional behaviour where we
-				 * didn't replay records until the walreceiver flushed them,
-				 * except that now we read and decode them sooner.  Could it
-				 * be relaxed even more?  Isn't the real data integrity
-				 * requirement for _writeback_ to stall until the WAL is
-				 * durable, not recovery, just as on a primary?
-				 *
-				 * XXX Are there any circumstances in which this should be
-				 * interruptible?
-				 *
-				 * XXX We don't replicate the XLogReceiptTime etc logic from
-				 * WaitForWALToBecomeAvailable() here...  probably need to
-				 * refactor/share code?
-				 */
-				if (EndRecPtr < flushedUpto)
-				{
-					while (EndRecPtr < (flushedUpto = GetWalRcvFlushRecPtr(NULL, NULL)))
-					{
-						(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
-										 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
-										 -1,
-										 WAIT_EVENT_RECOVERY_WAL_FLUSH);
-						CHECK_FOR_INTERRUPTS();
-						ResetLatch(&XLogCtl->recoveryWakeupLatch);
-					}
-				}
-			}
-
 			/* Great, got a record */
 			return record;
 		}
