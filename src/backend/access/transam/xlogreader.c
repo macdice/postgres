@@ -394,7 +394,7 @@ fprintf(stderr, "XLogReadRecord DecodeRecPtr = %zu\n", state->DecodeRecPtr);
 		XLogReadRecordResult result;
 
 fprintf(stderr, "XLogReadRecord loop DecodeRecPtr = %zu\n", state->DecodeRecPtr);
-		/* We can now return the tail item in the read queue, if there is one. */
+		/* We can now return the oldest item in the queue, if there is one. */
 		if (state->decode_queue_tail)
 		{
 			/*
@@ -456,6 +456,8 @@ fprintf(stderr, "XLogReadRecord loop DecodeRecPtr = %zu\n", state->DecodeRecPtr)
 		switch(result)
 		{
 		case XLREAD_NEED_DATA:
+			*errormsg = NULL;
+			*record = NULL;
 			return result;
 		case XLREAD_SUCCESS:
 			Assert(state->decode_queue_tail != NULL);
