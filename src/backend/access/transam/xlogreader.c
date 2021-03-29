@@ -398,13 +398,6 @@ fprintf(stderr, "XLogReadRecord loop DecodeRecPtr = %zu\n", state->DecodeRecPtr)
 		if (state->decode_queue_tail)
 		{
 			/*
-			 * Is this record at the LSN that the caller expects?  If it
-			 * isn't, this indicates that EndRecPtr has been moved to a new
-			 * position by the caller, so we'd better reset our read queue and
-			 * move to the new location.
-			 */
-
-			/*
 			 * Record this as the most recent record returned, so that we'll
 			 * release it next time.  This also exposes it to the
 			 * XLogRecXXX(decoder) macros, which pass in the decoder rather
@@ -424,13 +417,13 @@ fprintf(stderr, "XLogReadRecord loop DecodeRecPtr = %zu\n", state->DecodeRecPtr)
 					 state->record->lsn == state->EndRecPtr + SizeOfXLogLongPHD)));
 
 			/*
-			 * Likewise, set ReadRecPtr and EndRecPtr to correspond to that
+			 * Set ReadRecPtr and EndRecPtr to correspond to that
 			 * record.
 			 *
 			 * Calling code could access these through the returned decoded
 			 * record, but for now we'll update them directly here, for the
-			 * benefit of all the existing redo handler code that thinks
-			 * there's only one record in the decoder.
+			 * benefit of all the existing redo handler code that accesses these 
+			 * variables directly.
 			 */
 			state->ReadRecPtr = state->record->lsn;
 			state->EndRecPtr = state->record->next_lsn;
@@ -447,15 +440,13 @@ fprintf(stderr, "XLogReadRecord loop DecodeRecPtr = %zu\n", state->DecodeRecPtr)
 			 * If we've run out of records, but we have a deferred error, now
 			 * is the time to report it.
 			 */
+			state->errormsg_deferred = false;
 			if (state->errormsg_buf[0] != '\0')
 				*errormsg = state->errormsg_buf;
 			else
 				*errormsg = NULL;
-			state->errormsg_deferred = false;
-
-			/* Report the location of the error. */
-			state->ReadRecPtr = state->DecodeRecPtr;
-			state->EndRecPtr = state->NextRecPtr;
+			*record = NULL;
+			state->EndRecPtr = state->DecodeRecPtr;
 
 			return XLREAD_FAIL;
 		}
@@ -484,6 +475,7 @@ fprintf(stderr, "XLogReadRecord loop DecodeRecPtr = %zu\n", state->DecodeRecPtr)
 			{
 				state->EndRecPtr = state->DecodeRecPtr;
 				*errormsg = NULL;
+				*record = NULL;
 				return result;
 			}
 			break;
