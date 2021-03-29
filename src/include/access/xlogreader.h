@@ -166,14 +166,11 @@ struct XLogReaderState
 	 * position to read next.  Calling XLogBeginRead() sets EndRecPtr to the
 	 * starting position and ReadRecPtr to invalid.
 	 *
-	 * XXX Start and end point of last record returned by XLogReadRecord().
-	 *
-	 * XXX These are also available as record->lsn and record->next_lsn,
-	 * but since these were part of the public interface...
+	 * Start and end point of last record returned by XLogReadRecord().  These
+	 * are also available as record->lsn and record->next_lsn.
 	 */
 	XLogRecPtr	ReadRecPtr;		/* start of last record read or being read */
 	XLogRecPtr	EndRecPtr;		/* end+1 of last record read */
-	XLogRecPtr	PrevRecPtr;		/* start of previous record read */
 
 	/* ----------------------------------------
 	 * Communication with page reader
@@ -201,6 +198,7 @@ struct XLogReaderState
 	 */
 	XLogRecPtr	DecodeRecPtr;	/* start of last record decoded */
 	XLogRecPtr	NextRecPtr;		/* end+1 of last record decoded */
+	XLogRecPtr	PrevRecPtr;		/* start of previous record decoded */
 
 	/* Last record returned by XLogReadRecord(). */
 	DecodedXLogRecord *record;

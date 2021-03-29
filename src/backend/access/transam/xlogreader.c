@@ -39,8 +39,8 @@ static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 static bool XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr,
 						 int reqLen, bool header_inclusive);
 size_t DecodeXLogRecordRequiredSpace(size_t xl_tot_len);
-static XLogReadRecordResult XLogReadRecordInternal(XLogReaderState *state,
-												   bool allow_oversized);
+static XLogReadRecordResult XLogDecodeOneRecord(XLogReaderState *state,
+												bool allow_oversized);
 static void XLogReaderInvalReadState(XLogReaderState *state);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 								  XLogRecPtr PrevRecPtr, XLogRecord *record);
@@ -258,7 +258,8 @@ XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
 		   state->readBuf == (void *) MAXALIGN(state->readBuf));
 
 	ResetDecoder(state);
-
+	
+	fprintf(stderr, "XLogBeginRead %zu\n", RecPtr);
 	/* Begin at the passed-in record pointer. */
 	state->EndRecPtr = RecPtr;
 	state->NextRecPtr = RecPtr;
@@ -387,8 +388,12 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 	/* Release the space occupied by the last record we returned. */
 	XLogReleasePreviousRecord(state);
 
+fprintf(stderr, "XLogReadRecord DecodeRecPtr = %zu\n", state->DecodeRecPtr);
 	for (;;)
 	{
+		XLogReadRecordResult result;
+
+fprintf(stderr, "XLogReadRecord loop DecodeRecPtr = %zu\n", state->DecodeRecPtr);
 		/* We can now return the tail item in the read queue, if there is one. */
 		if (state->decode_queue_tail)
 		{
@@ -422,10 +427,10 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 			 * Likewise, set ReadRecPtr and EndRecPtr to correspond to that
 			 * record.
 			 *
-			 * XXX Calling code should perhaps access these through the
-			 * returned decoded record, but for now we'll update them directly
-			 * here, for the benefit of existing code that thinks there's only
-			 * one record in the decoder.
+			 * Calling code could access these through the returned decoded
+			 * record, but for now we'll update them directly here, for the
+			 * benefit of all the existing redo handler code that thinks
+			 * there's only one record in the decoder.
 			 */
 			state->ReadRecPtr = state->record->lsn;
 			state->EndRecPtr = state->record->next_lsn;
@@ -456,19 +461,32 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 		}
 
 		/* We need to get a decoded record into our queue first. */
-		XLogReadRecordInternal(state, true /* wait */ );
-
-		/*
-		 * If that produced neither a queued record nor a queued error, then
-		 * we're at the end (for example, archive recovery with no more files
-		 * available).
-		 */
-		if (state->decode_queue_tail == NULL && !state->errormsg_deferred)
+		result = XLogDecodeOneRecord(state, true /* allow_oversized */ );
+		switch(result)
 		{
-			state->EndRecPtr = state->NextRecPtr;
-			*errormsg = NULL;
-
-			return XLREAD_FAIL;
+		case XLREAD_NEED_DATA:
+			return result;
+		case XLREAD_SUCCESS:
+			Assert(state->decode_queue_tail != NULL);
+			break;
+		case XLREAD_FULL:
+			/* Not expected because we passed allow_oversized = true */
+			Assert(false);
+			break;
+		case XLREAD_FAIL:
+			/*
+			 * If that produced neither a queued record nor a queued error,
+			 * then we're at the end (for example, archive recovery with no
+			 * more files available).
+			 */
+			Assert(state->decode_queue_tail == NULL);
+			if (!state->errormsg_deferred)
+			{
+				state->EndRecPtr = state->DecodeRecPtr;
+				*errormsg = NULL;
+				return result;
+			}
+			break;
 		}
 	}
 
@@ -498,10 +516,10 @@ XLogReadAhead(XLogReaderState *state, DecodedXLogRecord **record, char **errorms
 	}
 
 	/*
-	 * Try to read a record.  Pass allow_oversized = false, so that this call
-	 * returns fast if the decode buffer is full.
+	 * Try to decode one more record, if we have space.  Pass allow_oversized
+	 * = false, so that this call returns fast if the decode buffer is full.
 	 */
-	result = XLogReadRecordInternal(state, false);
+	result = XLogDecodeOneRecord(state, false);
 	switch (result)
 	{
 	case XLREAD_SUCCESS:
@@ -606,11 +624,9 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
  * the decoding buffer is full.
  */
 static XLogReadRecordResult
-XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
+XLogDecodeOneRecord(XLogReaderState *state, bool allow_oversized)
 {
-	XLogRecPtr	RecPtr;
 	XLogRecord *record;
-	int			readOff;
 	char	   *errormsg; /* not used */
 	XLogRecord *prec;
 
@@ -618,24 +634,25 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 	state->errormsg_buf[0] = '\0';
 	record = NULL;
 
+	fprintf(stderr, "XLogRecodeOneRecord state = %d\n", state->readRecordState);
 	switch (state->readRecordState)
 	{
 		case XLREAD_NEXT_RECORD:
 			ResetDecoder(state);
 
-			if (state->ReadRecPtr != InvalidXLogRecPtr)
+			if (state->DecodeRecPtr != InvalidXLogRecPtr)
 			{
 				/* read the record after the one we just read */
 
 				/*
-				 * EndRecPtr is pointing to end+1 of the previous WAL record.
+				 * NextRecPtr is pointing to end+1 of the previous WAL record.
 				 * If we're at a page boundary, no more records can fit on the
 				 * current page. We must skip over the page header, but we
 				 * can't do that until we've read in the page, since the header
 				 * size is variable.
 				 */
-				state->PrevRecPtr = state->ReadRecPtr;
-				state->ReadRecPtr = state->EndRecPtr;
+				state->PrevRecPtr = state->DecodeRecPtr;
+				state->DecodeRecPtr = state->NextRecPtr;
 			}
 			else
 			{
@@ -645,8 +662,9 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 				 * In this case, EndRecPtr should already be pointing to a
 				 * valid record starting position.
 				 */
-				Assert(XRecOffIsValid(state->EndRecPtr));
-				state->ReadRecPtr = state->EndRecPtr;
+				Assert(XRecOffIsValid(state->NextRecPtr));
+				state->DecodeRecPtr = state->NextRecPtr;
+				fprintf(stderr, "XXX %zu\n", state->DecodeRecPtr);
 
 				/*
 				 * We cannot verify the previous-record pointer when we're
@@ -654,7 +672,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 				 * won't try doing that.
 				 */
 				state->PrevRecPtr = InvalidXLogRecPtr;
-				state->EndRecPtr = InvalidXLogRecPtr; 		/* to be tidy */
+//				state->EndRecPtr = InvalidXLogRecPtr; 		/* to be tidy */
 			}
 
 			state->record_verified = false;
@@ -670,8 +688,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			XLogPageHeader pageHeader;
 
 			targetPagePtr =
-				state->ReadRecPtr - (state->ReadRecPtr % state->pageSize);
-			targetRecOff = state->ReadRecPtr % state->pageSize;
+				state->DecodeRecPtr - (state->DecodeRecPtr % state->pageSize);
+			targetRecOff = state->DecodeRecPtr % state->pageSize;
 
 			/*
 			 * Check if we have enough data. For the first record in the page,
@@ -692,13 +710,13 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			if (targetRecOff == 0)
 			{
 				/* At page start, so skip over page header. */
-				state->ReadRecPtr += pageHeaderSize;
+				state->DecodeRecPtr += pageHeaderSize;
 				targetRecOff = pageHeaderSize;
 			}
 			else if (targetRecOff < pageHeaderSize)
 			{
 				report_invalid_record(state, "invalid record offset at %X/%X",
-									  LSN_FORMAT_ARGS(state->ReadRecPtr));
+									  LSN_FORMAT_ARGS(state->DecodeRecPtr));
 				goto err;
 			}
 
@@ -707,8 +725,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 				targetRecOff == pageHeaderSize)
 			{
 				report_invalid_record(state, "contrecord is requested by %X/%X",
-									  (uint32) (state->ReadRecPtr >> 32),
-									  (uint32) state->ReadRecPtr);
+									  (uint32) (state->DecodeRecPtr >> 32),
+									  (uint32) state->DecodeRecPtr);
 				goto err;
 			}
 
@@ -725,7 +743,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			 * verified that we got the whole header.
 			 */
 			prec = (XLogRecord *) (state->readBuf +
-								   state->ReadRecPtr % state->pageSize);
+								   state->DecodeRecPtr % state->pageSize);
 			total_len = prec->xl_tot_len;
 
 			/* Find space to decode this record. */
@@ -755,7 +773,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			 */
 			if (targetRecOff <= state->pageSize - SizeOfXLogRecord)
 			{
-				if (!ValidXLogRecordHeader(state, state->ReadRecPtr,
+				if (!ValidXLogRecordHeader(state, state->DecodeRecPtr,
 										   state->PrevRecPtr, prec))
 					goto err;
 
@@ -768,7 +786,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 				{
 					report_invalid_record(state,
 										  "invalid record length at %X/%X: wanted %u, got %u",
-										  LSN_FORMAT_ARGS(state->ReadRecPtr),
+										  LSN_FORMAT_ARGS(state->DecodeRecPtr),
 										  (uint32) SizeOfXLogRecord, total_len);
 					goto err;
 				}
@@ -798,8 +816,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			 * available
 			 */
 			targetPagePtr =
-				state->ReadRecPtr - (state->ReadRecPtr % state->pageSize);
-			targetRecOff = state->ReadRecPtr % state->pageSize;
+				state->DecodeRecPtr - (state->DecodeRecPtr % state->pageSize);
+			targetRecOff = state->DecodeRecPtr % state->pageSize;
 
 			request_len = Min(targetRecOff + total_len, state->pageSize);
 			record_len = request_len - targetRecOff;
@@ -818,7 +836,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			/* validate record header if not yet */
 			if (!state->record_verified && record_len >= SizeOfXLogRecord)
 			{
-				if (!ValidXLogRecordHeader(state, state->ReadRecPtr,
+				if (!ValidXLogRecordHeader(state, state->DecodeRecPtr,
 										   state->PrevRecPtr, prec))
 					goto err;
 
@@ -831,13 +849,13 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 				/* Record does not cross a page boundary */
 				Assert(state->record_verified);
 
-				if (!ValidXLogRecord(state, prec, state->ReadRecPtr))
+				if (!ValidXLogRecord(state, prec, state->DecodeRecPtr))
 					goto err;
 
 				state->record_verified = true;  /* to be tidy */
 
 				/* We already checked the header earlier */
-				state->EndRecPtr = state->ReadRecPtr + MAXALIGN(record_len);
+				state->NextRecPtr = state->DecodeRecPtr + MAXALIGN(record_len);
 
 				record = prec;
 				state->readRecordState = XLREAD_NEXT_RECORD;
@@ -858,7 +876,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 				report_invalid_record(state,
 									  "record length %u at %X/%X too long",
 									  total_len,
-									  LSN_FORMAT_ARGS(state->ReadRecPtr));
+									  LSN_FORMAT_ARGS(state->DecodeRecPtr));
 				goto err;
 			}
 
@@ -869,7 +887,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			state->recordRemainLen -= record_len;
 
 			/* Calculate pointer to beginning of next page */
-			state->recordContRecPtr = state->ReadRecPtr + record_len;
+			state->recordContRecPtr = state->DecodeRecPtr + record_len;
 			Assert(state->recordContRecPtr % state->pageSize == 0);
 
 			state->readRecordState = XLREAD_CONTINUATION;
@@ -915,8 +933,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 						"there is no contrecord flag at %X/%X reading %X/%X",
 						(uint32) (state->recordContRecPtr >> 32),
 						(uint32) state->recordContRecPtr,
-						(uint32) (state->ReadRecPtr >> 32),
-						(uint32) state->ReadRecPtr);
+						(uint32) (state->DecodeRecPtr >> 32),
+						(uint32) state->DecodeRecPtr);
 					goto err;
 				}
 
@@ -933,8 +951,8 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 						pageHeader->xlp_rem_len,
 						(uint32) (state->recordContRecPtr >> 32),
 						(uint32) state->recordContRecPtr,
-						(uint32) (state->ReadRecPtr >> 32),
-						(uint32) state->ReadRecPtr,
+						(uint32) (state->DecodeRecPtr >> 32),
+						(uint32) state->DecodeRecPtr,
 						state->recordRemainLen);
 					goto err;
 				}
@@ -967,7 +985,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 				if (!state->record_verified)
 				{
 					Assert(state->recordGotLen >= SizeOfXLogRecord);
-					if (!ValidXLogRecordHeader(state, state->ReadRecPtr,
+					if (!ValidXLogRecordHeader(state, state->DecodeRecPtr,
 											   state->PrevRecPtr,
 											   (XLogRecord *) state->readRecordBuf))
 						goto err;
@@ -981,17 +999,17 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 
 			/* targetPagePtr is pointing the last-read page here */
 			prec = (XLogRecord *) state->readRecordBuf;
-			if (!ValidXLogRecord(state, prec, state->ReadRecPtr))
+			if (!ValidXLogRecord(state, prec, state->DecodeRecPtr))
 				goto err;
 
 			pageHeaderSize =
 				XLogPageHeaderSize((XLogPageHeader) state->readBuf);
-			state->EndRecPtr = targetPagePtr + pageHeaderSize
+			state->NextRecPtr = targetPagePtr + pageHeaderSize
 				+ MAXALIGN(pageHeader->xlp_rem_len);
 
 			record = prec;
-			state->NextRecPtr = RecPtr + MAXALIGN(state->recordGotLen);
-			state->DecodeRecPtr = RecPtr;
+//			state->NextRecPtr = state->NextRecPtr + MAXALIGN(state->recordGotLen);
+//			state->DecodeRecPtr = state->NextRecPtr;
 			state->readRecordState = XLREAD_NEXT_RECORD;
 
 
@@ -1011,7 +1029,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 	}
 
 	Assert (!record || state->readLen >= 0);
-	if (DecodeXLogRecord(state, state->decoding, record, RecPtr, &errormsg))
+	if (DecodeXLogRecord(state, state->decoding, record, state->DecodeRecPtr, &errormsg))
 	{
 		/* Record the location of the next record. */
 		state->decoding->next_lsn = state->NextRecPtr;
@@ -1052,8 +1070,7 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 	 * Invalidate the read page. We might read from a different source after
 	 * failure.
 	 */
-	if (readOff < 0 || state->errormsg_buf[0] != '\0')
-		XLogReaderInvalReadState(state);
+	XLogReaderInvalReadState(state);
 
 	/*
 	 * If an error was written to errmsg_buf, it'll be returned to the caller
