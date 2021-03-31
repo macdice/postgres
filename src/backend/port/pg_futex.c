@@ -35,6 +35,45 @@ pg_futex_wake(volatile pg_atomic_futex_t *fut, int nwaiters)
 
 #endif
 
+#if defined(HAVE_SYS_FUTEX_H)
+
+/* https://man.openbsd.org/futex */
+
+#include <sys/time.h>
+#include <sys/futex.h>
+
+int
+pg_futex_wait(volatile pg_atomic_futex_t *fut,
+			  pg_futex_t value,
+			  struct timespec *timeout)
+{
+	int rc;
+
+	rc = futex((volatile void *) fut, FUTEX_WAIT, value, timeout, 0);
+	if (rc == 0)
+		return 0;
+	if (rc == ECANCELED)
+		rc = EINTR;
+	errno = rc;
+
+	return -1;
+}
+
+int
+pg_futex_wake(volatile pg_atomic_futex_t *fut, int nwaiters)
+{
+	int rc;
+
+	rc = futex((volatile void *) fut, FUTEX_WAKE, nwaiters, 0, 0);
+	if (rc == 0)
+		return 0;
+	errno = rc;
+
+	return -1;
+}
+
+#endif
+
 #if defined(HAVE_SYS_UMTX_H)
 
 #include <sys/types.h>
