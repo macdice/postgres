@@ -1702,6 +1702,7 @@ LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
 AC_CHECK_FUNCS(m4_normalize([
+	__ulock_wait
 	backtrace_symbols
 	clock_gettime
 	copyfile

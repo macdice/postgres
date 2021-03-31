@@ -8,9 +8,11 @@
 #include "port/atomics.h"
 
 #include <signal.h>
+#include <time.h>
 
 #if defined(HAVE_LINUX_FUTEX_H) || \
-	defined(HAVE_SYS_UMTX_H)
+	defined(HAVE_SYS_UMTX_H) || \
+	defined(HAVE___ULOCK_WAIT)
 
 #define HAVE_PG_FUTEX_T
 
@@ -22,6 +24,10 @@ typedef uint32 pg_futex_t;
 /* FreeBSD's user space mutexes use long. */
 typedef long pg_futex_t;
 #define SIZEOF_PG_FUTEX_T SIZEOF_LONG
+#elif defined(HAVE___ULOCK_WAIT)
+/* macOS's user locks use uint64_t (or optionally uint32_t). */
+typedef uint64 pg_futex_t;
+#define SIZEOF_PG_FUTEX_T 8
 #endif
 
 #if SIZEOF_PG_FUTEX_T == 4
