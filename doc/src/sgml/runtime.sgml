@@ -998,11 +998,7 @@ psql: error: connection to server on socket "/tmp/.s.PGSQL.5432" failed: No such
        <para>
         The default shared memory settings are usually good enough, unless
         you have set <literal>shared_memory_type</literal> to <literal>sysv</literal>.
-        You will usually want to
-        increase <literal>kern.seminfo.semmni</literal>
-        and <literal>kern.seminfo.semmns</literal>,
-        as <systemitem class="osname">OpenBSD</systemitem>'s default settings
-        for these are uncomfortably small.
+        System V semaphores are not used on this platform (since OpenBSD 5.5).
        </para>
 
        <para>

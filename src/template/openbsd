@@ -2,3 +2,14 @@
 
 # Extra CFLAGS for code that will go into a shared library
 CFLAGS_SL="-fPIC -DPIC"
+
+# OpenBSD 5.5 (2014) gained named POSIX semaphores.  They work out of the box
+# without changing any sysctl settings, unlike System V semaphores.
+case $host_os in
+  openbsd5.[01234]*)
+    USE_SYSV_SEMAPHORES=1
+    ;;
+  *)
+    USE_NAMED_POSIX_SEMAPHORES=1
+    ;;
+esac
