@@ -54,6 +54,7 @@
 #include "access/slru.h"
 #include "access/transam.h"
 #include "access/xlog.h"
+#include "common/hashfn.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/fd.h"
@@ -153,9 +154,11 @@ static int	SlruSelectLRUPage(SlruCtl ctl, int pageno);
 static bool SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename,
 									  int segpage, void *data);
 static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
-static void	SlruMappingAdd(SlruCtl ctl, int pageno, int slotno);
-static void	SlruMappingRemove(SlruCtl ctl, int pageno);
-static int	SlruMappingFind(SlruCtl ctl, int pageno);
+
+static inline uint32 SlruMappingHash(const void *key, size_t size);
+static inline void SlruMappingAdd(SlruCtl ctl, int pageno, int slotno);
+static inline void SlruMappingRemove(SlruCtl ctl, int pageno);
+static inline int SlruMappingFind(SlruCtl ctl, int pageno, uint32 hash);
 
 /*
  * Initialization of shared memory
@@ -276,10 +279,12 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	memset(&mapping_table_info, 0, sizeof(mapping_table_info));
 	mapping_table_info.keysize = sizeof(int);
 	mapping_table_info.entrysize = sizeof(SlruMappingTableEntry);
+	mapping_table_info.hash = SlruMappingHash;
 	snprintf(mapping_table_name, sizeof(mapping_table_name),
 			 "%s Lookup Table", name);
 	mapping_table = ShmemInitHash(mapping_table_name, nslots, nslots,
-								  &mapping_table_info, HASH_ELEM | HASH_BLOBS);
+								  &mapping_table_info,
+								  HASH_ELEM | HASH_FUNCTION);
 
 	/*
 	 * Initialize the unshared control struct, including directory path. We
@@ -534,12 +539,15 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 {
 	SlruShared	shared = ctl->shared;
 	int			slotno;
+	uint32		hash;
+
+	hash = SlruMappingHash(&pageno, sizeof(pageno));
 
 	/* Try to find the page while holding only shared lock */
 	LWLockAcquire(shared->ControlLock, LW_SHARED);
 
 	/* See if page is already in a buffer */
-	slotno = SlruMappingFind(ctl, pageno);
+	slotno = SlruMappingFind(ctl, pageno, hash);
 	if (slotno >= 0 &&
 		shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 	{
@@ -1054,6 +1062,9 @@ static int
 SlruSelectLRUPage(SlruCtl ctl, int pageno)
 {
 	SlruShared	shared = ctl->shared;
+	uint32		hash;
+
+	hash = SlruMappingHash(&pageno, sizeof(pageno));
 
 	/* Outer loop handles restart after I/O */
 	for (;;)
@@ -1068,7 +1079,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/* See if page already has a buffer assigned */
-		slotno = SlruMappingFind(ctl, pageno);
+		slotno = SlruMappingFind(ctl, pageno, hash);
 		if (slotno >= 0)
 		{
 			Assert(shared->page_number[slotno] == pageno);
@@ -1652,36 +1663,58 @@ SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path)
 	return result;
 }
 
-static int
-SlruMappingFind(SlruCtl ctl, int pageno)
+/*
+ * A hash function that conforms to dynahash's interface requirements pro
+ * forma, while also allowing for direct inlined use, as a micro-optimization.
+ */
+static inline uint32
+SlruMappingHash(const void *key, size_t size)
+{
+	Assert(size == sizeof(uint32));
+
+	return murmurhash32(*(uint32 *) key);
+}
+
+static inline int
+SlruMappingFind(SlruCtl ctl, int pageno, uint32 hash)
 {
 	SlruMappingTableEntry *mapping;
 
-	mapping = hash_search(ctl->mapping_table, &pageno, HASH_FIND, NULL);
+	Assert(hash == get_hash_value(ctl->mapping_table, &pageno));
+	mapping = hash_search_with_hash_value(ctl->mapping_table, &pageno, hash,
+										  HASH_FIND, NULL);
 	if (mapping)
 		return mapping->slotno;
 
 	return -1;
 }
 
-static void
+static inline void
 SlruMappingAdd(SlruCtl ctl, int pageno, int slotno)
 {
 	SlruMappingTableEntry *mapping;
 	bool		found PG_USED_FOR_ASSERTS_ONLY;
+	uint32		hash;
 
-	mapping = hash_search(ctl->mapping_table, &pageno, HASH_ENTER, &found);
+	hash = SlruMappingHash(&pageno, sizeof(pageno));
+	Assert(hash == get_hash_value(ctl->mapping_table, &pageno));
+	mapping = hash_search_with_hash_value(ctl->mapping_table, &pageno, hash,
+										  HASH_ENTER, &found);
 	mapping->slotno = slotno;
 
 	Assert(!found);
 }
 
-static void
+static inline void
 SlruMappingRemove(SlruCtl ctl, int pageno)
 {
 	bool		found PG_USED_FOR_ASSERTS_ONLY;
+	uint32		hash;
 
-	hash_search(ctl->mapping_table, &pageno, HASH_REMOVE, &found);
+	hash = SlruMappingHash(&pageno, sizeof(pageno));
+	Assert(hash == get_hash_value(ctl->mapping_table, &pageno));
+	hash_search_with_hash_value(ctl->mapping_table, &pageno, hash,
+								HASH_REMOVE, &found);
 
 	Assert(found);
 }
