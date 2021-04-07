@@ -649,10 +649,10 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 		if (BufferIsValid(prefetch.recent_buffer))
 		{
 			/*
-			 * It was already cached, so do nothing.  Perhaps in future we
-			 * could remember the buffer so that recovery doesn't have to look
-			 * it up again.
+			 * It was already cached, so do nothing.  We'll remember the
+			 * buffer, so that recovery can try to avoid looking it up again.
 			 */
+			block->recent_buffer = prefetch.recent_buffer;
 			XLogPrefetchIncrement(&SharedStats->skip_hit);
 		}
 		else if (prefetch.initiated_io)
