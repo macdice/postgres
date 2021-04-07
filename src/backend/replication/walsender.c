@@ -807,7 +807,7 @@ static bool
 logical_read_xlog_page(XLogReaderState *state)
 {
 	XLogRecPtr		targetPagePtr = state->readPagePtr;
-	int				reqLen		  = state->readLen;
+	int				reqLen		  = state->reqLen;
 	char		   *cur_page	  = state->readBuf;
 	XLogRecPtr	flushptr;
 	int			count;
@@ -826,7 +826,7 @@ logical_read_xlog_page(XLogReaderState *state)
 	/* fail if not (implies we are going to shut down) */
 	if (flushptr < targetPagePtr + reqLen)
 	{
-		state->readLen = -1;
+		XLogReaderNotifySize(state, -1);
 		return false;
 	}
 
@@ -856,7 +856,7 @@ logical_read_xlog_page(XLogReaderState *state)
 	XLByteToSeg(targetPagePtr, segno, state->segcxt.ws_segsize);
 	CheckXLogRemoved(segno, state->seg.ws_tli);
 
-	state->readLen = count;
+	XLogReaderNotifySize(state, count);
 	return true;
 }
 

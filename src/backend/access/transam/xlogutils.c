@@ -828,7 +828,7 @@ bool
 read_local_xlog_page(XLogReaderState *state)
 {
 	XLogRecPtr	targetPagePtr = state->readPagePtr;
-	int			reqLen		  = state->readLen;
+	int			reqLen		  = state->reqLen;
 	char	   *cur_page	  = state->readBuf;
 	XLogRecPtr	read_upto,
 				loc;
@@ -928,7 +928,7 @@ read_local_xlog_page(XLogReaderState *state)
 	else if (targetPagePtr + reqLen > read_upto)
 	{
 		/* not enough data there */
-		state->readLen = -1;
+		XLogReaderNotifySize(state,  -1);
 		return false;
 	}
 	else
@@ -948,7 +948,7 @@ read_local_xlog_page(XLogReaderState *state)
 
 	/* number of valid bytes in the buffer */
 	state->readPagePtr = targetPagePtr;
-	state->readLen = count;
+	XLogReaderNotifySize(state, count);
 	return true;
 }
 

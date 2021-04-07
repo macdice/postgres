@@ -107,7 +107,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 	WALOpenSegmentInit(&state->seg, &state->segcxt, wal_segment_size,
 					   waldir);
 
-	/* ReadRecPtr, EndRecPtr and readLen initialized to zeroes above */
+	/* ReadRecPtr, EndRecPtr, reqLen and readLen initialized to zeroes above */
 	state->errormsg_buf = palloc_extended(MAX_ERRORMSG_LEN + 1,
 										  MCXT_ALLOC_NO_OOM);
 	if (!state->errormsg_buf)
@@ -261,12 +261,12 @@ XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
  * record being stored in *record. Otherwise *record is NULL.
  *
  * Returns XLREAD_NEED_DATA if more data is needed to finish reading the
- * current record.  In that case, state->readPagePtr and state->readLen inform
+ * current record.  In that case, state->readPagePtr and state->reqLen inform
  * the desired position and minimum length of data needed. The caller shall
  * read in the requested data and set state->readBuf to point to a buffer
  * containing it. The caller must also set state->seg->ws_tli and
  * state->readLen to indicate the timeline that it was read from, and the
- * length of data that is now available (which must be >= given readLen),
+ * length of data that is now available (which must be >= given reqLen),
  * respectively.
  *
  * If invalid data is encountered, returns XLREAD_FAIL with *record being set to
@@ -630,7 +630,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 					 * XLogNeedData should have ensured that the whole page
 					 * header was read
 					 */
-					Assert(state->readLen >= pageHeaderSize);
+					Assert(pageHeaderSize <= state->readLen);
 
 					contdata = (char *) state->readBuf + pageHeaderSize;
 					record_len = XLOG_BLCKSZ - pageHeaderSize;
@@ -643,7 +643,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 					 * XLogNeedData should have ensured all needed data was
 					 * read
 					 */
-					Assert(state->readLen >= request_len);
+					Assert(request_len <= state->readLen);
 
 					memcpy(state->readRecordBuf + state->recordGotLen,
 						   (char *) contdata, record_len);
@@ -696,7 +696,6 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **record, char **errormsg)
 		state->EndRecPtr -= XLogSegmentOffset(state->EndRecPtr, state->segcxt.ws_segsize);
 	}
 
-	Assert(!*record || state->readLen >= 0);
 	if (DecodeXLogRecord(state, *record, errormsg))
 		return XLREAD_SUCCESS;
 
@@ -763,7 +762,7 @@ XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 		/* Request more data if we don't have the full header. */
 		if (state->readLen < pageHeaderSize)
 		{
-			state->readLen = pageHeaderSize;
+			state->reqLen = pageHeaderSize;
 			return true;
 		}
 
@@ -840,7 +839,7 @@ XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 		 * will not come back here, but will request the actual target page.
 		 */
 		state->readPagePtr = pageptr - targetPageOff;
-		state->readLen = XLOG_BLCKSZ;
+		state->reqLen = XLOG_BLCKSZ;
 		return true;
 	}
 
@@ -849,7 +848,7 @@ XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr, int reqLen,
 	 * header so that we can validate it.
 	 */
 	state->readPagePtr = pageptr;
-	state->readLen = Max(reqLen + addLen, SizeOfXLogShortPHD);
+	state->reqLen = Max(reqLen + addLen, SizeOfXLogShortPHD);
 	return true;
 }
 

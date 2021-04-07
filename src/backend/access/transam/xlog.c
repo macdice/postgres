@@ -12101,7 +12101,7 @@ XLogPageRead(XLogReaderState *state,
 {
 	char *readBuf				= state->readBuf;
 	XLogRecPtr	targetPagePtr	= state->readPagePtr;
-	int			reqLen			= state->readLen;
+	int			reqLen			= state->reqLen;
 	int			readLen			= 0;
 	XLogRecPtr	targetRecPtr	= state->ReadRecPtr;
 	uint32		targetPageOff;
@@ -12153,7 +12153,7 @@ retry:
 				close(readFile);
 			readFile = -1;
 			readSource = XLOG_FROM_ANY;
-			state->readLen = -1;
+			XLogReaderNotifySize(state, -1);
 			return false;
 		}
 	}
@@ -12208,7 +12208,7 @@ retry:
 	pgstat_report_wait_end();
 
 	Assert(targetSegNo == state->seg.ws_segno);
-	Assert(reqLen <= readLen);
+	Assert(readLen >= reqLen);
 
 	state->seg.ws_tli = curFileTLI;
 
@@ -12246,7 +12246,7 @@ retry:
 	}
 
 	Assert(state->readPagePtr == targetPagePtr);
-	state->readLen = readLen;
+	XLogReaderNotifySize(state, readLen);
 	return true;
 
 next_record_is_invalid:
@@ -12261,7 +12261,7 @@ next_record_is_invalid:
 	if (StandbyMode)
 		goto retry;
 
-	state->readLen = -1;
+	XLogReaderNotifySize(state, -1);
 	return false;
 }
 

@@ -149,19 +149,21 @@ struct XLogReaderState
 
 	/* ----------------------------------------
 	 * Communication with page reader
-	 * readBuf is XLOG_BLCKSZ bytes, valid up to at least readLen bytes.
+	 * readBuf is XLOG_BLCKSZ bytes, valid up to at least reqLen bytes.
 	 *  ----------------------------------------
 	 */
-	/* variables to communicate with page reader */
+	/* variables to inform to the callers from xlogreader */
 	XLogRecPtr	readPagePtr;	/* page pointer to read */
-	int32		readLen;		/* bytes requested to reader, or actual bytes
-								 * read by reader, which must be larger than
-								 * the request, or -1 on error */
+	int32		reqLen;			/* bytes requested to the caller */
 	char	   *readBuf;		/* buffer to store data */
 	bool		page_verified;	/* is the page header on the buffer verified? */
-	bool		record_verified;	/* is the current record header verified? */
+	bool		record_verified;/* is the current record header verified? */
 
-
+	/* variables to respond from the callers to xlogreader */
+	int32		readLen;		/* actual bytes read by reader, which must be
+								 * larger than the request, or -1 on error.
+								 * Use XLogReaderNotifyLength() to set a
+								 * value. */
 
 	/* ----------------------------------------
 	 * Decoded representation of current record
@@ -247,6 +249,13 @@ struct XLogFindNextRecordState
 	XLogRecPtr		targetRecPtr;
 	XLogRecPtr		currRecPtr;
 };
+
+/* setter functions of XLogReaderState used by other modules */
+static inline void
+XLogReaderNotifySize(XLogReaderState *state, int32 len)
+{
+	state->readLen = len;
+}
 
 /* Get a new XLogReader */
 extern XLogReaderState *XLogReaderAllocate(int wal_segment_size,

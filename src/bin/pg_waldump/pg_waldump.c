@@ -332,7 +332,7 @@ WALDumpReadPage(XLogReaderState *state, TimeLineID timeline,
 				XLogRecPtr startptr, XLogRecPtr endptr)
 {
 	XLogRecPtr	targetPagePtr = state->readPagePtr;
-	int			reqLen		  = state->readLen;
+	int			reqLen		  = state->reqLen;
 	char	   *readBuff	  = state->readBuf;
 	int			count = XLOG_BLCKSZ;
 	WALReadError errinfo;
@@ -347,7 +347,7 @@ WALDumpReadPage(XLogReaderState *state, TimeLineID timeline,
 		else
 		{
 			/* Notify xlogreader that we didn't read at all */
-			state->readLen = -1;
+			XLogReaderNotifySize(state,  -1);
 			return false;
 		}
 	}
@@ -377,7 +377,7 @@ WALDumpReadPage(XLogReaderState *state, TimeLineID timeline,
 	}
 
 	/* Notify xlogreader of how many bytes we have read */
-	state->readLen = count;
+	XLogReaderNotifySize(state, count);
 	return true;
 }
 
