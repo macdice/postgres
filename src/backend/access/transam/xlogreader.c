@@ -1136,7 +1136,7 @@ InitXLogFindNextRecord(XLogReaderState *reader_state, XLogRecPtr start_ptr)
 bool
 XLogFindNextRecord(XLogFindNextRecordState *state)
 {
-	XLogRecPtr	found = InvalidXLogRecPtr;
+	//XLogRecPtr	found = InvalidXLogRecPtr;
 	XLogPageHeader header;
 	XLogRecord *record;
 	XLogReadRecordResult result;
@@ -1231,7 +1231,7 @@ XLogFindNextRecord(XLogFindNextRecordState *state)
 		{
 			/* Rewind the reader to the beginning of the last record. */
 			state->currRecPtr = state->reader_state->ReadRecPtr;
-			XLogBeginRead(state->reader_state, found);
+			XLogBeginRead(state->reader_state, state->currRecPtr);
 			return false;
 		}
 	}
