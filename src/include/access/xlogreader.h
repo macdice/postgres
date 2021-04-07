@@ -56,6 +56,7 @@ typedef struct WALSegmentContext
 } WALSegmentContext;
 
 typedef struct XLogReaderState XLogReaderState;
+typedef struct XLogFindNextRecordState XLogFindNextRecordState;
 
 /* Function type definition for the segment cleanup callback */
 typedef void (*WALSegmentCleanupCB) (XLogReaderState *xlogreader);
@@ -240,6 +241,13 @@ struct XLogReaderState
 	char	   *errormsg_buf;
 };
 
+struct XLogFindNextRecordState
+{
+	XLogReaderState *reader_state;
+	XLogRecPtr		targetRecPtr;
+	XLogRecPtr		currRecPtr;
+};
+
 /* Get a new XLogReader */
 extern XLogReaderState *XLogReaderAllocate(int wal_segment_size,
 										   const char *waldir,
@@ -254,8 +262,8 @@ extern void XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr);
 /* Function type definition for the read_page callback */
 typedef bool (*XLogFindNextRecordCB) (XLogReaderState *xlogreader,
 									  void *private);
-extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr,
-									 XLogFindNextRecordCB read_page, void *private);
+extern XLogFindNextRecordState *InitXLogFindNextRecord(XLogReaderState *reader_state, XLogRecPtr start_ptr);
+extern bool XLogFindNextRecord(XLogFindNextRecordState *state);
 #endif							/* FRONTEND */
 
 /* Read the next XLog record. Returns NULL on end-of-WAL or failure */
