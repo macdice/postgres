@@ -1362,8 +1362,6 @@ AC_CHECK_HEADERS(m4_normalize([
 	sys/event.h
 	sys/futex.h
 	sys/ipc.h
-	sys/prctl.h
-	sys/procctl.h
 	sys/pstat.h
 	sys/resource.h
 	sys/select.h
