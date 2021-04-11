@@ -3356,6 +3356,10 @@ brin_serialize_callback_type
 bytea
 cached_re_str
 canonicalize_state
+car_allocate_result
+car_control
+car_list_id
+car_mapping
 cashKEY
 catalogid_hash
 cb_cleanup_dir
