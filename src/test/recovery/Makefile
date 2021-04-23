@@ -18,6 +18,9 @@ include $(top_builddir)/src/Makefile.global
 check:
 	$(prove_check)
 
+# Tell the TAP tests how to invoke make.
+export MAKE
+
 installcheck:
 	$(prove_installcheck)
 
