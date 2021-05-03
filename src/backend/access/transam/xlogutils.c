@@ -335,13 +335,11 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
-	Buffer		recent_buffer;
 	Page		page;
 	bool		zeromode;
 	bool		willinit;
 
-	if (!XLogRecGetRecentBuffer(record, block_id, &rnode, &forknum, &blkno,
-								&recent_buffer))
+	if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
 	{
 		/* Caller specified a bogus block_id */
 		elog(PANIC, "failed to locate backup block with ID %d", block_id);
@@ -363,8 +361,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	{
 		Assert(XLogRecHasBlockImage(record, block_id));
 		*buf = XLogReadBufferExtended(rnode, forknum, blkno,
-									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK,
-									  recent_buffer);
+									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK);
 		page = BufferGetPage(*buf);
 		if (!RestoreBlockImage(record, block_id, page))
 			elog(ERROR, "failed to restore block image");
@@ -393,8 +390,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	}
 	else
 	{
-		*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode,
-									  recent_buffer);
+		*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode);
 		if (BufferIsValid(*buf))
 		{
 			if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
@@ -441,23 +437,13 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
  */
 Buffer
 XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
-					   BlockNumber blkno, ReadBufferMode mode,
-					   Buffer recent_buffer)
+					   BlockNumber blkno, ReadBufferMode mode)
 {
 	BlockNumber lastblock;
 	Buffer		buffer;
 	SMgrRelation smgr;
 
 	Assert(blkno != P_NEW);
-
-	/* Do we have a clue where the buffer might be already? */
-	if (BufferIsValid(recent_buffer) &&
-		mode == RBM_NORMAL &&
-		ReadRecentBuffer(rnode, forknum, blkno, recent_buffer))
-	{
-		buffer = recent_buffer;
-		goto recent_buffer_fast_path;
-	}
 
 	/* Open the relation at smgr level */
 	smgr = smgropen(rnode, InvalidBackendId);
@@ -517,7 +503,6 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 		}
 	}
 
-recent_buffer_fast_path:
 	if (mode == RBM_NORMAL)
 	{
 		/* check that page has been initialized */
