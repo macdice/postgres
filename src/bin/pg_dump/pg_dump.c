@@ -13851,10 +13851,12 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 
 	if (fout->remoteVersion >= 100000)
 		appendPQExpBufferStr(query,
-							 "collprovider, ");
+							 "collprovider, "
+							 "collversion, ");
 	else
 		appendPQExpBufferStr(query,
-							 "'c' AS collprovider, ");
+							 "'c' AS collprovider, "
+							 "NULL AS collversion, ");
 
 	if (fout->remoteVersion >= 120000)
 		appendPQExpBufferStr(query,
@@ -13913,6 +13915,24 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 		appendStringLiteralAH(q, collcollate, fout);
 		appendPQExpBufferStr(q, ", lc_ctype = ");
 		appendStringLiteralAH(q, collctype, fout);
+	}
+
+	/*
+	 * For binary upgrade, carry over the collation version.  For normal
+	 * dump/restore, omit the version, so that it is computed upon restore.
+	 */
+	if (dopt->binary_upgrade)
+	{
+		int			i_collversion;
+
+		i_collversion = PQfnumber(res, "collversion");
+		if (!PQgetisnull(res, 0, i_collversion))
+		{
+			appendPQExpBufferStr(q, ", version = ");
+			appendStringLiteralAH(q,
+								  PQgetvalue(res, 0, i_collversion),
+								  fout);
+		}
 	}
 
 	appendPQExpBufferStr(q, ");\n");

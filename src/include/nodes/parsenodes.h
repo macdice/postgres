@@ -1960,6 +1960,17 @@ typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
 
 
 /* ----------------------
+ * Alter Collation
+ * ----------------------
+ */
+typedef struct AlterCollationStmt
+{
+	NodeTag		type;
+	List	   *collname;
+} AlterCollationStmt;
+
+
+/* ----------------------
  *	Alter Domain
  *
  * The fields are used in different ways by the different variants of
