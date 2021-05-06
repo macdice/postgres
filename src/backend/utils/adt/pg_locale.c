@@ -1700,11 +1700,10 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 /*
  * Get provider-specific collation version string for a given collation OID.
  * Return NULL if the provider doesn't support versions, or the collation is
- * unversioned (for example "C").  Unknown OIDs result in NULL if missing_ok is
- * true.
+ * unversioned (for example "C").
  */
 char *
-get_collation_version_for_oid(Oid oid, bool missing_ok)
+get_collation_version_for_oid(Oid oid)
 {
 	HeapTuple	tp;
 	char	   *version;
@@ -1726,11 +1725,7 @@ get_collation_version_for_oid(Oid oid, bool missing_ok)
 
 		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(oid));
 		if (!HeapTupleIsValid(tp))
-		{
-			if (missing_ok)
-				return NULL;
 			elog(ERROR, "cache lookup failed for collation %u", oid);
-		}
 		collform = (Form_pg_collation) GETSTRUCT(tp);
 		version = get_collation_actual_version(collform->collprovider,
 											   NameStr(collform->collcollate));

@@ -1301,8 +1301,7 @@ do_collation_version_check(const ObjectAddress *otherObject,
 		return false;
 
 	/* Ask the provider for the current version.  Give up if unsupported. */
-	current_version = get_collation_version_for_oid(otherObject->objectId,
-													false);
+	current_version = get_collation_version_for_oid(otherObject->objectId);
 	if (!current_version)
 		return false;
 
@@ -1381,7 +1380,7 @@ do_collation_version_update(const ObjectAddress *otherObject,
 	if (OidIsValid(*coll) && otherObject->objectId != *coll)
 		return false;
 
-	*new_version = get_collation_version_for_oid(otherObject->objectId, false);
+	*new_version = get_collation_version_for_oid(otherObject->objectId);
 
 	return true;
 }
