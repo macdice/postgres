@@ -73,6 +73,7 @@ recordMultipleDependencies(const ObjectAddress *depender,
 				max_slots,
 				slot_init_count,
 				slot_stored_count;
+	char	   *version = NULL;
 
 	if (nreferenced <= 0)
 		return;					/* nothing to do */
@@ -103,22 +104,31 @@ recordMultipleDependencies(const ObjectAddress *depender,
 	slot_init_count = 0;
 	for (i = 0; i < nreferenced; i++, referenced++)
 	{
-		char	   *version = NULL;
+		bool		ignore_systempin = false;
 
 		if (record_version)
 		{
 			/* For now we only know how to deal with collations. */
 			if (referenced->classId == CollationRelationId)
 			{
-				/* These are unversioned, so don't waste cycles on them. */
+				/* C and POSIX don't need version tracking. */
 				if (referenced->objectId == C_COLLATION_OID ||
 					referenced->objectId == POSIX_COLLATION_OID)
 					continue;
 
 				version = get_collation_version_for_oid(referenced->objectId,
 														false);
+
+				/*
+				 * Default collation is pinned, so we need to force recording
+				 * the dependency to store the version.
+				 */
+				if (referenced->objectId == DEFAULT_COLLATION_OID)
+					ignore_systempin = true;
 			}
 		}
+		else
+			Assert(!version);
 
 		/*
 		 * If the referenced object is pinned by the system, there's no real
@@ -126,7 +136,7 @@ recordMultipleDependencies(const ObjectAddress *depender,
 		 * version.  This saves lots of space in pg_depend, so it's worth the
 		 * time taken to check.
 		 */
-		if (version == NULL && isObjectPinned(referenced, dependDesc))
+		if (!ignore_systempin && isObjectPinned(referenced, dependDesc))
 			continue;
 
 		if (slot_init_count < max_slots)
