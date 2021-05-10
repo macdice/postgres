@@ -1390,15 +1390,15 @@ RemoveLocalLock(LOCALLOCK *locallock)
 		SpinLockRelease(&FastPathStrongRelationLocks->mutex);
 	}
 
-	if (!hash_search(LockMethodLocalHash,
-					 (void *) &(locallock->tag),
-					 HASH_REMOVE, NULL))
-		elog(WARNING, "locallock table corrupted");
-
 	/*
 	 * Indicate that the lock is released for certain types of locks
 	 */
 	CheckAndSetLockHeld(locallock, false);
+
+	if (!hash_search(LockMethodLocalHash,
+					 (void *) &(locallock->tag),
+					 HASH_REMOVE, NULL))
+		elog(WARNING, "locallock table corrupted");
 }
 
 /*
