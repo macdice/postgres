@@ -102,6 +102,7 @@
 #include "storage/shmem.h"
 #include "storage/spin.h"
 #include "utils/dynahash.h"
+#include "utils/memdebug.h"
 #include "utils/memutils.h"
 
 
@@ -1076,10 +1077,12 @@ hash_search_with_hash_value(HTAB *hashp,
 					SpinLockRelease(&hctl->freeList[freelist_idx].mutex);
 
 				/*
-				 * better hope the caller is synchronizing access to this
-				 * element, because someone else is going to reuse it the next
-				 * time something is added to the table
+				 * Clobber the memory, to find bugs in code that accesses
+				 * it after removing.
 				 */
+#ifdef CLOBBER_FREED_MEMORY
+				wipe_mem(ELEMENTKEY(currBucket), hctl->entrysize);
+#endif
 				return (void *) ELEMENTKEY(currBucket);
 			}
 			return NULL;
