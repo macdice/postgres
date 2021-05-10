@@ -37,6 +37,7 @@
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "lib/ilist.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -280,6 +281,7 @@ static volatile FastPathStrongRelationLockData *FastPathStrongRelationLocks;
 static HTAB *LockMethodLockHash;
 static HTAB *LockMethodProcLockHash;
 static HTAB *LockMethodLocalHash;
+dlist_head LockMethodLocalList;
 
 
 /* private state for error cleanup */
@@ -472,6 +474,7 @@ InitLocks(void)
 	info.keysize = sizeof(LOCALLOCKTAG);
 	info.entrysize = sizeof(LOCALLOCK);
 
+	dlist_init(&LockMethodLocalList);
 	LockMethodLocalHash = hash_create("LOCALLOCK hash",
 									  16,
 									  &info,
@@ -832,6 +835,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	 */
 	if (!found)
 	{
+		dlist_push_head(&LockMethodLocalList, &locallock->link);
 		locallock->lock = NULL;
 		locallock->proclock = NULL;
 		locallock->hashcode = LockTagHashCode(&(localtag.lock));
@@ -1389,6 +1393,8 @@ RemoveLocalLock(LOCALLOCK *locallock)
 		locallock->holdsStrongLockCount = false;
 		SpinLockRelease(&FastPathStrongRelationLocks->mutex);
 	}
+
+	dlist_delete(&locallock->link);
 
 	/*
 	 * Indicate that the lock is released for certain types of locks
@@ -2178,7 +2184,7 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 void
 LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 {
-	HASH_SEQ_STATUS status;
+	dlist_mutable_iter iter;
 	LockMethod	lockMethodTable;
 	int			i,
 				numLockModes;
@@ -2216,10 +2222,10 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 	 * pointers.  Fast-path locks are cleaned up during the locallock table
 	 * scan, though.
 	 */
-	hash_seq_init(&status, LockMethodLocalHash);
-
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	dlist_foreach_modify(iter, &LockMethodLocalList)
 	{
+		locallock = dlist_container(LOCALLOCK, link, iter.cur);
+
 		/*
 		 * If the LOCALLOCK entry is unused, we must've run out of shared
 		 * memory while trying to set up this lock.  Just forget the local
@@ -2327,7 +2333,7 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 		if (locallock->nLocks > 0)
 			locallock->proclock->releaseMask |= LOCKBIT_ON(locallock->tag.mode);
 
-		/* And remove the locallock hashtable entry */
+		/* And remove the locallock hashtable and list entry */
 		RemoveLocalLock(locallock);
 	}
 
@@ -2583,13 +2589,14 @@ LockReassignCurrentOwner(LOCALLOCK **locallocks, int nlocks)
 
 	if (locallocks == NULL)
 	{
-		HASH_SEQ_STATUS status;
+		dlist_mutable_iter iter;
 		LOCALLOCK  *locallock;
 
-		hash_seq_init(&status, LockMethodLocalHash);
-
-		while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+		dlist_foreach_modify(iter, &LockMethodLocalList)
+		{
+			locallock = dlist_container(LOCALLOCK, link, iter.cur);
 			LockReassignOwner(locallock, parent);
+		}
 	}
 	else
 	{
@@ -3220,8 +3227,7 @@ LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
 void
 AtPrepare_Locks(void)
 {
-	HASH_SEQ_STATUS status;
-	LOCALLOCK  *locallock;
+	dlist_mutable_iter iter;
 
 	/*
 	 * For the most part, we don't need to touch shared memory for this ---
@@ -3229,11 +3235,11 @@ AtPrepare_Locks(void)
 	 * Fast-path locks are an exception, however: we move any such locks to
 	 * the main table before allowing PREPARE TRANSACTION to succeed.
 	 */
-	hash_seq_init(&status, LockMethodLocalHash);
 
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	dlist_foreach_modify(iter, &LockMethodLocalList)
 	{
 		TwoPhaseLockRecord record;
+		LOCALLOCK  *locallock = dlist_container(LOCALLOCK, link, iter.cur);
 		LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
 		bool		haveSessionLock;
 		bool		haveXactLock;
@@ -3331,8 +3337,7 @@ void
 PostPrepare_Locks(TransactionId xid)
 {
 	PGPROC	   *newproc = TwoPhaseGetDummyProc(xid, false);
-	HASH_SEQ_STATUS status;
-	LOCALLOCK  *locallock;
+	dlist_mutable_iter iter;
 	LOCK	   *lock;
 	PROCLOCK   *proclock;
 	PROCLOCKTAG proclocktag;
@@ -3354,10 +3359,9 @@ PostPrepare_Locks(TransactionId xid)
 	 * pointing to the same proclock, and we daren't end up with any dangling
 	 * pointers.
 	 */
-	hash_seq_init(&status, LockMethodLocalHash);
-
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	dlist_foreach_modify(iter, &LockMethodLocalList)
 	{
+		LOCALLOCK  *locallock = dlist_container(LOCALLOCK, link, iter.cur);
 		LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
 		bool		haveSessionLock;
 		bool		haveXactLock;

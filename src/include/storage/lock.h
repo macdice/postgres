@@ -18,6 +18,7 @@
 #error "lock.h may not be included from frontend code"
 #endif
 
+#include "lib/ilist.h"
 #include "storage/backendid.h"
 #include "storage/lockdefs.h"
 #include "storage/lwlock.h"
@@ -429,6 +430,7 @@ typedef struct LOCALLOCK
 	LOCALLOCKOWNER *lockOwners; /* dynamically resizable array */
 	bool		holdsStrongLockCount;	/* bumped FastPathStrongRelationLocks */
 	bool		lockCleared;	/* we read all sinval msgs for lock */
+	dlist_node	link;			/* link in list of all local locks */
 } LOCALLOCK;
 
 #define LOCALLOCK_LOCKMETHOD(llock) ((llock).tag.lock.locktag_lockmethodid)
