@@ -89,6 +89,11 @@
 #include <systemd/sd-daemon.h>
 #endif
 
+#define USE_CAPSICUM
+#ifdef USE_CAPSICUM
+#include <sys/capsicum.h>
+#endif
+
 #ifdef HAVE_PTHREAD_IS_THREADED_NP
 #include <pthread.h>
 #endif
@@ -177,6 +182,7 @@
 typedef struct bkend
 {
 	pid_t		pid;			/* process id of backend */
+	int			pd;				/* process descriptor of backend */
 	int32		cancel_key;		/* cancel key for cancels for this backend */
 	int			child_slot;		/* PMChildSlot for this backend, if any */
 	int			bkend_type;		/* child process flavor, see above */
@@ -901,6 +907,8 @@ PostmasterMain(int argc, char *argv[])
 	/* And switch working directory into it */
 	ChangeToDataDir();
 
+	InitFileAccessPM();
+
 	/*
 	 * Check for invalid combinations of GUC settings.
 	 */
@@ -1405,6 +1413,14 @@ PostmasterMain(int argc, char *argv[])
 
 	/* Some workers may be scheduled to start now */
 	maybe_start_bgworkers();
+
+#ifdef USE_CAPSICUM
+	if (true) //sandbox == SANDBOX_CAPSICUM)
+	{
+		if (cap_enter() < 0)
+			elog(FATAL, "could not enter capabilities mode: %m");
+	}
+#endif
 
 	status = ServerLoop();
 

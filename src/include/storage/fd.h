@@ -140,6 +140,7 @@ extern void ReleaseExternalFD(void);
 extern int	MakePGDirectory(const char *directoryName);
 
 /* Miscellaneous support routines */
+extern void InitFileAccessPM(void);
 extern void InitFileAccess(void);
 extern void set_max_safe_fds(void);
 extern void closeAllVfds(void);

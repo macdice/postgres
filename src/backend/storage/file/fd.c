@@ -280,6 +280,8 @@ static Oid *tempTableSpaces = NULL;
 static int	numTempTableSpaces = -1;
 static int	nextTempTableSpace = 0;
 
+/* File descriptor for the data directory. */
+static int	datadir_fd = -1;
 
 /*--------------------
  *
@@ -864,6 +866,17 @@ durable_rename_excl(const char *oldfile, const char *newfile, int elevel)
 }
 
 /*
+ * Initialize this module during postmaster startup.
+ */
+void
+InitFileAccessPM(void)
+{
+	datadir_fd = open(".", O_RDONLY);
+	if (datadir_fd < 0)
+		elog(ERROR, "could not open data directory");
+}
+
+/*
  * InitFileAccess --- initialize this module during backend startup
  *
  * This is called during either normal or standalone backend start.
@@ -1057,7 +1070,7 @@ BasicOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 	int			fd;
 
 tryAgain:
-	fd = open(fileName, fileFlags, fileMode);
+	fd = openat(datadir_fd, fileName, fileFlags, fileMode);
 
 	if (fd >= 0)
 		return fd;				/* success! */
@@ -2372,7 +2385,10 @@ reserveAllocatedDesc(void)
 FILE *
 AllocateFile(const char *name, const char *mode)
 {
+	int			fd;
 	FILE	   *file;
+	int			mode_bits = 0;
+	int			dir_fd;
 
 	DO_DB(elog(LOG, "AllocateFile: Allocated %d (%s)",
 			   numAllocatedDescs, name));
@@ -2387,10 +2403,27 @@ AllocateFile(const char *name, const char *mode)
 	/* Close excess kernel FDs. */
 	ReleaseLruFiles();
 
+	/* XXX todo */
+	mode_bits = O_RDWR;
+
+	if (datadir_fd == -1)
+		dir_fd = AT_FDCWD;
+	else
+		dir_fd = datadir_fd;
+
 TryAgain:
-	if ((file = fopen(name, mode)) != NULL)
+	if ((fd = openat(dir_fd, name, mode_bits)) >= 0)
 	{
 		AllocateDesc *desc = &allocatedDescs[numAllocatedDescs];
+
+		if ((file = fdopen(fd, mode)) == NULL)
+		{
+			int		save_errno = errno;
+
+			close(fd);
+			errno = save_errno;
+			return NULL;
+		}
 
 		desc->kind = AllocateDescFile;
 		desc->desc.file = file;
