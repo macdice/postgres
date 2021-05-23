@@ -1032,7 +1032,7 @@ CreateLockFile(const char *filename, bool amPostmaster,
 		 * Think not to make the file protection weaker than 0600/0640.  See
 		 * comments below.
 		 */
-		fd = open(filename, O_RDWR | O_CREAT | O_EXCL, pg_file_create_mode);
+		fd = OpenTransientFile(filename, O_RDWR | O_CREAT | O_EXCL);
 		if (fd >= 0)
 			break;				/* Success; exit the retry loop */
 
@@ -1049,7 +1049,7 @@ CreateLockFile(const char *filename, bool amPostmaster,
 		 * Read the file to get the old owner's PID.  Note race condition
 		 * here: file might have been deleted since we tried to create it.
 		 */
-		fd = open(filename, O_RDONLY, pg_file_create_mode);
+		fd = OpenTransientFile(filename, O_RDONLY);
 		if (fd < 0)
 		{
 			if (errno == ENOENT)
@@ -1066,7 +1066,7 @@ CreateLockFile(const char *filename, bool amPostmaster,
 					 errmsg("could not read lock file \"%s\": %m",
 							filename)));
 		pgstat_report_wait_end();
-		close(fd);
+		CloseTransientFile(fd);
 
 		if (len == 0)
 		{
@@ -1212,7 +1212,7 @@ CreateLockFile(const char *filename, bool amPostmaster,
 	{
 		int			save_errno = errno;
 
-		close(fd);
+		CloseTransientFile(fd);
 		unlink(filename);
 		/* if write didn't set errno, assume problem is no disk space */
 		errno = save_errno ? save_errno : ENOSPC;
@@ -1227,7 +1227,7 @@ CreateLockFile(const char *filename, bool amPostmaster,
 	{
 		int			save_errno = errno;
 
-		close(fd);
+		CloseTransientFile(fd);
 		unlink(filename);
 		errno = save_errno;
 		ereport(FATAL,
@@ -1235,7 +1235,7 @@ CreateLockFile(const char *filename, bool amPostmaster,
 				 errmsg("could not write lock file \"%s\": %m", filename)));
 	}
 	pgstat_report_wait_end();
-	if (close(fd) != 0)
+	if (CloseTransientFile(fd) != 0)
 	{
 		int			save_errno = errno;
 
@@ -1338,7 +1338,7 @@ AddToDataDirLockFile(int target_line, const char *str)
 	char		srcbuffer[BLCKSZ];
 	char		destbuffer[BLCKSZ];
 
-	fd = open(DIRECTORY_LOCK_FILE, O_RDWR | PG_BINARY, 0);
+	fd = OpenTransientFile(DIRECTORY_LOCK_FILE, O_RDWR | PG_BINARY);
 	if (fd < 0)
 	{
 		ereport(LOG,
@@ -1356,7 +1356,7 @@ AddToDataDirLockFile(int target_line, const char *str)
 				(errcode_for_file_access(),
 				 errmsg("could not read from file \"%s\": %m",
 						DIRECTORY_LOCK_FILE)));
-		close(fd);
+		CloseTransientFile(fd);
 		return;
 	}
 	srcbuffer[len] = '\0';
@@ -1420,7 +1420,7 @@ AddToDataDirLockFile(int target_line, const char *str)
 				(errcode_for_file_access(),
 				 errmsg("could not write to file \"%s\": %m",
 						DIRECTORY_LOCK_FILE)));
-		close(fd);
+		CloseTransientFile(fd);
 		return;
 	}
 	pgstat_report_wait_end();
@@ -1433,7 +1433,7 @@ AddToDataDirLockFile(int target_line, const char *str)
 						DIRECTORY_LOCK_FILE)));
 	}
 	pgstat_report_wait_end();
-	if (close(fd) != 0)
+	if (CloseTransientFile(fd) != 0)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
@@ -1462,7 +1462,7 @@ RecheckDataDirLockFile(void)
 	long		file_pid;
 	char		buffer[BLCKSZ];
 
-	fd = open(DIRECTORY_LOCK_FILE, O_RDWR | PG_BINARY, 0);
+	fd = OpenTransientFile(DIRECTORY_LOCK_FILE, O_RDWR | PG_BINARY);
 	if (fd < 0)
 	{
 		/*
@@ -1498,11 +1498,11 @@ RecheckDataDirLockFile(void)
 				(errcode_for_file_access(),
 				 errmsg("could not read from file \"%s\": %m",
 						DIRECTORY_LOCK_FILE)));
-		close(fd);
+		CloseTransientFile(fd);
 		return true;			/* treat read failure as nonfatal */
 	}
 	buffer[len] = '\0';
-	close(fd);
+	CloseTransientFile(fd);
 	file_pid = atol(buffer);
 	if (file_pid == getpid())
 		return true;			/* all is well */
