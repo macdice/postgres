@@ -70,6 +70,7 @@
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "common/file_perm.h"
+#include "common/string.h"
 #include "miscadmin.h"
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"
@@ -267,14 +268,16 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 				 errmsg("tablespace location cannot contain single quotes")));
 
 	/*
-	 * Allowing relative paths seems risky
+	 * Allowing relative paths seems risky in general, but we'll allow it under
+	 * pg_user_files.
 	 *
 	 * this also helps us ensure that location is not empty or whitespace
 	 */
-	if (!is_absolute_path(location))
+	if (!is_absolute_path(location) &&
+		!pg_str_startswith(location, "pg_user_files/"))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("tablespace location must be an absolute path")));
+				 errmsg("tablespace location must be an absolute path or a relative path under pg_user_files/")));
 
 	/*
 	 * Check that location isn't too long. Remember that we're going to append
@@ -587,6 +590,7 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 static void
 create_tablespace_directories(const char *location, const Oid tablespaceoid)
 {
+	char		buffer[MAXPGPATH];
 	char	   *linkloc;
 	char	   *location_with_version_dir;
 	struct stat st;
@@ -650,6 +654,19 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid)
 	 */
 	if (InRecovery)
 		remove_tablespace_symlink(linkloc);
+
+#ifndef WIN32
+	/*
+	 * If location is relative to pgdata, prefix it with ".." so that we have a
+	 * path relative to the symlink.  (Not needed for Windows, because our
+	 * symlink() wrapper will interpret it as relative to pgdata instead).
+	 */
+	if (!is_absolute_path(location))
+	{
+		snprintf(buffer, sizeof(buffer), "../%s", location);
+		location = buffer;
+	}
+#endif
 
 	/*
 	 * Create the symlink under PGDATA
