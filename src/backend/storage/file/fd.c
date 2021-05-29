@@ -1036,6 +1036,15 @@ BasicOpenFile(const char *fileName, int fileFlags)
 }
 
 /*
+ * As BasicOpenFile(), but optionally attempt to disable kernel buffering.
+ */
+int
+BasicOpenFileDirect(const char *fileName, int fileFlags, bool direct)
+{
+	return BasicOpenFilePermDirect(fileName, fileFlags, pg_file_create_mode, direct);
+}
+
+/*
  * BasicOpenFilePerm --- same as open(2) except can free other FDs if needed
  *
  * This is exported for use by places that really want a plain kernel FD,
@@ -1079,6 +1088,51 @@ tryAgain:
 	}
 
 	return -1;					/* failure */
+}
+
+/*
+ * BasicOpenDirectFilePerm --- open a file, optionally without kernel buffering
+ *
+ * On systems that have a way to request it, open the file in direct mode if
+ * requested.
+ */
+int
+BasicOpenFilePermDirect(const char *fileName, int fileFlags, mode_t fileMode,
+						bool direct)
+{
+	int			fd;
+
+#ifdef O_DIRECT
+	if (direct)
+	{
+		/*
+		 * Almost every Unix system copied IRIX's O_DIRECT flag, and our wrapper
+		 * in src/port/open.c simulates that for Windows.
+		 */
+		fileFlags |= O_DIRECT;
+	}
+#endif
+
+	fd = BasicOpenFilePerm(fileName, fileFlags, fileMode);
+	if (fd < 0)
+		return fd;
+
+#ifdef F_NOCACHE
+	/* macOS requires an extra step. */
+	if (direct && fcntl(fd, F_NOCACHE, 1) < 0)
+	{
+		int			save_errno = errno;
+
+		close(fd);
+		errno = save_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not disable kernel file caching for file \"%s\": %m",
+						fileName)));
+	}
+#endif
+
+	return fd;
 }
 
 /*

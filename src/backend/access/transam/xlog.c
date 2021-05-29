@@ -961,6 +961,7 @@ static bool read_tablespace_map(List **tablespaces);
 
 static void rm_redo_error_callback(void *arg);
 static int	get_sync_bit(int method);
+static bool	get_direct_flag(int method);
 
 static void CopyXLogRecordToWAL(int write_len, bool isLogSwitch,
 								XLogRecData *rdata,
@@ -3296,7 +3297,8 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	 */
 	if (*use_existent)
 	{
-		fd = BasicOpenFile(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method));
+		fd = BasicOpenFileDirect(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method),
+								 get_direct_flag(sync_method));
 		if (fd < 0)
 		{
 			if (errno != ENOENT)
@@ -3454,7 +3456,8 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	*use_existent = false;
 
 	/* Now open original target segment (might not be file I just made) */
-	fd = BasicOpenFile(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method));
+	fd = BasicOpenFileDirect(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method),
+							 get_direct_flag(sync_method));
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -3693,7 +3696,8 @@ XLogFileOpen(XLogSegNo segno)
 
 	XLogFilePath(path, ThisTimeLineID, segno, wal_segment_size);
 
-	fd = BasicOpenFile(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method));
+	fd = BasicOpenFileDirect(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method),
+							 get_direct_flag(sync_method));
 	if (fd < 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
@@ -5455,8 +5459,10 @@ readRecoverySignalFile(void)
 	{
 		int			fd;
 
-		fd = BasicOpenFilePerm(STANDBY_SIGNAL_FILE, O_RDWR | PG_BINARY | get_sync_bit(sync_method),
-							   S_IRUSR | S_IWUSR);
+		fd = BasicOpenFilePermDirect(STANDBY_SIGNAL_FILE,
+									 O_RDWR | PG_BINARY | get_sync_bit(sync_method),
+									 S_IRUSR | S_IWUSR,
+									 get_direct_flag(sync_method));
 		if (fd >= 0)
 		{
 			(void) pg_fsync(fd);
@@ -5468,8 +5474,10 @@ readRecoverySignalFile(void)
 	{
 		int			fd;
 
-		fd = BasicOpenFilePerm(RECOVERY_SIGNAL_FILE, O_RDWR | PG_BINARY | get_sync_bit(sync_method),
-							   S_IRUSR | S_IWUSR);
+		fd = BasicOpenFilePermDirect(RECOVERY_SIGNAL_FILE,
+									 O_RDWR | PG_BINARY | get_sync_bit(sync_method),
+									 S_IRUSR | S_IWUSR,
+									 get_direct_flag(sync_method));
 		if (fd >= 0)
 		{
 			(void) pg_fsync(fd);
@@ -10505,28 +10513,9 @@ xlog_outdesc(StringInfo buf, XLogReaderState *record)
 static int
 get_sync_bit(int method)
 {
-	int			o_direct_flag = 0;
-
 	/* If fsync is disabled, never open in sync mode */
 	if (!enableFsync)
 		return 0;
-
-	/*
-	 * Optimize writes by bypassing kernel cache with O_DIRECT when using
-	 * O_SYNC/O_FSYNC and O_DSYNC.  But only if archiving and streaming are
-	 * disabled, otherwise the archive command or walsender process will read
-	 * the WAL soon after writing it, which is guaranteed to cause a physical
-	 * read if we bypassed the kernel cache. We also skip the
-	 * posix_fadvise(POSIX_FADV_DONTNEED) call in XLogFileClose() for the same
-	 * reason.
-	 *
-	 * Never use O_DIRECT in walreceiver process for similar reasons; the WAL
-	 * written by walreceiver is normally read by the startup process soon
-	 * after it's written. Also, walreceiver performs unaligned writes, which
-	 * don't work with O_DIRECT, so it is required for correctness too.
-	 */
-	if (!XLogIsNeeded() && !AmWalReceiverProcess())
-		o_direct_flag = PG_O_DIRECT;
 
 	switch (method)
 	{
@@ -10542,16 +10531,55 @@ get_sync_bit(int method)
 			return 0;
 #ifdef OPEN_SYNC_FLAG
 		case SYNC_METHOD_OPEN:
-			return OPEN_SYNC_FLAG | o_direct_flag;
+			return OPEN_SYNC_FLAG;
 #endif
 #ifdef OPEN_DATASYNC_FLAG
 		case SYNC_METHOD_OPEN_DSYNC:
-			return OPEN_DATASYNC_FLAG | o_direct_flag;
+			return OPEN_DATASYNC_FLAG;
 #endif
 		default:
 			/* can't happen (unless we are out of sync with option array) */
 			elog(ERROR, "unrecognized wal_sync_method: %d", method);
 			return 0;			/* silence warning */
+	}
+}
+
+static bool
+get_direct_flag(int method)
+{
+	/*
+	 * Optimize writes by bypassing kernel cache with O_DIRECT when using
+	 * O_SYNC/O_FSYNC and O_DSYNC.  But only if archiving and streaming are
+	 * disabled, otherwise the archive command or walsender process will read
+	 * the WAL soon after writing it, which is guaranteed to cause a physical
+	 * read if we bypassed the kernel cache. We also skip the
+	 * posix_fadvise(POSIX_FADV_DONTNEED) call in XLogFileClose() for the same
+	 * reason.
+	 *
+	 * Never use O_DIRECT in walreceiver process for similar reasons; the WAL
+	 * written by walreceiver is normally read by the startup process soon
+	 * after it's written. Also, walreceiver performs unaligned writes, which
+	 * don't work with O_DIRECT, so it is required for correctness too.
+	 */
+	if (XLogIsNeeded() || AmWalReceiverProcess())
+		return false;
+
+	switch (method)
+	{
+		case SYNC_METHOD_FSYNC:
+		case SYNC_METHOD_FSYNC_WRITETHROUGH:
+		case SYNC_METHOD_FDATASYNC:
+			return false;
+#ifdef OPEN_SYNC_FLAG
+		case SYNC_METHOD_OPEN:
+			return true;
+#endif
+#ifdef OPEN_DATASYNC_FLAG
+		case SYNC_METHOD_OPEN_DSYNC:
+			return true;
+#endif
+		default:
+			return false;
 	}
 }
 

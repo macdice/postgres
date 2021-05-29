@@ -130,7 +130,9 @@ extern int	CloseTransientFile(int fd);
 
 /* If you've really really gotta have a plain kernel FD, use this */
 extern int	BasicOpenFile(const char *fileName, int fileFlags);
+extern int	BasicOpenFileDirect(const char *fileName, int fileFlags, bool direct);
 extern int	BasicOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode);
+extern int	BasicOpenFilePermDirect(const char *fileName, int fileFlags, mode_t fileMode, bool direct);
 
 /* Use these for other cases, and also for long-lived BasicOpenFile FDs */
 extern bool AcquireExternalFD(void);
