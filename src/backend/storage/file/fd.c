@@ -1062,6 +1062,9 @@ tryAgain:
 	if (fd >= 0)
 		return fd;				/* success! */
 
+	if (errno == EINTR)
+		goto tryAgain;
+
 	if (errno == EMFILE || errno == ENFILE)
 	{
 		int			save_errno = errno;
