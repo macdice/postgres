@@ -15,6 +15,7 @@
 
 #include "parallel.h"
 #include "pg_backup_utils.h"
+#include "port/pg_thread.h"
 
 /* Globals exported by this file */
 const char *progname = NULL;
@@ -99,10 +100,8 @@ exit_nicely(int code)
 		on_exit_nicely_list[i].function(code,
 										on_exit_nicely_list[i].arg);
 
-#ifdef WIN32
-	if (parallel_init_done && GetCurrentThreadId() != mainThreadId)
-		_endthreadex(code);
-#endif
+	if (parallel_init_done && !pg_thread_equal(pg_thread_self(), mainThreadId))
+		pg_thread_exit(NULL);
 
 	exit(code);
 }
