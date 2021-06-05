@@ -56,7 +56,7 @@ LogicalRepWorker *MyLogicalRepWorker = NULL;
 typedef struct LogicalRepCtxStruct
 {
 	/* Supervisor process. */
-	pid_t		launcher_pid;
+	int			launcher_pgprocno;
 
 	/* Hash table holding last start times of subscriptions' apply workers. */
 	dsa_handle	last_start_dsa;
@@ -449,6 +449,7 @@ retry:
 	worker->relstate_lsn = InvalidXLogRecPtr;
 	worker->stream_fileset = NULL;
 	worker->leader_pid = is_parallel_apply_worker ? MyProcPid : InvalidPid;
+	worker->leader_pgprocno = is_parallel_apply_worker ? MyProcNumber : INVALID_PROC_NUMBER;
 	worker->parallel_apply = is_parallel_apply_worker;
 	worker->last_lsn = InvalidXLogRecPtr;
 	TIMESTAMP_NOBEGIN(worker->last_send_time);
@@ -529,7 +530,7 @@ retry:
  * slot.
  */
 static void
-logicalrep_worker_stop_internal(LogicalRepWorker *worker, int signo)
+logicalrep_worker_stop_internal(LogicalRepWorker *worker, int interrupt)
 {
 	uint16		generation;
 
@@ -579,7 +580,7 @@ logicalrep_worker_stop_internal(LogicalRepWorker *worker, int signo)
 	}
 
 	/* Now terminate the worker ... */
-	kill(worker->proc->pid, signo);
+	SendInterrupt(interrupt, GetNumberFromPGProc(worker->proc));
 
 	/* ... and wait for it to die. */
 	for (;;)
@@ -622,7 +623,7 @@ logicalrep_worker_stop(Oid subid, Oid relid)
 	if (worker)
 	{
 		Assert(!isParallelApplyWorker(worker));
-		logicalrep_worker_stop_internal(worker, SIGTERM);
+		logicalrep_worker_stop_internal(worker, INTERRUPT_DIE);
 	}
 
 	LWLockRelease(LogicalRepWorkerLock);
@@ -669,7 +670,7 @@ logicalrep_pa_worker_stop(ParallelApplyWorkerInfo *winfo)
 	 * Only stop the worker if the generation matches and the worker is alive.
 	 */
 	if (worker->generation == generation && worker->proc)
-		logicalrep_worker_stop_internal(worker, SIGINT);
+		logicalrep_worker_stop_internal(worker, INTERRUPT_QUERY_CANCEL);
 
 	LWLockRelease(LogicalRepWorkerLock);
 }
@@ -770,7 +771,7 @@ logicalrep_worker_detach(void)
 			LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
 
 			if (isParallelApplyWorker(w))
-				logicalrep_worker_stop_internal(w, SIGTERM);
+				logicalrep_worker_stop_internal(w, INTERRUPT_DIE);
 		}
 
 		LWLockRelease(LogicalRepWorkerLock);
@@ -800,6 +801,7 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 	worker->subid = InvalidOid;
 	worker->relid = InvalidOid;
 	worker->leader_pid = InvalidPid;
+	worker->leader_pgprocno = INVALID_PROC_NUMBER;
 	worker->parallel_apply = false;
 }
 
@@ -811,7 +813,7 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 static void
 logicalrep_launcher_onexit(int code, Datum arg)
 {
-	LogicalRepCtx->launcher_pid = 0;
+	LogicalRepCtx->launcher_pgprocno = INVALID_PROC_NUMBER;
 }
 
 /*
@@ -970,6 +972,7 @@ ApplyLauncherShmemInit(void)
 
 		memset(LogicalRepCtx, 0, ApplyLauncherShmemSize());
 
+		LogicalRepCtx->launcher_pgprocno = INVALID_PROC_NUMBER;
 		LogicalRepCtx->last_start_dsa = DSA_HANDLE_INVALID;
 		LogicalRepCtx->last_start_dsh = DSHASH_HANDLE_INVALID;
 
@@ -1115,8 +1118,10 @@ ApplyLauncherWakeupAtCommit(void)
 static void
 ApplyLauncherWakeup(void)
 {
-	if (LogicalRepCtx->launcher_pid != 0)
-		kill(LogicalRepCtx->launcher_pid, SIGUSR1);
+	int			pgprocno;
+
+	if ((pgprocno = LogicalRepCtx->launcher_pgprocno) != INVALID_PROC_NUMBER)
+		SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
 }
 
 /*
@@ -1130,8 +1135,8 @@ ApplyLauncherMain(Datum main_arg)
 
 	before_shmem_exit(logicalrep_launcher_onexit, (Datum) 0);
 
-	Assert(LogicalRepCtx->launcher_pid == 0);
-	LogicalRepCtx->launcher_pid = MyProcPid;
+	Assert(LogicalRepCtx->launcher_pgprocno == INVALID_PROC_NUMBER);
+	LogicalRepCtx->launcher_pgprocno = MyProcNumber;
 
 	/* Establish signal handlers. */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
@@ -1246,7 +1251,7 @@ ApplyLauncherMain(Datum main_arg)
 bool
 IsLogicalLauncher(void)
 {
-	return LogicalRepCtx->launcher_pid == MyProcPid;
+	return LogicalRepCtx->launcher_pgprocno == MyProcNumber;
 }
 
 /*

@@ -157,7 +157,7 @@ autoprewarm_main(Datum main_arg)
 	/* Establish signal handlers; once that's done, unblock signals. */
 	pqsignal(SIGTERM, SignalHandlerForShutdownRequest);
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	BackgroundWorkerUnblockSignals();
 
 	/* Create (if necessary) and attach to our shared memory area. */

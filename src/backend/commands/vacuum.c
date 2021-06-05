@@ -2344,7 +2344,7 @@ vacuum_delay_point(void)
 	/* Always check for interrupts */
 	CHECK_FOR_INTERRUPTS();
 
-	if (InterruptPending ||
+	if (INTERRUPTS_PENDING_CONDITION() ||
 		(!VacuumCostActive && !ConfigReloadPending))
 		return;
 

@@ -396,7 +396,7 @@ AutoVacLauncherMain(char *startup_data, size_t startup_data_len)
 	InitializeTimeouts();		/* establishes SIGALRM handler */
 
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, avl_sigusr2_handler);
 	pqsignal(SIGFPE, FloatExceptionHandler);
 	pqsignal(SIGCHLD, SIG_DFL);
@@ -446,7 +446,8 @@ AutoVacLauncherMain(char *startup_data, size_t startup_data_len)
 
 		/* Forget any pending QueryCancel or timeout request */
 		disable_all_timeouts(false);
-		QueryCancelPending = false; /* second to avoid race condition */
+		ClearInterrupt(INTERRUPT_QUERY_CANCEL); /* second to avoid race
+												 * condition */
 
 		/* Report the error to the server log */
 		EmitErrorReport();
@@ -758,11 +759,11 @@ HandleAutoVacLauncherInterrupts(void)
 	}
 
 	/* Process barrier events */
-	if (ProcSignalBarrierPending)
+	if (ConsumeInterrupt(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 
 	/* Perform logging of memory contexts of this process */
-	if (LogMemoryContextPending)
+	if (ConsumeInterrupt(INTERRUPT_LOG_MEMORY_CONTEXT))
 		ProcessLogMemoryContextInterrupt();
 
 	/* Process sinval catchup interrupts that happened while sleeping */
@@ -1394,7 +1395,7 @@ AutoVacWorkerMain(char *startup_data, size_t startup_data_len)
 	InitializeTimeouts();		/* establishes SIGALRM handler */
 
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, SIG_IGN);
 	pqsignal(SIGFPE, FloatExceptionHandler);
 	pqsignal(SIGCHLD, SIG_DFL);
@@ -2429,7 +2430,7 @@ do_autovacuum(void)
 			 * current table (we're done with it, so it would make no sense to
 			 * cancel at this point.)
 			 */
-			QueryCancelPending = false;
+			ClearInterrupt(INTERRUPT_QUERY_CANCEL);
 		}
 		PG_CATCH();
 		{
@@ -2627,7 +2628,7 @@ perform_work_item(AutoVacuumWorkItem *workitem)
 		 * (we're done with it, so it would make no sense to cancel at this
 		 * point.)
 		 */
-		QueryCancelPending = false;
+		ClearInterrupt(INTERRUPT_QUERY_CANCEL);
 	}
 	PG_CATCH();
 	{

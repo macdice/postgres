@@ -254,7 +254,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 * We do NOT reset ProcDiePending, so that the process will die after
 		 * the commit is cleaned up.
 		 */
-		if (ProcDiePending)
+		if (InterruptIsPending(INTERRUPT_DIE))
 		{
 			ereport(WARNING,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
@@ -271,9 +271,8 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 * altogether is not helpful, so we just terminate the wait with a
 		 * suitable warning.
 		 */
-		if (QueryCancelPending)
+		if (ConsumeInterrupt(INTERRUPT_QUERY_CANCEL))
 		{
-			QueryCancelPending = false;
 			ereport(WARNING,
 					(errmsg("canceling wait for synchronous replication due to user request"),
 					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
@@ -294,7 +293,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 */
 		if (rc & WL_POSTMASTER_DEATH)
 		{
-			ProcDiePending = true;
+			RaiseInterrupt(INTERRUPT_DIE);
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
 			break;

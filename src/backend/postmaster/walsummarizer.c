@@ -250,7 +250,7 @@ WalSummarizerMain(char *startup_data, size_t startup_data_len)
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, SIG_IGN); /* not used */
 
 	/* Advertise ourselves. */
@@ -855,7 +855,7 @@ GetLatestLSN(TimeLineID *tli)
 static void
 HandleWalSummarizerInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
+	if (ConsumeInterrupt(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 
 	if (ConfigReloadPending)
@@ -872,7 +872,7 @@ HandleWalSummarizerInterrupts(void)
 	}
 
 	/* Perform logging of memory contexts of this process */
-	if (LogMemoryContextPending)
+	if (ConsumeInterrupt(INTERRUPT_LOG_MEMORY_CONTEXT))
 		ProcessLogMemoryContextInterrupt();
 }
 

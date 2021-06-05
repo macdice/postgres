@@ -25,7 +25,6 @@
 
 static shm_mq_handle *pq_mq_handle;
 static bool pq_mq_busy = false;
-static pid_t pq_mq_parallel_leader_pid = 0;
 static ProcNumber pq_mq_parallel_leader_proc_number = INVALID_PROC_NUMBER;
 
 static void pq_cleanup_redirect_to_shm_mq(dsm_segment *seg, Datum arg);
@@ -71,14 +70,13 @@ pq_cleanup_redirect_to_shm_mq(dsm_segment *seg, Datum arg)
 }
 
 /*
- * Arrange to SendProcSignal() to the parallel leader each time we transmit
+ * Arrange to interrupt the parallel leader each time we transmit
  * message data via the shm_mq.
  */
 void
-pq_set_parallel_leader(pid_t pid, ProcNumber procNumber)
+pq_set_parallel_leader(ProcNumber procNumber)
 {
 	Assert(PqCommMethods == &PqCommMqMethods);
-	pq_mq_parallel_leader_pid = pid;
 	pq_mq_parallel_leader_proc_number = procNumber;
 }
 
@@ -163,19 +161,14 @@ mq_putmessage(char msgtype, const char *s, size_t len)
 		 */
 		result = shm_mq_sendv(pq_mq_handle, iov, 2, true, true);
 
-		if (pq_mq_parallel_leader_pid != 0)
+		if (pq_mq_parallel_leader_proc_number != INVALID_PROC_NUMBER)
 		{
 			if (IsLogicalParallelApplyWorker())
-				SendProcSignal(pq_mq_parallel_leader_pid,
-							   PROCSIG_PARALLEL_APPLY_MESSAGE,
-							   pq_mq_parallel_leader_proc_number);
+				SendInterrupt(INTERRUPT_PARALLEL_APPLY_MESSAGE,
+							  pq_mq_parallel_leader_proc_number);
 			else
-			{
-				Assert(IsParallelWorker());
-				SendProcSignal(pq_mq_parallel_leader_pid,
-							   PROCSIG_PARALLEL_MESSAGE,
-							   pq_mq_parallel_leader_proc_number);
-			}
+				SendInterrupt(INTERRUPT_PARALLEL_MESSAGE,
+							  pq_mq_parallel_leader_proc_number);
 		}
 
 		if (result != SHM_MQ_WOULD_BLOCK)

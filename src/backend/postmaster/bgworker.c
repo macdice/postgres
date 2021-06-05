@@ -722,7 +722,6 @@ BackgroundWorkerMain(char *startup_data, size_t startup_data_len)
 		 * SIGINT is used to signal canceling the current action
 		 */
 		pqsignal(SIGINT, StatementCancelHandler);
-		pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 		pqsignal(SIGFPE, FloatExceptionHandler);
 
 		/* XXX Any other handlers needed here? */
@@ -730,9 +729,9 @@ BackgroundWorkerMain(char *startup_data, size_t startup_data_len)
 	else
 	{
 		pqsignal(SIGINT, SIG_IGN);
-		pqsignal(SIGUSR1, SIG_IGN);
 		pqsignal(SIGFPE, SIG_IGN);
 	}
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGTERM, bgworker_die);
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 	pqsignal(SIGHUP, SIG_IGN);

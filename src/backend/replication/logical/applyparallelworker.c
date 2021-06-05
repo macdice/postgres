@@ -843,9 +843,9 @@ LogicalParallelApplyLoop(shm_mq_handle *mqh)
 static void
 pa_shutdown(int code, Datum arg)
 {
-	SendProcSignal(MyLogicalRepWorker->leader_pid,
-				   PROCSIG_PARALLEL_APPLY_MESSAGE,
-				   INVALID_PROC_NUMBER);
+	if (MyLogicalRepWorker->leader_pgprocno != INVALID_PROC_NUMBER)
+		SendInterrupt(INTERRUPT_PARALLEL_APPLY_MESSAGE,
+					  MyLogicalRepWorker->leader_pgprocno);
 
 	dsm_detach((dsm_segment *) DatumGetPointer(arg));
 }
@@ -933,8 +933,7 @@ ParallelApplyWorkerMain(Datum main_arg)
 	error_mqh = shm_mq_attach(mq, seg, NULL);
 
 	pq_redirect_to_shm_mq(seg, error_mqh);
-	pq_set_parallel_leader(MyLogicalRepWorker->leader_pid,
-						   INVALID_PROC_NUMBER);
+	pq_set_parallel_leader(MyLogicalRepWorker->leader_pgprocno);
 
 	MyLogicalRepWorker->last_send_time = MyLogicalRepWorker->last_recv_time =
 		MyLogicalRepWorker->reply_time = 0;
@@ -976,21 +975,6 @@ ParallelApplyWorkerMain(Datum main_arg)
 	 * code to reach here.
 	 */
 	Assert(false);
-}
-
-/*
- * Handle receipt of an interrupt indicating a parallel apply worker message.
- *
- * Note: this is called within a signal handler! All we can do is set a flag
- * that will cause the next CHECK_FOR_INTERRUPTS() to invoke
- * HandleParallelApplyMessages().
- */
-void
-HandleParallelApplyMessageInterrupt(void)
-{
-	InterruptPending = true;
-	ParallelApplyMessagePending = true;
-	SetLatch(MyLatch);
 }
 
 /*
@@ -1089,8 +1073,6 @@ HandleParallelApplyMessages(void)
 		MemoryContextReset(hpam_context);
 
 	oldcontext = MemoryContextSwitchTo(hpam_context);
-
-	ParallelApplyMessagePending = false;
 
 	foreach(lc, ParallelApplyWorkerPool)
 	{

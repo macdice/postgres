@@ -213,6 +213,7 @@ ReplicationSlotsShmemInit(void)
 			LWLockInitialize(&slot->io_in_progress_lock,
 							 LWTRANCHE_REPLICATION_SLOT_IO);
 			ConditionVariableInit(&slot->active_cv);
+			slot->active_pgprocno = INVALID_PROC_NUMBER;
 		}
 	}
 }
@@ -388,6 +389,7 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	 */
 	Assert(!slot->in_use);
 	Assert(slot->active_pid == 0);
+	Assert(slot->active_pgprocno == INVALID_PROC_NUMBER);
 
 	/* first initialize persistent data */
 	memset(&slot->data, 0, sizeof(ReplicationSlotPersistentData));
@@ -430,7 +432,9 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	/* We can now mark the slot active, and that makes it our slot. */
 	SpinLockAcquire(&slot->mutex);
 	Assert(slot->active_pid == 0);
+	Assert(slot->active_pgprocno == INVALID_PROC_NUMBER);
 	slot->active_pid = MyProcPid;
+	slot->active_pgprocno = MyProcNumber;
 	SpinLockRelease(&slot->mutex);
 	MyReplicationSlot = slot;
 
@@ -577,12 +581,17 @@ retry:
 
 		SpinLockAcquire(&s->mutex);
 		if (s->active_pid == 0)
+		{
 			s->active_pid = MyProcPid;
+			s->active_pgprocno = MyProcNumber;
+		}
 		active_pid = s->active_pid;
 		SpinLockRelease(&s->mutex);
 	}
 	else
+	{
 		active_pid = MyProcPid;
+	}
 	LWLockRelease(ReplicationSlotControlLock);
 
 	/*
@@ -703,6 +712,7 @@ ReplicationSlotRelease(void)
 		 */
 		SpinLockAcquire(&slot->mutex);
 		slot->active_pid = 0;
+		slot->active_pgprocno = INVALID_PROC_NUMBER;
 		slot->inactive_since = now;
 		SpinLockRelease(&slot->mutex);
 		ConditionVariableBroadcast(&slot->active_cv);
@@ -947,6 +957,7 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 
 		SpinLockAcquire(&slot->mutex);
 		slot->active_pid = 0;
+		slot->active_pgprocno = INVALID_PROC_NUMBER;
 		SpinLockRelease(&slot->mutex);
 
 		/* wake up anyone waiting on this slot */
@@ -969,6 +980,7 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	 */
 	LWLockAcquire(ReplicationSlotControlLock, LW_EXCLUSIVE);
 	slot->active_pid = 0;
+	slot->active_pgprocno = INVALID_PROC_NUMBER;
 	slot->in_use = false;
 	LWLockRelease(ReplicationSlotControlLock);
 	ConditionVariableBroadcast(&slot->active_cv);
@@ -1328,6 +1340,7 @@ restart:
 		{
 			MyReplicationSlot = s;
 			s->active_pid = MyProcPid;
+			s->active_pgprocno = MyProcNumber;
 		}
 		SpinLockRelease(&s->mutex);
 
@@ -1580,6 +1593,7 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlotInvalidationCause cause,
 		XLogRecPtr	restart_lsn;
 		NameData	slotname;
 		int			active_pid = 0;
+		int			active_pgprocno = INVALID_PROC_NUMBER;
 		ReplicationSlotInvalidationCause invalidation_cause = RS_INVAL_NONE;
 
 		Assert(LWLockHeldByMeInMode(ReplicationSlotControlLock, LW_SHARED));
@@ -1667,6 +1681,7 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlotInvalidationCause cause,
 
 		slotname = s->data.name;
 		active_pid = s->active_pid;
+		active_pgprocno = s->active_pgprocno;
 
 		/*
 		 * If the slot can be acquired, do so and mark it invalidated
@@ -1731,9 +1746,8 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlotInvalidationCause cause,
 									   oldestLSN, snapshotConflictHorizon);
 
 				if (MyBackendType == B_STARTUP)
-					(void) SendProcSignal(active_pid,
-										  PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT,
-										  INVALID_PROC_NUMBER);
+					SendInterrupt(INTERRUPT_RECOVERY_CONFLICT_LOGICALSLOT,
+								  active_pgprocno);
 				else
 					(void) kill(active_pid, SIGTERM);
 

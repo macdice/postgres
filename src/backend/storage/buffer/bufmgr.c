@@ -2989,7 +2989,7 @@ BufferSync(int flags)
 		UnlockBufHdr(bufHdr, buf_state);
 
 		/* Check for barrier events in case NBuffers is large. */
-		if (ProcSignalBarrierPending)
+		if (ConsumeInterrupt(INTERRUPT_BARRIER))
 			ProcessProcSignalBarrier();
 	}
 
@@ -3070,7 +3070,7 @@ BufferSync(int flags)
 		s->num_to_scan++;
 
 		/* Check for barrier events. */
-		if (ProcSignalBarrierPending)
+		if (ConsumeInterrupt(INTERRUPT_BARRIER))
 			ProcessProcSignalBarrier();
 	}
 
@@ -5286,7 +5286,7 @@ LockBufferForCleanup(Buffer buffer)
 			 * deadlock_timeout for it.
 			 */
 			if (logged_recovery_conflict)
-				LogRecoveryConflict(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
+				LogRecoveryConflict(INTERRUPT_RECOVERY_CONFLICT_BUFFERPIN,
 									waitStart, GetCurrentTimestamp(),
 									NULL, false);
 
@@ -5336,7 +5336,7 @@ LockBufferForCleanup(Buffer buffer)
 				if (TimestampDifferenceExceeds(waitStart, now,
 											   DeadlockTimeout))
 				{
-					LogRecoveryConflict(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
+					LogRecoveryConflict(INTERRUPT_RECOVERY_CONFLICT_BUFFERPIN,
 										waitStart, now, NULL, true);
 					logged_recovery_conflict = true;
 				}

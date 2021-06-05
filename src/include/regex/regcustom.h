@@ -45,6 +45,7 @@
 #include "mb/pg_wchar.h"
 
 #include "miscadmin.h"			/* needed by rstacktoodeep */
+#include "postmaster/interrupt.h"
 
 
 /* overrides for regguts.h definitions, if any */

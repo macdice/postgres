@@ -123,6 +123,7 @@ pg_signal_backend(int pid, int sig)
 				(errmsg("could not send signal to process %d: %m", pid)));
 		return SIGNAL_BACKEND_ERROR;
 	}
+
 	return SIGNAL_BACKEND_SUCCESS;
 }
 
