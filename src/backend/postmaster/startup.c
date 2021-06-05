@@ -198,7 +198,7 @@ HandleStartupProcInterrupts(void)
 		exit(1);
 
 	/* Process barrier events */
-	if (ProcSignalBarrierPending)
+	if (InterruptPending(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 }
 
@@ -235,7 +235,7 @@ StartupProcessMain(void)
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 	InitializeTimeouts();		/* establishes SIGALRM handler */
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, StartupProcTriggerHandler);
 
 	/*

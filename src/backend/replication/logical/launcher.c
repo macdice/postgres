@@ -59,7 +59,7 @@ LogicalRepWorker *MyLogicalRepWorker = NULL;
 typedef struct LogicalRepCtxStruct
 {
 	/* Supervisor process. */
-	pid_t		launcher_pid;
+	int			launcher_pgprocno;
 
 	/* Background workers. */
 	LogicalRepWorker workers[FLEXIBLE_ARRAY_MEMBER];
@@ -407,7 +407,7 @@ retry:
 	snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication worker");
 
 	bgw.bgw_restart_time = BGW_NEVER_RESTART;
-	bgw.bgw_notify_pid = MyProcPid;
+	bgw.bgw_notify_pgprocno = MyProc->pgprocno;
 	bgw.bgw_main_arg = Int32GetDatum(slot);
 
 	if (!RegisterDynamicBackgroundWorker(&bgw, &bgw_handle))
@@ -632,7 +632,7 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 static void
 logicalrep_launcher_onexit(int code, Datum arg)
 {
-	LogicalRepCtx->launcher_pid = 0;
+	LogicalRepCtx->launcher_pgprocno = 0;
 }
 
 /*
@@ -722,7 +722,7 @@ ApplyLauncherRegister(void)
 	snprintf(bgw.bgw_type, BGW_MAXLEN,
 			 "logical replication launcher");
 	bgw.bgw_restart_time = 5;
-	bgw.bgw_notify_pid = 0;
+	bgw.bgw_notify_pgprocno = 0;
 	bgw.bgw_main_arg = (Datum) 0;
 
 	RegisterBackgroundWorker(&bgw);
@@ -791,8 +791,10 @@ ApplyLauncherWakeupAtCommit(void)
 static void
 ApplyLauncherWakeup(void)
 {
-	if (LogicalRepCtx->launcher_pid != 0)
-		kill(LogicalRepCtx->launcher_pid, SIGUSR1);
+	int pgprocno;
+
+	if ((pgprocno = LogicalRepCtx->launcher_pgprocno) != 0)
+		SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
 }
 
 /*
@@ -808,8 +810,8 @@ ApplyLauncherMain(Datum main_arg)
 
 	before_shmem_exit(logicalrep_launcher_onexit, (Datum) 0);
 
-	Assert(LogicalRepCtx->launcher_pid == 0);
-	LogicalRepCtx->launcher_pid = MyProcPid;
+	Assert(LogicalRepCtx->launcher_pgprocno == 0);
+	LogicalRepCtx->launcher_pgprocno = MyProc->pgprocno;
 
 	/* Establish signal handlers. */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
@@ -917,7 +919,7 @@ ApplyLauncherMain(Datum main_arg)
 bool
 IsLogicalLauncher(void)
 {
-	return LogicalRepCtx->launcher_pid == MyProcPid;
+	return LogicalRepCtx->launcher_pgprocno == MyProc->pgprocno;
 }
 
 /*

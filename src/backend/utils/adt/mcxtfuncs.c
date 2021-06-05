@@ -199,13 +199,7 @@ pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 	}
 
-	if (SendProcSignal(pid, PROCSIG_LOG_MEMORY_CONTEXT, proc->backendId) < 0)
-	{
-		/* Again, just a warning to allow loops */
-		ereport(WARNING,
-				(errmsg("could not send signal to process %d: %m", pid)));
-		PG_RETURN_BOOL(false);
-	}
+	InterruptSend(INTERRUPT_LOG_MEMORY_CONTEXT, proc->pgprocno);
 
 	PG_RETURN_BOOL(true);
 }

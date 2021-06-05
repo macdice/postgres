@@ -171,9 +171,9 @@ proc_exit_prepare(int code)
 	 * close up shop already.  Note that the signal handlers will not set
 	 * these flags again, now that proc_exit_inprogress is set.
 	 */
-	InterruptPending = false;
-	ProcDiePending = false;
-	QueryCancelPending = false;
+	InterruptLocal();
+	InterruptClear(INTERRUPT_DIE);
+	InterruptClear(INTERRUPT_QUERY_CANCEL);
 	InterruptHoldoffCount = 1;
 	CritSectionCount = 0;
 

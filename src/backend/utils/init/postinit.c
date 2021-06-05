@@ -1229,24 +1229,21 @@ LockTimeoutHandler(void)
 static void
 IdleInTransactionSessionTimeoutHandler(void)
 {
-	IdleInTransactionSessionTimeoutPending = true;
-	InterruptPending = true;
+	InterruptRaise(INTERRUPT_IDLE_TRANSACTION_TIMEOUT);
 	SetLatch(MyLatch);
 }
 
 static void
 IdleSessionTimeoutHandler(void)
 {
-	IdleSessionTimeoutPending = true;
-	InterruptPending = true;
+	InterruptRaise(INTERRUPT_IDLE_SESSION_TIMEOUT);
 	SetLatch(MyLatch);
 }
 
 static void
 ClientCheckTimeoutHandler(void)
 {
-	CheckClientConnectionPending = true;
-	InterruptPending = true;
+	InterruptRaise(INTERRUPT_CHECK_CONNECTION_TIMEOUT);
 	SetLatch(MyLatch);
 }
 

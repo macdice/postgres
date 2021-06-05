@@ -469,6 +469,9 @@ InitProcess(void)
 	 */
 	InitLWLockAccess();
 	InitDeadLockChecking();
+
+	/* Switch to shared-memory interrupts. */
+	InterruptShared();
 }
 
 /*
@@ -963,6 +966,9 @@ AuxiliaryProcKill(int code, Datum arg)
 	/* Cancel any pending condition variable sleep, too */
 	ConditionVariableCancelSleep();
 
+	/* Revert to local interrupt vector. */
+	InterruptLocal();
+
 	/* look at the equivalent ProcKill() code for comments */
 	SwitchBackToLocalLatch();
 	pgstat_reset_wait_event_storage();
@@ -1349,7 +1355,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 					 * because the startup process here has already waited
 					 * longer than deadlock_timeout.
 					 */
-					LogRecoveryConflict(PROCSIG_RECOVERY_CONFLICT_LOCK,
+					LogRecoveryConflict(INTERRUPT_RECOVERY_CONFLICT_LOCK,
 										standbyWaitStart, now,
 										cnt > 0 ? vxids : NULL, true);
 					logged_recovery_conflict = true;
@@ -1642,7 +1648,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 * startup process waited longer than deadlock_timeout for it.
 	 */
 	if (InHotStandby && logged_recovery_conflict)
-		LogRecoveryConflict(PROCSIG_RECOVERY_CONFLICT_LOCK,
+		LogRecoveryConflict(INTERRUPT_RECOVERY_CONFLICT_LOCK,
 							standbyWaitStart, GetCurrentTimestamp(),
 							NULL, false);
 

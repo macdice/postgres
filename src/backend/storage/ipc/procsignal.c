@@ -33,22 +33,9 @@
 #include "utils/memutils.h"
 
 /*
- * The SIGUSR1 signal is multiplexed to support signaling multiple event
- * types. The specific reason is communicated via flags in shared memory.
- * We keep a boolean flag for each possible "reason", so that different
- * reasons can be signaled to a process concurrently.  (However, if the same
- * reason is signaled more than once nearly simultaneously, the process may
- * observe it only once.)
+ * State for the ProcSignalBarrier mechanism.
  *
- * Each process that wants to receive signals registers its process ID
- * in the ProcSignalSlots array. The array is indexed by backend ID to make
- * slot allocation simple, and to avoid having to search the array when you
- * know the backend ID of the process you're signaling.  (We do support
- * signaling without backend ID, but it's a bit less efficient.)
- *
- * The flags are actually declared as "volatile sig_atomic_t" for maximum
- * portability.  This should ensure that loads and stores of the flag
- * values are atomic, allowing us to dispense with any explicit locking.
+ * XXX Rename all of this stuff?
  *
  * pss_signalFlags are intended to be set in cases where we don't need to
  * keep track of whether or not the target process has handled the signal,
@@ -62,7 +49,7 @@
 typedef struct
 {
 	volatile pid_t pss_pid;
-	volatile sig_atomic_t pss_signalFlags[NUM_PROCSIGNALS];
+	volatile int pss_pgprocno;
 	pg_atomic_uint64 pss_barrierGeneration;
 	pg_atomic_uint32 pss_barrierCheckMask;
 	ConditionVariable pss_barrierCV;
@@ -98,7 +85,6 @@ typedef struct
 static ProcSignalHeader *ProcSignal = NULL;
 static ProcSignalSlot *MyProcSignalSlot = NULL;
 
-static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
 static void ResetProcSignalBarrierBits(uint32 flags);
 static bool ProcessBarrierPlaceholder(void);
@@ -142,7 +128,7 @@ ProcSignalShmemInit(void)
 			ProcSignalSlot *slot = &ProcSignal->psh_slot[i];
 
 			slot->pss_pid = 0;
-			MemSet(slot->pss_signalFlags, 0, sizeof(slot->pss_signalFlags));
+			slot->pss_pgprocno = 0;
 			pg_atomic_init_u64(&slot->pss_barrierGeneration, PG_UINT64_MAX);
 			pg_atomic_init_u32(&slot->pss_barrierCheckMask, 0);
 			ConditionVariableInit(&slot->pss_barrierCV);
@@ -172,9 +158,6 @@ ProcSignalInit(int pss_idx)
 		elog(LOG, "process %d taking over ProcSignal slot %d, but it's not empty",
 			 MyProcPid, pss_idx);
 
-	/* Clear out any leftover signal reasons */
-	MemSet(slot->pss_signalFlags, 0, NUM_PROCSIGNALS * sizeof(sig_atomic_t));
-
 	/*
 	 * Initialize barrier state. Since we're a brand-new process, there
 	 * shouldn't be any leftover backend-private state that needs to be
@@ -192,8 +175,9 @@ ProcSignalInit(int pss_idx)
 	pg_atomic_write_u64(&slot->pss_barrierGeneration, barrier_generation);
 	pg_memory_barrier();
 
-	/* Mark slot with my PID */
+	/* Mark slot with my procno, so my latch will be set for proc signals */
 	slot->pss_pid = MyProcPid;
+	slot->pss_pgprocno = MyProc->pgprocno;
 
 	/* Remember slot location for CheckProcSignal */
 	MyProcSignalSlot = slot;
@@ -225,14 +209,14 @@ CleanupProcSignalState(int status, Datum arg)
 	MyProcSignalSlot = NULL;
 
 	/* sanity check */
-	if (slot->pss_pid != MyProcPid)
+	if (slot->pss_pgprocno != MyProc->pgprocno)
 	{
 		/*
 		 * don't ERROR here. We're exiting anyway, and don't want to get into
 		 * infinite loop trying to exit
 		 */
 		elog(LOG, "process %d releasing ProcSignal slot %d, but it contains %d",
-			 MyProcPid, pss_idx, (int) slot->pss_pid);
+			 MyProcPid, pss_idx, slot->pss_pgprocno);
 		return;					/* XXX better to zero the slot anyway? */
 	}
 
@@ -244,72 +228,7 @@ CleanupProcSignalState(int status, Datum arg)
 	ConditionVariableBroadcast(&slot->pss_barrierCV);
 
 	slot->pss_pid = 0;
-}
-
-/*
- * SendProcSignal
- *		Send a signal to a Postgres process
- *
- * Providing backendId is optional, but it will speed up the operation.
- *
- * On success (a signal was sent), zero is returned.
- * On error, -1 is returned, and errno is set (typically to ESRCH or EPERM).
- *
- * Not to be confused with ProcSendSignal
- */
-int
-SendProcSignal(pid_t pid, ProcSignalReason reason, BackendId backendId)
-{
-	volatile ProcSignalSlot *slot;
-
-	if (backendId != InvalidBackendId)
-	{
-		slot = &ProcSignal->psh_slot[backendId - 1];
-
-		/*
-		 * Note: Since there's no locking, it's possible that the target
-		 * process detaches from shared memory and exits right after this
-		 * test, before we set the flag and send signal. And the signal slot
-		 * might even be recycled by a new process, so it's remotely possible
-		 * that we set a flag for a wrong process. That's OK, all the signals
-		 * are such that no harm is done if they're mistakenly fired.
-		 */
-		if (slot->pss_pid == pid)
-		{
-			/* Atomically set the proper flag */
-			slot->pss_signalFlags[reason] = true;
-			/* Send signal */
-			return kill(pid, SIGUSR1);
-		}
-	}
-	else
-	{
-		/*
-		 * BackendId not provided, so search the array using pid.  We search
-		 * the array back to front so as to reduce search overhead.  Passing
-		 * InvalidBackendId means that the target is most likely an auxiliary
-		 * process, which will have a slot near the end of the array.
-		 */
-		int			i;
-
-		for (i = NumProcSignalSlots - 1; i >= 0; i--)
-		{
-			slot = &ProcSignal->psh_slot[i];
-
-			if (slot->pss_pid == pid)
-			{
-				/* the above note about race conditions applies here too */
-
-				/* Atomically set the proper flag */
-				slot->pss_signalFlags[reason] = true;
-				/* Send signal */
-				return kill(pid, SIGUSR1);
-			}
-		}
-	}
-
-	errno = ESRCH;
-	return -1;
+	slot->pss_pgprocno = 0;
 }
 
 /*
@@ -356,7 +275,7 @@ EmitProcSignalBarrier(ProcSignalBarrierType type)
 		pg_atomic_add_fetch_u64(&ProcSignal->psh_barrierGeneration, 1);
 
 	/*
-	 * Signal all the processes, so that they update their advertised barrier
+	 * Interrupt all the processes, so that they update their advertised barrier
 	 * generation.
 	 *
 	 * Concurrency is not a problem here. Backends that have exited don't
@@ -368,18 +287,8 @@ EmitProcSignalBarrier(ProcSignalBarrierType type)
 	 * backends that need to update state - but they won't actually need to
 	 * change any state.
 	 */
-	for (int i = NumProcSignalSlots - 1; i >= 0; i--)
-	{
-		volatile ProcSignalSlot *slot = &ProcSignal->psh_slot[i];
-		pid_t		pid = slot->pss_pid;
-
-		if (pid != 0)
-		{
-			/* see SendProcSignal for details */
-			slot->pss_signalFlags[PROCSIG_BARRIER] = true;
-			kill(pid, SIGUSR1);
-		}
-	}
+	for (int i = 0; i < ProcGlobal->allProcCount; ++i)
+		InterruptSend(INTERRUPT_BARRIER, i);
 
 	return generation;
 }
@@ -425,23 +334,6 @@ WaitForProcSignalBarrier(uint64 generation)
 }
 
 /*
- * Handle receipt of an interrupt indicating a global barrier event.
- *
- * All the actual work is deferred to ProcessProcSignalBarrier(), because we
- * cannot safely access the barrier generation inside the signal handler as
- * 64bit atomics might use spinlock based emulation, even for reads. As this
- * routine only gets called when PROCSIG_BARRIER is sent that won't cause a
- * lot of unnecessary work.
- */
-static void
-HandleProcSignalBarrierInterrupt(void)
-{
-	InterruptPending = true;
-	ProcSignalBarrierPending = true;
-	/* latch will be set by procsignal_sigusr1_handler */
-}
-
-/*
  * Perform global barrier related interrupt checking.
  *
  * Any backend that participates in ProcSignal signaling must arrange to
@@ -457,11 +349,6 @@ ProcessProcSignalBarrier(void)
 	volatile uint32 flags;
 
 	Assert(MyProcSignalSlot);
-
-	/* Exit quickly if there's no work to do. */
-	if (!ProcSignalBarrierPending)
-		return;
-	ProcSignalBarrierPending = false;
 
 	/*
 	 * It's not unlikely to process multiple barriers at once, before the
@@ -590,8 +477,7 @@ static void
 ResetProcSignalBarrierBits(uint32 flags)
 {
 	pg_atomic_fetch_or_u32(&MyProcSignalSlot->pss_barrierCheckMask, flags);
-	ProcSignalBarrierPending = true;
-	InterruptPending = true;
+	InterruptRaise(INTERRUPT_BARRIER);
 }
 
 static bool
@@ -610,76 +496,4 @@ ProcessBarrierPlaceholder(void)
 	 * very frequent retries, so try hard to make that an uncommon case.
 	 */
 	return true;
-}
-
-/*
- * CheckProcSignal - check to see if a particular reason has been
- * signaled, and clear the signal flag.  Should be called after receiving
- * SIGUSR1.
- */
-static bool
-CheckProcSignal(ProcSignalReason reason)
-{
-	volatile ProcSignalSlot *slot = MyProcSignalSlot;
-
-	if (slot != NULL)
-	{
-		/* Careful here --- don't clear flag if we haven't seen it set */
-		if (slot->pss_signalFlags[reason])
-		{
-			slot->pss_signalFlags[reason] = false;
-			return true;
-		}
-	}
-
-	return false;
-}
-
-/*
- * procsignal_sigusr1_handler - handle SIGUSR1 signal.
- */
-void
-procsignal_sigusr1_handler(SIGNAL_ARGS)
-{
-	int			save_errno = errno;
-
-	if (CheckProcSignal(PROCSIG_CATCHUP_INTERRUPT))
-		HandleCatchupInterrupt();
-
-	if (CheckProcSignal(PROCSIG_NOTIFY_INTERRUPT))
-		HandleNotifyInterrupt();
-
-	if (CheckProcSignal(PROCSIG_PARALLEL_MESSAGE))
-		HandleParallelMessageInterrupt();
-
-	if (CheckProcSignal(PROCSIG_WALSND_INIT_STOPPING))
-		HandleWalSndInitStopping();
-
-	if (CheckProcSignal(PROCSIG_BARRIER))
-		HandleProcSignalBarrierInterrupt();
-
-	if (CheckProcSignal(PROCSIG_LOG_MEMORY_CONTEXT))
-		HandleLogMemoryContextInterrupt();
-
-	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_DATABASE))
-		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_DATABASE);
-
-	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_TABLESPACE))
-		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_TABLESPACE);
-
-	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_LOCK))
-		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_LOCK);
-
-	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_SNAPSHOT))
-		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_SNAPSHOT);
-
-	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK))
-		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK);
-
-	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
-		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
-
-	SetLatch(MyLatch);
-
-	errno = save_errno;
 }

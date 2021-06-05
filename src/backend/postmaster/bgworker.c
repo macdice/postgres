@@ -190,6 +190,7 @@ BackgroundWorkerShmemInit(void)
 			slot->generation = 0;
 			rw->rw_shmem_slot = slotno;
 			rw->rw_worker.bgw_notify_pid = 0;	/* might be reinit after crash */
+			rw->rw_worker.bgw_notify_pgprocno = 0;
 			memcpy(&slot->worker, &rw->rw_worker, sizeof(BackgroundWorker));
 			++slotno;
 		}
@@ -318,6 +319,7 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 		if (slot->terminate)
 		{
 			int			notify_pid;
+			int			notify_pgprocno;
 
 			/*
 			 * We need a memory barrier here to make sure that the load of
@@ -325,6 +327,7 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 			 * complete before the store to in_use.
 			 */
 			notify_pid = slot->worker.bgw_notify_pid;
+			notify_pgprocno = slot->worker.bgw_notify_pgprocno;
 			if ((slot->worker.bgw_flags & BGWORKER_CLASS_PARALLEL) != 0)
 				BackgroundWorkerData->parallel_terminate_count++;
 			slot->pid = 0;
@@ -334,6 +337,8 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 
 			if (notify_pid != 0)
 				kill(notify_pid, SIGUSR1);
+			if (notify_pgprocno != 0)
+				SetLatch(&ProcGlobal->allProcs[notify_pgprocno].procLatch);
 
 			continue;
 		}
@@ -393,6 +398,7 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 				 (long) rw->rw_worker.bgw_notify_pid);
 			rw->rw_worker.bgw_notify_pid = 0;
 		}
+		rw->rw_worker.bgw_notify_pgprocno = slot->worker.bgw_notify_pgprocno;
 
 		/* Initialize postmaster bookkeeping. */
 		rw->rw_backend = NULL;
@@ -468,6 +474,8 @@ ReportBackgroundWorkerPID(RegisteredBgWorker *rw)
 
 	if (rw->rw_worker.bgw_notify_pid != 0)
 		kill(rw->rw_worker.bgw_notify_pid, SIGUSR1);
+	if (rw->rw_worker.bgw_notify_pgprocno != 0)
+		SetLatch(&ProcGlobal->allProcs[rw->rw_worker.bgw_notify_pgprocno].procLatch);
 }
 
 /*
@@ -482,6 +490,7 @@ ReportBackgroundWorkerExit(slist_mutable_iter *cur)
 	RegisteredBgWorker *rw;
 	BackgroundWorkerSlot *slot;
 	int			notify_pid;
+	int			notify_pgprocno;
 
 	rw = slist_container(RegisteredBgWorker, rw_lnode, cur->cur);
 
@@ -489,6 +498,7 @@ ReportBackgroundWorkerExit(slist_mutable_iter *cur)
 	slot = &BackgroundWorkerData->slot[rw->rw_shmem_slot];
 	slot->pid = rw->rw_pid;
 	notify_pid = rw->rw_worker.bgw_notify_pid;
+	notify_pgprocno = rw->rw_worker.bgw_notify_pgprocno;
 
 	/*
 	 * If this worker is slated for deregistration, do that before notifying
@@ -503,6 +513,8 @@ ReportBackgroundWorkerExit(slist_mutable_iter *cur)
 
 	if (notify_pid != 0)
 		kill(notify_pid, SIGUSR1);
+	if (notify_pgprocno != 0)
+		SetLatch(&ProcGlobal->allProcs[notify_pgprocno].procLatch);
 }
 
 /*
@@ -553,14 +565,18 @@ ForgetUnstartedBackgroundWorkers(void)
 
 		/* If it's not yet started, and there's someone waiting ... */
 		if (slot->pid == InvalidPid &&
-			rw->rw_worker.bgw_notify_pid != 0)
+			(rw->rw_worker.bgw_notify_pid != 0 ||
+			 rw->rw_worker.bgw_notify_pgprocno != 0))
 		{
 			/* ... then zap it, and notify the waiter */
 			int			notify_pid = rw->rw_worker.bgw_notify_pid;
+			int			notify_pgprocno = rw->rw_worker.bgw_notify_pgprocno;
 
 			ForgetBackgroundWorker(&iter);
 			if (notify_pid != 0)
 				kill(notify_pid, SIGUSR1);
+			if (notify_pgprocno != 0)
+				SetLatch(&ProcGlobal->allProcs[notify_pgprocno].procLatch);
 		}
 	}
 }
@@ -618,6 +634,7 @@ ResetBackgroundWorkerCrashTimes(void)
 			 * If there was anyone waiting for it, they're history.
 			 */
 			rw->rw_worker.bgw_notify_pid = 0;
+			rw->rw_worker.bgw_notify_pgprocno = 0;
 		}
 	}
 }
@@ -767,7 +784,6 @@ StartBackgroundWorker(void)
 		 * SIGINT is used to signal canceling the current action
 		 */
 		pqsignal(SIGINT, StatementCancelHandler);
-		pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 		pqsignal(SIGFPE, FloatExceptionHandler);
 
 		/* XXX Any other handlers needed here? */

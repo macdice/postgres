@@ -245,7 +245,7 @@ typedef struct QueuePosition
  */
 typedef struct QueueBackendStatus
 {
-	int32		pid;			/* either a PID or InvalidPid */
+	int32		pgprocno;		/* either a pgprocno or INVALID_PGPROCNO */
 	Oid			dboid;			/* backend's database OID, or InvalidOid */
 	BackendId	nextListener;	/* id of next listener, or InvalidBackendId */
 	QueuePosition pos;			/* backend has read queue up to here */
@@ -300,7 +300,7 @@ static AsyncQueueControl *asyncQueueControl;
 #define QUEUE_TAIL					(asyncQueueControl->tail)
 #define QUEUE_STOP_PAGE				(asyncQueueControl->stopPage)
 #define QUEUE_FIRST_LISTENER		(asyncQueueControl->firstListener)
-#define QUEUE_BACKEND_PID(i)		(asyncQueueControl->backend[i].pid)
+#define QUEUE_BACKEND_PGPROCNO(i)	(asyncQueueControl->backend[i].pgprocno)
 #define QUEUE_BACKEND_DBOID(i)		(asyncQueueControl->backend[i].dboid)
 #define QUEUE_NEXT_LISTENER(i)		(asyncQueueControl->backend[i].nextListener)
 #define QUEUE_BACKEND_POS(i)		(asyncQueueControl->backend[i].pos)
@@ -420,15 +420,6 @@ typedef struct NotificationHash
 } NotificationHash;
 
 static NotificationList *pendingNotifies = NULL;
-
-/*
- * Inbound notifications are initially processed by HandleNotifyInterrupt(),
- * called from inside a signal handler. That just sets the
- * notifyInterruptPending flag and sets the process
- * latch. ProcessNotifyInterrupt() will then be called whenever it's safe to
- * actually deal with the interrupt.
- */
-volatile sig_atomic_t notifyInterruptPending = false;
 
 /* True if we've registered an on_shmem_exit cleanup */
 static bool unlistenExitRegistered = false;
@@ -558,7 +549,7 @@ AsyncShmemInit(void)
 		/* zero'th entry won't be used, but let's initialize it anyway */
 		for (int i = 0; i <= MaxBackends; i++)
 		{
-			QUEUE_BACKEND_PID(i) = InvalidPid;
+			QUEUE_BACKEND_PGPROCNO(i) = INVALID_PGPROCNO;
 			QUEUE_BACKEND_DBOID(i) = InvalidOid;
 			QUEUE_NEXT_LISTENER(i) = InvalidBackendId;
 			SET_QUEUE_POS(QUEUE_BACKEND_POS(i), 0, 0);
@@ -1131,7 +1122,7 @@ Exec_ListenPreCommit(void)
 			prevListener = i;
 	}
 	QUEUE_BACKEND_POS(MyBackendId) = max;
-	QUEUE_BACKEND_PID(MyBackendId) = MyProcPid;
+	QUEUE_BACKEND_PGPROCNO(MyBackendId) = MyProc->pgprocno;
 	QUEUE_BACKEND_DBOID(MyBackendId) = MyDatabaseId;
 	/* Insert backend into list of listeners at correct position */
 	if (prevListener > 0)
@@ -1274,7 +1265,7 @@ asyncQueueUnregister(void)
 	 */
 	LWLockAcquire(NotifyQueueLock, LW_EXCLUSIVE);
 	/* Mark our entry as invalid */
-	QUEUE_BACKEND_PID(MyBackendId) = InvalidPid;
+	QUEUE_BACKEND_PGPROCNO(MyBackendId) = InvalidPid;
 	QUEUE_BACKEND_DBOID(MyBackendId) = InvalidOid;
 	/* and remove it from the list */
 	if (QUEUE_FIRST_LISTENER == MyBackendId)
@@ -1588,22 +1579,22 @@ asyncQueueFillWarning(void)
 								   t, QUEUE_FULL_WARN_INTERVAL))
 	{
 		QueuePosition min = QUEUE_HEAD;
-		int32		minPid = InvalidPid;
+		int32		minPgprocno = INVALID_PGPROCNO;
 
 		for (BackendId i = QUEUE_FIRST_LISTENER; i > 0; i = QUEUE_NEXT_LISTENER(i))
 		{
-			Assert(QUEUE_BACKEND_PID(i) != InvalidPid);
+			Assert(QUEUE_BACKEND_PGPROCNO(i) != INVALID_PGPROCNO);
 			min = QUEUE_POS_MIN(min, QUEUE_BACKEND_POS(i));
 			if (QUEUE_POS_EQUAL(min, QUEUE_BACKEND_POS(i)))
-				minPid = QUEUE_BACKEND_PID(i);
+				minPgprocno = QUEUE_BACKEND_PGPROCNO(i);
 		}
 
 		ereport(WARNING,
 				(errmsg("NOTIFY queue is %.0f%% full", fillDegree * 100),
-				 (minPid != InvalidPid ?
-				  errdetail("The server process with PID %d is among those with the oldest transactions.", minPid)
+				 (minPgprocno != INVALID_PGPROCNO ?
+				  errdetail("The server process with pgprocno %d is among those with the oldest transactions.", minPgprocno)
 				  : 0),
-				 (minPid != InvalidPid ?
+				 (minPgprocno != INVALID_PGPROCNO ?
 				  errhint("The NOTIFY queue cannot be emptied until that process ends its current transaction.")
 				  : 0)));
 
@@ -1629,8 +1620,7 @@ asyncQueueFillWarning(void)
 static void
 SignalBackends(void)
 {
-	int32	   *pids;
-	BackendId  *ids;
+	int32	   *pgprocnos;
 	int			count;
 
 	/*
@@ -1641,17 +1631,16 @@ SignalBackends(void)
 	 * XXX in principle these pallocs could fail, which would be bad. Maybe
 	 * preallocate the arrays?  They're not that large, though.
 	 */
-	pids = (int32 *) palloc(MaxBackends * sizeof(int32));
-	ids = (BackendId *) palloc(MaxBackends * sizeof(BackendId));
+	pgprocnos = (int32 *) palloc(MaxBackends * sizeof(int32));
 	count = 0;
 
 	LWLockAcquire(NotifyQueueLock, LW_EXCLUSIVE);
 	for (BackendId i = QUEUE_FIRST_LISTENER; i > 0; i = QUEUE_NEXT_LISTENER(i))
 	{
-		int32		pid = QUEUE_BACKEND_PID(i);
+		int32		pgprocno = QUEUE_BACKEND_PGPROCNO(i);
 		QueuePosition pos;
 
-		Assert(pid != InvalidPid);
+		Assert(pgprocno != INVALID_PGPROCNO);
 		pos = QUEUE_BACKEND_POS(i);
 		if (QUEUE_BACKEND_DBOID(i) == MyDatabaseId)
 		{
@@ -1672,40 +1661,17 @@ SignalBackends(void)
 								   QUEUE_POS_PAGE(pos)) < QUEUE_CLEANUP_DELAY)
 				continue;
 		}
-		/* OK, need to signal this one */
-		pids[count] = pid;
-		ids[count] = i;
+		/* OK, need to wake this one */
+		pgprocnos[count] = pgprocno;
 		count++;
 	}
 	LWLockRelease(NotifyQueueLock);
 
-	/* Now send signals */
+	/* Now send interrupts */
 	for (int i = 0; i < count; i++)
-	{
-		int32		pid = pids[i];
+		InterruptSend(INTERRUPT_NOTIFY, pgprocnos[i]);
 
-		/*
-		 * If we are signaling our own process, no need to involve the kernel;
-		 * just set the flag directly.
-		 */
-		if (pid == MyProcPid)
-		{
-			notifyInterruptPending = true;
-			continue;
-		}
-
-		/*
-		 * Note: assuming things aren't broken, a signal failure here could
-		 * only occur if the target backend exited since we released
-		 * NotifyQueueLock; which is unlikely but certainly possible. So we
-		 * just log a low-level debug message if it happens.
-		 */
-		if (SendProcSignal(pid, PROCSIG_NOTIFY_INTERRUPT, ids[i]) < 0)
-			elog(DEBUG3, "could not signal backend with PID %d: %m", pid);
-	}
-
-	pfree(pids);
-	pfree(ids);
+	pfree(pgprocnos);
 }
 
 /*
@@ -1842,36 +1808,11 @@ AtSubAbort_Notify(void)
 }
 
 /*
- * HandleNotifyInterrupt
- *
- *		Signal handler portion of interrupt handling. Let the backend know
- *		that there's a pending notify interrupt. If we're currently reading
- *		from the client, this will interrupt the read and
- *		ProcessClientReadInterrupt() will call ProcessNotifyInterrupt().
- */
-void
-HandleNotifyInterrupt(void)
-{
-	/*
-	 * Note: this is called by a SIGNAL HANDLER. You must be very wary what
-	 * you do here.
-	 */
-
-	/* signal that work needs to be done */
-	notifyInterruptPending = true;
-
-	/* make sure the event is processed in due course */
-	SetLatch(MyLatch);
-}
-
-/*
  * ProcessNotifyInterrupt
  *
- *		This is called if we see notifyInterruptPending set, just before
+ *		This is called if we see PROCSIG_NOTIFY_INTERRUPT set, just before
  *		transmitting ReadyForQuery at the end of a frontend command, and
  *		also if a notify signal occurs while reading from the frontend.
- *		HandleNotifyInterrupt() will cause the read to be interrupted
- *		via the process's latch, and this routine will get called.
  *		If we are truly idle (ie, *not* inside a transaction block),
  *		process the incoming notifies.
  *
@@ -1886,7 +1827,7 @@ ProcessNotifyInterrupt(bool flush)
 		return;					/* not really idle */
 
 	/* Loop in case another signal arrives while sending messages */
-	while (notifyInterruptPending)
+	while (InterruptConsume(INTERRUPT_NOTIFY))
 		ProcessIncomingNotify(flush);
 }
 
@@ -1913,7 +1854,7 @@ asyncQueueReadAllNotifications(void)
 	/* Fetch current state */
 	LWLockAcquire(NotifyQueueLock, LW_SHARED);
 	/* Assert checks that we have a valid state entry */
-	Assert(MyProcPid == QUEUE_BACKEND_PID(MyBackendId));
+	Assert(MyProc->pgprocno == QUEUE_BACKEND_PGPROCNO(MyBackendId));
 	pos = QUEUE_BACKEND_POS(MyBackendId);
 	head = QUEUE_HEAD;
 	LWLockRelease(NotifyQueueLock);
@@ -2185,7 +2126,7 @@ asyncQueueAdvanceTail(void)
 	min = QUEUE_HEAD;
 	for (BackendId i = QUEUE_FIRST_LISTENER; i > 0; i = QUEUE_NEXT_LISTENER(i))
 	{
-		Assert(QUEUE_BACKEND_PID(i) != InvalidPid);
+		Assert(QUEUE_BACKEND_PGPROCNO(i) != INVALID_PGPROCNO);
 		min = QUEUE_POS_MIN(min, QUEUE_BACKEND_POS(i));
 	}
 	QUEUE_TAIL = min;
@@ -2236,9 +2177,6 @@ asyncQueueAdvanceTail(void)
 static void
 ProcessIncomingNotify(bool flush)
 {
-	/* We *must* reset the flag */
-	notifyInterruptPending = false;
-
 	/* Do nothing else if we aren't actively listening */
 	if (listenChannels == NIL)
 		return;

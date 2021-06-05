@@ -103,6 +103,7 @@
 #include "miscadmin.h"
 #include "parser/parse_relation.h"
 #include "pgstat.h"
+#include "postmaster/interrupt.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalrelation.h"
 #include "replication/walreceiver.h"

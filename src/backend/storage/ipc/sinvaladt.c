@@ -19,6 +19,7 @@
 
 #include "access/transam.h"
 #include "miscadmin.h"
+#include "postmaster/interrupt.h"
 #include "storage/backendid.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -724,19 +725,15 @@ SICleanupQueue(bool callerHasWriteLock, int minFree)
 
 	/*
 	 * Lastly, signal anyone who needs a catchup interrupt.  Since
-	 * SendProcSignal() might not be fast, we don't want to hold locks while
+	 * InterruptSend() might not be fast, we don't want to hold locks while
 	 * executing it.
 	 */
 	if (needSig)
 	{
-		pid_t		his_pid = needSig->procPid;
-		BackendId	his_backendId = (needSig - &segP->procState[0]) + 1;
-
 		needSig->signaled = true;
 		LWLockRelease(SInvalReadLock);
 		LWLockRelease(SInvalWriteLock);
-		elog(DEBUG4, "sending sinval catchup signal to PID %d", (int) his_pid);
-		SendProcSignal(his_pid, PROCSIG_CATCHUP_INTERRUPT, his_backendId);
+		InterruptSend(INTERRUPT_SINVAL_CATCHUP, needSig->proc->pgprocno);
 		if (callerHasWriteLock)
 			LWLockAcquire(SInvalWriteLock, LW_EXCLUSIVE);
 	}

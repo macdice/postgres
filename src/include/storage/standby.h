@@ -15,6 +15,7 @@
 #define STANDBY_H
 
 #include "datatype/timestamp.h"
+#include "postmaster/interrupt.h"
 #include "storage/lock.h"
 #include "storage/procsignal.h"
 #include "storage/relfilenode.h"
@@ -42,7 +43,7 @@ extern void CheckRecoveryConflictDeadlock(void);
 extern void StandbyDeadLockHandler(void);
 extern void StandbyTimeoutHandler(void);
 extern void StandbyLockTimeoutHandler(void);
-extern void LogRecoveryConflict(ProcSignalReason reason, TimestampTz wait_start,
+extern void LogRecoveryConflict(InterruptType reason, TimestampTz wait_start,
 								TimestampTz cur_ts, VirtualTransactionId *wait_list,
 								bool still_waiting);
 

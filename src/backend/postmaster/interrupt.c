@@ -17,14 +17,63 @@
 #include <unistd.h>
 
 #include "miscadmin.h"
+#include "port/atomics.h"
 #include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
+#include "storage/proc.h"
 #include "storage/procsignal.h"
 #include "utils/guc.h"
 
 volatile sig_atomic_t ConfigReloadPending = false;
 volatile sig_atomic_t ShutdownRequestPending = false;
+
+static pg_atomic_uint32 LocalPendingInterrupts;
+
+pg_atomic_uint32 *MyPendingInterrupts = &LocalPendingInterrupts;
+
+/*
+ * Switch to local interrupts.
+ */
+void
+InterruptLocal(void)
+{
+	pg_atomic_fetch_or_u32(&LocalPendingInterrupts, pg_atomic_read_u32(MyPendingInterrupts));
+	MyPendingInterrupts = &LocalPendingInterrupts;
+}
+
+/*
+ * Switch to shared memory interrupts.
+ */
+void
+InterruptShared(void)
+{
+	pg_atomic_fetch_or_u32(&MyProc->pending_interrupts, pg_atomic_read_u32(MyPendingInterrupts));
+	MyPendingInterrupts = &MyProc->pending_interrupts;
+}
+
+/*
+ * Set an interrupt flag in this backend.
+ */
+void
+InterruptRaise(InterruptType reason)
+{
+	pg_atomic_fetch_or_u32(MyPendingInterrupts, 1 << reason);
+	SetLatch(MyLatch);
+}
+
+/*
+ * Set an interrupt flag in another backend.
+ */
+void
+InterruptSend(InterruptType reason, int pgprocno)
+{
+	PGPROC *proc;
+
+	proc = &ProcGlobal->allProcs[pgprocno];
+	pg_atomic_fetch_or_u32(&proc->pending_interrupts, 1 << reason);
+	SetLatch(&proc->procLatch);
+}
 
 /*
  * Simple interrupt handler for main loops of background processes.
@@ -32,7 +81,7 @@ volatile sig_atomic_t ShutdownRequestPending = false;
 void
 HandleMainLoopInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
+	if (InterruptConsume(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 
 	if (ConfigReloadPending)

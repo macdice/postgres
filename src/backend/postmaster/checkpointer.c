@@ -198,7 +198,7 @@ CheckpointerMain(void)
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, SignalHandlerForShutdownRequest);
 
 	/*
@@ -533,7 +533,7 @@ CheckpointerMain(void)
 static void
 HandleCheckpointerInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
+	if (InterruptPending(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 
 	if (ConfigReloadPending)
@@ -735,7 +735,7 @@ CheckpointWriteDelay(int flags, double progress)
 	}
 
 	/* Check for barrier events. */
-	if (ProcSignalBarrierPending)
+	if (InterruptPending(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 }
 

@@ -79,6 +79,7 @@
 #include "libpq/libpq.h"
 #include "miscadmin.h"
 #include "port/pg_bswap.h"
+#include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -1417,8 +1418,7 @@ internal_flush(void)
 			 * the connection.
 			 */
 			PqSendStart = PqSendPointer = 0;
-			ClientConnectionLost = 1;
-			InterruptPending = 1;
+			InterruptRaise(INTERRUPT_CONNECTION_LOST);
 			return EOF;
 		}
 

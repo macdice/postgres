@@ -2153,7 +2153,7 @@ vacuum_delay_point(void)
 	/* Always check for interrupts */
 	CHECK_FOR_INTERRUPTS();
 
-	if (!VacuumCostActive || InterruptPending)
+	if (!VacuumCostActive || INTERRUPTS_PENDING_CONDITION())
 		return;
 
 	/*

@@ -91,7 +91,6 @@ typedef struct FixedParallelState
 	bool		is_superuser;
 	PGPROC	   *parallel_leader_pgproc;
 	pid_t		parallel_leader_pid;
-	BackendId	parallel_leader_backend_id;
 	TimestampTz xact_ts;
 	TimestampTz stmt_ts;
 	SerializableXactHandle serializable_xact_handle;
@@ -124,7 +123,7 @@ static FixedParallelState *MyFixedParallelState;
 static dlist_head pcxt_list = DLIST_STATIC_INIT(pcxt_list);
 
 /* Backend-local copy of data from FixedParallelState. */
-static pid_t ParallelLeaderPid;
+static int ParallelLeaderPgprocno;
 
 /*
  * List of internal parallel worker entry points.  We need this for
@@ -328,7 +327,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 						  &fps->temp_toast_namespace_id);
 	fps->parallel_leader_pgproc = MyProc;
 	fps->parallel_leader_pid = MyProcPid;
-	fps->parallel_leader_backend_id = MyBackendId;
 	fps->xact_ts = GetCurrentTransactionStartTimestamp();
 	fps->stmt_ts = GetCurrentStatementStartTimestamp();
 	fps->serializable_xact_handle = ShareSerializableXact();
@@ -569,7 +567,7 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 	sprintf(worker.bgw_library_name, "postgres");
 	sprintf(worker.bgw_function_name, "ParallelWorkerMain");
 	worker.bgw_main_arg = UInt32GetDatum(dsm_segment_handle(pcxt->seg));
-	worker.bgw_notify_pid = MyProcPid;
+	worker.bgw_notify_pgprocno = MyProc->pgprocno;
 
 	/*
 	 * Start workers.
@@ -993,21 +991,6 @@ ParallelContextActive(void)
 }
 
 /*
- * Handle receipt of an interrupt indicating a parallel worker message.
- *
- * Note: this is called within a signal handler!  All we can do is set
- * a flag that will cause the next CHECK_FOR_INTERRUPTS() to invoke
- * HandleParallelMessages().
- */
-void
-HandleParallelMessageInterrupt(void)
-{
-	InterruptPending = true;
-	ParallelMessagePending = true;
-	SetLatch(MyLatch);
-}
-
-/*
  * Handle any queued protocol messages received from parallel workers.
  */
 void
@@ -1315,9 +1298,8 @@ ParallelWorkerMain(Datum main_arg)
 	fps = shm_toc_lookup(toc, PARALLEL_KEY_FIXED, false);
 	MyFixedParallelState = fps;
 
-	/* Arrange to signal the leader if we exit. */
-	ParallelLeaderPid = fps->parallel_leader_pid;
-	ParallelLeaderBackendId = fps->parallel_leader_backend_id;
+	/* Arrange to interrupt the leader if we exit. */
+	ParallelLeaderPgprocno = fps->parallel_leader_pgproc->pgprocno;
 	before_shmem_exit(ParallelWorkerShutdown, PointerGetDatum(seg));
 
 	/*
@@ -1332,8 +1314,7 @@ ParallelWorkerMain(Datum main_arg)
 	shm_mq_set_sender(mq, MyProc);
 	mqh = shm_mq_attach(mq, seg, NULL);
 	pq_redirect_to_shm_mq(seg, mqh);
-	pq_set_parallel_leader(fps->parallel_leader_pid,
-						   fps->parallel_leader_backend_id);
+	pq_set_parallel_leader(fps->parallel_leader_pgproc->pgprocno);
 
 	/*
 	 * Send a BackendKeyData message to the process that initiated parallelism
@@ -1545,9 +1526,8 @@ ParallelWorkerReportLastRecEnd(XLogRecPtr last_xlog_end)
 static void
 ParallelWorkerShutdown(int code, Datum arg)
 {
-	SendProcSignal(ParallelLeaderPid,
-				   PROCSIG_PARALLEL_MESSAGE,
-				   ParallelLeaderBackendId);
+	InterruptSend(INTERRUPT_PARALLEL_MESSAGE,
+				  MyFixedParallelState->parallel_leader_pgproc->pgprocno);
 
 	dsm_detach((dsm_segment *) DatumGetPointer(arg));
 }
