@@ -155,6 +155,7 @@ typedef struct ReplicationSlot
 
 	/* Who is streaming out changes for this slot? 0 in unused slots. */
 	pid_t		active_pid;
+	ProcNumber	active_pgprocno;
 
 	/* any outstanding modifications? */
 	bool		just_dirtied;

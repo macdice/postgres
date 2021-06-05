@@ -124,7 +124,7 @@ static FixedParallelState *MyFixedParallelState;
 static dlist_head pcxt_list = DLIST_STATIC_INIT(pcxt_list);
 
 /* Backend-local copy of data from FixedParallelState. */
-static pid_t ParallelLeaderPid;
+static int ParallelLeaderPgprocno;
 
 /*
  * List of internal parallel worker entry points.  We need this for
@@ -582,7 +582,7 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 	sprintf(worker.bgw_library_name, "postgres");
 	sprintf(worker.bgw_function_name, "ParallelWorkerMain");
 	worker.bgw_main_arg = UInt32GetDatum(dsm_segment_handle(pcxt->seg));
-	worker.bgw_notify_pid = MyProcPid;
+	worker.bgw_notify_pgprocno = MyProcNumber;
 
 	/*
 	 * Start workers.
@@ -1006,21 +1006,6 @@ ParallelContextActive(void)
 }
 
 /*
- * Handle receipt of an interrupt indicating a parallel worker message.
- *
- * Note: this is called within a signal handler!  All we can do is set
- * a flag that will cause the next CHECK_FOR_INTERRUPTS() to invoke
- * HandleParallelMessages().
- */
-void
-HandleParallelMessageInterrupt(void)
-{
-	InterruptPending = true;
-	ParallelMessagePending = true;
-	SetLatch(MyLatch);
-}
-
-/*
  * Handle any queued protocol messages received from parallel workers.
  */
 void
@@ -1335,9 +1320,8 @@ ParallelWorkerMain(Datum main_arg)
 	fps = shm_toc_lookup(toc, PARALLEL_KEY_FIXED, false);
 	MyFixedParallelState = fps;
 
-	/* Arrange to signal the leader if we exit. */
-	ParallelLeaderPid = fps->parallel_leader_pid;
-	ParallelLeaderProcNumber = fps->parallel_leader_proc_number;
+	/* Arrange to interrupt the leader if we exit. */
+	ParallelLeaderPgprocno = fps->parallel_leader_proc_number;
 	before_shmem_exit(ParallelWorkerShutdown, PointerGetDatum(seg));
 
 	/*
@@ -1352,8 +1336,7 @@ ParallelWorkerMain(Datum main_arg)
 	shm_mq_set_sender(mq, MyProc);
 	mqh = shm_mq_attach(mq, seg, NULL);
 	pq_redirect_to_shm_mq(seg, mqh);
-	pq_set_parallel_leader(fps->parallel_leader_pid,
-						   fps->parallel_leader_proc_number);
+	pq_set_parallel_leader(fps->parallel_leader_proc_number);
 
 	/*
 	 * Hooray! Primary initialization is complete.  Now, we need to set up our
@@ -1566,9 +1549,7 @@ ParallelWorkerReportLastRecEnd(XLogRecPtr last_xlog_end)
 static void
 ParallelWorkerShutdown(int code, Datum arg)
 {
-	SendProcSignal(ParallelLeaderPid,
-				   PROCSIG_PARALLEL_MESSAGE,
-				   ParallelLeaderProcNumber);
+	SendInterrupt(INTERRUPT_PARALLEL_MESSAGE, ParallelLeaderProcNumber);
 
 	dsm_detach((dsm_segment *) DatumGetPointer(arg));
 }

@@ -90,29 +90,29 @@ pgstat_report_recovery_conflict(int reason)
 
 	switch (reason)
 	{
-		case PROCSIG_RECOVERY_CONFLICT_DATABASE:
+		case INTERRUPT_RECOVERY_CONFLICT_DATABASE:
 
 			/*
 			 * Since we drop the information about the database as soon as it
 			 * replicates, there is no point in counting these conflicts.
 			 */
 			break;
-		case PROCSIG_RECOVERY_CONFLICT_TABLESPACE:
+		case INTERRUPT_RECOVERY_CONFLICT_TABLESPACE:
 			dbentry->conflict_tablespace++;
 			break;
-		case PROCSIG_RECOVERY_CONFLICT_LOCK:
+		case INTERRUPT_RECOVERY_CONFLICT_LOCK:
 			dbentry->conflict_lock++;
 			break;
-		case PROCSIG_RECOVERY_CONFLICT_SNAPSHOT:
+		case INTERRUPT_RECOVERY_CONFLICT_SNAPSHOT:
 			dbentry->conflict_snapshot++;
 			break;
-		case PROCSIG_RECOVERY_CONFLICT_BUFFERPIN:
+		case INTERRUPT_RECOVERY_CONFLICT_BUFFERPIN:
 			dbentry->conflict_bufferpin++;
 			break;
-		case PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT:
+		case INTERRUPT_RECOVERY_CONFLICT_LOGICALSLOT:
 			dbentry->conflict_logicalslot++;
 			break;
-		case PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK:
+		case INTERRUPT_RECOVERY_CONFLICT_STARTUP_DEADLOCK:
 			dbentry->conflict_startup_deadlock++;
 			break;
 	}

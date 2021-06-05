@@ -56,7 +56,7 @@ LogicalRepWorker *MyLogicalRepWorker = NULL;
 typedef struct LogicalRepCtxStruct
 {
 	/* Supervisor process. */
-	pid_t		launcher_pid;
+	int			launcher_pgprocno;
 
 	/* Hash table holding last start times of subscriptions' apply workers. */
 	dsa_handle	last_start_dsa;
@@ -443,6 +443,7 @@ retry:
 	worker->relstate_lsn = InvalidXLogRecPtr;
 	worker->stream_fileset = NULL;
 	worker->leader_pid = is_parallel_apply_worker ? MyProcPid : InvalidPid;
+	worker->leader_pgprocno = is_parallel_apply_worker ? MyProcNumber : INVALID_PROC_NUMBER;
 	worker->parallel_apply = is_parallel_apply_worker;
 	worker->last_lsn = InvalidXLogRecPtr;
 	TIMESTAMP_NOBEGIN(worker->last_send_time);
@@ -497,7 +498,7 @@ retry:
 	}
 
 	bgw.bgw_restart_time = BGW_NEVER_RESTART;
-	bgw.bgw_notify_pid = MyProcPid;
+	bgw.bgw_notify_pgprocno = MyProcNumber;
 	bgw.bgw_main_arg = Int32GetDatum(slot);
 
 	if (!RegisterDynamicBackgroundWorker(&bgw, &bgw_handle))
@@ -795,6 +796,7 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 	worker->subid = InvalidOid;
 	worker->relid = InvalidOid;
 	worker->leader_pid = InvalidPid;
+	worker->leader_pgprocno = INVALID_PROC_NUMBER;
 	worker->parallel_apply = false;
 }
 
@@ -806,7 +808,7 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 static void
 logicalrep_launcher_onexit(int code, Datum arg)
 {
-	LogicalRepCtx->launcher_pid = 0;
+	LogicalRepCtx->launcher_pgprocno = 0;
 }
 
 /*
@@ -940,7 +942,7 @@ ApplyLauncherRegister(void)
 	snprintf(bgw.bgw_type, BGW_MAXLEN,
 			 "logical replication launcher");
 	bgw.bgw_restart_time = 5;
-	bgw.bgw_notify_pid = 0;
+	bgw.bgw_notify_pgprocno = 0;
 	bgw.bgw_main_arg = (Datum) 0;
 
 	RegisterBackgroundWorker(&bgw);
@@ -1111,8 +1113,10 @@ ApplyLauncherWakeupAtCommit(void)
 static void
 ApplyLauncherWakeup(void)
 {
-	if (LogicalRepCtx->launcher_pid != 0)
-		kill(LogicalRepCtx->launcher_pid, SIGUSR1);
+	int pgprocno;
+
+	if ((pgprocno = LogicalRepCtx->launcher_pgprocno) != 0)
+		SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
 }
 
 /*
@@ -1126,8 +1130,8 @@ ApplyLauncherMain(Datum main_arg)
 
 	before_shmem_exit(logicalrep_launcher_onexit, (Datum) 0);
 
-	Assert(LogicalRepCtx->launcher_pid == 0);
-	LogicalRepCtx->launcher_pid = MyProcPid;
+	Assert(LogicalRepCtx->launcher_pgprocno == 0);
+	LogicalRepCtx->launcher_pgprocno = MyProcNumber;
 
 	/* Establish signal handlers. */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
@@ -1242,7 +1246,7 @@ ApplyLauncherMain(Datum main_arg)
 bool
 IsLogicalLauncher(void)
 {
-	return LogicalRepCtx->launcher_pid == MyProcPid;
+	return LogicalRepCtx->launcher_pgprocno == MyProcNumber;
 }
 
 /*

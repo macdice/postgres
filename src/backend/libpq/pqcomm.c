@@ -76,6 +76,7 @@
 #include "libpq/libpq.h"
 #include "miscadmin.h"
 #include "port/pg_bswap.h"
+#include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
@@ -1408,8 +1409,7 @@ internal_flush_buffer(const char *buf, size_t *start, size_t *end)
 			 * the connection.
 			 */
 			*start = *end = 0;
-			ClientConnectionLost = 1;
-			InterruptPending = 1;
+			RaiseInterrupt(INTERRUPT_CONNECTION_LOST);
 			return EOF;
 		}
 

@@ -1305,7 +1305,7 @@ ReplSlotSyncWorkerMain(char *startup_data, size_t startup_data_len)
 	pqsignal(SIGINT, SignalHandlerForShutdownRequest);
 	pqsignal(SIGTERM, die);
 	pqsignal(SIGFPE, FloatExceptionHandler);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGCHLD, SIG_DFL);

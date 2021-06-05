@@ -19,6 +19,7 @@
 
 #include "access/transam.h"
 #include "miscadmin.h"
+#include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procnumber.h"
@@ -138,7 +139,8 @@
 typedef struct ProcState
 {
 	/* procPid is zero in an inactive ProcState array entry. */
-	pid_t		procPid;		/* PID of backend, for signaling */
+	pid_t		procPid;		/* pid of backend */
+	ProcNumber	pgprocno;		/* for sending interrupts */
 	/* nextMsgNum is meaningless if procPid == 0 or resetState is true. */
 	int			nextMsgNum;		/* next message number to read */
 	bool		resetState;		/* backend needs to reset its state */
@@ -254,6 +256,7 @@ CreateSharedInvalidationState(void)
 	for (i = 0; i < NumProcStateSlots; i++)
 	{
 		shmInvalBuffer->procState[i].procPid = 0;	/* inactive */
+		shmInvalBuffer->procState[i].pgprocno = INVALID_PROC_NUMBER;
 		shmInvalBuffer->procState[i].nextMsgNum = 0;	/* meaningless */
 		shmInvalBuffer->procState[i].resetState = false;
 		shmInvalBuffer->procState[i].signaled = false;
@@ -304,6 +307,7 @@ SharedInvalBackendInit(bool sendOnly)
 
 	/* mark myself active, with all extant messages already read */
 	stateP->procPid = MyProcPid;
+	stateP->pgprocno = MyProcNumber;
 	stateP->nextMsgNum = segP->maxMsgNum;
 	stateP->resetState = false;
 	stateP->signaled = false;
@@ -342,6 +346,7 @@ CleanupInvalidationState(int status, Datum arg)
 
 	/* Mark myself inactive */
 	stateP->procPid = 0;
+	stateP->pgprocno = INVALID_PROC_NUMBER;
 	stateP->nextMsgNum = 0;
 	stateP->resetState = false;
 	stateP->signaled = false;
@@ -659,19 +664,16 @@ SICleanupQueue(bool callerHasWriteLock, int minFree)
 
 	/*
 	 * Lastly, signal anyone who needs a catchup interrupt.  Since
-	 * SendProcSignal() might not be fast, we don't want to hold locks while
+	 * SendInterrupt() might not be fast, we don't want to hold locks while
 	 * executing it.
 	 */
 	if (needSig)
 	{
-		pid_t		his_pid = needSig->procPid;
-		ProcNumber	his_procNumber = (needSig - &segP->procState[0]);
-
 		needSig->signaled = true;
 		LWLockRelease(SInvalReadLock);
 		LWLockRelease(SInvalWriteLock);
-		elog(DEBUG4, "sending sinval catchup signal to PID %d", (int) his_pid);
-		SendProcSignal(his_pid, PROCSIG_CATCHUP_INTERRUPT, his_procNumber);
+		elog(DEBUG4, "sending sinval catchup interrupt to PID %d", (int) needSig->procPid);
+		SendInterrupt(INTERRUPT_SINVAL_CATCHUP, needSig->pgprocno);
 		if (callerHasWriteLock)
 			LWLockAcquire(SInvalWriteLock, LW_EXCLUSIVE);
 	}

@@ -18,6 +18,7 @@
 
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
+#include "postmaster/interrupt.h"
 #include "nodes/extensible.h"
 #include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"

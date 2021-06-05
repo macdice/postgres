@@ -17,9 +17,11 @@
 #include <unistd.h>
 
 #include "miscadmin.h"
+#include "port/atomics.h"
 #include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
+#include "storage/proc.h"
 #include "storage/procsignal.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -27,13 +29,62 @@
 volatile sig_atomic_t ConfigReloadPending = false;
 volatile sig_atomic_t ShutdownRequestPending = false;
 
+static pg_atomic_uint32 LocalPendingInterrupts;
+
+pg_atomic_uint32 *MyPendingInterrupts = &LocalPendingInterrupts;
+
+/*
+ * Switch to local interrupts.  Other backends can't send interrupts to this
+ * one.  Only RaiseInterrupt() can set them, from inside this process.
+ */
+void
+SwitchToLocalInterrupts(void)
+{
+	pg_atomic_fetch_or_u32(&LocalPendingInterrupts, pg_atomic_read_u32(MyPendingInterrupts));
+	MyPendingInterrupts = &LocalPendingInterrupts;
+}
+
+/*
+ * Switch to shared memory interrupts.  Other backends can send interrupts
+ * to this one if they know its ProcNumber.
+ */
+void
+SwitchToSharedInterrupts(void)
+{
+	pg_atomic_fetch_or_u32(&MyProc->pending_interrupts, pg_atomic_read_u32(MyPendingInterrupts));
+	MyPendingInterrupts = &MyProc->pending_interrupts;
+}
+
+/*
+ * Set an interrupt flag in this backend.
+ */
+void
+RaiseInterrupt(InterruptType reason)
+{
+	pg_atomic_fetch_or_u32(MyPendingInterrupts, 1 << reason);
+	SetLatch(MyLatch);
+}
+
+/*
+ * Set an interrupt flag in another backend.
+ */
+void
+SendInterrupt(InterruptType reason, int pgprocno)
+{
+	PGPROC *proc;
+
+	proc = &ProcGlobal->allProcs[pgprocno];
+	pg_atomic_fetch_or_u32(&proc->pending_interrupts, 1 << reason);
+	SetLatch(&proc->procLatch);
+}
+
 /*
  * Simple interrupt handler for main loops of background processes.
  */
 void
 HandleMainLoopInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
+	if (ConsumeInterrupt(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 
 	if (ConfigReloadPending)
@@ -46,7 +97,7 @@ HandleMainLoopInterrupts(void)
 		proc_exit(0);
 
 	/* Perform logging of memory contexts of this process */
-	if (LogMemoryContextPending)
+	if (ConsumeInterrupt(INTERRUPT_LOG_MEMORY_CONTEXT))
 		ProcessLogMemoryContextInterrupt();
 }
 

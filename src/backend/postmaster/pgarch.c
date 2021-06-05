@@ -231,7 +231,7 @@ PgArchiverMain(char *startup_data, size_t startup_data_len)
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGUSR1, SIG_IGN);
 	pqsignal(SIGUSR2, pgarch_waken_stop);
 
 	/* Reset some signals that are accepted by postmaster but not here */
@@ -858,11 +858,11 @@ pgarch_die(int code, Datum arg)
 static void
 HandlePgArchInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
+	if (ConsumeInterrupt(INTERRUPT_BARRIER))
 		ProcessProcSignalBarrier();
 
 	/* Perform logging of memory contexts of this process */
-	if (LogMemoryContextPending)
+	if (ConsumeInterrupt(INTERRUPT_LOG_MEMORY_CONTEXT))
 		ProcessLogMemoryContextInterrupt();
 
 	if (ConfigReloadPending)

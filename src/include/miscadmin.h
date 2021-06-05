@@ -23,10 +23,14 @@
 #ifndef MISCADMIN_H
 #define MISCADMIN_H
 
-#include <signal.h>
-
 #include "datatype/timestamp.h" /* for TimestampTz */
 #include "pgtime.h"				/* for pg_time_t */
+
+#ifndef FRONTEND
+#include "postmaster/interrupt.h"
+#endif
+
+#include "storage/procsignal.h"
 
 
 #define InvalidPid				(-1)
@@ -85,66 +89,8 @@
  *
  *****************************************************************************/
 
-/* in globals.c */
-/* these are marked volatile because they are set by signal handlers: */
-extern PGDLLIMPORT volatile sig_atomic_t InterruptPending;
-extern PGDLLIMPORT volatile sig_atomic_t QueryCancelPending;
-extern PGDLLIMPORT volatile sig_atomic_t ProcDiePending;
-extern PGDLLIMPORT volatile sig_atomic_t IdleInTransactionSessionTimeoutPending;
-extern PGDLLIMPORT volatile sig_atomic_t TransactionTimeoutPending;
-extern PGDLLIMPORT volatile sig_atomic_t IdleSessionTimeoutPending;
-extern PGDLLIMPORT volatile sig_atomic_t ProcSignalBarrierPending;
-extern PGDLLIMPORT volatile sig_atomic_t LogMemoryContextPending;
-extern PGDLLIMPORT volatile sig_atomic_t IdleStatsUpdateTimeoutPending;
+extern PGDLLIMPORT uint32 CritSectionCount;
 
-extern PGDLLIMPORT volatile sig_atomic_t CheckClientConnectionPending;
-extern PGDLLIMPORT volatile sig_atomic_t ClientConnectionLost;
-
-/* these are marked volatile because they are examined by signal handlers: */
-extern PGDLLIMPORT volatile uint32 InterruptHoldoffCount;
-extern PGDLLIMPORT volatile uint32 QueryCancelHoldoffCount;
-extern PGDLLIMPORT volatile uint32 CritSectionCount;
-
-/* in tcop/postgres.c */
-extern void ProcessInterrupts(void);
-
-/* Test whether an interrupt is pending */
-#ifndef WIN32
-#define INTERRUPTS_PENDING_CONDITION() \
-	(unlikely(InterruptPending))
-#else
-#define INTERRUPTS_PENDING_CONDITION() \
-	(unlikely(UNBLOCKED_SIGNAL_QUEUE()) ? pgwin32_dispatch_queued_signals() : 0, \
-	 unlikely(InterruptPending))
-#endif
-
-/* Service interrupt, if one is pending and it's safe to service it now */
-#define CHECK_FOR_INTERRUPTS() \
-do { \
-	if (INTERRUPTS_PENDING_CONDITION()) \
-		ProcessInterrupts(); \
-} while(0)
-
-/* Is ProcessInterrupts() guaranteed to clear InterruptPending? */
-#define INTERRUPTS_CAN_BE_PROCESSED() \
-	(InterruptHoldoffCount == 0 && CritSectionCount == 0 && \
-	 QueryCancelHoldoffCount == 0)
-
-#define HOLD_INTERRUPTS()  (InterruptHoldoffCount++)
-
-#define RESUME_INTERRUPTS() \
-do { \
-	Assert(InterruptHoldoffCount > 0); \
-	InterruptHoldoffCount--; \
-} while(0)
-
-#define HOLD_CANCEL_INTERRUPTS()  (QueryCancelHoldoffCount++)
-
-#define RESUME_CANCEL_INTERRUPTS() \
-do { \
-	Assert(QueryCancelHoldoffCount > 0); \
-	QueryCancelHoldoffCount--; \
-} while(0)
 
 #define START_CRIT_SECTION()  (CritSectionCount++)
 

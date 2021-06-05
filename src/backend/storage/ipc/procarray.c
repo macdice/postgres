@@ -3475,13 +3475,13 @@ GetConflictingVirtualXIDs(TransactionId limitXmin, Oid dbOid)
  * Returns pid of the process signaled, or 0 if not found.
  */
 pid_t
-CancelVirtualTransaction(VirtualTransactionId vxid, ProcSignalReason sigmode)
+CancelVirtualTransaction(VirtualTransactionId vxid, InterruptType sigmode)
 {
 	return SignalVirtualTransaction(vxid, sigmode, true);
 }
 
 pid_t
-SignalVirtualTransaction(VirtualTransactionId vxid, ProcSignalReason sigmode,
+SignalVirtualTransaction(VirtualTransactionId vxid, InterruptType sigmode,
 						 bool conflictPending)
 {
 	ProcArrayStruct *arrayP = procArray;
@@ -3502,15 +3502,7 @@ SignalVirtualTransaction(VirtualTransactionId vxid, ProcSignalReason sigmode,
 			procvxid.localTransactionId == vxid.localTransactionId)
 		{
 			proc->recoveryConflictPending = conflictPending;
-			pid = proc->pid;
-			if (pid != 0)
-			{
-				/*
-				 * Kill the pid if it's still here. If not, that's what we
-				 * wanted so ignore any errors.
-				 */
-				(void) SendProcSignal(pid, sigmode, vxid.procNumber);
-			}
+			SendInterrupt(sigmode, pgprocno);
 			break;
 		}
 	}
@@ -3644,7 +3636,7 @@ CountDBConnections(Oid databaseid)
  * CancelDBBackends --- cancel backends that are using specified database
  */
 void
-CancelDBBackends(Oid databaseid, ProcSignalReason sigmode, bool conflictPending)
+CancelDBBackends(Oid databaseid, InterruptType sigmode, bool conflictPending)
 {
 	ProcArrayStruct *arrayP = procArray;
 	int			index;
@@ -3659,20 +3651,14 @@ CancelDBBackends(Oid databaseid, ProcSignalReason sigmode, bool conflictPending)
 
 		if (databaseid == InvalidOid || proc->databaseId == databaseid)
 		{
-			VirtualTransactionId procvxid;
 			pid_t		pid;
-
-			GET_VXID_FROM_PGPROC(procvxid, *proc);
 
 			proc->recoveryConflictPending = conflictPending;
 			pid = proc->pid;
 			if (pid != 0)
 			{
-				/*
-				 * Kill the pid if it's still here. If not, that's what we
-				 * wanted so ignore any errors.
-				 */
-				(void) SendProcSignal(pid, sigmode, procvxid.procNumber);
+				/* Cancel the backend if it's still here. */
+				SendInterrupt(sigmode, pgprocno);
 			}
 		}
 	}
