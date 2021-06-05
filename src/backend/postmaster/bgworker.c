@@ -17,6 +17,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "port/pg_thread.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
@@ -878,6 +879,39 @@ StartBackgroundWorker(void)
 	proc_exit(0);
 }
 
+static void *
+BackgroundWorkerThreadMain(void *arg)
+{
+	BackgroundWorker *worker = arg;
+	bgworker_main_type entrypt;
+	
+	fprintf(stderr, "I AM A THREAD %s\n", worker->bgw_name);
+	
+	entrypt = LookupBackgroundWorkerFunction(worker->bgw_library_name,
+											 worker->bgw_function_name);
+
+	entrypt(worker->bgw_main_arg);
+	
+	return NULL;
+}
+
+static bool
+StartWorkerThread(BackgroundWorker *worker)
+{
+	pg_thread_t t; /* XXX */
+
+	/* Prevent threads from receiving any signals by blocking them first. */
+	PG_SETMASK(&BlockSig);
+	
+	elog(LOG, "StartWorkerThread");
+	if ((errno = pg_thread_create(&t, &BackgroundWorkerThreadMain, worker)) != 0)
+		return false;
+
+	PG_SETMASK(&UnBlockSig);
+	
+	return true;
+}
+
 /*
  * Register a new static background worker.
  *
@@ -1049,12 +1083,17 @@ RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
 
 	/* If we found a slot, tell the postmaster to notice the change. */
 	if (success)
-		SendPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE);
+	{
+		if ((worker->bgw_flags & BGWORKER_BACKEND_THREAD) == 0)
+			SendPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE);
+		else
+			StartWorkerThread(worker);
+	}
 
 	/*
 	 * If we found a slot and the user has provided a handle, initialize it.
 	 */
-	if (success && handle)
+	if (success)
 	{
 		*handle = palloc(sizeof(BackgroundWorkerHandle));
 		(*handle)->slot = slotno;

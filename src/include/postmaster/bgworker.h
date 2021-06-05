@@ -59,6 +59,11 @@
 #define BGWORKER_BACKEND_DATABASE_CONNECTION		0x0002
 
 /*
+ * TM:XXX be a thread
+ */
+#define BGWORKER_BACKEND_THREAD						0x0004
+
+/*
  * This class is used internally for parallel queries, to keep track of the
  * number of active parallel workers and make sure we never launch more than
  * max_parallel_workers parallel workers at the same time.  Third party

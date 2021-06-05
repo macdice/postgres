@@ -90,11 +90,11 @@
 
 
 /* Global variables */
-ErrorContextCallback *error_context_stack = NULL;
+pg_thread_local ErrorContextCallback *error_context_stack = NULL;
 
-sigjmp_buf *PG_exception_stack = NULL;
+pg_thread_local sigjmp_buf *PG_exception_stack = NULL;
 
-extern bool redirection_done;
+extern pg_thread_local bool redirection_done;
 
 /*
  * Hook for intercepting messages before they are sent to the server log.
@@ -103,15 +103,15 @@ extern bool redirection_done;
  * libraries will miss any log messages that are generated before the
  * library is loaded.
  */
-emit_log_hook_type emit_log_hook = NULL;
+pg_thread_local emit_log_hook_type emit_log_hook = NULL;
 
 /* GUC parameters */
-int			Log_error_verbosity = PGERROR_VERBOSE;
-char	   *Log_line_prefix = NULL; /* format for extra log line info */
-int			Log_destination = LOG_DESTINATION_STDERR;
-char	   *Log_destination_string = NULL;
-bool		syslog_sequence_numbers = true;
-bool		syslog_split_messages = true;
+pg_thread_local int	Log_error_verbosity = PGERROR_VERBOSE;
+pg_thread_local char *Log_line_prefix = NULL; /* format for extra log line info */
+pg_thread_local int	Log_destination = LOG_DESTINATION_STDERR;
+pg_thread_local char *Log_destination_string = NULL;
+pg_thread_local bool syslog_sequence_numbers = true;
+pg_thread_local bool syslog_split_messages = true;
 
 #ifdef HAVE_SYSLOG
 
@@ -142,11 +142,11 @@ static void write_eventlog(int level, const char *line, int len);
 /* We provide a small stack of ErrorData records for re-entrant cases */
 #define ERRORDATA_STACK_SIZE  5
 
-static ErrorData errordata[ERRORDATA_STACK_SIZE];
+static pg_thread_local ErrorData errordata[ERRORDATA_STACK_SIZE];
 
-static int	errordata_stack_depth = -1; /* index of topmost active frame */
+static pg_thread_local int errordata_stack_depth = -1; /* index of topmost active frame */
 
-static int	recursion_depth = 0;	/* to detect actual recursion */
+static pg_thread_local int recursion_depth = 0;	/* to detect actual recursion */
 
 /*
  * Saved timeval and buffers for formatted timestamps that might be used by

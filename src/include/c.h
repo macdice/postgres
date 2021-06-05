@@ -1107,6 +1107,9 @@ extern void ExceptionalCondition(const char *conditionName,
 #define FLOAT8_FITS_IN_INT64(num) \
 	((num) >= (float8) PG_INT64_MIN && (num) < -((float8) PG_INT64_MIN))
 
+/* TM:XXX adjust for compiler and build options! */
+#define pg_thread_local __thread
+
 
 /* ----------------------------------------------------------------
  *				Section 8:	random stuff
