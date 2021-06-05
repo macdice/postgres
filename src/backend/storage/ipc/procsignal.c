@@ -62,7 +62,11 @@
 typedef struct
 {
 	volatile pid_t pss_pid;
-	volatile sig_atomic_t pss_signalFlags[NUM_PROCSIGNALS];
+	volatile int pss_pgprocno;
+	pg_atomic_uint64 pss_receiveCount;
+	pg_atomic_uint64 pss_processCount;
+	pg_atomic_uint64 pss_receiveTypeCount[NUM_PROCSIGNALS];
+	pg_atomic_uint64 pss_processTypeCount[NUM_PROCSIGNALS];
 	pg_atomic_uint64 pss_barrierGeneration;
 	pg_atomic_uint32 pss_barrierCheckMask;
 	ConditionVariable pss_barrierCV;
@@ -142,7 +146,14 @@ ProcSignalShmemInit(void)
 			ProcSignalSlot *slot = &ProcSignal->psh_slot[i];
 
 			slot->pss_pid = 0;
-			MemSet(slot->pss_signalFlags, 0, sizeof(slot->pss_signalFlags));
+			slot->pss_pgprocno = 0;
+			pg_atomic_init_u64(&slot->pss_receiveCount, 0);
+			pg_atomic_init_u64(&slot->pss_processCount, 0);
+			for (int j = 0; j < NUM_PROCSIGNALS; ++j)
+			{
+				pg_atomic_init_u64(&slot->pss_receiveTypeCount[j], 0);
+				pg_atomic_init_u64(&slot->pss_processTypeCount[j], 0);
+			}
 			pg_atomic_init_u64(&slot->pss_barrierGeneration, PG_UINT64_MAX);
 			pg_atomic_init_u32(&slot->pss_barrierCheckMask, 0);
 			ConditionVariableInit(&slot->pss_barrierCV);
@@ -173,7 +184,11 @@ ProcSignalInit(int pss_idx)
 			 MyProcPid, pss_idx);
 
 	/* Clear out any leftover signal reasons */
-	MemSet(slot->pss_signalFlags, 0, NUM_PROCSIGNALS * sizeof(sig_atomic_t));
+	pg_atomic_write_u64(&slot->pss_processCount,
+						pg_atomic_read_u64(&slot->pss_receiveCount));
+	for (int i = 0; i < NUM_PROCSIGNALS; ++i)
+		pg_atomic_write_u64(&slot->pss_processTypeCount[i],
+							pg_atomic_read_u64(&slot->pss_receiveTypeCount[i]));
 
 	/*
 	 * Initialize barrier state. Since we're a brand-new process, there
@@ -192,8 +207,9 @@ ProcSignalInit(int pss_idx)
 	pg_atomic_write_u64(&slot->pss_barrierGeneration, barrier_generation);
 	pg_memory_barrier();
 
-	/* Mark slot with my PID */
+	/* Mark slot with my procno, so my latch will be set for proc signals */
 	slot->pss_pid = MyProcPid;
+	slot->pss_pgprocno = MyProc->pgprocno;
 
 	/* Remember slot location for CheckProcSignal */
 	MyProcSignalSlot = slot;
@@ -225,14 +241,14 @@ CleanupProcSignalState(int status, Datum arg)
 	MyProcSignalSlot = NULL;
 
 	/* sanity check */
-	if (slot->pss_pid != MyProcPid)
+	if (slot->pss_pgprocno != MyProc->pgprocno)
 	{
 		/*
 		 * don't ERROR here. We're exiting anyway, and don't want to get into
 		 * infinite loop trying to exit
 		 */
 		elog(LOG, "process %d releasing ProcSignal slot %d, but it contains %d",
-			 MyProcPid, pss_idx, (int) slot->pss_pid);
+			 MyProcPid, pss_idx, slot->pss_pgprocno);
 		return;					/* XXX better to zero the slot anyway? */
 	}
 
@@ -244,6 +260,7 @@ CleanupProcSignalState(int status, Datum arg)
 	ConditionVariableBroadcast(&slot->pss_barrierCV);
 
 	slot->pss_pid = 0;
+	slot->pss_pgprocno = 0;
 }
 
 /*
@@ -276,10 +293,10 @@ SendProcSignal(pid_t pid, ProcSignalReason reason, BackendId backendId)
 		 */
 		if (slot->pss_pid == pid)
 		{
-			/* Atomically set the proper flag */
-			slot->pss_signalFlags[reason] = true;
-			/* Send signal */
-			return kill(pid, SIGUSR1);
+			pg_atomic_fetch_add_u64(&slot->pss_receiveTypeCount[reason], 1);
+			pg_atomic_fetch_add_u64(&slot->pss_receiveCount, 1);
+			SetLatch(&ProcGlobal->allProcs[slot->pss_pgprocno].procLatch);
+			return 0;
 		}
 	}
 	else
@@ -300,10 +317,10 @@ SendProcSignal(pid_t pid, ProcSignalReason reason, BackendId backendId)
 			{
 				/* the above note about race conditions applies here too */
 
-				/* Atomically set the proper flag */
-				slot->pss_signalFlags[reason] = true;
-				/* Send signal */
-				return kill(pid, SIGUSR1);
+				pg_atomic_fetch_add_u64(&slot->pss_receiveTypeCount[reason], 1);
+				pg_atomic_fetch_add_u64(&slot->pss_receiveCount, 1);
+				SetLatch(&ProcGlobal->allProcs[slot->pss_pgprocno].procLatch);
+				return 0;
 			}
 		}
 	}
@@ -376,8 +393,10 @@ EmitProcSignalBarrier(ProcSignalBarrierType type)
 		if (pid != 0)
 		{
 			/* see SendProcSignal for details */
-			slot->pss_signalFlags[PROCSIG_BARRIER] = true;
-			kill(pid, SIGUSR1);
+			pg_atomic_fetch_add_u64(&slot->pss_receiveTypeCount[PROCSIG_BARRIER],
+									1);
+			pg_atomic_fetch_add_u64(&slot->pss_receiveCount, 1);
+			SetLatch(&ProcGlobal->allProcs[slot->pss_pgprocno].procLatch);
 		}
 	}
 
@@ -624,7 +643,18 @@ CheckProcSignal(ProcSignalReason reason)
 
 	if (slot != NULL)
 	{
-		/* Careful here --- don't clear flag if we haven't seen it set */
+		uint64 receive = pg_atomic_read_u64(&slot->pss_receiveCount[reason]);
+		uint64 process = pg_atomic_read_u64(&slot->pss_processCount[reason]);
+
+		if (process != receive)
+		{
+			pg_atomic_write_u64(&slot->pss_processCountType[reason],
+								receive);
+			return true;
+		}
+		/* XXX borked */
+		
+		if (pg_read
 		if (slot->pss_signalFlags[reason])
 		{
 			slot->pss_signalFlags[reason] = false;
