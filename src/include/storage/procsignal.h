@@ -36,6 +36,8 @@ typedef enum
 	PROCSIG_BARRIER,			/* global barrier interrupt  */
 	PROCSIG_LOG_MEMORY_CONTEXT, /* ask backend to log the memory contexts */
 
+	PROCSIG_CANCEL,
+
 	/* Recovery conflict reasons */
 	PROCSIG_RECOVERY_CONFLICT_DATABASE,
 	PROCSIG_RECOVERY_CONFLICT_TABLESPACE,
@@ -71,6 +73,25 @@ extern uint64 EmitProcSignalBarrier(ProcSignalBarrierType type);
 extern void WaitForProcSignalBarrier(uint64 generation);
 extern void ProcessProcSignalBarrier(void);
 
+static inline void
+ProcSignalClearAnyPending(void)
+{
+	MyProcSignalSlot->pss_signalPending = false;
+}
+static inline bool
+ProcSignalAnyPending(void)
+{
+	volatile ProcSignalSlot *slot = MyProcSignalSlot;
+
+	/* XXX point to a dummy entry instead of using NULL to avoid a branch */
+	return slot && slot->pss_signalPending;
+}
+
+extern bool ProcSignalPending(int reason);
+extern void ProcSignalSetPending(int reason);
+
+#if 0
 extern void procsignal_sigusr1_handler(SIGNAL_ARGS);
+#endif
 
 #endif							/* PROCSIGNAL_H */

@@ -3117,7 +3117,7 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
  *
  * If an interrupt condition is pending, and it's safe to service it,
  * then clear the flag and accept the interrupt.  Called only when
- * InterruptPending is true.
+ * ProcSignalPending() is true.
  *
  * Note: if INTERRUPTS_CAN_BE_PROCESSED() is true, then ProcessInterrupts
  * is guaranteed to clear the InterruptPending flag before returning.
@@ -3131,7 +3131,7 @@ ProcessInterrupts(void)
 	/* OK to accept any interrupts now? */
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
-	InterruptPending = false;
+	ProcSignalClearPending();
 
 	if (ProcDiePending)
 	{
@@ -3250,7 +3250,7 @@ ProcessInterrupts(void)
 	 * interrupts are OK, because we won't read any further messages from the
 	 * client in that case.)
 	 */
-	if (QueryCancelPending && QueryCancelHoldoffCount != 0)
+	if (ProcSignalPending(PROCSIGNAL_CANCEL) && QueryCancelHoldoffCount != 0)
 	{
 		/*
 		 * Re-arm InterruptPending so that we process the cancel request as
@@ -3260,9 +3260,9 @@ ProcessInterrupts(void)
 		 * meaning that this code also creates opportunities for other bugs to
 		 * appear.)
 		 */
-		InterruptPending = true;
+		ProcSignalRaise(PROCSIGNAL_CANCEL);
 	}
-	else if (QueryCancelPending)
+	else if (ProcSignalPending(PROCSIGNAL_CANCEL)
 	{
 		bool		lock_timeout_occurred;
 		bool		stmt_timeout_occurred;

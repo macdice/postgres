@@ -85,6 +85,7 @@
  *
  *****************************************************************************/
 
+#if 0
 /* in globals.c */
 /* these are marked volatile because they are set by signal handlers: */
 extern PGDLLIMPORT volatile sig_atomic_t InterruptPending;
@@ -97,6 +98,7 @@ extern PGDLLIMPORT volatile sig_atomic_t LogMemoryContextPending;
 
 extern PGDLLIMPORT volatile sig_atomic_t CheckClientConnectionPending;
 extern PGDLLIMPORT volatile sig_atomic_t ClientConnectionLost;
+#endif
 
 /* these are marked volatile because they are examined by signal handlers: */
 extern PGDLLIMPORT volatile uint32 InterruptHoldoffCount;
@@ -107,14 +109,8 @@ extern PGDLLIMPORT volatile uint32 CritSectionCount;
 extern void ProcessInterrupts(void);
 
 /* Test whether an interrupt is pending */
-#ifndef WIN32
 #define INTERRUPTS_PENDING_CONDITION() \
-	(unlikely(InterruptPending))
-#else
-#define INTERRUPTS_PENDING_CONDITION() \
-	(unlikely(UNBLOCKED_SIGNAL_QUEUE()) ? pgwin32_dispatch_queued_signals() : 0, \
-	 unlikely(InterruptPending))
-#endif
+	(unlikely(ProcSignalPending()))
 
 /* Service interrupt, if one is pending and it's safe to service it now */
 #define CHECK_FOR_INTERRUPTS() \
