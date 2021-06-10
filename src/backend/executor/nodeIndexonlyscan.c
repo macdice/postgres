@@ -243,12 +243,16 @@ IndexOnlyNext(IndexOnlyScanState *node)
 
 		/*
 		 * If we didn't access the heap, then we'll need to take a predicate
-		 * lock explicitly, as if we had.  For now we do that at page level.
+		 * lock explicitly, as if we had.  We don't have the inserter's xid,
+		 * but that's only used by PredicateLockTID to check if it matches the
+		 * caller's top level xid, and it can't possibly have been inserted by
+		 * us or the page wouldn't be all visible.
 		 */
 		if (!tuple_from_heap)
-			PredicateLockPage(scandesc->heapRelation,
-							  ItemPointerGetBlockNumber(tid),
-							  estate->es_snapshot);
+			PredicateLockTID(scandesc->heapRelation,
+							 tid,
+							 estate->es_snapshot,
+							 InvalidTransactionId);
 
 		return slot;
 	}
