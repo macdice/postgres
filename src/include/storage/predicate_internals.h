@@ -172,6 +172,7 @@ typedef struct PredXactListData
 	SERIALIZABLEXACT *OldCommittedSxact;	/* shared copy of dummy sxact */
 
 	SERIALIZABLEXACT *element;
+	pg_atomic_uint64 split_counters[64]; /* page split counters */
 }			PredXactListData;
 
 typedef struct PredXactListData *PredXactList;

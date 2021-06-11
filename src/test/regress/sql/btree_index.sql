@@ -242,3 +242,82 @@ CREATE TABLE btree_part (id int4) PARTITION BY RANGE (id);
 CREATE INDEX btree_part_idx ON btree_part(id);
 ALTER INDEX btree_part_idx ALTER COLUMN id SET (n_distinct=100);
 DROP TABLE btree_part;
+
+--
+-- Test SIREAD locking
+--
+
+CREATE TABLE test_table (i int, j int, PRIMARY KEY (i, j));
+INSERT INTO test_table VALUES (1, 1), (2, 2);
+VACUUM test_table;
+SET enable_seqscan = off;
+SET enable_indexonlyscan = off;
+
+-- Unique quals, found -> heap tuple lock only
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+-- Unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+-- Non-unique quals, found -> heap tuple and btree page locks
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1;
+SELECT * FROM test_table WHERE i = 1;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+-- Non-unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 3;
+SELECT * FROM test_table WHERE i = 3;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+-- The same 4 cases, this time with an index-only scan
+RESET enable_indexonlyscan;
+
+-- Unique quals, found -> heap tuple lock only
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+-- Unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+-- Non-unique quals, found -> heap tuple and btree page locks
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1;
+SELECT * FROM test_table WHERE i = 1;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+-- Non-unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 3;
+SELECT * FROM test_table WHERE i = 3;
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+
+DROP TABLE test_table;

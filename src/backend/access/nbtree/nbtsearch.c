@@ -837,6 +837,21 @@ _bt_compare(Relation rel,
 }
 
 /*
+ * _bt_predlock_page() -- Predicate-lock a page, immediate or deferred.
+ */
+static inline void
+_bt_predlock_page(IndexScanDesc scan, Relation rel, BlockNumber blocknum)
+{
+	if (scan->xs_defer_predlocks)
+		SchedulePredicateLockPage(&scan->xs_deferred_predlocks,
+								  rel,
+								  blocknum,
+								  scan->xs_snapshot);
+	else
+		PredicateLockPage(rel, blocknum, scan->xs_snapshot);
+}
+
+/*
  *	_bt_first() -- Find the first item in a scan.
  *
  *		We need to be clever about the direction of scan, the search
@@ -1386,8 +1401,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 		return false;
 	}
 	else
-		PredicateLockPage(rel, BufferGetBlockNumber(buf),
-						  scan->xs_snapshot);
+		_bt_predlock_page(scan, rel, BufferGetBlockNumber(buf));
 
 	_bt_initialize_more_data(so, dir);
 
@@ -2011,7 +2025,7 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			/* check for deleted page */
 			if (!P_IGNORE(opaque))
 			{
-				PredicateLockPage(rel, blkno, scan->xs_snapshot);
+				_bt_predlock_page(scan, rel, blkno);
 				/* see if there are any matches on this page */
 				/* note that this will clear moreRight if we can stop */
 				if (_bt_readpage(scan, dir, P_FIRSTDATAKEY(opaque)))
@@ -2113,7 +2127,7 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			opaque = BTPageGetOpaque(page);
 			if (!P_IGNORE(opaque))
 			{
-				PredicateLockPage(rel, BufferGetBlockNumber(so->currPos.buf), scan->xs_snapshot);
+				_bt_predlock_page(scan, rel, BufferGetBlockNumber(so->currPos.buf));
 				/* see if there are any matches on this page */
 				/* note that this will clear moreLeft if we can stop */
 				if (_bt_readpage(scan, dir, PageGetMaxOffsetNumber(page)))
@@ -2416,7 +2430,7 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 		return false;
 	}
 
-	PredicateLockPage(rel, BufferGetBlockNumber(buf), scan->xs_snapshot);
+	_bt_predlock_page(scan, rel, BufferGetBlockNumber(buf));
 	page = BufferGetPage(buf);
 	opaque = BTPageGetOpaque(page);
 	Assert(P_ISLEAF(opaque));

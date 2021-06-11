@@ -387,3 +387,196 @@ ALTER INDEX btree_part_idx ALTER COLUMN id SET (n_distinct=100);
 ERROR:  ALTER action ALTER COLUMN ... SET cannot be performed on relation "btree_part_idx"
 DETAIL:  This operation is not supported for partitioned indexes.
 DROP TABLE btree_part;
+--
+-- Test SIREAD locking
+--
+CREATE TABLE test_table (i int, j int, PRIMARY KEY (i, j));
+INSERT INTO test_table VALUES (1, 1), (2, 2);
+VACUUM test_table;
+SET enable_seqscan = off;
+SET enable_indexonlyscan = off;
+-- Unique quals, found -> heap tuple lock only
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Index Scan using test_table_pkey on test_table
+   Index Cond: ((i = 1) AND (j = 1))
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+ i | j 
+---+---
+ 1 | 1
+(1 row)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |  relation  | page | tuple 
+----------+------------+------+-------
+ tuple    | test_table |    0 |     1
+(1 row)
+
+ROLLBACK;
+-- Unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+                   QUERY PLAN                   
+------------------------------------------------
+ Index Scan using test_table_pkey on test_table
+   Index Cond: ((i = 1) AND (j = 2))
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+ i | j 
+---+---
+(0 rows)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |    relation     | page | tuple 
+----------+-----------------+------+-------
+ page     | test_table_pkey |    1 |      
+(1 row)
+
+ROLLBACK;
+-- Non-unique quals, found -> heap tuple and btree page locks
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1;
+                   QUERY PLAN                   
+------------------------------------------------
+ Index Scan using test_table_pkey on test_table
+   Index Cond: (i = 1)
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 1;
+ i | j 
+---+---
+ 1 | 1
+(1 row)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |    relation     | page | tuple 
+----------+-----------------+------+-------
+ page     | test_table_pkey |    1 |      
+ tuple    | test_table      |    0 |     1
+(2 rows)
+
+ROLLBACK;
+-- Non-unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 3;
+                   QUERY PLAN                   
+------------------------------------------------
+ Index Scan using test_table_pkey on test_table
+   Index Cond: (i = 3)
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 3;
+ i | j 
+---+---
+(0 rows)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |    relation     | page | tuple 
+----------+-----------------+------+-------
+ page     | test_table_pkey |    1 |      
+(1 row)
+
+ROLLBACK;
+-- The same 4 cases, this time with an index-only scan
+RESET enable_indexonlyscan;
+-- Unique quals, found -> heap tuple lock only
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Index Only Scan using test_table_pkey on test_table
+   Index Cond: ((i = 1) AND (j = 1))
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 1 AND j = 1;
+ i | j 
+---+---
+ 1 | 1
+(1 row)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |  relation  | page | tuple 
+----------+------------+------+-------
+ tuple    | test_table |    0 |     1
+(1 row)
+
+ROLLBACK;
+-- Unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Index Only Scan using test_table_pkey on test_table
+   Index Cond: ((i = 1) AND (j = 2))
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 1 AND j = 2;
+ i | j 
+---+---
+(0 rows)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |    relation     | page | tuple 
+----------+-----------------+------+-------
+ page     | test_table_pkey |    1 |      
+(1 row)
+
+ROLLBACK;
+-- Non-unique quals, found -> heap tuple and btree page locks
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 1;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Index Only Scan using test_table_pkey on test_table
+   Index Cond: (i = 1)
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 1;
+ i | j 
+---+---
+ 1 | 1
+(1 row)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |    relation     | page | tuple 
+----------+-----------------+------+-------
+ page     | test_table_pkey |    1 |      
+ tuple    | test_table      |    0 |     1
+(2 rows)
+
+ROLLBACK;
+-- Non-unique quals, not found -> btree page lock
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+EXPLAIN (COSTS OFF)
+SELECT * FROM test_table WHERE i = 3;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Index Only Scan using test_table_pkey on test_table
+   Index Cond: (i = 3)
+(2 rows)
+
+SELECT * FROM test_table WHERE i = 3;
+ i | j 
+---+---
+(0 rows)
+
+SELECT locktype, relation::regclass, page, tuple FROM pg_locks WHERE mode = 'SIReadLock' AND pid = pg_backend_pid() ORDER BY 1, 2, 3, 4;
+ locktype |    relation     | page | tuple 
+----------+-----------------+------+-------
+ page     | test_table_pkey |    1 |      
+(1 row)
+
+ROLLBACK;
+DROP TABLE test_table;
