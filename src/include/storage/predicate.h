@@ -55,20 +55,27 @@ extern void SetSerializableTransactionSnapshot(Snapshot snapshot,
 											   VirtualTransactionId *sourcevxid,
 											   int sourcepid);
 extern void RegisterPredicateLockingXid(TransactionId xid);
-extern void PredicateLockRelation(Relation relation, Snapshot snapshot);
-extern void PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot);
-extern void PredicateLockTID(Relation relation, ItemPointer tid, Snapshot snapshot,
-							 TransactionId insert_xid);
+extern void PredicateLockRelationBody(Relation relation, Snapshot snapshot);
+extern void PredicateLockPageBody(Relation relation, BlockNumber blkno,
+								  Snapshot snapshot);
+extern void PredicateLockTIDBody(Relation relation, ItemPointer tid,
+								 Snapshot snapshot,
+								 TransactionId insert_xid);
 extern void PredicateLockPageSplit(Relation relation, BlockNumber oldblkno, BlockNumber newblkno);
 extern void PredicateLockPageCombine(Relation relation, BlockNumber oldblkno, BlockNumber newblkno);
 extern void TransferPredicateLocksToHeapRelation(Relation relation);
 extern void ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe);
 
 /* conflict detection (may also trigger rollback) */
-extern bool CheckForSerializableConflictOutNeeded(Relation relation, Snapshot snapshot);
-extern void CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot snapshot);
-extern void CheckForSerializableConflictIn(Relation relation, ItemPointer tid, BlockNumber blkno);
-extern void CheckTableForSerializableConflictIn(Relation relation);
+extern bool CheckForSerializableConflictOutNeededBody(Relation relation,
+													  Snapshot snapshot);
+extern void CheckForSerializableConflictOutBody(Relation relation,
+												TransactionId xid,
+												Snapshot snapshot);
+extern void CheckForSerializableConflictInBody(Relation relation,
+											   ItemPointer tid,
+											   BlockNumber blkno);
+extern void CheckTableForSerializableConflictInBody(Relation relation);
 
 /* final rollback checking */
 extern void PreCommit_CheckForSerializationFailure(void);
@@ -83,5 +90,72 @@ extern void predicatelock_twophase_recover(TransactionId xid, uint16 info,
 /* parallel query support */
 extern SerializableXactHandle ShareSerializableXact(void);
 extern void AttachSerializableXact(SerializableXactHandle handle);
+
+/* inline part of predicate and conflict checks */
+
+/*
+ * This is given external linkage only so that the following inline wrappers
+ * can check it.
+ */
+struct SERIALIZABLEXACT;
+
+extern PGDLLIMPORT struct SERIALIZABLEXACT *MySerializableXact;
+
+static inline bool
+InSerializableTransaction(void)
+{
+	return MySerializableXact != NULL;
+}
+
+static inline void
+PredicateLockRelation(Relation relation, Snapshot snapshot)
+{
+	if (InSerializableTransaction())
+		PredicateLockRelationBody(relation, snapshot);
+}
+
+static inline void
+PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot)
+{
+	if (InSerializableTransaction())
+		PredicateLockPageBody(relation, blkno, snapshot);
+}
+
+static inline void
+PredicateLockTID(Relation relation, ItemPointer tid, Snapshot snapshot,
+				 TransactionId insert_xid)
+{
+	if (InSerializableTransaction())
+		PredicateLockTIDBody(relation, tid, snapshot, insert_xid);
+}
+
+static inline bool
+CheckForSerializableConflictOutNeeded(Relation relation, Snapshot snapshot)
+{
+	if (!InSerializableTransaction())
+		return false;
+	return CheckForSerializableConflictOutNeededBody(relation, snapshot);
+}
+
+static inline void
+CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot snapshot)
+{
+	if (InSerializableTransaction())
+		CheckForSerializableConflictOutBody(relation, xid, snapshot);
+}
+
+static inline void
+CheckForSerializableConflictIn(Relation relation, ItemPointer tid, BlockNumber blkno)
+{
+	if (InSerializableTransaction())
+		CheckForSerializableConflictInBody(relation, tid, blkno);
+}
+
+static inline void
+CheckTableForSerializableConflictIn(Relation relation)
+{
+	if (InSerializableTransaction())
+		CheckTableForSerializableConflictInBody(relation);
+}
 
 #endif							/* PREDICATE_H */

@@ -25,6 +25,7 @@
 #include "storage/bufpage.h"
 #include "storage/dsm.h"
 #include "storage/lockdefs.h"
+#include "storage/predicate.h"
 #include "storage/shm_toc.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
@@ -226,7 +227,20 @@ extern bool ResolveCminCmaxDuringDecoding(struct HTAB *tuplecid_data,
 										  HeapTuple htup,
 										  Buffer buffer,
 										  CommandId *cmin, CommandId *cmax);
-extern void HeapCheckForSerializableConflictOut(bool valid, Relation relation, HeapTuple tuple,
-												Buffer buffer, Snapshot snapshot);
+extern void HeapCheckForSerializableConflictOutBody(bool valid,
+													Relation relation,
+													HeapTuple tuple,
+													Buffer buffer,
+													Snapshot snapshot);
+static inline void
+HeapCheckForSerializableConflictOut(bool valid, Relation relation,
+									HeapTuple tuple, Buffer buffer,
+									Snapshot snapshot)
+{
+	if (!CheckForSerializableConflictOutNeeded(relation, snapshot))
+		return;
+	HeapCheckForSerializableConflictOutBody(valid, relation, tuple,
+											buffer, snapshot);
+}
 
 #endif							/* HEAPAM_H */

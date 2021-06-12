@@ -9771,7 +9771,7 @@ heap_mask(char *pagedata, BlockNumber blkno)
 }
 
 /*
- * HeapCheckForSerializableConflictOut
+ * HeapCheckForSerializableConflictOut (out of line part)
  *		We are reading a tuple.  If it's not visible, there may be a
  *		rw-conflict out with the inserter.  Otherwise, if it is visible to us
  *		but has been deleted, there may be a rw-conflict out with the deleter.
@@ -9786,15 +9786,14 @@ heap_mask(char *pagedata, BlockNumber blkno)
  * currently no known reason to call this function from an index AM.
  */
 void
-HeapCheckForSerializableConflictOut(bool visible, Relation relation,
-									HeapTuple tuple, Buffer buffer,
-									Snapshot snapshot)
+HeapCheckForSerializableConflictOutBody(bool visible, Relation relation,
+										HeapTuple tuple, Buffer buffer,
+										Snapshot snapshot)
 {
 	TransactionId xid;
 	HTSV_Result htsvResult;
 
-	if (!CheckForSerializableConflictOutNeeded(relation, snapshot))
-		return;
+	Assert(CheckForSerializableConflictOutNeeded(relation, snapshot));
 
 	/*
 	 * Check to see whether the tuple has been written to by a concurrent

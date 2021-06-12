@@ -413,7 +413,7 @@ static HTAB *LocalPredicateLockHash = NULL;
  * for quick reference. Also, remember if we have written anything that could
  * cause a rw-conflict.
  */
-static SERIALIZABLEXACT *MySerializableXact = InvalidSerializableXact;
+SERIALIZABLEXACT *MySerializableXact = InvalidSerializableXact;
 static bool MyXactDidWrite = false;
 
 /*
@@ -513,9 +513,11 @@ PredicateLockingNeededForRelation(Relation relation)
 static inline bool
 SerializationNeededForRead(Relation relation, Snapshot snapshot)
 {
-	/* Nothing to do if this is not a serializable transaction */
-	if (MySerializableXact == InvalidSerializableXact)
-		return false;
+	/*
+	 * Non-serializable transactions are excluded by the inline wrapper
+	 * functions.
+	 */
+	Assert(MySerializableXact != InvalidSerializableXact);
 
 	/*
 	 * Don't acquire locks or conflict when scanning with a special snapshot.
@@ -2558,7 +2560,7 @@ PredicateLockAcquire(const PREDICATELOCKTARGETTAG *targettag)
 
 
 /*
- *		PredicateLockRelation
+ *		PredicateLockRelation (out of line part)
  *
  * Gets a predicate lock at the relation level.
  * Skip if not in full serializable transaction isolation level.
@@ -2566,7 +2568,7 @@ PredicateLockAcquire(const PREDICATELOCKTARGETTAG *targettag)
  * Clear any finer-grained predicate locks this session has on the relation.
  */
 void
-PredicateLockRelation(Relation relation, Snapshot snapshot)
+PredicateLockRelationBody(Relation relation, Snapshot snapshot)
 {
 	PREDICATELOCKTARGETTAG tag;
 
@@ -2580,7 +2582,7 @@ PredicateLockRelation(Relation relation, Snapshot snapshot)
 }
 
 /*
- *		PredicateLockPage
+ *		PredicateLockPage (out of line part)
  *
  * Gets a predicate lock at the page level.
  * Skip if not in full serializable transaction isolation level.
@@ -2589,7 +2591,7 @@ PredicateLockRelation(Relation relation, Snapshot snapshot)
  * Clear any finer-grained predicate locks this session has on the relation.
  */
 void
-PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot)
+PredicateLockPageBody(Relation relation, BlockNumber blkno, Snapshot snapshot)
 {
 	PREDICATELOCKTARGETTAG tag;
 
@@ -2604,14 +2606,14 @@ PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot)
 }
 
 /*
- *		PredicateLockTID
+ *		PredicateLockTID (out of line part)
  *
  * Gets a predicate lock at the tuple level.
  * Skip if not in full serializable transaction isolation level.
  * Skip if this is a temporary table.
  */
 void
-PredicateLockTID(Relation relation, ItemPointer tid, Snapshot snapshot,
+PredicateLockTIDBody(Relation relation, ItemPointer tid, Snapshot snapshot,
 				 TransactionId tuple_xid)
 {
 	PREDICATELOCKTARGETTAG tag;
@@ -4086,7 +4088,7 @@ XidIsConcurrent(TransactionId xid)
 }
 
 bool
-CheckForSerializableConflictOutNeeded(Relation relation, Snapshot snapshot)
+CheckForSerializableConflictOutNeededBody(Relation relation, Snapshot snapshot)
 {
 	if (!SerializationNeededForRead(relation, snapshot))
 		return false;
@@ -4105,7 +4107,7 @@ CheckForSerializableConflictOutNeeded(Relation relation, Snapshot snapshot)
 }
 
 /*
- * CheckForSerializableConflictOut
+ * CheckForSerializableConflictOut (out of line part)
  *		A table AM is reading a tuple that has been modified.  If it determines
  *		that the tuple version it is reading is not visible to us, it should
  *		pass in the top level xid of the transaction that created it.
@@ -4118,7 +4120,7 @@ CheckForSerializableConflictOutNeeded(Relation relation, Snapshot snapshot)
  * each other's writes), then we have a conflict out.
  */
 void
-CheckForSerializableConflictOut(Relation relation, TransactionId xid, Snapshot snapshot)
+CheckForSerializableConflictOutBody(Relation relation, TransactionId xid, Snapshot snapshot)
 {
 	SERIALIZABLEXIDTAG sxidtag;
 	SERIALIZABLEXID *sxid;
@@ -4432,7 +4434,7 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 }
 
 /*
- * CheckForSerializableConflictIn
+ * CheckForSerializableConflictIn (out of line part)
  *		We are writing the given tuple.  If that indicates a rw-conflict
  *		in from another serializable transaction, take appropriate action.
  *
@@ -4443,7 +4445,8 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
  * tuple itself.
  */
 void
-CheckForSerializableConflictIn(Relation relation, ItemPointer tid, BlockNumber blkno)
+CheckForSerializableConflictInBody(Relation relation, ItemPointer tid,
+								   BlockNumber blkno)
 {
 	PREDICATELOCKTARGETTAG targettag;
 
@@ -4499,7 +4502,7 @@ CheckForSerializableConflictIn(Relation relation, ItemPointer tid, BlockNumber b
 }
 
 /*
- * CheckTableForSerializableConflictIn
+ * CheckTableForSerializableConflictIn (out of line part)
  *		The entire table is going through a DDL-style logical mass delete
  *		like TRUNCATE or DROP TABLE.  If that causes a rw-conflict in from
  *		another serializable transaction, take appropriate action.
@@ -4526,7 +4529,7 @@ CheckForSerializableConflictIn(Relation relation, ItemPointer tid, BlockNumber b
  * lead to some false positives, but it doesn't seem worth the trouble.)
  */
 void
-CheckTableForSerializableConflictIn(Relation relation)
+CheckTableForSerializableConflictInBody(Relation relation)
 {
 	HASH_SEQ_STATUS seqstat;
 	PREDICATELOCKTARGET *target;
