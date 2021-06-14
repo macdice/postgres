@@ -51,6 +51,7 @@ typedef struct HeapScanDescData
 	/* state set up at initscan time */
 	BlockNumber rs_nblocks;		/* total number of blocks in rel */
 	BlockNumber rs_startblock;	/* block # to start at */
+	OffsetNumber rs_startline;	/* offset to start at */
 	BlockNumber rs_numblocks;	/* max number of blocks to scan */
 	/* rs_numblocks is usually InvalidBlockNumber, meaning "scan whole rel" */
 

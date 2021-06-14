@@ -1315,6 +1315,13 @@ heap_endscan(TableScanDesc sscan)
 {
 	HeapScanDesc scan = (HeapScanDesc) sscan;
 
+	if (scan->rs_base.rs_rd->rd_options &&
+        ((StdRdOptions *) scan->rs_base.rs_rd->rd_options)->circular_scan)
+	{
+elog(LOG, "heap_endscan %u, %u", scan->rs_cblock, scan->rs_cindex);
+		scan->rs_base.rs_rd->rd_XXX_b = scan->rs_cblock;
+		scan->rs_base.rs_rd->rd_XXX_l = scan->rs_cindex + 1;
+	}
 	/* Note: no locking manipulations needed */
 
 	/*

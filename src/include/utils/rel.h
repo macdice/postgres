@@ -222,7 +222,8 @@ typedef struct RelationData
 	 * rd_amcache = NULL.
 	 */
 	void	   *rd_amcache;		/* available for use by index/table AM */
-
+BlockNumber rd_XXX_b;
+int rd_XXX_l;
 	/*
 	 * foreign-table support
 	 *
