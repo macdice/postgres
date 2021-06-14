@@ -168,6 +168,15 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	{
+		{
+			"circular_scan",
+			"Enables scans progress to be sticky",
+			RELOPT_KIND_HEAP,
+			ShareUpdateExclusiveLock
+		},
+		true
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1859,7 +1868,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)}
+		offsetof(StdRdOptions, vacuum_truncate)},
+		{"circular_scan", RELOPT_TYPE_BOOL,
+		offsetof(StdRdOptions, circular_scan)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate, kind,

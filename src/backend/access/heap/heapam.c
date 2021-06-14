@@ -308,6 +308,13 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 		scan->rs_base.rs_flags |= SO_ALLOW_SYNC;
 		scan->rs_startblock = ss_get_location(scan->rs_base.rs_rd, scan->rs_nblocks);
 	}
+	else if (scan->rs_base.rs_rd->rd_options &&
+			 ((StdRdOptions *) scan->rs_base.rs_rd->rd_options)->circular_scan)
+	{
+		elog(LOG, "circular scan!");
+		scan->rs_base.rs_flags &= ~SO_ALLOW_SYNC;
+		scan->rs_startblock = 0;
+	}
 	else
 	{
 		scan->rs_base.rs_flags &= ~SO_ALLOW_SYNC;
