@@ -264,6 +264,10 @@ pgarch_MainLoop(void)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
+		/* Check for barrier events */
+		if (ProcSignalBarrierPending)
+			ProcessProcSignalBarrier();
+
 		/*
 		 * If we've gotten SIGTERM, we normally just sit and do nothing until
 		 * SIGUSR2 arrives.  However, that means a random SIGTERM would
