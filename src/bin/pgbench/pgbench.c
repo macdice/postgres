@@ -334,7 +334,7 @@ typedef int64 pg_time_usec_t;
  */
 typedef struct StatsData
 {
-	pg_time_usec_t start_time;	/* interval start time, for aggregates */
+	time_t		start_time;		/* interval start time, for aggregates */
 	int64		cnt;			/* number of transactions, including skipped */
 	int64		skipped;		/* number of transactions skipped under --rate
 								 * and --latency-limit */
@@ -463,11 +463,11 @@ typedef struct
 	int			nvariables;		/* number of variables */
 	bool		vars_sorted;	/* are variables sorted by name? */
 
-	/* various times about current transaction in microseconds */
-	pg_time_usec_t txn_scheduled;	/* scheduled start time of transaction */
-	pg_time_usec_t sleep_until; /* scheduled start time of next cmd */
-	pg_time_usec_t txn_begin;	/* used for measuring schedule lag times */
-	pg_time_usec_t stmt_begin;	/* used for measuring statement latencies */
+	/* various times about current transaction */
+	int64		txn_scheduled;	/* scheduled start time of transaction (usec) */
+	int64		sleep_until;	/* scheduled start time of next cmd (usec) */
+	instr_time	txn_begin;		/* used for measuring schedule lag times */
+	instr_time	stmt_begin;		/* used for measuring statement latencies */
 
 	bool		prepared[MAX_SCRIPTS];	/* whether client prepared the script */
 
@@ -497,15 +497,11 @@ typedef struct
 	int64		throttle_trigger;	/* previous/next throttling (us) */
 	FILE	   *logfile;		/* where to log, or NULL */
 
-	/* per thread collected stats in microseconds */
-	pg_time_usec_t create_time; /* thread creation time */
-	pg_time_usec_t started_time;	/* thread is running */
-	pg_time_usec_t bench_start; /* thread is benchmarking */
-	pg_time_usec_t conn_duration;	/* cumulated connection and deconnection
-									 * delays */
-
+	/* per thread collected stats */
+	instr_time	start_time;		/* thread start time */
+	instr_time	conn_time;
 	StatsData	stats;
-	int64		latency_late;	/* count executed but late transactions */
+	int64		latency_late;	/* executed but late transactions */
 } TState;
 
 /*
@@ -647,10 +643,10 @@ static void setIntValue(PgBenchValue *pv, int64 ival);
 static void setDoubleValue(PgBenchValue *pv, double dval);
 static bool evaluateExpr(CState *st, PgBenchExpr *expr,
 						 PgBenchValue *retval);
-static ConnectionStateEnum executeMetaCommand(CState *st, pg_time_usec_t *now);
+static ConnectionStateEnum executeMetaCommand(CState *st, instr_time *now);
 static void doLog(TState *thread, CState *st,
 				  StatsData *agg, bool skipped, double latency, double lag);
-static void processXactStats(TState *thread, CState *st, pg_time_usec_t *now,
+static void processXactStats(TState *thread, CState *st, instr_time *now,
 							 bool skipped, StatsData *agg);
 static void addScript(ParsedScript script);
 static THREAD_FUNC_RETURN_TYPE THREAD_FUNC_CC threadRun(void *arg);
@@ -1279,9 +1275,9 @@ mergeSimpleStats(SimpleStats *acc, SimpleStats *ss)
  * the given value.
  */
 static void
-initStats(StatsData *sd, pg_time_usec_t start)
+initStats(StatsData *sd, time_t start_time)
 {
-	sd->start_time = start;
+	sd->start_time = start_time;
 	sd->cnt = 0;
 	sd->skipped = 0;
 	initSimpleStats(&sd->latency);
@@ -3118,6 +3114,7 @@ evaluateSleep(CState *st, int argc, char **argv, int *usecs)
 static void
 advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 {
+	instr_time	now;
 
 	/*
 	 * gettimeofday() isn't free, so we get the current timestamp lazily the
@@ -3127,7 +3124,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 	 * means "not set yet".  Reset "now" when we execute shell commands or
 	 * expressions, which might take a non-negligible amount of time, though.
 	 */
-	pg_time_usec_t now = 0;
+	INSTR_TIME_SET_ZERO(now);
 
 	/*
 	 * Loop in the state machine, until we have to wait for a result from the
@@ -3162,30 +3159,29 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 
 				/* Start new transaction (script) */
 			case CSTATE_START_TX:
-				pg_time_now_lazy(&now);
 
 				/* establish connection if needed, i.e. under --connect */
 				if (st->con == NULL)
 				{
-					pg_time_usec_t start = now;
+					instr_time	start;
 
+					INSTR_TIME_SET_CURRENT_LAZY(now);
+					start = now;
 					if ((st->con = doConnect()) == NULL)
 					{
 						pg_log_error("client %d aborted while establishing connection", st->id);
 						st->state = CSTATE_ABORTED;
 						break;
 					}
-
-					/* reset now after connection */
-					now = pg_time_now();
-
-					thread->conn_duration += now - start;
+					INSTR_TIME_SET_CURRENT(now);
+					INSTR_TIME_ACCUM_DIFF(thread->conn_time, now, start);
 
 					/* Reset session-local state */
 					memset(st->prepared, 0, sizeof(st->prepared));
 				}
 
 				/* record transaction start time */
+				INSTR_TIME_SET_CURRENT_LAZY(now);
 				st->txn_begin = now;
 
 				/*
@@ -3193,7 +3189,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				 * scheduled start time.
 				 */
 				if (!throttle_delay)
-					st->txn_scheduled = now;
+					st->txn_scheduled = INSTR_TIME_GET_MICROSEC(now);
 
 				/* Begin with the first command */
 				st->state = CSTATE_START_COMMAND;
@@ -3229,9 +3225,12 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				 */
 				if (latency_limit)
 				{
-					pg_time_now_lazy(&now);
+					int64		now_us;
 
-					while (thread->throttle_trigger < now - latency_limit &&
+					INSTR_TIME_SET_CURRENT_LAZY(now);
+					now_us = INSTR_TIME_GET_MICROSEC(now);
+
+					while (thread->throttle_trigger < now_us - latency_limit &&
 						   (nxacts <= 0 || st->cnt < nxacts))
 					{
 						processXactStats(thread, st, &now, true, agg);
@@ -3264,9 +3263,9 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				 * Wait until it's time to start next transaction.
 				 */
 			case CSTATE_THROTTLE:
-				pg_time_now_lazy(&now);
+				INSTR_TIME_SET_CURRENT_LAZY(now);
 
-				if (now < st->txn_scheduled)
+				if (INSTR_TIME_GET_MICROSEC(now) < st->txn_scheduled)
 					return;		/* still sleeping, nothing to do here */
 
 				/* done sleeping, but don't start transaction if we're done */
@@ -3289,7 +3288,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				/* record begin time of next command, and initiate it */
 				if (report_per_command)
 				{
-					pg_time_now_lazy(&now);
+					INSTR_TIME_SET_CURRENT_LAZY(now);
 					st->stmt_begin = now;
 				}
 
@@ -3485,8 +3484,8 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				 * instead of CSTATE_START_TX.
 				 */
 			case CSTATE_SLEEP:
-				pg_time_now_lazy(&now);
-				if (now < st->sleep_until)
+				INSTR_TIME_SET_CURRENT_LAZY(now);
+				if (INSTR_TIME_GET_MICROSEC(now) < st->sleep_until)
 					return;		/* still sleeping, nothing to do here */
 				/* Else done sleeping. */
 				st->state = CSTATE_END_COMMAND;
@@ -3506,12 +3505,13 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				{
 					Command    *command;
 
-					pg_time_now_lazy(&now);
+					INSTR_TIME_SET_CURRENT_LAZY(now);
 
 					command = sql_script[st->use_file].commands[st->command];
 					/* XXX could use a mutex here, but we choose not to */
 					addToSimpleStats(&command->stats,
-									 PG_TIME_GET_DOUBLE(now - st->stmt_begin));
+									 INSTR_TIME_GET_DOUBLE(now) -
+									 INSTR_TIME_GET_DOUBLE(st->stmt_begin));
 				}
 
 				/* Go ahead with next command, to be executed or skipped */
@@ -3537,7 +3537,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				if (is_connect)
 				{
 					finishCon(st);
-					now = 0;
+					INSTR_TIME_SET_ZERO(now);
 				}
 
 				if ((st->cnt >= nxacts && duration <= 0) || timer_exceeded)
@@ -3575,7 +3575,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
  * take no time to execute.
  */
 static ConnectionStateEnum
-executeMetaCommand(CState *st, pg_time_usec_t *now)
+executeMetaCommand(CState *st, instr_time *now)
 {
 	Command    *command = sql_script[st->use_file].commands[st->command];
 	int			argc;
@@ -3617,8 +3617,8 @@ executeMetaCommand(CState *st, pg_time_usec_t *now)
 			return CSTATE_ABORTED;
 		}
 
-		pg_time_now_lazy(now);
-		st->sleep_until = (*now) + usec;
+		INSTR_TIME_SET_CURRENT_LAZY(*now);
+		st->sleep_until = INSTR_TIME_GET_MICROSEC(*now) + usec;
 		return CSTATE_SLEEP;
 	}
 	else if (command->meta == META_SET)
@@ -3760,7 +3760,7 @@ executeMetaCommand(CState *st, pg_time_usec_t *now)
 	 * executing the expression or shell command might have taken a
 	 * non-negligible amount of time, so reset 'now'
 	 */
-	*now = 0;
+	INSTR_TIME_SET_ZERO(*now);
 
 	return CSTATE_END_COMMAND;
 }
@@ -3770,15 +3770,14 @@ executeMetaCommand(CState *st, pg_time_usec_t *now)
  *
  * We print Unix-epoch timestamps in the log, so that entries can be
  * correlated against other logs.  On some platforms this could be obtained
- * from the caller, but rather than get entangled with that, we just eat
- * the cost of an extra syscall in all cases.
+ * from the instr_time reading the caller has, but rather than get entangled
+ * with that, we just eat the cost of an extra syscall in all cases.
  */
 static void
 doLog(TState *thread, CState *st,
 	  StatsData *agg, bool skipped, double latency, double lag)
 {
 	FILE	   *logfile = thread->logfile;
-	pg_time_usec_t now = pg_time_now();
 
 	Assert(use_log);
 
@@ -3798,12 +3797,13 @@ doLog(TState *thread, CState *st,
 		 * any empty intervals in between (this may happen with very low tps,
 		 * e.g. --rate=0.1).
 		 */
+		time_t		now = time(NULL);
 
 		while (agg->start_time + agg_interval <= now)
 		{
 			/* print aggregated report to logfile */
-			fprintf(logfile, INT64_FORMAT " " INT64_FORMAT " %.0f %.0f %.0f %.0f",
-					agg->start_time,
+			fprintf(logfile, "%ld " INT64_FORMAT " %.0f %.0f %.0f %.0f",
+					(long) agg->start_time,
 					agg->cnt,
 					agg->latency.sum,
 					agg->latency.sum2,
@@ -3831,15 +3831,17 @@ doLog(TState *thread, CState *st,
 	else
 	{
 		/* no, print raw transactions */
+		struct timeval tv;
+
+		gettimeofday(&tv, NULL);
 		if (skipped)
-			fprintf(logfile, "%d " INT64_FORMAT " skipped %d " INT64_FORMAT " "
-					INT64_FORMAT,
-					st->id, st->cnt, st->use_file, now / 1000000, now % 1000000);
+ 			fprintf(logfile, "%d " INT64_FORMAT " skipped %d %ld %ld",
+					st->id, st->cnt, st->use_file,
+					(long) tv.tv_sec, (long) tv.tv_usec);
 		else
-			fprintf(logfile, "%d " INT64_FORMAT " %.0f %d " INT64_FORMAT " "
-					INT64_FORMAT,
-					st->id, st->cnt, latency, st->use_file,
-					now / 1000000, now % 1000000);
+ 			fprintf(logfile, "%d " INT64_FORMAT " %.0f %d %ld %ld",
+ 					st->id, st->cnt, latency, st->use_file,
+					(long) tv.tv_sec, (long) tv.tv_usec);
 		if (throttle_delay)
 			fprintf(logfile, " %.0f", lag);
 		fputc('\n', logfile);
@@ -3853,7 +3855,7 @@ doLog(TState *thread, CState *st,
  * Note that even skipped transactions are counted in the "cnt" fields.)
  */
 static void
-processXactStats(TState *thread, CState *st, pg_time_usec_t *now,
+processXactStats(TState *thread, CState *st, instr_time *now,
 				 bool skipped, StatsData *agg)
 {
 	double		latency = 0.0,
@@ -3863,11 +3865,11 @@ processXactStats(TState *thread, CState *st, pg_time_usec_t *now,
 
 	if (detailed && !skipped)
 	{
-		pg_time_now_lazy(now);
+		INSTR_TIME_SET_CURRENT_LAZY(*now);
 
 		/* compute latency & lag */
-		latency = (*now) - st->txn_scheduled;
-		lag = st->txn_begin - st->txn_scheduled;
+		latency = INSTR_TIME_GET_MICROSEC(*now) - st->txn_scheduled;
+		lag = INSTR_TIME_GET_MICROSEC(st->txn_begin) - st->txn_scheduled;
 	}
 
 	if (thread_details)
@@ -4118,7 +4120,10 @@ initGenerateDataClientSide(PGconn *con)
 	int64		k;
 
 	/* used to track elapsed time and estimate of the remaining time */
-	pg_time_usec_t start;
+	instr_time	start,
+				diff;
+	double		elapsed_sec,
+				remaining_sec;
 	int			log_interval = 1;
 
 	/* Stay on the same line if reporting to a terminal */
@@ -4170,7 +4175,7 @@ initGenerateDataClientSide(PGconn *con)
 	}
 	PQclear(res);
 
-	start = pg_time_now();
+	INSTR_TIME_SET_CURRENT(start);
 
 	for (k = 0; k < (int64) naccounts * scale; k++)
 	{
@@ -4195,8 +4200,11 @@ initGenerateDataClientSide(PGconn *con)
 		 */
 		if ((!use_quiet) && (j % 100000 == 0))
 		{
-			double		elapsed_sec = PG_TIME_GET_DOUBLE(pg_time_now() - start);
-			double		remaining_sec = ((double) scale * naccounts - j) * elapsed_sec / j;
+			INSTR_TIME_SET_CURRENT(diff);
+			INSTR_TIME_SUBTRACT(diff, start);
+
+			elapsed_sec = INSTR_TIME_GET_DOUBLE(diff);
+			remaining_sec = ((double) scale * naccounts - j) * elapsed_sec / j;
 
 			fprintf(stderr, INT64_FORMAT " of " INT64_FORMAT " tuples (%d%%) done (elapsed %.2f s, remaining %.2f s)%c",
 					j, (int64) naccounts * scale,
@@ -4206,8 +4214,11 @@ initGenerateDataClientSide(PGconn *con)
 		/* let's not call the timing for each row, but only each 100 rows */
 		else if (use_quiet && (j % 100 == 0))
 		{
-			double		elapsed_sec = PG_TIME_GET_DOUBLE(pg_time_now() - start);
-			double		remaining_sec = ((double) scale * naccounts - j) * elapsed_sec / j;
+			INSTR_TIME_SET_CURRENT(diff);
+			INSTR_TIME_SUBTRACT(diff, start);
+
+			elapsed_sec = INSTR_TIME_GET_DOUBLE(diff);
+			remaining_sec = ((double) scale * naccounts - j) * elapsed_sec / j;
 
 			/* have we reached the next interval (or end)? */
 			if ((j == scale * naccounts) || (elapsed_sec >= log_interval * LOG_STEP_SECONDS))
@@ -4412,8 +4423,10 @@ runInitSteps(const char *initialize_steps)
 
 	for (step = initialize_steps; *step != '\0'; step++)
 	{
+		instr_time	start;
 		char	   *op = NULL;
-		pg_time_usec_t start = pg_time_now();
+
+		INSTR_TIME_SET_CURRENT(start);
 
 		switch (*step)
 		{
@@ -4455,7 +4468,12 @@ runInitSteps(const char *initialize_steps)
 
 		if (op != NULL)
 		{
-			double		elapsed_sec = PG_TIME_GET_DOUBLE(pg_time_now() - start);
+			instr_time	diff;
+			double		elapsed_sec;
+
+			INSTR_TIME_SET_CURRENT(diff);
+			INSTR_TIME_SUBTRACT(diff, start);
+			elapsed_sec = INSTR_TIME_GET_DOUBLE(diff);
 
 			if (!first)
 				appendPQExpBufferStr(&stats, ", ");
@@ -5403,12 +5421,12 @@ addScript(ParsedScript script)
  * progress report.  On exit, they are updated with the new stats.
  */
 static void
-printProgressReport(TState *threads, int64 test_start, pg_time_usec_t now,
+printProgressReport(TState *threads, int64 test_start, int64 now,
 					StatsData *last, int64 *last_report)
 {
 	/* generate and show report */
-	pg_time_usec_t run = now - *last_report;
-	int64		ntx;
+	int64		run = now - *last_report,
+				ntx;
 	double		tps,
 				total_run,
 				latency,
@@ -5455,7 +5473,16 @@ printProgressReport(TState *threads, int64 test_start, pg_time_usec_t now,
 
 	if (progress_timestamp)
 	{
-		snprintf(tbuf, sizeof(tbuf), "%.3f s", PG_TIME_GET_DOUBLE(now));
+		/*
+		 * On some platforms the current system timestamp is available in
+		 * now_time, but rather than get entangled with that, we just eat the
+		 * cost of an extra syscall in all cases.
+		 */
+		struct timeval tv;
+
+		gettimeofday(&tv, NULL);
+		snprintf(tbuf, sizeof(tbuf), "%ld.%03ld s",
+				 (long) tv.tv_sec, (long) (tv.tv_usec / 1000));
 	}
 	else
 	{
@@ -5495,18 +5522,21 @@ printSimpleStats(const char *prefix, SimpleStats *ss)
 
 /* print out results */
 static void
-printResults(StatsData *total,
-			 pg_time_usec_t total_duration, /* benchmarking time */
-			 pg_time_usec_t conn_total_duration,	/* is_connect */
-			 pg_time_usec_t conn_elapsed_duration,	/* !is_connect */
-			 int64 latency_late)
+printResults(StatsData *total, instr_time total_time,
+			 instr_time conn_total_time, int64 latency_late)
 {
-	/* tps is about actually executed transactions during benchmarking */
+	double		time_include,
+				tps_include,
+				tps_exclude;
 	int64		ntx = total->cnt - total->skipped;
-	double		bench_duration = PG_TIME_GET_DOUBLE(total_duration);
-	double		tps = ntx / bench_duration;
 
-	printf("pgbench (PostgreSQL) %d.%d\n", PG_VERSION_NUM / 10000, PG_VERSION_NUM % 100);
+	time_include = INSTR_TIME_GET_DOUBLE(total_time);
+
+	/* tps is about actually executed transactions */
+	tps_include = ntx / time_include;
+	tps_exclude = ntx /
+		(time_include - (INSTR_TIME_GET_DOUBLE(conn_total_time) / nclients));
+
 	/* Report test parameters. */
 	printf("transaction type: %s\n",
 		   num_scripts == 1 ? sql_script[0].desc : "multiple scripts");
@@ -5537,7 +5567,8 @@ printResults(StatsData *total,
 
 	if (throttle_delay && latency_limit)
 		printf("number of transactions skipped: " INT64_FORMAT " (%.3f %%)\n",
-			   total->skipped, 100.0 * total->skipped / total->cnt);
+			   total->skipped,
+			   100.0 * total->skipped / total->cnt);
 
 	if (latency_limit)
 		printf("number of transactions above the %.1f ms latency limit: " INT64_FORMAT "/" INT64_FORMAT " (%.3f %%)\n",
@@ -5550,7 +5581,7 @@ printResults(StatsData *total,
 	{
 		/* no measurement, show average latency computed from run time */
 		printf("latency average = %.3f ms\n",
-			   0.001 * total_duration * nclients / total->cnt);
+			   1000.0 * time_include * nclients / total->cnt);
 	}
 
 	if (throttle_delay)
@@ -5565,25 +5596,8 @@ printResults(StatsData *total,
 			   0.001 * total->lag.sum / total->cnt, 0.001 * total->lag.max);
 	}
 
-	/*
-	 * Under -C/--connect, each transaction incurs a significant connection
-	 * cost, it would not make much sense to ignore it in tps, and it would
-	 * not be tps anyway.
-	 *
-	 * Otherwise connections are made just once at the beginning of the run
-	 * and should not impact performance but for very short run, so they are
-	 * (right)fully ignored in tps.
-	 */
-	if (is_connect)
-	{
-		printf("average connection time = %.3f ms\n", 0.001 * conn_total_duration / total->cnt);
-		printf("tps = %f (including reconnection times)\n", tps);
-	}
-	else
-	{
-		printf("initial connection time = %.3f ms\n", 0.001 * conn_elapsed_duration);
-		printf("tps = %f (without initial connection time)\n", tps);
-	}
+	printf("tps = %f (including connections establishing)\n", tps_include);
+	printf("tps = %f (excluding connections establishing)\n", tps_exclude);
 
 	/* Report per-script/command statistics */
 	if (per_script_stats || report_per_command)
@@ -5604,7 +5618,7 @@ printResults(StatsData *total,
 					   100.0 * sql_script[i].weight / total_weight,
 					   sstats->cnt,
 					   100.0 * sstats->cnt / total->cnt,
-					   (sstats->cnt - sstats->skipped) / bench_duration);
+					   (sstats->cnt - sstats->skipped) / time_include);
 
 				if (throttle_delay && latency_limit && sstats->cnt > 0)
 					printf(" - number of transactions skipped: " INT64_FORMAT " (%.3f%%)\n",
@@ -5652,7 +5666,10 @@ set_random_seed(const char *seed)
 	if (seed == NULL || strcmp(seed, "time") == 0)
 	{
 		/* rely on current time */
-		iseed = pg_time_now();
+		instr_time	now;
+
+		INSTR_TIME_SET_CURRENT(now);
+		iseed = (uint64) INSTR_TIME_GET_MICROSEC(now);
 	}
 	else if (strcmp(seed, "rand") == 0)
 	{
@@ -5755,11 +5772,9 @@ main(int argc, char **argv)
 	CState	   *state;			/* status of clients */
 	TState	   *threads;		/* array of thread */
 
-	pg_time_usec_t
-				start_time,		/* start up time */
-				bench_start = 0,	/* first recorded benchmarking time */
-				conn_total_duration;	/* cumulated connection time in
-										 * threads */
+	instr_time	start_time;		/* start up time */
+	instr_time	total_time;
+	instr_time	conn_total_time;
 	int64		latency_late = 0;
 	StatsData	stats;
 	int			weight;
@@ -6428,8 +6443,8 @@ main(int argc, char **argv)
 	/* all clients must be assigned to a thread */
 	Assert(nclients_dealt == nclients);
 
-	/* get start up time for the whole computation */
-	start_time = pg_time_now();
+	/* get start up time */
+	INSTR_TIME_SET_CURRENT(start_time);
 
 	/* set alarm if duration is specified. */
 	if (duration > 0)
@@ -6445,7 +6460,8 @@ main(int argc, char **argv)
 	{
 		TState	   *thread = &threads[i];
 
-		thread->create_time = pg_time_now();
+		INSTR_TIME_SET_CURRENT(thread->start_time);
+
 		errno = THREAD_CREATE(&thread->thread, threadRun, thread);
 
 		if (errno != 0)
@@ -6559,7 +6575,7 @@ threadRun(void *arg)
 	/* READY */
 	THREAD_BARRIER_WAIT(&barrier);
 
-	thread_start = pg_time_now();
+	INSTR_TIME_SET_CURRENT(thread_start);
 	thread->started_time = thread_start;
 	last_report = thread_start;
 	next_report = last_report + (int64) 1000000 * progress;
@@ -6759,8 +6775,11 @@ threadRun(void *arg)
 		/* progress report is made by thread 0 for all threads */
 		if (progress && thread->tid == 0)
 		{
-			pg_time_usec_t now = pg_time_now();
+			instr_time	now_time;
+			int64		now;
 
+			INSTR_TIME_SET_CURRENT(now_time);
+			now = INSTR_TIME_GET_MICROSEC(now_time);
 			if (now >= next_report)
 			{
 				/*
@@ -6778,17 +6797,17 @@ threadRun(void *arg)
 				 */
 				do
 				{
-					next_report += (int64) 1000000 * progress;
+					next_report += (int64) progress * 1000000;
 				} while (now >= next_report);
 			}
 		}
 	}
 
 done:
-	start = pg_time_now();
+	INSTR_TIME_SET_CURRENT(start);
 	disconnect_all(state, nstate);
-	thread->conn_duration += pg_time_now() - start;
-
+	INSTR_TIME_SET_CURRENT(end);
+	INSTR_TIME_ACCUM_DIFF(thread->conn_time, end, start);
 	if (thread->logfile)
 	{
 		if (agg_interval > 0)
