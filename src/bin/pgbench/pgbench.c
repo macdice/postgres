@@ -122,26 +122,45 @@ typedef struct socket_set
 #define THREAD_T HANDLE
 #define THREAD_FUNC_RETURN_TYPE unsigned
 #define THREAD_FUNC_RETURN return 0
+#define THREAD_FUNC_CC __stdcall
 #define THREAD_CREATE(handle, function, arg) \
 	((*(handle) = (HANDLE) _beginthreadex(NULL, 0, (function), (arg), 0, NULL)) == 0 ? errno : 0)
 #define THREAD_JOIN(handle) \
 	(WaitForSingleObject(handle, INFINITE) != WAIT_OBJECT_0 ? \
 	GETERRNO() : CloseHandle(handle) ? 0 : GETERRNO())
+#define THREAD_BARRIER_T SYNCHRONIZATION_BARRIER
+#define THREAD_BARRIER_INIT(barrier, n) \
+	(InitializeSynchronizationBarrier((barrier), (n), 0) ? 0 : GETERRNO())
+#define THREAD_BARRIER_WAIT(barrier) \
+	EnterSynchronizationBarrier((barrier), \
+								SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY)
+#define THREAD_BARRIER_DESTROY(barrier)
 #elif defined(ENABLE_THREAD_SAFETY)
 /* Use POSIX threads */
-#include <pthread.h>
+#include "port/pg_pthread.h"
 #define THREAD_T pthread_t
 #define THREAD_FUNC_RETURN_TYPE void *
 #define THREAD_FUNC_RETURN return NULL
+#define THREAD_FUNC_CC
 #define THREAD_CREATE(handle, function, arg) \
 	pthread_create((handle), NULL, (function), (arg))
 #define THREAD_JOIN(handle) \
 	pthread_join((handle), NULL)
+#define THREAD_BARRIER_T pthread_barrier_t
+#define THREAD_BARRIER_INIT(barrier, n) \
+	pthread_barrier_init((barrier), NULL, (n))
+#define THREAD_BARRIER_WAIT(barrier) pthread_barrier_wait((barrier))
+#define THREAD_BARRIER_DESTROY(barrier) pthread_barrier_destroy((barrier))
 #else
 /* No threads implementation, use none (-j 1) */
 #define THREAD_T void *
 #define THREAD_FUNC_RETURN_TYPE void *
 #define THREAD_FUNC_RETURN return NULL
+#define THREAD_FUNC_CC
+#define THREAD_BARRIER_T int
+#define THREAD_BARRIER_INIT(barrier, n) (*(barrier) = 0)
+#define THREAD_BARRIER_WAIT(barrier)
+#define THREAD_BARRIER_DESTROY(barrier)
 #endif
 
 
@@ -326,6 +345,9 @@ typedef struct RandomState
 
 /* Various random sequences are initialized from this one. */
 static RandomState base_random_sequence;
+
+/* Synchronization barrier for start and connection */
+static THREAD_BARRIER_T barrier;
 
 /*
  * Connection state machine states.
@@ -620,7 +642,7 @@ static void doLog(TState *thread, CState *st,
 static void processXactStats(TState *thread, CState *st, instr_time *now,
 							 bool skipped, StatsData *agg);
 static void addScript(ParsedScript script);
-static THREAD_FUNC_RETURN_TYPE threadRun(void *arg);
+static THREAD_FUNC_RETURN_TYPE THREAD_FUNC_CC threadRun(void *arg);
 static void finishCon(CState *st);
 static void setalarm(int seconds);
 static socket_set *alloc_socket_set(int count);
@@ -6403,6 +6425,11 @@ main(int argc, char **argv)
 	if (duration > 0)
 		setalarm(duration);
 
+	/* set up the barrier that we'll use to synchronize threads */
+	errno = THREAD_BARRIER_INIT(&barrier, nthreads);
+	if (errno != 0)
+		pg_log_fatal("could not initialize barrier: %m");
+
 	/* start threads */
 #ifdef ENABLE_THREAD_SAFETY
 	for (i = 0; i < nthreads; i++)
@@ -6482,13 +6509,15 @@ main(int argc, char **argv)
 	INSTR_TIME_SUBTRACT(total_time, start_time);
 	printResults(&stats, total_time, conn_total_time, latency_late);
 
+	THREAD_BARRIER_DESTROY(&barrier);
+
 	if (exit_code != 0)
 		pg_log_fatal("Run was aborted; the above results are incomplete.");
 
 	return exit_code;
 }
 
-static THREAD_FUNC_RETURN_TYPE
+static THREAD_FUNC_RETURN_TYPE THREAD_FUNC_CC
 threadRun(void *arg)
 {
 	TState	   *thread = (TState *) arg;
@@ -6547,13 +6576,26 @@ threadRun(void *arg)
 		for (i = 0; i < nstate; i++)
 		{
 			if ((state[i].con = doConnect()) == NULL)
+			{
+				/*
+				 * On connection failure, we meet the barrier here in place of
+				 * GO before proceeding to the "done" path which will cleanup,
+				 * so as to avoid locking the process.
+				 *
+				 * It is unclear whether it is worth doing anything rather than
+				 * coldly exiting with an error message.
+				 */
+				THREAD_BARRIER_WAIT(&barrier);
 				goto done;
+			}
 		}
 	}
 
 	/* time after thread and connections set up */
 	INSTR_TIME_SET_CURRENT(thread->conn_time);
 	INSTR_TIME_SUBTRACT(thread->conn_time, thread->start_time);
+
+	THREAD_BARRIER_WAIT(&barrier);
 
 	/* explicitly initialize the state machines */
 	for (i = 0; i < nstate; i++)
