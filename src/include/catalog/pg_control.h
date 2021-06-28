@@ -231,14 +231,6 @@ typedef struct ControlFileData
 } ControlFileData;
 
 /*
- * Maximum safe value of sizeof(ControlFileData).  For reliability's sake,
- * it's critical that pg_control updates be atomic writes.  That generally
- * means the active data can't be more than one disk sector, which is 512
- * bytes on common hardware.  Be very careful about raising this limit.
- */
-#define PG_CONTROL_MAX_SAFE_SIZE	512
-
-/*
  * Physical size of the pg_control file.  Note that this is considerably
  * bigger than the actually used size (ie, sizeof(ControlFileData)).
  * The idea is to keep the physical size constant independent of format

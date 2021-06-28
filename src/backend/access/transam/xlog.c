@@ -4660,10 +4660,8 @@ WriteControlFile(void)
 	 * Ensure that the size of the pg_control data structure is sane.  See the
 	 * comments for these symbols in pg_control.h.
 	 */
-	StaticAssertStmt(sizeof(ControlFileData) <= PG_CONTROL_MAX_SAFE_SIZE,
-					 "pg_control is too large for atomic disk writes");
-	StaticAssertStmt(sizeof(ControlFileData) <= PG_CONTROL_FILE_SIZE,
-					 "sizeof(ControlFileData) exceeds PG_CONTROL_FILE_SIZE");
+	StaticAssertStmt(sizeof(ControlFileData) * 2 <= PG_CONTROL_FILE_SIZE,
+					 "sizeof(ControlFileData) * 2 exceeds PG_CONTROL_FILE_SIZE");
 
 	/*
 	 * Initialize version and compatibility-check fields
@@ -4703,6 +4701,14 @@ WriteControlFile(void)
 	 */
 	memset(buffer, 0, PG_CONTROL_FILE_SIZE);
 	memcpy(buffer, ControlFile, sizeof(ControlFileData));
+
+	/*
+	 * Make second copy of the control file data.  No need to synchronize the
+	 * file in between copies (as UpdateControlFile() does), because this path
+	 * is used during bootstrapping only.
+	 */
+	memcpy(buffer + sizeof(ControlFileData),
+		   ControlFile, sizeof(ControlFileData));
 
 	fd = BasicOpenFile(XLOG_CONTROL_FILE,
 					   O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
@@ -4744,6 +4750,8 @@ WriteControlFile(void)
 static void
 ReadControlFile(void)
 {
+	ControlFileData	control_file_array[2];
+	bool		crc_good[2];
 	pg_crc32c	crc;
 	int			fd;
 	static char wal_segsz_str[20];
@@ -4761,8 +4769,8 @@ ReadControlFile(void)
 						XLOG_CONTROL_FILE)));
 
 	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_READ);
-	r = read(fd, ControlFile, sizeof(ControlFileData));
-	if (r != sizeof(ControlFileData))
+	r = read(fd, control_file_array, sizeof(control_file_array));
+	if (r != sizeof(control_file_array))
 	{
 		if (r < 0)
 			ereport(PANIC,
@@ -4773,11 +4781,97 @@ ReadControlFile(void)
 			ereport(PANIC,
 					(errcode(ERRCODE_DATA_CORRUPTED),
 					 errmsg("could not read file \"%s\": read %d of %zu",
-							XLOG_CONTROL_FILE, r, sizeof(ControlFileData))));
+							XLOG_CONTROL_FILE, r, sizeof(control_file_array))));
 	}
 	pgstat_report_wait_end();
 
 	close(fd);
+
+	/*
+	 * We read two copies.  Usually they are identical, but they might not be
+	 * if there was a crash while UpdateControlFile() was writing them out.
+	 * They were written with a synchronization barrier between them, so we can
+	 * assume that at least one of them was written out fully, without having
+	 * to make any assumptions about things like sectors and atomicity on
+	 * overwrite filesystems.
+	 */
+	for (int i = 0; i < 2; ++i)
+	{
+		INIT_CRC32C(crc);
+		COMP_CRC32C(crc, &control_file_array[i],
+					offsetof(ControlFileData, crc));
+		FIN_CRC32C(crc);
+		crc_good[i] = EQ_CRC32C(crc, control_file_array[i].crc);
+	}
+
+	if (crc_good[0])
+	{
+		/* The first copy is good, so that's the one we'll use to start up. */
+		*ControlFile = control_file_array[0];
+
+		/*
+		 * There is a hazard if the second copy is corrupted, though:
+		 * UpdateControlFile() writes first then second.  If we leave the
+		 * second copy corrupted now, another power loss event could corrupt
+		 * the first copy, leaving no good copies on the disk.  So, if the
+		 * second copy is corrupted, fix it now.
+		 */
+		if (!crc_good[1])
+		{
+			elog(WARNING, "incorrect checksum for second copy of control data, correcting");
+			fd = BasicOpenFile(XLOG_CONTROL_FILE, O_RDWR | PG_BINARY);
+			if (fd < 0)
+				ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg("could not open file \"%s\": %m",
+							XLOG_CONTROL_FILE)));
+			r = pg_pwrite(fd, ControlFile, sizeof(*ControlFile),
+						  sizeof(*ControlFile));
+			if (r != sizeof(*ControlFile))
+			{
+				if (r < 0)
+					ereport(PANIC,
+							(errcode_for_file_access(),
+							 errmsg("could not write file \"%s\": %m",
+									XLOG_CONTROL_FILE)));
+				else
+					ereport(PANIC,
+							(errcode(ERRCODE_DATA_CORRUPTED),
+							 errmsg("could not write file \"%s\": wrote %d of %zu",
+									XLOG_CONTROL_FILE, r, sizeof(*ControlFile))));
+			}
+			if (pg_fsync(openLogFile) != 0)
+				ereport(PANIC,
+						(errcode_for_file_access(),
+						 errmsg("could not fsync file \"%s\": %m",
+								XLOG_CONTROL_FILE)));
+			close(fd);
+		}
+	}
+	else if (crc_good[1])
+	{
+		/* The second copy is good, so that's the one we'll use to start up. */
+		*ControlFile = control_file_array[1];
+		elog(WARNING, "incorrect checksum for first copy of control data, using second copy");
+
+		/*
+		 * We don't have to worry about correcting the corrupted first copy.
+		 * The next call to UpdateControlFile() will overwrite the first copy
+		 * first, so there won't be a risk of both copies being corrupted on
+		 * overwrite filesystems.
+		 */
+	}
+	else
+	{
+		/*
+		 * Both copies failed CRC checks, so we can't start up.  We'll use the
+		 * first one for the checks on file format version that we perform
+		 * next, because only its version is expected to be at the same offset
+		 * in all versions.
+		 */
+		*ControlFile = control_file_array[0];
+		elog(WARNING, "incorrect checksum for both copies of control data");
+	}
 
 	/*
 	 * Check for expected pg_control format version.  If this is wrong, the
@@ -4803,14 +4897,8 @@ ReadControlFile(void)
 						   ControlFile->pg_control_version, PG_CONTROL_VERSION),
 				 errhint("It looks like you need to initdb.")));
 
-	/* Now check the CRC. */
-	INIT_CRC32C(crc);
-	COMP_CRC32C(crc,
-				(char *) ControlFile,
-				offsetof(ControlFileData, crc));
-	FIN_CRC32C(crc);
-
-	if (!EQ_CRC32C(crc, ControlFile->crc))
+	/* Now report CRC failure. */
+	if (!crc_good[0] && !crc_good[1])
 		ereport(FATAL,
 				(errmsg("incorrect checksum in control file")));
 

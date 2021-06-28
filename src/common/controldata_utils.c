@@ -44,6 +44,10 @@
  * Get controlfile values.  The result is returned as a palloc'd copy of the
  * control file data.
  *
+ * XXX Unlike the backend's ReadControlFile(), this function does not currently
+ * consider the second copy of ControlFileData and will simply report CRC check
+ * failure if the first copy is corrupted.
+ *
  * crc_ok_p can be used by the caller to see whether the CRC of the control
  * file data is correct.
  */
@@ -157,16 +161,13 @@ update_controlfile(const char *DataDir,
 				   ControlFileData *ControlFile, bool do_sync)
 {
 	int			fd;
-	char		buffer[PG_CONTROL_FILE_SIZE];
 	char		ControlFilePath[MAXPGPATH];
 
 	/*
 	 * Apply the same static assertions as in backend's WriteControlFile().
 	 */
-	StaticAssertStmt(sizeof(ControlFileData) <= PG_CONTROL_MAX_SAFE_SIZE,
-					 "pg_control is too large for atomic disk writes");
-	StaticAssertStmt(sizeof(ControlFileData) <= PG_CONTROL_FILE_SIZE,
-					 "sizeof(ControlFileData) exceeds PG_CONTROL_FILE_SIZE");
+	StaticAssertStmt(sizeof(ControlFileData) * 2 <= PG_CONTROL_FILE_SIZE,
+					 "sizeof(ControlFileData) * 2 exceeds PG_CONTROL_FILE_SIZE");
 
 	/* Recalculate CRC of control file */
 	INIT_CRC32C(ControlFile->crc);
@@ -174,14 +175,6 @@ update_controlfile(const char *DataDir,
 				(char *) ControlFile,
 				offsetof(ControlFileData, crc));
 	FIN_CRC32C(ControlFile->crc);
-
-	/*
-	 * Write out PG_CONTROL_FILE_SIZE bytes into pg_control by zero-padding
-	 * the excess over sizeof(ControlFileData), to avoid premature EOF related
-	 * errors when reading it.
-	 */
-	memset(buffer, 0, PG_CONTROL_FILE_SIZE);
-	memcpy(buffer, ControlFile, sizeof(ControlFileData));
 
 	snprintf(ControlFilePath, sizeof(ControlFilePath), "%s/%s", DataDir, XLOG_CONTROL_FILE);
 
@@ -205,47 +198,51 @@ update_controlfile(const char *DataDir,
 	}
 #endif
 
-	errno = 0;
-#ifndef FRONTEND
-	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE);
-#endif
-	if (write(fd, buffer, PG_CONTROL_FILE_SIZE) != PG_CONTROL_FILE_SIZE)
+	/* Write out two copies with a sychronization barrier in between. */
+	for (int i = 0; i < 2; ++i)
 	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
+		errno = 0;
+#ifndef FRONTEND
+		pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE);
+#endif
+		if (write(fd, ControlFile, sizeof(*ControlFile)) != sizeof(*ControlFile))
+		{
+			/* if write didn't set errno, assume problem is no disk space */
+			if (errno == 0)
+				errno = ENOSPC;
 
 #ifndef FRONTEND
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m",
-						ControlFilePath)));
-#else
-		pg_log_fatal("could not write file \"%s\": %m", ControlFilePath);
-		exit(EXIT_FAILURE);
-#endif
-	}
-#ifndef FRONTEND
-	pgstat_report_wait_end();
-#endif
-
-	if (do_sync)
-	{
-#ifndef FRONTEND
-		pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_SYNC_UPDATE);
-		if (pg_fsync(fd) != 0)
 			ereport(PANIC,
 					(errcode_for_file_access(),
-					 errmsg("could not fsync file \"%s\": %m",
+					 errmsg("could not write file \"%s\": %m",
 							ControlFilePath)));
-		pgstat_report_wait_end();
 #else
-		if (fsync(fd) != 0)
-		{
-			pg_log_fatal("could not fsync file \"%s\": %m", ControlFilePath);
+			pg_log_fatal("could not write file \"%s\": %m", ControlFilePath);
 			exit(EXIT_FAILURE);
-		}
 #endif
+		}
+#ifndef FRONTEND
+		pgstat_report_wait_end();
+#endif
+
+		if (do_sync)
+		{
+#ifndef FRONTEND
+			pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_SYNC_UPDATE);
+			if (pg_fsync(fd) != 0)
+				ereport(PANIC,
+						(errcode_for_file_access(),
+						 errmsg("could not fsync file \"%s\": %m",
+								ControlFilePath)));
+			pgstat_report_wait_end();
+#else
+			if (fsync(fd) != 0)
+			{
+				pg_log_fatal("could not fsync file \"%s\": %m", ControlFilePath);
+				exit(EXIT_FAILURE);
+			}
+#endif
+		}
 	}
 
 	if (close(fd) != 0)
