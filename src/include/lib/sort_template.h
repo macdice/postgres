@@ -47,6 +47,14 @@
  *
  * 	  - ST_COMPARE_RET_TYPE - an integer type
  *
+ *	  Experimental tuning options:
+ *
+ *	  - ST_SORT_NO_PRESORT_CHECK - do not test for initial sortedness
+ *	  - ST_SORT_IS_UNIQUE - remove code that deals with duplicates
+ *	  - ST_SORT_SMALL_THRESHOLD - below this size we do insertion sort (7)
+ *	  - ST_SORT_MEDIUM_THRESHOLD - above this size we partition with med3 (7)
+ *	  - ST_SORT_LARGE_THRESHOLD - above this size we partition with med9 (40)
+ *
  *	  The prototype of the generated sort function is:
  *
  *	  void ST_SORT(ST_ELEMENT_TYPE *data, size_t n,
@@ -177,6 +185,17 @@
 #else
 #define ST_SORT_PROTO_ARG
 #define ST_SORT_INVOKE_ARG
+#endif
+
+/* Default values for experimental tunables. */
+#ifndef ST_SORT_SMALL_THRESHOLD
+#define ST_SORT_SMALL_THRESHOLD 7
+#endif
+#ifndef ST_SORT_MEDIUM_THRESHOLD
+#define ST_SORT_MEDIUM_THRESHOLD 7
+#endif
+#ifndef ST_SORT_LARGE_THRESHOLD
+#define ST_SORT_LARGE_THRESHOLD 40
 #endif
 
 #ifdef ST_DECLARE
@@ -324,13 +343,16 @@ ST_SORT(ST_ELEMENT_TYPE * data, size_t n
 	ST_POINTER_TYPE *pn;
 	size_t		d1,
 				d2;
+#ifndef ST_SORT_NO_PRESORT_CHECK
 	int			presorted;
+#endif
 	ST_COMPARE_RET_TYPE r;
 
 loop:
 	DO_CHECK_FOR_INTERRUPTS();
-	if (n < 7)
+	if (n < ST_SORT_SMALL_THRESHOLD)
 	{
+		/* Use insertion sort for very small input. */
 		for (pm = a + ST_POINTER_STEP; pm < a + n * ST_POINTER_STEP;
 			 pm += ST_POINTER_STEP)
 			for (pl = pm; pl > a && DO_COMPARE(pl - ST_POINTER_STEP, pl) > 0;
@@ -338,6 +360,7 @@ loop:
 				DO_SWAP(pl, pl - ST_POINTER_STEP);
 		return;
 	}
+#ifndef ST_SORT_NO_PRESORT_CHECK
 	presorted = 1;
 	for (pm = a + ST_POINTER_STEP; pm < a + n * ST_POINTER_STEP;
 		 pm += ST_POINTER_STEP)
@@ -351,13 +374,17 @@ loop:
 	}
 	if (presorted)
 		return;
+#endif
+	/* Partition with middle element for small input. */
 	pm = a + (n / 2) * ST_POINTER_STEP;
-	if (n > 7)
+	if (n > ST_SORT_MEDIUM_THRESHOLD)
 	{
+		/* Partition with median of three for medium input. */
 		pl = a;
 		pn = a + (n - 1) * ST_POINTER_STEP;
-		if (n > 40)
+		if (n > ST_SORT_LARGE_THRESHOLD)
 		{
+			/* Partition with median of nine for large input. */
 			size_t		d = (n / 8) * ST_POINTER_STEP;
 
 			pl = DO_MED3(pl, pl + d, pl + 2 * d);
@@ -373,21 +400,25 @@ loop:
 	{
 		while (pb <= pc && (r = DO_COMPARE(pb, a)) <= 0)
 		{
+#ifndef ST_SORT_IS_UNIQUE
 			if (r == 0)
 			{
 				DO_SWAP(pa, pb);
 				pa += ST_POINTER_STEP;
 			}
+#endif
 			pb += ST_POINTER_STEP;
 			DO_CHECK_FOR_INTERRUPTS();
 		}
 		while (pb <= pc && (r = DO_COMPARE(pc, a)) >= 0)
 		{
+#ifndef ST_SORT_IS_UNIQUE
 			if (r == 0)
 			{
 				DO_SWAP(pc, pd);
 				pd -= ST_POINTER_STEP;
 			}
+#endif
 			pc -= ST_POINTER_STEP;
 			DO_CHECK_FOR_INTERRUPTS();
 		}
@@ -527,9 +558,14 @@ ST_UNIQUE(ST_ELEMENT_TYPE * array,
 #undef ST_SORT_INVOKE_ARG
 #undef ST_SORT_INVOKE_COMPARE
 #undef ST_SORT_INVOKE_ELEMENT_SIZE
+#undef ST_SORT_IS_UNIQUE
+#undef ST_SORT_LARGE_THRESHOLD
+#undef ST_SORT_MEDIUM_THRESHOLD
+#undef ST_SORT_NO_PRESORT_CHECK
 #undef ST_SORT_PROTO_ARG
 #undef ST_SORT_PROTO_COMPARE
 #undef ST_SORT_PROTO_ELEMENT_SIZE
+#undef ST_SORT_SMALL_THRESHOLD
 #undef ST_SWAP
 #undef ST_SWAPN
 #undef ST_UNIQUE
