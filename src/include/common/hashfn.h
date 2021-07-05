@@ -101,4 +101,59 @@ murmurhash32(uint32 data)
 	return h;
 }
 
+/*
+ * A murmur hash implementation based on Austin Appleby's public domain
+ * MurmurHash1.  Assumes that input is suitably aligned for uint32.  Results
+ * not portable between endiannesses.
+ */
+static inline uint32
+murmurhash_align4(const void *input, size_t len)
+{
+	uint32 h = 0 ^ (len * 0xc6a4a793);
+	const unsigned char *data = (const unsigned char *) input;
+
+	/*
+	 * This function can't handle non-int-aligned input.  This variant of the
+	 * function is intended to unroll to efficient code for structs that have
+	 * suitable alignment, without runtime code to handle non-aligned leading
+	 * bytes.
+	 */
+	Assert((((uintptr_t) input) % sizeof(uint32)) == 0);
+
+	/* Handle uint32 words. */
+	while (len >= 4)
+	{
+		uint32 k = *(uint32 *) data;
+
+		h += k;
+		h *= 0xc6a4a793;
+		h ^= h >> 16;
+		data += 4;
+		len -= 4;
+	}
+
+	/* Handle leftover bytes at the end. */
+	switch (len)
+	{
+	case 3:
+		h += data[2] << 16;
+		/* FALL THROUGH */
+	case 2:
+		h += data[1] << 8;
+		/* FALL THROUGH */
+	case 1:
+		h += data[0];
+		h *= 0xc6a4a793;
+		h ^= h >> 16;
+		/* FALL THROUGH */
+	}
+
+	h *= 0xc6a4a793;
+	h ^= h >> 10;
+	h *= 0xc6a4a793;
+	h ^= h >> 17;
+
+	return h;
+}
+
 #endif							/* HASHFN_H */
