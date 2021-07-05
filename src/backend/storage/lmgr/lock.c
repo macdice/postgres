@@ -503,21 +503,6 @@ GetLockTagsMethodTable(const LOCKTAG *locktag)
 	return LockMethods[lockmethodid];
 }
 
-
-/*
- * Compute the hash code associated with a LOCKTAG.
- *
- * To avoid unnecessary recomputations of the hash code, we try to do this
- * just once per function, and then pass it around as needed.  Aside from
- * passing the hashcode to hash_search_with_hash_value(), we can extract
- * the lock partition number from the hashcode.
- */
-uint32
-LockTagHashCode(const LOCKTAG *locktag)
-{
-	return get_hash_value(LockMethodLockHash, (const void *) locktag);
-}
-
 /*
  * Compute the hash code associated with a PROCLOCKTAG.
  *

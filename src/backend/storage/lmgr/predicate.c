@@ -287,6 +287,9 @@
 #define SxactIsROUnsafe(sxact) (((sxact)->flags & SXACT_FLAG_RO_UNSAFE) != 0)
 #define SxactIsPartiallyReleased(sxact) (((sxact)->flags & SXACT_FLAG_PARTIALLY_RELEASED) != 0)
 
+/* The hash function we'll use for lock tags. */
+#define PREDICATELOCKTARGETTAG_HASH_FUN murmurhash_align4
+
 /*
  * Compute the hash code associated with a PREDICATELOCKTARGETTAG.
  *
@@ -296,7 +299,8 @@
  * the lock partition number from the hashcode.
  */
 #define PredicateLockTargetTagHashCode(predicatelocktargettag) \
-	get_hash_value(PredicateLockTargetHash, predicatelocktargettag)
+	PREDICATELOCKTARGETTAG_HASH_FUN((predicatelocktargettag), \
+									sizeof(*predicatelocktargettag))
 
 /*
  * Given a predicate lock tag, and the hash for its target,
@@ -1174,12 +1178,13 @@ InitPredicateLocks(void)
 	info.keysize = sizeof(PREDICATELOCKTARGETTAG);
 	info.entrysize = sizeof(PREDICATELOCKTARGET);
 	info.num_partitions = NUM_PREDICATELOCK_PARTITIONS;
+	info.hash = PREDICATELOCKTARGETTAG_HASH_FUN;
 
 	PredicateLockTargetHash = ShmemInitHash("PREDICATELOCKTARGET hash",
 											max_table_size,
 											max_table_size,
 											&info,
-											HASH_ELEM | HASH_BLOBS |
+											HASH_ELEM | HASH_FUNCTION |
 											HASH_PARTITION | HASH_FIXED_SIZE);
 
 	/*
@@ -1927,10 +1932,11 @@ CreateLocalPredicateLockHash(void)
 	Assert(LocalPredicateLockHash == NULL);
 	hash_ctl.keysize = sizeof(PREDICATELOCKTARGETTAG);
 	hash_ctl.entrysize = sizeof(LOCALPREDICATELOCK);
+	hash_ctl.hash = PREDICATELOCKTARGETTAG_HASH_FUN;
 	LocalPredicateLockHash = hash_create("Local predicate lock",
 										 max_predicate_locks_per_xact,
 										 &hash_ctl,
-										 HASH_ELEM | HASH_BLOBS);
+										 HASH_ELEM | HASH_FUNCTION);
 }
 
 /*

@@ -18,6 +18,7 @@
 #error "lock.h may not be included from frontend code"
 #endif
 
+#include "common/hashfn.h"
 #include "storage/backendid.h"
 #include "storage/lockdefs.h"
 #include "storage/lwlock.h"
@@ -532,6 +533,23 @@ typedef enum
  */
 #define LockHashPartitionLockByProc(leader_pgproc) \
 	LockHashPartitionLock((leader_pgproc)->pgprocno)
+
+/* The hash function we'll use for lock tags. */
+#define LOCKTAG_HASH_FUN murmurhash_align4
+
+/*
+ * Compute the hash code associated with a LOCKTAG.
+ *
+ * To avoid unnecessary recomputations of the hash code, we try to do this
+ * just once per function, and then pass it around as needed.  Aside from
+ * passing the hashcode to hash_search_with_hash_value(), we can extract
+ * the lock partition number from the hashcode.
+ */
+static inline uint32
+LockTagHashCode(const LOCKTAG *locktag)
+{
+	return LOCKTAG_HASH_FUN(locktag, sizeof(*locktag));
+}
 
 /*
  * function prototypes

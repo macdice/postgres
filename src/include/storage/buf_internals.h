@@ -15,6 +15,7 @@
 #ifndef BUFMGR_INTERNALS_H
 #define BUFMGR_INTERNALS_H
 
+#include "common/hashfn.h"
 #include "port/atomics.h"
 #include "storage/buf.h"
 #include "storage/bufmgr.h"
@@ -95,6 +96,9 @@ typedef struct buftag
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
+/* The name of the hash function we'll use for buffer tags. */
+#define BUFFERTAG_HASH_FUN murmurhash_align4
+
 #define CLEAR_BUFFERTAG(a) \
 ( \
 	(a).rnode.spcNode = InvalidOid, \
@@ -131,6 +135,21 @@ typedef struct buftag
 		BufTableHashPartition(hashcode)].lock)
 #define BufMappingPartitionLockByIndex(i) \
 	(&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + (i)].lock)
+
+/*
+ * BufTableHashCode
+ *              Compute the hash code associated with a BufferTag
+ *
+ * This must be passed to the lookup/insert/delete routines along with the
+ * tag.  We do it like this because the callers need to know the hash code
+ * in order to determine which buffer partition to lock, and we don't want
+ * to do the hash computation twice (hash_any is a bit slow).
+ */
+static inline uint32
+BufTableHashCode(BufferTag *tagPtr)
+{
+	return BUFFERTAG_HASH_FUN(tagPtr, sizeof(*tagPtr));
+}
 
 /*
  *	BufferDesc -- shared descriptor/state data for a single shared buffer.
@@ -325,7 +344,6 @@ extern bool have_free_buffer(void);
 /* buf_table.c */
 extern Size BufTableShmemSize(int size);
 extern void InitBufTable(int size);
-extern uint32 BufTableHashCode(BufferTag *tagPtr);
 extern int	BufTableLookup(BufferTag *tagPtr, uint32 hashcode);
 extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
 extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);

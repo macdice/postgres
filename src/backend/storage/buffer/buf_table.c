@@ -59,26 +59,12 @@ InitBufTable(int size)
 	info.keysize = sizeof(BufferTag);
 	info.entrysize = sizeof(BufferLookupEnt);
 	info.num_partitions = NUM_BUFFER_PARTITIONS;
+	info.hash = BUFFERTAG_HASH_FUN;
 
 	SharedBufHash = ShmemInitHash("Shared Buffer Lookup Table",
 								  size, size,
 								  &info,
-								  HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
-}
-
-/*
- * BufTableHashCode
- *		Compute the hash code associated with a BufferTag
- *
- * This must be passed to the lookup/insert/delete routines along with the
- * tag.  We do it like this because the callers need to know the hash code
- * in order to determine which buffer partition to lock, and we don't want
- * to do the hash computation twice (hash_any is a bit slow).
- */
-uint32
-BufTableHashCode(BufferTag *tagPtr)
-{
-	return get_hash_value(SharedBufHash, (void *) tagPtr);
+								  HASH_ELEM | HASH_FUNCTION | HASH_PARTITION);
 }
 
 /*
