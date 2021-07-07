@@ -344,6 +344,17 @@ typedef struct StatsData
 } StatsData;
 
 /*
+ * For displaying epoch timestamp, as some time functions may have
+ * another reference.
+ */
+pg_time_usec_t epoch_shift;
+
+/*
+ * When the bench run started, just before creating threads
+ */
+pg_time_usec_t run_start_time;
+
+/*
  * Struct to keep random state.
  */
 typedef struct RandomState
@@ -649,7 +660,7 @@ static void setDoubleValue(PgBenchValue *pv, double dval);
 static bool evaluateExpr(CState *st, PgBenchExpr *expr,
 						 PgBenchValue *retval);
 static ConnectionStateEnum executeMetaCommand(CState *st, pg_time_usec_t *now);
-static void doLog(TState *thread, CState *st,
+static void doLog(TState *thread, CState *st, bool tx,
 				  StatsData *agg, bool skipped, double latency, double lag);
 static void processXactStats(TState *thread, CState *st, pg_time_usec_t *now,
 							 bool skipped, StatsData *agg);
@@ -3768,8 +3779,39 @@ executeMetaCommand(CState *st, pg_time_usec_t *now)
 	return CSTATE_END_COMMAND;
 }
 
+/* print aggregated report to logfile */
+static void
+logAgg(FILE *logfile, StatsData *agg)
+{
+	fprintf(logfile, INT64_FORMAT " " INT64_FORMAT " %.0f %.0f %.0f %.0f",
+			(agg->start_time + epoch_shift) / 1000000,
+			agg->cnt,
+			agg->latency.sum,
+			agg->latency.sum2,
+			agg->latency.min,
+			agg->latency.max);
+	if (throttle_delay)
+	{
+		fprintf(logfile, " %.0f %.0f %.0f %.0f",
+				agg->lag.sum,
+				agg->lag.sum2,
+				agg->lag.min,
+				agg->lag.max);
+		if (latency_limit)
+			fprintf(logfile, " " INT64_FORMAT, agg->skipped);
+	}
+	fputc('\n', logfile);
+}
+
 /*
  * Print log entry after completing one transaction.
+ *
+ * Param tx tells whether the call actually represents a transaction,
+ * or if it is used to flush aggregated logs.
+ *
+ * The function behavior changes depending on sample_rate (a fraction of
+ * transaction is reported) and agg_interval (transactions are aggregated
+ * and reported once every agg_interval seconds).
  *
  * We print Unix-epoch timestamps in the log, so that entries can be
  * correlated against other logs.  On some platforms this could be obtained
@@ -3777,7 +3819,7 @@ executeMetaCommand(CState *st, pg_time_usec_t *now)
  * the cost of an extra syscall in all cases.
  */
 static void
-doLog(TState *thread, CState *st,
+doLog(TState *thread, CState *st, bool tx,
 	  StatsData *agg, bool skipped, double latency, double lag)
 {
 	FILE	   *logfile = thread->logfile;
@@ -3796,43 +3838,36 @@ doLog(TState *thread, CState *st,
 	/* should we aggregate the results or not? */
 	if (agg_interval > 0)
 	{
+		pg_time_usec_t	next;
+
 		/*
 		 * Loop until we reach the interval of the current moment, and print
 		 * any empty intervals in between (this may happen with very low tps,
 		 * e.g. --rate=0.1).
 		 */
-
-		while (agg->start_time + agg_interval <= now)
+		while ((next = agg->start_time + agg_interval * INT64CONST(1000000)) <= now)
 		{
-			/* print aggregated report to logfile */
-			fprintf(logfile, INT64_FORMAT " " INT64_FORMAT " %.0f %.0f %.0f %.0f",
-					agg->start_time,
-					agg->cnt,
-					agg->latency.sum,
-					agg->latency.sum2,
-					agg->latency.min,
-					agg->latency.max);
-			if (throttle_delay)
-			{
-				fprintf(logfile, " %.0f %.0f %.0f %.0f",
-						agg->lag.sum,
-						agg->lag.sum2,
-						agg->lag.min,
-						agg->lag.max);
-				if (latency_limit)
-					fprintf(logfile, " " INT64_FORMAT, agg->skipped);
-			}
-			fputc('\n', logfile);
+			logAgg(logfile, agg);
 
 			/* reset data and move to next interval */
-			initStats(agg, agg->start_time + agg_interval);
+			initStats(agg, next);
 		}
 
-		/* accumulate the current transaction */
-		accumStats(agg, skipped, latency, lag);
+		if (tx)
+			/* accumulate the current transaction */
+			accumStats(agg, skipped, latency, lag);
+		else
+			/* final call to show the last aggregate */
+			logAgg(logfile, agg);
 	}
 	else
 	{
+		/* switch to epoch */
+		now += epoch_shift;
+
+		/* !tx only used for aggregated data */
+		Assert(tx);
+
 		/* no, print raw transactions */
 		if (skipped)
 			fprintf(logfile, "%d " INT64_FORMAT " skipped %d " INT64_FORMAT " "
@@ -3892,7 +3927,7 @@ processXactStats(TState *thread, CState *st, pg_time_usec_t *now,
 	st->cnt++;
 
 	if (use_log)
-		doLog(thread, st, agg, skipped, latency, lag);
+		doLog(thread, st, true, agg, skipped, latency, lag);
 
 	/* XXX could use a mutex here, but we choose not to */
 	if (per_script_stats)
@@ -5458,7 +5493,7 @@ printProgressReport(TState *threads, int64 test_start, pg_time_usec_t now,
 
 	if (progress_timestamp)
 	{
-		snprintf(tbuf, sizeof(tbuf), "%.3f s", PG_TIME_GET_DOUBLE(now));
+		snprintf(tbuf, sizeof(tbuf), "%.3f s", PG_TIME_GET_DOUBLE(now + epoch_shift));
 	}
 	else
 	{
@@ -5789,7 +5824,6 @@ main(int argc, char **argv)
 	TState	   *threads;		/* array of thread */
 
 	pg_time_usec_t
-				start_time,		/* start up time */
 				bench_start = 0,	/* first recorded benchmarking time */
 				conn_total_duration;	/* cumulated connection time in
 										 * threads */
@@ -5808,6 +5842,11 @@ main(int argc, char **argv)
 	char	   *env;
 
 	int			exit_code = 0;
+	struct timeval tv;
+
+	/* record shift between epoch and now() */
+	gettimeofday(&tv, NULL);
+	epoch_shift = tv.tv_sec * INT64CONST(1000000) + tv.tv_usec - pg_time_now();
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
@@ -6465,7 +6504,7 @@ main(int argc, char **argv)
 	Assert(nclients_dealt == nclients);
 
 	/* get start up time for the whole computation */
-	start_time = pg_time_now();
+	run_start_time = pg_time_now();
 
 	/* set alarm if duration is specified. */
 	if (duration > 0)
@@ -6543,7 +6582,7 @@ main(int argc, char **argv)
 	 * underestimated.
 	 */
 	printResults(&stats, pg_time_now() - bench_start, conn_total_duration,
-				 bench_start - start_time, latency_late);
+				 bench_start - run_start_time, latency_late);
 
 	THREAD_BARRIER_DESTROY(&barrier);
 
@@ -6637,7 +6676,8 @@ threadRun(void *arg)
 	thread->bench_start = start;
 	thread->throttle_trigger = start;
 
-	initStats(&aggs, start);
+	/* aggregations are do one whole seconds, the same for all threads */
+	initStats(&aggs, run_start_time / 1000000 * 1000000);
 	last = aggs;
 
 	/* loop till all clients have terminated */
@@ -6830,8 +6870,9 @@ done:
 		if (agg_interval > 0)
 		{
 			/* log aggregated but not yet reported transactions */
-			doLog(thread, state, &aggs, false, 0, 0);
+			doLog(thread, state, false, &aggs, false, 0.0, 0.0);
 		}
+
 		fclose(thread->logfile);
 		thread->logfile = NULL;
 	}
