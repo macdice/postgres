@@ -1251,20 +1251,6 @@ my $delay = pgbench(
 	'pgbench progress', undef,
 	"--log-prefix=$bdir/001_pgbench_log_1");
 
-# cool check that we are around 2 seconds
-
-TODO: {
-	local $TODO = "possibly unreliable on slow hosts or unlucky runs";
-
-	# The rate may results in an unlucky schedule which triggers
-	# an early exit, hence the loose bound.
-
-	# also, the delay may totally fail on very slow or overloard hosts,
-	# valgrind runs...
-
-	ok(1.5 < $delay && $delay < 2.5, "-T 2 run around 2 seconds");
-}
-
 # $nthreads threads, 2 seconds, but due to timing imprecision we might get
 # only 1 or as many as 3 progress reports per thread.
 # aggregate log format is:
