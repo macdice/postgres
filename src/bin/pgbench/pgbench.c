@@ -350,7 +350,7 @@ typedef struct StatsData
 pg_time_usec_t epoch_shift;
 
 /*
- * When the bench run started, just before creating threads
+ * When the benchmark run started, just before creating threads
  */
 pg_time_usec_t run_start_time;
 

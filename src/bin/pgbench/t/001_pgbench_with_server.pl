@@ -8,7 +8,6 @@ use PostgresNode;
 use TestLib;
 use Test::More;
 use Config;
-use Time::HiRes qw( time );
 
 # start a pgbench specific server
 my $node = get_new_node('main');
@@ -55,14 +54,12 @@ sub pgbench
 
 	push @cmd, @args;
 
-	my $start = time();
 	$node->command_checks_all(\@cmd, $stat, $out, $err, $name);
-	my $stop = time();
 
 	# cleanup?
 	#unlink @filenames or die "cannot unlink files (@filenames): $!";
 
-	return $stop - $start;
+	return;
 }
 
 # tablespace for testing, because partitioned tables cannot use pg_default
@@ -1226,15 +1223,15 @@ my $bdir = $node->basedir;
 #
 # Test time-sensitive features on a light read-only transaction:
 #
-#   -T: bench duration, 2 seconds to exercise progress & logs
+#   -T: benchmark duration, 2 seconds to exercise progress & logs
 #   -P: progress report
 #   --aggregate-interval: periodic aggregated logs
 #   --rate: schedule load
-#   --latency-limit: max delay, not deeply exercice
+#   --latency-limit: max delay, not exercised much
 #
 # note: the --rate behavior is probabilistic in nature.
 # note: --progress-timestamp is not tested.
-my $delay = pgbench(
+pgbench(
 	'-T 2 -P 1 -l --aggregate-interval=1 -S -b se@2'
 	. ' --rate=20 --latency-limit=1000 -j ' . $nthreads
 	. ' -c 3 -r',
