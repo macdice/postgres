@@ -280,6 +280,9 @@ static volatile FastPathStrongRelationLockData *FastPathStrongRelationLocks;
 static HTAB *LockMethodLockHash;
 static HTAB *LockMethodProcLockHash;
 static HTAB *LockMethodLocalHash;
+static LOCALLOCK **LockMethodLocalArray;
+static size_t LockMethodLocalArraySize;
+static size_t LockMethodLocalArrayCapacity;
 
 
 /* private state for error cleanup */
@@ -476,6 +479,14 @@ InitLocks(void)
 									  16,
 									  &info,
 									  HASH_ELEM | HASH_BLOBS);
+
+	/*
+	 * Allocate an array to track the LOCALLOCK objects in LockMethodLocalHash
+	 * for fast iteration.
+	 */
+	LockMethodLocalArray = palloc(sizeof(LOCALLOCK *) * 16);
+	LockMethodLocalArrayCapacity = 16;
+	LockMethodLocalArraySize = 0;
 }
 
 
@@ -753,6 +764,70 @@ LockAcquire(const LOCKTAG *locktag,
 }
 
 /*
+ * Make sure that LockMethodLocalArray could hold one more item.
+ */
+static void
+PrepareToRememberLocalLock(void)
+{
+	if (LockMethodLocalArraySize == LockMethodLocalArrayCapacity)
+	{
+		LockMethodLocalArray =
+			repalloc(LockMethodLocalArray,
+					 sizeof(LOCALLOCK *) * LockMethodLocalArrayCapacity * 2);
+		LockMethodLocalArrayCapacity *= 2;
+	}
+}
+
+/*
+ * Remember that we have added a lock to LockMethodLocalHash.
+ */
+static void
+RememberLocalLock(LOCALLOCK *lock)
+{
+	Assert(LockMethodLocalArraySize < LockMethodLocalArrayCapacity);
+	LockMethodLocalArray[LockMethodLocalArraySize++] = lock;
+}
+
+/*
+ * Forget a lock that we're about to remove from LockMethodLocalHash.
+ */
+static void
+ForgetLocalLock(LOCALLOCK *lock)
+{
+	Assert(LockMethodLocalArraySize > 0);
+
+	/*
+	 * To support fast deletion by the iteration loop in LockReleaseAll(),
+	 * we'll first see if this is the last item that we looked up by index.
+	 */
+	if (LockMethodLocalArrayLast < LockMethodLocalArraySize &&
+		LockMethodLocalArray[LockMethodLocalArrayLast] == lock)
+	{
+		/* Move the final element into this slot. */
+		LockMethodLocalArray[i] =
+			LockMethodLocalArray[--LockMethodLocalArraySize];
+		LockMethodLocalArraySize--;
+		LockMethodLocalArraySorted = false;
+	}
+
+
+	/*
+	 * To support random retail lock release, we'll do a 
+	for (size_t i = 0; i < LockMethodLocalArraySize; ++i)
+	{
+		if (LockMethodLocalArray[i] == lock)
+		{
+			/* Move the final element into this slot. */
+			LockMethodLocalArray[i] =
+				LockMethodLocalArray[--LockMethodLocalHashSize];
+			LockMethodLocalHashSize--;
+		}
+	}
+
+	elog(WARNING, "LockMethodLocalArray corrupted");
+}
+
+/*
  * LockAcquireExtended - allows us to specify additional options
  *
  * reportMemoryError specifies whether a lock request that fills the lock
@@ -816,6 +891,8 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	else
 		owner = CurrentResourceOwner;
 
+	PrepareToRememberLocalLock();
+
 	/*
 	 * Find or create a LOCALLOCK entry for this lock and lockmode
 	 */
@@ -844,6 +921,8 @@ LockAcquireExtended(const LOCKTAG *locktag,
 		locallock->lockOwners = (LOCALLOCKOWNER *)
 			MemoryContextAlloc(TopMemoryContext,
 							   locallock->maxLockOwners * sizeof(LOCALLOCKOWNER));
+
+		RememberLocalLock(locallock);
 	}
 	else
 	{
@@ -1389,6 +1468,8 @@ RemoveLocalLock(LOCALLOCK *locallock)
 		locallock->holdsStrongLockCount = false;
 		SpinLockRelease(&FastPathStrongRelationLocks->mutex);
 	}
+
+	ForgetLocalLock(locallock);
 
 	if (!hash_search(LockMethodLocalHash,
 					 (void *) &(locallock->tag),
@@ -2178,7 +2259,6 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 void
 LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 {
-	HASH_SEQ_STATUS status;
 	LockMethod	lockMethodTable;
 	int			i,
 				numLockModes;
@@ -2187,6 +2267,7 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 	PROCLOCK   *proclock;
 	int			partition;
 	bool		have_fast_path_lwlock = false;
+	size_t		local_lock_number;
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
@@ -2216,10 +2297,12 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 	 * pointers.  Fast-path locks are cleaned up during the locallock table
 	 * scan, though.
 	 */
-	hash_seq_init(&status, LockMethodLocalHash);
+	local_lock_number = 0;
 
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	while (local_lock_number < LockMethodLocalArraySize)
 	{
+		locallock = LockMethodLocalArray[local_lock_number];
+
 		/*
 		 * If the LOCALLOCK entry is unused, we must've run out of shared
 		 * memory while trying to set up this lock.  Just forget the local
@@ -2233,7 +2316,10 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 
 		/* Ignore items that are not of the lockmethod to be removed */
 		if (LOCALLOCK_LOCKMETHOD(*locallock) != lockmethodid)
+		{
+			local_lock_number++;
 			continue;
+		}
 
 		/*
 		 * If we are asked to release all locks, we can just zap the entry.
@@ -2261,6 +2347,7 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 				locallock->nLocks = lockOwners[0].nLocks;
 				locallock->numLockOwners = 1;
 				/* We aren't deleting this locallock, so done */
+				local_lock_number++;
 				continue;
 			}
 			else
