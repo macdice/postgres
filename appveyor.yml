@@ -5,13 +5,14 @@ install:
   - SET PATH=%PATH%;C:\msys64\usr\bin
 
 before_build:
+  - copy windows_build_config.pl src\tools\msvc\config.pl
   - perl buildsetup.pl
 
 build:
   project: pgsql.sln
 
 test_script:
-  - cd src\tools\msvc && vcregress check
+  - cd src\tools\msvc && vcregress check && vcregress bincheck
 
 on_failure:
   - perl dumpregr.pl
