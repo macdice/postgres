@@ -7,6 +7,7 @@ install:
 before_build:
   - copy windows_build_config.pl src\tools\msvc\config.pl
   - perl buildsetup.pl
+  - cpan -T IPC::Run
 
 build:
   project: pgsql.sln
