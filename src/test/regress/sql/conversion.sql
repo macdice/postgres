@@ -131,6 +131,31 @@ using (description)
 where p.error is distinct from b.error
 order by description;
 
+-- Test SSE ASCII fast path with cases where incomplete UTF-8 sequences
+-- fall at the end of a 16-byte boundary followed by more than 16 bytes
+-- of ASCII.
+with test_bytes as (
+  select
+    inbytes,
+    description,
+    (test_conv(inbytes || repeat('.', 3)::bytea, 'utf8', 'utf8')).error
+  from utf8_verification_inputs
+), test_padded as (
+  select
+    description,
+    (test_conv(repeat('.', 16 - length(inbytes))::bytea || inbytes || repeat('.', 17)::bytea, 'utf8', 'utf8')).error
+  from test_bytes
+)
+select
+  description,
+  b.error as orig_error,
+  p.error as error_after_padding
+from test_padded p
+join test_bytes b
+using (description)
+where p.error is distinct from b.error
+order by description;
+
 CREATE TABLE utf8_inputs (inbytes bytea, description text);
 insert into utf8_inputs  values
   ('\x666f6f',		'valid, pure ASCII'),
