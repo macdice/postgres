@@ -7,9 +7,12 @@ else
   CFLAGS_SL="-KPIC"
 fi
 
+# Select conforming versions of many interfaces (sigwait, getpwuid_r, ...).
+CFLAGS="-D_POSIX_PTHREAD_SEMANTICS"
+
 if test "$SUN_STUDIO_CC" = yes ; then
   CC="$CC -Xa"			# relaxed ISO C mode
-  CFLAGS="-v"			# -v is like gcc -Wall
+  CFLAGS="$CFLAGS -v"		# -v is like gcc -Wall
   if test "$enable_debug" != yes; then
     CFLAGS="$CFLAGS -O"		# any optimization breaks debug
   fi
