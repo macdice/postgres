@@ -63,6 +63,7 @@ extern int pg_futex_wake(volatile pg_atomic_futex_t *fut, int nwaiters);
 #define PG_FUTEX_INTERRUPT_OP_NONE 0
 #define PG_FUTEX_INTERRUPT_OP_SET 1
 #define PG_FUTEX_INTERRUPT_OP_INC 2
+#define PG_FUTEX_INTERRUPT_OP_CLEAR 3
 extern volatile sig_atomic_t pg_futex_interrupt_op;
 extern volatile pg_atomic_futex_t *pg_futex_interruptible;
 
@@ -108,6 +109,9 @@ pg_signal_handler_futex_interrupt(void)
 		break;
 	case PG_FUTEX_INTERRUPT_OP_INC:
 		pg_atomic_fetch_add_futex(fut, 1);
+		break;
+	case PG_FUTEX_INTERRUPT_OP_CLEAR:
+		pg_atomic_write_futex(fut, 0);
 		break;
 	}
 }

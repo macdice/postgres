@@ -29,10 +29,6 @@
 #include "storage/spin.h"
 #include "utils/memutils.h"
 
-#ifdef HAVE_PG_FUTEX_T
-static pg_futex_t futex_observed;
-#endif
-
 /* Initially, we are not prepared to sleep on any condition variable. */
 static ConditionVariable *cv_sleep_target = NULL;
 
@@ -71,8 +67,16 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 #ifdef HAVE_PG_FUTEX_T
 	if (cv_sleep_target != NULL)
 		ConditionVariableCancelSleep();
-	futex_observed = pg_atomic_read_futex(&cv->futex);
-	pg_futex_set_interruptible(&cv->futex, PG_FUTEX_INTERRUPT_OP_INC);
+	/*
+	 * Write my backend ID into the futex.  I am the only backend that will
+	 * ever write this value, so ABA problems between here and the sleep are
+	 * impossible.
+	 *
+	 * XXX If procno were limited to 16 bits, we could put it and nwaiters into
+	 * one write.
+	 */
+	pg_atomic_write_futex(&cv->futex, MyProc->pgprocno);
+	pg_futex_set_interruptible(&cv->futex, PG_FUTEX_INTERRUPT_OP_CLEAR);
 	cv_sleep_target = cv;
 	pg_atomic_fetch_add_u32(&cv->nwaiters, 1);
 #else
@@ -194,7 +198,15 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 			use_ts = &ts;
 		}
 
-		if (pg_futex_wait(&cv->futex, futex_observed, use_ts) < 0)
+		/*
+		 * If the futex was signaled already, then its value will no longer
+		 * match our pgprocno and we won't sleep.
+		 *
+		 * XXX We'll also not sleep if someone else began waiting and put their
+		 * pgprocno there.  This is bad because we might both busy-loop
+		 * forever, nobody making progress!
+		 */
+		if (pg_futex_wait(&cv->futex, MyProc->pgprocno, use_ts) < 0)
 		{
 			if (errno == ETIMEDOUT)
 				return true;		/* timeout reached */
@@ -203,9 +215,10 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 				/* We might have been woken by the postmaster death signal. */
 				if (!PostmasterIsAlive())	/* XXX refactor all this!*/
 					proc_exit(1);
-				futex_observed = pg_atomic_read_futex(&cv->futex);
+				pg_atomic_write_futex(&cv->futex, MyProc->pgprocno);
 				return false;		/* already woken before sleeping */
 			}
+			/* XXX EINTR could also indicate PM death */
 			if (errno != EINTR)
 				elog(ERROR, "could not sleep on wait futex: %m");
 			/* if EINTR, we'll loop again after processing interrupts */
@@ -215,7 +228,7 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 			/* We might have been woken by the postmaster death signal. */
 			if (!PostmasterIsAlive())
 				proc_exit(1);
-			futex_observed = pg_atomic_read_futex(&cv->futex);
+			pg_atomic_write_futex(&cv->futex, MyProc->pgprocno);
 			return false;			/* woken up, possibly spuriously */
 		}
 #else
@@ -337,7 +350,7 @@ ConditionVariableSignal(ConditionVariable *cv)
 	pg_memory_barrier();
 	if (pg_atomic_read_u32(&cv->nwaiters) > 0)
 	{
-		pg_atomic_fetch_add_futex(&cv->futex, 1);
+		pg_atomic_write_futex(&cv->futex, INVALID_PGPROCNO);
 		pg_futex_wake(&cv->futex, 1);
 	}
 #else
@@ -369,7 +382,7 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 	pg_memory_barrier();
 	if (pg_atomic_read_u32(&cv->nwaiters) > 0)
 	{
-		pg_atomic_fetch_add_futex(&cv->futex, 1);
+		pg_atomic_write_futex(&cv->futex, INVALID_PGPROCNO);
 		pg_futex_wake(&cv->futex, INT_MAX);
 	}
 #else
