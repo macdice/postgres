@@ -18442,13 +18442,13 @@ fi
 #
 # You can override this logic by setting the appropriate USE_*_UTF8 flag to 1
 # in the template or configure command line.
-if test x"$USE_SSE42_UTF8" = x"" && test x"$USE_SSE42_UTF8_WITH_RUNTIME_CHECK" = x"" && test x"$USE_FALLBACK_UTF8" = x""; then
+if test x"$USE_SIMD_UTF8" = x"" && test x"$USE_SIMD_UTF8_WITH_RUNTIME_CHECK" = x"" && test x"$USE_FALLBACK_UTF8" = x""; then
   if test x"$pgac_sse42_intrinsics" = x"yes" && test x"$SSE4_2_TARGETED" = x"1" ; then
-    USE_SSE42_UTF8=1
+    USE_SIMD_UTF8=1
   else
     # the CPUID instruction is needed for the runtime check.
     if test x"$pgac_sse42_intrinsics" = x"yes" && (test x"$pgac_cv__get_cpuid" = x"yes" || test x"$pgac_cv__cpuid" = x"yes"); then
-      USE_SSE42_UTF8_WITH_RUNTIME_CHECK=1
+      USE_SIMD_UTF8_WITH_RUNTIME_CHECK=1
     else
       # fall back to algorithm which doesn't require any special
       # CPU support.
@@ -18461,19 +18461,19 @@ fi
 # Note: We need the fallback for error handling in all builds.
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking which UTF-8 validator to use" >&5
 $as_echo_n "checking which UTF-8 validator to use... " >&6; }
-if test x"$USE_SSE42_UTF8" = x"1"; then
+if test x"$USE_SIMD_UTF8" = x"1"; then
 
-$as_echo "#define USE_SSE42_UTF8 1" >>confdefs.h
+$as_echo "#define USE_SIMD_UTF8 1" >>confdefs.h
 
-  PG_UTF8_OBJS="pg_utf8_sse42.o pg_utf8_fallback.o"
+  PG_UTF8_OBJS="pg_utf8_simd.o pg_utf8_fallback.o"
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: SSE 4.2" >&5
 $as_echo "SSE 4.2" >&6; }
 else
-  if test x"$USE_SSE42_UTF8_WITH_RUNTIME_CHECK" = x"1"; then
+  if test x"$USE_SIMD_UTF8_WITH_RUNTIME_CHECK" = x"1"; then
 
-$as_echo "#define USE_SSE42_UTF8_WITH_RUNTIME_CHECK 1" >>confdefs.h
+$as_echo "#define USE_SIMD_UTF8_WITH_RUNTIME_CHECK 1" >>confdefs.h
 
-    PG_UTF8_OBJS="pg_utf8_sse42.o pg_utf8_fallback.o pg_utf8_sse42_choose.o"
+    PG_UTF8_OBJS="pg_utf8_simd.o pg_utf8_fallback.o pg_utf8_choose.o"
     { $as_echo "$as_me:${as_lineno-$LINENO}: result: SSE 4.2 with runtime check" >&5
 $as_echo "SSE 4.2 with runtime check" >&6; }
   else

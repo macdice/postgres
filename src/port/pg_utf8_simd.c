@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * pg_utf8_sse42.c
+ * pg_utf8_simd.c
  *	  Validate UTF-8 using Intel SSE 4.2 instructions.
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	  src/port/pg_utf8_sse42.c
+ *	  src/port/pg_utf8_simd.c
  *
  *-------------------------------------------------------------------------
  */
@@ -18,6 +18,8 @@
 #include <nmmintrin.h>
 
 #include "port/pg_utf8.h"
+
+typedef __m128i pg_u8x16_t;
 
 /*
  * This module is based on the paper "Validating UTF-8 In Less Than One
@@ -184,48 +186,48 @@
 #define vset(...)		_mm_setr_epi8(__VA_ARGS__)
 
 /* return a zeroed register */
-static inline const __m128i
+static inline const pg_u8x16_t
 vzero()
 {
 	return _mm_setzero_si128();
 }
 
 /* perform an unaligned load from memory into a register */
-static inline const __m128i
+static inline const pg_u8x16_t
 vload(const unsigned char *raw_input)
 {
-	return _mm_loadu_si128((const __m128i *) raw_input);
+	return _mm_loadu_si128((const pg_u8x16_t *) raw_input);
 }
 
 /* return a vector with each 8-bit lane populated with the input scalar */
-static inline __m128i
+static inline pg_u8x16_t
 splat(char byte)
 {
 	return _mm_set1_epi8(byte);
 }
 
 /* perform signed greater-than on all 8-bit lanes */
-static inline __m128i
-greater_than(const __m128i v1, const __m128i v2)
+static inline pg_u8x16_t
+greater_than(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 	return _mm_cmpgt_epi8(v1, v2);
 }
 
 /* bitwise vector operations */
-static inline __m128i
-bitwise_and(const __m128i v1, const __m128i v2)
+static inline pg_u8x16_t
+bitwise_and(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 	return _mm_and_si128(v1, v2);
 }
 
-static inline __m128i
-bitwise_or(const __m128i v1, const __m128i v2)
+static inline pg_u8x16_t
+bitwise_or(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 	return _mm_or_si128(v1, v2);
 }
 
-static inline __m128i
-bitwise_xor(const __m128i v1, const __m128i v2)
+static inline pg_u8x16_t
+bitwise_xor(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 	return _mm_xor_si128(v1, v2);
 }
@@ -235,8 +237,8 @@ bitwise_xor(const __m128i v1, const __m128i v2)
  * on overflow, stop at zero. Useful for emulating unsigned
  * comparison.
  */
-static inline __m128i
-saturating_sub(const __m128i v1, const __m128i v2)
+static inline pg_u8x16_t
+saturating_sub(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 	return _mm_subs_epu8(v1, v2);
 }
@@ -247,11 +249,11 @@ saturating_sub(const __m128i v1, const __m128i v2)
  * There is no intrinsic to do this on 8-bit lanes, so shift right in each
  * 16-bit lane then apply a mask in each 8-bit lane shifted the same amount.
  */
-static inline __m128i
-shift_right(const __m128i v, const int n)
+static inline pg_u8x16_t
+shift_right(const pg_u8x16_t v, const int n)
 {
-	const		__m128i shift16 = _mm_srli_epi16(v, n);
-	const		__m128i mask = splat(0xFF >> n);
+	const		pg_u8x16_t shift16 = _mm_srli_epi16(v, n);
+	const		pg_u8x16_t mask = splat(0xFF >> n);
 
 	return bitwise_and(shift16, mask);
 }
@@ -266,30 +268,30 @@ shift_right(const __m128i v, const int n)
  * The third argument to the intrinsic must be a numeric constant, so
  * we must have separate functions for different shift amounts.
  */
-static inline __m128i
-prev1(__m128i prev, __m128i input)
+static inline pg_u8x16_t
+prev1(pg_u8x16_t prev, pg_u8x16_t input)
 {
-	return _mm_alignr_epi8(input, prev, sizeof(__m128i) - 1);
+	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 1);
 }
 
-static inline __m128i
-prev2(__m128i prev, __m128i input)
+static inline pg_u8x16_t
+prev2(pg_u8x16_t prev, pg_u8x16_t input)
 {
-	return _mm_alignr_epi8(input, prev, sizeof(__m128i) - 2);
+	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 2);
 }
 
-static inline __m128i
-prev3(__m128i prev, __m128i input)
+static inline pg_u8x16_t
+prev3(pg_u8x16_t prev, pg_u8x16_t input)
 {
-	return _mm_alignr_epi8(input, prev, sizeof(__m128i) - 3);
+	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 3);
 }
 
 /*
  * For each 8-bit lane in the input, use that value as an index
  * into the lookup vector as if it were a 16-element byte array.
  */
-static inline __m128i
-lookup(const __m128i input, const __m128i lookup)
+static inline pg_u8x16_t
+lookup(const pg_u8x16_t input, const pg_u8x16_t lookup)
 {
 	return _mm_shuffle_epi8(lookup, input);
 }
@@ -298,28 +300,28 @@ lookup(const __m128i input, const __m128i lookup)
  * Return a vector with lanes non-zero where we have either errors, or
  * two or more continuations in a row.
  */
-static inline __m128i
-check_special_cases(const __m128i prev, const __m128i input)
+static inline pg_u8x16_t
+check_special_cases(const pg_u8x16_t prev, const pg_u8x16_t input)
 {
-	const		__m128i byte_1_high_table = vset(BYTE_1_HIGH_TABLE);
-	const		__m128i byte_1_low_table = vset(BYTE_1_LOW_TABLE);
-	const		__m128i byte_2_high_table = vset(BYTE_2_HIGH_TABLE);
+	const		pg_u8x16_t byte_1_high_table = vset(BYTE_1_HIGH_TABLE);
+	const		pg_u8x16_t byte_1_low_table = vset(BYTE_1_LOW_TABLE);
+	const		pg_u8x16_t byte_2_high_table = vset(BYTE_2_HIGH_TABLE);
 
 	/*
 	 * To classify the first byte in each chunk we need to have the last byte
 	 * from the previous chunk.
 	 */
-	const		__m128i input_shift1 = prev1(prev, input);
+	const		pg_u8x16_t input_shift1 = prev1(prev, input);
 
 	/* put the relevant nibbles into their own bytes in their own registers */
-	const		__m128i byte_1_high = shift_right(input_shift1, 4);
-	const		__m128i byte_1_low = bitwise_and(input_shift1, splat(0x0F));
-	const		__m128i byte_2_high = shift_right(input, 4);
+	const		pg_u8x16_t byte_1_high = shift_right(input_shift1, 4);
+	const		pg_u8x16_t byte_1_low = bitwise_and(input_shift1, splat(0x0F));
+	const		pg_u8x16_t byte_2_high = shift_right(input, 4);
 
 	/* lookup the possible errors for each set of nibbles */
-	const		__m128i lookup_1_high = lookup(byte_1_high, byte_1_high_table);
-	const		__m128i lookup_1_low = lookup(byte_1_low, byte_1_low_table);
-	const		__m128i lookup_2_high = lookup(byte_2_high, byte_2_high_table);
+	const		pg_u8x16_t lookup_1_high = lookup(byte_1_high, byte_1_high_table);
+	const		pg_u8x16_t lookup_1_low = lookup(byte_1_low, byte_1_low_table);
+	const		pg_u8x16_t lookup_2_high = lookup(byte_2_high, byte_2_high_table);
 
 	/*
 	 * AND all the lookups together. At this point, non-zero lanes in the
@@ -331,7 +333,7 @@ check_special_cases(const __m128i prev, const __m128i input)
 	 *
 	 * 3. the third continuation byte of a 4-byte character
 	 */
-	const		__m128i temp = bitwise_and(lookup_1_high, lookup_1_low);
+	const		pg_u8x16_t temp = bitwise_and(lookup_1_high, lookup_1_low);
 
 	return bitwise_and(temp, lookup_2_high);
 }
@@ -340,22 +342,22 @@ check_special_cases(const __m128i prev, const __m128i input)
  * Return a vector with lanes set to TWO_CONTS where we expect to find two
  * continuations in a row. These are valid only within 3- and 4-byte sequences.
  */
-static inline __m128i
-check_multibyte_lengths(const __m128i prev, const __m128i input)
+static inline pg_u8x16_t
+check_multibyte_lengths(const pg_u8x16_t prev, const pg_u8x16_t input)
 {
 	/*
 	 * Populate registers that contain the input shifted right by 2 and 3
 	 * bytes, filling in the left lanes from the previous input.
 	 */
-	const		__m128i input_shift2 = prev2(prev, input);
-	const		__m128i input_shift3 = prev3(prev, input);
+	const		pg_u8x16_t input_shift2 = prev2(prev, input);
+	const		pg_u8x16_t input_shift3 = prev3(prev, input);
 
 	/*
 	 * Constants for comparison. Any 3-byte lead is greater than
 	 * MAX_TWO_BYTE_LEAD, etc.
 	 */
-	const		__m128i max_lead2 = splat(MAX_TWO_BYTE_LEAD);
-	const		__m128i max_lead3 = splat(MAX_THREE_BYTE_LEAD);
+	const		pg_u8x16_t max_lead2 = splat(MAX_TWO_BYTE_LEAD);
+	const		pg_u8x16_t max_lead3 = splat(MAX_THREE_BYTE_LEAD);
 
 	/*
 	 * Look in the shifted registers for 3- or 4-byte leads. There is no
@@ -363,17 +365,17 @@ check_multibyte_lengths(const __m128i prev, const __m128i input)
 	 * signed comparison with zero. Any non-zero bytes in the result represent
 	 * valid leads.
 	 */
-	const		__m128i is_third_byte = saturating_sub(input_shift2, max_lead2);
-	const		__m128i is_fourth_byte = saturating_sub(input_shift3, max_lead3);
+	const		pg_u8x16_t is_third_byte = saturating_sub(input_shift2, max_lead2);
+	const		pg_u8x16_t is_fourth_byte = saturating_sub(input_shift3, max_lead3);
 
 	/* OR them together for easier comparison */
-	const		__m128i temp = bitwise_or(is_third_byte, is_fourth_byte);
+	const		pg_u8x16_t temp = bitwise_or(is_third_byte, is_fourth_byte);
 
 	/*
 	 * Set all bits in each 8-bit lane if the result is greater than zero.
 	 * Signed arithmetic is okay because the values are small.
 	 */
-	const		__m128i must23 = greater_than(temp, vzero());
+	const		pg_u8x16_t must23 = greater_than(temp, vzero());
 
 	/*
 	 * We want to compare with the result of check_special_cases() so apply a
@@ -385,20 +387,20 @@ check_multibyte_lengths(const __m128i prev, const __m128i input)
 
 /* set bits in the error vector where we find invalid UTF-8 input */
 static inline void
-check_utf8_bytes(const __m128i prev, const __m128i input, __m128i * error)
+check_utf8_bytes(const pg_u8x16_t prev, const pg_u8x16_t input, pg_u8x16_t * error)
 {
-	const		__m128i special_cases = check_special_cases(prev, input);
-	const		__m128i expect_two_conts = check_multibyte_lengths(prev, input);
+	const		pg_u8x16_t special_cases = check_special_cases(prev, input);
+	const		pg_u8x16_t expect_two_conts = check_multibyte_lengths(prev, input);
 
 	/* If the two cases are identical, this will be zero. */
-	const		__m128i result = bitwise_xor(expect_two_conts, special_cases);
+	const		pg_u8x16_t result = bitwise_xor(expect_two_conts, special_cases);
 
 	*error = bitwise_or(*error, result);
 }
 
 /* return false if a register is zero, true otherwise */
 static inline bool
-to_bool(const __m128i v)
+to_bool(const pg_u8x16_t v)
 {
 	/*
 	 * _mm_testz_si128 returns 1 if the bitwise AND of the two arguments is
@@ -409,25 +411,25 @@ to_bool(const __m128i v)
 
 /* set bits in the error vector where bytes in the input are zero */
 static inline void
-check_for_zeros(const __m128i v, __m128i * error)
+check_for_zeros(const pg_u8x16_t v, pg_u8x16_t * error)
 {
-	const		__m128i cmp = _mm_cmpeq_epi8(v, vzero());
+	const		pg_u8x16_t cmp = _mm_cmpeq_epi8(v, vzero());
 
 	*error = bitwise_or(*error, cmp);
 }
 
 /* vector version of IS_HIGHBIT_SET() */
 static inline bool
-is_highbit_set(const __m128i v)
+is_highbit_set(const pg_u8x16_t v)
 {
 	return _mm_movemask_epi8(v) != 0;
 }
 
 /* return non-zero if the input terminates with an incomplete code point */
-static inline __m128i
-is_incomplete(const __m128i v)
+static inline pg_u8x16_t
+is_incomplete(const pg_u8x16_t v)
 {
-	const		__m128i max_array =
+	const		pg_u8x16_t max_array =
 	vset(0xFF, 0xFF, 0xFF, 0xFF,
 		 0xFF, 0xFF, 0xFF, 0xFF,
 		 0xFF, 0xFF, 0xFF, 0xFF,
@@ -440,20 +442,20 @@ is_incomplete(const __m128i v)
  * See the comment in common/wchar.c under "multibyte sequence validators".
  */
 int
-pg_validate_utf8_sse42(const unsigned char *s, int len)
+pg_validate_utf8_simd(const unsigned char *s, int len)
 {
 	const unsigned char *start = s;
 	const int	orig_len = len;
-	__m128i		error = vzero();
-	__m128i		prev = vzero();
-	__m128i		prev_incomplete = vzero();
-	__m128i		input;
+	pg_u8x16_t		error = vzero();
+	pg_u8x16_t		prev = vzero();
+	pg_u8x16_t		prev_incomplete = vzero();
+	pg_u8x16_t		input;
 
 	/*
 	 * NB: This check must be strictly greater-than, otherwise an invalid byte
 	 * at the end might not get detected.
 	 */
-	while (len > sizeof(__m128i))
+	while (len > sizeof(pg_u8x16_t))
 	{
 		input = vload(s);
 
@@ -474,8 +476,8 @@ pg_validate_utf8_sse42(const unsigned char *s, int len)
 		}
 
 		prev = input;
-		s += sizeof(__m128i);
-		len -= sizeof(__m128i);
+		s += sizeof(pg_u8x16_t);
+		len -= sizeof(pg_u8x16_t);
 	}
 
 	/*

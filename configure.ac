@@ -2217,13 +2217,13 @@ AC_SUBST(PG_CRC32C_OBJS)
 #
 # You can override this logic by setting the appropriate USE_*_UTF8 flag to 1
 # in the template or configure command line.
-if test x"$USE_SSE42_UTF8" = x"" && test x"$USE_SSE42_UTF8_WITH_RUNTIME_CHECK" = x"" && test x"$USE_FALLBACK_UTF8" = x""; then
+if test x"$USE_SIMD_UTF8" = x"" && test x"$USE_SIMD_UTF8_WITH_RUNTIME_CHECK" = x"" && test x"$USE_FALLBACK_UTF8" = x""; then
   if test x"$pgac_sse42_intrinsics" = x"yes" && test x"$SSE4_2_TARGETED" = x"1" ; then
-    USE_SSE42_UTF8=1
+    USE_SIMD_UTF8=1
   else
     # the CPUID instruction is needed for the runtime check.
     if test x"$pgac_sse42_intrinsics" = x"yes" && (test x"$pgac_cv__get_cpuid" = x"yes" || test x"$pgac_cv__cpuid" = x"yes"); then
-      USE_SSE42_UTF8_WITH_RUNTIME_CHECK=1
+      USE_SIMD_UTF8_WITH_RUNTIME_CHECK=1
     else
       # fall back to algorithm which doesn't require any special
       # CPU support.
@@ -2235,14 +2235,14 @@ fi
 # Set PG_UTF8_OBJS appropriately depending on the selected implementation.
 # Note: We need the fallback for error handling in all builds.
 AC_MSG_CHECKING([which UTF-8 validator to use])
-if test x"$USE_SSE42_UTF8" = x"1"; then
-  AC_DEFINE(USE_SSE42_UTF8, 1, [Define to 1 use Intel SSE 4.2 instructions.])
-  PG_UTF8_OBJS="pg_utf8_sse42.o pg_utf8_fallback.o"
+if test x"$USE_SIMD_UTF8" = x"1"; then
+  AC_DEFINE(USE_SIMD_UTF8, 1, [Define to 1 use Intel SSE 4.2 instructions.])
+  PG_UTF8_OBJS="pg_utf8_simd.o pg_utf8_fallback.o"
   AC_MSG_RESULT(SSE 4.2)
 else
-  if test x"$USE_SSE42_UTF8_WITH_RUNTIME_CHECK" = x"1"; then
-    AC_DEFINE(USE_SSE42_UTF8_WITH_RUNTIME_CHECK, 1, [Define to 1 to use Intel SSE 4.2 instructions with a runtime check.])
-    PG_UTF8_OBJS="pg_utf8_sse42.o pg_utf8_fallback.o pg_utf8_sse42_choose.o"
+  if test x"$USE_SIMD_UTF8_WITH_RUNTIME_CHECK" = x"1"; then
+    AC_DEFINE(USE_SIMD_UTF8_WITH_RUNTIME_CHECK, 1, [Define to 1 to use Intel SSE 4.2 instructions with a runtime check.])
+    PG_UTF8_OBJS="pg_utf8_simd.o pg_utf8_fallback.o pg_utf8_choose.o"
     AC_MSG_RESULT(SSE 4.2 with runtime check)
   else
     AC_DEFINE(USE_FALLBACK_UTF8, 1, [Define to 1 to use Intel SSE 4.2 instructions with a runtime check.])

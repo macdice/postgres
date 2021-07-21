@@ -90,10 +90,10 @@ libpgport.a: $(OBJS)
 thread.o: CFLAGS+=$(PTHREAD_CFLAGS)
 thread_shlib.o: CFLAGS+=$(PTHREAD_CFLAGS)
 
-# all versions of pg_utf8_sse42.o need CFLAGS_SSE42
-pg_utf8_sse42.o: CFLAGS+=$(CFLAGS_SSE42)
-pg_utf8_sse42_shlib.o: CFLAGS+=$(CFLAGS_SSE42)
-pg_utf8_sse42_srv.o: CFLAGS+=$(CFLAGS_SSE42)
+# all versions of pg_utf8_simd.o need CFLAGS_SSE42
+pg_utf8_simd.o: CFLAGS+=$(CFLAGS_SSE42)
+pg_utf8_simd_shlib.o: CFLAGS+=$(CFLAGS_SSE42)
+pg_utf8_simd_srv.o: CFLAGS+=$(CFLAGS_SSE42)
 
 # all versions of pg_crc32c_sse42.o need CFLAGS_SSE42
 pg_crc32c_sse42.o: CFLAGS+=$(CFLAGS_SSE42)

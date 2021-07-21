@@ -15,14 +15,14 @@
 #define PG_UTF8_H
 
 
-#if defined(USE_SSE42_UTF8)
+#if defined(USE_SIMD_UTF8)
 /* Use Intel SSE4.2 instructions. */
 #define UTF8_VERIFYSTR(s, len) \
-	pg_validate_utf8_sse42((s), (len))
+	pg_validate_utf8_simd((s), (len))
 
-extern int	pg_validate_utf8_sse42(const unsigned char *s, int len);
+extern int	pg_validate_utf8_simd(const unsigned char *s, int len);
 
-#elif defined(USE_SSE42_UTF8_WITH_RUNTIME_CHECK)
+#elif defined(USE_SIMD_UTF8_WITH_RUNTIME_CHECK)
 /*
  * Use Intel SSE 4.2 instructions, but perform a runtime check first
  * to check that they are available.
@@ -31,7 +31,7 @@ extern int	pg_validate_utf8_sse42(const unsigned char *s, int len);
 	pg_validate_utf8((s), (len))
 
 extern int	(*pg_validate_utf8) (const unsigned char *s, int len);
-extern int	pg_validate_utf8_sse42(const unsigned char *s, int len);
+extern int	pg_validate_utf8_simd(const unsigned char *s, int len);
 
 #else
 #define UTF8_VERIFYSTR(s, len) \
