@@ -449,7 +449,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 		 * less efficiently.
 		 */
 		if (nextidx != INVALID_PGPROCNO &&
-			ProcGlobal->allProcs[nextidx].clogGroupMemberPage != proc->clogGroupMemberPage)
+			GetPGProcByNumber(nextidx)->clogGroupMemberPage != proc->clogGroupMemberPage)
 		{
 			/*
 			 * Ensure that this proc is not a member of any clog group that
@@ -515,7 +515,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 	/* Walk the list and update the status of all XIDs. */
 	while (nextidx != INVALID_PGPROCNO)
 	{
-		PGPROC	   *proc = &ProcGlobal->allProcs[nextidx];
+		PGPROC	   *proc = GetPGProcByNumber(nextidx);
 
 		/*
 		 * Transactions with more than THRESHOLD_SUBTRANS_CLOG_OPT sub-XIDs
@@ -544,7 +544,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 	 */
 	while (wakeidx != INVALID_PGPROCNO)
 	{
-		PGPROC	   *proc = &ProcGlobal->allProcs[wakeidx];
+		PGPROC	   *proc = GetPGProcByNumber(wakeidx);
 
 		wakeidx = pg_atomic_read_u32(&proc->clogGroupNext);
 		pg_atomic_write_u32(&proc->clogGroupNext, INVALID_PGPROCNO);

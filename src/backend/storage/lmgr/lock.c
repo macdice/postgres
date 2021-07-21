@@ -2733,7 +2733,7 @@ FastPathTransferRelationLocks(LockMethod lockMethodTable, const LOCKTAG *locktag
 	 */
 	for (i = 0; i < ProcGlobal->allProcCount; i++)
 	{
-		PGPROC	   *proc = &ProcGlobal->allProcs[i];
+		PGPROC	   *proc = GetPGProcByNumber(i);
 		uint32		f;
 
 		LWLockAcquire(&proc->fpInfoLock, LW_EXCLUSIVE);
@@ -2972,7 +2972,7 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 		 */
 		for (i = 0; i < ProcGlobal->allProcCount; i++)
 		{
-			PGPROC	   *proc = &ProcGlobal->allProcs[i];
+			PGPROC	   *proc = GetPGProcByNumber(i);
 			uint32		f;
 
 			/* A backend never blocks itself */
@@ -3587,7 +3587,7 @@ GetLockStatusData(void)
 	 */
 	for (i = 0; i < ProcGlobal->allProcCount; ++i)
 	{
-		PGPROC	   *proc = &ProcGlobal->allProcs[i];
+		PGPROC	   *proc = GetPGProcByNumber(i);
 		uint32		f;
 
 		LWLockAcquire(&proc->fpInfoLock, LW_SHARED);

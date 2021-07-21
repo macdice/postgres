@@ -1890,7 +1890,7 @@ ProcWaitForSignal(uint32 wait_event_info)
 void
 ProcSendSignal(int pgprocno)
 {
-	SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
+	SetLatch(&GetPGProcByNumber(pgprocno)->procLatch);
 }
 
 /*
