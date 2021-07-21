@@ -19,6 +19,8 @@
 #define USE_NEON
 #elif defined(__x86_64__)
 #define USE_SSE
+#elif defined(__powerpc__)
+#define USE_ALTIVEC
 #else
 #error "Unsupported architecture"
 #endif
@@ -27,6 +29,8 @@
 #include <arm_neon.h>
 #elif defined(USE_SSE)
 #include <nmmintrin.h>
+#elif defined(USE_ALTIVEC)
+#include <altivec.h>
 #endif
 
 #include "port/pg_utf8.h"
@@ -35,6 +39,8 @@
 typedef uint8x16_t pg_u8x16_t;
 #elif defined(USE_SSE)
 typedef __m128i pg_u8x16_t;
+#elif defined(USE_ALTIVEC)
+typedef vector unsigned char pg_u8x16_t;
 #endif
 
 /*
@@ -211,6 +217,18 @@ vset(uint8 v0, uint8 v1, uint8 v2, uint8 v3,
 	};
 	return vld1q_u8(values);
 }
+#elif defined(USE_ALTIVEC)
+static pg_attribute_always_inline pg_u8x16_t
+vset(uint8 v0, uint8 v1, uint8 v2, uint8 v3,
+	 uint8 v4, uint8 v5, uint8 v6, uint8 v7,
+	 uint8 v8, uint8 v9, uint8 v10, uint8 v11,
+	 uint8 v12, uint8 v13, uint8 v14, uint8 v15)
+{
+	pg_u8x16_t v = {
+		v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15
+	};
+	return v;
+}
 #elif defined(USE_SSE)
 #define vset(...)		_mm_setr_epi8(__VA_ARGS__)
 #endif
@@ -221,6 +239,8 @@ vzero()
 {
 #if defined(USE_NEON)
 	return vmovq_n_u8(0);
+#elif defined(USE_ALTIVEC)
+	return vset(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 #elif defined(USE_SSE)
 	return _mm_setzero_si128();
 #endif
@@ -232,6 +252,8 @@ vload(const unsigned char *raw_input)
 {
 #if defined(USE_NEON)
 	return vld1q_u8(raw_input);
+#elif defined(USE_ALTIVEC)
+	return vec_ld(0, raw_input);
 #elif defined(USE_SSE)
 	return _mm_loadu_si128((const pg_u8x16_t *) raw_input);
 #endif
@@ -243,6 +265,8 @@ splat(char byte)
 {
 #if defined(USE_NEON)
 	return vdupq_n_u8((unsigned char) byte);
+#elif defined(USE_ALTIVEC)
+	return vec_splats((unsigned char) byte);
 #elif defined(USE_SSE)
 	return _mm_set1_epi8(byte);
 #endif
@@ -254,6 +278,8 @@ greater_than(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 #if defined(USE_NEON)
 	return vcgtq_s8((int8x16_t) v1, (int8x16_t) v2);
+#elif defined(USE_ALTIVEC)
+	return (pg_u8x16_t) vec_cmpgt((vector signed char) v1, (vector signed char) v2);
 #elif defined(USE_SSE)
 	return _mm_cmpgt_epi8(v1, v2);
 #endif
@@ -265,6 +291,8 @@ bitwise_and(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 #if defined(USE_NEON)
 	return vandq_u8(v1, v2);
+#elif defined(USE_ALTIVEC)
+	return vec_and(v1, v2);
 #elif defined(USE_SSE)
 	return _mm_and_si128(v1, v2);
 #endif
@@ -275,6 +303,8 @@ bitwise_or(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 #if defined(USE_NEON)
 	return vorrq_u8(v1, v2);
+#elif defined(USE_ALTIVEC)
+	return vec_or(v1, v2);
 #elif defined(USE_SSE)
 	return _mm_or_si128(v1, v2);
 #endif
@@ -285,6 +315,8 @@ bitwise_xor(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 #if defined(USE_NEON)
 	return veorq_u8(v1, v2);
+#elif defined(USE_ALTIVEC)
+	return vec_xor(v1, v2);
 #elif defined(USE_SSE)
 	return _mm_xor_si128(v1, v2);
 #endif
@@ -300,6 +332,8 @@ saturating_sub(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
 #if defined(USE_NEON)
 	return vqsubq_u8(v1, v2);
+#elif defined(USE_ALTIVEC)
+	return vec_subs(v1, v2);
 #elif defined(USE_SSE)
 	return _mm_subs_epu8(v1, v2);
 #endif
@@ -313,6 +347,9 @@ shift_right(const pg_u8x16_t v, const int n)
 {
 #if defined(USE_NEON)
 	return vshrq_n_u8(v, n);
+#elif defined(USE_ALTIVEC)
+	/* XXX is there a shift right with a single value for n? */
+	return vec_sr(v, splat(n));
 #elif defined(USE_SSE)
 	/*
 	 * There is no intrinsic to do this on 8-bit lanes, so shift right in each
@@ -325,6 +362,16 @@ shift_right(const pg_u8x16_t v, const int n)
 	return bitwise_and(shift16, mask);
 #endif
 }
+
+/*
+ * For little endian machines, the prevN functions need to do byte swapping
+ * here.  Is there a way to avoid this?
+ */
+#ifdef WORDS_BIGENDIAN
+#define rev(a) (a)
+#else
+#define rev(a) ((pg_u8x16_t) (vec_reve((_v16qu) (a))))
+#endif
 
 /*
  * Shift entire 'input' register right by N 8-bit lanes, and
@@ -341,6 +388,8 @@ prev1(pg_u8x16_t prev, pg_u8x16_t input)
 {
 #if defined(USE_NEON)
 	return vextq_u8(prev, input, sizeof(pg_u8x16_t) - 1);
+#elif defined(USE_ALTIVEC)
+	return rev(vec_sld(rev(prev), rev(input), sizeof(pg_u8x16_t) - 1));
 #elif defined(USE_SSE)
 	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 1);
 #endif
@@ -351,6 +400,8 @@ prev2(pg_u8x16_t prev, pg_u8x16_t input)
 {
 #if defined(USE_NEON)
 	return vextq_u8(prev, input, sizeof(pg_u8x16_t) - 2);
+#elif defined(USE_ALTIVEC)
+	return rev(vec_sld(rev(prev), rev(input), sizeof(pg_u8x16_t) - 2));
 #elif defined(USE_SSE)
 	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 2);
 #endif
@@ -361,6 +412,8 @@ prev3(pg_u8x16_t prev, pg_u8x16_t input)
 {
 #if defined(USE_NEON)
 	return vextq_u8(prev, input, sizeof(pg_u8x16_t) - 3);
+#elif defined(USE_ALTIVEC)
+	return rev(vec_sld(rev(prev), rev(input), sizeof(pg_u8x16_t) - 3));
 #elif defined(USE_SSE)
 	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 3);
 #endif
@@ -375,6 +428,8 @@ lookup(const pg_u8x16_t input, const pg_u8x16_t lookup)
 {
 #if defined(USE_NEON)
 	return vqtbl1q_u8(lookup, input);
+#elif defined(USE_ALTIVEC)
+	return vec_perm(lookup, vzero(), input);
 #elif defined(USE_SSE)
 	return _mm_shuffle_epi8(lookup, input);
 #endif
@@ -488,6 +543,8 @@ to_bool(const pg_u8x16_t v)
 {
 #if defined(USE_NEON)
 	return vmaxvq_u8(v) != 0;
+#elif defined(USE_ALTIVEC)
+	return !vec_all_eq(v, vzero());
 #elif defined(USE_SSE)
 	/*
 	 * _mm_testz_si128 returns 1 if the bitwise AND of the two arguments is
@@ -503,6 +560,8 @@ check_for_zeros(const pg_u8x16_t v, pg_u8x16_t * error)
 {
 #if defined(USE_NEON)
 	const		pg_u8x16_t cmp = vceqq_u8(v, vzero());
+#elif defined(USE_ALTIVEC)
+	const		pg_u8x16_t cmp = (pg_u8x16_t) vec_cmpeq(v, vzero());
 #elif defined(USE_SSE)
 	const		pg_u8x16_t cmp = _mm_cmpeq_epi8(v, vzero());
 #endif
@@ -516,6 +575,8 @@ is_highbit_set(const pg_u8x16_t v)
 {
 #if defined(USE_NEON)
 	return vmaxvq_u8(v) > 0x7F;
+#elif defined(USE_ALTIVEC)
+	return to_bool(vec_and(v, splat(0x80)));
 #elif defined(USE_SSE)
 	return _mm_movemask_epi8(v) != 0;
 #endif
