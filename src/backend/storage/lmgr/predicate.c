@@ -1877,7 +1877,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	sxact->finishedBefore = InvalidTransactionId;
 	sxact->xmin = snapshot->xmin;
 	sxact->pid = MyProcPid;
-	sxact->pgprocno = MyProc->pgprocno;
+	sxact->pgprocno = GetPGProcNumber(MyProc);
 	SHMQueueInit(&(sxact->predicateLocks));
 	SHMQueueElemInit(&(sxact->finishedLink));
 	sxact->flags = 0;

@@ -227,7 +227,6 @@ InitProcGlobal(void)
 			InitSharedLatch(&(procs[i].procLatch));
 			LWLockInitialize(&(procs[i].fpInfoLock), LWTRANCHE_LOCK_FASTPATH);
 		}
-		procs[i].pgprocno = i;
 
 		/*
 		 * Newly created PGPROCs for normal backends, autovacuum and bgworkers
@@ -1945,13 +1944,7 @@ BecomeLockGroupMember(PGPROC *leader, int pid)
 	/* PID must be valid. */
 	Assert(pid != 0);
 
-	/*
-	 * Get lock protecting the group fields.  Note LockHashPartitionLockByProc
-	 * accesses leader->pgprocno in a PGPROC that might be free.  This is safe
-	 * because all PGPROCs' pgprocno fields are set during shared memory
-	 * initialization and never change thereafter; so we will acquire the
-	 * correct lock even if the leader PGPROC is in process of being recycled.
-	 */
+	/* Get lock protecting the group fields. */
 	leader_lwlock = LockHashPartitionLockByProc(leader);
 	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
 

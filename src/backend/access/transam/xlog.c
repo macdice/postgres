@@ -1687,7 +1687,7 @@ WALInsertLockAcquire(void)
 	static int	lockToTry = -1;
 
 	if (lockToTry == -1)
-		lockToTry = MyProc->pgprocno % NUM_XLOGINSERT_LOCKS;
+		lockToTry = GetPGProcNumber(MyProc) % NUM_XLOGINSERT_LOCKS;
 	MyLockNo = lockToTry;
 
 	/*

@@ -447,6 +447,7 @@ ProcArrayAdd(PGPROC *proc)
 	ProcArrayStruct *arrayP = procArray;
 	int			index;
 	int			movecount;
+	int			pgprocno = GetPGProcNumber(proc);
 
 	/* See ProcGlobal comment explaining why both locks are held */
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
@@ -481,7 +482,7 @@ ProcArrayAdd(PGPROC *proc)
 		Assert(allProcs[procno].pgxactoff == index);
 
 		/* If we have found our right position in the array, break */
-		if (arrayP->pgprocnos[index] > proc->pgprocno)
+		if (arrayP->pgprocnos[index] > pgprocno)
 			break;
 	}
 
@@ -499,7 +500,7 @@ ProcArrayAdd(PGPROC *proc)
 			&ProcGlobal->statusFlags[index],
 			movecount * sizeof(*ProcGlobal->statusFlags));
 
-	arrayP->pgprocnos[index] = proc->pgprocno;
+	arrayP->pgprocnos[index] = pgprocno;
 	proc->pgxactoff = index;
 	ProcGlobal->xids[index] = proc->xid;
 	ProcGlobal->subxidStates[index] = proc->subxidStatus;
@@ -778,7 +779,7 @@ ProcArrayGroupClearXid(PGPROC *proc, TransactionId latestXid)
 
 		if (pg_atomic_compare_exchange_u32(&procglobal->procArrayGroupFirst,
 										   &nextidx,
-										   (uint32) proc->pgprocno))
+										   (uint32) GetPGProcNumber(proc)))
 			break;
 	}
 

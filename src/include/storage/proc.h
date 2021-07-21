@@ -147,7 +147,6 @@ struct PGPROC
 
 	int			pgxactoff;		/* offset into various ProcGlobal->arrays with
 								 * data mirrored from this PGPROC */
-	int			pgprocno;
 
 	/* These fields are zero while a backend is still starting up: */
 	BackendId	backendId;		/* This backend's backend ID (if assigned) */
@@ -362,6 +361,7 @@ extern PGPROC *PreparedXactProcs;
 
 /* Accessor for PGPROC given a pgprocno. */
 #define GetPGProcByNumber(n) (&ProcGlobal->allProcs[(n)])
+#define GetPGProcNumber(p) ((p) - ProcGlobal->allProcs)
 
 /*
  * We set aside some extra PGPROC structures for auxiliary processes,
