@@ -15,11 +15,27 @@
 
 #include "c.h"
 
+#if defined(__aarch64__)
+#define USE_NEON
+#elif defined(__x86_64__)
+#define USE_SSE
+#else
+#error "Unsupported architecture"
+#endif
+
+#if defined(USE_NEON)
+#include <arm_neon.h>
+#elif defined(USE_SSE)
 #include <nmmintrin.h>
+#endif
 
 #include "port/pg_utf8.h"
 
+#if defined(USE_NEON)
+typedef uint8x16_t pg_u8x16_t;
+#elif defined(USE_SSE)
 typedef __m128i pg_u8x16_t;
+#endif
 
 /*
  * This module is based on the paper "Validating UTF-8 In Less Than One
@@ -183,53 +199,95 @@ typedef __m128i pg_u8x16_t;
 
 /* helper functions to wrap intrinsics */
 
+#if defined(USE_NEON)
+static pg_attribute_always_inline pg_u8x16_t
+vset(uint8 v0, uint8 v1, uint8 v2, uint8 v3,
+	 uint8 v4, uint8 v5, uint8 v6, uint8 v7,
+	 uint8 v8, uint8 v9, uint8 v10, uint8 v11,
+	 uint8 v12, uint8 v13, uint8 v14, uint8 v15)
+{
+	uint8 pg_attribute_aligned(16) values[16] = {
+		v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15
+	};
+	return vld1q_u8(values);
+}
+#elif defined(USE_SSE)
 #define vset(...)		_mm_setr_epi8(__VA_ARGS__)
+#endif
 
 /* return a zeroed register */
 static inline const pg_u8x16_t
 vzero()
 {
+#if defined(USE_NEON)
+	return vmovq_n_u8(0);
+#elif defined(USE_SSE)
 	return _mm_setzero_si128();
+#endif
 }
 
 /* perform an unaligned load from memory into a register */
 static inline const pg_u8x16_t
 vload(const unsigned char *raw_input)
 {
+#if defined(USE_NEON)
+	return vld1q_u8(raw_input);
+#elif defined(USE_SSE)
 	return _mm_loadu_si128((const pg_u8x16_t *) raw_input);
+#endif
 }
 
 /* return a vector with each 8-bit lane populated with the input scalar */
 static inline pg_u8x16_t
 splat(char byte)
 {
+#if defined(USE_NEON)
+	return vdupq_n_u8((unsigned char) byte);
+#elif defined(USE_SSE)
 	return _mm_set1_epi8(byte);
+#endif
 }
 
 /* perform signed greater-than on all 8-bit lanes */
 static inline pg_u8x16_t
 greater_than(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
+#if defined(USE_NEON)
+	return vcgtq_s8((int8x16_t) v1, (int8x16_t) v2);
+#elif defined(USE_SSE)
 	return _mm_cmpgt_epi8(v1, v2);
+#endif
 }
 
 /* bitwise vector operations */
 static inline pg_u8x16_t
 bitwise_and(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
+#if defined(USE_NEON)
+	return vandq_u8(v1, v2);
+#elif defined(USE_SSE)
 	return _mm_and_si128(v1, v2);
+#endif
 }
 
 static inline pg_u8x16_t
 bitwise_or(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
+#if defined(USE_NEON)
+	return vorrq_u8(v1, v2);
+#elif defined(USE_SSE)
 	return _mm_or_si128(v1, v2);
+#endif
 }
 
 static inline pg_u8x16_t
 bitwise_xor(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
+#if defined(USE_NEON)
+	return veorq_u8(v1, v2);
+#elif defined(USE_SSE)
 	return _mm_xor_si128(v1, v2);
+#endif
 }
 
 /*
@@ -240,22 +298,32 @@ bitwise_xor(const pg_u8x16_t v1, const pg_u8x16_t v2)
 static inline pg_u8x16_t
 saturating_sub(const pg_u8x16_t v1, const pg_u8x16_t v2)
 {
+#if defined(USE_NEON)
+	return vqsubq_u8(v1, v2);
+#elif defined(USE_SSE)
 	return _mm_subs_epu8(v1, v2);
+#endif
 }
 
 /*
  * Shift right each 8-bit lane
- *
- * There is no intrinsic to do this on 8-bit lanes, so shift right in each
- * 16-bit lane then apply a mask in each 8-bit lane shifted the same amount.
  */
 static inline pg_u8x16_t
 shift_right(const pg_u8x16_t v, const int n)
 {
+#if defined(USE_NEON)
+	return vshrq_n_u8(v, n);
+#elif defined(USE_SSE)
+	/*
+	 * There is no intrinsic to do this on 8-bit lanes, so shift right in each
+	 * 16-bit lane then apply a mask in each 8-bit lane shifted the same
+	 * amount.
+	 */
 	const		pg_u8x16_t shift16 = _mm_srli_epi16(v, n);
 	const		pg_u8x16_t mask = splat(0xFF >> n);
 
 	return bitwise_and(shift16, mask);
+#endif
 }
 
 /*
@@ -271,19 +339,31 @@ shift_right(const pg_u8x16_t v, const int n)
 static inline pg_u8x16_t
 prev1(pg_u8x16_t prev, pg_u8x16_t input)
 {
+#if defined(USE_NEON)
+	return vextq_u8(prev, input, sizeof(pg_u8x16_t) - 1);
+#elif defined(USE_SSE)
 	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 1);
+#endif
 }
 
 static inline pg_u8x16_t
 prev2(pg_u8x16_t prev, pg_u8x16_t input)
 {
+#if defined(USE_NEON)
+	return vextq_u8(prev, input, sizeof(pg_u8x16_t) - 2);
+#elif defined(USE_SSE)
 	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 2);
+#endif
 }
 
 static inline pg_u8x16_t
 prev3(pg_u8x16_t prev, pg_u8x16_t input)
 {
+#if defined(USE_NEON)
+	return vextq_u8(prev, input, sizeof(pg_u8x16_t) - 3);
+#elif defined(USE_SSE)
 	return _mm_alignr_epi8(input, prev, sizeof(pg_u8x16_t) - 3);
+#endif
 }
 
 /*
@@ -293,7 +373,11 @@ prev3(pg_u8x16_t prev, pg_u8x16_t input)
 static inline pg_u8x16_t
 lookup(const pg_u8x16_t input, const pg_u8x16_t lookup)
 {
+#if defined(USE_NEON)
+	return vqtbl1q_u8(lookup, input);
+#elif defined(USE_SSE)
 	return _mm_shuffle_epi8(lookup, input);
+#endif
 }
 
 /*
@@ -402,18 +486,26 @@ check_utf8_bytes(const pg_u8x16_t prev, const pg_u8x16_t input, pg_u8x16_t * err
 static inline bool
 to_bool(const pg_u8x16_t v)
 {
+#if defined(USE_NEON)
+	return vmaxvq_u8(v) != 0;
+#elif defined(USE_SSE)
 	/*
 	 * _mm_testz_si128 returns 1 if the bitwise AND of the two arguments is
 	 * zero. Zero is the only value whose bitwise AND with itself is zero.
 	 */
 	return !_mm_testz_si128(v, v);
+#endif
 }
 
 /* set bits in the error vector where bytes in the input are zero */
 static inline void
 check_for_zeros(const pg_u8x16_t v, pg_u8x16_t * error)
 {
+#if defined(USE_NEON)
+	const		pg_u8x16_t cmp = vceqq_u8(v, vzero());
+#elif defined(USE_SSE)
 	const		pg_u8x16_t cmp = _mm_cmpeq_epi8(v, vzero());
+#endif
 
 	*error = bitwise_or(*error, cmp);
 }
@@ -422,7 +514,11 @@ check_for_zeros(const pg_u8x16_t v, pg_u8x16_t * error)
 static inline bool
 is_highbit_set(const pg_u8x16_t v)
 {
+#if defined(USE_NEON)
+	return vmaxvq_u8(v) > 0x7F;
+#elif defined(USE_SSE)
 	return _mm_movemask_epi8(v) != 0;
+#endif
 }
 
 /* return non-zero if the input terminates with an incomplete code point */
