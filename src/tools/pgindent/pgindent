@@ -56,9 +56,8 @@ $excludes ||= "$code_base/src/tools/pgindent/exclude_file_patterns"
 # some names we want to treat like typedefs, e.g. "bool" (which is a macro
 # according to <stdbool.h>), and may include some names we don't want
 # treated as typedefs, although various headers that some builds include
-# might make them so.  For the moment we just hardwire a list of names
-# to add and a list of names to exclude; eventually this may need to be
-# easier to configure.  Note that the typedefs need trailing newlines.
+# might make them so.  Extra items can be added within individual source files
+# with special annotation comments; see run_indent.
 my @additional = ("bool\n");
 
 my %excluded = map { +"$_\n" => 1 } qw(
@@ -263,6 +262,12 @@ sub run_indent
 	my $error_message = shift;
 
 	my $cmd = "$indent $indent_opts -U" . $filtered_typedefs_fh->filename;
+
+	# add file-local typenames in inline annotations
+	foreach ($source =~ /\@pgindent typename (\w+)\@/g)
+	{
+		$cmd .= " -T'$_'";
+	}
 
 	my $tmp_fh = new File::Temp(TEMPLATE => "pgsrcXXXXX");
 	my $filename = $tmp_fh->filename;

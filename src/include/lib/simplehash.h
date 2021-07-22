@@ -86,6 +86,12 @@
  *	  presence is relevant to determine whether a lookup needs to continue
  *	  looking or is done - buckets following a deleted element are shifted
  *	  backwards, unless they're empty or already at their optimal position.
+ *
+ * Help pgindent understand our pseudo-typenames:
+ *
+ *	  @pgindent typename SH_ELEMENT_TYPE@
+ *	  @pgindent typename SH_TYPE@
+ *	  @pgindent typename SH_ITERATOR@
  */
 
 #include "port/pg_bitutils.h"
@@ -164,7 +170,7 @@ typedef struct SH_TYPE
 
 	/* user defined data, useful for callbacks */
 	void	   *private_data;
-}			SH_TYPE;
+} SH_TYPE;
 
 typedef enum SH_STATUS
 {
@@ -177,67 +183,67 @@ typedef struct SH_ITERATOR
 	uint32		cur;			/* current element */
 	uint32		end;
 	bool		done;			/* iterator exhausted? */
-}			SH_ITERATOR;
+} SH_ITERATOR;
 
 /* externally visible function prototypes */
 #ifdef SH_RAW_ALLOCATOR
 /* <prefix>_hash <prefix>_create(uint32 nelements, void *private_data) */
-SH_SCOPE	SH_TYPE *SH_CREATE(uint32 nelements, void *private_data);
+SH_SCOPE SH_TYPE *SH_CREATE(uint32 nelements, void *private_data);
 #else
 /*
  * <prefix>_hash <prefix>_create(MemoryContext ctx, uint32 nelements,
  *								 void *private_data)
  */
-SH_SCOPE	SH_TYPE *SH_CREATE(MemoryContext ctx, uint32 nelements,
-							   void *private_data);
+SH_SCOPE SH_TYPE *SH_CREATE(MemoryContext ctx, uint32 nelements,
+							void *private_data);
 #endif
 
 /* void <prefix>_destroy(<prefix>_hash *tb) */
-SH_SCOPE void SH_DESTROY(SH_TYPE * tb);
+SH_SCOPE void SH_DESTROY(SH_TYPE *tb);
 
 /* void <prefix>_reset(<prefix>_hash *tb) */
-SH_SCOPE void SH_RESET(SH_TYPE * tb);
+SH_SCOPE void SH_RESET(SH_TYPE *tb);
 
 /* void <prefix>_grow(<prefix>_hash *tb) */
-SH_SCOPE void SH_GROW(SH_TYPE * tb, uint32 newsize);
+SH_SCOPE void SH_GROW(SH_TYPE *tb, uint32 newsize);
 
 /* <element> *<prefix>_insert(<prefix>_hash *tb, <key> key, bool *found) */
-SH_SCOPE	SH_ELEMENT_TYPE *SH_INSERT(SH_TYPE * tb, SH_KEY_TYPE key, bool *found);
+SH_SCOPE SH_ELEMENT_TYPE *SH_INSERT(SH_TYPE *tb, SH_KEY_TYPE key, bool *found);
 
 /*
  * <element> *<prefix>_insert_hash(<prefix>_hash *tb, <key> key, uint32 hash,
  * 								  bool *found)
  */
-SH_SCOPE	SH_ELEMENT_TYPE *SH_INSERT_HASH(SH_TYPE * tb, SH_KEY_TYPE key,
-											uint32 hash, bool *found);
+SH_SCOPE SH_ELEMENT_TYPE *SH_INSERT_HASH(SH_TYPE *tb, SH_KEY_TYPE key,
+										 uint32 hash, bool *found);
 
 /* <element> *<prefix>_lookup(<prefix>_hash *tb, <key> key) */
-SH_SCOPE	SH_ELEMENT_TYPE *SH_LOOKUP(SH_TYPE * tb, SH_KEY_TYPE key);
+SH_SCOPE SH_ELEMENT_TYPE *SH_LOOKUP(SH_TYPE *tb, SH_KEY_TYPE key);
 
 /* <element> *<prefix>_lookup_hash(<prefix>_hash *tb, <key> key, uint32 hash) */
-SH_SCOPE	SH_ELEMENT_TYPE *SH_LOOKUP_HASH(SH_TYPE * tb, SH_KEY_TYPE key,
-											uint32 hash);
+SH_SCOPE SH_ELEMENT_TYPE *SH_LOOKUP_HASH(SH_TYPE *tb, SH_KEY_TYPE key,
+										 uint32 hash);
 
 /* void <prefix>_delete_item(<prefix>_hash *tb, <element> *entry) */
-SH_SCOPE void SH_DELETE_ITEM(SH_TYPE * tb, SH_ELEMENT_TYPE * entry);
+SH_SCOPE void SH_DELETE_ITEM(SH_TYPE *tb, SH_ELEMENT_TYPE *entry);
 
 /* bool <prefix>_delete(<prefix>_hash *tb, <key> key) */
-SH_SCOPE bool SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key);
+SH_SCOPE bool SH_DELETE(SH_TYPE *tb, SH_KEY_TYPE key);
 
 /* void <prefix>_start_iterate(<prefix>_hash *tb, <prefix>_iterator *iter) */
-SH_SCOPE void SH_START_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter);
+SH_SCOPE void SH_START_ITERATE(SH_TYPE *tb, SH_ITERATOR *iter);
 
 /*
  * void <prefix>_start_iterate_at(<prefix>_hash *tb, <prefix>_iterator *iter,
  *								  uint32 at)
  */
-SH_SCOPE void SH_START_ITERATE_AT(SH_TYPE * tb, SH_ITERATOR * iter, uint32 at);
+SH_SCOPE void SH_START_ITERATE_AT(SH_TYPE *tb, SH_ITERATOR *iter, uint32 at);
 
 /* <element> *<prefix>_iterate(<prefix>_hash *tb, <prefix>_iterator *iter) */
-SH_SCOPE	SH_ELEMENT_TYPE *SH_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter);
+SH_SCOPE SH_ELEMENT_TYPE *SH_ITERATE(SH_TYPE *tb, SH_ITERATOR *iter);
 
 /* void <prefix>_stat(<prefix>_hash *tb */
-SH_SCOPE void SH_STAT(SH_TYPE * tb);
+SH_SCOPE void SH_STAT(SH_TYPE *tb);
 
 #endif							/* SH_DECLARE */
 
@@ -302,7 +308,7 @@ SH_SCOPE void SH_STAT(SH_TYPE * tb);
  * the hashtable.
  */
 static inline void
-SH_COMPUTE_PARAMETERS(SH_TYPE * tb, uint32 newsize)
+SH_COMPUTE_PARAMETERS(SH_TYPE *tb, uint32 newsize)
 {
 	uint64		size;
 
@@ -340,14 +346,14 @@ SH_COMPUTE_PARAMETERS(SH_TYPE * tb, uint32 newsize)
 
 /* return the optimal bucket for the hash */
 static inline uint32
-SH_INITIAL_BUCKET(SH_TYPE * tb, uint32 hash)
+SH_INITIAL_BUCKET(SH_TYPE *tb, uint32 hash)
 {
 	return hash & tb->sizemask;
 }
 
 /* return next bucket after the current, handling wraparound */
 static inline uint32
-SH_NEXT(SH_TYPE * tb, uint32 curelem, uint32 startelem)
+SH_NEXT(SH_TYPE *tb, uint32 curelem, uint32 startelem)
 {
 	curelem = (curelem + 1) & tb->sizemask;
 
@@ -358,7 +364,7 @@ SH_NEXT(SH_TYPE * tb, uint32 curelem, uint32 startelem)
 
 /* return bucket before the current, handling wraparound */
 static inline uint32
-SH_PREV(SH_TYPE * tb, uint32 curelem, uint32 startelem)
+SH_PREV(SH_TYPE *tb, uint32 curelem, uint32 startelem)
 {
 	curelem = (curelem - 1) & tb->sizemask;
 
@@ -369,7 +375,7 @@ SH_PREV(SH_TYPE * tb, uint32 curelem, uint32 startelem)
 
 /* return distance between bucket and its optimal position */
 static inline uint32
-SH_DISTANCE_FROM_OPTIMAL(SH_TYPE * tb, uint32 optimal, uint32 bucket)
+SH_DISTANCE_FROM_OPTIMAL(SH_TYPE *tb, uint32 optimal, uint32 bucket)
 {
 	if (optimal <= bucket)
 		return bucket - optimal;
@@ -378,7 +384,7 @@ SH_DISTANCE_FROM_OPTIMAL(SH_TYPE * tb, uint32 optimal, uint32 bucket)
 }
 
 static inline uint32
-SH_ENTRY_HASH(SH_TYPE * tb, SH_ELEMENT_TYPE * entry)
+SH_ENTRY_HASH(SH_TYPE *tb, SH_ELEMENT_TYPE *entry)
 {
 #ifdef SH_STORE_HASH
 	return SH_GET_HASH(tb, entry);
@@ -388,14 +394,14 @@ SH_ENTRY_HASH(SH_TYPE * tb, SH_ELEMENT_TYPE * entry)
 }
 
 /* default memory allocator function */
-static inline void *SH_ALLOCATE(SH_TYPE * type, Size size);
-static inline void SH_FREE(SH_TYPE * type, void *pointer);
+static inline void *SH_ALLOCATE(SH_TYPE *type, Size size);
+static inline void SH_FREE(SH_TYPE *type, void *pointer);
 
 #ifndef SH_USE_NONDEFAULT_ALLOCATOR
 
 /* default memory allocator function */
 static inline void *
-SH_ALLOCATE(SH_TYPE * type, Size size)
+SH_ALLOCATE(SH_TYPE *type, Size size)
 {
 #ifdef SH_RAW_ALLOCATOR
 	return SH_RAW_ALLOCATOR(size);
@@ -407,7 +413,7 @@ SH_ALLOCATE(SH_TYPE * type, Size size)
 
 /* default memory free function */
 static inline void
-SH_FREE(SH_TYPE * type, void *pointer)
+SH_FREE(SH_TYPE *type, void *pointer)
 {
 	pfree(pointer);
 }
@@ -424,10 +430,10 @@ SH_FREE(SH_TYPE * type, void *pointer)
  * the passed-in context.
  */
 #ifdef SH_RAW_ALLOCATOR
-SH_SCOPE	SH_TYPE *
+SH_SCOPE SH_TYPE *
 SH_CREATE(uint32 nelements, void *private_data)
 #else
-SH_SCOPE	SH_TYPE *
+SH_SCOPE SH_TYPE *
 SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 #endif
 {
@@ -454,7 +460,7 @@ SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 
 /* destroy a previously created hash table */
 SH_SCOPE void
-SH_DESTROY(SH_TYPE * tb)
+SH_DESTROY(SH_TYPE *tb)
 {
 	SH_FREE(tb, tb->data);
 	pfree(tb);
@@ -462,7 +468,7 @@ SH_DESTROY(SH_TYPE * tb)
 
 /* reset the contents of a previously created hash table */
 SH_SCOPE void
-SH_RESET(SH_TYPE * tb)
+SH_RESET(SH_TYPE *tb)
 {
 	memset(tb->data, 0, sizeof(SH_ELEMENT_TYPE) * tb->size);
 	tb->members = 0;
@@ -476,7 +482,7 @@ SH_RESET(SH_TYPE * tb)
  * performance-wise, when known at some point.
  */
 SH_SCOPE void
-SH_GROW(SH_TYPE * tb, uint32 newsize)
+SH_GROW(SH_TYPE *tb, uint32 newsize)
 {
 	uint64		oldsize = tb->size;
 	SH_ELEMENT_TYPE *olddata = tb->data;
@@ -586,7 +592,7 @@ SH_GROW(SH_TYPE * tb, uint32 newsize)
  * into its wrapper functions even if SH_SCOPE is extern.
  */
 static inline SH_ELEMENT_TYPE *
-SH_INSERT_HASH_INTERNAL(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash, bool *found)
+SH_INSERT_HASH_INTERNAL(SH_TYPE *tb, SH_KEY_TYPE key, uint32 hash, bool *found)
 {
 	uint32		startelem;
 	uint32		curelem;
@@ -756,8 +762,8 @@ restart:
  * already exists, false otherwise. Returns the hash-table entry in either
  * case.
  */
-SH_SCOPE	SH_ELEMENT_TYPE *
-SH_INSERT(SH_TYPE * tb, SH_KEY_TYPE key, bool *found)
+SH_SCOPE SH_ELEMENT_TYPE *
+SH_INSERT(SH_TYPE *tb, SH_KEY_TYPE key, bool *found)
 {
 	uint32		hash = SH_HASH_KEY(tb, key);
 
@@ -769,8 +775,8 @@ SH_INSERT(SH_TYPE * tb, SH_KEY_TYPE key, bool *found)
  * hash. Set *found to true if the key already exists, false
  * otherwise. Returns the hash-table entry in either case.
  */
-SH_SCOPE	SH_ELEMENT_TYPE *
-SH_INSERT_HASH(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash, bool *found)
+SH_SCOPE SH_ELEMENT_TYPE *
+SH_INSERT_HASH(SH_TYPE *tb, SH_KEY_TYPE key, uint32 hash, bool *found)
 {
 	return SH_INSERT_HASH_INTERNAL(tb, key, hash, found);
 }
@@ -780,7 +786,7 @@ SH_INSERT_HASH(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash, bool *found)
  * into its wrapper functions even if SH_SCOPE is extern.
  */
 static inline SH_ELEMENT_TYPE *
-SH_LOOKUP_HASH_INTERNAL(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash)
+SH_LOOKUP_HASH_INTERNAL(SH_TYPE *tb, SH_KEY_TYPE key, uint32 hash)
 {
 	const uint32 startelem = SH_INITIAL_BUCKET(tb, hash);
 	uint32		curelem = startelem;
@@ -813,8 +819,8 @@ SH_LOOKUP_HASH_INTERNAL(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash)
 /*
  * Lookup up entry in hash table.  Returns NULL if key not present.
  */
-SH_SCOPE	SH_ELEMENT_TYPE *
-SH_LOOKUP(SH_TYPE * tb, SH_KEY_TYPE key)
+SH_SCOPE SH_ELEMENT_TYPE *
+SH_LOOKUP(SH_TYPE *tb, SH_KEY_TYPE key)
 {
 	uint32		hash = SH_HASH_KEY(tb, key);
 
@@ -826,8 +832,8 @@ SH_LOOKUP(SH_TYPE * tb, SH_KEY_TYPE key)
  *
  * Returns NULL if key not present.
  */
-SH_SCOPE	SH_ELEMENT_TYPE *
-SH_LOOKUP_HASH(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash)
+SH_SCOPE SH_ELEMENT_TYPE *
+SH_LOOKUP_HASH(SH_TYPE *tb, SH_KEY_TYPE key, uint32 hash)
 {
 	return SH_LOOKUP_HASH_INTERNAL(tb, key, hash);
 }
@@ -837,7 +843,7 @@ SH_LOOKUP_HASH(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash)
  * present.
  */
 SH_SCOPE bool
-SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key)
+SH_DELETE(SH_TYPE *tb, SH_KEY_TYPE key)
 {
 	uint32		hash = SH_HASH_KEY(tb, key);
 	uint32		startelem = SH_INITIAL_BUCKET(tb, hash);
@@ -908,7 +914,7 @@ SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key)
  * Delete entry from hash table by entry pointer
  */
 SH_SCOPE void
-SH_DELETE_ITEM(SH_TYPE * tb, SH_ELEMENT_TYPE * entry)
+SH_DELETE_ITEM(SH_TYPE *tb, SH_ELEMENT_TYPE *entry)
 {
 	SH_ELEMENT_TYPE *lastentry = entry;
 	uint32		hash = SH_ENTRY_HASH(tb, entry);
@@ -963,7 +969,7 @@ SH_DELETE_ITEM(SH_TYPE * tb, SH_ELEMENT_TYPE * entry)
  * Initialize iterator.
  */
 SH_SCOPE void
-SH_START_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter)
+SH_START_ITERATE(SH_TYPE *tb, SH_ITERATOR *iter)
 {
 	int			i;
 	uint64		startelem = PG_UINT64_MAX;
@@ -1003,7 +1009,7 @@ SH_START_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter)
  * same position.
  */
 SH_SCOPE void
-SH_START_ITERATE_AT(SH_TYPE * tb, SH_ITERATOR * iter, uint32 at)
+SH_START_ITERATE_AT(SH_TYPE *tb, SH_ITERATOR *iter, uint32 at)
 {
 	/*
 	 * Iterate backwards, that allows the current element to be deleted, even
@@ -1024,8 +1030,8 @@ SH_START_ITERATE_AT(SH_TYPE * tb, SH_ITERATOR * iter, uint32 at)
  * deletions), but if so, there's neither a guarantee that all nodes are
  * visited at least once, nor a guarantee that a node is visited at most once.
  */
-SH_SCOPE	SH_ELEMENT_TYPE *
-SH_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter)
+SH_SCOPE SH_ELEMENT_TYPE *
+SH_ITERATE(SH_TYPE *tb, SH_ITERATOR *iter)
 {
 	while (!iter->done)
 	{
@@ -1052,7 +1058,7 @@ SH_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter)
  * debugging/profiling purposes only.
  */
 SH_SCOPE void
-SH_STAT(SH_TYPE * tb)
+SH_STAT(SH_TYPE *tb)
 {
 	uint32		max_chain_length = 0;
 	uint32		total_chain_length = 0;
