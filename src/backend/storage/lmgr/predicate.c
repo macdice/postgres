@@ -575,12 +575,15 @@ SerializationNeededForWrite(Relation relation)
  * These functions are a simple implementation of a list for this specific
  * type of struct.  If there is ever a generalized shared memory list, we
  * should probably switch to that.
+ *
+ * The active list is maintained in xmin order, except that
+ * InvalidTransactionId can appear anywhere.  The xmin is set, but all other
+ * values must be set by the caller.
  */
 static SERIALIZABLEXACT *
 CreatePredXact(TransactionId xmin)
 {
 	PredXactListElement ptle;
-	PredXactListElement tail;
 
 	ptle = (PredXactListElement)
 		SHMQueueNext(&PredXact->availableList,
@@ -592,28 +595,54 @@ CreatePredXact(TransactionId xmin)
 	/* Remove from available list. */
 	SHMQueueDelete(&ptle->link);
 
-	if (SHMQueueIsEmpty(&PredXact->activeList))
+	if (SHMQueueEmpty(&PredXact->activeList) ||
+		!TransactionIdIsValid(xmin))
 	{
-		/* First active sxact.  Just insert it. */
+		/*
+		 * First active sxact, or no xmin (should be only OldCommittedSxact).
+		 * Just add it to the active list.
+		 */
 		SHMQueueInsertBefore(&PredXact->activeList, &ptle->link);
 	}
 	else
 	{
-		/*
-		 * Maintain sort order.  This almost always just pushes directly onto
-		 * the tail of the list, but it's possible that me might arrive here
-		 * slightly out of order and need to walk back a bit further in the
-		 * list.
-		 */
-		tail = (PredXactListElement)
+		PredXactListElement iter;
+
+		iter = (PredXactListElement)
 			SHMQueuePrev(&PredXact->activeList,
 						 &PredXact->activeList,
 						 offsetof(PredXactListElementData, link));
+		Assert(iter);
 
+		/* Search for correct insertion location to maintain xmin order. */
 		for (;;)
 		{
+			if (likely(TransactionIdIsValid(iter->sxact.xmin) &&
+					   TransactionIdPrecedesOrEquals(iter->sxact.xmin, xmin)))
+			{
+				/* Insert after this one. */
+elog(NOTICE, "CreatePredXact, new xmin %u going after %u", xmin, iter->sxact.xmin);
+				SHMQueueInsertAfter(&iter->link, &ptle->link);
+				break;
+			}
+
+			/* Try to walk back one. */
+			iter = (PredXactListElement)
+				SHMQueuePrev(&PredXact->activeList,
+							 &iter->link,
+							 offsetof(PredXactListElementData, link));
+
+			if (!iter)
+			{
+elog(NOTICE, "CreatePredXact, new xmin %u going at head", xmin);
+				/* Insert at head. */
+				SHMQueueInsertBefore(&PredXact->activeList, &ptle->link);
+				break;
+			}
 		}
 	}
+
+	ptle->sxact.xmin = xmin;
 
 	return &ptle->sxact;
 }
@@ -3303,6 +3332,7 @@ SetNewSxactGlobalXmin(void)
 	PredXact->SxactGlobalXmin = InvalidTransactionId;
 	PredXact->SxactGlobalXminCount = 0;
 
+elog(NOTICE, "SetNewSxactGlobalXmin!");
 	for (sxact = FirstPredXact(); sxact != NULL; sxact = NextPredXact(sxact))
 	{
 		if (!SxactIsRolledBack(sxact)
@@ -3310,9 +3340,9 @@ SetNewSxactGlobalXmin(void)
 			&& sxact != OldCommittedSxact)
 		{
 			Assert(sxact->xmin != InvalidTransactionId);
-			if (!TransactionIdIsValid(PredXact->SxactGlobalXmin)
-				|| TransactionIdPrecedes(sxact->xmin,
-										 PredXact->SxactGlobalXmin))
+elog(NOTICE, "got xmin = %u", sxact->xmin);
+
+			if (!TransactionIdIsValid(PredXact->SxactGlobalXmin))
 			{
 				PredXact->SxactGlobalXmin = sxact->xmin;
 				PredXact->SxactGlobalXminCount = 1;
@@ -3320,6 +3350,16 @@ SetNewSxactGlobalXmin(void)
 			else if (TransactionIdEquals(sxact->xmin,
 										 PredXact->SxactGlobalXmin))
 				PredXact->SxactGlobalXminCount++;
+			else
+			{
+				/*
+				 * Since activeList is kept in xmin order, as soon as we see a
+				 * later xmin, our work is done.
+				 */
+				Assert(TransactionIdFollows(sxact->xmin,
+											PredXact->SxactGlobalXmin));
+				//break;
+			}
 		}
 	}
 
