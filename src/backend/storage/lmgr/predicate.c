@@ -427,7 +427,7 @@ static SERIALIZABLEXACT *SavedSerializableXact = InvalidSerializableXact;
 
 /* local functions */
 
-static SERIALIZABLEXACT *CreatePredXact(void);
+static SERIALIZABLEXACT *CreatePredXact(TransactionId xmin);
 static void ReleasePredXact(SERIALIZABLEXACT *sxact);
 static SERIALIZABLEXACT *FirstPredXact(void);
 static SERIALIZABLEXACT *NextPredXact(SERIALIZABLEXACT *sxact);
@@ -580,7 +580,7 @@ static SERIALIZABLEXACT *
 CreatePredXact(TransactionId xmin)
 {
 	PredXactListElement ptle;
-	PredXactListElement prev;
+	PredXactListElement tail;
 
 	ptle = (PredXactListElement)
 		SHMQueueNext(&PredXact->availableList,
@@ -605,7 +605,14 @@ CreatePredXact(TransactionId xmin)
 		 * slightly out of order and need to walk back a bit further in the
 		 * list.
 		 */
-		/* XXX walk back here */
+		tail = (PredXactListElement)
+			SHMQueuePrev(&PredXact->activeList,
+						 &PredXact->activeList,
+						 offsetof(PredXactListElementData, link));
+
+		for (;;)
+		{
+		}
 	}
 
 	return &ptle->sxact;
@@ -1280,7 +1287,7 @@ InitPredicateLocks(void)
 			SHMQueueInsertBefore(&(PredXact->availableList),
 								 &(PredXact->element[i].link));
 		}
-		PredXact->OldCommittedSxact = CreatePredXact();
+		PredXact->OldCommittedSxact = CreatePredXact(InvalidTransactionId);
 		SetInvalidVirtualTransactionId(PredXact->OldCommittedSxact->vxid);
 		PredXact->OldCommittedSxact->prepareSeqNo = 0;
 		PredXact->OldCommittedSxact->commitSeqNo = 0;
@@ -1292,7 +1299,6 @@ InitPredicateLocks(void)
 		SHMQueueInit(&PredXact->OldCommittedSxact->possibleUnsafeConflicts);
 		PredXact->OldCommittedSxact->topXid = InvalidTransactionId;
 		PredXact->OldCommittedSxact->finishedBefore = InvalidTransactionId;
-		PredXact->OldCommittedSxact->xmin = InvalidTransactionId;
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
 		PredXact->OldCommittedSxact->pid = 0;
 	}
@@ -1821,7 +1827,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 	do
 	{
-		sxact = CreatePredXact();
+		sxact = CreatePredXact(snapshot->xmin);
 		/* If null, push out committed sxact to SLRU summary & retry. */
 		if (!sxact)
 		{
@@ -1892,7 +1898,6 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	SHMQueueInit(&(sxact->possibleUnsafeConflicts));
 	sxact->topXid = GetTopTransactionIdIfAny();
 	sxact->finishedBefore = InvalidTransactionId;
-	sxact->xmin = snapshot->xmin;
 	sxact->pid = MyProcPid;
 	SHMQueueInit(&(sxact->predicateLocks));
 	SHMQueueElemInit(&(sxact->finishedLink));
@@ -5089,7 +5094,7 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
 		xactRecord = (TwoPhasePredicateXactRecord *) &record->data.xactRecord;
 
 		LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
-		sxact = CreatePredXact();
+		sxact = CreatePredXact(xactRecord->xmin);
 		if (!sxact)
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -5118,7 +5123,6 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
 		SHMQueueElemInit(&(sxact->finishedLink));
 
 		sxact->topXid = xid;
-		sxact->xmin = xactRecord->xmin;
 		sxact->flags = xactRecord->flags;
 		Assert(SxactIsPrepared(sxact));
 		if (!SxactIsReadOnly(sxact))
