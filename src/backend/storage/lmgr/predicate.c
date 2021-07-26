@@ -3331,6 +3331,7 @@ SetNewSxactGlobalXmin(void)
 void
 ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 {
+	bool		partiallyReleasing = false;
 	bool		needToClear;
 	RWConflict	conflict,
 				nextConflict,
@@ -3431,6 +3432,7 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 		else
 		{
 			MySerializableXact->flags |= SXACT_FLAG_PARTIALLY_RELEASED;
+			partiallyReleasing = true;
 			/* ... and proceed to perform the partial release below. */
 		}
 	}
@@ -3681,9 +3683,15 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 	 * serializable transactions completes.  We then find the "new oldest"
 	 * xmin and purge any transactions which finished before this transaction
 	 * was launched.
+	 *
+	 * For parallel queries in read-only transactions, it might run twice.
+	 * We only release the reference on the first call.
 	 */
 	needToClear = false;
-	if (TransactionIdEquals(MySerializableXact->xmin, PredXact->SxactGlobalXmin))
+	if ((partiallyReleasing ||
+		 !SxactIsPartiallyReleased(MySerializableXact)) &&
+		TransactionIdEquals(MySerializableXact->xmin,
+							PredXact->SxactGlobalXmin))
 	{
 		Assert(PredXact->SxactGlobalXminCount > 0);
 		if (--(PredXact->SxactGlobalXminCount) == 0)
