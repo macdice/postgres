@@ -577,9 +577,10 @@ SerializationNeededForWrite(Relation relation)
  * should probably switch to that.
  */
 static SERIALIZABLEXACT *
-CreatePredXact(void)
+CreatePredXact(TransactionId xmin)
 {
 	PredXactListElement ptle;
+	PredXactListElement prev;
 
 	ptle = (PredXactListElement)
 		SHMQueueNext(&PredXact->availableList,
@@ -588,8 +589,25 @@ CreatePredXact(void)
 	if (!ptle)
 		return NULL;
 
+	/* Remove from available list. */
 	SHMQueueDelete(&ptle->link);
-	SHMQueueInsertBefore(&PredXact->activeList, &ptle->link);
+
+	if (SHMQueueIsEmpty(&PredXact->activeList))
+	{
+		/* First active sxact.  Just insert it. */
+		SHMQueueInsertBefore(&PredXact->activeList, &ptle->link);
+	}
+	else
+	{
+		/*
+		 * Maintain sort order.  This almost always just pushes directly onto
+		 * the tail of the list, but it's possible that me might arrive here
+		 * slightly out of order and need to walk back a bit further in the
+		 * list.
+		 */
+		/* XXX walk back here */
+	}
+
 	return &ptle->sxact;
 }
 
