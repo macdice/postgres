@@ -113,6 +113,7 @@ typedef struct SERIALIZABLEXACT
 	TransactionId xmin;			/* the transaction's snapshot xmin */
 	uint32		flags;			/* OR'd combination of values defined below */
 	int			pid;			/* pid of associated process */
+	Oid			dbid;			/* database this transaction is in */
 } SERIALIZABLEXACT;
 
 #define SXACT_FLAG_COMMITTED			0x00000001	/* already committed */

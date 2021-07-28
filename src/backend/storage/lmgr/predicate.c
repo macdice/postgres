@@ -1277,6 +1277,7 @@ InitPredicateLocks(void)
 		PredXact->OldCommittedSxact->xmin = InvalidTransactionId;
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
 		PredXact->OldCommittedSxact->pid = 0;
+		PredXact->OldCommittedSxact->dbid = InvalidOid;
 	}
 	/* This never changes, so let's keep a local copy. */
 	OldCommittedSxact = PredXact->OldCommittedSxact;
@@ -1876,6 +1877,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	sxact->finishedBefore = InvalidTransactionId;
 	sxact->xmin = snapshot->xmin;
 	sxact->pid = MyProcPid;
+	sxact->dbid = MyDatabaseId;
 	SHMQueueInit(&(sxact->predicateLocks));
 	SHMQueueElemInit(&(sxact->finishedLink));
 	sxact->flags = 0;
@@ -1893,12 +1895,24 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 			 othersxact != NULL;
 			 othersxact = NextPredXact(othersxact))
 		{
-			if (!SxactIsCommitted(othersxact)
+			if (othersxact->dbid == MyDatabaseId &&
+				!SxactIsCommitted(othersxact)
 				&& !SxactIsDoomed(othersxact)
 				&& !SxactIsReadOnly(othersxact))
 			{
 				SetPossibleUnsafeConflict(sxact, othersxact);
 			}
+		}
+
+		/*
+		 * If we didn't find any possible conflicts in our database, we can opt
+		 * out (see above).
+		 */
+		if (SHMQueueEmpty(&sxact->possibleUnsafeConflicts))
+		{
+			ReleasePredXact(sxact);
+			LWLockRelease(SerializableXactHashLock);
+			return snapshot;
 		}
 	}
 	else
