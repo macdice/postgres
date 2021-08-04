@@ -91,7 +91,8 @@ char	   *temp_tablespaces = NULL;
 
 
 static void create_tablespace_directories(const char *location,
-										  const Oid tablespaceoid);
+										  const Oid tablespaceoid,
+										  bool missing_ok);
 static bool destroy_tablespace_directories(Oid tablespaceoid, bool redo);
 
 
@@ -369,13 +370,14 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	/* Post creation hook for new tablespace */
 	InvokeObjectPostCreateHook(TableSpaceRelationId, tablespaceoid, 0);
 
-	create_tablespace_directories(location, tablespaceoid);
+	create_tablespace_directories(location, tablespaceoid, stmt->missing_ok);
 
 	/* Record the filesystem change in XLOG */
 	{
 		xl_tblspc_create_rec xlrec;
 
 		xlrec.ts_id = tablespaceoid;
+		xlrec.ts_missing_ok = stmt->missing_ok;
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec,
@@ -588,7 +590,8 @@ DropTableSpace(DropTableSpaceStmt *stmt)
  *	to the specified directory
  */
 static void
-create_tablespace_directories(const char *location, const Oid tablespaceoid)
+create_tablespace_directories(const char *location, const Oid tablespaceoid,
+							  bool missing_ok)
 {
 	char		buffer[MAXPGPATH];
 	char	   *linkloc;
@@ -601,16 +604,28 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid)
 
 	/*
 	 * Attempt to coerce target directory to safe permissions.  If this fails,
-	 * it doesn't exist or has the wrong owner.
+	 * it doesn't exist or has the wrong owner.  If NEW LOCATION, we'll create
+	 * the directory.
 	 */
 	if (chmod(location, pg_dir_create_mode) != 0)
 	{
 		if (errno == ENOENT)
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_FILE),
-					 errmsg("directory \"%s\" does not exist", location),
-					 InRecovery ? errhint("Create this directory for the tablespace before "
-										  "restarting the server.") : 0));
+		{
+			if (missing_ok)
+			{
+				if (mkdir(location, pg_dir_create_mode) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_FILE),
+							 errmsg("could not create directory \"%s\"",
+									location)));
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FILE),
+						 errmsg("directory \"%s\" does not exist", location),
+						 InRecovery ? errhint("Create this directory for the tablespace before "
+											  "restarting the server.") : 0));
+		}
 		else
 			ereport(ERROR,
 					(errcode_for_file_access(),
@@ -1537,8 +1552,9 @@ tblspc_redo(XLogReaderState *record)
 	{
 		xl_tblspc_create_rec *xlrec = (xl_tblspc_create_rec *) XLogRecGetData(record);
 		char	   *location = xlrec->ts_path;
+		bool		missing_ok = xlrec->ts_missing_ok;
 
-		create_tablespace_directories(location, xlrec->ts_id);
+		create_tablespace_directories(location, xlrec->ts_id, missing_ok);
 	}
 	else if (info == XLOG_TBLSPC_DROP)
 	{
