@@ -93,6 +93,10 @@
 #include <pthread.h>
 #endif
 
+#ifdef USE_POSIX_SPAWN
+#include <spawn.h>
+#endif
+
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "catalog/pg_control.h"
@@ -4585,6 +4589,10 @@ internal_forkexec(int argc, char *argv[], Port *port)
 	char		tmpfilename[MAXPGPATH];
 	BackendParameters param;
 	FILE	   *fp;
+#ifdef USE_POSIX_SPAWN
+	posix_spawn_file_actions_t actions;
+	posix_spawnattr_t attrs;
+#endif
 
 	if (!save_backend_variables(&param, port))
 		return -1;				/* log made by save_backend_variables */
@@ -4642,6 +4650,30 @@ internal_forkexec(int argc, char *argv[], Port *port)
 	/* Insert temp file name after --fork argument */
 	argv[2] = tmpfilename;
 
+#ifdef USE_POSIX_SPAWN
+	posix_spawn_file_actions_init(&actions);
+	posix_spawnattr_init(&attrs);
+#ifdef USE_POSIX_SPAWN_DISABLE_ASLR
+	/*
+	 * Undocumented magic.  See bsd/sys/spawn.h and bsd/kern/kern_exec.c in the
+	 * Darwin sources at https://github.com/apple/darwin-xnu.
+	 */
+	if ((errno = posix_spawnattr_setflags(&attrs, 0x100)) != 0)
+		elog(LOG, "could not set undocumented ASLR disable flag when spawning backend: %m");
+#endif
+	errno = posix_spawn(&pid,
+						postgres_exec_path,
+						&actions,
+						&attrs,
+						argv,
+						NULL);
+	if (errno != 0)
+	{
+			ereport(LOG,
+					(errmsg("could not spawn server process \"%s\": %m",
+							postgres_exec_path)));
+	}
+#else
 	/* Fire off execv in child */
 	if ((pid = fork_process()) == 0)
 	{
@@ -4654,6 +4686,7 @@ internal_forkexec(int argc, char *argv[], Port *port)
 			exit(1);
 		}
 	}
+#endif
 
 	return pid;					/* Parent returns pid, or -1 on fork failure */
 }

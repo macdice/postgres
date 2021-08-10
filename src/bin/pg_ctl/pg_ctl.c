@@ -18,6 +18,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifdef USE_POSIX_SPAWN
+#include <spawn.h>
+#endif
+
 #ifdef HAVE_SYS_RESOURCE_H
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -443,14 +447,65 @@ static pgpid_t
 start_postmaster(void)
 {
 	char		cmd[MAXPGPATH];
+#ifdef USE_POSIX_SPAWN
+	posix_spawn_file_actions_t actions;
+	posix_spawnattr_t attrs;
+#endif
 
 #ifndef WIN32
-	pgpid_t		pm_pid;
+	pid_t		pm_pid;
 
 	/* Flush stdio channels just before fork, to avoid double-output problems */
 	fflush(stdout);
 	fflush(stderr);
 
+	/*
+	 * Since there might be quotes to handle here, it is easier simply to pass
+	 * everything to a shell to process them.  Use exec so that the postmaster
+	 * has the same PID as the current child process.
+	 */
+	if (log_file != NULL)
+		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s%s < \"%s\" >> \"%s\" 2>&1",
+				 exec_path, pgdata_opt, post_opts,
+				 DEVNULL, log_file);
+	else
+		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s%s < \"%s\" 2>&1",
+				 exec_path, pgdata_opt, post_opts, DEVNULL);
+
+#ifdef USE_POSIX_SPAWN
+	posix_spawn_file_actions_init(&actions);
+	posix_spawnattr_init(&attrs);
+#ifdef USE_POSIX_SPAWN_DISABLE_ASLR
+	/*
+	 * Undocumented magic.  See bsd/sys/spawn.h and bsd/kern/kern_exec.c in the
+	 * Darwin sources at https://github.com/apple/darwin-xnu.
+	 */
+	if ((errno = posix_spawnattr_setflags(&attrs, 0x100)) != 0)
+		write_stderr(_("could not set undocumented ASLR disable flag when spawning postmaster: %s"),
+					 strerror(errno));
+#endif
+	{
+		char *args[] = {
+			"/bin/sh",
+			"-c",
+			cmd,
+			NULL
+		};
+		errno = posix_spawn(&pm_pid,
+							"/bin/sh",
+							&actions,
+							&attrs,
+							args,
+							NULL);
+	}
+	if (errno != 0)
+	{
+		write_stderr(_("%s: could not start server: %s\n"),
+					 progname, strerror(errno));
+		exit(1);
+	}
+	return pm_pid;
+#else
 	pm_pid = fork();
 	if (pm_pid < 0)
 	{
@@ -481,19 +536,6 @@ start_postmaster(void)
 	}
 #endif
 
-	/*
-	 * Since there might be quotes to handle here, it is easier simply to pass
-	 * everything to a shell to process them.  Use exec so that the postmaster
-	 * has the same PID as the current child process.
-	 */
-	if (log_file != NULL)
-		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s%s < \"%s\" >> \"%s\" 2>&1",
-				 exec_path, pgdata_opt, post_opts,
-				 DEVNULL, log_file);
-	else
-		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s%s < \"%s\" 2>&1",
-				 exec_path, pgdata_opt, post_opts, DEVNULL);
-
 	(void) execl("/bin/sh", "/bin/sh", "-c", cmd, (char *) NULL);
 
 	/* exec failed */
@@ -502,6 +544,7 @@ start_postmaster(void)
 	exit(1);
 
 	return 0;					/* keep dumb compilers quiet */
+#endif
 
 #else							/* WIN32 */
 
