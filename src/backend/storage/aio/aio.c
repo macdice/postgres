@@ -51,7 +51,7 @@ static void pgaio_io_call_local_callback(PgAioInProgress *io, bool in_error);
 static int pgaio_synchronous_submit(void);
 static void pgaio_io_wait_ref_int(PgAioIoRef *ref, bool call_shared, bool call_local);
 static void pgaio_io_retry_soft_failed(PgAioInProgress *io, uint64 ref_generation);
-static void pgaio_wait_for_issued_internal(int n, int fd);
+static void pgaio_wait_for_issued(void);
 static inline PgAioInProgress *pgaio_io_from_ref(PgAioIoRef *ref, uint64 *ref_generation);
 
 
@@ -282,7 +282,7 @@ pgaio_postmaster_before_child_exit(int code, Datum arg)
 	 * are still in progress when exiting. Other's don't provide access to the
 	 * results of such IOs.
 	 */
-	pgaio_wait_for_issued_internal(-1, -1);
+	pgaio_wait_for_issued();
 	pgaio_complete_ios(true);
 
 	elog(DEBUG2, "aio before shmem exit: end");
@@ -933,19 +933,15 @@ pgaio_closing_possibly_referenced(void)
 
 /*
  * Should be called before closing any fd that might have asynchronous I/O
- * operations.  Since some POSIX AIO implementations cancel IOs (or worse,
- * confuse files) when the fd is concurrently closed, we'll default to waiting
- * for anything in flight on this fd to complete first, except on systems where
- * we're sure that isn't necessary.
+ * operations in progress.  Some implementations may need to drain the
+ * descriptor first.
  */
 void
 pgaio_closing_fd(int fd)
 {
 #ifdef USE_POSIX_AIO
-#if !defined(__freebsd__)
 	if (io_method == IOMETHOD_POSIX)
-		pgaio_wait_for_issued_internal(-1, fd);
-#endif
+		pgaio_posix_aio_closing_fd(fd);
 #endif
 }
 
@@ -1049,12 +1045,10 @@ pgaio_apply_backend_limit(void)
 }
 
 /*
- * Workhorse routine to wait for all IOs issued by this process to complete.
- * If n >= 0, then only wait for at most n IOs.  If fd is >= 0, then only wait
- * for IOs on the given descriptor.
+ * Wait for all IOs issued by this process to complete.
  */
 static void
-pgaio_wait_for_issued_internal(int n, int fd)
+pgaio_wait_for_issued(void)
 {
 	dlist_iter iter;
 
@@ -1062,16 +1056,13 @@ pgaio_wait_for_issued_internal(int n, int fd)
 	{
 		PgAioInProgress *io = dlist_container(PgAioInProgress, owner_node, iter.cur);
 
-		if (io->flags & PGAIOIP_INFLIGHT &&
-			(fd < 0 || pgaio_io_matches_fd(io, fd)))
+		if (io->flags & PGAIOIP_INFLIGHT)
 		{
 			PgAioIoRef ref;
 
 			pgaio_io_ref_internal(io, &ref);
 			pgaio_io_print(io, NULL);
 			pgaio_io_wait_ref(&ref, false);
-			if (n > 0 && --n == 0)
-				return;
 		}
 	}
 
@@ -1086,8 +1077,7 @@ pgaio_wait_for_issued_internal(int n, int fd)
 		{
 			io = dlist_container(PgAioInProgress, owner_node, iter.cur);
 
-			if (io->flags & PGAIOIP_INFLIGHT &&
-				(fd < 0 || pgaio_io_matches_fd(io, fd)))
+			if (io->flags & PGAIOIP_INFLIGHT)
 			{
 				pgaio_io_ref_internal(io, &ref);
 				break;
@@ -1104,8 +1094,6 @@ pgaio_wait_for_issued_internal(int n, int fd)
 		pgaio_io_wait_ref(&ref, false);
 		pgaio_complete_ios(false);
 		pgaio_transfer_foreign_to_local();
-		if (n > 0 && --n == 0)
-			return;
 	}
 }
 

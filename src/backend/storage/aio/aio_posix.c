@@ -1255,3 +1255,48 @@ pgaio_posix_aio_enable_interrupt(void)
 	}
 }
 
+/*
+ * POSIX leaves it unspecified whether the OS cancels IOs when you close the
+ * underlying descriptor.  Some do (macOS), some don't (FreeBSD) and one starts
+ * mixing up unrelated fds (glibc).
+ */
+#if !defined(__freebsd__)
+#define PGAIO_POSIX_AIO_DRAIN_FDS_BEFORE_CLOSING
+#endif
+
+/*
+ * Drain all in progress IOs from a file descriptor, if necessary on this
+ * platform.
+ */
+void
+pgaio_posix_aio_closing_fd(int fd)
+{
+#if defined(PGAIO_POSIX_AIO_DRAIN_FDS_BEFORE_CLOSING)
+	struct aiocb *iocb;
+	bool waiting;
+
+	START_CRIT_SECTION();
+	pgaio_posix_aio_disable_interrupt();
+	for (;;)
+	{
+		waiting = false;
+		for (int i = 0; i < pgaio_posix_aio_num_iocbs; ++i)
+		{
+			iocb = pgaio_posix_aio_iocbs[i];
+			if (iocb->aio_fildes == fd)
+			{
+				waiting = true;
+				break;
+			}
+		}
+
+		if (!waiting)
+			break;
+
+		pgaio_posix_aio_drain_internal(true /* block */,
+									   false /* in_interrupt_handler */);
+	}
+	pgaio_posix_aio_enable_interrupt();
+	END_CRIT_SECTION();
+#endif
+}

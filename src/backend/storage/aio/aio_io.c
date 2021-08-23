@@ -499,31 +499,6 @@ pgaio_fill_iov(struct iovec *iovs, const PgAioInProgress *io)
 	return iov + 1 - iovs;
 }
 
-bool
-pgaio_io_matches_fd(PgAioInProgress *io, int fd)
-{
-#ifdef USE_POSIX_AIO
-	/* XXX review sanity of this */
-	/* We only want to match IOs that were submitted by this process. */
-	if (io_method != IOMETHOD_POSIX || io->owner_id != my_aio_id)
-		return false;
-#endif
-
-	switch (io->op)
-	{
-		case PGAIO_OP_READ:
-			return fd == io->op_data.read.fd;
-		case PGAIO_OP_WRITE:
-			return fd == io->op_data.write.fd;
-		case PGAIO_OP_FSYNC:
-			return fd == io->op_data.fsync.fd;
-		case PGAIO_OP_FLUSH_RANGE:
-			return fd == io->op_data.flush_range.fd;
-		default:
-			return false;
-	}
-}
-
 /*
  * Run an IO with a traditional blocking system call.  This is used by worker
  * mode to simulate AIO in worker processes, but it can also be used in other

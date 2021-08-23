@@ -582,7 +582,6 @@ static inline bool pgaio_io_recycled(PgAioInProgress *io, uint64 ref_generation,
 extern void pgaio_combine_pending(void);
 extern void pgaio_process_io_completion(PgAioInProgress *io, int result);
 extern int pgaio_fill_iov(struct iovec *iovs, const PgAioInProgress *io);
-extern bool pgaio_io_matches_fd(PgAioInProgress *io, int fd);
 extern void pgaio_do_synchronously(PgAioInProgress *io);
 extern const char *pgaio_io_operation_string(PgAioOp op);
 
@@ -619,6 +618,7 @@ extern int pgaio_posix_aio_submit(int max_submit, bool drain);
 extern void pgaio_posix_aio_wait_one(PgAioInProgress *io, uint64 ref_generation);
 extern void pgaio_posix_aio_io_retry(PgAioInProgress *io);
 extern int pgaio_posix_aio_drain(bool block);
+extern void pgaio_posix_aio_closing_fd(int fd);
 
 #endif
 
