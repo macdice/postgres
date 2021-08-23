@@ -82,8 +82,7 @@ static void pgaio_posix_aio_submit_one(PgAioInProgress * io,
 									   pgaio_posix_aio_listio_buffer * listio_buffer);
 static int	pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb);
 static int	pgaio_posix_aio_start_rw(PgAioInProgress * io,
-									 pgaio_posix_aio_listio_buffer * lb,
-									 int lio_opcode);
+									 pgaio_posix_aio_listio_buffer * lb);
 static void pgaio_posix_aio_kernel_io_done(PgAioInProgress * io,
 										   int result,
 										   bool in_interrupt_handler);
@@ -300,13 +299,13 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 			iocb->aio_fildes = io->op_data.read.fd;
 			iocb->aio_offset = io->op_data.read.offset +
 				io->op_data.read.already_done;
-			rc = pgaio_posix_aio_start_rw(io, listio_buffer, LIO_READ);
+			rc = pgaio_posix_aio_start_rw(io, listio_buffer);
 			break;
 		case PGAIO_OP_WRITE:
 			iocb->aio_fildes = io->op_data.write.fd;
 			iocb->aio_offset = io->op_data.write.offset +
 				io->op_data.write.already_done;
-			rc = pgaio_posix_aio_start_rw(io, listio_buffer, LIO_WRITE);
+			rc = pgaio_posix_aio_start_rw(io, listio_buffer);
 			break;
 		case PGAIO_OP_FSYNC:
 			iocb->aio_fildes = io->op_data.fsync.fd;
@@ -460,8 +459,7 @@ pgaio_posix_aio_add_listio(pgaio_posix_aio_listio_buffer * lb, PgAioInProgress *
  */
 static int
 pgaio_posix_aio_start_rw(PgAioInProgress * io,
-						 pgaio_posix_aio_listio_buffer * lb,
-						 int lio_opcode)
+						 pgaio_posix_aio_listio_buffer * lb)
 {
 	struct aiocb *cb = iocb_for_io(io);
 	struct iovec iov[IOV_MAX];
@@ -475,7 +473,7 @@ pgaio_posix_aio_start_rw(PgAioInProgress * io,
 		/* FreeBSD supports async readv/writev in an lio batch. */
 		cb->aio_iov = iov;	/* this will be copied */
 		cb->aio_iovcnt = iovcnt;
-		cb->aio_lio_opcode = lio_opcode == LIO_WRITE ? LIO_WRITEV : LIO_READV;
+		cb->aio_lio_opcode = io->op == PGAIO_OP_WRITE ? LIO_WRITEV : LIO_READV;
 		return pgaio_posix_aio_add_listio(lb, io);
 #endif
 
@@ -493,7 +491,7 @@ pgaio_posix_aio_start_rw(PgAioInProgress * io,
 		Assert(iovcnt == 1);
 		cb->aio_buf = iov[0].iov_base;
 		cb->aio_nbytes = iov[0].iov_len;
-		cb->aio_lio_opcode = lio_opcode;
+		cb->aio_lio_opcode = io->op == PGAIO_OP_WRITE ? LIO_WRITE : LIO_READ;
 		return pgaio_posix_aio_add_listio(lb, io);
 	}
 }
