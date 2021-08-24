@@ -11,6 +11,10 @@
  * infrastructure for reopening the file, and must processed synchronously by
  * the client code when submitted.
  *
+ * So that the submitter can make just one system call when submitting a batch
+ * of IOs, wakeups "fan out"; each woken backend can wake two more.  XXX This
+ * could be improved by using futexes instead of latches to wake N waiters.
+ *
  * This method of AIO is available in all builds on all operating systems, and
  * is the default.
  *
@@ -28,9 +32,11 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_bitutils.h"
 #include "postmaster/interrupt.h"
 #include "storage/aio_internal.h"
 #include "storage/condition_variable.h"
+#include "storage/latch.h"
 #include "storage/shmem.h"
 #include "tcop/tcopprot.h"
 
@@ -41,24 +47,70 @@ int io_workers;
 
 int MyIoWorkerId;
 
+/* How many workers should each worker wake up if needed? */
+#define IO_WORKER_WAKEUP_FANOUT 2
+
+typedef struct AioWorkerSubmissionQueue
+{
+	uint32		size;
+	uint32		mask;
+	uint32		head;
+	uint32		tail;
+	uint32		ios[FLEXIBLE_ARRAY_MEMBER];
+} AioWorkerSubmissionQueue;
+
+typedef struct AioWorkerSlot
+{
+	Latch	   *latch;
+} AioWorkerSlot;
+
+typedef struct AioWorkerControl
+{
+	uint64		idle_worker_mask;
+	AioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
+} AioWorkerControl;
+
+static AioWorkerSubmissionQueue *io_worker_submission_queue;
+static AioWorkerControl *io_worker_control;
 
 Size
 AioWorkerShmemSize(void)
 {
-	return squeue32_estimate(io_worker_queue_size);
+	return
+		offsetof(AioWorkerSubmissionQueue, ios) +
+		sizeof(uint32) * io_worker_queue_size +
+		offsetof(AioWorkerControl, workers) +
+		sizeof(AioWorkerSlot) * io_workers;
 }
 
 void
 AioWorkerShmemInit(void)
 {
 	bool found;
+	int size;
 
-	aio_ctl->worker_submission_queue = (squeue32 *)
-		ShmemInitStruct("AioWorkerSubmissionQueue", AioWorkerShmemSize(),
+	/* Round size up to next power of two so we can make a mask. */
+	size = pg_nextpower2_32(io_worker_queue_size);
+
+	io_worker_submission_queue =
+		ShmemInitStruct("AioWorkerSubmissionQueue",
+						offsetof(AioWorkerSubmissionQueue, ios) +
+						sizeof(uint32) * size,
 						&found);
 	Assert(!found);
-	squeue32_init(aio_ctl->worker_submission_queue, io_worker_queue_size);
-	ConditionVariableInit(&aio_ctl->worker_submission_queue_not_empty);
+	io_worker_submission_queue->size = size;
+	io_worker_submission_queue->head = 0;
+	io_worker_submission_queue->tail = 0;
+
+	io_worker_control =
+		ShmemInitStruct("AioWorkerControl",
+						offsetof(AioWorkerControl, workers) +
+						sizeof(AioWorkerSlot) * io_workers,
+						&found);
+	Assert(!found);
+	io_worker_control->idle_worker_mask = 0;
+	for (int i = 0; i < io_workers; ++i)
+		io_worker_control->workers[i].latch = NULL;
 }
 
 static bool
@@ -72,36 +124,123 @@ pgaio_worker_need_synchronous(PgAioInProgress *io)
 	return !pgaio_io_has_shared_open(io);
 }
 
-static void
-pgaio_worker_submit_one(PgAioInProgress *io)
+static int
+pgaio_choose_idle_worker(void)
 {
-	uint32 io_index;
+	int worker;
 
-	io_index = io - aio_ctl->in_progress_io;
+	if (io_worker_control->idle_worker_mask == 0)
+		return -1;
 
-	if (pgaio_worker_need_synchronous(io))
+	/* Find the lowest bit position, and clear it. */
+	worker = pg_rightmost_one_pos64(io_worker_control->idle_worker_mask);
+	io_worker_control->idle_worker_mask &= ~(1 << worker);
+
+	return worker;
+};
+
+static bool
+pgaio_worker_submission_queue_insert(PgAioInProgress *io)
+{
+	AioWorkerSubmissionQueue *queue;
+	uint32 new_head;
+
+	queue = io_worker_submission_queue;
+	new_head = (queue->head + 1) & (queue->size - 1);
+	if (new_head == queue->tail)
+		return false;		/* full */
+
+	queue->ios[queue->head] = pgaio_io_id(io);
+	queue->head = new_head;
+
+	return true;
+}
+
+static uint32
+pgaio_worker_submission_queue_consume(void)
+{
+	AioWorkerSubmissionQueue *queue;
+	uint32 result;
+
+	queue = io_worker_submission_queue;
+	if (queue->tail == queue->head)
+		return UINT32_MAX;	/* empty */
+
+	result = queue->ios[queue->tail];
+	queue->tail = (queue->tail + 1) & (queue->size - 1);
+
+	return result;
+}
+
+static uint32
+pgaio_worker_submission_queue_depth(void)
+{
+	uint32 head;
+	uint32 tail;
+
+	head = io_worker_submission_queue->head;
+	tail = io_worker_submission_queue->tail;
+
+	if (tail > head)
+		head += io_worker_submission_queue->size;
+
+	Assert(head >= tail);
+
+	return head - tail;
+}
+
+static void
+pgaio_worker_submit_internal(PgAioInProgress *ios[], int nios)
+{
+	PgAioInProgress *synchronous_ios[PGAIO_SUBMIT_BATCH_SIZE];
+	int nsync = 0;
+	Latch *wakeup = NULL;
+	int worker;
+
+	Assert(nios <= PGAIO_SUBMIT_BATCH_SIZE);
+
+	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+	for (int i = 0; i < nios; ++i)
 	{
-		/* Perform the IO synchronously in this process. */
-		pgaio_do_synchronously(io);
+		if (pgaio_worker_need_synchronous(ios[i]) ||
+			!pgaio_worker_submission_queue_insert(ios[i]))
+		{
+			/*
+			 * We'll do it synchronously, but only after we've sent as many as
+			 * we can to workers, to maximize concurrency.
+			 */
+			synchronous_ios[nsync++] = ios[i];
+			continue;
+		}
+
+		if (wakeup == NULL)
+		{
+			/* Choose an idle worker to wake up if we haven't already. */
+			worker = pgaio_choose_idle_worker();
+			if (worker >= 0)
+				wakeup = io_worker_control->workers[worker].latch;
+		}
 	}
-	else
+	LWLockRelease(AioWorkerSubmissionQueueLock);
+
+	if (wakeup)
+		SetLatch(wakeup);
+
+	/* Run whatever is left synchronously. */
+	if (nsync > 0)
 	{
-		/*
-		 * Push it on the submission queue and wake a worker, but if the
-		 * queue is full then handle it synchronously rather than waiting.
-		 * XXX Is this fair enough?  XXX Write a smarter work distributor.
-		 */
-		if (squeue32_enqueue(aio_ctl->worker_submission_queue, io_index))
-			ConditionVariableSignal(&aio_ctl->worker_submission_queue_not_empty);
-		else
-			pgaio_do_synchronously(io);
+		for (int i = 0; i < nsync; ++i)
+		{
+			pgaio_do_synchronously(synchronous_ios[i]);
+			pgaio_complete_ios(false);
+		}
 	}
-	pgaio_complete_ios(false);
 }
 
 int
 pgaio_worker_submit(int max_submit, bool drain)
 {
+	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
 	int nios = 0;
 
 	while (!dlist_is_empty(&my_aio->pending) && nios < max_submit)
@@ -114,9 +253,12 @@ pgaio_worker_submit(int max_submit, bool drain)
 
 		pgaio_io_prepare_submit(io, io->ring);
 
-		pgaio_worker_submit_one(io);
-		++nios;
+		Assert(nios < PGAIO_SUBMIT_BATCH_SIZE);
+
+		ios[nios++] = io;
 	}
+
+	pgaio_worker_submit_internal(ios, nios);
 
 	return nios;
 }
@@ -126,7 +268,7 @@ pgaio_worker_io_retry(PgAioInProgress *io)
 {
 	WRITE_ONCE_F(io->flags) |= PGAIOIP_INFLIGHT;
 
-	pgaio_worker_submit_one(io);
+	pgaio_worker_submit_internal(&io, 1);
 }
 
 void
@@ -144,25 +286,52 @@ IoWorkerMain(void)
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
-	pqsignal(SIGUSR2, die);
+	pqsignal(SIGUSR2, SignalHandlerForShutdownRequest);
 	PG_SETMASK(&UnBlockSig);
 
-	for (;;)
+	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+	io_worker_control->idle_worker_mask |= (1 << MyIoWorkerId);
+	io_worker_control->workers[MyIoWorkerId].latch = MyLatch;
+	LWLockRelease(AioWorkerSubmissionQueueLock);
+
+	while (!ShutdownRequestPending)
 	{
 		uint32 io_index;
+		Latch *latches[IO_WORKER_WAKEUP_FANOUT];
+		int nlatches = 0;
+		int nwakeups = 0;
+		int worker;
 
-		if (squeue32_dequeue(aio_ctl->worker_submission_queue, &io_index))
+		/* Try to get a job to do. */
+		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+		if ((io_index = pgaio_worker_submission_queue_consume()) == UINT32_MAX)
+		{
+			/* Nothing to do.  Mark self idle. */
+			io_worker_control->idle_worker_mask |= (1 << MyIoWorkerId);
+		}
+		else
+		{
+			/* Got one.  Clear idle flag. */
+			io_worker_control->idle_worker_mask &= ~(1 << MyIoWorkerId);
+
+			/* See if we can wake up some peers. */
+			nwakeups = Min(pgaio_worker_submission_queue_depth(),
+						   IO_WORKER_WAKEUP_FANOUT);
+			for (int i = 0; i < nwakeups; ++i)
+			{
+				if ((worker = pgaio_choose_idle_worker()) < 0)
+					break;
+				latches[nlatches++] = io_worker_control->workers[worker].latch;
+			}
+		}
+		LWLockRelease(AioWorkerSubmissionQueueLock);
+
+		for (int i = 0; i < nlatches; ++i)
+			SetLatch(latches[i]);
+
+		if (io_index != UINT32_MAX)
 		{
 			PgAioInProgress *io = &aio_ctl->in_progress_io[io_index];
-
-			/* Do IO and completions.  This'll signal anyone waiting. */
-			/*
-			 * XXX I think we might need this to be in a critical section, so
-			 * that we can't lose track of an IO without taking the system
-			 * down.  But we're not allowed to, because the IO handler might
-			 * reach smgropen() which allocates.
-			 */
-			ConditionVariableCancelSleep();
 
 			pgaio_io_call_shared_open(io);
 			pgaio_do_synchronously(io);
@@ -170,9 +339,16 @@ IoWorkerMain(void)
 		}
 		else
 		{
-			/* Nothing in the queue.  Go to sleep. */
-			ConditionVariableSleep(&aio_ctl->worker_submission_queue_not_empty,
-								   WAIT_EVENT_IO_WORKER_MAIN);
+			WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, -1,
+					  WAIT_EVENT_IO_WORKER_MAIN);
+			ResetLatch(MyLatch);
+			CHECK_FOR_INTERRUPTS();
 		}
 	}
+
+	/* XXX Should do this in error cleanup! */
+	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+	io_worker_control->idle_worker_mask &= ~(1 << MyIoWorkerId);
+	io_worker_control->workers[MyIoWorkerId].latch = NULL;
+	LWLockRelease(AioWorkerSubmissionQueueLock);
 }

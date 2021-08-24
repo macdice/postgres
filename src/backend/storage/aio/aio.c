@@ -22,7 +22,6 @@
  */
 #include "postgres.h"
 
-#include "lib/squeue32.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "nodes/memnodes.h"

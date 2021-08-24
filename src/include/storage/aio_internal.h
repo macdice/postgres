@@ -17,7 +17,6 @@
 #define AIO_INTERNAL_H
 
 #include "lib/ilist.h"
-#include "lib/squeue32.h"
 #include "port/atomics.h"
 #include "port/pg_iovec.h"
 #include "storage/aio.h"
@@ -543,10 +542,6 @@ typedef struct PgAioCtl
 	PgAioBounceBuffer *bounce_buffers;
 	dlist_head unused_bounce_buffers;
 	uint32 unused_bounce_buffers_count;
-
-	/* Queue for IO submissions in worker mode. */
-	ConditionVariable worker_submission_queue_not_empty;
-	squeue32 *worker_submission_queue;
 
 	int backend_state_count;
 	PgAioPerBackend *backend_state;
