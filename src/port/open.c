@@ -82,6 +82,20 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 	//Assert(pgwin32_signal_event != NULL);	/* small chance of pg_usleep() */
 #endif
 
+	/*
+	 * In backend processes, we open all files with FILE_FLAG_OVERLAPPED so
+	 * that aio_windows.c can initiate asynchronous I/O.  This makes all I/O
+	 * asynchronous, so the pg_read() and pg_write() wrappers cope by
+	 * explictly waiting for completion.
+	 *
+	 * XXX What happens to code that calls plain old read() or write()?!
+	 */
+#ifdef FRONTEND
+#define OVERLAPPED_IN_BACKEND 0
+#else
+#define OVERLAPPED_IN_BACKEND FILE_FLAG_OVERLAPPED
+#endif
+
 	sa.nLength = sizeof(sa);
 	sa.bInheritHandle = TRUE;
 	sa.lpSecurityDescriptor = NULL;
@@ -101,7 +115,8 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 						   ((fileFlags & _O_SHORT_LIVED) ? FILE_ATTRIBUTE_TEMPORARY : 0) |
 						   ((fileFlags & O_TEMPORARY) ? FILE_FLAG_DELETE_ON_CLOSE : 0) |
 						   ((fileFlags & O_DIRECT) ? FILE_FLAG_NO_BUFFERING : 0) |
-						   ((fileFlags & O_DSYNC) ? FILE_FLAG_WRITE_THROUGH : 0),
+						   ((fileFlags & O_DSYNC) ? FILE_FLAG_WRITE_THROUGH : 0) |
+						   OVERLAPPED_IN_BACKEND,
 						   NULL)) == INVALID_HANDLE_VALUE)
 	{
 		/*

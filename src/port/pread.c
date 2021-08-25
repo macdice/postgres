@@ -31,6 +31,13 @@ pg_pread(int fd, void *buf, size_t size, off_t offset)
 	HANDLE		handle;
 	DWORD		result;
 
+#ifndef FRONTEND
+	static HANDLE completion_handle = INVALID_HANDLE_VALUE;
+
+	if (completion_handle == INVALID_HANDLE_VALUE)
+		completion_handle = CreateHandle() | 1;		/* suppress IOCP */
+#endif
+
 	handle = (HANDLE) _get_osfhandle(fd);
 	if (handle == INVALID_HANDLE_VALUE)
 	{
@@ -39,6 +46,9 @@ pg_pread(int fd, void *buf, size_t size, off_t offset)
 	}
 
 	overlapped.Offset = offset;
+#ifndef FRONTEND
+	overlapped.Handle = completion_handle;
+#endif
 	if (!ReadFile(handle, buf, size, &result, &overlapped))
 	{
 		if (GetLastError() == ERROR_HANDLE_EOF)
@@ -47,6 +57,14 @@ pg_pread(int fd, void *buf, size_t size, off_t offset)
 		_dosmaperr(GetLastError());
 		return -1;
 	}
+
+#ifndef FRONTEND
+	if (!GetOverlappedResult(handle, &overlapped, &result, TRUE))
+	{
+		_dosmaperr(GetLastError());
+		return -1;
+	}
+#endif
 
 	return result;
 #else

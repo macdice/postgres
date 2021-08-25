@@ -339,6 +339,21 @@ struct PgAioInProgress
 #endif
 		} posix_aio;
 #endif
+#ifdef WIN32
+		struct
+		{
+			OVERLAPPED overlapped;
+
+			/* Atomic control flags used to negotiate completer. */
+			pg_atomic_uint64 flags;
+
+			uint32 merge_head_idx;
+
+			/* Raw result from the kernel, if known. */
+			volatile int raw_result;
+
+		} windows;
+#endif
 	} io_method_data;
 	union
 	{
@@ -585,6 +600,9 @@ extern const IoMethodOps pgaio_uring_ops;
 #endif
 #ifdef USE_POSIX_AIO
 extern const IoMethodOps pgaio_posix_aio_ops;
+#endif
+#ifdef WIN32
+extern const IoMethodOps pgaio_windows_ops;
 #endif
 
 /* global list of in-progress IO */

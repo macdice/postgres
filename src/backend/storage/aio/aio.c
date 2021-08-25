@@ -83,6 +83,9 @@ const struct config_enum_entry io_method_options[] = {
 #ifdef USE_POSIX_AIO
 	{"posix_aio", IOMETHOD_POSIX_AIO, false},
 #endif
+#ifdef WIN32
+	{"windows", IOMETHOD_WINDOWS, false},
+#endif
 	{NULL, 0, false}
 };
 
@@ -92,6 +95,9 @@ static const IoMethodOps *pgaio_ops_table[] = {
 #endif
 #ifdef USE_LIBURING
 	[IOMETHOD_IO_URING] = &pgaio_uring_ops,
+#endif
+#ifdef WIN32
+	[IOMETHOD_WINDOWS] = &pgaio_windows_ops,
 #endif
 	[IOMETHOD_WORKER] = &pgaio_worker_ops
 };
