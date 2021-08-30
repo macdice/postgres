@@ -427,15 +427,15 @@ pgaio_windows_wait_one(PgAioContext *context,
 			 * or this is a later generation and we'll detect that in the next
 			 * loop.  Wait on the IO.
 			 */
+			ConditionvariablePrepareToSleep(&io->cv);
 			if (pgaio_io_recycled(io, ref_generation, &flags) ||
 				!(flags & PGAIOIP_INFLIGHT))
 				break;
 			ConditionVariableSleep(&io->cv,
 								   WAIT_EVENT_AIO_IO_COMPLETE_ONE);
 		}
-		pgaio_complete_ios(false);
 	}
-
+	pgaio_complete_ios(false);
 	ConditionVariableCancelSleep();
 }
 
