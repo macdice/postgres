@@ -578,7 +578,7 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 		else if (flags & PGAIO_WINDOWS_AIO_FLAG_REQUESTED)
 		{
 
-			if (started_waiting)
+			if (waiting)
 			{
 				Assert(completer_id == my_aio_id);
 
