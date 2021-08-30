@@ -536,6 +536,7 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 	uint32		submitter_id;
 	uint32		completer_id;
 	uint64		flags;
+	bool		waiting = false;
 
 	for (;;)
 	{
@@ -571,13 +572,16 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 					continue;	/* lost race, try again */
 
 				/* Go around again. */
+				waiting = true;
 			}
 		}
 		else if (flags & PGAIO_WINDOWS_AIO_FLAG_REQUESTED)
 		{
 
-			if (completer_id == my_aio_id)
+			if (started_waiting)
 			{
+				Assert(completer_id == my_aio_id);
+
 				/*
 				 * We're waiting for the IOCP thread to write the result and
 				 * set our latch.
