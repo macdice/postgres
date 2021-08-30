@@ -5016,6 +5016,10 @@ SubPostmasterMain(int argc, char *argv[])
 	/* Close the postmaster's sockets (as soon as we know them) */
 	ClosePostmasterPorts(strcmp(argv[1], "--forklog") == 0);
 
+
+	/* Read in remaining GUC variables */
+	read_nondefault_variables();
+
 	/* Setup as postmaster child */
 	InitPostmasterChild();
 
@@ -5049,9 +5053,6 @@ SubPostmasterMain(int argc, char *argv[])
 		AutovacuumLauncherIAm();
 	if (strcmp(argv[1], "--forkavworker") == 0)
 		AutovacuumWorkerIAm();
-
-	/* Read in remaining GUC variables */
-	read_nondefault_variables();
 
 	/*
 	 * Check that the data directory looks valid, which will also check the

@@ -47,24 +47,30 @@ pg_pread(int fd, void *buf, size_t size, off_t offset)
 
 	overlapped.Offset = offset;
 #ifndef FRONTEND
-	overlapped.hEvent = completion_event;
+	overlapped.hEvent = (HANDLE) (((uintptr_t) completion_event) | 1);
 #endif
 	if (!ReadFile(handle, buf, size, &result, &overlapped))
 	{
 		if (GetLastError() == ERROR_HANDLE_EOF)
 			return 0;
 
-		_dosmaperr(GetLastError());
-		return -1;
-	}
+		if (GetLastError() == ERROR_IO_PENDING)
+		{
+			if (!GetOverlappedResult(overlapped.hEvent, &overlapped, &result, TRUE))
+			{
+				if (GetLastError() == ERROR_HANDLE_EOF)
+					return 0;
 
-#ifndef FRONTEND
-	if (WaitForSingleObject(overlapped.hEvent, INFINITE) != WAIT_OBJECT_0)
-	{
-		_dosmaperr(GetLastError());
-		return -1;
+				_dosmaperr(GetLastError());
+				return -1;
+			}
+		}
+		else
+		{
+			_dosmaperr(GetLastError());
+			return -1;
+		}
 	}
-#endif
 
 	return result;
 #else

@@ -25,6 +25,9 @@
 #include <assert.h>
 #include <sys/stat.h>
 
+/* XXX fix this. Put it in a header or something */
+extern void pgaio_windows_register_file_handle(HANDLE file_handle);
+
 
 static int
 openFlagsToCreateFileFlags(int openFlags)
@@ -75,25 +78,11 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 	/* Check that we can handle the request */
 	assert((fileFlags & ((O_RDONLY | O_WRONLY | O_RDWR) | O_APPEND |
 						 (O_RANDOM | O_SEQUENTIAL | O_TEMPORARY) |
-						 _O_SHORT_LIVED | O_DSYNC | O_DIRECT |
+						 _O_SHORT_LIVED | O_DSYNC | O_DIRECT | O_OVERLAPPED |
 						 (O_CREAT | O_TRUNC | O_EXCL) | (O_TEXT | O_BINARY))) == fileFlags);
 #ifndef FRONTEND
 	/* XXX When called by stat very early on, this fails! */
 	//Assert(pgwin32_signal_event != NULL);	/* small chance of pg_usleep() */
-#endif
-
-	/*
-	 * In backend processes, we open all files with FILE_FLAG_OVERLAPPED so
-	 * that aio_windows.c can initiate asynchronous I/O.  This makes all I/O
-	 * asynchronous, so the pg_read() and pg_write() wrappers cope by
-	 * explictly waiting for completion.
-	 *
-	 * XXX What happens to code that calls plain old read() or write()?!
-	 */
-#ifdef FRONTEND
-#define OVERLAPPED_IN_BACKEND 0
-#else
-#define OVERLAPPED_IN_BACKEND FILE_FLAG_OVERLAPPED
 #endif
 
 	sa.nLength = sizeof(sa);
@@ -114,9 +103,9 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 						   ((fileFlags & O_SEQUENTIAL) ? FILE_FLAG_SEQUENTIAL_SCAN : 0) |
 						   ((fileFlags & _O_SHORT_LIVED) ? FILE_ATTRIBUTE_TEMPORARY : 0) |
 						   ((fileFlags & O_TEMPORARY) ? FILE_FLAG_DELETE_ON_CLOSE : 0) |
+						   ((fileFlags & O_OVERLAPPED) ? FILE_FLAG_OVERLAPPED : 0) |
 						   ((fileFlags & O_DIRECT) ? FILE_FLAG_NO_BUFFERING : 0) |
-						   ((fileFlags & O_DSYNC) ? FILE_FLAG_WRITE_THROUGH : 0) |
-						   OVERLAPPED_IN_BACKEND,
+						   ((fileFlags & O_DSYNC) ? FILE_FLAG_WRITE_THROUGH : 0),
 						   NULL)) == INVALID_HANDLE_VALUE)
 	{
 		/*
@@ -171,7 +160,8 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 		return INVALID_HANDLE_VALUE;
 	}
 
-	return h;
+	if (fileFlags & O_OVERLAPPED)
+		pgaio_windows_register_file_handle(h);
 }
 
 int
@@ -196,7 +186,6 @@ pgwin32_open(const char *fileName, int fileFlags,...)
 	 */
 	if ((fileFlags & O_BINARY) == 0)
 		fileFlags |= O_TEXT;
-#endif
 
 	/* _open_osfhandle will, on error, set errno accordingly */
 	if ((fd = _open_osfhandle((intptr_t) h, fileFlags & O_APPEND)) < 0)

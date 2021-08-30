@@ -154,6 +154,10 @@ _mdfd_open_flags(ForkNumber forkNum)
 	if (io_data_direct /* && forkNum == MAIN_FORKNUM */)
 		flags |= PG_O_DIRECT;
 
+#ifdef WIN32
+	flags |= O_OVERLAPPED;
+#endif
+
 	return flags;
 }
 

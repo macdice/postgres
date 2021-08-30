@@ -64,6 +64,7 @@ static void pgaio_windows_closing_fd(int fd);
 /* XXX put these in the right order */
 static void pgaio_windows_submit_one(PgAioInProgress *io);
 static void pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios);
+static void pgaio_windows_postmaster_child_init_local(void);
 
 
 /*
@@ -84,6 +85,7 @@ static void pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios);
 
 const IoMethodOps pgaio_windows_ops = {
 	.shmem_init = pgaio_windows_shmem_init,
+	.postmaster_child_init_local = pgaio_windows_postmaster_child_init_local,
 	.submit = pgaio_windows_submit,
 	.retry = pgaio_windows_io_retry,
 	.wait_one = pgaio_windows_wait_one,
@@ -350,24 +352,29 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 
 		//overlapped
 		if (io->op == PGAIO_OP_READ)
-			result = ReadFileScatter(_get_osfhandle(io->op_data.read.fd), segments, size, NULL, overlapped);
+			result = ReadFileScatter((HANDLE) _get_osfhandle(io->op_data.read.fd), segments, size, NULL, overlapped);
 		else
-			result = WriteFileGather(_get_osfhandle(io->op_data.write.fd), segments, size, NULL, overlapped);
+			result = WriteFileGather((HANDLE) _get_osfhandle(io->op_data.write.fd), segments, size, NULL, overlapped);
 	}
 	else
 	{
 		if (io->op == PGAIO_OP_READ)
-			result = ReadFileEx(_get_osfhandle(io->op_data.read.fd), iov[0].iov_base, iov[0].iov_len,
-								overlapped, NULL);
+			result = ReadFile((HANDLE) _get_osfhandle(io->op_data.read.fd), iov[0].iov_base, iov[0].iov_len, NULL,
+								overlapped);
 		else
-			result = WriteFileEx(_get_osfhandle(io->op_data.write.fd), iov[0].iov_base, iov[0].iov_len,
-								 overlapped, NULL);
+			result = WriteFile((HANDLE) _get_osfhandle(io->op_data.write.fd), iov[0].iov_base, iov[0].iov_len, NULL,
+								 overlapped);
 	}
 
 	if (!result)
 	{
-		_dosmaperr(GetLastError());
-		return -1;
+		DWORD err = GetLastError();
+
+		if (err != ERROR_IO_PENDING)
+		{
+			_dosmaperr(err);
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -441,6 +448,7 @@ pgaio_windows_drain(PgAioContext *context, bool block, bool call_shared)
 	 * full.  Perhaps the IOCP thread should also put IOs into a circular
 	 * buffer that this would consult.
 	 */
+	return 0;
 }
 
 /*
@@ -707,8 +715,8 @@ pgaio_windows_completion_thread(LPVOID param)
 	{
 		PgAioInProgress *io;
 		OVERLAPPED *overlapped;
-		DWORD *nbytes;
-		void *completion_key; /* not used */
+		DWORD nbytes;
+		ULONG_PTR completion_key = 0; /* not used */
 
 		/*
 		 * XXX There is also GetQueuedCompletionStatusEx() that can dequeue
@@ -734,9 +742,11 @@ pgaio_windows_completion_thread(LPVOID param)
 				elog(ERROR, "could not wait for completion events: %m");
 			}
 		}
-
-		io = io_for_overlapped(overlapped);
-		pgaio_windows_kernel_io_done(io, nbytes);
+		else
+		{
+			io = io_for_overlapped(overlapped);
+			pgaio_windows_kernel_io_done(io, nbytes);
+		}
 	}
 }
 
@@ -744,6 +754,7 @@ static void
 pgaio_windows_postmaster_child_init_local(void)
 {
 	HANDLE		thread_handle;
+	ULONG_PTR		CompletionKey = 0;
 
 	/*
 	 * Create an IO completion port that will be used to receive all I/O
@@ -752,21 +763,19 @@ pgaio_windows_postmaster_child_init_local(void)
 	pgaio_windows_completion_port =
 		CreateIoCompletionPort(INVALID_HANDLE_VALUE,
 							   NULL,
-							   NULL,
+							   CompletionKey,
 							   1);
 	if (pgaio_windows_completion_port == NULL)
 	{
 		_dosmaperr(GetLastError());
-		elog(FATAL,
-			 (errmsg_internal("could not create completion port")));
+		elog(FATAL, "could not create completion port");
 	}
 
 	/* Start the I/O completion thread. */
 	thread_handle = CreateThread(NULL, 0, pgaio_windows_completion_thread,
 								 NULL, 0, NULL);
 	if (thread_handle == NULL)
-		elog(FATAL,
-			 (errmsg_internal("could not create completion port")));
+		elog(FATAL, "could not create completion port");
 }
 
 /*
@@ -777,18 +786,18 @@ pgaio_windows_postmaster_child_init_local(void)
 void
 pgaio_windows_register_file_handle(HANDLE file_handle)
 {
+	ULONG_PTR		CompletionKey = 0;
+
 	/*
 	 * XXX This is the way you register an existing file handle with an
 	 * existing IOCP, right?
 	 */
-
-	if (!CreateIoCompletionPort(file_handle,
-								&pgaio_windows_completion_port,
-								NULL,
-								1))
+	if (CreateIoCompletionPort(file_handle,
+								pgaio_windows_completion_port,
+								CompletionKey,
+								1) != pgaio_windows_completion_port)
 	{
 		_dosmaperr(GetLastError());
-		elog(FATAL,
-			 (errmsg_internal("could not associate file handle with completion port")));
+		elog(FATAL, "could not associate file handle with completion port");
 	}
 }

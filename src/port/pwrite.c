@@ -46,21 +46,24 @@ pg_pwrite(int fd, const void *buf, size_t size, off_t offset)
 	}
 	overlapped.Offset = offset;
 #ifndef FRONTEND
-	overlapped.hEvent = completion_event;
+	overlapped.hEvent = (HANDLE) (((uintptr_t)completion_event) | 1);
 #endif
 	if (!WriteFile(handle, buf, size, &result, &overlapped))
 	{
-		_dosmaperr(GetLastError());
-		return -1;
+		if (GetLastError() == ERROR_IO_PENDING)
+		{
+			if (!GetOverlappedResult(overlapped.hEvent, &overlapped, &result, TRUE))
+			{
+				_dosmaperr(GetLastError());
+				return -1;
+			}
+		}
+		else
+		{
+			_dosmaperr(GetLastError());
+			return -1;
+		}
 	}
-
-#ifndef FRONTEND
-	if (WaitForSingleObject(overlapped.hEvent, INFINITE) != WAIT_OBJECT_0)
-	{
-		_dosmaperr(GetLastError());
-		return -1;
-	}
-#endif
 
 	return result;
 #else
