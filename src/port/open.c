@@ -83,6 +83,27 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 #ifndef FRONTEND
 	/* XXX When called by stat very early on, this fails! */
 	//Assert(pgwin32_signal_event != NULL);	/* small chance of pg_usleep() */
+	/*
+	 * XXX FIXME This fails because we moved read_nondefault_variables() before
+	 * InitPostmasterChild() in SubPostmasterMain(), but we needed to do that
+	 * so that io_method would be set early enough.  Doh.
+	 */
+	//Assert(pgwin32_signal_event != NULL);	/* small chance of pg_usleep() */
+#endif
+
+#ifdef FRONTEND
+
+	/*
+	 * Since PostgreSQL 12, those concurrent-safe versions of open() and
+	 * fopen() can be used by frontends, having as side-effect to switch the
+	 * file-translation mode from O_TEXT to O_BINARY if none is specified.
+	 * Caller may want to enforce the binary or text mode, but if nothing is
+	 * defined make sure that the default mode maps with what versions older
+	 * than 12 have been doing.
+	 */
+	if ((fileFlags & O_BINARY) == 0)
+		fileFlags |= O_TEXT;
+>>>>>>> 88a081e585 (fixup windows: dirty hack to disable assertion, fixme)
 #endif
 
 	sa.nLength = sizeof(sa);
