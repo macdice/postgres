@@ -351,7 +351,7 @@ struct PgAioInProgress
 
 			/* Raw result from the kernel, if known. */
 			volatile int raw_result;
-
+#define PGAIO_WINDOWS_RESULT_INVALID INT_MIN
 		} windows;
 #endif
 	} io_method_data;
@@ -625,6 +625,7 @@ extern void pgaio_io_stage(PgAioInProgress *io, PgAioSharedCallback scb);
 extern void pgaio_io_unprepare(PgAioInProgress *io, PgAioOp op);
 extern void pgaio_io_flag_string(PgAioIPFlags flags, struct StringInfoData *s);
 static inline bool pgaio_io_recycled(PgAioInProgress *io, uint64 ref_generation, PgAioIPFlags *flags);
+extern void pgaio_wait_for_issued(void);
 
 extern bool pgaio_can_scatter_gather(void);
 

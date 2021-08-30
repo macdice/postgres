@@ -18,6 +18,7 @@
 #include "pgstat.h"
 #include "miscadmin.h"
 #include "storage/aio_internal.h"
+#include "storage/bufmgr.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
 #include "storage/shmem.h"
@@ -37,11 +38,11 @@
 
 static HANDLE pgaio_windows_completion_port;
 
-static bool	pgaio_windows_take_baton(PgAioInProgress * io, bool have_result);
+static bool	pgaio_windows_take_baton(PgAioInProgress * io);
 static bool pgaio_windows_give_baton(PgAioInProgress * io, int result);
 
 static PgAioInProgress * io_for_overlapped(OVERLAPPED *overlapped);
-static OVERLAPPED *overlapped_for_io(struct PgAioInProgress *io);
+static OVERLAPPED *overlapped_for_io(PgAioInProgress *io);
 
 static int	pgaio_windows_start_rw(PgAioInProgress * io);
 static void pgaio_windows_kernel_io_done(PgAioInProgress * io,
@@ -58,6 +59,12 @@ static void pgaio_windows_wait_one(PgAioContext *context, PgAioInProgress *io, u
 static void pgaio_windows_io_retry(PgAioInProgress *io);
 static int pgaio_windows_drain(PgAioContext *context, bool block, bool call_shared);
 static void pgaio_windows_closing_fd(int fd);
+
+
+/* XXX put these in the right order */
+static void pgaio_windows_submit_one(PgAioInProgress *io);
+static void pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios);
+
 
 /*
  * XXX This baton stuff is similar to the POSIX AIO version, and could perhaps
@@ -81,7 +88,7 @@ const IoMethodOps pgaio_windows_ops = {
 	.retry = pgaio_windows_io_retry,
 	.wait_one = pgaio_windows_wait_one,
 	.drain = pgaio_windows_drain,
-	.closing_fd = pgaio_windows_closing_fd
+	.closing_fd = pgaio_windows_closing_fd,
 
 	/*
 	 * Windows ReadFileScatter() and WriteFileGather() only work on direct IO
@@ -95,8 +102,8 @@ const IoMethodOps pgaio_windows_ops = {
 /*
  * Initialize shared memory data structures.
  */
-static
-pgaio_window_shmem_init(void)
+static void
+pgaio_windows_shmem_init(void)
 {
 	for (int i = 0; i < max_aio_in_progress; i++)
 	{
@@ -179,10 +186,12 @@ pgaio_windows_io_retry(PgAioInProgress * io)
 static void
 pgaio_windows_submit_one(PgAioInProgress *io)
 {
+	int rc;
 
 	pg_atomic_add_fetch_u32(&my_aio->inflight_count, 1);
 
 	/* Set things up so that any backend can become the completer. */
+	/* XXX PGAIO_WINDOWS_RESULT_INVALID is not defined. */
 	io->io_method_data.windows.raw_result = PGAIO_WINDOWS_RESULT_INVALID;
 	pg_atomic_write_u64(&io->io_method_data.windows.flags,
 						pgaio_windows_make_flags(PGAIO_WINDOWS_FLAG_AVAILABLE,
@@ -212,6 +221,7 @@ pgaio_windows_submit_one(PgAioInProgress *io)
 		errno = EOPNOTSUPP;
 		break;
 	default:
+		rc = -1;
 		elog(ERROR, "unexpected op");
 	}
 
@@ -229,23 +239,25 @@ pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios)
 
 	for (int i = 0; i < nios; ++i)
 	{
+		PgAioInProgress *io = ios[i];
+
 		switch (io->op)
 		{
-		case PGAIO_OP_FLUSH_RANGE:	/* XXX ignoring for now */
-		case PGAIO_OP_NOP:
-			pgaio_windows_kernel_io_done(io, 0);
-			break;
-		case PGAIO_OP_FSYNC:
-			/*
-			 * XXX FileFlushBuffers() doesn't seem to have an asynchronous
-			 * version.  Handle synchronously, after starting others.
-			 */
-			synchronous_ios[nsync++] = ios[i];
-			break;
-		default:
-			pgaio_windows_submit_one(io);
-			break;
-		}
+			case PGAIO_OP_FLUSH_RANGE:	/* XXX ignoring for now */
+			case PGAIO_OP_NOP:
+				pgaio_windows_kernel_io_done(io, 0);
+				break;
+			case PGAIO_OP_FSYNC:
+				/*
+				* XXX FileFlushBuffers() doesn't seem to have an asynchronous
+				* version.  Handle synchronously, after starting others.
+				*/
+				synchronous_ios[nsync++] = ios[i];
+				break;
+			default:
+				pgaio_windows_submit_one(io);
+				break;
+			}
 	}
 
 	if (nsync > 0)
@@ -276,7 +288,7 @@ pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT *segments,
 		base = iov[i].iov_base;
 		len = iov[i].iov_len;
 
-		if (len % PGAIO_WINDOWS_IOV_PAGE_SIZE != 0)
+		if (len % PGAIO_WINDOWS_IOV_SEG_SIZE != 0)
 			elog(ERROR, "scatter/gather I/O not multiple of memory page size");
 
 		/* Unpack this iovec into pages. */
@@ -285,14 +297,14 @@ pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT *segments,
 			if (count == PGAIO_WINDOWS_IOV_MAX_PAGES)
 				elog(ERROR, "too many scatter/gather segments");
 			segments[count++].Buffer = base;
-			base += PGAIO_WINDOWS_IOV_PAGE_SIZE;
-			len -= PGAIO_WINDOWS_IOV_PAGE_SIZE;
+			base += PGAIO_WINDOWS_IOV_SEG_SIZE;
+			len -= PGAIO_WINDOWS_IOV_SEG_SIZE;
 		}
 	}
 
 	segments[count].Buffer = NULL;
 
-	return count * PGAIO_WINDOWS_IOV_PAGE_SIZE;
+	return count * PGAIO_WINDOWS_IOV_SEG_SIZE;
 }
 
 /*
@@ -301,9 +313,10 @@ pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT *segments,
 static int
 pgaio_windows_start_rw(PgAioInProgress * io)
 {
-	struct OVERLAPPED *overlapped = overlapped_for_io(io);
+	OVERLAPPED *overlapped = overlapped_for_io(io);
 	struct iovec iov[IOV_MAX];
 	int			iovcnt;
+	bool		result;
 
 	/* Prepare the OVERLAPPED struct. */
 	memset(overlapped, 0, sizeof(*overlapped));
@@ -335,19 +348,19 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 		/* Convert to the page-by-page format Windows requires. */
 		size = pgaio_windows_iov_to_segments(segments, iov, iovcnt);
 
-		overlapped
+		//overlapped
 		if (io->op == PGAIO_OP_READ)
-			result = ReadFileScatter(op->fd, segments, size, NULL, overlapped);
+			result = ReadFileScatter(_get_osfhandle(io->op_data.read.fd), segments, size, NULL, overlapped);
 		else
-			result = WriteFileGather(op->fd, segments, size, NULL, overlapped);
+			result = WriteFileGather(_get_osfhandle(io->op_data.write.fd), segments, size, NULL, overlapped);
 	}
 	else
 	{
 		if (io->op == PGAIO_OP_READ)
-			result = ReadFileEx(op->fd, iov[0].iov_base, iov[0].len,
+			result = ReadFileEx(_get_osfhandle(io->op_data.read.fd), iov[0].iov_base, iov[0].iov_len,
 								overlapped, NULL);
 		else
-			result = WriteFileEx(op->fd, iov[0].iov_base, iov[0].len,
+			result = WriteFileEx(_get_osfhandle(io->op_data.write.fd), iov[0].iov_base, iov[0].iov_len,
 								 overlapped, NULL);
 	}
 
@@ -437,11 +450,11 @@ static PgAioInProgress *
 io_for_overlapped(OVERLAPPED *overlapped)
 {
 	return (PgAioInProgress *)
-		(((char *) cb) - offsetof(PgAioInProgress,
+		(((char *) overlapped) - offsetof(PgAioInProgress,
 								  io_method_data.windows.overlapped));
 }
 
-static struct OVERLAPPED *
+static OVERLAPPED *
 overlapped_for_io(PgAioInProgress * io)
 {
 	return &io->io_method_data.windows.overlapped;
@@ -466,7 +479,6 @@ pgaio_windows_kernel_io_done(PgAioInProgress * io, int result)
 
 
 /* Functions for negotiating who is allowed to complete an IO. */
-
 static uint64
 pgaio_windows_make_flags(uint64 control_flags,
 						 uint32 submitter_id,
@@ -481,7 +493,7 @@ static uint32
 pgaio_windows_submitter_from_flags(uint64 flags)
 {
 	return (flags & PGAIO_WINDOWS_FLAG_SUBMITTER_MASK) >>
-		PGAIO_WINDOWSFLAG_SUBMITTER_SHIFT;
+		PGAIO_WINDOWS_FLAG_SUBMITTER_SHIFT;
 }
 
 static uint32
@@ -508,7 +520,7 @@ pgaio_windows_update_flags(PgAioInProgress * io,
  * Try to get permission to complete this IO.  Waits if no result available yet.
  */
 static bool
-pgaio_windows_take_baton(PgAioInProgress * io, bool have_result)
+pgaio_windows_take_baton(PgAioInProgress * io)
 {
 	uint32		submitter_id;
 	uint32		completer_id;
@@ -522,7 +534,7 @@ pgaio_windows_take_baton(PgAioInProgress * io, bool have_result)
 
 		if (flags & PGAIO_WINDOWS_FLAG_AVAILABLE)
 		{
-			if ((flags & PGAIO_WINDOWS_FLAG_RESULT) || have_result)
+			if ((flags & PGAIO_WINDOWS_FLAG_RESULT))
 			{
 				/*
 				 * The raw result from the kernel is already, available, or
@@ -542,7 +554,7 @@ pgaio_windows_take_baton(PgAioInProgress * io, bool have_result)
 				/* Request the right to complete. */
 				if (!pgaio_windows_update_flags(io,
 												flags,
-												PGAIO_WINDOWS_FLAG_REQUESTED,
+												PGAIO_WINDOWS_AIO_FLAG_REQUESTED,
 												submitter_id,
 												my_aio_id))
 					continue;	/* lost race, try again */
@@ -550,7 +562,7 @@ pgaio_windows_take_baton(PgAioInProgress * io, bool have_result)
 				/* Go around again. */
 			}
 		}
-		else if (flags & PGAIO_WINDOWS_FLAG_REQUESTED)
+		else if (flags & PGAIO_WINDOWS_AIO_FLAG_REQUESTED)
 		{
 
 			if (completer_id == my_aio_id)
@@ -575,11 +587,10 @@ pgaio_windows_take_baton(PgAioInProgress * io, bool have_result)
 				 * someone else waiting?  It can perhaps run the completions
 				 * more efficiently.
 				 */
-				 */
 				return false;
 			}
 		}
-		else if (flags & PGAIO_WINDOWS_FLAG_GRANTED)
+		else if (flags & PGAIO_WINDOWS_AIO_FLAG_GRANTED)
 		{
 			/* It was granted to someone.  Was it us? */
 			if (completer_id == my_aio_id)
@@ -637,11 +648,11 @@ pgaio_windows_give_baton(PgAioInProgress * io, int result)
 			 */
 			break;
 		}
-		else if (flags & PGAIO_WINDOWS_FLAG_REQUESTED)
+		else if (flags & PGAIO_WINDOWS_AIO_FLAG_REQUESTED)
 		{
 			if (!pgaio_windows_update_flags(io,
 											flags,
-											PGAIO_WINDOWS_FLAG_GRANTED,
+											PGAIO_WINDOWS_AIO_FLAG_GRANTED,
 											submitter_id,
 											completer_id))
 				continue;		/* lost race, try again (not expected) */
@@ -714,7 +725,7 @@ pgaio_windows_completion_thread(LPVOID param)
 			if (overlapped)
 			{
 				io = io_for_overlapped(overlapped);
-				_dosmaperr();
+				_dosmaperr(GetLastError());
 				pgaio_windows_kernel_io_done(io, -errno);
 			}
 			else
@@ -732,6 +743,8 @@ pgaio_windows_completion_thread(LPVOID param)
 static void
 pgaio_windows_postmaster_child_init_local(void)
 {
+	HANDLE		thread_handle;
+
 	/*
 	 * Create an IO completion port that will be used to receive all I/O
 	 * completions for this process.
@@ -743,7 +756,7 @@ pgaio_windows_postmaster_child_init_local(void)
 							   1);
 	if (pgaio_windows_completion_port == NULL)
 	{
-		_dosmaperr();
+		_dosmaperr(GetLastError());
 		elog(FATAL,
 			 (errmsg_internal("could not create completion port")));
 	}
@@ -774,7 +787,7 @@ pgaio_windows_register_file_handle(HANDLE file_handle)
 								NULL,
 								1))
 	{
-		_dosmaperr();
+		_dosmaperr(GetLastError());
 		elog(FATAL,
 			 (errmsg_internal("could not associate file handle with completion port")));
 	}

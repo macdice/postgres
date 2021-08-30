@@ -51,7 +51,6 @@ static void pgaio_io_call_local_callback(PgAioInProgress *io, bool in_error);
 static int pgaio_synchronous_submit(void);
 static void pgaio_io_wait_ref_int(PgAioIoRef *ref, bool call_shared, bool call_local);
 static void pgaio_io_retry_soft_failed(PgAioInProgress *io, uint64 ref_generation);
-static void pgaio_wait_for_issued(void);
 static inline PgAioInProgress *pgaio_io_from_ref(PgAioIoRef *ref, uint64 *ref_generation);
 
 
@@ -1100,7 +1099,7 @@ pgaio_apply_backend_limit(void)
 /*
  * Wait for all IOs issued by this process to complete.
  */
-static void
+void
 pgaio_wait_for_issued(void)
 {
 	dlist_iter iter;
