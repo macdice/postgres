@@ -448,6 +448,9 @@ pgaio_windows_drain(PgAioContext *context, bool block, bool call_shared)
 	 * full.  Perhaps the IOCP thread should also put IOs into a circular
 	 * buffer that this would consult.
 	 */
+	if (call_shared)
+		pgaio_complete_ios(false);
+
 	return 0;
 }
 
