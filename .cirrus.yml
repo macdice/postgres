@@ -260,6 +260,9 @@ task:
     - name: Windows Worker DIO
       env:
         TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\worker_dio.conf
+    - name: Windows Windows Buf
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\windows_buf.conf
   test_script:
     - powershell -Command get-psdrive -psprovider filesystem
     - ps: Get-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug'
