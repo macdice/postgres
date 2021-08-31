@@ -282,8 +282,10 @@ perform_base_backup(basebackup_options *opt)
 	}
 
 	/* we're going to use a BufFile, so we need a ResourceOwner */
-	Assert(CurrentResourceOwner == NULL);
-	CurrentResourceOwner = ResourceOwnerCreate(NULL, "base backup");
+	Assert(AuxProcessResourceOwner != NULL);
+	Assert(CurrentResourceOwner == AuxProcessResourceOwner ||
+		   CurrentResourceOwner == NULL);
+	CurrentResourceOwner = AuxProcessResourceOwner;
 
 	datadirpathlen = strlen(DataDir);
 
@@ -738,7 +740,7 @@ perform_base_backup(basebackup_options *opt)
 	FreeBackupManifest(&manifest);
 
 	/* clean up the resource owner we created */
-	WalSndResourceCleanup(true);
+	ReleaseAuxProcessResources(true);
 
 	pgstat_progress_end_command();
 }
