@@ -637,11 +637,13 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		 * way, start up the XLOG machinery, and register to have it closed
 		 * down at exit.
 		 *
-		 * We don't yet have an aux-process resource owner, but StartupXLOG
-		 * and ShutdownXLOG will need one.  Hence, create said resource owner
-		 * (and register a callback to clean it up after ShutdownXLOG runs).
+		 * In single user mode we don't yet have an aux-process resource
+		 * owner, but StartupXLOG and ShutdownXLOG will need one.  Hence,
+		 * create said resource owner (and register a callback to clean it up
+		 * after ShutdownXLOG runs).
 		 */
-		CreateAuxProcessResourceOwner();
+		if (!bootstrap)
+			CreateAuxProcessResourceOwner();
 
 		StartupXLOG();
 		/* Release (and warn about) any buffer pins leaked in StartupXLOG */
