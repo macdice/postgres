@@ -45,9 +45,9 @@ task:
   configure_script:
     - su postgres -c './configure --enable-cassert --enable-debug --enable-tap-tests --with-includes=/usr/local/include --with-libs=/usr/local/lib CC="ccache cc"'
   build_script:
-    #- su postgres -c 'gmake -s -j4 && gmake -s -j4 -C contrib'
-    - sudo --preserve-env -u postgres gmake -s -j4
-    - sudo --preserve-env -u postgres gmake -s -j4 -C contrib
+    - su postgres -c 'gmake -s -j4 && gmake -s -j4 -C contrib'
+    #- sudo --preserve-env -u postgres gmake -s -j4
+    #- sudo --preserve-env -u postgres gmake -s -j4 -C contrib
     #- dtrace -o build.log -n 'profile-99 /arg0/ { @[stack()] = count(); }' -c 'sudo --preserve-env -u postgres gmake -s -j4'
   check_script:
     - su postgres -c 'time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > check.log 2>&1
