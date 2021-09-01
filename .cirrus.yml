@@ -199,10 +199,10 @@ task:
   stop_script:
     # XXX: should ensure this gets called if previous steps fail
     - tmp_install\bin\pg_ctl.exe stop -D tmp_check\db -l tmp_check\postmaster.log
-  recoverycheck_script:
-    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl recoverycheck
   bincheck_script:
     - timeout -k60s 30m perl src/tools/msvc/vcregress.pl bincheck
+  recoverycheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl recoverycheck
   upgradecheck_script:
     - timeout -k60s 30m perl src/tools/msvc/vcregress.pl upgradecheck
   on_failure:
