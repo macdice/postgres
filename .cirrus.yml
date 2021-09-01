@@ -44,7 +44,8 @@ task:
     - chown -R postgres:postgres /tmp/ccache_dir
   build_script:
     - su postgres -c './configure --enable-cassert --enable-debug --enable-tap-tests --with-includes=/usr/local/include --with-libs=/usr/local/lib CC="ccache cc"'
-    - su postgres -c 'gmake -s -j4 && gmake -s -j4 -C contrib'
+    #- su postgres -c 'gmake -s -j4 && gmake -s -j4 -C contrib'
+    - sudo dtrace -o build.log -n 'profile-99 /arg0/ { @[stack()] = count(); }' -c 'sudo -u postgres gmake -s -j4'
   check_script:
     - su postgres -c 'time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > check.log 2>&1
   on_failure:
