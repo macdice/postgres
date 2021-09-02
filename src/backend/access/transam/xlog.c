@@ -12245,15 +12245,22 @@ get_sync_bit(int method)
 {
 	int			o_direct_flag = 0;
 
+	/*
+	 * Never use O_DIRECT in walreceiver process for similar reasons; the WAL
+	 * written by walreceiver is normally read by the startup process soon
+	 * after it's written. Also, walreceiver performs unaligned writes, which
+	 * don't work with O_DIRECT, so it is required for correctness too.
+	 */
+	if (AmWalReceiverProcess())
+		return 0;
+
 	/* make O_DIRECT setting only depend on GUC */
 	if (io_wal_direct)
 		o_direct_flag |= PG_O_DIRECT;
 
-#if 0
 	/* If fsync is disabled, never open in sync mode */
 	if (!enableFsync)
-		return 0;
-#endif
+		return o_direct_flag;
 
 #if 0
 	/*
@@ -12268,15 +12275,6 @@ get_sync_bit(int method)
 	if (!XLogIsNeeded())
 		o_direct_flag = PG_O_DIRECT;
 #endif
-
-	/*
-	 * Never use O_DIRECT in walreceiver process for similar reasons; the WAL
-	 * written by walreceiver is normally read by the startup process soon
-	 * after it's written. Also, walreceiver performs unaligned writes, which
-	 * don't work with O_DIRECT, so it is required for correctness too.
-	 */
-	if (AmWalReceiverProcess())
-		return 0;
 
 	switch (method)
 	{
