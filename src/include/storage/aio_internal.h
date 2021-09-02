@@ -352,6 +352,7 @@ struct PgAioInProgress
 
 			/* Raw result from the kernel, if known. */
 			volatile int raw_result;
+			volatile int waiter_id;
 #define PGAIO_POSIX_RESULT_INVALID INT_MIN
 		} posix_aio;
 #endif
