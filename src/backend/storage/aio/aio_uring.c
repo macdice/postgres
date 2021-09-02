@@ -30,7 +30,7 @@ static void pgaio_uring_iovec_transfer(PgAioContext *context);
 
 /* Entry points for IoMethodOps. */
 static size_t pgaio_uring_shmem_size(void);
-static void pgaio_uring_shmem_init(void);
+static void pgaio_uring_shmem_init(bool first_time);
 static void pgaio_uring_postmaster_child_init_local(void);
 static int pgaio_uring_submit(int max_submit, bool drain);
 static void pgaio_uring_wait_one(PgAioContext *context, PgAioInProgress *io, uint64 ref_generation, uint32 wait_event_info);
@@ -72,7 +72,7 @@ pgaio_uring_shmem_size(void)
 }
 
 static void
-pgaio_uring_shmem_init(void)
+pgaio_uring_shmem_init(bool first_time)
 {
 	PgAioIovec *iovecs;
 	bool found;

@@ -53,7 +53,7 @@ int MyIoWorkerId;
 
 /* Entry points for IoMethodOps. */
 static size_t pgaio_worker_shmem_size(void);
-static void pgaio_worker_shmem_init(void);
+static void pgaio_worker_shmem_init(bool first_time);
 static int pgaio_worker_submit(int max_submit, bool drain);
 static void pgaio_worker_io_retry(PgAioInProgress *io);
 
@@ -77,7 +77,7 @@ typedef struct AioWorkerControl
 	AioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
 } AioWorkerControl;
 
-StaticAssertDecl(sizeof(uint64) * CHAR_BIT >= MAX_IO_WORKERS,
+StaticAssertDecl(sizeof(((AioWorkerControl *)0)->idle_worker_mask) * CHAR_BIT >= MAX_IO_WORKERS,
 				 "idle_worker_mask not wide enough");
 
 static AioWorkerSubmissionQueue *io_worker_submission_queue;
@@ -118,7 +118,7 @@ pgaio_worker_shmem_size(void)
 }
 
 static void
-pgaio_worker_shmem_init(void)
+pgaio_worker_shmem_init(bool first_time)
 {
 	bool found;
 	int size;
