@@ -42,6 +42,11 @@
 
 #define PGAIO_NUM_CONTEXTS 8
 
+#ifdef USE_POSIX_AIO
+#ifndef HAVE_AIO_WAITCOMPLETE
+#define USE_AIO_SUSPEND
+#endif
+#endif
 
 /*
  * The type of AIO.
@@ -175,6 +180,9 @@ struct PgAioInProgress
 
 	/* index into allProcs, or PG_UINT32_MAX for process local IO */
 	uint32 owner_id;
+
+	/* submitter can differ from owner on retry */
+	uint32 submitter_id;
 
 	/* the IOs result, depends on operation. E.g. the length of a read */
 	int32 result;
@@ -324,38 +332,28 @@ struct PgAioInProgress
 #ifdef USE_POSIX_AIO
 		struct
 		{
-			/*
-			 * The POSIX AIO control block doesn't need to be in shared
-			 * memory, but we'd waste more space if we had large private
-			 * arrays in every backend.
-			 *
-			 * XXX Should we move this into a separate mirror array, to
-			 * debloat the top level struct?
-			 */
 			struct aiocb iocb;
 
-			/* Index in pgaio_posix_aio_iocbs. */
-			int iocb_index;
-
-			/*
-			 * Atomic control flags used to negotiate handover from submitter
-			 * to completer.
-			 */
-			pg_atomic_uint64 flags;
-
-			/*
-			 * Which IO is the head of this IO's chain?  That's the only one
-			 * that the kernel knows about, so we need to be able to get our
-			 * hands on it to wrestle control from another backend.
-			 */
-			uint32 merge_head_idx;
-
-			/* Raw result from the kernel, if known. */
-			volatile int raw_result;
-#define PGAIO_POSIX_RESULT_INVALID INT_MIN
+#ifdef USE_AIO_SUSPEND
+			int aio_suspend_array_index;
+#endif
 		} posix_aio;
 #endif
 	} io_method_data;
+	union
+	{
+		struct
+		{
+			/* Index of head IO in merged chain of IOs, or self. */
+			uint32 head_idx;
+
+			/* Merged IO result from the kernel, or INT_MIN. */
+			volatile int result;
+
+			/* Atomic flag used to negotiate who processes the result. */
+			pg_atomic_uint32 have_completer;
+		} exchange;
+	} interlock;
 };
 
 #ifdef USE_LIBURING
@@ -560,9 +558,10 @@ typedef struct PgAioCtl
 typedef struct IoMethodOps
 {
 	size_t (*shmem_size)(void);
-	void (*shmem_init)(void);
+	void (*shmem_init)(bool first_time);
 
 	void (*postmaster_child_init_local)(void);
+	void (*postmaster_before_child_exit)(void);
 
 	int (*submit)(int max_submit, bool drain);
 	void (*retry)(PgAioInProgress *io);
@@ -571,6 +570,7 @@ typedef struct IoMethodOps
 					 uint64 ref_generation,
 					 uint32 wait_event_info);
 	int (*drain)(PgAioContext *context, bool block, bool call_shared);
+	void (*drain_in_interrupt_handler)(void);
 
 	void (*closing_fd)(int fd);
 
@@ -599,6 +599,7 @@ extern int my_aio_id;
 /* Declarations for functions in aio.c that are visible to aio_XXX.c. */
 extern void pgaio_io_prepare_submit(PgAioInProgress *io, uint32 ring);
 extern int pgaio_drain(PgAioContext *context, bool block, bool call_shared, bool call_local);
+extern void pgaio_drain_in_interrupt_handler(void);
 extern void pgaio_complete_ios(bool in_error);
 extern void pgaio_broadcast_ios(PgAioInProgress **ios, int nios);
 extern void pgaio_io_prepare(PgAioInProgress *io, PgAioOp op);
@@ -608,6 +609,19 @@ extern void pgaio_io_flag_string(PgAioIPFlags flags, struct StringInfoData *s);
 static inline bool pgaio_io_recycled(PgAioInProgress *io, uint64 ref_generation, PgAioIPFlags *flags);
 
 extern bool pgaio_can_scatter_gather(void);
+
+/* Declarations for aio_exchange.c */
+extern void pgaio_exchange_shmem_init(bool first_time);
+extern void pgaio_exchange_submit_one(PgAioInProgress *io);
+extern void pgaio_exchange_process_completion(PgAioInProgress * io,
+											  int raw_result,
+											  bool in_interrupt_handler);
+extern void pgaio_exchange_wait_one(PgAioContext *context,
+									PgAioInProgress * io,
+									uint64 ref_generation,
+									uint32 wait_event_info);
+extern void pgaio_exchange_disable_interrupt(void);
+extern void pgaio_exchange_enable_interrupt(void);
 
 /* Declarations for aio_io.c */
 extern void pgaio_combine_pending(void);

@@ -652,10 +652,8 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	if (CheckProcSignal(PROCSIG_LOG_MEMORY_CONTEXT))
 		HandleLogMemoryContextInterrupt();
 
-#ifdef USE_POSIX_AIO
-	if (CheckProcSignal(PROCSIG_POSIX_AIO))
-		HandlePosixAioInterrupt();
-#endif
+	if (CheckProcSignal(PROCSIG_AIO_INTERRUPT))
+		HandleAioInterrupt();
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_DATABASE))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_DATABASE);
