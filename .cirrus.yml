@@ -22,11 +22,12 @@ task:
   env:
     CCACHE_SIZE: "500M"
     CCACHE_DIR: "/tmp/ccache_dir"
-  ccache_cache:
-    folder: "/tmp/ccache_dir"
   sysconfig_script:
     - sysctl kern.corefile='/tmp/%N.%P.core'
     - sysctl kern.timecounter.hardware=TSC-low
+    - sysctl vfs.write_behind=0
+  ccache_cache:
+    folder: "/tmp/ccache_dir"
   create_partition_script:
     - gpart recover da0 # fix backup partition table after resize
     - gpart show da0
