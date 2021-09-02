@@ -5,7 +5,7 @@ env:
   CIRRUS_CLONE_DEPTH: 1
   # target to test, for all but OSX and windows
   CHECK: check-world
-  CHECKFLAGS: -Otarget
+  #CHECKFLAGS: -Otarget
   PGCTLTIMEOUT: 120
 
 task:
