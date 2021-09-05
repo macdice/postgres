@@ -72,6 +72,7 @@
 
 #include "postgres.h"
 
+#include <common/string.h>
 #include <dirent.h>
 #include <sys/file.h>
 #include <sys/param.h>
@@ -680,6 +681,35 @@ pg_truncate(const char *path, off_t length)
 	return ret;
 #else
 	return truncate(path, length);
+#endif
+}
+
+/*
+ * Unlink a file.  On Windows, rename to a temporary filename before unlinking
+ * so that "path" is available for new files immediately even if other backends
+ * hold descriptors to the one we unlink.
+ */
+int
+pg_unlink(const char *path)
+{
+#ifdef WIN32
+	for (;;)
+	{
+		char		tmp_path[MAXPGPATH];
+
+		snprintf(tmp_path, sizeof(tmp_path), "%s.%ld.unlinked", path, random());
+		if (!MoveFileEx(path, tmp_path, 0))
+		{
+			if (GetLastError() == ERROR_FILE_EXISTS)
+				continue;		/* try a new random number */
+			_dosmaperr(GetLastError());
+			return -1;
+		}
+
+		return unlink(tmp_path);
+	}
+#else
+	return unlink(path);
 #endif
 }
 
@@ -3269,8 +3299,9 @@ CleanupTempFiles(bool isCommit, bool isProcExit)
  * postmaster session
  *
  * This should be called during postmaster startup.  It will forcibly
- * remove any leftover files created by OpenTemporaryFile and any leftover
- * temporary relation files created by mdcreate.
+ * remove any leftover files created by OpenTemporaryFile, any leftover
+ * temporary relation files created by mdcreate, and anything left
+ * behind by pg_unlink() on crash.
  *
  * During post-backend-crash restart cycle, this routine is called when
  * remove_temp_files_after_crash GUC is enabled. Multiple crashes while
@@ -3448,7 +3479,8 @@ RemovePgTempRelationFilesInDbspace(const char *dbspacedirname)
 
 	while ((de = ReadDirExtended(dbspace_dir, dbspacedirname, LOG)) != NULL)
 	{
-		if (!looks_like_temp_rel_name(de->d_name))
+		if (!looks_like_temp_rel_name(de->d_name) &&
+			!pg_str_endswith(de->d_name, ".unlinked"))
 			continue;
 
 		snprintf(rm_path, sizeof(rm_path), "%s/%s",

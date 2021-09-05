@@ -19,6 +19,7 @@
 #include "access/xlog_internal.h"	/* for pg_start/stop_backup */
 #include "catalog/pg_type.h"
 #include "common/file_perm.h"
+#include "common/string.h"
 #include "commands/progress.h"
 #include "lib/stringinfo.h"
 #include "libpq/libpq.h"
@@ -1267,6 +1268,12 @@ sendDir(const char *path, int basepathlen, bool sizeonly, List *tablespaces,
 					PG_TEMP_FILE_PREFIX,
 					strlen(PG_TEMP_FILE_PREFIX)) == 0)
 			continue;
+
+#ifdef WIN32
+		/* Skip unlinked files */
+		if (pg_str_endswith(de->d_name, ".unlinked"))
+			continue;
+#endif
 
 		/*
 		 * Check if the postmaster has signaled us to exit, and abort with an

@@ -189,6 +189,7 @@ extern ssize_t pg_pwritev_with_retry(int fd,
 									 int iovcnt,
 									 off_t offset);
 extern int	pg_truncate(const char *path, off_t length);
+extern int	pg_unlink(const char *path);
 extern void fsync_fname(const char *fname, bool isdir);
 extern int	fsync_fname_ext(const char *fname, bool isdir, bool ignore_perm, int elevel);
 extern int	durable_rename(const char *oldfile, const char *newfile, int loglevel);

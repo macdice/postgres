@@ -374,7 +374,7 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 		/* Next unlink the file, unless it was already found to be missing */
 		if (ret == 0 || errno != ENOENT)
 		{
-			ret = unlink(path);
+			ret = pg_unlink(path);
 			if (ret < 0 && errno != ENOENT)
 				ereport(WARNING,
 						(errcode_for_file_access(),
@@ -422,7 +422,7 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 				register_forget_request(rnode, forkNum, segno);
 			}
 
-			if (unlink(segpath) < 0)
+			if (pg_unlink(segpath) < 0)
 			{
 				/* ENOENT is expected after the last segment... */
 				if (errno != ENOENT)
@@ -1753,7 +1753,7 @@ mdunlinkfiletag(const FileTag *ftag, char *path)
 	pfree(p);
 
 	/* Try to unlink the file. */
-	return unlink(path);
+	return pg_unlink(path);
 }
 
 /*
