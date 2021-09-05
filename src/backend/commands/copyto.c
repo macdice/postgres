@@ -722,6 +722,8 @@ BeginCopyTo(ParseState *pstate,
 								 "You may want a client-side facility such as psql's \\copy.") : 0));
 			}
 
+#ifndef WIN32
+/* XXX: can't fstat a file that we opened write-only! */
 			if (fstat(fileno(cstate->copy_file), &st))
 				ereport(ERROR,
 						(errcode_for_file_access(),
@@ -732,6 +734,7 @@ BeginCopyTo(ParseState *pstate,
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 						 errmsg("\"%s\" is a directory", cstate->filename)));
+#endif
 		}
 	}
 
