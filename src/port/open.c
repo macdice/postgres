@@ -89,6 +89,7 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 
 	/* Convert other parameters. */
 	desiredAccess =
+		FILE_READ_ATTRIBUTES |		/* allow fstat() even if O_WRONLY */
 		((fileFlags & O_TEMPORARY) ? DELETE : 0) |
 		((fileFlags & O_RDWR) ? FILE_GENERIC_WRITE | FILE_GENERIC_READ :
 		 (fileFlags & O_WRONLY) ? FILE_GENERIC_WRITE : FILE_GENERIC_READ);
