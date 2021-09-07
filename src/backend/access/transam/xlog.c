@@ -35,6 +35,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "access/xloginsert.h"
+#include "access/xlogprefetch.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/catversion.h"
@@ -113,6 +114,7 @@ int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
+int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
 
 #ifdef WAL_DEBUG
@@ -1653,7 +1655,7 @@ checkXLogConsistency(XLogReaderState *record)
 		 * temporary page.
 		 */
 		buf = XLogReadBufferExtended(rnode, forknum, blkno,
-									 RBM_NORMAL_NO_LOG);
+									 RBM_NORMAL_NO_LOG, InvalidBuffer);
 		if (!BufferIsValid(buf))
 			continue;
 
@@ -5227,7 +5229,6 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 			snprintf(activitymsg, sizeof(activitymsg), "waiting for %s",
 					 xlogfname);
 			set_ps_display(activitymsg);
-
 			if (!RestoreArchivedFile(path, xlogfname,
 									 "RECOVERYXLOG",
 									 wal_segment_size,
@@ -8232,6 +8233,12 @@ StartupXLOG(void)
 	xlogreader->system_identifier = ControlFile->system_identifier;
 
 	/*
+	 * Set the WAL decode buffer size.  This limits how far ahead we can read
+	 * in the WAL.
+	 */
+	XLogReaderSetDecodeBuffer(xlogreader, NULL, wal_decode_buffer_size);
+
+	/*
 	 * Allocate two page buffers dedicated to WAL consistency checks.  We do
 	 * it this way, rather than just making static arrays, for two reasons:
 	 * (1) no need to waste the storage in most instantiations of the backend;
@@ -8900,6 +8907,7 @@ StartupXLOG(void)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
+			XLogPrefetchState prefetch;
 			PGRUsage	ru0;
 
 			pg_rusage_init(&ru0);
@@ -8909,6 +8917,9 @@ StartupXLOG(void)
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							LSN_FORMAT_ARGS(ReadRecPtr))));
+
+			/* Prepare to prefetch, if configured. */
+			XLogPrefetchBegin(&prefetch, xlogreader);
 
 			/*
 			 * main redo apply loop
@@ -8938,6 +8949,9 @@ StartupXLOG(void)
 
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
+
+				/* Perform WAL prefetching, if enabled. */
+				XLogPrefetch(&prefetch);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -9111,6 +9125,9 @@ StartupXLOG(void)
 					 */
 					if (AllowCascadeReplication())
 						WalSndWakeup();
+
+					/* Reset the prefetcher. */
+					XLogPrefetchReconfigure();
 				}
 
 				/* Exit loop if we reached inclusive recovery target */
@@ -9127,6 +9144,7 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
+			XLogPrefetchEnd(&prefetch);
 
 			if (reachedRecoveryTarget)
 			{
@@ -13713,6 +13731,9 @@ CancelBackup(void)
  * and call XLogPageRead() again with the same arguments. This lets
  * XLogPageRead() to try fetching the record from another source, or to
  * sleep and retry.
+ *
+ * If nowait is true, then return false immediately if the requested data isn't
+ * available yet.
  */
 static int
 XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
@@ -14008,6 +14029,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					currentSource = XLOG_FROM_STREAM;
 					startWalReceiver = true;
+					XLogPrefetchReconfigure();
 					break;
 
 				case XLOG_FROM_STREAM:
@@ -14265,6 +14287,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						else
 							havedata = false;
 					}
+
 					if (havedata)
 					{
 						/*
