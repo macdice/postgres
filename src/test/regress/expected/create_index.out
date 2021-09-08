@@ -1909,6 +1909,66 @@ ORDER BY unique1;
       42
 (3 rows)
 
+-- Some temp debugging to try to track down randomly failing regression test
+create or replace function log_querytext(tag text, query text) returns int
+language plpgsql as
+$$
+declare
+    ln text;
+begin
+    for ln in
+        execute format('%s', query)
+    loop
+	raise log '%: %', tag, ln;
+    end loop;
+    return 1;
+end;
+$$;
+select log_querytext('explain_output',
+'explain (analyze, costs on, summary off, timing off)
+SELECT thousand, tenthous FROM tenk1
+WHERE thousand < 2 AND tenthous IN (1001,3000)
+ORDER BY thousand;
+');
+ log_querytext 
+---------------
+             1
+(1 row)
+
+select log_querytext('pg_class_details',
+'select row(relname, relallvisible, reltuples, relpages)::text
+from pg_class where relname like $$tenk1%$$;');
+ log_querytext 
+---------------
+             1
+(1 row)
+
+select log_querytext('pg_stat_user_tables',
+'select ut::text from pg_stat_user_tables ut where relname = $$tenk1$$;');
+ log_querytext 
+---------------
+             1
+(1 row)
+
+select log_querytext('shared_buffers_text', 'select current_setting($$shared_buffers$$);');
+ log_querytext 
+---------------
+             1
+(1 row)
+
+select log_querytext('tenk1_check',
+'select row(
+	count(*),sum(unique1),sum(unique2),sum(two),sum(four),sum(ten),
+	sum(twenty),sum(hundred),sum(thousand),sum(twothousand),
+	sum(fivethous),sum(tenthous),sum(odd),sum(even),
+	sum(length(stringu1)),sum(length(stringu2)),
+	sum(length(string4)), pg_relation_size($$tenk1$$)
+)::text from tenk1;');
+ log_querytext 
+---------------
+             1
+(1 row)
+
 explain (costs off)
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
