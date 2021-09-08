@@ -704,7 +704,8 @@ pgaio_iocp_give_baton(PgAioInProgress * io, int result)
 		}
 		else
 		{
-			elog(PANIC, "unreachable");
+			fprintf(stderr, "unreachable %u\n", flags);
+			abort();
 		}
 	}
 
@@ -772,7 +773,8 @@ pgaio_iocp_completion_thread(LPVOID param)
 			else
 			{
 				/* Error trying to dequeue. */
-				elog(ERROR, "could not wait for completion events: %m");
+				fprintf(stderr, "could not wait for completion events: %m\n");
+				abort();
 			}
 		}
 		else
