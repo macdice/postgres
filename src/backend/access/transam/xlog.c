@@ -4718,8 +4718,11 @@ XLogFileInitInternal(XLogSegNo logsegno, bool *added, char *path)
 
 	if (io_wal_init_direct)
 		open_flags |= PG_O_DIRECT;
+
+#ifdef WIN32
 	if (io_method == IOMETHOD_WINDOWS)
 		open_flags |= O_OVERLAPPED;
+#endif
 
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
 	fd = BasicOpenFile(tmppath, open_flags);
@@ -5150,8 +5153,10 @@ XLogFileOpen(XLogSegNo segno)
 
 	XLogFilePath(path, ThisTimeLineID, segno, wal_segment_size);
 
+#ifdef WIN32
 	if (io_method == IOMETHOD_WINDOWS)
 		flags |= O_OVERLAPPED;
+#endif
 
 	fd = BasicOpenFile(path, flags);
 	if (fd < 0)
@@ -5267,8 +5272,10 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 
 	flags = O_RDONLY | PG_BINARY;
 
+#ifdef WIN32
 	if (io_method == IOMETHOD_WINDOWS)
 		flags |= O_OVERLAPPED;
+#endif
 
 	fd = BasicOpenFile(path, flags);
 
@@ -12140,8 +12147,10 @@ get_sync_bit(int method)
 		o_direct_flag = PG_O_DIRECT;
 #endif
 
+#ifdef WIN32
 	if (io_method == IOMETHOD_WINDOWS)
 		o_direct_flag |= O_OVERLAPPED;
+#endif
 
 	switch (method)
 	{
