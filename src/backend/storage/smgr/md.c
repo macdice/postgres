@@ -585,7 +585,7 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		Assert(segstartblock < RELSEG_SIZE);
 		Assert(segendblock <= RELSEG_SIZE);
 
-#ifdef HAVE_POSIX_FALLOCATE
+#ifdef HAVE_POSIX_FALLOCATEx
 		{
 			int			fd = FileGetRawDesc(v->mdfd_vfd);
 			off_t		seekpos = (off_t) BLCKSZ * segstartblock;

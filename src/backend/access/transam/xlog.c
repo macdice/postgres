@@ -4773,7 +4773,7 @@ XLogFileInitInternal(XLogSegNo logsegno, bool *added, char *path)
 		 * indirect blocks are down on disk.  Therefore, fdatasync(2) or
 		 * O_DSYNC will be sufficient to sync future writes to the log file.
 		 */
-#ifdef HAVE_POSIX_FALLOCATE
+#ifdef HAVE_POSIX_FALLOCATEx
 		if ((errno = posix_fallocate(fd, 0, wal_segment_size)) != 0 &&
 			errno != EINVAL &&
 			errno != EOPNOTSUPP)
