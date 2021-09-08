@@ -91,21 +91,6 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 	//Assert(pgwin32_signal_event != NULL);	/* small chance of pg_usleep() */
 #endif
 
-#ifdef FRONTEND
-
-	/*
-	 * Since PostgreSQL 12, those concurrent-safe versions of open() and
-	 * fopen() can be used by frontends, having as side-effect to switch the
-	 * file-translation mode from O_TEXT to O_BINARY if none is specified.
-	 * Caller may want to enforce the binary or text mode, but if nothing is
-	 * defined make sure that the default mode maps with what versions older
-	 * than 12 have been doing.
-	 */
-	if ((fileFlags & O_BINARY) == 0)
-		fileFlags |= O_TEXT;
->>>>>>> 88a081e585 (fixup windows: dirty hack to disable assertion, fixme)
-#endif
-
 	sa.nLength = sizeof(sa);
 	sa.bInheritHandle = TRUE;
 	sa.lpSecurityDescriptor = NULL;
@@ -183,6 +168,8 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 
 	if (fileFlags & O_OVERLAPPED)
 		pgaio_windows_register_file_handle(h);
+
+	return h;
 }
 
 int
@@ -207,6 +194,7 @@ pgwin32_open(const char *fileName, int fileFlags,...)
 	 */
 	if ((fileFlags & O_BINARY) == 0)
 		fileFlags |= O_TEXT;
+#endif
 
 	/* _open_osfhandle will, on error, set errno accordingly */
 	if ((fd = _open_osfhandle((intptr_t) h, fileFlags & O_APPEND)) < 0)
