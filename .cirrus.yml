@@ -50,7 +50,8 @@ task:
     - su postgres -c 'gmake -s -j4 && gmake -s -j4 -C contrib'
   worker_buf_script:
     #- su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_buf.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_buf.log 2>&1
-    - dtrace -n 'sched:::off-cpu { @[stack()] = count(); }' -o off_cpu.profile -c "sudo --preserve-env -u postgres gmake -s -j8 ${CHECK} ${CHECKFLAGS}"
+    #- dtrace -n 'sched:::off-cpu { @[stack()] = count(); }' -o off_cpu.profile -c "sudo --preserve-env -u postgres gmake -s -j8 ${CHECK} ${CHECKFLAGS}"
+    - dtrace -n 'profile-99 /arg0/ { @[stack()] = count(); }' -o on_cpu.profile -c "sudo --preserve-env -u postgres gmake -s -j8 ${CHECK} ${CHECKFLAGS}"
   #worker_dio_script:
   #  - su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_dio.log 2>&1
   #posix_aio_buf_script:
