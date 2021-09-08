@@ -101,6 +101,10 @@ const IoMethodOps pgaio_iocp_ops = {
 static void
 pgaio_iocp_shmem_init(void)
 {
+	/* XXX: don't re-initialize while already running */
+	if (IsUnderPostmaster && IsPostmasterEnvironment)
+		return;
+
 	for (int i = 0; i < max_aio_in_progress; i++)
 	{
 		PgAioInProgress *io = &aio_ctl->in_progress_io[i];

@@ -12130,7 +12130,8 @@ get_sync_bit(int method)
 		o_direct_flag |= PG_O_DIRECT;
 
 	/* If fsync is disabled, never open in sync mode */
-	if (!enableFsync)
+	/* FIXME: the iocp test is a temporary workaround */
+	if (!enableFsync && io_method != IOMETHOD_IOCP)
 		return o_direct_flag;
 
 #if 0
