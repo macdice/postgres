@@ -2,7 +2,7 @@ env:
   # accelerate initial clone
   CIRRUS_CLONE_DEPTH: 1
   # target to test, for all but OSX and windows
-  CHECK: check
+  CHECK: check-world
   CHECKFLAGS: -Otarget
   PGCTLTIMEOUT: 120
 
