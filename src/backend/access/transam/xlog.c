@@ -4720,7 +4720,7 @@ XLogFileInitInternal(XLogSegNo logsegno, bool *added, char *path)
 		open_flags |= PG_O_DIRECT;
 
 #ifdef WIN32
-	if (io_method == IOMETHOD_WINDOWS)
+	if (io_method == IOMETHOD_IOCP)
 		open_flags |= O_OVERLAPPED;
 #endif
 
@@ -5154,7 +5154,7 @@ XLogFileOpen(XLogSegNo segno)
 	XLogFilePath(path, ThisTimeLineID, segno, wal_segment_size);
 
 #ifdef WIN32
-	if (io_method == IOMETHOD_WINDOWS)
+	if (io_method == IOMETHOD_IOCP)
 		flags |= O_OVERLAPPED;
 #endif
 
@@ -5273,7 +5273,7 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 	flags = O_RDONLY | PG_BINARY;
 
 #ifdef WIN32
-	if (io_method == IOMETHOD_WINDOWS)
+	if (io_method == IOMETHOD_IOCP)
 		flags |= O_OVERLAPPED;
 #endif
 
@@ -12148,7 +12148,7 @@ get_sync_bit(int method)
 #endif
 
 #ifdef WIN32
-	if (io_method == IOMETHOD_WINDOWS)
+	if (io_method == IOMETHOD_IOCP)
 		o_direct_flag |= O_OVERLAPPED;
 #endif
 

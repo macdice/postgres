@@ -155,7 +155,7 @@ _mdfd_open_flags(ForkNumber forkNum)
 		flags |= PG_O_DIRECT;
 
 #ifdef WIN32
-	if (io_method == IOMETHOD_WINDOWS)
+	if (io_method == IOMETHOD_IOCP)
 		flags |= O_OVERLAPPED;
 #endif
 
