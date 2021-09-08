@@ -24,6 +24,7 @@ task:
     - sysctl kern.corefile='/tmp/%N.%P.core'
     - sysctl kern.timecounter.hardware=TSC-low
     - sysctl vfs.write_behind=0
+    - sysctl vfs.timestamp_precision=1
   ccache_cache:
     folder: "/tmp/ccache_dir"
   create_partition_script:
@@ -38,7 +39,7 @@ task:
     - du -hs $CIRRUS_WORKING_DIR
     - mv $CIRRUS_WORKING_DIR $CIRRUS_WORKING_DIR.orig
     - mkdir $CIRRUS_WORKING_DIR
-    - mount /dev/da0p3 $CIRRUS_WORKING_DIR
+    - mount -o noatime /dev/da0p3 $CIRRUS_WORKING_DIR
     - cp -r $CIRRUS_WORKING_DIR.orig/* $CIRRUS_WORKING_DIR/
   create_user_script:
     - pw useradd postgres
