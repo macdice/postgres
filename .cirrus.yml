@@ -58,7 +58,7 @@ task:
   #posix_aio_dio_script:
   #  - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_dio.log 2>&1
   always:
-    log_profile:
+    profile_artifacts:
       path: "**/**.profile"
       type: text/plain
   on_failure:
