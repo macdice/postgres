@@ -57,14 +57,12 @@ task:
   #  - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_buf.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_buf.log 2>&1
   #posix_aio_dio_script:
   #  - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_dio.log 2>&1
-  fetch_flamegraph_script:
-    - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/stackcollapse.pl
-    - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/flamegraph.pl
-    - chmod +x stackcollapse.pl flamegraph.pl
   render_flamegraph_script:
     # let's remove the expected off-cpu stuff (kevent etc) since otherwise it
     # would dominate
-    - ./stackcollapse.pl off_cpu.stacks | grep -v sys_kevent | grep -v sys_poll | grep -v sys_select | ./flamegraph.pl > off_cpu_filtered.svg
+    - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/stackcollapse.pl
+    - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/flamegraph.pl
+    - perl ./stackcollapse.pl off_cpu.stacks | grep -v sys_kevent | grep -v sys_poll | grep -v sys_select | perl ./flamegraph.pl > off_cpu_filtered.svg
   upload_flamegraph_artifacts:
     path: "**/**.svg"
     type: image/svg+xml
