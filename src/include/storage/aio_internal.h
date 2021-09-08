@@ -351,8 +351,8 @@ struct PgAioInProgress
 
 			/* Raw result from the kernel, if known. */
 			volatile int raw_result;
-#define PGAIO_WINDOWS_RESULT_INVALID INT_MIN
-		} windows;
+#define PGAIO_IOCP_RESULT_INVALID INT_MIN
+		} iocp;
 #endif
 	} io_method_data;
 	union
@@ -602,7 +602,7 @@ extern const IoMethodOps pgaio_uring_ops;
 extern const IoMethodOps pgaio_posix_aio_ops;
 #endif
 #ifdef WIN32
-extern const IoMethodOps pgaio_windows_ops;
+extern const IoMethodOps pgaio_iocp_ops;
 #endif
 
 /* global list of in-progress IO */

@@ -1,13 +1,13 @@
 /*-------------------------------------------------------------------------
  *
- * aio_windows.c
- *	  Routines for Windows.
+ * aio_iocp.c
+ *	  Routines for Windows IOCP.
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
- *	  src/backend/storage/aio/aio_windows.c
+ *	  src/backend/storage/aio/aio_iocp.c
  *
  *-------------------------------------------------------------------------
  */
@@ -28,37 +28,37 @@
  * How much memory does each FILE_SEGMENT_ELEMENT cover?
  * XXX Should we call GetSystemInfo() to get this value at runtime?
  */
-#define PGAIO_WINDOWS_IOV_SEG_SIZE 4096
+#define PGAIO_IOCP_IOV_SEG_SIZE 4096
 
-static HANDLE pgaio_windows_completion_port;
+static HANDLE pgaio_iocp_completion_port;
 
-static bool	pgaio_windows_take_baton(PgAioInProgress * io);
-static bool pgaio_windows_give_baton(PgAioInProgress * io, int result);
+static bool	pgaio_iocp_take_baton(PgAioInProgress * io);
+static bool pgaio_iocp_give_baton(PgAioInProgress * io, int result);
 
 static PgAioInProgress * io_for_overlapped(OVERLAPPED *overlapped);
 static OVERLAPPED *overlapped_for_io(PgAioInProgress *io);
 
-static int	pgaio_windows_start_rw(PgAioInProgress * io);
-static void pgaio_windows_kernel_io_done(PgAioInProgress * io,
+static int	pgaio_iocp_start_rw(PgAioInProgress * io);
+static void pgaio_iocp_kernel_io_done(PgAioInProgress * io,
 										 int result);
 
-static uint64 pgaio_windows_make_flags(uint64 control_flags,
+static uint64 pgaio_iocp_make_flags(uint64 control_flags,
 									   uint32 submitter_id,
 									   uint32 completer_id);
 
 /* Entry points for IoMethodOps. */
-static void pgaio_windows_shmem_init(void);
-static int pgaio_windows_submit(int max_submit, bool drain);
-static void pgaio_windows_wait_one(PgAioContext *context, PgAioInProgress *io, uint64 ref_generation, uint32 wait_event_info);
-static void pgaio_windows_io_retry(PgAioInProgress *io);
-static int pgaio_windows_drain(PgAioContext *context, bool block, bool call_shared);
-static void pgaio_windows_closing_fd(int fd);
+static void pgaio_iocp_shmem_init(void);
+static int pgaio_iocp_submit(int max_submit, bool drain);
+static void pgaio_iocp_wait_one(PgAioContext *context, PgAioInProgress *io, uint64 ref_generation, uint32 wait_event_info);
+static void pgaio_iocp_io_retry(PgAioInProgress *io);
+static int pgaio_iocp_drain(PgAioContext *context, bool block, bool call_shared);
+static void pgaio_iocp_closing_fd(int fd);
 
 
 /* XXX put these in the right order */
-static void pgaio_windows_submit_one(PgAioInProgress *io);
-static void pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios);
-static void pgaio_windows_postmaster_child_init_local(void);
+static void pgaio_iocp_submit_one(PgAioInProgress *io);
+static void pgaio_iocp_submit_internal(PgAioInProgress *ios[], int nios);
+static void pgaio_iocp_postmaster_child_init_local(void);
 
 
 /*
@@ -67,24 +67,24 @@ static void pgaio_windows_postmaster_child_init_local(void);
  */
 
 /* Bits and masks for determining the completer for an IO. */
-#define PGAIO_WINDOWS_FLAG_AVAILABLE			0x0100000000000000
-#define PGAIO_WINDOWS_AIO_FLAG_REQUESTED		0x0200000000000000
-#define PGAIO_WINDOWS_AIO_FLAG_GRANTED			0x0400000000000000
-#define PGAIO_WINDOWS_FLAG_DONE					0x0800000000000000
-#define PGAIO_WINDOWS_FLAG_RESULT				0x1000000000000000
-#define PGAIO_WINDOWS_FLAG_SUBMITTER_MASK		0x00ffffff00000000
-#define PGAIO_WINDOWS_FLAG_COMPLETER_MASK		0x0000000000ffffff
-#define PGAIO_WINDOWS_FLAG_SUBMITTER_SHIFT		32
+#define PGAIO_IOCP_FLAG_AVAILABLE				0x0100000000000000
+#define PGAIO_IOCP_AIO_FLAG_REQUESTED			0x0200000000000000
+#define PGAIO_IOCP_AIO_FLAG_GRANTED				0x0400000000000000
+#define PGAIO_IOCP_FLAG_DONE					0x0800000000000000
+#define PGAIO_IOCP_FLAG_RESULT					0x1000000000000000
+#define PGAIO_IOCP_FLAG_SUBMITTER_MASK			0x00ffffff00000000
+#define PGAIO_IOCP_FLAG_COMPLETER_MASK			0x0000000000ffffff
+#define PGAIO_IOCP_FLAG_SUBMITTER_SHIFT			32
 
 
-const IoMethodOps pgaio_windows_ops = {
-	.shmem_init = pgaio_windows_shmem_init,
-	.postmaster_child_init_local = pgaio_windows_postmaster_child_init_local,
-	.submit = pgaio_windows_submit,
-	.retry = pgaio_windows_io_retry,
-	.wait_one = pgaio_windows_wait_one,
-	.drain = pgaio_windows_drain,
-	.closing_fd = pgaio_windows_closing_fd,
+const IoMethodOps pgaio_iocp_ops = {
+	.shmem_init = pgaio_iocp_shmem_init,
+	.postmaster_child_init_local = pgaio_iocp_postmaster_child_init_local,
+	.submit = pgaio_iocp_submit,
+	.retry = pgaio_iocp_io_retry,
+	.wait_one = pgaio_iocp_wait_one,
+	.drain = pgaio_iocp_drain,
+	.closing_fd = pgaio_iocp_closing_fd,
 
 	/*
 	 * Windows ReadFileScatter() and WriteFileGather() only work on direct IO
@@ -99,13 +99,13 @@ const IoMethodOps pgaio_windows_ops = {
  * Initialize shared memory data structures.
  */
 static void
-pgaio_windows_shmem_init(void)
+pgaio_iocp_shmem_init(void)
 {
 	for (int i = 0; i < max_aio_in_progress; i++)
 	{
 		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
 
-		pg_atomic_init_u64(&io->io_method_data.windows.flags, 0);
+		pg_atomic_init_u64(&io->io_method_data.iocp.flags, 0);
 	}
 }
 
@@ -117,7 +117,7 @@ pgaio_windows_shmem_init(void)
  * any results that have arrived, without waiting.
  */
 static int
-pgaio_windows_submit(int max_submit, bool drain)
+pgaio_iocp_submit(int max_submit, bool drain)
 {
 	PgAioInProgress *ios[PGAIO_SUBMIT_BATCH_SIZE];
 	int			nios = 0;
@@ -142,7 +142,7 @@ pgaio_windows_submit(int max_submit, bool drain)
 		ios[nios] = io;
 		++nios;
 	}
-	pgaio_windows_submit_internal(ios, nios);
+	pgaio_iocp_submit_internal(ios, nios);
 	END_CRIT_SECTION();
 
 	/* XXXX copied from uring submit */
@@ -168,11 +168,11 @@ pgaio_windows_submit(int max_submit, bool drain)
  * read) or that the kernel told us to retry.
  */
 static void
-pgaio_windows_io_retry(PgAioInProgress * io)
+pgaio_iocp_io_retry(PgAioInProgress * io)
 {
 	WRITE_ONCE_F(io->flags) |= PGAIOIP_INFLIGHT;
 
-	pgaio_windows_submit_internal(&io, 1);
+	pgaio_iocp_submit_internal(&io, 1);
 
 	pgaio_complete_ios(false);
 
@@ -180,17 +180,17 @@ pgaio_windows_io_retry(PgAioInProgress * io)
 }
 
 static void
-pgaio_windows_submit_one(PgAioInProgress *io)
+pgaio_iocp_submit_one(PgAioInProgress *io)
 {
 	int rc;
 
 	pg_atomic_add_fetch_u32(&my_aio->inflight_count, 1);
 
 	/* Set things up so that any backend can become the completer. */
-	/* XXX PGAIO_WINDOWS_RESULT_INVALID is not defined. */
-	io->io_method_data.windows.raw_result = PGAIO_WINDOWS_RESULT_INVALID;
-	pg_atomic_write_u64(&io->io_method_data.windows.flags,
-						pgaio_windows_make_flags(PGAIO_WINDOWS_FLAG_AVAILABLE,
+	/* XXX PGAIO_IOCP_RESULT_INVALID is not defined. */
+	io->io_method_data.iocp.raw_result = PGAIO_IOCP_RESULT_INVALID;
+	pg_atomic_write_u64(&io->io_method_data.iocp.flags,
+						pgaio_iocp_make_flags(PGAIO_IOCP_FLAG_AVAILABLE,
 												 my_aio_id,
 												 0));
 
@@ -200,7 +200,7 @@ pgaio_windows_submit_one(PgAioInProgress *io)
 	 */
 	for (PgAioInProgress * cur = io;;)
 	{
-		cur->io_method_data.windows.merge_head_idx = pgaio_io_id(io);
+		cur->io_method_data.iocp.merge_head_idx = pgaio_io_id(io);
 		if (cur->merge_with_idx == PGAIO_MERGE_INVALID)
 			break;
 		cur = &aio_ctl->in_progress_io[cur->merge_with_idx];
@@ -210,7 +210,7 @@ pgaio_windows_submit_one(PgAioInProgress *io)
 	{
 	case PGAIO_OP_READ:
 	case PGAIO_OP_WRITE:
-		rc = pgaio_windows_start_rw(io);
+		rc = pgaio_iocp_start_rw(io);
 		break;
 	case PGAIO_OP_INVALID:
 		rc = -1;
@@ -222,11 +222,11 @@ pgaio_windows_submit_one(PgAioInProgress *io)
 	}
 
 	if (rc < 0)
-		pgaio_windows_kernel_io_done(io, -errno);
+		pgaio_iocp_kernel_io_done(io, -errno);
 }
 
 static void
-pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios)
+pgaio_iocp_submit_internal(PgAioInProgress *ios[], int nios)
 {
 	PgAioInProgress *synchronous_ios[PGAIO_SUBMIT_BATCH_SIZE];
 	int nsync = 0;
@@ -241,7 +241,7 @@ pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios)
 		{
 			case PGAIO_OP_FLUSH_RANGE:	/* XXX ignoring for now */
 			case PGAIO_OP_NOP:
-				pgaio_windows_kernel_io_done(io, 0);
+				pgaio_iocp_kernel_io_done(io, 0);
 				break;
 			case PGAIO_OP_FSYNC:
 				/*
@@ -251,7 +251,7 @@ pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios)
 				synchronous_ios[nsync++] = ios[i];
 				break;
 			default:
-				pgaio_windows_submit_one(io);
+				pgaio_iocp_submit_one(io);
 				break;
 			}
 	}
@@ -269,13 +269,13 @@ static int segment_element_size = 0;
 
 /*
  * Convert Unix iovec array to Windows memory-page representation.  The
- * segments array must have space for PGAIO_WINDOWS_IOV_MAX_PAGES plus one
+ * segments array must have space for PGAIO_IOCP_IOV_MAX_PAGES plus one
  * more for NULL termination.
  *
  * Returns the total number of bytes to transfer.
  */
 static size_t
-pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT **segments,
+pgaio_iocp_iov_to_segments(FILE_SEGMENT_ELEMENT **segments,
 							  const struct iovec *iov, int iovcnt)
 {
 	int count = 0;
@@ -287,7 +287,7 @@ pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT **segments,
 	for (int i = 0; i < iovcnt; i++)
 		total_len += iov[i].iov_len;
 
-	num_win_pages = total_len / PGAIO_WINDOWS_IOV_SEG_SIZE + 1;
+	num_win_pages = total_len / PGAIO_IOCP_IOV_SEG_SIZE + 1;
 
 	if (segments_elements == NULL)
 	{
@@ -304,30 +304,30 @@ pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT **segments,
 		base = iov[i].iov_base;
 		len = iov[i].iov_len;
 
-		if (len % PGAIO_WINDOWS_IOV_SEG_SIZE != 0)
+		if (len % PGAIO_IOCP_IOV_SEG_SIZE != 0)
 			elog(ERROR, "scatter/gather I/O not multiple of memory page size");
 
 		/* Unpack this iovec into pages. */
 		while (len > 0)
 		{
-		//	elog(LOG, "pgaio_windows_iov_to_segments: %p %zu iovcnt = %d, count = %d, PGAIO_WINDOWS_IOV_MAX_PAGES = %d", base, len, iovcnt, count, PGAIO_WINDOWS_IOV_MAX_PAGES);
+		//	elog(LOG, "pgaio_iocp_iov_to_segments: %p %zu iovcnt = %d, count = %d, PGAIO_IOCP_IOV_MAX_PAGES = %d", base, len, iovcnt, count, PGAIO_IOCP_IOV_MAX_PAGES);
 			segments_elements[count++].Buffer = base;
-			base += PGAIO_WINDOWS_IOV_SEG_SIZE;
-			len -= PGAIO_WINDOWS_IOV_SEG_SIZE;
+			base += PGAIO_IOCP_IOV_SEG_SIZE;
+			len -= PGAIO_IOCP_IOV_SEG_SIZE;
 		}
 	}
 
 	segments_elements[count].Buffer = NULL;
 	*segments = segments_elements;
 
-	return count * PGAIO_WINDOWS_IOV_SEG_SIZE;
+	return count * PGAIO_IOCP_IOV_SEG_SIZE;
 }
 
 /*
  * Start a read or write.
  */
 static int
-pgaio_windows_start_rw(PgAioInProgress * io)
+pgaio_iocp_start_rw(PgAioInProgress * io)
 {
 	OVERLAPPED *overlapped = overlapped_for_io(io);
 	struct iovec iov[IOV_MAX];
@@ -362,7 +362,7 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 		}
 
 		/* Convert to the page-by-page format Windows requires. */
-		size = pgaio_windows_iov_to_segments(&segments, iov, iovcnt);
+		size = pgaio_iocp_iov_to_segments(&segments, iov, iovcnt);
 
 		if (io->op == PGAIO_OP_READ)
 			result = ReadFileScatter((HANDLE) _get_osfhandle(io->op_data.read.fd), segments, size, NULL, overlapped);
@@ -386,7 +386,7 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 
 		if (err != ERROR_IO_PENDING)
 		{
-			elog(LOG, "pgaio_windows_start_rw: %d", err);
+			elog(LOG, "pgaio_iocp_start_rw: %d", err);
 			_dosmaperr(err);
 			return -1;
 		}
@@ -401,7 +401,7 @@ pgaio_windows_start_rw(PgAioInProgress * io)
  * Wait for a given IO/generation to complete.
  */
 static void
-pgaio_windows_wait_one(PgAioContext *context,
+pgaio_iocp_wait_one(PgAioContext *context,
 					   PgAioInProgress * io,
 					   uint64 ref_generation,
 					   uint32 wait_event_info)
@@ -421,10 +421,10 @@ pgaio_windows_wait_one(PgAioContext *context,
 		 * Find the IO that is the head of the merge chain.  This information
 		 * may be arbitrarily out of date, but we'll cope with that.
 		 */
-		merge_head_idx = io->io_method_data.windows.merge_head_idx;
+		merge_head_idx = io->io_method_data.iocp.merge_head_idx;
 		merge_head_io = &aio_ctl->in_progress_io[merge_head_idx];
 
-		if (pgaio_windows_take_baton(merge_head_io))
+		if (pgaio_iocp_take_baton(merge_head_io))
 		{
 			/*
 			 * We're now the completer for the head of the merged IO
@@ -433,7 +433,7 @@ pgaio_windows_wait_one(PgAioContext *context,
 			 * let's process it anyway and check the generation again.
 			 */
 			pgaio_process_io_completion(merge_head_io,
-										merge_head_io->io_method_data.windows.raw_result);
+										merge_head_io->io_method_data.iocp.raw_result);
 		}
 		else
 		{
@@ -455,7 +455,7 @@ pgaio_windows_wait_one(PgAioContext *context,
 }
 
 int
-pgaio_windows_drain(PgAioContext *context, bool block, bool call_shared)
+pgaio_iocp_drain(PgAioContext *context, bool block, bool call_shared)
 {
 	/*
 	 * XXX The problem with doing nothing here is that we don't find out about
@@ -477,13 +477,13 @@ io_for_overlapped(OVERLAPPED *overlapped)
 {
 	return (PgAioInProgress *)
 		(((char *) overlapped) - offsetof(PgAioInProgress,
-								  io_method_data.windows.overlapped));
+								  io_method_data.iocp.overlapped));
 }
 
 static OVERLAPPED *
 overlapped_for_io(PgAioInProgress * io)
 {
-	return &io->io_method_data.windows.overlapped;
+	return &io->io_method_data.iocp.overlapped;
 }
 
 /*
@@ -492,7 +492,7 @@ overlapped_for_io(PgAioInProgress * io)
  * completion thread so mustn't do anything but update atomics and set latches.
  */
 static void
-pgaio_windows_kernel_io_done(PgAioInProgress * io, int result)
+pgaio_iocp_kernel_io_done(PgAioInProgress * io, int result)
 {
 	pg_atomic_fetch_sub_u32(&my_aio->inflight_count, 1);
 
@@ -500,44 +500,44 @@ pgaio_windows_kernel_io_done(PgAioInProgress * io, int result)
 	 * Store the value for later, for whoever arrives first to take the baton.
 	 * If someone is waiting already, give them the baton now.
 	 */
-	pgaio_windows_give_baton(io, result);
+	pgaio_iocp_give_baton(io, result);
 }
 
 
 /* Functions for negotiating who is allowed to complete an IO. */
 static uint64
-pgaio_windows_make_flags(uint64 control_flags,
+pgaio_iocp_make_flags(uint64 control_flags,
 						 uint32 submitter_id,
 						 uint32 completer_id)
 {
 	return control_flags |
-		(((uint64) submitter_id) << PGAIO_WINDOWS_FLAG_SUBMITTER_SHIFT) |
+		(((uint64) submitter_id) << PGAIO_IOCP_FLAG_SUBMITTER_SHIFT) |
 		completer_id;
 }
 
 static uint32
-pgaio_windows_submitter_from_flags(uint64 flags)
+pgaio_iocp_submitter_from_flags(uint64 flags)
 {
-	return (flags & PGAIO_WINDOWS_FLAG_SUBMITTER_MASK) >>
-		PGAIO_WINDOWS_FLAG_SUBMITTER_SHIFT;
+	return (flags & PGAIO_IOCP_FLAG_SUBMITTER_MASK) >>
+		PGAIO_IOCP_FLAG_SUBMITTER_SHIFT;
 }
 
 static uint32
-pgaio_windows_completer_from_flags(uint64 flags)
+pgaio_iocp_completer_from_flags(uint64 flags)
 {
-	return flags & PGAIO_WINDOWS_FLAG_COMPLETER_MASK;
+	return flags & PGAIO_IOCP_FLAG_COMPLETER_MASK;
 }
 
 static bool
-pgaio_windows_update_flags(PgAioInProgress * io,
+pgaio_iocp_update_flags(PgAioInProgress * io,
 						   uint64 old_flags,
 						   uint64 control_flags,
 						   uint32 submitter_id,
 						   uint32 completer_id)
 {
-	return pg_atomic_compare_exchange_u64(&io->io_method_data.windows.flags,
+	return pg_atomic_compare_exchange_u64(&io->io_method_data.iocp.flags,
 										  &old_flags,
-										  pgaio_windows_make_flags(control_flags,
+										  pgaio_iocp_make_flags(control_flags,
 																   submitter_id,
 																   completer_id));
 }
@@ -546,7 +546,7 @@ pgaio_windows_update_flags(PgAioInProgress * io,
  * Try to get permission to complete this IO.  Waits if no result available yet.
  */
 static bool
-pgaio_windows_take_baton(PgAioInProgress * io)
+pgaio_iocp_take_baton(PgAioInProgress * io)
 {
 	uint32		submitter_id;
 	uint32		completer_id;
@@ -555,24 +555,24 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 
 	for (;;)
 	{
-		flags = pg_atomic_read_u64(&io->io_method_data.windows.flags);
-		submitter_id = pgaio_windows_submitter_from_flags(flags);
-		completer_id = pgaio_windows_completer_from_flags(flags);
+		flags = pg_atomic_read_u64(&io->io_method_data.iocp.flags);
+		submitter_id = pgaio_iocp_submitter_from_flags(flags);
+		completer_id = pgaio_iocp_completer_from_flags(flags);
 
-		printf("[%x] pgaio_windows_take_baton: flags = %llx\n", my_aio_id, flags);
+		printf("[%x] pgaio_iocp_take_baton: flags = %llx\n", my_aio_id, flags);
 
-		if (flags & PGAIO_WINDOWS_FLAG_AVAILABLE)
+		if (flags & PGAIO_IOCP_FLAG_AVAILABLE)
 		{
-			if ((flags & PGAIO_WINDOWS_FLAG_RESULT))
+			if ((flags & PGAIO_IOCP_FLAG_RESULT))
 			{
 				/*
 				 * The raw result from the kernel is already, available, or
 				 * the caller (submitter) has it.  Grant the baton
 				 * immediately.
 				 */
-				if (!pgaio_windows_update_flags(io,
+				if (!pgaio_iocp_update_flags(io,
 												flags,
-												PGAIO_WINDOWS_FLAG_DONE,
+												PGAIO_IOCP_FLAG_DONE,
 												submitter_id,
 												my_aio_id))
 					continue;	/* lost race, try again */
@@ -581,9 +581,9 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 			else
 			{
 				/* Request the right to complete. */
-				if (!pgaio_windows_update_flags(io,
+				if (!pgaio_iocp_update_flags(io,
 												flags,
-												PGAIO_WINDOWS_AIO_FLAG_REQUESTED,
+												PGAIO_IOCP_AIO_FLAG_REQUESTED,
 												submitter_id,
 												my_aio_id))
 					continue;	/* lost race, try again */
@@ -592,7 +592,7 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 				waiting = true;
 			}
 		}
-		else if (flags & PGAIO_WINDOWS_AIO_FLAG_REQUESTED)
+		else if (flags & PGAIO_IOCP_AIO_FLAG_REQUESTED)
 		{
 
 			if (waiting)
@@ -622,14 +622,14 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 				return false;
 			}
 		}
-		else if (flags & PGAIO_WINDOWS_AIO_FLAG_GRANTED)
+		else if (flags & PGAIO_IOCP_AIO_FLAG_GRANTED)
 		{
 			/* It was granted to someone.  Was it us? */
 			if (completer_id == my_aio_id)
 			{
-				if (!pgaio_windows_update_flags(io,
+				if (!pgaio_iocp_update_flags(io,
 												flags,
-												PGAIO_WINDOWS_FLAG_DONE,
+												PGAIO_IOCP_FLAG_DONE,
 												submitter_id,
 												my_aio_id))
 					continue;	/* lost race, try again */
@@ -650,27 +650,27 @@ pgaio_windows_take_baton(PgAioInProgress * io)
  * shared memory and set latches, can't run any normal PostgreSQL code.
  */
 static bool
-pgaio_windows_give_baton(PgAioInProgress * io, int result)
+pgaio_iocp_give_baton(PgAioInProgress * io, int result)
 {
 	uint64		flags;
 	uint32		submitter_id;
 	uint32		completer_id;
 
-	io->io_method_data.windows.raw_result = result;
+	io->io_method_data.iocp.raw_result = result;
 
 
 	for (;;)
 	{
-		flags = pg_atomic_read_u64(&io->io_method_data.windows.flags);
-		submitter_id = pgaio_windows_submitter_from_flags(flags);
-		completer_id = pgaio_windows_completer_from_flags(flags);
+		flags = pg_atomic_read_u64(&io->io_method_data.iocp.flags);
+		submitter_id = pgaio_iocp_submitter_from_flags(flags);
+		completer_id = pgaio_iocp_completer_from_flags(flags);
 
-		if (flags & PGAIO_WINDOWS_FLAG_AVAILABLE)
+		if (flags & PGAIO_IOCP_FLAG_AVAILABLE)
 		{
-			if (!pgaio_windows_update_flags(io,
+			if (!pgaio_iocp_update_flags(io,
 											flags,
-											PGAIO_WINDOWS_FLAG_AVAILABLE |
-											PGAIO_WINDOWS_FLAG_RESULT,
+											PGAIO_IOCP_FLAG_AVAILABLE |
+											PGAIO_IOCP_FLAG_RESULT,
 											submitter_id,
 											completer_id))
 				continue;		/* lost race, try again (not expected) */
@@ -681,11 +681,11 @@ pgaio_windows_give_baton(PgAioInProgress * io, int result)
 			 */
 			break;
 		}
-		else if (flags & PGAIO_WINDOWS_AIO_FLAG_REQUESTED)
+		else if (flags & PGAIO_IOCP_AIO_FLAG_REQUESTED)
 		{
-			if (!pgaio_windows_update_flags(io,
+			if (!pgaio_iocp_update_flags(io,
 											flags,
-											PGAIO_WINDOWS_AIO_FLAG_GRANTED,
+											PGAIO_IOCP_AIO_FLAG_GRANTED,
 											submitter_id,
 											completer_id))
 				continue;		/* lost race, try again (not expected) */
@@ -693,7 +693,7 @@ pgaio_windows_give_baton(PgAioInProgress * io, int result)
 			/* Wake the completer. */
 			SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
 
-			printf("[%x] pgaio_windows_give_baton: waking backend %d %llu\n", my_aio_id, completer_id, flags);
+			printf("[%x] pgaio_iocp_give_baton: waking backend %d %llu\n", my_aio_id, completer_id, flags);
 
 
 			return true;
@@ -712,7 +712,7 @@ pgaio_windows_give_baton(PgAioInProgress * io, int result)
  * platform.
  */
 static void
-pgaio_windows_closing_fd(int fd)
+pgaio_iocp_closing_fd(int fd)
 {
 	/*
 	 * https://social.msdn.microsoft.com/Forums/SQLSERVER/en-US/5d67623b-fe3f-463e-950d-7af24e3243ca/safe-to-call-closehandle-when-an-overlapped-io-is-in-progress?forum=windowsgeneraldevelopmentissues
@@ -737,7 +737,7 @@ pgaio_windows_closing_fd(int fd)
  * transferring the results to PostgreSQL's share memory structures.
  */
 static DWORD WINAPI
-pgaio_windows_completion_thread(LPVOID param)
+pgaio_iocp_completion_thread(LPVOID param)
 {
 	for (;;)
 	{
@@ -746,14 +746,14 @@ pgaio_windows_completion_thread(LPVOID param)
 		DWORD nbytes;
 		ULONG_PTR completion_key = 0; /* not used */
 
-		printf("pgaio_windows_completion_thread:\n");
+		printf("pgaio_iocp_completion_thread:\n");
 		/*
 		 * XXX There is also GetQueuedCompletionStatusEx() that can dequeue
 		 * multiple results at once, but I can't figure out how to get
 		 * per I/O errors...
 		 */
 
-		if (!GetQueuedCompletionStatus(pgaio_windows_completion_port,
+		if (!GetQueuedCompletionStatus(pgaio_iocp_completion_port,
 									   &nbytes,
 									   &completion_key,
 									   &overlapped,
@@ -763,7 +763,7 @@ pgaio_windows_completion_thread(LPVOID param)
 			{
 				io = io_for_overlapped(overlapped);
 				_dosmaperr(GetLastError());
-				pgaio_windows_kernel_io_done(io, -errno);
+				pgaio_iocp_kernel_io_done(io, -errno);
 			}
 			else
 			{
@@ -774,13 +774,13 @@ pgaio_windows_completion_thread(LPVOID param)
 		else
 		{
 			io = io_for_overlapped(overlapped);
-			pgaio_windows_kernel_io_done(io, nbytes);
+			pgaio_iocp_kernel_io_done(io, nbytes);
 		}
 	}
 }
 
 static void
-pgaio_windows_postmaster_child_init_local(void)
+pgaio_iocp_postmaster_child_init_local(void)
 {
 	HANDLE		thread_handle;
 	ULONG_PTR		CompletionKey = 0;
@@ -789,19 +789,19 @@ pgaio_windows_postmaster_child_init_local(void)
 	 * Create an IO completion port that will be used to receive all I/O
 	 * completions for this process.
 	 */
-	pgaio_windows_completion_port =
+	pgaio_iocp_completion_port =
 		CreateIoCompletionPort(INVALID_HANDLE_VALUE,
 							   NULL,
 							   CompletionKey,
 							   1);
-	if (pgaio_windows_completion_port == NULL)
+	if (pgaio_iocp_completion_port == NULL)
 	{
 		_dosmaperr(GetLastError());
 		elog(FATAL, "could not create completion port");
 	}
 
 	/* Start the I/O completion thread. */
-	thread_handle = CreateThread(NULL, 0, pgaio_windows_completion_thread,
+	thread_handle = CreateThread(NULL, 0, pgaio_iocp_completion_thread,
 								 NULL, 0, NULL);
 	if (thread_handle == NULL)
 		elog(FATAL, "could not create completion port");
@@ -813,7 +813,7 @@ pgaio_windows_postmaster_child_init_local(void)
  * the completion of every I/O initiated on this file.
  */
 void
-pgaio_windows_register_file_handle(HANDLE file_handle)
+pgaio_iocp_register_file_handle(HANDLE file_handle)
 {
 	ULONG_PTR		CompletionKey = 0;
 
@@ -822,9 +822,9 @@ pgaio_windows_register_file_handle(HANDLE file_handle)
 	 * existing IOCP, right?
 	 */
 	if (CreateIoCompletionPort(file_handle,
-								pgaio_windows_completion_port,
+								pgaio_iocp_completion_port,
 								CompletionKey,
-								1) != pgaio_windows_completion_port)
+								1) != pgaio_iocp_completion_port)
 	{
 		_dosmaperr(GetLastError());
 		elog(FATAL, "could not associate file handle with completion port");

@@ -260,9 +260,12 @@ task:
     - name: Windows Worker DIO
       env:
         TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\worker_dio.conf
-    - name: Windows Windows Buf
+    - name: Windows IOCP Buf
       env:
-        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\windows_buf.conf
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\iocp_buf.conf
+    - name: Windows IOCP DIO
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\iocp_dio.conf
   test_script:
     - powershell -Command get-psdrive -psprovider filesystem
     - ps: Get-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug'

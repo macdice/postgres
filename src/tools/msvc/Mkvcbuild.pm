@@ -182,7 +182,7 @@ sub mkvcbuild
 	$postgres->AddFiles('src/port',   @pgportfiles);
 	$postgres->AddFiles('src/common', @pgcommonbkndfiles);
 	$postgres->AddDir('src/timezone');
-	$postgres->AddFile('src/backend/storage/aio/aio_windows.c');
+	$postgres->AddFile('src/backend/storage/aio/aio_iocp.c');
 
 	# We need source files from src/timezone, but that directory's resource
 	# file pertains to "zic", not to the backend.

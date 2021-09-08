@@ -26,7 +26,7 @@
 #include <sys/stat.h>
 
 /* XXX fix this. Put it in a header or something */
-extern void pgaio_windows_register_file_handle(HANDLE file_handle);
+extern void pgaio_iocp_register_file_handle(HANDLE file_handle);
 
 
 static int
@@ -168,7 +168,7 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 
 #ifndef FRONTEND
 	if (fileFlags & O_OVERLAPPED)
-		pgaio_windows_register_file_handle(h);
+		pgaio_iocp_register_file_handle(h);
 #endif
 
 	return h;
