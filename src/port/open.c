@@ -166,8 +166,10 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 		return INVALID_HANDLE_VALUE;
 	}
 
+#ifndef FRONTEND
 	if (fileFlags & O_OVERLAPPED)
 		pgaio_windows_register_file_handle(h);
+#endif
 
 	return h;
 }
