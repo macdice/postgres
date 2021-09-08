@@ -4718,6 +4718,8 @@ XLogFileInitInternal(XLogSegNo logsegno, bool *added, char *path)
 
 	if (io_wal_init_direct)
 		open_flags |= PG_O_DIRECT;
+	if (io_method == IOMETHOD_WINDOWS)
+		open_flags |= O_OVERLAPPED;
 
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
 	fd = BasicOpenFile(tmppath, open_flags);
@@ -5144,10 +5146,14 @@ XLogFileOpen(XLogSegNo segno)
 {
 	char		path[MAXPGPATH];
 	int			fd;
+	int			flags = O_RDWR | PG_BINARY | get_sync_bit(sync_method);
 
 	XLogFilePath(path, ThisTimeLineID, segno, wal_segment_size);
 
-	fd = BasicOpenFile(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method));
+	if (io_method == IOMETHOD_WINDOWS)
+		flags |= O_OVERLAPPED;
+
+	fd = BasicOpenFile(path, flags);
 	if (fd < 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
@@ -5216,6 +5222,7 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 	char		activitymsg[MAXFNAMELEN + 16];
 	char		path[MAXPGPATH];
 	int			fd;
+	int			flags;
 
 	XLogFileName(xlogfname, tli, segno, wal_segment_size);
 
@@ -5258,7 +5265,13 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 		snprintf(path, MAXPGPATH, XLOGDIR "/%s", xlogfname);
 	}
 
-	fd = BasicOpenFile(path, O_RDONLY | PG_BINARY);
+	flags = O_RDONLY | PG_BINARY;
+
+	if (io_method == IOMETHOD_WINDOWS)
+		flags |= O_OVERLAPPED;
+
+	fd = BasicOpenFile(path, flags);
+
 	if (fd >= 0)
 	{
 		/* Success! */
@@ -12126,6 +12139,9 @@ get_sync_bit(int method)
 	if (!XLogIsNeeded())
 		o_direct_flag = PG_O_DIRECT;
 #endif
+
+	if (io_method == IOMETHOD_WINDOWS)
+		o_direct_flag |= O_OVERLAPPED;
 
 	switch (method)
 	{

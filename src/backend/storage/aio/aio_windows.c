@@ -30,12 +30,6 @@
  */
 #define PGAIO_WINDOWS_IOV_SEG_SIZE 4096
 
-/*
- * The largest number of FILE_SEGMENT_ELEMENTs we could need.
- */
-#define PGAIO_WINDOWS_IOV_MAX_PAGES \
-	((PGAIO_MAX_COMBINE * BLCKSZ) / PGAIO_WINDOWS_IOV_SEG_SIZE)
-
 static HANDLE pgaio_windows_completion_port;
 
 static bool	pgaio_windows_take_baton(PgAioInProgress * io);
@@ -270,6 +264,8 @@ pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios)
 	}
 }
 
+static FILE_SEGMENT_ELEMENT *segments_elements = NULL;
+static int segment_element_size = 0;
 
 /*
  * Convert Unix iovec array to Windows memory-page representation.  The
@@ -279,12 +275,30 @@ pgaio_windows_submit_internal(PgAioInProgress *ios[], int nios)
  * Returns the total number of bytes to transfer.
  */
 static size_t
-pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT *segments,
+pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT **segments,
 							  const struct iovec *iov, int iovcnt)
 {
 	int count = 0;
 	char *base;
+	size_t total_len = 0;
 	size_t len;
+	size_t num_win_pages;
+
+	for (int i = 0; i < iovcnt; i++)
+		total_len += iov[i].iov_len;
+
+	num_win_pages = total_len / PGAIO_WINDOWS_IOV_SEG_SIZE + 1;
+
+	if (segments_elements == NULL)
+	{
+		segments_elements = malloc(sizeof(FILE_SEGMENT_ELEMENT) * num_win_pages);
+		segment_element_size = num_win_pages;
+	}
+	else if (segment_element_size < num_win_pages)
+	{
+		segments_elements = realloc(segments_elements, sizeof(FILE_SEGMENT_ELEMENT) * num_win_pages);
+		segment_element_size = num_win_pages;
+	}
 
 	for (int i = 0; i < iovcnt; ++i) {
 		base = iov[i].iov_base;
@@ -296,15 +310,15 @@ pgaio_windows_iov_to_segments(FILE_SEGMENT_ELEMENT *segments,
 		/* Unpack this iovec into pages. */
 		while (len > 0)
 		{
-			if (count == PGAIO_WINDOWS_IOV_MAX_PAGES)
-				elog(ERROR, "too many scatter/gather segments");
-			segments[count++].Buffer = base;
+		//	elog(LOG, "pgaio_windows_iov_to_segments: %p %zu iovcnt = %d, count = %d, PGAIO_WINDOWS_IOV_MAX_PAGES = %d", base, len, iovcnt, count, PGAIO_WINDOWS_IOV_MAX_PAGES);
+			segments_elements[count++].Buffer = base;
 			base += PGAIO_WINDOWS_IOV_SEG_SIZE;
 			len -= PGAIO_WINDOWS_IOV_SEG_SIZE;
 		}
 	}
 
-	segments[count].Buffer = NULL;
+	segments_elements[count].Buffer = NULL;
+	*segments = segments_elements;
 
 	return count * PGAIO_WINDOWS_IOV_SEG_SIZE;
 }
@@ -337,7 +351,7 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 
 	if (iovcnt > 1)
 	{
-		FILE_SEGMENT_ELEMENT segments[PGAIO_WINDOWS_IOV_MAX_PAGES + 1];
+		FILE_SEGMENT_ELEMENT *segments;
 		size_t size;
 
 		/* Windows can't do scatter/gather on buffered files. */
@@ -348,9 +362,8 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 		}
 
 		/* Convert to the page-by-page format Windows requires. */
-		size = pgaio_windows_iov_to_segments(segments, iov, iovcnt);
+		size = pgaio_windows_iov_to_segments(&segments, iov, iovcnt);
 
-		//overlapped
 		if (io->op == PGAIO_OP_READ)
 			result = ReadFileScatter((HANDLE) _get_osfhandle(io->op_data.read.fd), segments, size, NULL, overlapped);
 		else
@@ -364,6 +377,7 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 		else
 			result = WriteFile((HANDLE) _get_osfhandle(io->op_data.write.fd), iov[0].iov_base, iov[0].iov_len, NULL,
 								 overlapped);
+		
 	}
 
 	if (!result)
@@ -372,6 +386,7 @@ pgaio_windows_start_rw(PgAioInProgress * io)
 
 		if (err != ERROR_IO_PENDING)
 		{
+			elog(LOG, "pgaio_windows_start_rw: %d", err);
 			_dosmaperr(err);
 			return -1;
 		}
@@ -544,6 +559,8 @@ pgaio_windows_take_baton(PgAioInProgress * io)
 		submitter_id = pgaio_windows_submitter_from_flags(flags);
 		completer_id = pgaio_windows_completer_from_flags(flags);
 
+		printf("[%x] pgaio_windows_take_baton: flags = %llx\n", my_aio_id, flags);
+
 		if (flags & PGAIO_WINDOWS_FLAG_AVAILABLE)
 		{
 			if ((flags & PGAIO_WINDOWS_FLAG_RESULT))
@@ -641,6 +658,7 @@ pgaio_windows_give_baton(PgAioInProgress * io, int result)
 
 	io->io_method_data.windows.raw_result = result;
 
+
 	for (;;)
 	{
 		flags = pg_atomic_read_u64(&io->io_method_data.windows.flags);
@@ -674,6 +692,9 @@ pgaio_windows_give_baton(PgAioInProgress * io, int result)
 
 			/* Wake the completer. */
 			SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
+
+			printf("[%x] pgaio_windows_give_baton: waking backend %d %llu\n", my_aio_id, completer_id, flags);
+
 
 			return true;
 		}
@@ -725,6 +746,7 @@ pgaio_windows_completion_thread(LPVOID param)
 		DWORD nbytes;
 		ULONG_PTR completion_key = 0; /* not used */
 
+		printf("pgaio_windows_completion_thread:\n");
 		/*
 		 * XXX There is also GetQueuedCompletionStatusEx() that can dequeue
 		 * multiple results at once, but I can't figure out how to get
