@@ -62,8 +62,8 @@ task:
     - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/stackcollapse.pl
     - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/flamegraph.pl
     - perl ./stackcollapse.pl off_cpu.stacks | perl ./flamegraph.pl > off_cpu_time.svg
-	# let's filter out the expected off-cpu stuff (kevent etc) since otherwise
-	# it would dominate
+    # let's filter out the expected off-cpu stuff (kevent etc) since otherwise
+    # it would dominate
     - perl ./stackcollapse.pl off_cpu.stacks | grep -v -E '(sys_pselect|sys_select|sys_kevent|sys_poll|sys_ppoll|sys_wait4|sched_idletd)' | perl ./flamegraph.pl > off_cpu_time_filtered.svg
   flamegraph_artifacts:
     path: "**/**.svg"
