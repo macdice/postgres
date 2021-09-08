@@ -58,8 +58,9 @@ task:
   #posix_aio_dio_script:
   #  - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_dio.log 2>&1
   always:
-    path: "**/**.profile"
-    type: text/plain
+    log_profile:
+      path: "**/**.profile"
+      type: text/plain
   on_failure:
     core_script:
       for corefile in $(find /tmp -name '*.core' 2>/dev/null) ; do binary=$(gdb -quiet -core $corefile -batch -ex 'info auxv' | grep AT_EXECPATH | perl -pe "s/^.*\"(.*)\"\$/\$1/g") ; echo dumping $corefile for $binary ; gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile ; done
