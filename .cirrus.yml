@@ -58,8 +58,8 @@ task:
   #posix_aio_dio_script:
   #  - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_dio.log 2>&1
   fetch_flamegraph_script:
-    - curl -O https://github.com/brendangregg/FlameGraph/blob/master/stackcollapse.pl
-    - curl -O https://github.com/brendangregg/FlameGraph/blob/master/flamegraph.pl
+    - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/stackcollapse.pl
+    - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/flamegraph.pl
     - chmod +x stackcollapse.pl flamegraph.pl
   render_flamegraph_script:
     # let's remove the expected off-cpu stuff (kevent etc) since otherwise it
