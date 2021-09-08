@@ -26,4 +26,8 @@ ifeq ($(with_posix_aio),yes)
 OBJS += aio_posix.o
 endif
 
+ifeq ($(PORTNAME),win32)
+OBJS += aio_iocp.o
+endif
+
 include $(top_srcdir)/src/backend/common.mk
