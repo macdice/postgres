@@ -3,15 +3,19 @@
  * aio_baton.c
  *	  Routines for coordinating which backend will complete an IO.
  *
- * The posix_aio and [TODO] iocp implementations control which backend should
- * complete each IO and the handover of the raw result from submitter to
- * completer using an atomic control word called the 'baton'.  This file
- * contains the common infrastructure required to do that.
+ * This module provides a common implementation of wait_one() shared by
+ * implementations where only the submitting process can consume the result
+ * from the kernel.  We need a way to handle the (hopefully rare) cases where
+ * a backend finishes up waiting for an IO that another backend submitted.
+ * This is accomplished by using an atomic variable to "pass the baton" from
+ * the submitter to the completer.
  *
- * (In contrast, the io_uring implementation coordinates completion using
- * 'contexts' with per-context completion locks, and the worker implementation
- * doesn't need to coordinate completion and worker processes always do it, so
- * these routines are not used by those IO methods.)
+ * This is shared infrastrucure used by the "posix_aio" and "iocp" [TODO!]
+ * implementations.  (In contrast, the io_uring implementation coordinates
+ * completion using 'contexts' with per-context completion locks, and the
+ * worker implementation doesn't need to coordinate completion and worker
+ * processes always do it, so these routines are not used by those IO
+ * methods.)
  *
  * XXX TODO: Is there a better name than "baton"?
  *
@@ -35,10 +39,6 @@
 #define PGAIO_BATON_FLAGS_SUBMITTED			0x0100000000000000
 #define PGAIO_BATON_FLAGS_WAITER			0x0200000000000000
 #define PGAIO_BATON_FLAGS_COMPLETED			0x0300000000000000
-
-#define PGAIO_BATON_GRANTED					0
-#define PGAIO_BATON_DENIED					1
-#define PGAIO_BATON_WOULDBLOCK				2
 
 static uint64
 pgaio_make_baton_flags(uint64 control_flags,
@@ -84,20 +84,35 @@ pgaio_update_baton_flags(PgAioInProgress * io,
 }
 
 /*
- * The kernel has provided the result for an IO.
+ * The kernel has provided the result for an IO.  Process completion callbacks
+ * immediately if we're not in an interrupt handler; hopefully this is the
+ * common case.
  *
- * Process completion callbacks immediately if we're not in an interrupt
- * handler.
+ * It is called in four different scenarios.  Here XXX stands for
+ * pgaio_{posix_aio,iocp}:
  *
- * If we're in an interrupt handler, it's not safe to run completion
- * callbacks.  If another backend is waiting on this IO, pass the result to it
- * so that it can make progress.  Otherwise, store the result for the next
+ * 1.  A backend submits an IO and then XXX_drain() consumes the result from
+ * the kernel some time later (because we opportunii...
+ *
+ * 2.  XXX_submit() fails to submit an IO, and immediately records the error.
+ *
+ * 3.  Another backend waits in pgaio_baton_wait_one() for an IO that was
+ * submitted by this backend.  It signals When pgaio_baton_process_interrupt() handles a
+ * request for
+ *
+ * If we're in an interrupt handler (because a blocked backend asked us to
+ * collect the result from the kernel, it's not safe to run completion
+ * callbacks, or do much else.  We can write to shared memory and set latches,
+ * though.  If another backend is waiting on this IO, pass the result to it so
+ * that it can make progress.  Otherwise, store the result for the next
  * backend to wait on the IO.
+ *
+ * XX Xblah blah
  */
-static void
-pgaio_baton_process_result(PgAioInProgress * io,
-						   int raw_result,
-						   bool in_interrupt_handler)
+void
+pgaio_baton_process_completion(PgAioInProgress * io,
+							   int raw_result,
+							   bool in_interrupt_handler)
 {
 
 	pg_atomic_fetch_sub_u32(&my_aio->inflight_count, 1);
@@ -112,49 +127,64 @@ pgaio_baton_process_result(PgAioInProgress * io,
 	pgaio_posix_aio_deactivate_io(io);
 	pgaio_posix_aio_enable_interrupt();
 
-	/* Store the result. */
-	io->io_method_data.posix_aio.raw_result = result;
-
-	if (likely(!in_interrupt_handler))
-	{
-		int			rc PG_USED_FOR_ASSERTS_ONLY;
-
-		/*
-		 * We can reap the result immediately, without any expensive
-		 * interprocess communication.  Hopefully this is the way most IOs are
-		 * completed.
-		 *
-		 * The submitter can always take the baton, when the result comes in.
-		 * If someone else is waiting for it, this will wake them up their
-		 * request is denied.
-		 */
-		rc = pgaio_baton_take(io);
-		Assert(rc == PGAIO_POSIX_AIO_BATON_GRANTED);
-		pgaio_process_io_completion(io, result);
-	}
-	else
+	/*
+	 * If we're in a signal handler, we can't do very much at all.  Just write
+	 * the result into shared memory and wake up the waiter, if there is one.
+	 */
+	if (unlikely(in_interrupt_handler))
 	{
 		uint32		waiter_id;
 
-		/*
-		 * We can't do much in a signal handler.  Let any waiter know that
-		 * there's a result.
-		 */
+		io->io_method_data.posix_aio.raw_result = result;
 		pg_memory_barrier();
 		waiter_id = io->io_method_data.posix_aio.waiter_id;
 		if (waiter_id != -1)
 			SetLatch(&ProcGlobal->allProcs[waiter_id].procLatch);
+		return;
 	}
+	
+	/*
+	 * Use a CAS loop to serialize with any backend that might be concurrently
+	 * signing up to be the completer.  We need to be able to wake it up.
+	 */
+	do
+	{
+		flags = pg_atomic_read_u64(&io->io_method_data.posix_aio.flags);
+		submitter_id = pgaio_submitter_from_baton_flags(flags);
+		completer_id = pgaio_completer_from_baton_flags(flags);
+		state = pgaio_state_from_baton_flags(flags);
+
+		/*
+		 * This should only be called for IOs that this backend submitted, and
+		 * we should definitely see a fresh enough view of that without memory
+		 * barriers: this backend wrote the submitter ID.
+		 */
+		Assert(submitter_id == my_aio_id);
+		Assert(state == PGAIO_BATON_FLAGS_SUBMITTED ||
+			   state == PGAIO_BATON_FLAGS_WAITER);
+
+	}
+	while (!pgaio_update_baton_flags(io,
+									 flags,
+									 PGAIO_BATON_FLAGS_COMPLETED,
+									 submitter_id,
+									 my_aio_id));
+
+	/* Process completions. */
+	pgaio_process_io_completion(io, raw_result);
+	
+	/* If there was a backend waiting, wake it up. */
+	if (flags == PGAIO_BATON_WAITING && completer_id != my_aio_id)
+		SendProcSignal(ProcGlobal->allProcs[submitter_id].pid,
+					   PROCSIG_POSIX_AIO,
+					   InvalidBackendId);
 }
 
 /*
- * Seize this IO as completer, draining or asking the submitter to drain if
- * necessary.  If true is returned (possibly after waiting for a result), the
- * caller should process completions.  Otherwise, the caller should recheck
- * the IO for completion and wait using the CV if necessary.
+
  */
-static bool
-pgaio_baton_wait(PgAioInProgress * io)
+static void
+pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_generation, uint32 wait_event_info)
 {
 	uint32		submitter_id;
 	uint32		completer_id;
