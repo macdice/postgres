@@ -51,7 +51,8 @@ task:
   worker_buf_script:
     #- su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_buf.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_buf.log 2>&1
     #- dtrace -n 'sched:::off-cpu { @[stack()] = count(); }' -o off_cpu.stacks -c "sudo --preserve-env -u postgres gmake -s -j8 ${CHECK} ${CHECKFLAGS}"
-    - dtrace -n 'sched:::off-cpu /execname == "postgres"/ { self->start = timestamp; } sched:::on-cpu /execname == "postgres"/ { if (self->start) { @[stack()] = sum(timestamp - self->start); } }' -o off_cpu.stacks -c "sudo --preserve-env -u postgres gmake -s -j8 ${CHECK} ${CHECKFLAGS}"
+    #- dtrace -n 'sched:::off-cpu /execname == "postgres"/ { self->start = timestamp; } sched:::on-cpu /execname == "postgres"/ { if (self->start) { @[stack()] = sum(timestamp - self->start); } }' -o off_cpu.stacks -c "sudo --preserve-env -u postgres gmake -s -j8 ${CHECK} ${CHECKFLAGS}"
+    - dtrace -n 'io:::start { @[stack()] = count();' -o io.stacks -c "sudo --preserve-env -u postgres gmake -s -j8 ${CHECK} ${CHECKFLAGS}"
   #worker_dio_script:
   #  - su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_dio.log 2>&1
   #posix_aio_buf_script:
@@ -61,10 +62,9 @@ task:
   render_flamegraph_script:
     - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/stackcollapse.pl
     - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/flamegraph.pl
-    - perl ./stackcollapse.pl off_cpu.stacks | perl ./flamegraph.pl > off_cpu_time.svg
-    # let's filter out the expected off-cpu stuff (kevent etc) since otherwise
-    # it would dominate
-    - perl ./stackcollapse.pl off_cpu.stacks | grep -v -E '(sys_pselect|sys_select|sys_kevent|sys_poll|sys_ppoll|sys_wait4|sched_idletd)' | perl ./flamegraph.pl > off_cpu_time_filtered.svg
+    - perl ./stackcollapse.pl io.stacks | perl ./flamegraph.pl > io.svg
+    #- perl ./stackcollapse.pl off_cpu.stacks | perl ./flamegraph.pl > off_cpu_time.svg
+    #- perl ./stackcollapse.pl off_cpu.stacks | grep -v -E '(sys_pselect|sys_select|sys_kevent|sys_poll|sys_ppoll|sys_wait4|sched_idletd)' | perl ./flamegraph.pl > off_cpu_time_filtered.svg
   flamegraph_artifacts:
     path: "**/**.svg"
     type: image/svg+xml
