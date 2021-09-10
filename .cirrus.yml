@@ -228,6 +228,7 @@ task:
     memory: 4G
   env:
     PROVE_FLAGS: -j10
+    CIRRUS_WORKING_DIR: "c:\\cirrus"
     # Avoid re-installing over and over
     NO_TEMP_INSTALL: 1
     TIMEOUT_CMD: timeout -k60s 30m
@@ -241,6 +242,7 @@ task:
         TEMP_CONFIG: ${CIRRUS_WORKING_DIR}\ci\worker_dio.conf
   test_script:
     - powershell -Command get-psdrive -psprovider filesystem
+    - ps: Get-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug'
     - set
 
   configure_script:
@@ -284,6 +286,14 @@ task:
     - timeout -k60s 30m perl src/tools/msvc/vcregress.pl bincheck
   upgradecheck_script:
     - timeout -k60s 30m perl src/tools/msvc/vcregress.pl upgradecheck
+
+  always:
+    cat_dumps_script:
+      - cat crashlog.txt || true
+    dump_artifacts:
+      path: "crashlog.txt"
+      type: text/plain
+
   on_failure:
     log_artifacts:
       path: "**/**.log"
