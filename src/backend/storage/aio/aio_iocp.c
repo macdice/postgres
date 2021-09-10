@@ -833,6 +833,6 @@ pgaio_iocp_register_file_handle(HANDLE file_handle)
 								1) != pgaio_iocp_completion_port)
 	{
 		_dosmaperr(GetLastError());
-		elog(FATAL, "could not associate file handle with completion port");
+		elog(PANIC, "could not associate file handle with completion port: %m");
 	}
 }
