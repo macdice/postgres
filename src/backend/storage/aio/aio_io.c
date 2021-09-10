@@ -505,7 +505,7 @@ pgaio_do_synchronously(PgAioInProgress *io)
 			break;
 		case PGAIO_OP_FSYNC:
 			pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC);
-			if (io->op_data.fsync.datasync || true)
+			if (io->op_data.fsync.datasync)
 				result = pg_fdatasync(io->op_data.fsync.fd);
 			else
 				result = pg_fsync(io->op_data.fsync.fd);
