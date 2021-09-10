@@ -63,6 +63,7 @@ task:
     - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/stackcollapse.pl
     - curl -O https://raw.githubusercontent.com/brendangregg/FlameGraph/master/flamegraph.pl
     - perl ./stackcollapse.pl io.stacks | perl ./flamegraph.pl > io.svg
+    - perl ./stackcollapse.pl io_syscalls.stacks | grep amd64_syscall | perl ./flamegraph.pl > io_syscalls.svg
     #- perl ./stackcollapse.pl off_cpu.stacks | perl ./flamegraph.pl > off_cpu_time.svg
     #- perl ./stackcollapse.pl off_cpu.stacks | grep -v -E '(sys_pselect|sys_select|sys_kevent|sys_poll|sys_ppoll|sys_wait4|sched_idletd)' | perl ./flamegraph.pl > off_cpu_time_filtered.svg
   flamegraph_artifacts:
