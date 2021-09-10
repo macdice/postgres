@@ -50,10 +50,14 @@
  * such a central place, but until then...
  */
 #define WIN32_LEAN_AND_MEAN
+#define UMDF_USING_NTSTATUS
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <wincrypt.h>
+#include <ntstatus.h>
+
 #undef small
 #include <process.h>
 #include <signal.h>
