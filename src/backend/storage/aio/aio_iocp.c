@@ -390,7 +390,7 @@ pgaio_iocp_start_rw(PgAioInProgress * io)
 
 		if (err != ERROR_IO_PENDING)
 		{
-			elog(LOG, "pgaio_iocp_start_rw: %d", err);
+			elog(LOG, "pgaio_iocp_start_rw: %lu", err);
 			_dosmaperr(err);
 			return -1;
 		}
@@ -704,7 +704,7 @@ pgaio_iocp_give_baton(PgAioInProgress * io, int result)
 		}
 		else
 		{
-			fprintf(stderr, "unreachable %u\n", flags);
+			fprintf(stderr, "unreachable %llu\n", (long long unsigned) flags);
 			abort();
 		}
 	}
