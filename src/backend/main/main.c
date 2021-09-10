@@ -26,6 +26,10 @@
 #include <sys/param.h>
 #endif
 
+#if defined(WIN32)
+#include <crtdbg.h>
+#endif
+
 #if defined(_M_AMD64) && _MSC_VER == 1800
 #include <math.h>
 #include <versionhelpers.h>
@@ -238,7 +242,15 @@ startup_hacks(const char *progname)
 		}
 
 		/* In case of general protection fault, don't show GUI popup box */
-		SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+		SetErrorMode(SEM_FAILCRITICALERRORS /* | SEM_NOGPFAULTERRORBOX */);
+
+		_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+		_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+		_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+		_CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#ifndef __MINGW64__
+		_set_abort_behavior(_CALL_REPORTFAULT | _WRITE_ABORT_MSG, _CALL_REPORTFAULT | _WRITE_ABORT_MSG);
+#endif
 
 #if defined(_M_AMD64) && _MSC_VER == 1800
 
