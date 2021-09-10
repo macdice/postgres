@@ -21,7 +21,7 @@ task:
   sysconfig_script:
     - sysctl kern.corefile='/tmp/%N.%P.core'
     - sysctl kern.timecounter.hardware=TSC-low
-    - sysctl vfs.write_behind=0
+    #- sysctl vfs.write_behind=0
     - sysctl vfs.timestamp_precision=1
   ccache_cache:
     folder: "/tmp/ccache_dir"
