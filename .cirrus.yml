@@ -337,6 +337,13 @@ task:
     - cd src\tools\msvc
     - perl vcregress.pl ecpgcheck
 
+  always:
+    cores_script:
+      - cat crashlog.txt || true
+    dump_artifacts:
+      path: "crashlog.txt"
+      type: text/plain
+
   on_failure:
     log_artifacts:
       path: "**/**.log"
