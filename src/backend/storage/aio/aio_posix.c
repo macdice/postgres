@@ -101,21 +101,6 @@ static void pgaio_posix_aio_io_retry(PgAioInProgress *io);
 static int pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared);
 static void pgaio_posix_aio_closing_fd(int fd);
 
-/* Bits and masks for determining the completer for an IO. */
-#define PGAIO_POSIX_AIO_FLAG_SUBMITTED			0x0100000000000000
-#define PGAIO_POSIX_AIO_FLAG_HAS_WAITER			0x0200000000000000
-#define PGAIO_POSIX_AIO_FLAG_COMPLETED			0x0300000000000000
-
-#define PGAIO_POSIX_AIO_FLAG_STATE_MASK			0x0f00000000000000
-#define PGAIO_POSIX_AIO_FLAG_SUBMITTER_MASK		0x00ffffff00000000
-#define PGAIO_POSIX_AIO_FLAG_COMPLETER_MASK		0x0000000000ffffff
-#define PGAIO_POSIX_AIO_FLAG_SUBMITTER_SHIFT	32
-
-/* Result values from pgaio_posix_aio_take_baton(). */
-#define PGAIO_POSIX_AIO_BATON_GRANTED			0
-#define PGAIO_POSIX_AIO_BATON_DENIED			1
-#define PGAIO_POSIX_AIO_BATON_WOULDBLOCK		2
-
 /* On systems with no O_DSYNC, just use the stronger O_SYNC. */
 #ifdef O_DSYNC
 #define PG_O_DSYNC O_DSYNC
@@ -279,34 +264,8 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 	struct aiocb *iocb = iocb_for_io(io);
 	int			rc = -1;
 
-	pg_atomic_add_fetch_u32(&my_aio->inflight_count, 1);
 
-	/* Start with no result and no waiter. */
-	io->io_method_data.posix_aio.raw_result = INT_MIN;
-	io->io_method_data.posix_aio.waiter_id = -1;
-
-	/*
-	 * Other backends are free to request the right to complete this IO if
-	 * they are blocked on it.  Publish our submitter ID, so that we'll
-	 * recognize it as our own, and other processes will be able to signal us
-	 * if necessary.
-	 */
-	pg_atomic_write_u64(&io->io_method_data.posix_aio.flags,
-						pgaio_posix_aio_make_flags(PGAIO_POSIX_AIO_FLAG_AVAILABLE,
-												   my_aio_id,
-												   0));
-
-	/*
-	 * Every IO needs the index of the head IO in a merge chain, so that we
-	 * can find the iocb that the kernel knows about.
-	 */
-	for (PgAioInProgress * cur = io;;)
-	{
-		cur->io_method_data.posix_aio.merge_head_idx = pgaio_io_id(io);
-		if (cur->merge_with_idx == PGAIO_MERGE_INVALID)
-			break;
-		cur = &aio_ctl->in_progress_io[cur->merge_with_idx];
-	}
+	pgaio_baton_submit_one(io);
 
 	/* This IOCB is not "active" yet. */
 	io->io_method_data.posix_aio.iocb_index = -1;
@@ -641,10 +600,18 @@ static int
 pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared)
 {
 	int			ndrained;
+	bool		in_interrupt_handler;
 
+	/*
+	 * XXX Come up with a decent way to pass this flag in, so that
+	 * pgaio_baton_process_interrupt() can tell us we're running in an
+	 * interrupt handler!
+	 */
+	in_interrupt_handler == context == NULL;
+	
 	START_CRIT_SECTION();
 	pgaio_posix_aio_disable_interrupt();
-	ndrained = pgaio_posix_aio_drain_internal(block, false);
+	ndrained = pgaio_posix_aio_drain_internal(block, in_interrupt_handler);
 	pgaio_posix_aio_enable_interrupt();
 
 	if (call_shared)
@@ -735,9 +702,26 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 	return ndrained;
 }
 
+static void
+pgaio_posix_aio_process_completion(PgAioInProgress * io,
+								   int raw_result,
+								   bool in_interrupt_handler)
+{
 
+	pg_atomic_fetch_sub_u32(&my_aio->inflight_count, 1);
 
-
+	/*
+	 * Maintain the array of active iocbs.  If this was an IO that was actually
+	 * submitted to the kernel, it should have been "activated", but if we
+	 * failed to submit or it was a degenerate case like NOP then it's not
+	 * "active".
+	 */
+	pgaio_posix_aio_disable_interrupt();
+	pgaio_posix_aio_deactivate_io(io);
+	pgaio_posix_aio_enable_interrupt();
+	
+	pgaio_baton_process_completion(io, raw_result, in_interrupt_handler);
+}
 
 
 
@@ -805,119 +789,8 @@ pgaio_posix_aio_deactivate_io(PgAioInProgress * io)
 }
 
 
-/*
- * While waiting, there's a small chance we might take the baton for an IO
- * whose generation has rolled over (ie it's been recycled).  Give it away.
- */
-void
-pgaio_posix_aio_release_baton(PgAioInProgress * io)
-{
-	uint32		submitter_id;
-	uint32		completer_id;
-	uint64		flags;
-
-	for (;;)
-	{
-		flags = pg_atomic_read_u64(&io->io_method_data.posix_aio.flags);
-		submitter_id = pgaio_posix_aio_submitter_from_flags(flags);
-		completer_id = pgaio_posix_aio_completer_from_flags(flags);
-
-		if (pgaio_posix_aio_state_from_flags(flags) == PGAIO_POSIX_AIO_FLAG_HAS_WAITER &&
-			completer_id == my_aio_id)
-		{
-			/*
-			 * Set it back to submitted and wake up anyone who might be
-			 * waiting.  Let them wait for and process completions while we go
-			 * and do something else.
-			 */
-			if (!pgaio_posix_aio_update_flags(io,
-											  flags,
-											  PGAIO_POSIX_AIO_FLAG_AVAILABLE,
-											  submitter_id,
-											  0))
-				continue;	/* lost race, try again */
-			ConditionVariableBroadcast(&io->cv);
-		}
-		break;
-	}
-}
-
-
 /* Functions for dealing with interrupts received from other processes. */
 
-/*
- * Handler for PROCSIG_POSIX_AIO.  Called in signal handler context.
- */
-void
-HandlePosixAioInterrupt(void)
-{
-	/*
-	 * If the main context is currently manipulating iocbs, just remember that
-	 * the signal arrived.
-	 */
-	if (pgaio_posix_aio_interrupt_holdoff > 0)
-	{
-		pgaio_posix_aio_interrupt_pending = true;
-		return;
-	}
-	pgaio_posix_aio_process_interrupt();
-}
-
-/*
- * Collect results from any IOs that other backends are waiting for.
- *
- * Runs in signal handler context.  Also runs in user context.
- */
-static void
-pgaio_posix_aio_process_interrupt(void)
-{
-	bool		found_waiter;
-
-	/*
-	 * It's not safe to use spinlocks or lwlocks or anything else that is not
-	 * guaranteed to make progress in a signal handler, so we do our baton
-	 * negotiation with atomics.  We can't do that on (ancient) platforms
-	 * where our atomics are simulated with spinlocks.
-	 */
-#ifdef PG_HAVE_ATOMIC_U64_SIMULATION
-#error "Cannot use simulated atomics in signal handlers."
-#endif
-
-	for (;;)
-	{
-		/*
-		 * Search all IOs submitted by this backend to see if there are any
-		 * that other backends are blocked on.
-		 */
-		found_waiter = false;
-		for (int i = 0; i < pgaio_posix_aio_num_iocbs; ++i)
-		{
-			PgAioInProgress *io = io_for_iocb(pgaio_posix_aio_iocbs[i]);
-
-			if (pg_atomic_read_u64(&io->io_method_data.posix_aio.flags) &
-				PGAIO_POSIX_AIO_FLAG_REQUESTED)
-			{
-				found_waiter = true;
-				break;
-			}
-		}
-
-		/* If we didn't find any, we're done. */
-		if (!found_waiter)
-			break;
-
-		/*
-		 * Wait for the kernel to tell us that one or more IO has returned.
-		 * It's a shame to have temporarily given up up whatever we were doing
-		 * in our user context to wait around for an IO to finish on behalf of
-		 * another backend, but that backend can't do it, and we can't block
-		 * others' progress or we might deadlock.  This problem and much of
-		 * this code would go away if we used threads instead of process.
-		 */
-		pgaio_posix_aio_drain_internal(true /* block */ ,
-									   true /* in_interrupt_handler */ );
-	}
-}
 
 /*
  * Disable interrupt processing while interacting with aiocbs.  This avoids

@@ -519,6 +519,9 @@ typedef struct PgAioPerBackend
 	uint64 foreign_completed_total_count;
 	uint64 retry_total_count;
 
+	/* XXX baton (posix_aio, iocp) */
+	pg_atomic_uint32 baton_waiter_count;
+	
 #ifdef USE_LIBURING
 	PgAioUringWaitRef wr;
 #endif
@@ -609,6 +612,16 @@ extern void pgaio_io_flag_string(PgAioIPFlags flags, struct StringInfoData *s);
 static inline bool pgaio_io_recycled(PgAioInProgress *io, uint64 ref_generation, PgAioIPFlags *flags);
 
 extern bool pgaio_can_scatter_gather(void);
+
+/* Declarations for aio_baton.c (used by aio_posix.c and aio_iocp.c) */
+extern void pgaio_baton_submit_one(PgAioInProgress *io);
+extern void pgaio_baton_process_completion(PgAioInProgress * io,
+										   int raw_result,
+										   bool in_interrupt_handler);
+extern void pgaio_baton_wait_one(PgAioContext *context,
+								 PgAioInProgress * io,
+								 uint64 ref_generation,
+								 uint32 wait_event_info);
 
 /* Declarations for aio_io.c */
 extern void pgaio_combine_pending(void);
