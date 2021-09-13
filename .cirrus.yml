@@ -25,7 +25,12 @@ task:
   sysconfig_script:
     - sysctl kern.corefile='/tmp/%N.%P.core'
     - sysctl kern.timecounter.hardware=TSC-low
-    - sysctl vfs.write_behind=0
+    - sysctl vfs.write_behind=1
+    - sysctl vfs.lodirtybuffers=8192
+    - sysctl vfs.hidirtybuffers=16384
+    - sysctl vfs.dirtybufthresh=14745
+    - sysctl vfs.lorunningspace=1048576
+    - sysctl vfs.hirunningspace=2097152
   ccache_cache:
     folder: "/tmp/ccache_dir"
   create_partition_script:
