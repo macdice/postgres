@@ -348,7 +348,7 @@ struct PgAioInProgress
 			 * that the kernel knows about, so we need to be able to get our
 			 * hands on it to wrestle control from another backend.
 			 */
-			uint32 merge_head_idx;
+			uint32 head_idx;
 
 			/* Raw result from the kernel, if known. */
 			volatile int raw_result;
@@ -613,7 +613,7 @@ static inline bool pgaio_io_recycled(PgAioInProgress *io, uint64 ref_generation,
 
 extern bool pgaio_can_scatter_gather(void);
 
-/* Declarations for aio_baton.c (used by aio_posix.c and aio_iocp.c) */
+/* Declarations for aio_baton.c */
 extern void pgaio_baton_submit_one(PgAioInProgress *io);
 extern void pgaio_baton_process_completion(PgAioInProgress * io,
 										   int raw_result,

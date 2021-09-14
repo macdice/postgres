@@ -3,13 +3,13 @@
  * aio_baton.c
  *	  Routines for coordinating which backend will complete an IO.
  *
- * This module provides a common implementation of wait_one() for use by
+ * This module provides a common implementation of wait_one() current used by
  * "posix_aio" and "iocp".  With those kernel APIs, only the submitting
- * process can consume an IO's result.  We need a way to handle the (hopefully
- * rare) cases where a backend finishes up waiting for an IO that another
- * backend submitted.  This is accomplished by using an atomic variable to
- * "pass the baton" from the submitter to the completer, with an interrupt to
- * make sure that progress can always be made.
+ * process can consume an IO's result, so we need a way to handle the
+ * (hopefully rare) cases where a backend finishes up waiting for an IO that
+ * another backend submitted.  This is accomplished by using an atomic
+ * variable to "pass the baton" from the submitter to the completer, with an
+ * interrupt to make sure that progress can always be made.
  *
  * XXX TODO: Is there a better name than "baton"?
  *
@@ -28,60 +28,59 @@
 #include "storage/latch.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
+#include "utils/wait_event.h"
 
-#define PGAIO_BATON_FLAGS_STATE_MASK		0x0f00000000000000
-#define PGAIO_BATON_FLAGS_SUBMITTER_MASK	0x00ffffff00000000
-#define PGAIO_BATON_FLAGS_COMPLETER_MASK	0x0000000000ffffff
-#define PGAIO_BATON_FLAGS_SUBMITTER_SHIFT	32
+#define PGAIO_BATON_STATE_MASK			0x0f00000000000000
+#define PGAIO_BATON_SUBMITTER_MASK		0x00ffffff00000000
+#define PGAIO_BATON_COMPLETER_MASK		0x0000000000ffffff
+#define PGAIO_BATON_SUBMITTER_SHIFT		32
 
-#define PGAIO_BATON_FLAGS_SUBMITTED			0x0100000000000000
-#define PGAIO_BATON_FLAGS_HAS_WAITER	   	0x0200000000000000
-#define PGAIO_BATON_FLAGS_COMPLETED			0x0300000000000000
+#define PGAIO_BATON_SUBMITTED			0x0100000000000000
+#define PGAIO_BATON_HAS_WAITER			0x0200000000000000
+#define PGAIO_BATON_COMPLETED			0x0300000000000000
 
 static volatile sig_atomic_t pgaio_baton_interrupt_pending;
 static volatile sig_atomic_t pgaio_baton_interrupt_holdoff;
 
 static uint64
-pgaio_make_baton_flags(uint64 control_flags,
-					   uint32 submitter_id,
-					   uint32 completer_id)
+pgaio_make_baton(uint64 state, uint32 submitter_id, uint32 completer_id)
 {
-	return control_flags |
-		(((uint64) submitter_id) << PGAIO_BATON_FLAGS_SUBMITTER_SHIFT) |
+	return state |
+		(((uint64) submitter_id) << PGAIO_BATON_SUBMITTER_SHIFT) |
 		completer_id;
 }
 
 static uint32
-pgaio_submitter_from_baton_flags(uint64 flags)
+pgaio_baton_submitter(uint64 baton)
 {
-	return (flags & PGAIO_BATON_FLAGS_SUBMITTER_MASK) >>
-		PGAIO_BATON_FLAGS_SUBMITTER_SHIFT;
+	return (baton & PGAIO_BATON_SUBMITTER_MASK) >>
+		PGAIO_BATON_SUBMITTER_SHIFT;
 }
 
 static uint32
-pgaio_completer_from_baton_flags(uint64 flags)
+pgaio_baton_completer(uint64 baton)
 {
-	return flags & PGAIO_BATON_FLAGS_COMPLETER_MASK;
+	return baton & PGAIO_BATON_COMPLETER_MASK;
 }
 
 static uint64
-pgaio_state_from_baton_flags(uint64 flags)
+pgaio_baton_state(uint64 baton)
 {
-	return flags & PGAIO_BATON_FLAGS_STATE_MASK;
+	return baton & PGAIO_BATON_STATE_MASK;
 }
 
 static bool
-pgaio_update_baton_flags(PgAioInProgress * io,
-						 uint64 old_flags,
-						 uint64 control_flags,
-						 uint32 submitter_id,
-						 uint32 completer_id)
+pgaio_update_baton(PgAioInProgress * io,
+				   uint64 baton,
+				   uint64 state,
+				   uint32 submitter_id,
+				   uint32 completer_id)
 {
 	return pg_atomic_compare_exchange_u64(&io->io_method_data.posix_aio.flags,
-										  &old_flags,
-										  pgaio_make_baton_flags(control_flags,
-																 submitter_id,
-																 completer_id));
+										  &baton,
+										  pgaio_make_baton(state,
+														   submitter_id,
+														   completer_id));
 }
 
 void
@@ -91,7 +90,7 @@ pgaio_baton_submit_one(PgAioInProgress *io)
 
 	for (PgAioInProgress * cur = io;;)
 	{
-		cur->io_method_data.posix_aio.merge_head_idx = pgaio_io_id(io);
+		cur->io_method_data.posix_aio.head_idx = pgaio_io_id(io);
 		if (cur->merge_with_idx == PGAIO_MERGE_INVALID)
 			break;
 		cur = &aio_ctl->in_progress_io[cur->merge_with_idx];
@@ -100,9 +99,7 @@ pgaio_baton_submit_one(PgAioInProgress *io)
 	io->io_method_data.posix_aio.raw_result = INT_MIN;
 	io->io_method_data.posix_aio.waiter_id = -1;
 	pg_atomic_write_u64(&io->io_method_data.posix_aio.flags,
-						pgaio_make_baton_flags(PGAIO_BATON_FLAGS_SUBMITTED,
-											   my_aio_id,
-											   0));
+						pgaio_make_baton(PGAIO_BATON_SUBMITTED, my_aio_id, 0));
 }
 
 /*
@@ -136,7 +133,7 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 							   int raw_result,
 							   bool in_interrupt_handler)
 {
-	uint64 flags;
+	uint64 baton;
 	uint32 submitter_id;
 	uint32 completer_id;
 	uint64 state;
@@ -166,10 +163,10 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 	 */
 	do
 	{
-		flags = pg_atomic_read_u64(&io->io_method_data.posix_aio.flags);
-		submitter_id = pgaio_submitter_from_baton_flags(flags);
-		completer_id = pgaio_completer_from_baton_flags(flags);
-		state = pgaio_state_from_baton_flags(flags);
+		baton = pg_atomic_read_u64(&io->io_method_data.posix_aio.flags);
+		submitter_id = pgaio_baton_submitter(baton);
+		completer_id = pgaio_baton_completer(baton);
+		state = pgaio_baton_state(baton);
 
 		/*
 		 * This should only be called for IOs that this backend submitted, and
@@ -177,23 +174,23 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 		 * barriers: this backend wrote the submitter ID.
 		 */
 		Assert(submitter_id == my_aio_id);
-		Assert(state == PGAIO_BATON_FLAGS_SUBMITTED ||
-			   state == PGAIO_BATON_FLAGS_WAITER);
+		Assert(state == PGAIO_BATON_SUBMITTED ||
+			   state == PGAIO_BATON_HAS_WAITER);
 
 	}
-	while (!pgaio_update_baton_flags(io,
-									 flags,
-									 PGAIO_BATON_FLAGS_COMPLETED,
-									 submitter_id,
-									 my_aio_id));
+	while (!pgaio_update_baton(io,
+							   baton,
+							   PGAIO_BATON_COMPLETED,
+							   submitter_id,
+							   my_aio_id));
 
 	/* Process completions. */
 	pgaio_process_io_completion(io, raw_result);
 	
 	/* If there was a backend waiting, now wake it up. */
-	if (flags == PGAIO_BATON_FLAGS_HAS_WAITER && completer_id != my_aio_id)
+	if (state == PGAIO_BATON_HAS_WAITER && completer_id != my_aio_id)
 		SendProcSignal(ProcGlobal->allProcs[submitter_id].pid,
-					   PROCSIG_POSIX_AIO,
+					   PROCSIG_AIO_INTERRUPT,
 					   InvalidBackendId);
 }
 
@@ -207,25 +204,28 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 	uint32		head_idx;
 	uint32		submitter_id;
 	uint32		completer_id;
-	uint64		flags;
+	uint64		baton;
 	uint64		state;
 	int			raw_result;
 
-	head_idx = io->io_method_data.posix_aio.merge_head_idx;
-	head_io = &aio_ctl->in_progress_io[merge_head_idx];
+	/*
+	 * To wait for a ...
+	 */
+	head_idx = io->io_method_data.posix_aio.head_idx;
+	head_io = &aio_ctl->in_progress_io[head_idx];
 
 	for (;;)
 	{		
-		flags = pg_atomic_read_u64(&head_io->io_method_data.posix_aio.flags);
-		submitter_id = pgaio_submitter_from_baton_flags(flags);
-		completer_id = pgaio_completer_from_baton_flags(flags);
-		state = pgaio_state_from_baton_flags(flags);
+		baton = pg_atomic_read_u64(&head_io->io_method_data.posix_aio.flags);
+		submitter_id = pgaio_baton_submitter(baton);
+		completer_id = pgaio_baton_completer(baton);
+		state = pgaio_baton_state(baton);
 
 		pg_read_barrier();
 
 		raw_result = head_io->io_method_data.posix_aio.raw_result;
 
-		if (state == PGAIO_BATON_FLAGS_SUBMITTED)
+		if (state == PGAIO_BATON_SUBMITTED)
 		{
 			if (raw_result != INT_MIN)
 			{
@@ -234,22 +234,22 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 				 * have been consumed from the kernel incidentally by the
 				 * interrupt handler.
 				 */
-				if (!pgaio_update_baton_flags(head_io,
-											  flags,
-											  PGAIO_BATON_FLAGS_COMPLETED,
-											  submitter_id,
-											  my_aio_id))
+				if (!pgaio_update_baton(head_io,
+										baton,
+										PGAIO_BATON_COMPLETED,
+										submitter_id,
+										my_aio_id))
 					continue;	/* lost race, try again */
 				pgaio_process_io_completion(head_io, false);
 				break;
 			}
 
 			/* Try to become the registered completer. */
-			if (!pgaio_update_baton_flags(head_io,
-										  flags,
-										  PGAIO_BATON_FLAGS_HAS_WAITER,
-										  submitter_id,
-										  my_aio_id))
+			if (!pgaio_update_baton(head_io,
+									baton,
+									PGAIO_BATON_HAS_WAITER,
+									submitter_id,
+									my_aio_id))
 				continue;	/* lost race, try again */
 			
 			/* If I submitted it, go around again so we can drain. */
@@ -278,10 +278,10 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			pg_atomic_fetch_add_u32(&aio_ctl->backend_state[submitter_id].baton_waiter_count,
 									1);
 			SendProcSignal(ProcGlobal->allProcs[submitter_id].pid,
-						   PROCSIG_POSIX_AIO,
+						   PROCSIG_AIO_INTERRUPT,
 						   InvalidBackendId);
 		}
-		else if (state == PGAIO_BATON_FLAGS_HAS_WAITER)
+		else if (state == PGAIO_BATON_HAS_WAITER)
 		{
 			if (raw_result != INT_MIN)
 			{
@@ -289,11 +289,11 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 				 * There's already a waiter (possibly me).  Since the result
 				 * is available and I'm on CPU right now, steal it.
 				 */
-				if (!pgaio_update_baton_flags(head_io,
-											  flags,
-											  PGAIO_BATON_FLAGS_COMPLETED,
-											  submitter_id,
-											  my_aio_id))
+				if (!pgaio_update_baton(head_io,
+										baton,
+										PGAIO_BATON_COMPLETED,
+										submitter_id,
+										my_aio_id))
 					continue;	/* lost race, try again */
 				
 				pgaio_process_io_completion(head_io, false);
@@ -313,11 +313,11 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 				 */
 				if (completer_id != my_aio_id)
 				{
-					if (!pgaio_update_baton_flags(head_io,
-												  flags,
-												  PGAIO_BATON_FLAGS_HAS_WAITER,
-												  submitter_id,
-												  my_aio_id))
+					if (!pgaio_update_baton(head_io,
+											baton,
+											PGAIO_BATON_HAS_WAITER,
+											submitter_id,
+											my_aio_id))
 						continue;	/* lost race, try again */
 
 					/* Wake previous waiter.  It'll wait on the CV. */
@@ -342,6 +342,12 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			}
 			else
 			{
+				PgAioIPFlags flags;
+
+				if (pgaio_io_recycled(io, ref_generation, &flags) ||
+					!(flags & PGAIOIP_INFLIGHT))
+					break;
+
 				/*
 				 * Someone else is already signed up and waiting to complete
 				 * this IO.  We have to wait on the condition variable.
@@ -357,6 +363,8 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			break;
 		}
 	}
+
+	ConditionVariableCancelSleep();
 }
 
 
@@ -382,8 +390,8 @@ pgaio_baton_process_interrupt(void)
 		 * others' progress or we might deadlock.  This problem would go away
 		 * if we used threads instead of processes.
 		 *
-		 * XXX: NULL context is a way to tell pgaio_posix_aio_drain() that
-		 * we're in a signal handler!  FIXME, need extensible flags or
+		 * XXX: NULL context is a way to tell pgaio_{posix_aio,iocp}_drain()
+		 * that we're in a signal handler!  FIXME, need extensible flags or
 		 * something
 		 */
 		pgaio_drain(NULL, true, false, false);
@@ -391,14 +399,15 @@ pgaio_baton_process_interrupt(void)
 }
 
 /*
- * Handler for PROCSIG_POSIX_AIO.  Called in signal handler context.
+ * Handler for PROCSIG_AIO_INTERRUPT.  Called in signal handler when another
+ * backend is blocked waiting for an IO that this backend submitted.
  */
 void
-HandleAioBatonInterrupt(void)
+HandleAioInterrupt(void)
 {
 	/*
 	 * If baton interrupts are currently disabled, just remember that the
-	 * interrupt arrived.
+	 * interrupt arrived.  It'll be processed when they're reenabled.
 	 */
 	if (pgaio_baton_interrupt_holdoff > 0)
 	{

@@ -68,9 +68,6 @@ static volatile sig_atomic_t pgaio_posix_aio_interrupt_holdoff;
 static void pgaio_posix_aio_disable_interrupt(void);
 static void pgaio_posix_aio_enable_interrupt(void);
 
-static int	pgaio_posix_aio_take_baton(PgAioInProgress * io);
-static void pgaio_posix_aio_release_baton(PgAioInProgress * io);
-
 static PgAioInProgress * io_for_iocb(struct aiocb *cb);
 static struct aiocb *iocb_for_io(struct PgAioInProgress *io);
 
@@ -82,21 +79,14 @@ static void pgaio_posix_aio_submit_one(PgAioInProgress * io,
 static int	pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb);
 static int	pgaio_posix_aio_start_rw(PgAioInProgress * io,
 									 pgaio_posix_aio_listio_buffer * lb);
-static void pgaio_posix_aio_kernel_io_done(PgAioInProgress * io,
-										   int result,
-										   bool in_interrupt_handler);
+static void pgaio_posix_aio_process_completion(PgAioInProgress * io,
+											   int result,
+											   bool in_interrupt_handler);
 static int	pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler);
-static void pgaio_posix_aio_process_interrupt(void);
-
-static uint64
-			pgaio_posix_aio_make_flags(uint64 control_flags,
-									   uint32 submitter_id,
-									   uint32 completer_id);
 
 /* Entry points for IoMethodOps. */
 static void pgaio_posix_aio_shmem_init(void);
 static int pgaio_posix_aio_submit(int max_submit, bool drain);
-static void pgaio_posix_aio_wait_one(PgAioContext *context, PgAioInProgress *io, uint64 ref_generation, uint32 wait_event_info);
 static void pgaio_posix_aio_io_retry(PgAioInProgress *io);
 static int pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared);
 static void pgaio_posix_aio_closing_fd(int fd);
@@ -112,7 +102,7 @@ const IoMethodOps pgaio_posix_aio_ops = {
 	.shmem_init = pgaio_posix_aio_shmem_init,
 	.submit = pgaio_posix_aio_submit,
 	.retry = pgaio_posix_aio_io_retry,
-	.wait_one = pgaio_posix_aio_wait_one,
+	.wait_one = pgaio_baton_wait_one,
 	.drain = pgaio_posix_aio_drain,
 	.closing_fd = pgaio_posix_aio_closing_fd,
 
@@ -318,7 +308,7 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 	/* If we failed to submit, then try to reap immediately. */
 	if (rc < 0)
 	{
-		pgaio_posix_aio_kernel_io_done(io, -errno, false);
+		pgaio_posix_aio_process_completion(io, -errno, false);
 		pgaio_complete_ios(false);
 	}
 }
@@ -380,7 +370,7 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 					 */
 					error_status = listio_errno;
 				}
-				pgaio_posix_aio_kernel_io_done(io, -error_status, false);
+				pgaio_posix_aio_process_completion(io, -error_status, false);
 			}
 			pgaio_complete_ios(false);
 		}
@@ -398,7 +388,7 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 				PgAioInProgress *io;
 
 				io = io_for_iocb(lb->cbs[i]);
-				pgaio_posix_aio_kernel_io_done(io, -error_status, false);
+				pgaio_posix_aio_process_completion(io, -error_status, false);
 			}
 			pgaio_complete_ios(false);
 		}
@@ -429,6 +419,7 @@ pgaio_posix_aio_add_listio(pgaio_posix_aio_listio_buffer * lb, PgAioInProgress *
 	index = lb->nios;
 	iocb = iocb_for_io(io);
 	lb->cbs[index] = iocb;
+
 #if defined(LIO_READV) && defined(LIO_WRITEV)
 	if (iocb->aio_lio_opcode == LIO_READV || iocb->aio_lio_opcode == LIO_WRITEV) {
 		/* Copy the iovecs into a new buffer with the right lifetime. */
@@ -440,6 +431,7 @@ pgaio_posix_aio_add_listio(pgaio_posix_aio_listio_buffer * lb, PgAioInProgress *
 		iocb->aio_iov = &lb->iovecs[index][0];
 	}
 #endif
+
 	++lb->nios;
 
 	return 0;
@@ -494,104 +486,6 @@ pgaio_posix_aio_start_rw(PgAioInProgress * io,
 /* Functions for waiting for IOs to complete. */
 
 /*
- * Wait for a given IO/generation to complete.
- */
-static void
-pgaio_posix_aio_wait_one(PgAioContext *context,
-						 PgAioInProgress * io,
-						 uint64 ref_generation,
-						 uint32 wait_event_info)
-{
-	PgAioInProgress *last_merge_head_io = NULL;
-	PgAioInProgress *merge_head_io;
-	PgAioIPFlags flags;
-	bool		release_baton = false;
-
-	for (;;)
-	{
-		uint32		merge_head_idx;
-
-		if (pgaio_io_recycled(io, ref_generation, &flags) ||
-			!(flags & PGAIOIP_INFLIGHT))
-			break;
-
-		/*
-		 * Find the IO that is the head of the merge chain.  This information
-		 * may be arbitrarily out of date, but we'll cope with that.
-		 */
-		merge_head_idx = io->io_method_data.posix_aio.merge_head_idx;
-		merge_head_io = &aio_ctl->in_progress_io[merge_head_idx];
-
-		/*
-		 * If we retry and finish up looking at a new merge head IO, release
-		 * the baton on the last one.  We should only hold the baton on an IO
-		 * that we will detinitely complete.
-		 */
-		if (last_merge_head_io != NULL &&
-			last_merge_head_io != merge_head_io &&
-			release_baton)
-		{
-			pgaio_posix_aio_release_baton(last_merge_head_io);
-			release_baton = false;
-		}
-		last_merge_head_io = merge_head_io;
-
-		switch (pgaio_posix_aio_take_baton(merge_head_io))
-		{
-			case PGAIO_POSIX_AIO_BATON_GRANTED:
-
-				/*
-				 * We're now the completer for the head of the merged IO
-				 * chain. It's possibly a later generation than the one we're
-				 * actually waiting for, but the result is available now so
-				 * let's process it anyway and check the generation again.
-				 */
-				pgaio_process_io_completion(merge_head_io,
-											merge_head_io->io_method_data.posix_aio.raw_result);
-				break;
-			case PGAIO_POSIX_AIO_BATON_WOULDBLOCK:
-
-				/*
-				 * We're the submitter.  It's possibly a later generation than
-				 * the one we're waiting for, but in that case we'll exit the
-				 * next loop.
-				 */
-				release_baton = true;
-				pgaio_posix_aio_drain(NULL, true, false);
-				break;
-			case PGAIO_POSIX_AIO_BATON_DENIED:
-
-				/*
-				 * Someone else is already signed up to reap the merged IO
-				 * chain, or this is a later generation and we'll detect that
-				 * in the next loop.  Wait on the IO.
-				 */
-				ConditionVariablePrepareToSleep(&io->cv);
-				if (pgaio_io_recycled(io, ref_generation, &flags) ||
-					!(flags & PGAIOIP_INFLIGHT))
-					break;
-				ConditionVariableSleep(&io->cv,
-									   WAIT_EVENT_AIO_IO_COMPLETE_ONE);
-				break;
-			default:
-				elog(ERROR, "unexpected value");
-		}
-	}
-
-	/* Complete anything on our "reaped" list. */
-	pgaio_complete_ios(false);
-
-	/*
-	 * If we became the requester but then exited because it turned out the
-	 * generation had moved, we'd better undo that.
-	 */
-	if (release_baton)
-		pgaio_posix_aio_release_baton(merge_head_io);
-
-	ConditionVariableCancelSleep();
-}
-
-/*
  * Drain completion events from the kernel, reaping them if possible.  If
  * block is true, wait for at least one to complete, unless there are none in
  * flight.
@@ -607,7 +501,7 @@ pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared)
 	 * pgaio_baton_process_interrupt() can tell us we're running in an
 	 * interrupt handler!
 	 */
-	in_interrupt_handler == context == NULL;
+	in_interrupt_handler = context == NULL;
 	
 	START_CRIT_SECTION();
 	pgaio_posix_aio_disable_interrupt();
@@ -655,8 +549,8 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 		}
 		if (rc < 0)
 			rc = -errno;
-		pgaio_posix_aio_kernel_io_done(io_for_iocb(iocb), rc,
-									   in_interrupt_handler);
+		pgaio_posix_aio_process_completion(io_for_iocb(iocb), rc,
+										   in_interrupt_handler);
 		ndrained++;
 #else
 		/* Standard POSIX requires us to do a bit more work. */
@@ -690,8 +584,8 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 			rc = aio_return(iocb);
 			if (rc < 0)
 				rc = -errno;
-			pgaio_posix_aio_kernel_io_done(io_for_iocb(iocb), rc,
-										   in_interrupt_handler);
+			pgaio_posix_aio_process_completion(io_for_iocb(iocb), rc,
+											   in_interrupt_handler);
 			ndrained++;
 
 			/* Don't advance i; another item was moved into element i. */
@@ -707,7 +601,6 @@ pgaio_posix_aio_process_completion(PgAioInProgress * io,
 								   int raw_result,
 								   bool in_interrupt_handler)
 {
-
 	pg_atomic_fetch_sub_u32(&my_aio->inflight_count, 1);
 
 	/*
