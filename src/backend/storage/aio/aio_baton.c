@@ -76,11 +76,22 @@ pgaio_update_baton(PgAioInProgress * io,
 				   uint32 submitter_id,
 				   uint32 completer_id)
 {
-	return pg_atomic_compare_exchange_u64(&io->io_method_data.posix_aio.flags,
+	return pg_atomic_compare_exchange_u64(&io->interlock.baton.baton,
 										  &baton,
 										  pgaio_make_baton(state,
 														   submitter_id,
 														   completer_id));
+}
+
+void
+pgaio_baton_shmem_init(void)
+{
+	for (int i = 0; i < max_aio_in_progress; i++)
+	{
+		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
+
+		pg_atomic_init_u64(&io->interlock.baton.baton, 0);
+	}
 }
 
 void
@@ -90,15 +101,15 @@ pgaio_baton_submit_one(PgAioInProgress *io)
 
 	for (PgAioInProgress * cur = io;;)
 	{
-		cur->io_method_data.posix_aio.head_idx = pgaio_io_id(io);
+		cur->interlock.baton.head_idx = pgaio_io_id(io);
 		if (cur->merge_with_idx == PGAIO_MERGE_INVALID)
 			break;
 		cur = &aio_ctl->in_progress_io[cur->merge_with_idx];
 	}
 
-	io->io_method_data.posix_aio.raw_result = INT_MIN;
-	io->io_method_data.posix_aio.waiter_id = -1;
-	pg_atomic_write_u64(&io->io_method_data.posix_aio.flags,
+	io->interlock.baton.raw_result = INT_MIN;
+	io->interlock.baton.waiter_id = -1;
+	pg_atomic_write_u64(&io->interlock.baton.baton,
 						pgaio_make_baton(PGAIO_BATON_SUBMITTED, my_aio_id, 0));
 }
 
@@ -146,9 +157,9 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 	{
 		uint32		waiter_id;
 
-		io->io_method_data.posix_aio.raw_result = raw_result;
+		io->interlock.baton.raw_result = raw_result;
 		pg_memory_barrier();
-		waiter_id = io->io_method_data.posix_aio.waiter_id;
+		waiter_id = io->interlock.baton.waiter_id;
 		if (waiter_id != -1)
 		{
 			SetLatch(&ProcGlobal->allProcs[waiter_id].procLatch);
@@ -163,7 +174,7 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 	 */
 	do
 	{
-		baton = pg_atomic_read_u64(&io->io_method_data.posix_aio.flags);
+		baton = pg_atomic_read_u64(&io->interlock.baton.baton);
 		submitter_id = pgaio_baton_submitter(baton);
 		completer_id = pgaio_baton_completer(baton);
 		state = pgaio_baton_state(baton);
@@ -211,19 +222,25 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 	/*
 	 * To wait for a ...
 	 */
-	head_idx = io->io_method_data.posix_aio.head_idx;
+	head_idx = io->interlock.baton.head_idx;
 	head_io = &aio_ctl->in_progress_io[head_idx];
 
 	for (;;)
 	{		
-		baton = pg_atomic_read_u64(&head_io->io_method_data.posix_aio.flags);
+		PgAioIPFlags flags;
+
+		if (pgaio_io_recycled(io, ref_generation, &flags) ||
+			!(flags & PGAIOIP_INFLIGHT))
+			break;
+
+		baton = pg_atomic_read_u64(&head_io->interlock.baton.baton);
 		submitter_id = pgaio_baton_submitter(baton);
 		completer_id = pgaio_baton_completer(baton);
 		state = pgaio_baton_state(baton);
 
 		pg_read_barrier();
 
-		raw_result = head_io->io_method_data.posix_aio.raw_result;
+		raw_result = head_io->interlock.baton.raw_result;
 
 		if (state == PGAIO_BATON_SUBMITTED)
 		{
@@ -261,10 +278,10 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			 * copy of the completer/waiter ID that the interrupt handler can
 			 * read without using atomics.
 			 */
-			head_io->io_method_data.posix_aio.waiter_id = my_aio_id;
+			head_io->interlock.baton.waiter_id = my_aio_id;
 			
 			/* Double-check for a result to close a race. XXX discuss */
-			if (head_io->io_method_data.posix_aio.raw_result != INT_MIN)
+			if (head_io->interlock.baton.raw_result != INT_MIN)
 				continue;	/* go around again */
 
 			/*
@@ -325,10 +342,10 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 				}
 
 				/* Since I submitted it, I need to drain to make progress. */
-				pgaio_drain(NULL,
+				pgaio_drain(context,
 							/* block = */ true,
-							/* call_shared = */ false,
-							/* call_local = */ false);
+							/* call_shared = */ true,
+							/* call_local = */ true);
 			}
 			else if (completer_id == my_aio_id)
 			{
@@ -342,11 +359,6 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			}
 			else
 			{
-				PgAioIPFlags flags;
-
-				if (pgaio_io_recycled(io, ref_generation, &flags) ||
-					!(flags & PGAIOIP_INFLIGHT))
-					break;
 
 				/*
 				 * Someone else is already signed up and waiting to complete

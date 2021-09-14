@@ -336,27 +336,24 @@ struct PgAioInProgress
 
 			/* Index in pgaio_posix_aio_iocbs. */
 			int iocb_index;
-
-			/*
-			 * Atomic control flags used to negotiate handover from submitter
-			 * to completer.
-			 */
-			pg_atomic_uint64 flags;
-
-			/*
-			 * Which IO is the head of this IO's chain?  That's the only one
-			 * that the kernel knows about, so we need to be able to get our
-			 * hands on it to wrestle control from another backend.
-			 */
+		} posix_aio;
+#endif
+	} io_method_data;
+	union
+	{
+		struct
+		{
+			/* Control word for negotiating who should complete. */
+			pg_atomic_uint64 baton;
+			
+			/* Index of head IO in merged chain of IOs, or self. */
 			uint32 head_idx;
 
 			/* Raw result from the kernel, if known. */
 			volatile int raw_result;
-			volatile int waiter_id;
-#define PGAIO_POSIX_RESULT_INVALID INT_MIN
-		} posix_aio;
-#endif
-	} io_method_data;
+			volatile int waiter_id;			
+		} baton;
+	} interlock;
 };
 
 #ifdef USE_LIBURING
@@ -614,6 +611,7 @@ static inline bool pgaio_io_recycled(PgAioInProgress *io, uint64 ref_generation,
 extern bool pgaio_can_scatter_gather(void);
 
 /* Declarations for aio_baton.c */
+extern void pgaio_baton_shmem_init(void);
 extern void pgaio_baton_submit_one(PgAioInProgress *io);
 extern void pgaio_baton_process_completion(PgAioInProgress * io,
 										   int raw_result,

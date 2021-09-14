@@ -116,12 +116,7 @@ const IoMethodOps pgaio_posix_aio_ops = {
 static void
 pgaio_posix_aio_shmem_init(void)
 {
-	for (int i = 0; i < max_aio_in_progress; i++)
-	{
-		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
-
-		pg_atomic_init_u64(&io->io_method_data.posix_aio.flags, 0);
-	}
+	pgaio_baton_shmem_init();
 
 	/*
 	 * We need this array in every backend, including single process.
@@ -605,7 +600,7 @@ pgaio_posix_aio_process_completion(PgAioInProgress * io,
 	pgaio_baton_disable_interrupt();
 	pgaio_posix_aio_deactivate_io(io);
 	pgaio_baton_enable_interrupt();
-	
+
 	pgaio_baton_process_completion(io, raw_result, in_interrupt_handler);
 }
 
