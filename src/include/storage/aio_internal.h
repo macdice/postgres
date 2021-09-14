@@ -622,6 +622,10 @@ extern void pgaio_baton_wait_one(PgAioContext *context,
 								 PgAioInProgress * io,
 								 uint64 ref_generation,
 								 uint32 wait_event_info);
+extern void pgaio_baton_disable_interrupt(void);
+extern void pgaio_baton_enable_interrupt(void);
+
+
 
 /* Declarations for aio_io.c */
 extern void pgaio_combine_pending(void);

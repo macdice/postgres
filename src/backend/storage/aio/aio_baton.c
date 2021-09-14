@@ -367,11 +367,6 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 	ConditionVariableCancelSleep();
 }
 
-
-
-
-
-
 /*
  * Collect results from any IOs that other backends are waiting for.
  *
@@ -395,6 +390,36 @@ pgaio_baton_process_interrupt(void)
 		 * something
 		 */
 		pgaio_drain(NULL, true, false, false);
+	}
+}
+
+/*
+ * Disable interrupt processing.  This avoids undefined behaviour in
+ * aio_suspend() for IOs that have already returned, and problems with
+ * implementations that are not as async signal safe as they should be.
+ */
+void
+pgaio_baton_disable_interrupt(void)
+{
+	pgaio_baton_interrupt_holdoff++;
+}
+
+/*
+ * Renable interrupt processing, and handle any interrupts we missed.
+ */
+void
+pgaio_baton_enable_interrupt(void)
+{
+	Assert(pgaio_baton_interrupt_holdoff > 0);
+	if (--pgaio_baton_interrupt_holdoff == 0)
+	{
+		while (pgaio_baton_interrupt_pending)
+		{
+			pgaio_baton_interrupt_pending = false;
+			pgaio_baton_interrupt_holdoff++;
+			pgaio_baton_process_interrupt();
+			pgaio_baton_interrupt_holdoff--;
+		}
 	}
 }
 

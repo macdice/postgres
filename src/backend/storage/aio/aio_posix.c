@@ -61,13 +61,8 @@ typedef struct pgaio_posix_aio_listio_buffer
 /* Variables used by the interprocess interrupt system. */
 static int	pgaio_posix_aio_num_iocbs;
 static struct aiocb **pgaio_posix_aio_iocbs;
-static volatile sig_atomic_t pgaio_posix_aio_interrupt_pending;
-static volatile sig_atomic_t pgaio_posix_aio_interrupt_holdoff;
 
 /* Helper function declarations. */
-static void pgaio_posix_aio_disable_interrupt(void);
-static void pgaio_posix_aio_enable_interrupt(void);
-
 static PgAioInProgress * io_for_iocb(struct aiocb *cb);
 static struct aiocb *iocb_for_io(struct PgAioInProgress *io);
 
@@ -158,7 +153,7 @@ pgaio_posix_aio_submit(int max_submit, bool drain)
 	 * view of the set of running aiocbs.
 	 */
 	START_CRIT_SECTION();
-	pgaio_posix_aio_disable_interrupt();
+	pgaio_baton_disable_interrupt();
 
 	while (!dlist_is_empty(&my_aio->pending))
 	{
@@ -182,7 +177,7 @@ pgaio_posix_aio_submit(int max_submit, bool drain)
 	}
 	pgaio_posix_aio_flush_listio(&listio_buffer);
 
-	pgaio_posix_aio_enable_interrupt();
+	pgaio_baton_enable_interrupt();
 	END_CRIT_SECTION();
 
 	/* XXXX copied from uring submit */
@@ -230,12 +225,12 @@ pgaio_posix_aio_io_retry(PgAioInProgress * io)
 
 	/* See comments in pgaio_posix_aio_submit(). */
 	START_CRIT_SECTION();
-	pgaio_posix_aio_disable_interrupt();
+	pgaio_baton_disable_interrupt();
 
 	pgaio_posix_aio_submit_one(io, &listio_buffer);
 	pgaio_posix_aio_flush_listio(&listio_buffer);
 
-	pgaio_posix_aio_enable_interrupt();
+	pgaio_baton_enable_interrupt();
 	END_CRIT_SECTION();
 
 	pgaio_complete_ios(false);
@@ -321,8 +316,6 @@ static int
 pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 {
 	int			rc;
-
-	Assert(pgaio_posix_aio_interrupt_holdoff > 0);
 
 	if (lb->nios == 0)
 		return 0;
@@ -504,9 +497,9 @@ pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared)
 	in_interrupt_handler = context == NULL;
 	
 	START_CRIT_SECTION();
-	pgaio_posix_aio_disable_interrupt();
+	pgaio_baton_disable_interrupt();
 	ndrained = pgaio_posix_aio_drain_internal(block, in_interrupt_handler);
-	pgaio_posix_aio_enable_interrupt();
+	pgaio_baton_enable_interrupt();
 
 	if (call_shared)
 		pgaio_complete_ios(false);
@@ -609,9 +602,9 @@ pgaio_posix_aio_process_completion(PgAioInProgress * io,
 	 * failed to submit or it was a degenerate case like NOP then it's not
 	 * "active".
 	 */
-	pgaio_posix_aio_disable_interrupt();
+	pgaio_baton_disable_interrupt();
 	pgaio_posix_aio_deactivate_io(io);
-	pgaio_posix_aio_enable_interrupt();
+	pgaio_baton_enable_interrupt();
 	
 	pgaio_baton_process_completion(io, raw_result, in_interrupt_handler);
 }
@@ -644,8 +637,6 @@ iocb_for_io(PgAioInProgress * io)
 static void
 pgaio_posix_aio_activate_io(PgAioInProgress * io)
 {
-	Assert(pgaio_posix_aio_interrupt_holdoff > 0);
-
 	if (pgaio_posix_aio_num_iocbs == max_aio_in_flight)
 		elog(PANIC, "too many IOs in flight");
 
@@ -663,8 +654,6 @@ pgaio_posix_aio_deactivate_io(PgAioInProgress * io)
 	int			highest_index = pgaio_posix_aio_num_iocbs - 1;
 	int			gap_index = io->io_method_data.posix_aio.iocb_index;
 	PgAioInProgress *migrant;
-
-	Assert(pgaio_posix_aio_interrupt_holdoff > 0);
 
 	/* Nothing to do if not activated. */
 	if (gap_index == -1)
@@ -685,37 +674,6 @@ pgaio_posix_aio_deactivate_io(PgAioInProgress * io)
 /* Functions for dealing with interrupts received from other processes. */
 
 
-/*
- * Disable interrupt processing while interacting with aiocbs.  This avoids
- * undefined behaviour in aio_suspend() for IOs that have already returned,
- * and problems with implementations that are not as async signal safe as they
- * should be.
- */
-static void
-pgaio_posix_aio_disable_interrupt(void)
-{
-	pgaio_posix_aio_interrupt_holdoff++;
-}
-
-/*
- * Renable interrupt processing after interacting with aiocbs, and handle any
- * interrupts we missed.
- */
-static void
-pgaio_posix_aio_enable_interrupt(void)
-{
-	Assert(pgaio_posix_aio_interrupt_holdoff > 0);
-	if (--pgaio_posix_aio_interrupt_holdoff == 0)
-	{
-		while (pgaio_posix_aio_interrupt_pending)
-		{
-			pgaio_posix_aio_interrupt_pending = false;
-			pgaio_posix_aio_interrupt_holdoff++;
-			pgaio_posix_aio_process_interrupt();
-			pgaio_posix_aio_interrupt_holdoff--;
-		}
-	}
-}
 
 /*
  * POSIX leaves it unspecified whether the OS cancels IOs when you close the
@@ -738,7 +696,7 @@ pgaio_posix_aio_closing_fd(int fd)
 	bool waiting;
 
 	START_CRIT_SECTION();
-	pgaio_posix_aio_disable_interrupt();
+	pgaio_baton_disable_interrupt();
 	for (;;)
 	{
 		waiting = false;
@@ -758,7 +716,7 @@ pgaio_posix_aio_closing_fd(int fd)
 		pgaio_posix_aio_drain_internal(true /* block */,
 									   false /* in_interrupt_handler */);
 	}
-	pgaio_posix_aio_enable_interrupt();
+	pgaio_baton_enable_interrupt();
 	pgaio_complete_ios(false);
 	END_CRIT_SECTION();
 
