@@ -351,7 +351,6 @@ struct PgAioInProgress
 
 			/* Raw result from the kernel, if known. */
 			volatile int raw_result;
-			volatile int waiter_id;			
 		} baton;
 	} interlock;
 };

@@ -35,6 +35,8 @@
 #define PGAIO_BATON_COMPLETER_MASK		0x0000000000ffffff
 #define PGAIO_BATON_SUBMITTER_SHIFT		32
 
+#define PGAIO_BATON_INVALID_COMPLETER	0xffffffff
+
 #define PGAIO_BATON_SUBMITTED			0x0100000000000000
 #define PGAIO_BATON_HAS_WAITER			0x0200000000000000
 #define PGAIO_BATON_COMPLETED			0x0300000000000000
@@ -69,6 +71,12 @@ pgaio_baton_state(uint64 baton)
 	return baton & PGAIO_BATON_STATE_MASK;
 }
 
+static uint64
+pgaio_read_baton(PgAioInProgress *io)
+{
+	return pg_atomic_read_u64(&io->interlock.baton.baton);
+}
+
 static bool
 pgaio_update_baton(PgAioInProgress * io,
 				   uint64 baton,
@@ -90,7 +98,10 @@ pgaio_baton_shmem_init(void)
 	{
 		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
 
-		pg_atomic_init_u64(&io->interlock.baton.baton, 0);
+		pg_atomic_init_u64(&io->interlock.baton.baton,
+						   pgaio_make_baton(0,
+											0,
+											PGAIO_BATON_INVALID_COMPLETER));
 	}
 }
 
@@ -108,9 +119,18 @@ pgaio_baton_submit_one(PgAioInProgress *io)
 	}
 
 	io->interlock.baton.raw_result = INT_MIN;
-	io->interlock.baton.waiter_id = -1;
 	pg_atomic_write_u64(&io->interlock.baton.baton,
-						pgaio_make_baton(PGAIO_BATON_SUBMITTED, my_aio_id, 0));
+						pgaio_make_baton(PGAIO_BATON_SUBMITTED,
+										 my_aio_id,
+										 -1));
+}
+
+static void
+pgaio_baton_wake(PgAioInProgress *io, uint completer_id)
+{
+	pg_atomic_fetch_sub_u32(&my_aio->baton_waiter_count, 1);
+	if (completer_id != -1)
+		SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
 }
 
 /*
@@ -157,15 +177,19 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 	{
 		uint32		waiter_id;
 
-		printf("XXX pgaio_baton_process_completion in interrupt handler, %d\n", raw_result);
 		io->interlock.baton.raw_result = raw_result;
 		pg_memory_barrier();
-		waiter_id = io->interlock.baton.waiter_id;
-		if (waiter_id != -1)
-		{
-			SetLatch(&ProcGlobal->allProcs[waiter_id].procLatch);
-			pg_atomic_fetch_sub_u32(&my_aio->baton_waiter_count, 1);
-		}
+
+		/*
+		 * XXX Provide a function pg_atomic_read_u32_from_u64() that provided
+		 * non-torn read of the lower half of a u64 even on platforms where
+		 * atomic 64 bit is simulated
+		 */
+		waiter_id = pgaio_read_baton(io);
+
+		if (waiter_id != PGAIO_BATON_INVALID_COMPLETER)
+			pgaio_baton_wake(io, waiter_id);
+
 		return;
 	}
 
@@ -175,7 +199,7 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 	 */
 	do
 	{
-		baton = pg_atomic_read_u64(&io->interlock.baton.baton);
+		baton = pgaio_read_baton(io);
 		submitter_id = pgaio_baton_submitter(baton);
 		completer_id = pgaio_baton_completer(baton);
 		state = pgaio_baton_state(baton);
@@ -201,21 +225,7 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 
 	/* If there was a backend waiting, now wake it up. */
 	if (state == PGAIO_BATON_HAS_WAITER && completer_id != my_aio_id)
-	{
-		pg_atomic_sub_fetch_u32(&my_aio->baton_waiter_count, 1);
-		SendProcSignal(ProcGlobal->allProcs[submitter_id].pid,
-					   PROCSIG_AIO_INTERRUPT,
-					   InvalidBackendId);
-	}
-}
-
-static void
-pgaio_baton_wake(PgAioInProgress *io, uint completer_id)
-{
-//	Assert(pg_atomic_read_u32(&my_aio->baton_waiter_count > 0));
-	pg_atomic_fetch_sub_u32(&my_aio->baton_waiter_count, 1);
-	if (completer_id != -1)
-		SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
+		pgaio_baton_wake(io, completer_id);
 }
 
 /*
@@ -246,7 +256,7 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			!(flags & PGAIOIP_INFLIGHT))
 			break;
 
-		baton = pg_atomic_read_u64(&head_io->interlock.baton.baton);
+		baton = pgaio_read_baton(head_io);
 		submitter_id = pgaio_baton_submitter(baton);
 		completer_id = pgaio_baton_completer(baton);
 		state = pgaio_baton_state(baton);
@@ -270,7 +280,8 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 										submitter_id,
 										my_aio_id))
 					continue;	/* lost race, try again */
-				pgaio_process_io_completion(head_io, false);
+				pgaio_process_io_completion(head_io, raw_result);
+				pgaio_complete_ios(false);
 				break;
 			}
 
@@ -286,17 +297,6 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			/* XXX restructure so we can fall through */
 			if (submitter_id == my_aio_id)
 				continue;
-
-			/*
-			 * Otherwise we have to ask the submitter to help.  Make a second
-			 * copy of the completer/waiter ID that the interrupt handler can
-			 * read without using atomics.
-			 */
-			head_io->interlock.baton.waiter_id = my_aio_id;
-
-			/* Double-check for a result to close a race. XXX discuss */
-			if (head_io->interlock.baton.raw_result != INT_MIN)
-				continue;	/* go around again */
 
 			/*
 			 * Interrupt the submitter to tell it we are waiting.
@@ -327,7 +327,8 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 										my_aio_id))
 					continue;	/* lost race, try again */
 
-				pgaio_process_io_completion(head_io, false);
+				pgaio_process_io_completion(head_io, raw_result);
+				pgaio_complete_ios(false);
 
 				/* Wake previous waiter, if not me. */
 				if (completer_id != my_aio_id)
