@@ -487,10 +487,11 @@ pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared)
 	/*
 	 * XXX Come up with a decent way to pass this flag in, so that
 	 * pgaio_baton_process_interrupt() can tell us we're running in an
-	 * interrupt handler!
+	 * interrupt handler without having to overload the context pointer like
+	 * this...
 	 */
-	in_interrupt_handler = context == NULL;
-	
+	in_interrupt_handler = (bool) context;
+
 	START_CRIT_SECTION();
 	pgaio_baton_disable_interrupt();
 	ndrained = pgaio_posix_aio_drain_internal(block, in_interrupt_handler);

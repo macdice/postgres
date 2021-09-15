@@ -157,6 +157,7 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 	{
 		uint32		waiter_id;
 
+		printf("XXX pgaio_baton_process_completion in interrupt handler, %d\n", raw_result);
 		io->interlock.baton.raw_result = raw_result;
 		pg_memory_barrier();
 		waiter_id = io->interlock.baton.waiter_id;
@@ -167,10 +168,10 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 		}
 		return;
 	}
-	
+
 	/*
-	 * Use a CAS loop to serialize with any backend that registers as
-	 * completer.  We need to be able to wake it up.
+	 * Use CAS to serialize with any backend that registers as completer.  We
+	 * need to be able to wake it up (it didn't get the job).
 	 */
 	do
 	{
@@ -197,12 +198,15 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 
 	/* Process completions. */
 	pgaio_process_io_completion(io, raw_result);
-	
+
 	/* If there was a backend waiting, now wake it up. */
 	if (state == PGAIO_BATON_HAS_WAITER && completer_id != my_aio_id)
+	{
+		pg_atomic_sub_fetch_u32(&my_aio->baton_waiter_count, 1);
 		SendProcSignal(ProcGlobal->allProcs[submitter_id].pid,
 					   PROCSIG_AIO_INTERRUPT,
 					   InvalidBackendId);
+	}
 }
 
 /*
@@ -226,7 +230,7 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 	head_io = &aio_ctl->in_progress_io[head_idx];
 
 	for (;;)
-	{		
+	{
 		PgAioIPFlags flags;
 
 		if (pgaio_io_recycled(io, ref_generation, &flags) ||
@@ -248,8 +252,8 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			{
 				/*
 				 * Result is here already, but there's no waiter.  It must
-				 * have been consumed from the kernel incidentally by the
-				 * interrupt handler.
+				 * have been drained by an interrupt handler than couldn't
+				 * process it.  We can now do it immediately.
 				 */
 				if (!pgaio_update_baton(head_io,
 										baton,
@@ -268,18 +272,18 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 									submitter_id,
 									my_aio_id))
 				continue;	/* lost race, try again */
-			
+
 			/* If I submitted it, go around again so we can drain. */
 			if (submitter_id == my_aio_id)
 				continue;
-			
+
 			/*
 			 * Otherwise we have to ask the submitter to help.  Make a second
 			 * copy of the completer/waiter ID that the interrupt handler can
 			 * read without using atomics.
 			 */
 			head_io->interlock.baton.waiter_id = my_aio_id;
-			
+
 			/* Double-check for a result to close a race. XXX discuss */
 			if (head_io->interlock.baton.raw_result != INT_MIN)
 				continue;	/* go around again */
@@ -312,12 +316,15 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 										submitter_id,
 										my_aio_id))
 					continue;	/* lost race, try again */
-				
+
 				pgaio_process_io_completion(head_io, false);
 
 				/* Wake previous waiter, if not me. */
 				if (completer_id != my_aio_id)
+				{
+
 					SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
+				}
 
 				break;
 			}
@@ -342,10 +349,11 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 				}
 
 				/* Since I submitted it, I need to drain to make progress. */
-				pgaio_drain(context,
+				pgaio_drain(NULL,
 							/* block = */ true,
 							/* call_shared = */ true,
 							/* call_local = */ true);
+				pgaio_complete_ios(false);
 			}
 			else if (completer_id == my_aio_id)
 			{
@@ -359,7 +367,6 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 			}
 			else
 			{
-
 				/*
 				 * Someone else is already signed up and waiting to complete
 				 * this IO.  We have to wait on the condition variable.
@@ -385,7 +392,7 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
  * Runs in signal handler context.  Also runs in user context.
  */
 static void
-pgaio_baton_process_interrupt(void)
+pgaio_baton_process_interrupt(bool in_signal_handler)
 {
 	while (pg_atomic_read_u32(&my_aio->baton_waiter_count) > 0)
 	{
@@ -397,11 +404,14 @@ pgaio_baton_process_interrupt(void)
 		 * others' progress or we might deadlock.  This problem would go away
 		 * if we used threads instead of processes.
 		 *
-		 * XXX: NULL context is a way to tell pgaio_{posix_aio,iocp}_drain()
-		 * that we're in a signal handler!  FIXME, need extensible flags or
+		 * XXX: Bogus pointer is a way to tell pgaio_{posix_aio,iocp}_drain()
+		 * if we're in a signal handler!  FIXME, need extensible flags or
 		 * something
 		 */
-		pgaio_drain(NULL, true, false, false);
+		pgaio_drain(/* context = */ (void *) in_signal_handler,
+					/* block = */ true,
+					/* call_shared = */ false,
+					/* call_local = */ false);
 	}
 }
 
@@ -429,7 +439,7 @@ pgaio_baton_enable_interrupt(void)
 		{
 			pgaio_baton_interrupt_pending = false;
 			pgaio_baton_interrupt_holdoff++;
-			pgaio_baton_process_interrupt();
+			pgaio_baton_process_interrupt(false);
 			pgaio_baton_interrupt_holdoff--;
 		}
 	}
@@ -451,5 +461,5 @@ HandleAioInterrupt(void)
 		pgaio_baton_interrupt_pending = true;
 		return;
 	}
-	pgaio_baton_process_interrupt();
+	pgaio_baton_process_interrupt(true);
 }
