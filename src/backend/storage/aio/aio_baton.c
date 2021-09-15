@@ -209,6 +209,15 @@ pgaio_baton_process_completion(PgAioInProgress * io,
 	}
 }
 
+static void
+pgaio_baton_wake(PgAioInProgress *io, uint completer_id)
+{
+	Assert(pg_atomic_read_u32(&my_aio->baton_waiter_count > 0));
+	pg_atomic_fetch_sub_u32(&my_aio->baton_waiter_count, 1);
+	if (completer_id != -1)
+		SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
+}
+
 /*
 
  */
@@ -321,10 +330,7 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 
 				/* Wake previous waiter, if not me. */
 				if (completer_id != my_aio_id)
-				{
-
-					SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
-				}
+					pgail_baton_wake(head_io, completer_id);
 
 				break;
 			}
@@ -345,7 +351,7 @@ pgaio_baton_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_gen
 						continue;	/* lost race, try again */
 
 					/* Wake previous waiter.  It'll wait on the CV. */
-					SetLatch(&ProcGlobal->allProcs[completer_id].procLatch);
+					pgaio_baton_wake(head_io, completer_id);
 				}
 
 				/* Since I submitted it, I need to drain to make progress. */
