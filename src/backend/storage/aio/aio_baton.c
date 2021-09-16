@@ -71,6 +71,18 @@ pgaio_baton_state(uint64 baton)
 	return baton & PGAIO_BATON_STATE_MASK;
 }
 
+static uint32
+pgaio_read_baton_completer(PgAioInProgress *io)
+{
+	/*
+	 * XXX This is called in a signal handler.  Here I want a new function
+	 * pg_atomic_read_u64_lower_word(x) that does an unlocked load of the
+	 * lower u32 (something that we require to work) without using any
+	 * spinlocks on the platforms where u64 atomics are simulated...
+	 */
+	return pg_atomic_read_u64(&io->interlock.baton.baton);
+}
+
 static uint64
 pgaio_read_baton(PgAioInProgress *io)
 {
