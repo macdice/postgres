@@ -917,6 +917,11 @@ AC_MSG_CHECKING([whether to build with POSIX AIO support])
 PGAC_ARG_BOOL(with, posix-aio, no, [use POSIX AIO for async io],
               [AC_DEFINE([USE_POSIX_AIO], 1, [Define to build with POSIX AIO support. (--with-posix-aio)])])
 AC_MSG_RESULT([$with_posix_aio])
+
+# Just so we can easily see the size on different platforms
+AC_CHECK_SIZEOF([struct aiocb], [],
+[#include <aio.h>
+])
 AC_SUBST(with_posix_aio)
 
 #

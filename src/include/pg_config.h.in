@@ -886,6 +886,9 @@
 /* The size of `size_t', as computed by sizeof. */
 #undef SIZEOF_SIZE_T
 
+/* The size of `struct aiocb', as computed by sizeof. */
+#undef SIZEOF_STRUCT_AIOCB
+
 /* The size of `void *', as computed by sizeof. */
 #undef SIZEOF_VOID_P
 

@@ -486,6 +486,7 @@ sub GenerateFiles
 		SIZEOF_OFF_T                        => undef,
 		SIZEOF_SIZE_T                       => $bits / 8,
 		SIZEOF_VOID_P                       => $bits / 8,
+		SIZEOF_STRUCT_AIOCB                 => undef,
 		STDC_HEADERS                        => 1,
 		STRERROR_R_INT                      => undef,
 		USE_ARMV8_CRC32C                    => undef,
