@@ -27,7 +27,7 @@ task:
     - sysctl kern.metadelay=3028
     - sysctl kern.dirdelay=3028
     - sysctl kern.filedelay=3029
-    - sysctl kern.maxvnodes=400000
+    - sysctl kern.maxvnodes=2000000
   ccache_cache:
     folder: "/tmp/ccache_dir"
   create_partition_script:
