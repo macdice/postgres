@@ -7,16 +7,11 @@
  * macOS, AIX and HP-UX.  It's also provided by user space-managed threads in
  * the runtime libraries of Linux (Glibc, Musl), illumos and Solaris.
  *
- * The main complication for PostgreSQL's current process-based architecture
- * is that it's not possible for one backend to consume the completion of an
- * IO submitted by another.  To avoid deadlocks, any backend that is waiting
- * for an abitrary IO must be able to make progress, so this module has to
- * overcome that limitation.  It does that by sending a signal to the
- * submitting backend to ask it to collect the result and pass it on.
+ * Uses the "exchange" mechanism to deal with the problem that results can
+ * only be consumed by the process that submitted them.
  *
- * XXX Set requester in flags while running synchronous IO to prevent signaling
+ * XXX Clear interruptor while running synchronous IO to prevent signaling
  * XXX Tidy
- * XXX pgbench fails on macos with "buffer beyond EOF"
  *
  * For macOS, the default kern.aio* settings are inadequate and must be
  * increased.  For AIX, shared_memory_type must be set to sysv because kernel
