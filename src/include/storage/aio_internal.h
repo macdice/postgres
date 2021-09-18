@@ -176,6 +176,8 @@ struct PgAioInProgress
 	/* index into allProcs, or PG_UINT32_MAX for process local IO */
 	uint32 owner_id;
 
+	uint32 submitter_id;
+	
 	/* the IOs result, depends on operation. E.g. the length of a read */
 	int32 result;
 
@@ -343,15 +345,14 @@ struct PgAioInProgress
 	{
 		struct
 		{
-			/* Control word for negotiating who should complete. */
-			pg_atomic_uint64 baton;
-			
+			pg_atomic_uint32 interruptible;
+
 			/* Index of head IO in merged chain of IOs, or self. */
 			uint32 head_idx;
 
-			/* Raw result from the kernel, if known. */
+			/* Raw result from the kernel, or INT_MIN. */
 			volatile int raw_result;
-		} baton;
+		} exchange;
 	} interlock;
 };
 
@@ -571,6 +572,7 @@ typedef struct IoMethodOps
 					 uint64 ref_generation,
 					 uint32 wait_event_info);
 	int (*drain)(PgAioContext *context, bool block, bool call_shared);
+	int (*reap)(PgAioContext *context);
 
 	void (*closing_fd)(int fd);
 
@@ -610,17 +612,17 @@ static inline bool pgaio_io_recycled(PgAioInProgress *io, uint64 ref_generation,
 extern bool pgaio_can_scatter_gather(void);
 
 /* Declarations for aio_baton.c */
-extern void pgaio_baton_shmem_init(void);
-extern void pgaio_baton_submit_one(PgAioInProgress *io);
-extern void pgaio_baton_process_completion(PgAioInProgress * io,
-										   int raw_result,
-										   bool in_interrupt_handler);
-extern void pgaio_baton_wait_one(PgAioContext *context,
-								 PgAioInProgress * io,
-								 uint64 ref_generation,
-								 uint32 wait_event_info);
-extern void pgaio_baton_disable_interrupt(void);
-extern void pgaio_baton_enable_interrupt(void);
+extern void pgaio_exchange_shmem_init(void);
+extern void pgaio_exchange_submit_one(PgAioInProgress *io);
+extern void pgaio_exchange_process_completion(PgAioInProgress * io,
+											  int raw_result,
+											  bool in_interrupt_handler);
+extern void pgaio_exchange_wait_one(PgAioContext *context,
+									PgAioInProgress * io,
+									uint64 ref_generation,
+									uint32 wait_event_info);
+extern void pgaio_exchange_disable_interrupt(void);
+extern void pgaio_exchange_enable_interrupt(void);
 
 
 

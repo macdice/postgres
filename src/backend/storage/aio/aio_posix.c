@@ -97,7 +97,7 @@ const IoMethodOps pgaio_posix_aio_ops = {
 	.shmem_init = pgaio_posix_aio_shmem_init,
 	.submit = pgaio_posix_aio_submit,
 	.retry = pgaio_posix_aio_io_retry,
-	.wait_one = pgaio_baton_wait_one,
+	.wait_one = pgaio_exchange_wait_one,
 	.drain = pgaio_posix_aio_drain,
 	.closing_fd = pgaio_posix_aio_closing_fd,
 
@@ -116,7 +116,7 @@ const IoMethodOps pgaio_posix_aio_ops = {
 static void
 pgaio_posix_aio_shmem_init(void)
 {
-	pgaio_baton_shmem_init();
+	pgaio_exchange_shmem_init();
 
 	/*
 	 * We need this array in every backend, including single process.
@@ -148,7 +148,7 @@ pgaio_posix_aio_submit(int max_submit, bool drain)
 	 * view of the set of running aiocbs.
 	 */
 	START_CRIT_SECTION();
-	pgaio_baton_disable_interrupt();
+	pgaio_exchange_disable_interrupt();
 
 	while (!dlist_is_empty(&my_aio->pending))
 	{
@@ -172,7 +172,7 @@ pgaio_posix_aio_submit(int max_submit, bool drain)
 	}
 	pgaio_posix_aio_flush_listio(&listio_buffer);
 
-	pgaio_baton_enable_interrupt();
+	pgaio_exchange_enable_interrupt();
 	END_CRIT_SECTION();
 
 	/* XXXX copied from uring submit */
@@ -220,12 +220,12 @@ pgaio_posix_aio_io_retry(PgAioInProgress * io)
 
 	/* See comments in pgaio_posix_aio_submit(). */
 	START_CRIT_SECTION();
-	pgaio_baton_disable_interrupt();
+	pgaio_exchange_disable_interrupt();
 
 	pgaio_posix_aio_submit_one(io, &listio_buffer);
 	pgaio_posix_aio_flush_listio(&listio_buffer);
 
-	pgaio_baton_enable_interrupt();
+	pgaio_exchange_enable_interrupt();
 	END_CRIT_SECTION();
 
 	pgaio_complete_ios(false);
@@ -245,7 +245,7 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 	int			rc = -1;
 
 
-	pgaio_baton_submit_one(io);
+	pgaio_exchange_submit_one(io);
 
 	/* This IOCB is not "active" yet. */
 	io->io_method_data.posix_aio.iocb_index = -1;
@@ -486,16 +486,16 @@ pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared)
 
 	/*
 	 * XXX Come up with a decent way to pass this flag in, so that
-	 * pgaio_baton_process_interrupt() can tell us we're running in an
+	 * pgaio_exchange_process_interrupt() can tell us we're running in an
 	 * interrupt handler without having to overload the context pointer like
 	 * this...
 	 */
 	in_interrupt_handler = (bool) context;
 
 	START_CRIT_SECTION();
-	pgaio_baton_disable_interrupt();
+	pgaio_exchange_disable_interrupt();
 	ndrained = pgaio_posix_aio_drain_internal(block, in_interrupt_handler);
-	pgaio_baton_enable_interrupt();
+	pgaio_exchange_enable_interrupt();
 
 	if (call_shared)
 		pgaio_complete_ios(false);
@@ -598,11 +598,11 @@ pgaio_posix_aio_process_completion(PgAioInProgress * io,
 	 * failed to submit or it was a degenerate case like NOP then it's not
 	 * "active".
 	 */
-	pgaio_baton_disable_interrupt();
+	pgaio_exchange_disable_interrupt();
 	pgaio_posix_aio_deactivate_io(io);
-	pgaio_baton_enable_interrupt();
+	pgaio_exchange_enable_interrupt();
 
-	pgaio_baton_process_completion(io, raw_result, in_interrupt_handler);
+	pgaio_exchange_process_completion(io, raw_result, in_interrupt_handler);
 }
 
 
@@ -692,7 +692,7 @@ pgaio_posix_aio_closing_fd(int fd)
 	bool waiting;
 
 	START_CRIT_SECTION();
-	pgaio_baton_disable_interrupt();
+	pgaio_exchange_disable_interrupt();
 	for (;;)
 	{
 		waiting = false;
@@ -712,7 +712,7 @@ pgaio_posix_aio_closing_fd(int fd)
 		pgaio_posix_aio_drain_internal(true /* block */,
 									   false /* in_interrupt_handler */);
 	}
-	pgaio_baton_enable_interrupt();
+	pgaio_exchange_enable_interrupt();
 	pgaio_complete_ios(false);
 	END_CRIT_SECTION();
 

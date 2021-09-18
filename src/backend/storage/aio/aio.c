@@ -1187,6 +1187,7 @@ pgaio_io_get(void)
 	WRITE_ONCE_F(io->flags) = PGAIOIP_IDLE;
 
 	io->owner_id = my_aio_id;
+	io->submitter_id = my_aio_id;
 
 	dlist_push_tail(&my_aio->outstanding, &io->owner_node);
 	my_aio->outstanding_count++;
@@ -1718,7 +1719,7 @@ wait_ref_again:
 
 		Assert(!(flags & (PGAIOIP_UNUSED)));
 
-		if (flags & PGAIOIP_INFLIGHT)
+		if (flags & PGAIOIP_INFLIGHT)		/* XXX && pgaio_impl->XXX ?*/
 		{
 			pgaio_drain(&aio_ctl->contexts[io->ring],
 						/* block = */ false,
@@ -1938,6 +1939,8 @@ pgaio_io_retry_common(PgAioInProgress *io)
 
 	my_aio->retry_total_count++;
 
+	io->submitter_id = my_aio_id;
+	
 	START_CRIT_SECTION();
 	pgaio_impl->retry(io);
 	END_CRIT_SECTION();
