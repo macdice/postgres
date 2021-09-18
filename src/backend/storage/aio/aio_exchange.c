@@ -8,10 +8,8 @@
  * process can consume an IO's result, so we need a way to handle the
  * (hopefully rare) cases where a backend finishes up waiting for an IO that
  * another backend submitted.  This is accomplished by using an atomic
- * variable to "pass the exchange" from the submitter to the completer, with an
- * interrupt to make sure that progress can always be made.
- *
- * XXX TODO: Is there a better name than "exchange"?
+ * variable to coordinate handover of results from the submitter to the
+ * completer, with an interrupt to make sure that progress can always be made.
  *
  * Portions Copyright (c) 2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -41,7 +39,7 @@ pgaio_exchange_shmem_init(void)
 		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
 
 		pg_atomic_init_u32(&io->interlock.exchange.interruptible, false);
-		io->interlock.exchange.raw_result = INT_MIN;
+		io->interlock.exchange.result = INT_MIN;
 	}
 }
 
@@ -58,16 +56,17 @@ pgaio_exchange_submit_one(PgAioInProgress *io)
 		cur = &aio_ctl->in_progress_io[cur->merge_with_idx];
 	}
 
-	io->interlock.exchange.raw_result = INT_MIN;
+	pg_atomic_write_u32(&io->interlock.exchange.interruptible, true);
+	io->interlock.exchange.result = INT_MIN;
 }
 
 void
 pgaio_exchange_process_completion(PgAioInProgress * io,
-								  int raw_result,
+								  int result,
 								  bool in_interrupt_handler)
 {
 	Assert(io->submitter_id == my_aio_id);
-	Assert(io->interlock.exchange.raw_result == INT_MIN);
+	Assert(io->interlock.exchange.result == INT_MIN);
 
 	if (unlikely(in_interrupt_handler))
 	{
@@ -76,12 +75,12 @@ pgaio_exchange_process_completion(PgAioInProgress * io,
 		 * available to other backends with operations that are safe from a
 		 * signal handler.
 		 */
-		io->interlock.exchange.raw_result = raw_result;
+		io->interlock.exchange.result = result;
 		ConditionVariableSignalFromSignalHandler(&io->cv);
 		return;
 	}
 	
-	pgaio_process_io_completion(io, raw_result);
+	pgaio_process_io_completion(io, result);
 
 	/*
 	 * XXX It's a shame to broadcast on the CV here (because
@@ -97,7 +96,7 @@ pgaio_exchange_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_
 {
 	PgAioInProgress *head_io;
 	PgAioIPFlags flags;
-	int			raw_result;
+	int			result;
 
 	/* Find the head of the merge chain (could be out of date if gen advanced). */
 	head_io = &aio_ctl->in_progress_io[io->interlock.exchange.head_idx];
@@ -112,14 +111,14 @@ pgaio_exchange_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_
 		 * It might have reaped a raw result while it was enabled, in which
 		 * case we have to negotiate for the right to process completions.
 		 */
-		if ((raw_result = io->interlock.exchange.raw_result) != INT_MIN)
+		if ((result = io->interlock.exchange.result) != INT_MIN)
 		{
 			if (!pg_atomic_exchange_u32(&io->interlock.exchange.interruptible, false))
 				goto out;
 			if (pgaio_io_recycled(io, ref_generation, &flags) ||
 				!(flags & PGAIOIP_INFLIGHT))
 				goto out;
-			pgaio_exchange_process_completion(io, raw_result, false);
+			pgaio_exchange_process_completion(io, result, false);
 			goto out;
 		}
 
@@ -183,7 +182,7 @@ pgaio_exchange_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_
 	ConditionVariablePrepareToSleep(&io->cv);
 	for (int backoff = 10;; backoff = Min(backoff * 2, 1000))
 	{
-		int			raw_result;
+		int			result;
 
 		/* Has the submitter done it? */
 		if (pgaio_io_recycled(io, ref_generation, &flags) ||
@@ -191,10 +190,10 @@ pgaio_exchange_wait_one(PgAioContext *context, PgAioInProgress * io, uint64 ref_
 			break;
 		
 		/* Has the submitter given us the result? */
-		raw_result = head_io->interlock.exchange.raw_result;
-		if (raw_result != INT_MIN)
+		result = head_io->interlock.exchange.result;
+		if (result != INT_MIN)
 		{
-			pgaio_exchange_process_completion(head_io, raw_result, false);
+			pgaio_exchange_process_completion(head_io, result, false);
 			break;
 		}
 

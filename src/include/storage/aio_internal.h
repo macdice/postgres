@@ -351,7 +351,7 @@ struct PgAioInProgress
 			uint32 head_idx;
 
 			/* Raw result from the kernel, or INT_MIN. */
-			volatile int raw_result;
+			volatile int result;
 		} exchange;
 	} interlock;
 };
