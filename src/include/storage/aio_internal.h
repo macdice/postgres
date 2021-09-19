@@ -343,14 +343,14 @@ struct PgAioInProgress
 	{
 		struct
 		{
-			pg_atomic_uint32 have_interruptor;
-			pg_atomic_uint32 have_completer;
-
 			/* Index of head IO in merged chain of IOs, or self. */
 			uint32 head_idx;
 
 			/* Raw result from the kernel, or INT_MIN. */
 			volatile int result;
+
+			/* Atomic flag used to negotiate who processes the result. */
+			pg_atomic_uint32 have_completer;
 		} exchange;
 	} interlock;
 };

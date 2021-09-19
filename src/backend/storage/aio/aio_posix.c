@@ -10,9 +10,6 @@
  * Uses the "exchange" mechanism to deal with the problem that results can
  * only be consumed by the process that submitted them.
  *
- * XXX Clear interruptor while running synchronous IO to prevent signaling
- * XXX Tidy
- *
  * For macOS, the default kern.aio* settings are inadequate and must be
  * increased.  For AIX, shared_memory_type must be set to sysv because kernel
  * AIO cannot access mmap'd memory.  For Solaris and Linux, libc emulates POSIX
@@ -44,6 +41,13 @@
 #define AIO_LISTIO_MAX 16
 #endif
 
+/* On systems with no O_DSYNC, just use the stronger O_SYNC. */
+#ifdef O_DSYNC
+#define PG_O_DSYNC O_DSYNC
+#else
+#define PG_O_DSYNC O_SYNC
+#endif
+
 typedef struct pgaio_posix_aio_listio_buffer
 {
 	int			nios;
@@ -52,10 +56,6 @@ typedef struct pgaio_posix_aio_listio_buffer
 	struct iovec iovecs[AIO_LISTIO_MAX][IOV_MAX];
 #endif
 }			pgaio_posix_aio_listio_buffer;
-
-/* Helper function declarations. */
-static PgAioInProgress * io_for_iocb(struct aiocb *cb);
-static struct aiocb *iocb_for_io(struct PgAioInProgress *io);
 
 /*
  * If we're using aio_suspend(), we maintain an array of pointers to all active
@@ -69,6 +69,9 @@ static void pgaio_posix_aio_suspend_array_insert(struct PgAioInProgress *io);
 static void pgaio_posix_aio_suspend_array_delete(struct PgAioInProgress *io);
 #endif
 
+/* Helper function declarations. */
+static PgAioInProgress * io_for_iocb(struct aiocb *cb);
+static struct aiocb *iocb_for_io(struct PgAioInProgress *io);
 static void pgaio_posix_aio_submit_one(PgAioInProgress * io,
 									   pgaio_posix_aio_listio_buffer * listio_buffer);
 static int	pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb);
@@ -79,13 +82,6 @@ static void pgaio_posix_aio_process_completion(PgAioInProgress * io,
 											   bool in_interrupt_handler);
 static int	pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared);
 static int	pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler);
-
-/* On systems with no O_DSYNC, just use the stronger O_SYNC. */
-#ifdef O_DSYNC
-#define PG_O_DSYNC O_DSYNC
-#else
-#define PG_O_DSYNC O_SYNC
-#endif
 
 /* Module initialization. */
 

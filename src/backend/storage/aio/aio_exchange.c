@@ -40,12 +40,6 @@ pgaio_exchange_reneg_completer(PgAioInProgress *io)
 	ConditionVariableBroadcast(&io->cv);
 }
 
-static bool
-pgaio_exchange_become_interruptor(PgAioInProgress *io)
-{
-	return !pg_atomic_exchange_u32(&io->interlock.exchange.have_interruptor, true);
-}
-
 void
 pgaio_exchange_shmem_init(void)
 {
@@ -54,7 +48,6 @@ pgaio_exchange_shmem_init(void)
 		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
 
 		pg_atomic_init_u32(&io->interlock.exchange.have_completer, false);
-		pg_atomic_init_u32(&io->interlock.exchange.have_interruptor, false);
 		io->interlock.exchange.result = INT_MIN;
 	}
 }
@@ -71,7 +64,6 @@ pgaio_exchange_submit_one(PgAioInProgress *io)
 	}
 
 	pg_atomic_write_u32(&io->interlock.exchange.have_completer, false);
-	pg_atomic_write_u32(&io->interlock.exchange.have_interruptor, false);
 	io->interlock.exchange.result = INT_MIN;
 }
 
@@ -140,22 +132,17 @@ pgaio_exchange_wait_one_local(PgAioInProgress * io, uint64 ref_generation, uint3
 		}
 	}
 
-	/* Suppress useless interruptions while we're draining. */
-	if (pgaio_io_recycled(io, ref_generation, &flags) ||
-		!(flags & PGAIOIP_INFLIGHT))
-		goto out;
-	pgaio_exchange_become_interruptor(head_io);
-
 	/* Keep draining until the IO is no longer in flight. */
-	do
+	for (;;)
 	{
+		if (pgaio_io_recycled(io, ref_generation, &flags) ||
+			(flags & PGAIOIP_INFLIGHT))
+			break;
 		pgaio_drain(NULL,
 					/* block = */ true,
 					/* call_shared = */ false,
 					/* call_local = */ false);
 	}
-	while (!pgaio_io_recycled(io, ref_generation, &flags) &&
-		   (flags & PGAIOIP_INFLIGHT));
 
  out:
 	pgaio_exchange_enable_interrupt();
@@ -167,19 +154,10 @@ pgaio_exchange_wait_one_foreign(PgAioInProgress * io, uint64 ref_generation, uin
 	uint32 head_idx;
 	PgAioInProgress *head_io;
 	PgAioIPFlags flags;
-	bool am_interruptor;
 
 	/* Find the head of the merge chain (could be out of date if gen advanced). */
 	head_idx = io->interlock.exchange.head_idx;
 	head_io = &aio_ctl->in_progress_io[head_idx];
-
-	/*
-	 * Elect one waiting backend to interrupt the submitter.  No point in
-	 * having any more than one backend doing that.
-	 */
-	am_interruptor =
-		!pg_atomic_exchange_u32(&head_io->interlock.exchange.have_interruptor,
-								true);
 
 	/*
 	 * Wait for the submitter to tell us the result, or to process completions
@@ -211,17 +189,24 @@ pgaio_exchange_wait_one_foreign(PgAioInProgress * io, uint64 ref_generation, uin
 				break;
 			}
 		}
-		else if (am_interruptor)
+		else
 		{
-			/* Ask the submitter to drain. */
-			SendProcSignal(ProcGlobal->allProcs[io->submitter_id].pid,
+			/*
+			 * Ask the submitter to drain.
+			 *
+			 * XXX It might be nice to coordinate so that multiple waiters
+			 * don't become a thundering herd.
+			 *
+			 * XXX Expose whether the submitter has interrupts disabled, and do
+			 * a double-checked flag dance so that we can avoid interrupting
+			 * the submitter if it's blocked in drain() (hopefully a common case).
+			 */
+			SendProcSignal(ProcGlobal->allProcs[head_io->submitter_id].pid,
 						   PROCSIG_AIO_INTERRUPT,
 						   InvalidBackendId);
 		}
 
-		ConditionVariableTimedSleep(&io->cv,
-									am_interruptor ? backoff : -1,
-									wait_event_info);
+		ConditionVariableTimedSleep(&io->cv, backoff, wait_event_info);
 	}
 	ConditionVariableCancelSleep();
 }
