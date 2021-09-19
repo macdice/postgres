@@ -62,10 +62,9 @@ static struct aiocb *iocb_for_io(struct PgAioInProgress *io);
  * aiocb structs (otherwise we'd have to build the array every time we drain).
  * If we have aio_waitcomplete(), we don't need to bother with that.
  */
-#ifndef HAVE_AIO_WAITCOMPLETE
-#define USE_AIO_SUSPEND
-static int	pgaio_posix_aio_suspend_array_size;
+#ifdef USE_AIO_SUSPEND
 static struct aiocb **pgaio_posix_aio_suspend_array;
+static int	pgaio_posix_aio_suspend_array_size;
 static void pgaio_posix_aio_suspend_array_insert(struct PgAioInProgress *io);
 static void pgaio_posix_aio_suspend_array_delete(struct PgAioInProgress *io);
 #endif

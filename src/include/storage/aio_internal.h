@@ -42,6 +42,11 @@
 
 #define PGAIO_NUM_CONTEXTS 8
 
+#ifdef USE_POSIX_AIO
+#ifndef HAVE_AIO_WAITCOMPLETE
+#define USE_AIO_SUSPEND
+#endif
+#endif
 
 /*
  * The type of AIO.
@@ -326,18 +331,9 @@ struct PgAioInProgress
 #ifdef USE_POSIX_AIO
 		struct
 		{
-			/*
-			 * The POSIX AIO control block doesn't need to be in shared
-			 * memory, but we'd waste more space if we had large private
-			 * arrays in every backend.
-			 *
-			 * XXX Should we move this into a separate mirror array, to
-			 * debloat the top level struct?
-			 */
 			struct aiocb iocb;
 
-#ifndef HAVE_AIO_WAITCOMPLETE
-			/* Index in pgaio_posix_aio_suspend_array if using aio_suspend(). */
+#ifdef USE_AIO_SUSPEND
 			int aio_suspend_array_index;
 #endif
 		} posix_aio;
