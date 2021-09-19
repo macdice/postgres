@@ -1501,6 +1501,7 @@ pgaio_io_prepare_submit(PgAioInProgress *io, uint32 ring)
 		Assert(my_aio_id == cur->owner_id);
 
 		cur->ring = ring;
+		cur->submitter_id = my_aio_id;
 
 		pg_write_barrier();
 
