@@ -310,7 +310,18 @@ pgaio_postmaster_before_child_exit(int code, Datum arg)
 	 * XXX This is not sufficient: if we retried an IO that another backend
 	 * owns (ie we submitted it to the kernel, even though another backend
 	 * submitted it originally), it will not be on our issued lists.
+	 *
+	 * XXX Temporarily add a per-impl hook for that, so that POSIX AIO can do
+	 * this a more reliable way, because otherwise Macs run into trouble (high
+	 * retry rate makes it likely that we'll exit with an IO we haven't
+	 * handled).  This isn't a permanent solution, I just want to unbreak CI;
+	 * once this higher lever code has enough book keeping to wait for all
+	 * submitted then we could drop this.
 	 */
+
+	if (pgaio_impl->postmaster_before_child_exit)
+		pgaio_impl->postmaster_before_child_exit();
+
 	pgaio_wait_for_issued();
 	pgaio_complete_ios(true);
 

@@ -574,6 +574,7 @@ typedef struct IoMethodOps
 	int (*reap)(PgAioContext *context);
 
 	void (*closing_fd)(int fd);
+	void (*postmaster_before_child_exit)(void);
 
 	bool can_scatter_gather_direct;
 	bool can_scatter_gather_buffered;

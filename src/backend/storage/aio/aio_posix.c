@@ -85,6 +85,7 @@ static int pgaio_posix_aio_submit(int max_submit, bool drain);
 static void pgaio_posix_aio_io_retry(PgAioInProgress *io);
 static int pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared);
 static void pgaio_posix_aio_closing_fd(int fd);
+static void pgaio_posix_aio_postmaster_before_child_exit(void);
 
 /* On systems with no O_DSYNC, just use the stronger O_SYNC. */
 #ifdef O_DSYNC
@@ -100,6 +101,7 @@ const IoMethodOps pgaio_posix_aio_ops = {
 	.wait_one = pgaio_exchange_wait_one,
 	.drain = pgaio_posix_aio_drain,
 	.closing_fd = pgaio_posix_aio_closing_fd,
+	.postmaster_before_child_exit = pgaio_posix_aio_postmaster_before_child_exit,
 
 	/* FreeBSD has asynchronous scatter/gather as an extension. */
 #if defined(LIO_READV) && defined(LIO_WRITEV)
@@ -727,5 +729,26 @@ pgaio_posix_aio_closing_fd(int fd)
 	pgaio_complete_ios(false);
 	END_CRIT_SECTION();
 
+#endif
+}
+
+static void
+pgaio_posix_aio_postmaster_before_child_exit(void)
+{
+	/*
+	 * XXX Code in pgaio_postmaster_before_child_exit() should take care of
+	 * this, but it currently doesn't correctly wait for IOs that we don't
+	 * 'own' but resubmitted by retrying.  I can only do this on aio_suspend()
+	 * builds, so in theory aio_waitcomplete() builds can hang.
+	 */
+#ifdef USE_AIO_SUSPEND
+	START_CRIT_SECTION();
+	pgaio_exchange_disable_interrupt();
+	while (pgaio_posix_aio_suspend_array_size > 0)
+		pgaio_posix_aio_drain_internal(true /* block */,
+									   false /* in_interrupt_handler */);
+	pgaio_exchange_enable_interrupt();
+	pgaio_complete_ios(false);
+	END_CRIT_SECTION();
 #endif
 }
