@@ -661,6 +661,8 @@ pgaio_posix_aio_suspend_array_delete(PgAioInProgress * io)
 	if (gap_index == -1)
 		return;
 
+	io->io_method_data.posix_aio.aio_suspend_array_index = -1;
+
 	if (gap_index != highest_index)
 	{
 		/* Migrate the highest entry into the new empty slot, to avoid gaps. */
