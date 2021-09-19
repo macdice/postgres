@@ -85,6 +85,7 @@ static int pgaio_posix_aio_submit(int max_submit, bool drain);
 static void pgaio_posix_aio_io_retry(PgAioInProgress *io);
 static int pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared);
 static void pgaio_posix_aio_closing_fd(int fd);
+static void pgaio_posix_aio_postmaster_child_init_local(void);
 static void pgaio_posix_aio_postmaster_before_child_exit(void);
 
 /* On systems with no O_DSYNC, just use the stronger O_SYNC. */
@@ -96,12 +97,14 @@ static void pgaio_posix_aio_postmaster_before_child_exit(void);
 
 const IoMethodOps pgaio_posix_aio_ops = {
 	.shmem_init = pgaio_posix_aio_shmem_init,
+	.postmaster_child_init_local = pgaio_posix_aio_postmaster_child_init_local,
+	.postmaster_before_child_exit = pgaio_posix_aio_postmaster_before_child_exit,
+
 	.submit = pgaio_posix_aio_submit,
 	.retry = pgaio_posix_aio_io_retry,
 	.wait_one = pgaio_exchange_wait_one,
 	.drain = pgaio_posix_aio_drain,
 	.closing_fd = pgaio_posix_aio_closing_fd,
-	.postmaster_before_child_exit = pgaio_posix_aio_postmaster_before_child_exit,
 
 	/* FreeBSD has asynchronous scatter/gather as an extension. */
 #if defined(LIO_READV) && defined(LIO_WRITEV)
@@ -121,6 +124,15 @@ pgaio_posix_aio_shmem_init(void)
 	pgaio_exchange_shmem_init();
 
 #ifdef USE_AIO_SUSPEND
+	for (int i = 0; i < max_aio_in_flight; ++i)
+		aio_ctl->in_progress_io[i].io_method_data.posix_aio.aio_suspend_array_index = -1;
+#endif
+}
+
+static void
+pgaio_posix_aio_postmaster_child_init_local(void)
+{
+#ifdef USE_AIO_SUSPEND
 	/* Workspace for aio_suspend(). */
 	if (!pgaio_posix_aio_suspend_array)
 		pgaio_posix_aio_suspend_array =
@@ -128,7 +140,6 @@ pgaio_posix_aio_shmem_init(void)
 							   sizeof(struct aiocb *) * max_aio_in_flight);
 #endif
 }
-
 
 /* Functions for submitting IOs to the kernel. */
 
@@ -250,7 +261,7 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 	pgaio_exchange_submit_one(io);
 
 #ifdef USE_AIO_SUSPEND
-	io->io_method_data.posix_aio.aio_suspend_array_index = -1;
+	Assert(io->io_method_data.posix_aio.aio_suspend_array_index == -1);
 #endif
 
 	/* Populate the POSIX AIO iocb. */

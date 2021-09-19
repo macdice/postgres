@@ -242,10 +242,10 @@ AioShmemInit(void)
 				aio_ctl->unused_bounce_buffers_count++;
 			}
 		}
-	}
 
-	/* Initialize IO-engine specific resources. */
-	pgaio_impl->shmem_init();
+		/* Initialize IO method specific resources. */
+		pgaio_impl->shmem_init();
+	}
 }
 
 void
