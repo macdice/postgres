@@ -27,6 +27,25 @@
 static volatile sig_atomic_t pgaio_exchange_interrupt_pending;
 static volatile sig_atomic_t pgaio_exchange_interrupt_holdoff;
 
+static bool
+pgaio_exchange_become_completer(PgAioInProgress *io)
+{
+	return !pg_atomic_exchange_u32(&io->interlock.exchange.have_completer, true);
+}
+
+static void
+pgaio_exchange_reneg_completer(PgAioInProgress *io)
+{
+	pg_atomic_write_u32(&io->interlock.exchange.have_completer, false);
+	ConditionVariableBroadcast(&io->cv);
+}
+
+static bool
+pgaio_exchange_become_interruptor(PgAioInProgress *io)
+{
+	return !pg_atomic_exchange_u32(&io->interlock.exchange.have_interruptor, true);
+}
+
 void
 pgaio_exchange_shmem_init(void)
 {
@@ -34,7 +53,8 @@ pgaio_exchange_shmem_init(void)
 	{
 		PgAioInProgress *io = &aio_ctl->in_progress_io[i];
 
-		pg_atomic_init_u32(&io->interlock.exchange.interruptible, false);
+		pg_atomic_init_u32(&io->interlock.exchange.have_completer, false);
+		pg_atomic_init_u32(&io->interlock.exchange.have_interruptor, false);
 		io->interlock.exchange.result = INT_MIN;
 	}
 }
@@ -50,7 +70,8 @@ pgaio_exchange_submit_one(PgAioInProgress *io)
 		cur = &aio_ctl->in_progress_io[cur->merge_with_idx];
 	}
 
-	pg_atomic_write_u32(&io->interlock.exchange.interruptible, true);
+	pg_atomic_write_u32(&io->interlock.exchange.have_completer, false);
+	pg_atomic_write_u32(&io->interlock.exchange.have_interruptor, false);
 	io->interlock.exchange.result = INT_MIN;
 }
 
@@ -83,54 +104,58 @@ pgaio_exchange_wait_one_local(PgAioInProgress * io, uint64 ref_generation, uint3
 	PgAioIPFlags flags;
 	int			result;
 
-	/* Prevent the interrupt handler from running. */
+	/*
+	 * Prevent the interrupt handler from setting any results, so that we can
+	 * check for results it's already written without races.
+	 */
 	pgaio_exchange_disable_interrupt();
 
-	/* Find the head of the merge chain (could be out of date if gen advanced). */
+	/* Find the head of the merge chain (could be out of date). */
 	head_io = &aio_ctl->in_progress_io[io->interlock.exchange.head_idx];
 
-	/*
-	 * We might have consumed a result form the kernel while the interrupt was
-	 * enabled.  In that case, we have to negotiate for the right to process
-	 * completions, and wait for someone else to do so if we lose.
-	 */
+	/* We might have stored the result already, in the interrupt handler. */
 	if ((result = head_io->interlock.exchange.result) != INT_MIN)
 	{
-		if (!pg_atomic_exchange_u32(&head_io->interlock.exchange.interruptible, false))
+		if (pgaio_exchange_become_completer(head_io))
 		{
-			/*
-			 * Another backend has already cleared it.  Wait for it to clear the
-			 * INFLIGHT flag, or turn the interruptible flag back on and wake us.
-			 */
+			/* We won the right to complete it. */
+			if (pgaio_io_recycled(io, ref_generation, &flags) ||
+				!(flags & PGAIOIP_INFLIGHT))
+				pgaio_exchange_reneg_completer(head_io);
+			else
+				pgaio_exchange_process_completion(head_io, result, false);
+			goto out;
+		}
+		else
+		{
+			/* Someone beat us.  Wait for progress. */
+			pgaio_exchange_enable_interrupt();
+
 			ConditionVariablePrepareToSleep(&head_io->cv);
 			if (!pgaio_io_recycled(io, ref_generation, &flags) &&
 				(flags & PGAIOIP_INFLIGHT))
 				ConditionVariableSleep(&head_io->cv, wait_event_info);
 			ConditionVariableCancelSleep();
-			goto out;
+			return;
 		}
-		pgaio_exchange_process_completion(head_io, result, false);
-		goto out;
 	}
 
-	/*
-	 * Mark IO non-interruptible, to prevent useless interruptions while we're
-	 * draining.  We don't care if someone else has already cleared it,
-	 * because we'll be handling the completion directly (we won't write the
-	 * result into shared memory).
-	 */
-	pg_atomic_write_u32(&head_io->interlock.exchange.interruptible, false);
+	/* Suppress useless interruptions while we're draining. */
+	if (pgaio_io_recycled(io, ref_generation, &flags) ||
+		!(flags & PGAIOIP_INFLIGHT))
+		goto out;
+	pgaio_exchange_become_interruptor(head_io);
 
-	for (;;)
+	/* Keep draining until the IO is no longer in flight. */
+	do
 	{
-		if (pgaio_io_recycled(io, ref_generation, &flags) ||
-			(flags & PGAIOIP_INFLIGHT))
-			break;
 		pgaio_drain(NULL,
 					/* block = */ true,
 					/* call_shared = */ false,
 					/* call_local = */ false);
 	}
+	while (!pgaio_io_recycled(io, ref_generation, &flags) &&
+		   (flags & PGAIOIP_INFLIGHT));
 
  out:
 	pgaio_exchange_enable_interrupt();
@@ -139,44 +164,22 @@ pgaio_exchange_wait_one_local(PgAioInProgress * io, uint64 ref_generation, uint3
 static void
 pgaio_exchange_wait_one_foreign(PgAioInProgress * io, uint64 ref_generation, uint32 wait_event_info)
 {
+	uint32 head_idx;
 	PgAioInProgress *head_io;
 	PgAioIPFlags flags;
+	bool am_interruptor;
 
 	/* Find the head of the merge chain (could be out of date if gen advanced). */
-	head_io = &aio_ctl->in_progress_io[io->interlock.exchange.head_idx];
+	head_idx = io->interlock.exchange.head_idx;
+	head_io = &aio_ctl->in_progress_io[head_idx];
 
 	/*
-	 * Elect one backend to become the interruptor, if that turns out to be
-	 * necessary.  That doesn't mean that we'll definitely process the
-	 * completion (the submitter might decide to do it itself), but if the
-	 * submitter decides to share the result then the winner of this election
-	 * will do it.
+	 * Elect one waiting backend to interrupt the submitter.  No point in
+	 * having any more than one backend doing that.
 	 */
-	if (!pg_atomic_exchange_u32(&head_io->interlock.exchange.interruptible, false))
-	{
-		/*
-		 * Another backend has already cleared it.  Wait for that to clear the
-		 * INFLIGHT flag, or turn the interruptible flag back on and wake us.
-		 */
-		ConditionVariablePrepareToSleep(&head_io->cv);
-		if (!pgaio_io_recycled(io, ref_generation, &flags) &&
-			(flags & PGAIOIP_INFLIGHT))
-			ConditionVariableSleep(&head_io->cv, wait_event_info);
-		ConditionVariableCancelSleep();
-		return;
-	}
-
-	/* I won, but are we looking at a later generation? */
-	if (pgaio_io_recycled(io, ref_generation, &flags))
-	{
-		/*
-		 * We don't have to wait any more, but we have to turn the
-		 * interruptible flag back on and wake everyone up.
-		 */
-		pg_atomic_write_u32(&io->interlock.exchange.interruptible, true);
-		ConditionVariableBroadcast(&io->cv);
-		return;
-	}
+	am_interruptor =
+		!pg_atomic_exchange_u32(&head_io->interlock.exchange.have_interruptor,
+								true);
 
 	/*
 	 * Wait for the submitter to tell us the result, or to process completions
@@ -184,30 +187,41 @@ pgaio_exchange_wait_one_foreign(PgAioInProgress * io, uint64 ref_generation, uin
 	 * eventually does that even if it's blocked (perhaps on a lock we hold).
 	 * Start with 10ms and back off until we reach 1 second.
 	 */
-	ConditionVariablePrepareToSleep(&io->cv);
+	ConditionVariablePrepareToSleep(&head_io->cv);
 	for (int backoff = 10;; backoff = Min(backoff * 2, 1000))
 	{
 		int			result;
 
-		/* Has the submitter decided to do it itself? */
 		if (pgaio_io_recycled(io, ref_generation, &flags) ||
 			!(flags & PGAIOIP_INFLIGHT))
 			break;
 
-		/* Has the submitter given us the result? */
+		/* See if the submitter has put the result in shared memory. */
 		result = head_io->interlock.exchange.result;
 		if (result != INT_MIN)
 		{
-			pgaio_exchange_process_completion(head_io, result, false);
-			break;
+			if (pgaio_exchange_become_completer(head_io))
+			{
+				/* We won the right to complete it. */
+				if (pgaio_io_recycled(io, ref_generation, &flags) ||
+					!(flags & PGAIOIP_INFLIGHT))
+					pgaio_exchange_reneg_completer(head_io);
+				else
+					pgaio_exchange_process_completion(head_io, result, false);
+				break;
+			}
+		}
+		else if (am_interruptor)
+		{
+			/* Ask the submitter to drain. */
+			SendProcSignal(ProcGlobal->allProcs[io->submitter_id].pid,
+						   PROCSIG_AIO_INTERRUPT,
+						   InvalidBackendId);
 		}
 
-		/* Interrupt the submitter. */
-		SendProcSignal(ProcGlobal->allProcs[io->submitter_id].pid,
-					   PROCSIG_AIO_INTERRUPT,
-					   InvalidBackendId);
-
-		ConditionVariableTimedSleep(&io->cv, backoff, wait_event_info);
+		ConditionVariableTimedSleep(&io->cv,
+									am_interruptor ? backoff : -1,
+									wait_event_info);
 	}
 	ConditionVariableCancelSleep();
 }
