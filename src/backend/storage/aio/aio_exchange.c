@@ -42,8 +42,6 @@ pgaio_exchange_shmem_init(void)
 void
 pgaio_exchange_submit_one(PgAioInProgress *io)
 {
-	pg_atomic_add_fetch_u32(&my_aio->inflight_count, 1);
-
 	for (PgAioInProgress * cur = io;;)
 	{
 		cur->interlock.exchange.head_idx = pgaio_io_id(io);

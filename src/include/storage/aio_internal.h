@@ -336,8 +336,10 @@ struct PgAioInProgress
 			 */
 			struct aiocb iocb;
 
-			/* Index in pgaio_posix_aio_iocbs. */
+#ifndef HAVE_AIO_WAITCOMPLETE
+			/* Index in pgaio_posix_aio_iocbs, if using aio_suspend(). */
 			int iocb_index;
+#endif
 		} posix_aio;
 #endif
 	} io_method_data;

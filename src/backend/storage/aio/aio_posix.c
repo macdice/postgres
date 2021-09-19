@@ -53,16 +53,22 @@ typedef struct pgaio_posix_aio_listio_buffer
 #endif
 }			pgaio_posix_aio_listio_buffer;
 
-/* Variables used by the interprocess interrupt system. */
-static int	pgaio_posix_aio_num_iocbs;
-static struct aiocb **pgaio_posix_aio_iocbs;
-
 /* Helper function declarations. */
 static PgAioInProgress * io_for_iocb(struct aiocb *cb);
 static struct aiocb *iocb_for_io(struct PgAioInProgress *io);
 
+/*
+ * If we're using aio_suspend(), we maintain an array of pointer to all
+ * "active" aiocb structs (otherwise we'd have to build the array every time we
+ * drain).  If we have aio_waitcomplete(), we don't need to bother.
+ */
+#ifndef HAVE_AIO_WAITCOMPLETE
+#define USE_AIO_SUSPEND
+static int	pgaio_posix_aio_num_iocbs;
+static struct aiocb **pgaio_posix_aio_iocbs;
 static void pgaio_posix_aio_activate_io(struct PgAioInProgress *io);
 static void pgaio_posix_aio_deactivate_io(struct PgAioInProgress *io);
+#endif
 
 static void pgaio_posix_aio_submit_one(PgAioInProgress * io,
 									   pgaio_posix_aio_listio_buffer * listio_buffer);
@@ -113,14 +119,13 @@ pgaio_posix_aio_shmem_init(void)
 {
 	pgaio_exchange_shmem_init();
 
-	/*
-	 * We need this array in every backend, including single process.
-	 * XXX It's not "shmem", so where should it go?
-	 */
+#ifdef USE_AIO_SUSPEND
+	/* Space to track active aiocb objects for use by aio_suspend(). */
 	if (!pgaio_posix_aio_iocbs)
 		pgaio_posix_aio_iocbs =
 			MemoryContextAlloc(TopMemoryContext,
 							   sizeof(struct aiocb *) * max_aio_in_flight);
+#endif
 }
 
 
@@ -239,11 +244,14 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 	struct aiocb *iocb = iocb_for_io(io);
 	int			rc = -1;
 
+	pg_atomic_fetch_add_u32(&my_aio->inflight_count, 1);
 
 	pgaio_exchange_submit_one(io);
 
-	/* This IOCB is not "active" yet. */
+#ifdef USE_AIO_SUSPEND
+	/* This IOCB is not in pgaio_posix_aio_iocbs yet. */
 	io->io_method_data.posix_aio.iocb_index = -1;
+#endif
 
 	/* Populate the POSIX AIO iocb. */
 	memset(iocb, 0, sizeof(*iocb));
@@ -265,7 +273,9 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 			break;
 		case PGAIO_OP_FSYNC:
 			iocb->aio_fildes = io->op_data.fsync.fd;
+#ifdef USE_AIO_SUSPEND
 			pgaio_posix_aio_activate_io(io);
+#endif
 			rc = aio_fsync(io->op_data.fsync.datasync ? PG_O_DSYNC : O_SYNC,
 						   iocb);
 			break;
@@ -278,7 +288,9 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 			 * XXX this is a bad idea.  Should we just do nothing instead?
 			 */
 			iocb->aio_fildes = io->op_data.flush_range.fd;
+#ifdef USE_AIO_SUSPEND
 			pgaio_posix_aio_activate_io(io);
+#endif
 			rc = aio_fsync(PG_O_DSYNC, iocb);
 			break;
 		case PGAIO_OP_NOP:
@@ -310,9 +322,11 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 	if (lb->nios == 0)
 		return 0;
 
+#ifdef USE_AIO_SUSPEND
 	/* Activate all of the individual IOs. */
 	for (int i = 0; i < lb->nios; ++i)
 		pgaio_posix_aio_activate_io(io_for_iocb(lb->cbs[i]));
+#endif
 
 	/* Try to initiate all of these IOs with one system call. */
 	rc = lio_listio(LIO_NOWAIT, lb->cbs, lb->nios, NULL);
@@ -514,11 +528,10 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 		struct aiocb *iocb;
 		ssize_t		rc;
 
-		if (pgaio_posix_aio_num_iocbs == 0)
-			break;
-
 #ifdef HAVE_AIO_WAITCOMPLETE
-		/* FreeBSD has a convenient way to consume completions like a queue. */
+		/* FreeBSD can read completions from a queue. */
+		if (pg_atomic_read_u32(&my_aio->inflight_count) == 0)
+			break;		/* skip if we know nothing is in flight */
 		rc = aio_waitcomplete(&iocb,
 							  ndrained == 0 && block ? NULL : &timeout);
 		if (rc < 0 && iocb == NULL)
@@ -538,6 +551,8 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 		ndrained++;
 #else
 		/* Standard POSIX requires us to do a bit more work. */
+		if (pgaio_posix_aio_num_iocbs == 0)
+			break;		/* skip if array is empty */
 		rc = aio_suspend((const struct aiocb *const *) pgaio_posix_aio_iocbs,
 						 pgaio_posix_aio_num_iocbs,
 						 ndrained == 0 && block ? NULL : &timeout);
@@ -587,6 +602,7 @@ pgaio_posix_aio_process_completion(PgAioInProgress * io,
 {
 	pg_atomic_fetch_sub_u32(&my_aio->inflight_count, 1);
 
+#ifdef USE_AIO_SUSPEND
 	/*
 	 * Maintain the array of active iocbs.  If this was an IO that was actually
 	 * submitted to the kernel, it should have been "activated", but if we
@@ -596,6 +612,7 @@ pgaio_posix_aio_process_completion(PgAioInProgress * io,
 	pgaio_exchange_disable_interrupt();
 	pgaio_posix_aio_deactivate_io(io);
 	pgaio_exchange_enable_interrupt();
+#endif
 
 	pgaio_exchange_process_completion(io, raw_result, in_interrupt_handler);
 }
@@ -622,8 +639,9 @@ iocb_for_io(PgAioInProgress * io)
 	return &io->io_method_data.posix_aio.iocb;
 }
 
+#ifdef USE_AIO_SUSPEND
 /*
- * Record that an iocb is running in the kernel.
+ * Maintain our array of aiocb pointers, for aio_suspend().
  */
 static void
 pgaio_posix_aio_activate_io(PgAioInProgress * io)
@@ -660,10 +678,7 @@ pgaio_posix_aio_deactivate_io(PgAioInProgress * io)
 	Assert(pgaio_posix_aio_num_iocbs > 0);
 	--pgaio_posix_aio_num_iocbs;
 }
-
-
-/* Functions for dealing with interrupts received from other processes. */
-
+#endif
 
 
 /*
@@ -671,7 +686,7 @@ pgaio_posix_aio_deactivate_io(PgAioInProgress * io)
  * underlying descriptor.  Some do (macOS), some don't (FreeBSD) and one starts
  * mixing up unrelated fds (glibc).
  */
-#if !defined(__freebsd__)
+#if !defined(__FreeBSD__)
 #define PGAIO_POSIX_AIO_DRAIN_FDS_BEFORE_CLOSING
 #endif
 
