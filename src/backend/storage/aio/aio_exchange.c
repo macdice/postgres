@@ -74,14 +74,6 @@ pgaio_exchange_process_completion(PgAioInProgress * io,
 	}
 
 	pgaio_process_io_completion(io, result);
-
-	/*
-	 * XXX It's a shame to broadcast on the CV here (because
-	 * pgaio_exchange_wait_one() is waiting for INFLIGHT to clear), and then
-	 * again in the shared callbacks!  This may be impetus to implement the
-	 * empty CV optimisation XXX
-	 */
-	ConditionVariableBroadcast(&io->cv);
 }
 
 static void
