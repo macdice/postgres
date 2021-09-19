@@ -58,16 +58,16 @@ static PgAioInProgress * io_for_iocb(struct aiocb *cb);
 static struct aiocb *iocb_for_io(struct PgAioInProgress *io);
 
 /*
- * If we're using aio_suspend(), we maintain an array of pointer to all
- * "active" aiocb structs (otherwise we'd have to build the array every time we
- * drain).  If we have aio_waitcomplete(), we don't need to bother.
+ * If we're using aio_suspend(), we maintain an array of pointers to all active
+ * aiocb structs (otherwise we'd have to build the array every time we drain).
+ * If we have aio_waitcomplete(), we don't need to bother with that.
  */
 #ifndef HAVE_AIO_WAITCOMPLETE
 #define USE_AIO_SUSPEND
-static int	pgaio_posix_aio_num_iocbs;
-static struct aiocb **pgaio_posix_aio_iocbs;
-static void pgaio_posix_aio_activate_io(struct PgAioInProgress *io);
-static void pgaio_posix_aio_deactivate_io(struct PgAioInProgress *io);
+static int	pgaio_posix_aio_suspend_array_size;
+static struct aiocb **pgaio_posix_aio_suspend_array;
+static void pgaio_posix_aio_suspend_array_insert(struct PgAioInProgress *io);
+static void pgaio_posix_aio_suspend_array_delete(struct PgAioInProgress *io);
 #endif
 
 static void pgaio_posix_aio_submit_one(PgAioInProgress * io,
@@ -120,9 +120,9 @@ pgaio_posix_aio_shmem_init(void)
 	pgaio_exchange_shmem_init();
 
 #ifdef USE_AIO_SUSPEND
-	/* Space to track active aiocb objects for use by aio_suspend(). */
-	if (!pgaio_posix_aio_iocbs)
-		pgaio_posix_aio_iocbs =
+	/* Workspace for aio_suspend(). */
+	if (!pgaio_posix_aio_suspend_array)
+		pgaio_posix_aio_suspend_array =
 			MemoryContextAlloc(TopMemoryContext,
 							   sizeof(struct aiocb *) * max_aio_in_flight);
 #endif
@@ -143,9 +143,9 @@ pgaio_posix_aio_submit(int max_submit, bool drain)
 	pgaio_posix_aio_listio_buffer listio_buffer = {0};
 
 	/*
-	 * We can't allow the interrupt handler to run while we modify data
-	 * structures and interact with the AIO APIs, because we need a consistent
-	 * view of the set of running aiocbs.
+	 * Disable the interrupt handler while we're interacting with AIO APIs
+	 * (it's supposed to be async signal stuff, but clearly isn't on some
+	 * platforms), and possibly modifying our suspend array.
 	 */
 	START_CRIT_SECTION();
 	pgaio_exchange_disable_interrupt();
@@ -249,8 +249,7 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 	pgaio_exchange_submit_one(io);
 
 #ifdef USE_AIO_SUSPEND
-	/* This IOCB is not in pgaio_posix_aio_iocbs yet. */
-	io->io_method_data.posix_aio.iocb_index = -1;
+	io->io_method_data.posix_aio.aio_suspend_array_index = -1;
 #endif
 
 	/* Populate the POSIX AIO iocb. */
@@ -274,7 +273,7 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 		case PGAIO_OP_FSYNC:
 			iocb->aio_fildes = io->op_data.fsync.fd;
 #ifdef USE_AIO_SUSPEND
-			pgaio_posix_aio_activate_io(io);
+			pgaio_posix_aio_suspend_array_insert(io);
 #endif
 			rc = aio_fsync(io->op_data.fsync.datasync ? PG_O_DSYNC : O_SYNC,
 						   iocb);
@@ -289,7 +288,7 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 			 */
 			iocb->aio_fildes = io->op_data.flush_range.fd;
 #ifdef USE_AIO_SUSPEND
-			pgaio_posix_aio_activate_io(io);
+			pgaio_posix_aio_suspend_array_insert(io);
 #endif
 			rc = aio_fsync(PG_O_DSYNC, iocb);
 			break;
@@ -323,9 +322,8 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 		return 0;
 
 #ifdef USE_AIO_SUSPEND
-	/* Activate all of the individual IOs. */
 	for (int i = 0; i < lb->nios; ++i)
-		pgaio_posix_aio_activate_io(io_for_iocb(lb->cbs[i]));
+		pgaio_posix_aio_suspend_array_insert(io_for_iocb(lb->cbs[i]));
 #endif
 
 	/* Try to initiate all of these IOs with one system call. */
@@ -551,10 +549,10 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 		ndrained++;
 #else
 		/* Standard POSIX requires us to do a bit more work. */
-		if (pgaio_posix_aio_num_iocbs == 0)
+		if (pgaio_posix_aio_suspend_array_size == 0)
 			break;		/* skip if array is empty */
-		rc = aio_suspend((const struct aiocb *const *) pgaio_posix_aio_iocbs,
-						 pgaio_posix_aio_num_iocbs,
+		rc = aio_suspend((const struct aiocb *const *) pgaio_posix_aio_suspend_array,
+						 pgaio_posix_aio_suspend_array_size,
 						 ndrained == 0 && block ? NULL : &timeout);
 		if (rc < 0)
 		{
@@ -565,12 +563,12 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 			continue;			/* signaled; retry */
 		}
 		/* Something has completed, but what? */
-		for (int i = 0; i < pgaio_posix_aio_num_iocbs;)
+		for (int i = 0; i < pgaio_posix_aio_suspend_array_size;)
 		{
 			int			error_status;
 
 			/* Still running? */
-			iocb = pgaio_posix_aio_iocbs[i];
+			iocb = pgaio_posix_aio_suspend_array[i];
 			error_status = aio_error(iocb);
 			if (error_status < 0)
 				error_status = errno;
@@ -603,14 +601,8 @@ pgaio_posix_aio_process_completion(PgAioInProgress * io,
 	pg_atomic_fetch_sub_u32(&my_aio->inflight_count, 1);
 
 #ifdef USE_AIO_SUSPEND
-	/*
-	 * Maintain the array of active iocbs.  If this was an IO that was actually
-	 * submitted to the kernel, it should have been "activated", but if we
-	 * failed to submit or it was a degenerate case like NOP then it's not
-	 * "active".
-	 */
 	pgaio_exchange_disable_interrupt();
-	pgaio_posix_aio_deactivate_io(io);
+	pgaio_posix_aio_suspend_array_delete(io);
 	pgaio_exchange_enable_interrupt();
 #endif
 
@@ -644,39 +636,41 @@ iocb_for_io(PgAioInProgress * io)
  * Maintain our array of aiocb pointers, for aio_suspend().
  */
 static void
-pgaio_posix_aio_activate_io(PgAioInProgress * io)
+pgaio_posix_aio_suspend_array_insert(PgAioInProgress * io)
 {
-	if (pgaio_posix_aio_num_iocbs == max_aio_in_flight)
+	int i;
+
+	if (pgaio_posix_aio_suspend_array_size == max_aio_in_flight)
 		elog(PANIC, "too many IOs in flight");
 
-	io->io_method_data.posix_aio.iocb_index = pgaio_posix_aio_num_iocbs++;
-	pgaio_posix_aio_iocbs[io->io_method_data.posix_aio.iocb_index] =
-		iocb_for_io(io);
+	i = pgaio_posix_aio_suspend_array_size++;
+	io->io_method_data.posix_aio.aio_suspend_array_index = i;
+	pgaio_posix_aio_suspend_array[i] = iocb_for_io(io);
 }
 
 /*
  * Forget about an iocb that is no longer known to the kernel.
  */
 static void
-pgaio_posix_aio_deactivate_io(PgAioInProgress * io)
+pgaio_posix_aio_suspend_array_delete(PgAioInProgress * io)
 {
-	int			highest_index = pgaio_posix_aio_num_iocbs - 1;
-	int			gap_index = io->io_method_data.posix_aio.iocb_index;
+	int			highest_index = pgaio_posix_aio_suspend_array_size - 1;
+	int			gap_index = io->io_method_data.posix_aio.aio_suspend_array_index;
 	PgAioInProgress *migrant;
 
-	/* Nothing to do if not activated. */
+	/* Nothing to do if not in the array. */
 	if (gap_index == -1)
 		return;
 
 	if (gap_index != highest_index)
 	{
 		/* Migrate the highest entry into the new empty slot, to avoid gaps. */
-		migrant = io_for_iocb(pgaio_posix_aio_iocbs[highest_index]);
-		migrant->io_method_data.posix_aio.iocb_index = gap_index;
-		pgaio_posix_aio_iocbs[gap_index] = iocb_for_io(migrant);
+		migrant = io_for_iocb(pgaio_posix_aio_suspend_array[highest_index]);
+		migrant->io_method_data.posix_aio.aio_suspend_array_index = gap_index;
+		pgaio_posix_aio_suspend_array[gap_index] = iocb_for_io(migrant);
 	}
-	Assert(pgaio_posix_aio_num_iocbs > 0);
-	--pgaio_posix_aio_num_iocbs;
+	Assert(pgaio_posix_aio_suspend_array_size > 0);
+	--pgaio_posix_aio_suspend_array_size;
 }
 #endif
 
@@ -706,9 +700,15 @@ pgaio_posix_aio_closing_fd(int fd)
 	for (;;)
 	{
 		waiting = false;
-		for (int i = 0; i < pgaio_posix_aio_num_iocbs; ++i)
+
+		/*
+		 * This assumes that any OS that needs this is using aio_suspend(), and
+		 * thus that we have an access to the set of all fds through the book
+		 * keeping we do for that.
+		  */
+		for (int i = 0; i < pgaio_posix_aio_suspend_array_size; ++i)
 		{
-			iocb = pgaio_posix_aio_iocbs[i];
+			iocb = pgaio_posix_aio_suspend_array[i];
 			if (iocb->aio_fildes == fd)
 			{
 				waiting = true;
