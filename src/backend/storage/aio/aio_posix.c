@@ -77,16 +77,8 @@ static int	pgaio_posix_aio_start_rw(PgAioInProgress * io,
 static void pgaio_posix_aio_process_completion(PgAioInProgress * io,
 											   int result,
 											   bool in_interrupt_handler);
+static int	pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared);
 static int	pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler);
-
-/* Entry points for IoMethodOps. */
-static void pgaio_posix_aio_shmem_init(void);
-static int pgaio_posix_aio_submit(int max_submit, bool drain);
-static void pgaio_posix_aio_io_retry(PgAioInProgress *io);
-static int pgaio_posix_aio_drain(PgAioContext *context, bool block, bool call_shared);
-static void pgaio_posix_aio_closing_fd(int fd);
-static void pgaio_posix_aio_postmaster_child_init_local(void);
-static void pgaio_posix_aio_postmaster_before_child_exit(void);
 
 /* On systems with no O_DSYNC, just use the stronger O_SYNC. */
 #ifdef O_DSYNC
@@ -94,24 +86,6 @@ static void pgaio_posix_aio_postmaster_before_child_exit(void);
 #else
 #define PG_O_DSYNC O_SYNC
 #endif
-
-const IoMethodOps pgaio_posix_aio_ops = {
-	.shmem_init = pgaio_posix_aio_shmem_init,
-	.postmaster_child_init_local = pgaio_posix_aio_postmaster_child_init_local,
-	.postmaster_before_child_exit = pgaio_posix_aio_postmaster_before_child_exit,
-
-	.submit = pgaio_posix_aio_submit,
-	.retry = pgaio_posix_aio_io_retry,
-	.wait_one = pgaio_exchange_wait_one,
-	.drain = pgaio_posix_aio_drain,
-	.closing_fd = pgaio_posix_aio_closing_fd,
-
-	/* FreeBSD has asynchronous scatter/gather as an extension. */
-#if defined(LIO_READV) && defined(LIO_WRITEV)
-	.can_scatter_gather_direct = true,
-	.can_scatter_gather_buffered = true
-#endif
-};
 
 /* Module initialization. */
 
@@ -186,8 +160,6 @@ pgaio_posix_aio_submit(int max_submit, bool drain)
 
 	pgaio_exchange_enable_interrupt();
 	END_CRIT_SECTION();
-
-	/* XXXX copied from uring submit */
 
 	/*
 	 * Others might have been waiting for this IO. Because it wasn't marked as
@@ -763,3 +735,20 @@ pgaio_posix_aio_postmaster_before_child_exit(void)
 	END_CRIT_SECTION();
 #endif
 }
+
+const IoMethodOps pgaio_posix_aio_ops = {
+	.shmem_init = pgaio_posix_aio_shmem_init,
+	.postmaster_child_init_local = pgaio_posix_aio_postmaster_child_init_local,
+	.postmaster_before_child_exit = pgaio_posix_aio_postmaster_before_child_exit,
+
+	.submit = pgaio_posix_aio_submit,
+	.retry = pgaio_posix_aio_io_retry,
+	.wait_one = pgaio_exchange_wait_one,
+	.drain = pgaio_posix_aio_drain,
+	.closing_fd = pgaio_posix_aio_closing_fd,
+
+#if defined(LIO_READV) && defined(LIO_WRITEV)
+	.can_scatter_gather_direct = true,
+	.can_scatter_gather_buffered = true
+#endif
+};
