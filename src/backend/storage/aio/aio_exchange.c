@@ -59,9 +59,6 @@ pgaio_exchange_process_completion(PgAioInProgress * io,
 								  int result,
 								  bool in_interrupt_handler)
 {
-	Assert(io->submitter_id == my_aio_id);
-	Assert(io->interlock.exchange.result == INT_MIN);
-
 	if (unlikely(in_interrupt_handler))
 	{
 		/*
@@ -69,6 +66,8 @@ pgaio_exchange_process_completion(PgAioInProgress * io,
 		 * available to other backends with operations that are safe from a
 		 * signal handler.
 		 */
+		Assert(io->submitter_id == my_aio_id);
+		Assert(io->interlock.exchange.result == INT_MIN);
 		io->interlock.exchange.result = result;
 		ConditionVariableSignalFromSignalHandler(&io->cv);
 		return;
@@ -211,6 +210,11 @@ pgaio_exchange_wait_one_foreign(PgAioInProgress * io, uint64 ref_generation, uin
 			break;
 		}
 
+		/* Interrupt the submitter. */
+		SendProcSignal(ProcGlobal->allProcs[io->submitter_id].pid,
+					   PROCSIG_AIO_INTERRUPT,
+					   InvalidBackendId);
+
 		ConditionVariableTimedSleep(&io->cv, backoff, wait_event_info);
 	}
 	ConditionVariableCancelSleep();
@@ -251,9 +255,7 @@ pgaio_exchange_process_interrupt(bool in_signal_handler)
 }
 
 /*
- * Disable interrupt processing.  This avoids undefined behaviour in
- * aio_suspend() for IOs that have already returned, and problems with
- * implementations that are not as async signal safe as they should be.
+ * Disable interrupt processing.
  */
 void
 pgaio_exchange_disable_interrupt(void)
@@ -262,7 +264,7 @@ pgaio_exchange_disable_interrupt(void)
 }
 
 /*
- * Renable interrupt processing, and handle any interrupts we missed.
+ * Re-enable interrupt processing, and handle any interrupts we missed.
  */
 void
 pgaio_exchange_enable_interrupt(void)

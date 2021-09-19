@@ -1750,6 +1750,8 @@ wait_ref_again:
 								 io,
 								 ref_generation,
 								 WAIT_EVENT_AIO_IO_COMPLETE_ANY);
+			if (call_shared)
+				pgaio_complete_ios(false);
 		}
 		else
 		{
