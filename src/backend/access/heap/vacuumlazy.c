@@ -519,8 +519,12 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
 
+	if (params->options & VACOPT_VERBOSE)
+		params->log_min_duration = 0;
+
 	/* measure elapsed time iff autovacuum logging requires it */
-	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
+	if ((IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0) ||
+		params->options & VACOPT_VERBOSE)
 	{
 		pg_rusage_init(&ru0);
 		starttime = GetCurrentTimestamp();
@@ -532,7 +536,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	}
 
 	if (params->options & VACOPT_VERBOSE)
-		elevel = INFO;
+		elevel = NOTICE;
 	else
 		elevel = DEBUG2;
 
@@ -617,7 +621,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	vacrel->phase = VACUUM_ERRCB_PHASE_UNKNOWN;
 
 	/* Save index names iff autovacuum logging requires it */
-	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0 &&
+	if (((IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0) ||
+		 params->options & VACOPT_VERBOSE) &&
 		vacrel->nindexes > 0)
 	{
 		indnames = palloc(sizeof(char *) * vacrel->nindexes);
@@ -737,7 +742,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	pgstat_progress_end_command();
 
 	/* and log the action if appropriate */
-	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
+	if ((IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0) ||
+		params->options & VACOPT_VERBOSE)
 	{
 		TimestampTz endtime = GetCurrentTimestamp();
 

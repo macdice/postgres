@@ -733,7 +733,13 @@ SELECT count(*) FROM dupindexcols
 -- Check ordering of =ANY indexqual results (bug in 9.2.0)
 --
 
-vacuum tenk1;		-- ensure we get consistent plans here
+set log_min_messages=info;
+set client_min_messages=error;
+\o test.log
+vacuum verbose tenk1;		-- ensure we get consistent plans here
+\o
+reset log_min_messages;
+reset client_min_messages;
 
 explain (costs off)
 SELECT unique1 FROM tenk1
