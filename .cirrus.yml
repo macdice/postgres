@@ -33,6 +33,14 @@ task:
     - sysctl vfs.hirunningspace=2097152
   ccache_cache:
     folder: "/tmp/ccache_dir"
+  ccache_info_prune_script:
+    - ccache --version
+    - ccache -p || true
+    - ccache -s
+    - ccache -c
+    - ccache -s
+    - ccache -x || true
+    - export
   create_partition_script:
     - gpart recover da0 # fix backup partition table after resize
     - gpart show da0
