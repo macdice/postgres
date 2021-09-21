@@ -17,14 +17,30 @@ task:
     image_project: pg-vm-images-aio
     image: family/pg-aio-freebsd-13-0
     platform: freebsd
-    cpu: 4
-    memory: 8G
+    cpu: 1
+    memory: 2G
     disk: 50
   env:
     CCACHE_DIR: "/tmp/ccache_dir"
+
+  matrix:
+    - name: FreeBSD worker buf
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/ci/worker_buf.conf
+    - name: FreeBSD worker dio
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/ci/worker_dio.conf
+    - name: FreeBSD posix buf
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/ci/posix_aio_buf.conf
+    - name: FreeBSD posix dio
+      env:
+        TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/ci/posix_aio_dio.conf
+
   sysconfig_script:
     - sysctl kern.corefile='/tmp/%N.%P.core'
-    - sysctl kern.timecounter.hardware=TSC-low
+    # Doesn't work reliably on single core instances
+    - sysctl kern.timecounter.hardware=TSC-low || true
     - sysctl vfs.write_behind=1
     - sysctl vfs.lodirtybuffers=8192
     - sysctl vfs.hidirtybuffers=16384
@@ -63,15 +79,10 @@ task:
   configure_script:
     - su postgres -c './configure --enable-cassert --enable-debug --enable-tap-tests --with-posix-aio --with-includes=/usr/local/include --with-libs=/usr/local/lib CC="ccache cc"'
   build_script:
-    - su postgres -c 'gmake -s -j4 && gmake -s -j4 -C contrib'
-  worker_buf_script:
-    - su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_buf.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_buf.log 2>&1
-  worker_dio_script:
-    - su postgres -c 'TEMP_CONFIG=$(realpath ci/worker_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > worker_dio.log 2>&1
-  posix_aio_buf_script:
-    - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_buf.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_buf.log 2>&1
-  posix_aio_dio_script:
-    - su postgres -c 'TEMP_CONFIG=$(realpath ci/posix_aio_dio.conf) time gmake -s -j8 ${CHECK} ${CHECKFLAGS}' > posix_aio_dio.log 2>&1
+    - su postgres -c 'gmake -s -j3 && gmake -s -j3 -C contrib'
+
+  check_world_script:
+    - su postgres -c 'time gmake -s -j2 ${CHECK} ${CHECKFLAGS}' > check_world.log 2>&1
   on_failure:
     core_script:
       for corefile in $(find /tmp -name '*.core' 2>/dev/null) ; do binary=$(gdb -quiet -core $corefile -batch -ex 'info auxv' | grep AT_EXECPATH | perl -pe "s/^.*\"(.*)\"\$/\$1/g") ; echo dumping $corefile for $binary ; gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" $binary $corefile ; done
