@@ -181,19 +181,24 @@ command_fails(
 
 # Test postgres -C for an offline cluster.
 # Run-time GUCs are safe to query here.  Note that a lock file is created,
-# then removed, leading to an extra LOG entry showing in stderr.  This uses
-# log_min_messages=fatal to remove any noise.  This test uses a startup
-# wrapped with pg_ctl to allow the case where this runs under a privileged
+# then unlinked, leading to an extra LOG entry showing in stderr so use
+# log_min_messages=fatal to remove this noise.  This test uses a startup
+# wrapped with pg_ctl to allow the case of a CI running under an unprivileged
 # account on Windows.
-command_checks_all(
-	[
-		'pg_ctl', 'start', '-D', $pgdata, '-s', '-o',
-		'-C data_checksums -c log_min_messages=fatal'
-	],
-	1,
-	[qr/^on$/],
-	[qr/could not start server/],
-	'data_checksums=on is reported on an offline cluster');
+SKIP:
+{
+	skip "unstable output generated with Msys", 3
+	  if ($Config{osname} eq 'msys');
+	command_checks_all(
+		[
+			'pg_ctl', 'start', '-D', $pgdata, '-s', '-o',
+			'-C data_checksums -c log_min_messages=fatal'
+		],
+		1,
+		[qr/^on$/],
+		[qr/could not start server/],
+		'data_checksums=on is reported on an offline cluster');
+}
 
 # Checks cannot happen with an online cluster
 $node->start;
