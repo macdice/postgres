@@ -750,12 +750,14 @@ language plpgsql as
 $$
 declare
     ln text;
+    res text := '';
 begin
     for ln in
         execute format('%s', query)
     loop
-	raise log '%: %', tag, ln;
+	res = res || ln || E'\n';
     end loop;
+    raise log '%: %', tag, res;
     return 1;
 end;
 $$;
@@ -768,11 +770,13 @@ ORDER BY thousand;
 ');
 
 select log_querytext('pg_class_details',
-'select row(relname, relallvisible, reltuples, relpages)::text
-from pg_class where relname like $$tenk1%$$;');
+'select to_json(s)
+from (
+  select relname, relallvisible, reltuples, relpages
+  from pg_class where relname like $$tenk1%$$) s;');
 
 select log_querytext('pg_stat_user_tables',
-'select ut::text from pg_stat_user_tables ut where relname = $$tenk1$$;');
+'select to_json(ut) from pg_stat_user_tables ut where relname = $$tenk1$$;');
 
 select log_querytext('shared_buffers_text', 'select current_setting($$shared_buffers$$);');
 
