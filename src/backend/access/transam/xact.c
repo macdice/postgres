@@ -34,6 +34,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
+#include "storage/aio.h"
 #include "commands/async.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
@@ -2234,6 +2235,8 @@ CommitTransaction(void)
 						 RESOURCE_RELEASE_BEFORE_LOCKS,
 						 true, true);
 
+	pgaio_at_commit();
+
 	/* Check we've released all buffer pins */
 	AtEOXact_Buffers(true);
 
@@ -2760,6 +2763,9 @@ AbortTransaction(void)
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_BEFORE_LOCKS,
 							 false, true);
+
+		pgaio_at_abort();
+
 		AtEOXact_Buffers(false);
 		AtEOXact_RelationCache(false);
 		AtEOXact_Inval(false);
@@ -4893,6 +4899,9 @@ CommitSubTransaction(void)
 	ResourceOwnerRelease(s->curTransactionOwner,
 						 RESOURCE_RELEASE_LOCKS,
 						 true, false);
+
+	pgaio_at_subcommit();
+
 	ResourceOwnerRelease(s->curTransactionOwner,
 						 RESOURCE_RELEASE_AFTER_LOCKS,
 						 true, false);
@@ -5045,6 +5054,9 @@ AbortSubTransaction(void)
 		ResourceOwnerRelease(s->curTransactionOwner,
 							 RESOURCE_RELEASE_BEFORE_LOCKS,
 							 false, false);
+
+		pgaio_at_subabort();
+
 		AtEOSubXact_RelationCache(false, s->subTransactionId,
 								  s->parent->subTransactionId);
 		AtEOSubXact_Inval(false);

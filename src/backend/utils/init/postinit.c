@@ -41,6 +41,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -530,6 +531,8 @@ BaseInit(void)
 	 * can).
 	 */
 	pgstat_initialize();
+
+	pgaio_postmaster_child_init();
 
 	/* Do local initialization of storage and buffer managers */
 	InitSync();
