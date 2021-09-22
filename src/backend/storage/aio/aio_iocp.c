@@ -481,7 +481,7 @@ pgaio_iocp_register_file_handle(HANDLE file_handle)
 	if (CreateIoCompletionPort(file_handle,
 								pgaio_iocp_completion_port,
 								CompletionKey,
-								1) != pgaio_iocp_completion_port)
+								0) != pgaio_iocp_completion_port)
 	{
 		_dosmaperr(GetLastError());
 		elog(PANIC, "could not associate file handle with completion port: %m");
