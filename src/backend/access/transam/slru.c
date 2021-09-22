@@ -1624,7 +1624,10 @@ SlruSyncFileTag(SlruCtl ctl, struct PgStreamingWrite *pgsw, InflightSyncEntry *e
 
 	fd = OpenTransientFile(entry->path, O_RDWR | PG_BINARY);
 	if (fd < 0)
+	{
 		SyncRequestCompleted(entry, false, errno);
+		return;
+	}
 
 	entry->handler_data = fd;
 	aio = pg_streaming_write_get_io(pgsw);
