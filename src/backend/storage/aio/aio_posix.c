@@ -307,10 +307,7 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 
 	/* If we failed to submit, then try to reap immediately. */
 	if (rc < 0)
-	{
 		pgaio_posix_aio_process_completion(io, -errno, false);
-		pgaio_complete_ios(false);
-	}
 }
 
 /*
@@ -371,7 +368,6 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 				}
 				pgaio_posix_aio_process_completion(io, -error_status, false);
 			}
-			pgaio_complete_ios(false);
 		}
 		else
 		{
@@ -389,7 +385,6 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 				io = io_for_iocb(lb->cbs[i]);
 				pgaio_posix_aio_process_completion(io, -error_status, false);
 			}
-			pgaio_complete_ios(false);
 		}
 	}
 	lb->nios = 0;
