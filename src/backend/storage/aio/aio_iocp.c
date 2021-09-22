@@ -338,12 +338,23 @@ pgaio_iocp_drain(PgAioContext *context, bool block, bool call_shared)
 
 	int			ndrained;
 
+	START_CRIT_SECTION();
 	ndrained = pgaio_iocp_drain_internal(block, false);
 
 	if (call_shared)
 		pgaio_complete_ios(false);
+	END_CRIT_SECTION();
 
 	return ndrained;
+}
+
+static void
+pgaio_iocp_drain_in_interrupt_handler(void)
+{
+	START_CRIT_SECTION();
+	pgaio_iocp_drain_internal(false /* block */,
+							  true /* in_interrupt_handler */);
+	END_CRIT_SECTION();
 }
 
 static int
@@ -484,6 +495,7 @@ const IoMethodOps pgaio_iocp_ops = {
 	.retry = pgaio_iocp_io_retry,
 	.wait_one = pgaio_exchange_wait_one,
 	.drain = pgaio_iocp_drain,
+	.drain_in_interrupt_handler = pgaio_iocp_drain_in_interrupt_handler,
 	.closing_fd = pgaio_iocp_closing_fd,
 
 	/*
