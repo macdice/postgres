@@ -2,7 +2,10 @@
 
 FROM cirrusci/windowsservercore:visualstudio2019
 
-SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command"]
+SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command", "Set-PSDebug -Trace 1;"]
+
+# Adding VS path to vcvarsall.bat so user of container doesn't need to know the full path
+RUN setx PATH \"c:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build;$Env:PATH\" /m
 
 # Install commandline debugger and log all crashes to c:\cirrus\crashlog.txt
 RUN choco install -y --no-progress windows-sdk-10-version-2004-windbg ; `
@@ -10,22 +13,17 @@ RUN choco install -y --no-progress windows-sdk-10-version-2004-windbg ; `
   Remove-Item C:\Users\ContainerAdministrator\AppData\Local\Temp\*.* -Force -Recurse ; `
   Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug' -Name 'Debugger' -Value '\"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe\" -p %ld -e %ld -g -kqm -c \".lines -e; .symfix+ ;.logappend c:\cirrus\crashlog.txt ; !peb; ~*kP ; .logclose ; q \"' ; `
   New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug' -Name 'Auto' -Value 1 -PropertyType DWord ; `
-  Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug' -Name Debugger
+  Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug' -Name Debugger; `
+  setx PATH \"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64;$Env:PATH\" /m
 
-SHELL ["cmd", "/s", "/c"]
-RUN setx path /m "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64;%PATH%"
-
-
-SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command"]
-
+# PATH adition ordered so strawberry perl wins over git perl, the latter
+# doesn't work for PG
 RUN choco install -y --no-progress strawberryperl ; `
   choco install -y --no-progress winflexbison diffutils ; `
   Rename-Item -Path c:\ProgramData\chocolatey\bin\win_flex.exe flex.exe ; `
   Rename-Item -Path c:\ProgramData\chocolatey\bin\win_bison.exe bison.exe ; `
   Remove-Item C:\ProgramData\chocolatey\logs\*.* -Force -Recurse ; `
-  Remove-Item C:\Users\ContainerAdministrator\AppData\Local\Temp\*.* -Force -Recurse
+  Remove-Item C:\Users\ContainerAdministrator\AppData\Local\Temp\*.* -Force -Recurse ; `
+  setx PATH \"C:\strawberry\perl\bin;C:\Program Files\Git\usr\bin;$Env:PATH\" /m
 
-# Adding VS path to vcvarsall.bat so user of container doesn't need to know the full path
-# Ordered so strawberry perl wins over git perl
-SHELL ["cmd", "/s", "/c"]
-RUN setx path /m "C:\strawberry\perl\bin;C:\Program Files\Git\usr\bin;c:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build;%PATH%"
+RUN echo \"Path is '$Env:PATH'\"
