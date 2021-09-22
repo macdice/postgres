@@ -302,34 +302,42 @@ pgaio_process_io_completion(PgAioInProgress *io, int result)
 	Assert(io->system_referenced);
 	Assert(io->result == 0 || io->merge_with_idx == PGAIO_MERGE_INVALID);
 
-	/* very useful for testing the retry logic */
 	/*
-	 * XXX: a probabilistic mode would be useful, especially if it also
-	 * injected occasional EINTR/EAGAINs.
+	 * To test the retry logic artificially, define
+	 * AIO_CHAOS_{READ,WRITE,FSYNC}_{SHORT,EAGAIN} to x to inject failures with
+	 * probability 1/x.
 	 */
 #if 0
-	if (io->op == PGAIO_OP_READ && result > 4096)
+#define AIO_CHAOS_READ_EAGAIN 10
+#define AIO_CHAOS_WRITE_EAGAIN 10
+#define AIO_CHAOS_FSYNC_EAGAIN 10
+#endif
+
+#define R(x) ((random() % (x)) == 0)
+#if defined(AIO_CHAOS_READ_SHORT)
+	if (io->op == PGAIO_OP_READ && result > 4096 && R(AIO_CHAOS_READ_SHORT))
 		result = 4096;
 #endif
-#if 0
-	if (result > 4096 && (
-			io->scb == PGAIO_SCB_WRITE_SMGR
-			|| io->scb == PGAIO_SCB_WRITE_SB
-			|| io->scb == PGAIO_SCB_WRITE_WAL
-			|| io->scb == PGAIO_SCB_WRITE_RAW
-			))
+#if defined(AIO_CHAOS_WRITE_SHORT)
+	if (io->op == PGAIO_OP_WRITE && result > 4096 && R(AIO_CHAOS_WRITE_SHORT))
 		result = 4096;
 #endif
-#if 0
-	if (io->scb == PGAIO_SCB_WRITE_RAW &&
-		!(io->flags & PGAIOIP_RETRY))
-		result = -EAGAIN;
+	if (!(io->flags & PGAIOIP_RETRY))
+	{
+#if defined(AIO_CHAOS_READ_EAGAIN)
+		if (io->op == PGAIO_OP_READ && R(AIO_CHAOS_READ_EAGAIN))
+			result = -EAGAIN;
 #endif
-#if 0
-	if (io->op == PGAIO_OP_FSYNC &&
-		!(io->flags & PGAIOIP_RETRY))
-		result = -EAGAIN;
+#if defined(AIO_CHAOS_WRITE_EAGAIN)
+		if (io->op == PGAIO_OP_WRITE && R(AIO_CHAOS_WRITE_EAGAIN))
+			result = -EAGAIN;
 #endif
+#if defined(AIO_CHAOS_FSYNC_EAGAIN)
+		if (io->op == PGAIO_OP_FSYNC && R(AIO_CHAOS_FSYNC_EAGAIN))
+			result = -EAGAIN;
+#endif
+	}
+#undef R
 
 	/* treat 0 length write as ENOSPC */
 	if (result == 0 && io->op == PGAIO_OP_WRITE)
