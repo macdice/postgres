@@ -680,20 +680,11 @@ pgaio_posix_aio_suspend_array_delete(PgAioInProgress * io)
  * starts mixing up unrelated fds (glibc).  Therefore, drain everything from
  * this fd, unless we're on a system known not to need it.  For now that
  * corresponds to the systems using aio_suspend().
- *
  */
 static void
 pgaio_posix_aio_closing_fd(int fd)
 {
 #ifdef USE_AIO_SUSPEND
-	/*
-	 * XXX Remove this code, and call some new common code in aio.c, once once
-	 * pgaio_wait_for_issued() is fixed to handle retried IOs correctly.  We
-	 * already know that IOCP needs one of these too.  See also
-	 * pgaio_posix_aio_postmaster_before_child_exit().  This is needed
-	 * temporarily to get CI to pass on macOS.
-	 */
-
 	struct aiocb *iocb;
 	bool waiting;
 
@@ -716,11 +707,21 @@ pgaio_posix_aio_closing_fd(int fd)
 		if (!waiting)
 			break;
 
+		/*
+		 * Since this function might run any time we have vfd pressure, we
+		 * might not be able to run pgaio_complete_ios() safely.  That means
+		 * that we can't "reap" the IO.  If we did that, it might sit on our
+		 * reaped list just before we wait for something else, creating
+		 * arbitrary deadlock risks.  Therefore, we'll drain the result from
+		 * the kernel, but allow any backend to reap it, using the
+		 * "in_interrupt_handler" mode.
+		 *
+		 * XXX This usage suggests that parameter might need a better name
+		 */
 		pgaio_posix_aio_drain_internal(true /* block */,
-									   false /* in_interrupt_handler */);
+									   true /* in_interrupt_handler */);
 	}
 	pgaio_exchange_enable_interrupt();
-	pgaio_complete_ios(false);
 	END_CRIT_SECTION();
 
 #endif
