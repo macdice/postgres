@@ -42,12 +42,6 @@
 
 #define PGAIO_NUM_CONTEXTS 8
 
-#ifdef USE_POSIX_AIO
-#ifndef HAVE_AIO_WAITCOMPLETE
-#define USE_AIO_SUSPEND
-#endif
-#endif
-
 /*
  * The type of AIO.
  *
@@ -333,10 +327,6 @@ struct PgAioInProgress
 		struct
 		{
 			struct aiocb iocb;
-
-#ifdef USE_AIO_SUSPEND
-			int aio_suspend_array_index;
-#endif
 		} posix_aio;
 #endif
 	} io_method_data;

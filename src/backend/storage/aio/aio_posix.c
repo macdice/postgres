@@ -49,6 +49,19 @@
 #endif
 
 /*
+ * Decide which system interface to use to drain completions from the kernel,
+ * if not explicitly specified already.
+ */
+#if !defined(USE_AIO_SUSPEND) && \
+	!defined(USE_AIO_WAITCOMPLETE)
+#if defined(HAVE_AIO_WAITCOMPLETE)
+#define USE_AIO_WAITCOMPLETE
+#else
+#define USE_AIO_SUSPEND
+#endif
+#endif
+
+/*
  * A buffer to accumulate IOs for submission in a single lio_listio() call.
  */
 typedef struct pgaio_posix_aio_listio_buffer
@@ -62,12 +75,17 @@ typedef struct pgaio_posix_aio_listio_buffer
 
 /*
  * If we're using aio_suspend(), we maintain an array of pointers to all active
- * aiocb structs (otherwise we'd have to build the array every time we drain).
- * If we have aio_waitcomplete(), we don't need to bother with that.
+ * aiocb structs (this isn't strictly necessary, but otherwise we'd have to
+ * build the array from a linked list every time we drain).  We'll borrow the
+ * aio_sigevent field to store the index in that array, so that we can maintain
+ * it efficiently.
  */
 #ifdef USE_AIO_SUSPEND
+#define AIO_SUSPEND_ARRAY_INDEX(io) \
+	((io)->io_method_data.posix_aio.iocb.aio_sigevent.sigev_value.sival_int)
 static struct aiocb **pgaio_posix_aio_suspend_array;
 static int	pgaio_posix_aio_suspend_array_size;
+static void pgaio_posix_aio_suspend_array_init(struct PgAioInProgress *io);
 static void pgaio_posix_aio_suspend_array_insert(struct PgAioInProgress *io);
 static void pgaio_posix_aio_suspend_array_delete(struct PgAioInProgress *io);
 #endif
@@ -88,20 +106,6 @@ static int	pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 
 
 /* Module startup and shutdown. */
-
-static void
-pgaio_posix_aio_shmem_init(bool first_time)
-{
-	pgaio_exchange_shmem_init(first_time);
-
-#ifdef USE_AIO_SUSPEND
-	if (first_time)
-	{
-		for (int i = 0; i < max_aio_in_flight; ++i)
-			aio_ctl->in_progress_io[i].io_method_data.posix_aio.aio_suspend_array_index = -1;
-	}
-#endif
-}
 
 static void
 pgaio_posix_aio_postmaster_child_init_local(void)
@@ -252,13 +256,12 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 
 	pgaio_exchange_submit_one(io);
 
-#ifdef USE_AIO_SUSPEND
-	Assert(io->io_method_data.posix_aio.aio_suspend_array_index == -1);
-#endif
-
 	/* Populate the POSIX AIO iocb. */
 	memset(iocb, 0, sizeof(*iocb));
 	iocb->aio_sigevent.sigev_notify = SIGEV_NONE;
+#ifdef USE_AIO_SUSPEND
+	pgaio_posix_aio_suspend_array_init(io);
+#endif
 
 	switch (io->op)
 	{
@@ -342,20 +345,20 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 			for (int i = 0; i < lb->nios; ++i)
 			{
 				PgAioInProgress *io;
-				int			error_status;
+				int			error;
 
 				io = io_for_iocb(lb->cbs[i]);
-				error_status = aio_error(iocb_for_io(io));
-				if (error_status == EINPROGRESS || error_status == 0)
+				error = aio_error(iocb_for_io(io));
+				if (error == EINPROGRESS || error == 0)
 					continue;	/* submitted or already finished */
 
 				/*
 				 * If we failed to submit, we may see -1 here and the reason
 				 * in errno.
 				 */
-				if (error_status < 0)
-					error_status = errno;
-				if (error_status == EINVAL)
+				if (error < 0)
+					error = errno;
+				if (error == EINVAL)
 				{
 					/*
 					 * We failed to initiate this IO, so the kernel doesn't
@@ -364,14 +367,14 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 					 * EINVAL so that pgaio_process_io_completion treats it as
 					 * a soft failure.
 					 */
-					error_status = listio_errno;
+					error = listio_errno;
 				}
-				pgaio_posix_aio_process_completion(io, -error_status, false);
+				pgaio_posix_aio_process_completion(io, -error, false);
 			}
 		}
 		else
 		{
-			int			error_status = errno;
+			int			error = errno;
 
 			/*
 			 * The only other error documented by POSIX is EINVAL.  Whether we
@@ -383,7 +386,7 @@ pgaio_posix_aio_flush_listio(pgaio_posix_aio_listio_buffer * lb)
 				PgAioInProgress *io;
 
 				io = io_for_iocb(lb->cbs[i]);
-				pgaio_posix_aio_process_completion(io, -error_status, false);
+				pgaio_posix_aio_process_completion(io, -error, false);
 			}
 		}
 	}
@@ -523,13 +526,62 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 	struct timespec timeout = {0, 0};
 	int			ndrained = 0;
 
+#ifdef USE_AIO_SUSPEND
+	/* This is the least efficient, but most standard option. */
 	for (;;)
 	{
 		struct aiocb *iocb;
 		ssize_t		rc;
 
-#ifdef HAVE_AIO_WAITCOMPLETE
-		/* FreeBSD can read completions from a queue. */
+		if (pgaio_posix_aio_suspend_array_size == 0)
+			break;		/* skip if array is empty */
+		rc = aio_suspend((const struct aiocb *const *) pgaio_posix_aio_suspend_array,
+						 pgaio_posix_aio_suspend_array_size,
+						 ndrained == 0 && block ? NULL : &timeout);
+		if (rc < 0)
+		{
+			if (errno == EAGAIN)
+				break;			/* all IOs in progress */
+			if (errno != EINTR)
+				elog(ERROR, "could not wait for IO completion: %m");
+			continue;			/* signaled; retry */
+		}
+		/* Something has completed, but what? */
+		for (int i = 0; i < pgaio_posix_aio_suspend_array_size;)
+		{
+			int			error;
+
+			/* Still running? */
+			iocb = pgaio_posix_aio_suspend_array[i];
+			error = aio_error(iocb);
+			if (error < 0)
+				error = errno;
+			if (error == EINPROGRESS)
+			{
+				++i;
+				continue;
+			}
+
+			/* Consume the result. */
+			rc = aio_return(iocb);
+
+			pgaio_posix_aio_process_completion(io_for_iocb(iocb),
+											   error == 0 ? rc : -error,
+											   in_interrupt_handler);
+			ndrained++;
+
+			/* Don't advance i; another item was moved into element i. */
+		}
+		break;
+	}
+#endif
+#ifdef USE_AIO_WAITCOMPLETE
+	for (;;)
+	{
+		struct aiocb *iocb;
+		ssize_t		rc;
+
+		/* FreeBSD aio_waitcomplete(): no bookkeeping, but one-at-a-time. */
 		if (pg_atomic_read_u32(&my_aio->inflight_count) == 0)
 			break;		/* skip if we know nothing is in flight */
 		rc = aio_waitcomplete(&iocb,
@@ -549,48 +601,8 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 		pgaio_posix_aio_process_completion(io_for_iocb(iocb), rc,
 										   in_interrupt_handler);
 		ndrained++;
-#else
-		/* Standard POSIX requires us to do a bit more work. */
-		if (pgaio_posix_aio_suspend_array_size == 0)
-			break;		/* skip if array is empty */
-		rc = aio_suspend((const struct aiocb *const *) pgaio_posix_aio_suspend_array,
-						 pgaio_posix_aio_suspend_array_size,
-						 ndrained == 0 && block ? NULL : &timeout);
-		if (rc < 0)
-		{
-			if (errno == EAGAIN)
-				break;			/* all IOs in progress */
-			if (errno != EINTR)
-				elog(ERROR, "could not wait for IO completion: %m");
-			continue;			/* signaled; retry */
-		}
-		/* Something has completed, but what? */
-		for (int i = 0; i < pgaio_posix_aio_suspend_array_size;)
-		{
-			int			error_status;
-
-			/* Still running? */
-			iocb = pgaio_posix_aio_suspend_array[i];
-			error_status = aio_error(iocb);
-			if (error_status < 0)
-				error_status = errno;
-			if (error_status == EINPROGRESS)
-			{
-				++i;
-				continue;
-			}
-			/* Consume the result. */
-			rc = aio_return(iocb);
-			if (rc < 0)
-				rc = -errno;
-			pgaio_posix_aio_process_completion(io_for_iocb(iocb), rc,
-											   in_interrupt_handler);
-			ndrained++;
-
-			/* Don't advance i; another item was moved into element i. */
-		}
-#endif
 	}
+#endif
 
 	return ndrained;
 }
@@ -630,8 +642,18 @@ iocb_for_io(PgAioInProgress * io)
 }
 
 #ifdef USE_AIO_SUSPEND
+
 /*
- * Maintain our array of aiocb pointers, for aio_suspend().
+ * Initialize state to say that the IO is not in the aio_suspend array yet.
+ */
+static void
+pgaio_posix_aio_suspend_array_init(PgAioInProgress * io)
+{
+	AIO_SUSPEND_ARRAY_INDEX(io) = -1;
+}
+
+/*
+ * Add IO to aio_suspend array so that drain() can wait for it.
  */
 static void
 pgaio_posix_aio_suspend_array_insert(PgAioInProgress * io)
@@ -642,36 +664,37 @@ pgaio_posix_aio_suspend_array_insert(PgAioInProgress * io)
 		elog(PANIC, "too many IOs in flight");
 
 	i = pgaio_posix_aio_suspend_array_size++;
-	io->io_method_data.posix_aio.aio_suspend_array_index = i;
+	AIO_SUSPEND_ARRAY_INDEX(io) = i;
 	pgaio_posix_aio_suspend_array[i] = iocb_for_io(io);
 }
 
 /*
- * Forget about an iocb that is no longer known to the kernel.
+ * Forget about an IO that has completed.
  */
 static void
 pgaio_posix_aio_suspend_array_delete(PgAioInProgress * io)
 {
 	int			highest_index = pgaio_posix_aio_suspend_array_size - 1;
-	int			i = io->io_method_data.posix_aio.aio_suspend_array_index;
+	int			i = AIO_SUSPEND_ARRAY_INDEX(io);
 	PgAioInProgress *migrant;
 
 	/* Nothing to do if not in the array. */
 	if (i == -1)
 		return;
 
-	io->io_method_data.posix_aio.aio_suspend_array_index = -1;
+	AIO_SUSPEND_ARRAY_INDEX(io) = -1;
 
 	if (i != highest_index)
 	{
 		/* Migrate the highest entry into the new empty slot, to avoid gaps. */
 		migrant = io_for_iocb(pgaio_posix_aio_suspend_array[highest_index]);
-		migrant->io_method_data.posix_aio.aio_suspend_array_index = i;
+		AIO_SUSPEND_ARRAY_INDEX(migrant) = i;
 		pgaio_posix_aio_suspend_array[i] = iocb_for_io(migrant);
 	}
 	Assert(pgaio_posix_aio_suspend_array_size > 0);
 	--pgaio_posix_aio_suspend_array_size;
 }
+
 #endif
 
 /*
@@ -728,7 +751,7 @@ pgaio_posix_aio_closing_fd(int fd)
 }
 
 const IoMethodOps pgaio_posix_aio_ops = {
-	.shmem_init = pgaio_posix_aio_shmem_init,
+	.shmem_init = pgaio_exchange_shmem_init,
 	.postmaster_child_init_local = pgaio_posix_aio_postmaster_child_init_local,
 	.postmaster_before_child_exit = pgaio_posix_aio_postmaster_before_child_exit,
 
