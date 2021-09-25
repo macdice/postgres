@@ -48,20 +48,30 @@
 #define PG_O_DSYNC O_SYNC
 #endif
 
+/* XXX proposed freebsd feature!  this would be from <aio.h> */
+//#define AIO_KEVENT_FLAG_REAP EV_FLAG2
+
 /*
  * Decide which system interface to use to drain completions from the kernel,
  * if not explicitly specified already.
  */
 #if !defined(USE_AIO_SUSPEND) && \
 	!defined(USE_AIO_WAITCOMPLETE) && \
-	!defined(USE_AIO_WAITN)
-#if defined(HAVE_AIO_WAITCOMPLETE)
+	!defined(USE_AIO_WAITN) && \
+	!defined(USE_AIO_KQUEUE)
+#if defined(AIO_KEVENT_FLAG_REAP)
+#define USE_AIO_KQUEUE
+#elif defined(HAVE_AIO_WAITCOMPLETE)
 #define USE_AIO_WAITCOMPLETE
 #elif defined(HAVE_AIO_WAITN)
 #define USE_AIO_WAITN
 #else
 #define USE_AIO_SUSPEND
 #endif
+#endif
+
+#ifdef USE_AIO_KQUEUE
+#include <sys/event.h>
 #endif
 
 /*
@@ -76,6 +86,7 @@ typedef struct pgaio_posix_aio_listio_buffer
 #endif
 }			pgaio_posix_aio_listio_buffer;
 
+#ifdef USE_AIO_SUSPEND
 /*
  * If we're using aio_suspend(), we maintain an array of pointers to all active
  * aiocb structs (this isn't strictly necessary, but otherwise we'd have to
@@ -83,7 +94,6 @@ typedef struct pgaio_posix_aio_listio_buffer
  * aio_sigevent field to store the index in that array, so that we can maintain
  * it efficiently.
  */
-#ifdef USE_AIO_SUSPEND
 #define AIO_SUSPEND_ARRAY_INDEX(io) \
 	((io)->io_method_data.posix_aio.iocb.aio_sigevent.sigev_value.sival_int)
 static struct aiocb **pgaio_posix_aio_suspend_array;
@@ -91,6 +101,22 @@ static int	pgaio_posix_aio_suspend_array_size;
 static void pgaio_posix_aio_suspend_array_init(struct PgAioInProgress *io);
 static void pgaio_posix_aio_suspend_array_insert(struct PgAioInProgress *io);
 static void pgaio_posix_aio_suspend_array_delete(struct PgAioInProgress *io);
+#endif
+
+#ifdef USE_AIO_KQUEUE
+/*
+ * We'll create one kqueue to receive IO completions for each backend.
+ *
+ * We could in theory use the one inside LatchWaitSet to avoid wasting another
+ * descriptor, but it's a bit of a modularity violation and we currently can't
+ * reach it from here.
+ *
+ * We could also have a small fixed number of kqueues accessible from all
+ * backends and identified by ring number, and then we could use context-based
+ * interlocking (like pgaio_uring.c) instead of exchange-based interlocking,
+ * but for now, keep it simple.
+ */
+int pgaio_posix_aio_kqueue = -1;
 #endif
 
 /* Helper function declarations. */
@@ -119,6 +145,11 @@ pgaio_posix_aio_postmaster_child_init_local(void)
 		pgaio_posix_aio_suspend_array =
 			MemoryContextAlloc(TopMemoryContext,
 							   sizeof(struct aiocb *) * max_aio_in_flight);
+#endif
+#ifdef USE_AIO_KQUEUE
+	/* Dedicated kqueue for consuming IO completions. */
+	if ((pgaio_posix_aio_kqueue = kqueue()) < 0)
+		elog(ERROR, "could not create kqueue for IO completions: %m");
 #endif
 }
 
@@ -258,9 +289,15 @@ pgaio_posix_aio_submit_one(PgAioInProgress * io,
 
 	/* Populate the POSIX AIO iocb. */
 	memset(iocb, 0, sizeof(*iocb));
+#ifdef USE_AIO_KQUEUE
+	iocb->aio_sigevent.sigev_notify = SIGEV_KEVENT;
+	iocb->aio_sigevent.sigev_notify_kqueue = pgaio_posix_aio_kqueue;
+	iocb->aio_sigevent.sigev_notify_kevent_flags = AIO_KEVENT_FLAG_REAP;
+#else
 	iocb->aio_sigevent.sigev_notify = SIGEV_NONE;
 #ifdef USE_AIO_SUSPEND
 	pgaio_posix_aio_suspend_array_init(io);
+#endif
 #endif
 
 	switch (io->op)
@@ -633,6 +670,44 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 			result = aio_return(iocb);
 			pgaio_posix_aio_process_completion(io_for_iocb(iocb),
 											   error == 0 ? result : -error,
+											   in_interrupt_handler);
+			ndrained++;
+		}
+		break;
+	}
+#endif
+#ifdef USE_AIO_KQUEUE
+	/* FreeBSD can drain like a queue, N at a time. */
+	for (;;)
+	{
+		struct aiocb *iocb;
+		struct kevent events[128];
+		int nevents;
+
+		if (pg_atomic_read_u32(&my_aio->inflight_count) == 0)
+			break;		/* skip if we know nothing is in flight */
+		nevents = kevent(pgaio_posix_aio_kqueue,
+						 NULL, 0,
+						 events, lengthof(events),
+						 block ? NULL : &timeout);
+		if (nevents < 0)
+		{
+			if (errno == EINTR)
+				continue;
+			elog(ERROR, "could not wait for IO completion: %m");
+		}
+		for (int i = 0; i < nevents; ++i)
+		{
+			int result;
+
+			if (events[i].filter != EVFILT_AIO)
+				elog(PANIC, "unexpected kevent");
+			iocb = (struct aiocb *) events[i].ident;
+			result = events[i].data;
+			if (events[i].flags & EV_ERROR)
+				result = -result;
+			pgaio_posix_aio_process_completion(io_for_iocb(iocb),
+											   result,
 											   in_interrupt_handler);
 			ndrained++;
 		}
