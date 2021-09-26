@@ -13,7 +13,7 @@
  * For macOS, the default kern.aio* settings are inadequate and must be
  * increased.  For AIX, shared_memory_type must be set to sysv because kernel
  * AIO cannot access mmap'd memory.  For Solaris and Linux, libc emulates POSIX
- * AIO with threads, which may not work well.
+ * AIO with threads, which may not be better than io_method=worker.
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -53,9 +53,12 @@
  * if not explicitly specified already.
  */
 #if !defined(USE_AIO_SUSPEND) && \
-	!defined(USE_AIO_WAITCOMPLETE)
+	!defined(USE_AIO_WAITCOMPLETE) && \
+	!defined(USE_AIO_WAITN)
 #if defined(HAVE_AIO_WAITCOMPLETE)
 #define USE_AIO_WAITCOMPLETE
+#elif defined(HAVE_AIO_WAITN)
+#define USE_AIO_WAITN
 #else
 #define USE_AIO_SUSPEND
 #endif
@@ -122,24 +125,21 @@ pgaio_posix_aio_postmaster_child_init_local(void)
 static void
 pgaio_posix_aio_postmaster_before_child_exit(void)
 {
-#ifdef USE_AIO_SUSPEND
 	/*
 	 * XXX Remove this code, and let pgaio_postmaster_before_child_exit() take
 	 * care of this, once it is fixed to understand IOs that we retried.  See
 	 * also pgaio_posix_aio_closing_fd().  This is needed temporarily to get
-	 * CI to pass on macOS.
+	 * tests to pass on macOS and Solaris.
 	 */
 	START_CRIT_SECTION();
 	pgaio_exchange_disable_interrupt();
-	while (pgaio_posix_aio_suspend_array_size > 0)
+	while (pg_atomic_read_u32(&my_aio->inflight_count) > 0)
 		pgaio_posix_aio_drain_internal(true /* block */,
 									   false /* in_interrupt_handler */);
 	pgaio_exchange_enable_interrupt();
 	pgaio_complete_ios(false);
 	END_CRIT_SECTION();
-#endif
 }
-
 
 /* Functions for submitting IOs to the kernel. */
 
@@ -576,17 +576,17 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 	}
 #endif
 #ifdef USE_AIO_WAITCOMPLETE
+	/* FreeBSD can drain like a queue, one at a time. */
 	for (;;)
 	{
 		struct aiocb *iocb;
-		ssize_t		rc;
+		ssize_t		result;
 
-		/* FreeBSD aio_waitcomplete(): no bookkeeping, but one-at-a-time. */
 		if (pg_atomic_read_u32(&my_aio->inflight_count) == 0)
 			break;		/* skip if we know nothing is in flight */
-		rc = aio_waitcomplete(&iocb,
-							  ndrained == 0 && block ? NULL : &timeout);
-		if (rc < 0 && iocb == NULL)
+		result = aio_waitcomplete(&iocb,
+								  ndrained == 0 && block ? NULL : &timeout);
+		if (result < 0 && iocb == NULL)
 		{
 			if (errno == EAGAIN)
 				break;			/* no IOs in progress? */
@@ -596,11 +596,47 @@ pgaio_posix_aio_drain_internal(bool block, bool in_interrupt_handler)
 				elog(ERROR, "could not wait for IO completion: %m");
 			continue;			/* signaled; retry */
 		}
-		if (rc < 0)
-			rc = -errno;
-		pgaio_posix_aio_process_completion(io_for_iocb(iocb), rc,
+		pgaio_posix_aio_process_completion(io_for_iocb(iocb),
+										   result < 0 ? -errno : result,
 										   in_interrupt_handler);
 		ndrained++;
+	}
+#endif
+#ifdef USE_AIO_WAITN
+	/* Solaris-family systems can drain like a queue, N at a time. */
+	for (;;)
+	{
+		struct aiocb *iocbs[128];
+		unsigned int nwait = 1;
+
+		if (pg_atomic_read_u32(&my_aio->inflight_count) == 0)
+			break;		/* skip if we know nothing is in flight */
+		if (aio_waitn(iocbs, lengthof(iocbs), &nwait, block ? NULL : &timeout) < 0)
+		{
+			if (errno == ETIME)
+				break;
+			if (errno != EINTR)
+				elog(ERROR, "could not wait for IO completion: %m");
+			/* If interruped by a signal, restart only if nothing consumed. */
+			if (nwait == 0)
+				continue;
+		}
+		for (int i = 0; i < nwait; ++i)
+		{
+			struct aiocb *iocb = iocbs[i];
+			int			result;
+			int			error;
+
+			error = aio_error(iocb);
+			if (error < 0)
+				error = errno;
+			result = aio_return(iocb);
+			pgaio_posix_aio_process_completion(io_for_iocb(iocb),
+											   error == 0 ? result : -error,
+											   in_interrupt_handler);
+			ndrained++;
+		}
+		break;
 	}
 #endif
 
@@ -699,10 +735,10 @@ pgaio_posix_aio_suspend_array_delete(PgAioInProgress * io)
 
 /*
  * POSIX leaves it unspecified whether the OS cancels IOs when you close the
- * underlying descriptor.  Some do (macOS), some don't (FreeBSD) and one
- * starts mixing up unrelated fds (glibc).  Therefore, drain everything from
- * this fd, unless we're on a system known not to need it.  For now that
- * corresponds to the systems using aio_suspend().
+ * underlying descriptor.  Some do (macOS, Solaris), some don't (FreeBSD) and
+ * one starts mixing up unrelated fds (glibc).  Therefore, drain everything
+ * from this fd, unless we're on a system known not to need it.  For now that
+ * corresponds to the systems using aio_suspend() or aio_waitn().
  */
 static void
 pgaio_posix_aio_closing_fd(int fd)
@@ -746,7 +782,21 @@ pgaio_posix_aio_closing_fd(int fd)
 	}
 	pgaio_exchange_enable_interrupt();
 	END_CRIT_SECTION();
-
+#endif
+#ifdef USE_AIO_WAITN
+	/*
+	 * XXX TODO until we have a good way to iterate over all submittted IOs (ie
+	 * that works for retries) looking for the fd, we'll just be
+	 * pessimistic here and wait for all.  That's because we don't have the
+	 * array that we maintain only for aio_suspend builds.
+	 */
+	START_CRIT_SECTION();
+	pgaio_exchange_disable_interrupt();
+	while (pg_atomic_read_u32(&my_aio->inflight_count) > 0)
+		pgaio_posix_aio_drain_internal(true /* block */,
+									   true /* in_interrupt_handler */);
+	pgaio_exchange_enable_interrupt();
+	END_CRIT_SECTION();
 #endif
 }
 

@@ -74,6 +74,9 @@
 /* Define to 1 if you have the `aio_waitcomplete' function. */
 #undef HAVE_AIO_WAITCOMPLETE
 
+/* Define to 1 if you have the `aio_waitn' function. */
+#undef HAVE_AIO_WAITN
+
 /* Define to 1 if you have the `append_history' function. */
 #undef HAVE_APPEND_HISTORY
 
