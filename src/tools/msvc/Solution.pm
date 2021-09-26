@@ -225,6 +225,7 @@ sub GenerateFiles
 		ENABLE_THREAD_SAFETY       => 1,
 		GETTIMEOFDAY_1ARG          => undef,
 		HAVE_AIO_WAITCOMPLETE      => undef,
+		HAVE_AIO_WAITN             => undef,
 		HAVE_APPEND_HISTORY        => undef,
 		HAVE_ASN1_STRING_GET0_DATA => undef,
 		HAVE_ATOMICS               => 1,
