@@ -786,23 +786,6 @@ restart:
 									   state->DecodeRecPtr % XLOG_BLCKSZ);
 				total_len = prec->xl_tot_len;
 
-				/* Find space to decode this record. */
-				Assert(state->decoding == NULL);
-				state->decoding = XLogReadRecordAlloc(state, total_len,
-												  allow_oversized);
-				if (state->decoding == NULL)
-				{
-					/*
-					 * We couldn't get space.  If allow_oversized was true,
-					 * then palloc() must have failed.  Otherwise, report that
-					 * our decoding buffer is full.  This means that weare
-					 * trying to read too far ahead.
-					 */
-					if (allow_oversized)
-						goto err;
-					return XLREAD_FULL;
-				}
-
 				/*
 				 * If the whole record header is on this page, validate it
 				 * immediately.  Otherwise do just a basic sanity check on
@@ -831,6 +814,23 @@ restart:
 											  (uint32) SizeOfXLogRecord, total_len);
 						goto err;
 					}
+				}
+
+				/* Find space to decode this record. */
+				Assert(state->decoding == NULL);
+				state->decoding = XLogReadRecordAlloc(state, total_len,
+												  allow_oversized);
+				if (state->decoding == NULL)
+				{
+					/*
+					 * We couldn't get space.  If allow_oversized was true,
+					 * then palloc() must have failed.  Otherwise, report that
+					 * our decoding buffer is full.  This means that weare
+					 * trying to read too far ahead.
+					 */
+					if (allow_oversized)
+						goto err;
+					return XLREAD_FULL;
 				}
 
 				/*
