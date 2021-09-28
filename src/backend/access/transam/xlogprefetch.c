@@ -683,13 +683,21 @@ XLogPrefetcherScanBlocks(XLogPrefetcher *prefetcher)
 		{
 			/*
 			 * Neither cached nor initiated.  The underlying segment file
-			 * doesn't exist.  Presumably it will be unlinked by a later WAL
-			 * record.  When recovery reads this block, it will use the
-			 * EXTENSION_CREATE_RECOVERY flag.  We certainly don't want to do
-			 * that sort of thing while merely prefetching, so let's just
-			 * ignore references to this relation until this record is
-			 * replayed, and let recovery create the dummy file or complain if
-			 * something is wrong.
+			 * doesn't exist.
+			 *
+			 * It might be missing becaused it was unlinked, we crashed, and
+			 * now we're replaying WAL.  When recovery reads this block, it
+			 * will use the EXTENSION_CREATE_RECOVERY flag.  We certainly
+			 * don't want to do that sort of thing while merely prefetching,
+			 * so let's just ignore references to this relation until this
+			 * record is replayed, and let recovery create the dummy file or
+			 * complain if something is wrong.
+			 *
+			 * It might be missing because wa haven't yet replayed a record
+			 * like XLOG_DBASE_CREATE that will create relfilenodes in bulk,
+			 * but we're already trying to prefetch blocks from those files
+			 * due to references later in the WAL.  Wait until this LSN is
+			 * replayed before trying to prefetch anything from this relation.
 			 */
 			XLogPrefetcherAddFilter(prefetcher, block->rnode, 0,
 									record->lsn);
