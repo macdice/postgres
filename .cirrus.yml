@@ -311,6 +311,8 @@ task:
   stop_script:
     # XXX: should ensure this gets called if previous steps fail
     - tmp_install\bin\pg_ctl.exe stop -D tmp_check\db -l tmp_check\postmaster.log
+  subscriptioncheck_script:
+    - timeout -k60s 30m perl src/tools/msvc/vcregress.pl taptest .\src\test\subscription\
   recoverycheck_script:
     - timeout -k60s 30m perl src/tools/msvc/vcregress.pl recoverycheck
   bincheck_script:
