@@ -1,3 +1,5 @@
+-- -c shared_buffers=256kB -c bgwriter_delay=10
+
 create extension chaos;
 create extension pg_buffercache;
 create extension pg_prewarm;
@@ -35,7 +37,7 @@ select relfilenode, count(*) as t2_dirty_buffers_before_sleep
   from pg_buffercache
  where relfilenode = 't2'::regclass and isdirty
  group by 1;
-select sum(i) as t2_sum_before_corruption from t2;
+--select sum(i) as t2_sum_before_corruption from t2;
 select pg_sleep(10); -- give bgwriter some time
 select relfilenode, count(*) as t2_dirty_buffers_after_sleep
  from pg_buffercache
