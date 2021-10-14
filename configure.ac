@@ -1204,6 +1204,8 @@ AC_SEARCH_LIBS(fdatasync, [rt posix4])
 AC_SEARCH_LIBS(shmget, cygipc)
 # *BSD:
 AC_SEARCH_LIBS(backtrace_symbols, execinfo)
+# HPUX:
+AC_SEARCH_LIBS(aio_suspend, rt)
 
 if test "$enable_thread_safety" = yes; then
   AC_SEARCH_LIBS(gethostbyname_r, nsl)
