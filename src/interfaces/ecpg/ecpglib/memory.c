@@ -3,11 +3,12 @@
 #define POSTGRES_ECPG_INTERNAL
 #include "postgres_fe.h"
 
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
+#include "port/pg_thread_once.h"
+#include "port/pg_thread_specific.h"
 
 void
 ecpg_free(void *ptr)
@@ -68,8 +69,8 @@ struct auto_mem
 	struct auto_mem *next;
 };
 
-static pthread_key_t auto_mem_key;
-static pthread_once_t auto_mem_once = PTHREAD_ONCE_INIT;
+static pg_thread_key_t auto_mem_key;
+static pg_thread_once_t auto_mem_once = PG_THREAD_ONCE_INIT;
 
 static void
 auto_mem_destructor(void *arg)
@@ -81,20 +82,20 @@ auto_mem_destructor(void *arg)
 static void
 auto_mem_key_init(void)
 {
-	pthread_key_create(&auto_mem_key, auto_mem_destructor);
+	pg_thread_key_create(&auto_mem_key, auto_mem_destructor);
 }
 
 static struct auto_mem *
 get_auto_allocs(void)
 {
-	pthread_once(&auto_mem_once, auto_mem_key_init);
-	return (struct auto_mem *) pthread_getspecific(auto_mem_key);
+	pg_thread_once(&auto_mem_once, auto_mem_key_init);
+	return (struct auto_mem *) pg_thread_getspecific(auto_mem_key);
 }
 
 static void
 set_auto_allocs(struct auto_mem *am)
 {
-	pthread_setspecific(auto_mem_key, am);
+	pg_thread_setspecific(auto_mem_key, am);
 }
 
 char *
