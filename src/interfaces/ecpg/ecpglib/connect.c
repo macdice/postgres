@@ -3,11 +3,11 @@
 #define POSTGRES_ECPG_INTERNAL
 #include "postgres_fe.h"
 
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
+#include "port/pg_pthread.h"
 #include "sqlca.h"
 
 static pthread_mutex_t connections_mutex = PTHREAD_MUTEX_INITIALIZER;

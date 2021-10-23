@@ -6,7 +6,6 @@
 #include <limits.h>
 #include <unistd.h>
 
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
@@ -16,6 +15,7 @@
 #include "pgtypes_interval.h"
 #include "pgtypes_numeric.h"
 #include "pgtypes_timestamp.h"
+#include "port/pg_pthread.h"
 #include "sqlca.h"
 
 #ifndef LONG_LONG_MIN
@@ -405,39 +405,6 @@ ECPGis_noind_null(enum ECPGttype type, const void *ptr)
 
 	return false;
 }
-
-#ifdef WIN32
-
-void
-win32_pthread_mutex(volatile pthread_mutex_t *mutex)
-{
-	if (mutex->handle == NULL)
-	{
-		while (InterlockedExchange((LONG *) &mutex->initlock, 1) == 1)
-			Sleep(0);
-		if (mutex->handle == NULL)
-			mutex->handle = CreateMutex(NULL, FALSE, NULL);
-		InterlockedExchange((LONG *) &mutex->initlock, 0);
-	}
-}
-
-static pthread_mutex_t win32_pthread_once_lock = PTHREAD_MUTEX_INITIALIZER;
-
-void
-win32_pthread_once(volatile pthread_once_t *once, void (*fn) (void))
-{
-	if (!*once)
-	{
-		pthread_mutex_lock(&win32_pthread_once_lock);
-		if (!*once)
-		{
-			fn();
-			*once = true;
-		}
-		pthread_mutex_unlock(&win32_pthread_once_lock);
-	}
-}
-#endif							/* WIN32 */
 
 #ifdef ENABLE_NLS
 

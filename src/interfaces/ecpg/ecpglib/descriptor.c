@@ -7,11 +7,11 @@
 #include "postgres_fe.h"
 
 #include "catalog/pg_type_d.h"
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
+#include "port/pg_pthread.h"
 #include "sql3types.h"
 #include "sqlca.h"
 #include "sqlda.h"
