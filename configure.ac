@@ -1465,14 +1465,17 @@ AC_CHECK_HEADERS(m4_normalize([
 	getopt.h
 	ifaddrs.h
 	langinfo.h
+	linux/futex.h
 	mbarrier.h
 	sys/epoll.h
 	sys/event.h
+	sys/futex.h
 	sys/personality.h
 	sys/prctl.h
 	sys/procctl.h
 	sys/signalfd.h
 	sys/ucred.h
+	sys/umtx.h
 	termios.h
 	ucred.h
 ]))
@@ -1747,6 +1750,7 @@ LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
 AC_CHECK_FUNCS(m4_normalize([
+	__ulock_wait
 	backtrace_symbols
 	copyfile
 	copy_file_range
@@ -1765,6 +1769,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	strsignal
 	syncfs
 	sync_file_range
+	umtx_sleep
 	uselocale
 	wcstombs_l
 ]))
