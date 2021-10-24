@@ -2380,15 +2380,18 @@ header_checks = [
   'execinfo.h',
   'getopt.h',
   'ifaddrs.h',
+  'linux/futex.h',
   'mbarrier.h',
   'strings.h',
   'sys/epoll.h',
   'sys/event.h',
+  'sys/futex.h',
   'sys/personality.h',
   'sys/prctl.h',
   'sys/procctl.h',
   'sys/signalfd.h',
   'sys/ucred.h',
+  'sys/umtx.h',
   'termios.h',
   'ucred.h',
   'xlocale.h',
@@ -2611,6 +2614,7 @@ endif
 # XXX: Might be worth conditioning some checks on the OS, to avoid doing
 # unnecessary checks over and over, particularly on windows.
 func_checks = [
+  ['__ulock_wait'],
   ['backtrace_symbols', {'dependencies': [execinfo_dep]}],
   ['clock_gettime', {'dependencies': [rt_dep], 'define': false}],
   ['copyfile'],
@@ -2654,6 +2658,7 @@ func_checks = [
   ['strsignal'],
   ['sync_file_range'],
   ['syncfs'],
+  ['umtx_sleep'],
   ['uselocale'],
   ['wcstombs_l'],
 ]

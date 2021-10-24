@@ -265,6 +265,9 @@
 /* Define to 1 if you have the `zstd' library (-lzstd). */
 #undef HAVE_LIBZSTD
 
+/* Define to 1 if you have the <linux/futex.h> header file. */
+#undef HAVE_LINUX_FUTEX_H
+
 /* Define to 1 if you have the <mbarrier.h> header file. */
 #undef HAVE_MBARRIER_H
 
@@ -418,6 +421,9 @@
 /* Define to 1 if you have the <sys/event.h> header file. */
 #undef HAVE_SYS_EVENT_H
 
+/* Define to 1 if you have the <sys/futex.h> header file. */
+#undef HAVE_SYS_FUTEX_H
+
 /* Define to 1 if you have the <sys/personality.h> header file. */
 #undef HAVE_SYS_PERSONALITY_H
 
@@ -439,6 +445,9 @@
 /* Define to 1 if you have the <sys/ucred.h> header file. */
 #undef HAVE_SYS_UCRED_H
 
+/* Define to 1 if you have the <sys/umtx.h> header file. */
+#undef HAVE_SYS_UMTX_H
+
 /* Define to 1 if you have the <termios.h> header file. */
 #undef HAVE_TERMIOS_H
 
@@ -447,6 +456,9 @@
 
 /* Define to 1 if you have the <ucred.h> header file. */
 #undef HAVE_UCRED_H
+
+/* Define to 1 if you have the `umtx_sleep' function. */
+#undef HAVE_UMTX_SLEEP
 
 /* Define to 1 if the system has the type `union semun'. */
 #undef HAVE_UNION_SEMUN
@@ -537,6 +549,9 @@
 
 /* Define to 1 if your compiler understands _Static_assert. */
 #undef HAVE__STATIC_ASSERT
+
+/* Define to 1 if you have the `__ulock_wait' function. */
+#undef HAVE___ULOCK_WAIT
 
 /* Define as the maximum alignment requirement of any C data type. */
 #undef MAXIMUM_ALIGNOF
