@@ -2164,6 +2164,10 @@ if test "$PORTNAME" != "win32"; then
     # Need sem_init for this
     AC_SEARCH_LIBS(sem_init, [rt pthread], [USE_UNNAMED_POSIX_SEMAPHORES=1])
   fi
+  if test x"$PREFERRED_SEMAPHORES" = x"FUTEX" ; then
+    # Need futex implementation for this
+    USE_FUTEX_SEMAPHORES=1
+  fi
   AC_MSG_CHECKING([which semaphore API to use])
   if test x"$USE_NAMED_POSIX_SEMAPHORES" = x"1" ; then
     AC_DEFINE(USE_NAMED_POSIX_SEMAPHORES, 1, [Define to select named POSIX semaphores.])
@@ -2175,9 +2179,15 @@ if test "$PORTNAME" != "win32"; then
       SEMA_IMPLEMENTATION="src/backend/port/posix_sema.c"
       sematype="unnamed POSIX"
     else
-      AC_DEFINE(USE_SYSV_SEMAPHORES, 1, [Define to select SysV-style semaphores.])
-      SEMA_IMPLEMENTATION="src/backend/port/sysv_sema.c"
-      sematype="System V"
+      if test x"$USE_FUTEX_SEMAPHORES" = x"1" ; then
+        AC_DEFINE(USE_FUTEX_SEMAPHORES, 1, [Define to select futex semaphores.])
+        SEMA_IMPLEMENTATION="src/backend/port/posix_sema.c"
+        sematype="futex"
+      else
+        AC_DEFINE(USE_SYSV_SEMAPHORES, 1, [Define to select SysV-style semaphores.])
+        SEMA_IMPLEMENTATION="src/backend/port/sysv_sema.c"
+        sematype="System V"
+      fi
     fi
   fi
   AC_MSG_RESULT([$sematype])

@@ -669,6 +669,9 @@
 /* Define to 1 to build with BSD Authentication support. (--with-bsd-auth) */
 #undef USE_BSD_AUTH
 
+/* Define to select futex semaphores. */
+#undef USE_FUTEX_SEMAPHORES
+
 /* Define to build with ICU support. (--with-icu) */
 #undef USE_ICU
 

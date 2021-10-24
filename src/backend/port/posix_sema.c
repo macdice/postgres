@@ -36,6 +36,10 @@
 #include "storage/pg_sema.h"
 #include "storage/shmem.h"
 
+#if defined(USE_FUTEX_SEMAPHORES)
+#include "port/atomics.h"
+#include "port/pg_futex.h"
+#endif
 
 /* see file header comment */
 #if defined(USE_NAMED_POSIX_SEMAPHORES) && defined(EXEC_BACKEND)
@@ -45,6 +49,9 @@
 typedef union SemTPadded
 {
 	sem_t		pgsem;
+#if defined(USE_FUTEX_SEMAPHORES)
+	pg_atomic_uint32 futexsem;
+#endif
 	char		pad[PG_CACHE_LINE_SIZE];
 } SemTPadded;
 
@@ -70,6 +77,72 @@ static int	nextSemKey;			/* next name to try */
 
 static void ReleaseSemaphores(int status, Datum arg);
 
+#ifdef USE_FUTEX_SEMAPHORES
+
+/*
+ * An implementation of POSIX unnamed semaphores in shared memory, for OSes
+ * that lack them but have futexes.
+ */
+
+/*
+ * Like standard sem_init() with pshared set to 1, meaning that it can work in
+ * shared memory.
+ */
+static void
+pg_futex_sem_init(pg_atomic_uint32 *fut, uint32 value)
+{
+	pg_atomic_init_u32(fut, value);
+}
+
+/*
+ * Like standard sem_post().
+ */
+static int
+pg_futex_sem_post(pg_atomic_uint32 *fut)
+{
+	pg_atomic_fetch_add_u32(fut, 1);
+
+	/*
+	 * XXX If some bits held a waiter count, then the result of the above could
+	 * be checked to see if we can skip this call.  Currently we use semaphores
+	 * as the slow path for lwlocks, so there is always expected to be a
+	 * waiter.
+	 */
+	return pg_futex_wake(fut, INT_MAX);
+}
+
+/*
+ * Like standard sem_wait().
+ */
+static int
+pg_futex_sem_wait(pg_atomic_uint32 *fut)
+{
+	uint32		value = 1;
+
+	/*
+	 * The futex API takes void *, so there is no type checking or casting.
+	 * Assert that pg_atomic_uint32 is really just a wrapped uint32_t as
+	 * required by the kernel for 32 bit futex pre-check.
+	 */
+	StaticAssertStmt(sizeof(*fut) == sizeof(uint32), "unexpected size");
+
+	while (!pg_atomic_compare_exchange_u32(fut, &value, value - 1))
+	{
+		if (value == 0)
+		{
+			/* Wait for someone else to move it above 0. */
+			if (pg_futex_wait_u32(fut, 0, NULL) < 0)
+			{
+				if (errno != EAGAIN)
+					return -1;
+				/* The value changed under our feet.  Try again. */
+			}
+		}
+	}
+	return 0;
+}
+
+#endif
 
 #ifdef USE_NAMED_POSIX_SEMAPHORES
 
@@ -124,7 +197,7 @@ PosixSemaphoreCreate(void)
 
 	return mySem;
 }
-#else							/* !USE_NAMED_POSIX_SEMAPHORES */
+#elif defined(USE_UNNAMED_POSIX_SEMAPHORES)
 
 /*
  * PosixSemaphoreCreate
@@ -139,6 +212,7 @@ PosixSemaphoreCreate(sem_t *sem)
 }
 #endif							/* USE_NAMED_POSIX_SEMAPHORES */
 
+#ifndef USE_FUTEX_SEMAPHORES
 
 /*
  * PosixSemaphoreKill	- removes a semaphore
@@ -156,6 +230,7 @@ PosixSemaphoreKill(sem_t *sem)
 		elog(LOG, "sem_destroy failed: %m");
 #endif
 }
+#endif
 
 
 /*
@@ -238,18 +313,22 @@ PGReserveSemaphores(int maxSemas)
 static void
 ReleaseSemaphores(int status, Datum arg)
 {
+#ifdef USE_NAMED_POSIX_SEMAPHORES
 	int			i;
 
-#ifdef USE_NAMED_POSIX_SEMAPHORES
 	for (i = 0; i < numSems; i++)
 		PosixSemaphoreKill(mySemPointers[i]);
 	free(mySemPointers);
 #endif
 
 #ifdef USE_UNNAMED_POSIX_SEMAPHORES
+	int			i;
+
 	for (i = 0; i < numSems; i++)
 		PosixSemaphoreKill(PG_SEM_REF(sharedSemas + i));
 #endif
+
+	/* Futex-based semaphores have no kernel resource to clean up. */
 }
 
 /*
@@ -261,7 +340,9 @@ PGSemaphore
 PGSemaphoreCreate(void)
 {
 	PGSemaphore sema;
+#ifndef USE_FUTEX_SEMAPHORES
 	sem_t	   *newsem;
+#endif
 
 	/* Can't do this in a backend, because static state is postmaster's */
 	Assert(!IsUnderPostmaster);
@@ -274,6 +355,9 @@ PGSemaphoreCreate(void)
 	/* Remember new sema for ReleaseSemaphores */
 	mySemPointers[numSems] = newsem;
 	sema = (PGSemaphore) newsem;
+#elif defined(USE_FUTEX_SEMAPHORES)
+	sema = &sharedSemas[numSems];
+	pg_futex_sem_init(&sema->sem_padded.futexsem, 1);
 #else
 	sema = &sharedSemas[numSems];
 	newsem = PG_SEM_REF(sema);
@@ -293,6 +377,9 @@ PGSemaphoreCreate(void)
 void
 PGSemaphoreReset(PGSemaphore sema)
 {
+#ifdef USE_FUTEX_SEMAPHORES
+	pg_atomic_write_u32(&sema->sem_padded.futexsem, 0);
+#else
 	/*
 	 * There's no direct API for this in POSIX, so we have to ratchet the
 	 * semaphore down to 0 with repeated trywait's.
@@ -308,6 +395,7 @@ PGSemaphoreReset(PGSemaphore sema)
 			elog(FATAL, "sem_trywait failed: %m");
 		}
 	}
+#endif
 }
 
 /*
@@ -323,7 +411,11 @@ PGSemaphoreLock(PGSemaphore sema)
 	/* See notes in sysv_sema.c's implementation of PGSemaphoreLock. */
 	do
 	{
+#if defined(USE_FUTEX_SEMAPHORES)
+		errStatus = pg_futex_sem_wait(&sema->sem_padded.futexsem);
+#else
 		errStatus = sem_wait(PG_SEM_REF(sema));
+#endif
 	} while (errStatus < 0 && errno == EINTR);
 
 	if (errStatus < 0)
@@ -348,7 +440,11 @@ PGSemaphoreUnlock(PGSemaphore sema)
 	 */
 	do
 	{
+#if defined(USE_FUTEX_SEMAPHORES)
+		errStatus = pg_futex_sem_post(&sema->sem_padded.futexsem);
+#else
 		errStatus = sem_post(PG_SEM_REF(sema));
+#endif
 	} while (errStatus < 0 && errno == EINTR);
 
 	if (errStatus < 0)
