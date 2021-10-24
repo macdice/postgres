@@ -207,6 +207,7 @@ if host_system == 'cygwin'
   mod_link_with_dir = 'libdir'
 
 elif host_system == 'darwin'
+  sema_kind = 'unnamed_posix+emulation' # reverts to sysv if unsupported
   dlsuffix = '.dylib'
   library_path_var = 'DYLD_LIBRARY_PATH'
 
@@ -2660,6 +2661,7 @@ decl_checks = [
 # checking for library symbols wouldn't handle deployment target
 # restrictions on macOS
 decl_checks += [
+  ['os_sync_wait_on_address', 'os/os_sync_wait_on_address.h'],
   ['preadv', 'sys/uio.h'],
   ['pwritev', 'sys/uio.h'],
   ['strchrnul', 'string.h'],
@@ -2966,6 +2968,18 @@ endif
 if sema_kind == 'unnamed_posix' and \
    not func_check_results.get('sem_init', false)
   sema_kind = 'sysv'
+endif
+
+# for unnamed_posix+emulation, use unnamed_posix and enable emulation, or fall
+# back to sysv if support isn't found
+if sema_kind == 'unnamed_posix+emulation'
+  if cdata.get('HAVE_DECL_OS_SYNC_WAIT_ON_ADDRESS') != 0
+    cdata.set('USE_SEMAPHORE_EMULATION', 1,
+              description: 'Define to 1 to enable emulation of unnamed POSIX semaphores')
+    sema_kind = 'unnamed_posix'
+  else
+    sema_kind = 'sysv'
+  endif
 endif
 
 cdata.set('USE_@0@_SHARED_MEMORY'.format(shmem_kind.to_upper()), 1)

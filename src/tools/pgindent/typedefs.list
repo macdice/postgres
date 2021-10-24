@@ -3871,6 +3871,7 @@ pg_enc2name
 pg_encname
 pg_fe_sasl_mech
 pg_funcptr_t
+pg_futex_u32
 pg_gssinfo
 pg_hmac_ctx
 pg_hmac_errno
@@ -3885,6 +3886,7 @@ pg_regex_t
 pg_regmatch_t
 pg_regoff_t
 pg_saslprep_rc
+pg_sem_t
 pg_sha1_ctx
 pg_sha224_ctx
 pg_sha256_ctx

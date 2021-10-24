@@ -16179,6 +16179,21 @@ _ACEOF
 
 # We can't use AC_CHECK_FUNCS to detect these functions, because it
 # won't handle deployment target restrictions on macOS
+ac_fn_c_check_decl "$LINENO" "os_sync_wait_on_address" "ac_cv_have_decl_os_sync_wait_on_address" "#include <os/os_sync_wait_on_address.h>
+"
+if test "x$ac_cv_have_decl_os_sync_wait_on_address" = xyes; then :
+  ac_have_decl=1
+else
+  ac_have_decl=0
+fi
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_DECL_OS_SYNC_WAIT_ON_ADDRESS $ac_have_decl
+_ACEOF
+if test $ac_have_decl = 1; then :
+  HAVE_NATIVE_FUTEX=1
+fi
+
 ac_fn_c_check_decl "$LINENO" "preadv" "ac_cv_have_decl_preadv" "#include <sys/uio.h>
 "
 if test "x$ac_cv_have_decl_preadv" = xyes; then :
@@ -18418,6 +18433,15 @@ if test "$ac_res" != no; then :
   USE_UNNAMED_POSIX_SEMAPHORES=1
 fi
 
+  fi
+  if test x"$PREFERRED_SEMAPHORES" = x"UNNAMED_POSIX+EMULATION" ; then
+    # Need futex support for this
+	if test x"$HAVE_NATIVE_FUTEX" = x"1" ; then
+
+$as_echo "#define USE_SEMAPHORE_EMULATION 1" >>confdefs.h
+
+      USE_UNNAMED_POSIX_SEMAPHORES=1
+    fi
   fi
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking which semaphore API to use" >&5
 $as_echo_n "checking which semaphore API to use... " >&6; }

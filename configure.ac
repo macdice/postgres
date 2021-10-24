@@ -1841,6 +1841,7 @@ AC_CHECK_DECLS([strlcat, strlcpy, strnlen, strsep, timingsafe_bcmp])
 
 # We can't use AC_CHECK_FUNCS to detect these functions, because it
 # won't handle deployment target restrictions on macOS
+AC_CHECK_DECLS([os_sync_wait_on_address], [HAVE_NATIVE_FUTEX=1], [], [#include <os/os_sync_wait_on_address.h>])
 AC_CHECK_DECLS([preadv], [], [], [#include <sys/uio.h>])
 AC_CHECK_DECLS([pwritev], [], [], [#include <sys/uio.h>])
 AC_CHECK_DECLS([strchrnul], [], [], [#include <string.h>])
@@ -2271,6 +2272,13 @@ if test "$PORTNAME" != "win32"; then
   if test x"$PREFERRED_SEMAPHORES" = x"UNNAMED_POSIX" ; then
     # Need sem_init for this
     AC_SEARCH_LIBS(sem_init, [rt pthread], [USE_UNNAMED_POSIX_SEMAPHORES=1])
+  fi
+  if test x"$PREFERRED_SEMAPHORES" = x"UNNAMED_POSIX+EMULATION" ; then
+    # Need futex support for this
+	if test x"$HAVE_NATIVE_FUTEX" = x"1" ; then
+      AC_DEFINE(USE_SEMAPHORE_EMULATION, 1, [Define to enable semaphore emulation with futexes.])
+      USE_UNNAMED_POSIX_SEMAPHORES=1
+    fi
   fi
   AC_MSG_CHECKING([which semaphore API to use])
   if test x"$USE_NAMED_POSIX_SEMAPHORES" = x"1" ; then

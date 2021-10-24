@@ -36,6 +36,20 @@
 #include "storage/pg_sema.h"
 #include "storage/shmem.h"
 
+#ifdef USE_SEMAPHORE_EMULATION
+#include "port/pg_semaphore.h"
+
+/*
+ * Redirect to futex-based emulation of the POSIX unnamed API, for systems that
+ * can't do sem_init() with pshared=1.
+ */
+#define sem_t pg_sem_t
+#define sem_init pg_sem_init
+#define sem_destroy pg_sem_destroy
+#define sem_post pg_sem_post
+#define sem_wait pg_sem_wait
+#define sem_trywait pg_sem_trywait
+#endif
 
 /* see file header comment */
 #if defined(USE_NAMED_POSIX_SEMAPHORES) && defined(EXEC_BACKEND)
