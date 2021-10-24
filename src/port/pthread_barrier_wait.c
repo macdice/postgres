@@ -16,7 +16,9 @@
 #include "port/pg_pthread.h"
 
 int
-pthread_barrier_init(pthread_barrier_t *barrier, const void *attr, int count)
+pthread_barrier_init(pthread_barrier_t *barrier,
+					 const pthread_barrierattr_t *attr,
+					 unsigned count)
 {
 	int			error;
 
