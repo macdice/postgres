@@ -18179,6 +18179,10 @@ if test "$ac_res" != no; then :
 fi
 
   fi
+  if test x"$PREFERRED_SEMAPHORES" = x"FUTEX" ; then
+    # Need futex implementation for this
+    USE_FUTEX_SEMAPHORES=1
+  fi
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking which semaphore API to use" >&5
 $as_echo_n "checking which semaphore API to use... " >&6; }
   if test x"$USE_NAMED_POSIX_SEMAPHORES" = x"1" ; then
@@ -18195,11 +18199,19 @@ $as_echo "#define USE_UNNAMED_POSIX_SEMAPHORES 1" >>confdefs.h
       SEMA_IMPLEMENTATION="src/backend/port/posix_sema.c"
       sematype="unnamed POSIX"
     else
+      if test x"$USE_FUTEX_SEMAPHORES" = x"1" ; then
+
+$as_echo "#define USE_FUTEX_SEMAPHORES 1" >>confdefs.h
+
+        SEMA_IMPLEMENTATION="src/backend/port/posix_sema.c"
+        sematype="futex"
+      else
 
 $as_echo "#define USE_SYSV_SEMAPHORES 1" >>confdefs.h
 
-      SEMA_IMPLEMENTATION="src/backend/port/sysv_sema.c"
-      sematype="System V"
+        SEMA_IMPLEMENTATION="src/backend/port/sysv_sema.c"
+        sematype="System V"
+      fi
     fi
   fi
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: $sematype" >&5
