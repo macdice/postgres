@@ -47,18 +47,14 @@
 
 #include <sys/stat.h>
 
-#ifdef WIN32
-#include "pthread-win32.h"
-#else
-#include <pthread.h>
-#endif
-
 #include <openssl/ssl.h>
 #include <openssl/conf.h>
 #ifdef USE_SSL_ENGINE
 #include <openssl/engine.h>
 #endif
 #include <openssl/x509v3.h>
+
+#include "port/pg_pthread.h"
 
 static int	verify_cb(int ok, X509_STORE_CTX *ctx);
 static int	openssl_verify_peer_name_matches_certificate_name(PGconn *conn,
@@ -84,12 +80,7 @@ static bool ssl_lib_initialized = false;
 
 static long crypto_open_connections = 0;
 
-#ifndef WIN32
 static pthread_mutex_t ssl_config_mutex = PTHREAD_MUTEX_INITIALIZER;
-#else
-static pthread_mutex_t ssl_config_mutex = NULL;
-static long win32_ssl_create_mutex = 0;
-#endif
 
 static PQsslKeyPassHook_OpenSSL_type PQsslKeyPassHook = NULL;
 static int	ssl_protocol_version_to_openssl(const char *protocol);
@@ -635,20 +626,6 @@ pq_lockingcallback(int mode, int n, const char *file, int line)
 int
 pgtls_init(PGconn *conn, bool do_ssl, bool do_crypto)
 {
-#ifdef WIN32
-	/* Also see similar code in fe-connect.c, default_threadlock() */
-	if (ssl_config_mutex == NULL)
-	{
-		while (InterlockedExchange(&win32_ssl_create_mutex, 1) == 1)
-			 /* loop, another thread own the lock */ ;
-		if (ssl_config_mutex == NULL)
-		{
-			if (pthread_mutex_init(&ssl_config_mutex, NULL))
-				return -1;
-		}
-		InterlockedExchange(&win32_ssl_create_mutex, 0);
-	}
-#endif
 	if (pthread_mutex_lock(&ssl_config_mutex))
 		return -1;
 

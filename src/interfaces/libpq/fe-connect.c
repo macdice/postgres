@@ -31,6 +31,7 @@
 #include "mb/pg_wchar.h"
 #include "pg_config_paths.h"
 #include "port/pg_bswap.h"
+#include "port/pg_pthread.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -53,12 +54,6 @@
 #ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
 #endif
-#endif
-
-#ifdef WIN32
-#include "pthread-win32.h"
-#else
-#include <pthread.h>
 #endif
 
 #ifdef USE_LDAP
@@ -7273,24 +7268,7 @@ pqGetHomeDirectory(char *buf, int bufsize)
 static void
 default_threadlock(int acquire)
 {
-#ifndef WIN32
 	static pthread_mutex_t singlethread_lock = PTHREAD_MUTEX_INITIALIZER;
-#else
-	static pthread_mutex_t singlethread_lock = NULL;
-	static long mutex_initlock = 0;
-
-	if (singlethread_lock == NULL)
-	{
-		while (InterlockedExchange(&mutex_initlock, 1) == 1)
-			 /* loop, another thread own the lock */ ;
-		if (singlethread_lock == NULL)
-		{
-			if (pthread_mutex_init(&singlethread_lock, NULL))
-				Assert(false);
-		}
-		InterlockedExchange(&mutex_initlock, 0);
-	}
-#endif
 	if (acquire)
 	{
 		if (pthread_mutex_lock(&singlethread_lock))
