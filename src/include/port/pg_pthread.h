@@ -162,6 +162,8 @@ typedef struct pthread_barrierattr_t pthread_barrierattr_t;
 
 typedef SYNCHRONIZATION_BARRIER pthread_barrier_t;
 
+#define PTHREAD_BARRIER_SERIAL_THREAD (-1)
+
 static inline int
 pthread_barrier_init(pthread_barrier_t *barrier,
 					 const pthread_barrierattr_t *attr,
@@ -211,27 +213,21 @@ typedef struct pthread_mutexattr_t pthread_mutexattr_t;
 static void
 pthread_mutex_initialize_on_demand(pthread_mutex_t *mutex)
 {
-	for (;;)
+	while (unlikely(mutex->state != PTHREAD_MUTEX_INITIALIZED))
 	{
-		/* If initialized already, there's nothing to do. */
-		if (likely(mutex->state == PTHREAD_MUTEX_INITIALIZED))
-			return;
-
 		/*
 		 * Try to become the initializer.  If someone else has beaten us to
 		 * it, then we'll spin around the loop hammering the memory bus until
 		 * they succeed, which isn't expected to take long.
 		 */
-		if (InterlockedCompareExchange(&mutex->initialized,
+		if (InterlockedCompareExchange(&mutex->state,
 									   PTHREAD_MUTEX_INITIALIZING,
 									   PTHREAD_MUTEX_UNINITIALIZED) == 0)
 		{
 			InitializeCriticalSection(&mutex->critical_section);
 			mutex->state = PTHREAD_MUTEX_INITIALIZED;
-			return;
 		}
 	}
-	pg_unreachable();
 }
 
 static inline int
