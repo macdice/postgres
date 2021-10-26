@@ -68,12 +68,15 @@ struct pthread_win32_thunk
 
 typedef struct pthread_win32_thunk *pthread_t;
 
+extern __declspec(thread) pthread_t pthread_win32_self;
+
 struct pthread_attr_t;
 typedef struct pthread_attr_t pthread_attr_t;
 
 static unsigned __stdcall
 pthread_win32_run(void *arg)
 {
+	pthread_win32_self = (pthread_t) arg;
 	pthread_win32_self->result =
 		pthread_win32_self->routine(pthread_win32_self->arg);
 
@@ -88,6 +91,7 @@ pthread_create(pthread_t *thread,
 {
 	struct pthread_win32_thunk *th;
 
+	/* Our arg/result transfer object will be freed by pthread_join(). */
 	th = malloc(sizeof(*th));
 	if (th == NULL)
 		return ENOMEM;
