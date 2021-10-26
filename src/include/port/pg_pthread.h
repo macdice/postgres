@@ -50,6 +50,8 @@ extern int	pthread_barrier_destroy(pthread_barrier_t *barrier);
 
 #ifdef WIN32
 
+#include <windows.h>
+
 /*
  * For pthread_thread_t, we need to allocate a piece of memory to traffic the
  * argument and result.  We'll use a pointer to that struct as pthread_t.
