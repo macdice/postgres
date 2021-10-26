@@ -50,7 +50,8 @@ extern int	pthread_barrier_destroy(pthread_barrier_t *barrier);
 
 #ifdef WIN32
 
-#include <windows.h>
+#include <handleapi.h>
+#include <process.h>
 
 /*
  * For pthread_thread_t, we need to allocate a piece of memory to traffic the
