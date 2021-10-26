@@ -50,7 +50,7 @@ extern int	pthread_barrier_destroy(pthread_barrier_t *barrier);
 
 #ifdef WIN32
 
-#include <handleapi.h>
+#include <windows.h>
 #include <process.h>
 
 /*
