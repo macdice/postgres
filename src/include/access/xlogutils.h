@@ -91,7 +91,8 @@ extern void FreeFakeRelcacheEntry(Relation fakerel);
 
 extern int	read_local_xlog_page(XLogReaderState *state,
 								 XLogRecPtr targetPagePtr, int reqLen,
-								 XLogRecPtr targetRecPtr, char *cur_page);
+								 XLogRecPtr targetRecPtr, char *cur_page,
+								 bool nowait);
 extern void wal_segment_open(XLogReaderState *state,
 							 XLogSegNo nextSegNo,
 							 TimeLineID *tli_p);

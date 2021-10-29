@@ -370,7 +370,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	 * going to initialize it. And vice versa.
 	 */
 	zeromode = (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK);
-	willinit = (record->blocks[block_id].flags & BKPBLOCK_WILL_INIT) != 0;
+	willinit = (record->record->blocks[block_id].flags & BKPBLOCK_WILL_INIT) != 0;
 	if (willinit && !zeromode)
 		elog(PANIC, "block with WILL_INIT flag in WAL record must be zeroed by redo routine");
 	if (!willinit && zeromode)
@@ -846,7 +846,8 @@ wal_segment_close(XLogReaderState *state)
  */
 int
 read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
-					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page)
+					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page,
+					 bool nowait)
 {
 	XLogRecPtr	read_upto,
 				loc;
