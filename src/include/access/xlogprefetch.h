@@ -24,12 +24,9 @@ typedef struct XLogPrefetcher XLogPrefetcher;
 
 extern int	XLogPrefetchReconfigureCount;
 
-typedef bool (*XLogReadPageNonBlocking)(XLogReaderState *);
-
 typedef struct XLogPrefetchState
 {
 	XLogReaderState *reader;
-	XLogReadPageNonBlocking read_page_nonblocking;
 	XLogPrefetcher *prefetcher;
 	int			reconfigure_count;
 } XLogPrefetchState;
@@ -44,8 +41,7 @@ extern void XLogPrefetchBegin(XLogPrefetchState *state, XLogReaderState *reader)
 extern void XLogPrefetchEnd(XLogPrefetchState *state);
 
 /* Functions exposed only for the use of XLogPrefetch(). */
-extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader,
-											  XLogReadPageNonBlocking read_page_nonblocking);
+extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader);
 extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
 extern void XLogPrefetcherReadAhead(XLogPrefetcher *prefetch);
 
@@ -72,8 +68,7 @@ XLogPrefetch(XLogPrefetchState *state)
 		}
 		/* If we want a prefetcher, set it up. */
 		if (recovery_prefetch)
-			state->prefetcher = XLogPrefetcherAllocate(state->reader,
-													   state->read_page_nonblocking);
+			state->prefetcher = XLogPrefetcherAllocate(state->reader);
 		state->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
 

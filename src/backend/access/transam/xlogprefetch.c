@@ -80,7 +80,6 @@ struct XLogPrefetcher
 	XLogReaderState *reader;
 	DecodedXLogRecord *record;
 	int			next_block_id;
-	XLogReadPageNonBlocking read_page_nonblocking;
 
 	/* Details of last prefetch to skip repeats and seq scans. */
 	SMgrRelation last_reln;
@@ -319,8 +318,7 @@ XLogPrefetcherReleaseBlock(uintptr_t pgsr_private, uintptr_t read_private)
  * WAL records.
  */
 XLogPrefetcher *
-XLogPrefetcherAllocate(XLogReaderState *reader,
-					   XLogReadPageNonBlocking read_page_nonblocking)
+XLogPrefetcherAllocate(XLogReaderState *reader)
 {
 	XLogPrefetcher *prefetcher;
 	static HASHCTL hash_table_ctl = {
@@ -331,7 +329,6 @@ XLogPrefetcherAllocate(XLogReaderState *reader,
 	prefetcher = palloc0(sizeof(XLogPrefetcher));
 
 	prefetcher->reader = reader;
-	prefetcher->read_page_nonblocking = read_page_nonblocking;
 	prefetcher->filter_table = hash_create("XLogPrefetcherFilterTable", 1024,
 										   &hash_table_ctl,
 										   HASH_ELEM | HASH_BLOBS);
