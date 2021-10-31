@@ -78,8 +78,15 @@ typedef struct
 	ForkNumber	forknum;
 	BlockNumber blkno;
 
-	/* Workspace for remembering last known buffer holding this block. */
+	/*
+	 * A buffer the block was recently seen in.  This can be set by
+	 * xlogprefetch.c, so that XLogReadBufferForRedo() can potentially avoid a
+	 * (second) buffer mapping table lookup.
+	 */
 	Buffer		recent_buffer;
+
+	/* Workspace used by xlogprefetch.c */
+	uint8		prefetch_flags;
 
 	/* copy of the fork_flags field from the XLogRecordBlockHeader */
 	uint8		flags;

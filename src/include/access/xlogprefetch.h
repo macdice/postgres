@@ -24,9 +24,12 @@ typedef struct XLogPrefetcher XLogPrefetcher;
 
 extern int	XLogPrefetchReconfigureCount;
 
+typedef bool (*XLogReadPageNonBlocking)(XLogReaderState *);
+
 typedef struct XLogPrefetchState
 {
 	XLogReaderState *reader;
+	XLogReadPageNonBlocking read_page_nonblocking;
 	XLogPrefetcher *prefetcher;
 	int			reconfigure_count;
 } XLogPrefetchState;
@@ -37,22 +40,24 @@ extern void XLogPrefetchShmemInit(void);
 extern void XLogPrefetchReconfigure(void);
 extern void XLogPrefetchRequestResetStats(void);
 
-extern void XLogPrefetchBegin(XLogPrefetchState *state, XLogReaderState *reader);
+extern void XLogPrefetchBegin(XLogPrefetchState *state,
+							  XLogReaderState *reader,
+							  XLogReadPageNonBlocking read_page_nonblocking);
 extern void XLogPrefetchEnd(XLogPrefetchState *state);
 
 /* Functions exposed only for the use of XLogPrefetch(). */
-extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader);
+extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader,
+											  XLogReadPageNonBlocking read_page_nonblocking);
 extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
-extern bool XLogPrefetcherReadAhead(XLogPrefetcher *prefetch,
-									XLogRecPtr replaying_lsn);
+extern void XLogPrefetcherReadAhead(XLogPrefetcher *prefetch);
 
 /*
  * Tell the prefetching module that we are now replaying a given LSN, so that
  * it can decide how far ahead to read in the WAL, if configured.  Return
  * true if more data is needed by the reader.
  */
-static inline bool
-XLogPrefetch(XLogPrefetchState *state, XLogRecPtr replaying_lsn)
+static inline void
+XLogPrefetch(XLogPrefetchState *state)
 {
 	/*
 	 * Handle any configuration changes.  Rather than trying to deal with
@@ -69,14 +74,15 @@ XLogPrefetch(XLogPrefetchState *state, XLogRecPtr replaying_lsn)
 		}
 		/* If we want a prefetcher, set it up. */
 		if (recovery_prefetch)
-			state->prefetcher = XLogPrefetcherAllocate(state->reader);
+			state->prefetcher = XLogPrefetcherAllocate(state->reader,
+													   state->read_page_nonblocking);
 		state->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
 
 	if (state->prefetcher)
-		return XLogPrefetcherReadAhead(state->prefetcher, replaying_lsn);
-
-	return false;
+		XLogPrefetcherReadAhead(state->prefetcher);
 }
+
+extern void XLogPrefetchComplete(XLogPrefetcher *prefetch);
 
 #endif

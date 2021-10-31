@@ -1015,6 +1015,7 @@ static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
 static bool XLogPageRead(XLogReaderState *state,
 						 bool fetching_ckpt, int emode, bool randAccess,
 						 bool nowait);
+static bool XLogPageReadForPrefetch(XLogReaderState *reader);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 										bool fetching_ckpt,
 										XLogRecPtr tliRecPtr,
@@ -8966,7 +8967,7 @@ StartupXLOG(void)
 							LSN_FORMAT_ARGS(ReadRecPtr))));
 
 			/* Prepare to prefetch, if configured. */
-			XLogPrefetchBegin(&prefetch, xlogreader);
+			XLogPrefetchBegin(&prefetch, xlogreader, XLogPageReadForPrefetch);
 
 			/*
 			 * main redo apply loop
@@ -8998,12 +8999,7 @@ StartupXLOG(void)
 				HandleStartupProcInterrupts();
 
 				/* Perform WAL prefetching, if enabled. */
-				while (XLogPrefetch(&prefetch, xlogreader->ReadRecPtr) == XLREAD_NEED_DATA)
-				{
-					if (!XLogPageRead(xlogreader, false, LOG, false,
-									  true /* don't wait for streaming data */))
-						break;
-				}
+				XLogPrefetch(&prefetch);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -14083,6 +14079,17 @@ next_record_is_invalid:
 
 	XLogReaderNotifySize(state, -1);
 	return false;
+}
+
+/*
+ * A WAL page read function for use while reading ahead in the log.  Does not
+ * wait for new data to arrive.
+ */
+static bool
+XLogPageReadForPrefetch(XLogReaderState *reader)
+{
+	return XLogPageRead(reader, false, LOG, false,
+						true /* don't wait for streaming data */);
 }
 
 /*

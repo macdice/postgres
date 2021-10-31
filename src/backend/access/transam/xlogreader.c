@@ -2002,7 +2002,11 @@ DecodeXLogRecord(XLogReaderState *state,
 			blk->has_image = ((fork_flags & BKPBLOCK_HAS_IMAGE) != 0);
 			blk->has_data = ((fork_flags & BKPBLOCK_HAS_DATA) != 0);
 
+#ifndef FRONTEND
+//			elog(LOG, "clearing prefetch_flags block_id = %d, address = %p", (int) block_id, blk);
+#endif
 			blk->recent_buffer = InvalidBuffer;
+			blk->prefetch_flags = 0;
 
 			COPY_HEADER_FIELD(&blk->data_len, sizeof(uint16));
 			/* cross-check that the HAS_DATA flag is set iff data_length > 0 */
