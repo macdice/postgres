@@ -539,8 +539,15 @@ PrefetchSharedBuffer(Relation reln,
 	 * rechecked!
 	 */
 
-	result.recent_buffer = ReadBufferAsync(reln, forkNum, blockNum, RBM_NORMAL,
-										   NULL, &already_valid, &aio);
+	if (reln)
+		result.recent_buffer = ReadBufferAsync(reln, forkNum, blockNum,
+											   RBM_NORMAL, NULL,
+											   &already_valid, &aio);
+	else
+		result.recent_buffer = ReadBufferAsyncSMgr(smgr_reln, RELPERSISTENCE_PERMANENT,
+												   forkNum, blockNum, RBM_NORMAL, NULL,
+												   &already_valid, &aio);
+
 	result.initiated_io = !already_valid;
 
 	if (already_valid)
@@ -858,9 +865,10 @@ ReadBufferInitRead(PgAioInProgress *aio,
 }
 
 Buffer
-ReadBufferAsync(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
-				ReadBufferMode mode, BufferAccessStrategy strategy,
-				bool *already_valid, PgAioInProgress **aiop)
+ReadBufferAsyncSMgr(SMgrRelation smgr_reln, char relpersistence,
+					ForkNumber forkNum, BlockNumber blockNum,
+					ReadBufferMode mode, BufferAccessStrategy strategy,
+					bool *already_valid, PgAioInProgress **aiop)
 {
 	Buffer buf;
 	BufferDesc *bufHdr;
@@ -868,6 +876,38 @@ ReadBufferAsync(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	PgAioInProgress *aio;
 
 	Assert(aiop != NULL);
+
+	if (mode != RBM_NORMAL || blockNum == P_NEW)
+		elog(ERROR, "unsupported");
+
+	bufHdr = ReadBuffer_start(smgr_reln, relpersistence, forkNum,
+							  blockNum, mode, strategy, &hit, false);
+	buf = BufferDescriptorGetBuffer(bufHdr);
+
+	if (hit)
+	{
+		*already_valid = true;
+		return buf;
+	}
+
+	*already_valid = false;
+
+	if(*aiop == NULL)
+		*aiop = aio = pgaio_io_get();
+	else
+		aio = *aiop;
+
+	ReadBufferInitRead(aio, smgr_reln, forkNum, blockNum, buf, bufHdr, mode);
+
+	return buf;
+}
+
+Buffer
+ReadBufferAsync(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
+				ReadBufferMode mode, BufferAccessStrategy strategy,
+				bool *already_valid, PgAioInProgress **aiop)
+{
+	Buffer		buf;
 
 	if (mode != RBM_NORMAL || blockNum == P_NEW)
 		elog(ERROR, "unsupported");
@@ -880,31 +920,20 @@ ReadBufferAsync(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	if (RelationUsesLocalBuffers(reln))
 	{
 		*already_valid = true;
+		pgstat_count_buffer_hit(reln);
 		return ReadBufferExtended(reln, forkNum, blockNum, mode, strategy);
 	}
 
 	pgstat_count_buffer_read(reln);
 
-	bufHdr = ReadBuffer_start(RelationGetSmgr(reln), reln->rd_rel->relpersistence, forkNum,
-							  blockNum, mode, strategy, &hit, false);
-	buf = BufferDescriptorGetBuffer(bufHdr);
+	buf = ReadBufferAsyncSMgr(RelationGetSmgr(reln),
+							  reln->rd_rel->relpersistence,
+							  forkNum, blockNum,
+							  mode, strategy,
+							  already_valid, aiop);
 
-	if (hit)
-	{
+	if (*already_valid)
 		pgstat_count_buffer_hit(reln);
-
-		*already_valid = true;
-		return buf;
-	}
-
-	*already_valid = false;
-
-	if(*aiop == NULL)
-		*aiop = aio = pgaio_io_get();
-	else
-		aio = *aiop;
-
-	ReadBufferInitRead(aio, reln->rd_smgr, forkNum, blockNum, buf, bufHdr, mode);
 
 	return buf;
 }
