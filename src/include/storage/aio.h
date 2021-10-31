@@ -274,6 +274,7 @@ typedef enum PgStreamingReadNextStatus
 {
 	PGSR_NEXT_END,
 	PGSR_NEXT_NO_IO,
+	PGSR_NEXT_AGAIN,
 	PGSR_NEXT_IO
 } PgStreamingReadNextStatus;
 
@@ -284,5 +285,7 @@ extern PgStreamingRead *pg_streaming_read_alloc(uint32 iodepth, uintptr_t pgsr_p
 												PgStreamingReadRelease release_cb);
 extern void pg_streaming_read_free(PgStreamingRead *pgsr);
 extern uintptr_t pg_streaming_read_get_next(PgStreamingRead *pgsr);
+extern void pg_streaming_read_prefetch(PgStreamingRead *pgsr);
+extern uint32 pg_streaming_read_inflight(PgStreamingRead *pgsr);
 
 #endif							/* AIO_H */
