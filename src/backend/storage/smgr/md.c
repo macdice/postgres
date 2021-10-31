@@ -943,6 +943,11 @@ mdstartread(PgAioInProgress *io, SMgrRelation reln,
 
 	AssertPointerAlignment(buffer, 4096);
 
+	/*
+	 * XXXX: if we're prefetching, we need this to be EXTENSION_NULL, and then
+	 * we need to be able to report this case from ReadBufferAsyncSMgr()
+	 * without failing!
+	 */
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
 					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
 
