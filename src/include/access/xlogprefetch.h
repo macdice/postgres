@@ -14,22 +14,21 @@
 #define XLOGPREFETCH_H
 
 #include "access/xlogdefs.h"
+#include "storage/aio.h"
 
 /* GUCs */
 extern bool recovery_prefetch;
 extern bool recovery_prefetch_fpw;
+
+
 
 struct XLogPrefetcher;
 typedef struct XLogPrefetcher XLogPrefetcher;
 
 extern int	XLogPrefetchReconfigureCount;
 
-typedef struct XLogPrefetchState
-{
-	XLogReaderState *reader;
-	XLogPrefetcher *prefetcher;
-	int			reconfigure_count;
-} XLogPrefetchState;
+
+
 
 extern size_t XLogPrefetchShmemSize(void);
 extern void XLogPrefetchShmemInit(void);
@@ -37,14 +36,13 @@ extern void XLogPrefetchShmemInit(void);
 extern void XLogPrefetchReconfigure(void);
 extern void XLogPrefetchRequestResetStats(void);
 
-extern void XLogPrefetchBegin(XLogPrefetchState *state, XLogReaderState *reader);
-extern void XLogPrefetchEnd(XLogPrefetchState *state);
-
-/* Functions exposed only for the use of XLogPrefetch(). */
 extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader);
 extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
-extern void XLogPrefetcherReadAhead(XLogPrefetcher *prefetch);
 
+
+extern XLogRecord *XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg);
+
+#if 0
 /*
  * Tell the prefetching module that we are now replaying a given LSN, so that
  * it can decide how far ahead to read in the WAL, if configured.  Return
@@ -75,6 +73,7 @@ XLogPrefetch(XLogPrefetchState *state)
 	if (state->prefetcher)
 		XLogPrefetcherReadAhead(state->prefetcher);
 }
+#endif
 
 extern void XLogPrefetchComplete(XLogPrefetcher *prefetch);
 

@@ -1,4 +1,4 @@
-/*-------------------------------------------------------------------------
+X/*-------------------------------------------------------------------------
  *
  * xlog.c
  *		PostgreSQL write-ahead log manager
@@ -1030,7 +1030,8 @@ static void UpdateLastRemovedPtr(char *filename);
 static void ValidateXLOGDirectoryStructure(void);
 static void CleanupBackupHistory(void);
 static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
-static XLogRecord *ReadRecord(XLogReaderState *xlogreader,
+static XLogRecord *ReadRecord(XLogPrefetcher *xlogprefetcher,
+							  XLogReaderState *xlogreader,
 							  int emode, bool fetching_ckpt);
 static void CheckRecoveryConsistency(void);
 static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
@@ -5888,7 +5889,9 @@ CleanupBackupHistory(void)
  * record is available.
  */
 static XLogRecord *
-ReadRecord(XLogReaderState *xlogreader, int emode,
+ReadRecord(XLogPrefetcher *xlogprefetcher,
+		   XLogReaderState *xlogreader,
+		   int emode,
 		   bool fetching_ckpt)
 {
 	XLogRecord *record;
@@ -5898,6 +5901,7 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	private->fetching_ckpt = fetching_ckpt;
 	private->emode = emode;
 	private->randAccess = (xlogreader->ReadRecPtr == InvalidXLogRecPtr);
+	/* XXX nowait could be here? */
 
 	/* This is the first attempt to read this page. */
 	lastSourceFailed = false;
@@ -5906,7 +5910,7 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	{
 		char	   *errormsg;
 
-		if (XLogReadRecord(xlogreader, &record, &errormsg) == XLREAD_WAIT)
+		if (XLogPrefetcherReadRecord(xlogreader, &record, &errormsg) == XLREAD_WAIT)
 		{
 			/*
 			 * This special value is returned to us if the page read function
@@ -5932,7 +5936,6 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 			}
 			continue;
 		}
-
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -8935,7 +8938,7 @@ StartupXLOG(void)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
-			XLogPrefetchState prefetch;
+			XLogPrefetcher *prefetcher;
 			PGRUsage	ru0;
 
 			pg_rusage_init(&ru0);
@@ -8945,9 +8948,6 @@ StartupXLOG(void)
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							LSN_FORMAT_ARGS(ReadRecPtr))));
-
-			/* Prepare to prefetch, if configured. */
-			XLogPrefetchBegin(&prefetch, xlogreader);
 
 			/*
 			 * main redo apply loop
@@ -8977,9 +8977,6 @@ StartupXLOG(void)
 
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
-
-				/* Perform WAL prefetching, if enabled. */
-				XLogPrefetch(&prefetch);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -9155,7 +9152,7 @@ StartupXLOG(void)
 						WalSndWakeup();
 
 					/* Reset the prefetcher. */
-					XLogPrefetchReconfigure();
+					XLogPrefetchReconfigure(prefetcher);
 				}
 
 				/* Exit loop if we reached inclusive recovery target */
@@ -9172,7 +9169,7 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
-			XLogPrefetchEnd(&prefetch);
+			XLogPrefetchEnd(prefetcher);
 
 			if (reachedRecoveryTarget)
 			{
