@@ -148,8 +148,8 @@ static inline bool XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher,
 											BlockNumber blockno);
 static inline void XLogPrefetcherCompleteFilters(XLogPrefetcher *prefetcher,
 												 XLogRecPtr replaying_lsn);
-static void XLogPrefetchSaveStats(void);
-static void XLogPrefetchRestoreStats(void);
+//static void XLogPrefetchSaveStats(void);
+//static void XLogPrefetchRestoreStats(void);
 
 static PgStreamingReadNextStatus XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 														 PgAioInProgress *aio,
@@ -193,6 +193,7 @@ XLogPrefetchShmemInit(void)
 		pg_atomic_init_u32(&SharedStats->reset_request, 0);
 		SharedStats->reset_handled = 0;
 
+		
 		pg_atomic_init_u64(&SharedStats->reset_time, GetCurrentTimestamp());
 		pg_atomic_init_u64(&SharedStats->prefetch, 0);
 		pg_atomic_init_u64(&SharedStats->skip_hit, 0);
@@ -224,6 +225,7 @@ XLogPrefetchRequestResetStats(void)
 	pg_atomic_fetch_add_u32(&SharedStats->reset_request, 1);
 }
 
+#if 0
 /*
  * Tell the stats collector to serialize the shared memory counters into the
  * stats file.
@@ -242,7 +244,9 @@ XLogPrefetchSaveStats(void)
 
 	pgstat_send_recoveryprefetch(&serialized);
 }
+#endif
 
+#if 0
 /*
  * Try to restore the shared memory counters from the stats file.
  */
@@ -261,6 +265,7 @@ XLogPrefetchRestoreStats(void)
 		pg_atomic_write_u64(&SharedStats->reset_time, serialized->stat_reset_timestamp);
 	}
 }
+#endif
 
 /*
  * Increment a counter in shared memory.  This is equivalent to *counter++ on a
@@ -274,6 +279,7 @@ XLogPrefetchIncrement(pg_atomic_uint64 *counter)
 	pg_atomic_write_u64(counter, pg_atomic_read_u64(counter) + 1);
 }
 
+#if 0
 /*
  * Initialize an XLogPrefetchState object and restore the last saved
  * statistics from disk.
@@ -288,7 +294,9 @@ XLogPrefetchBegin(XLogPrefetchState *state, XLogReaderState *reader)
 	state->prefetcher = NULL;
 	state->reconfigure_count = XLogPrefetchReconfigureCount - 1;
 }
+#endif
 
+#if 0
 /*
  * Shut down the prefetching infrastructure, if configured.
  */
@@ -304,6 +312,7 @@ XLogPrefetchEnd(XLogPrefetchState *state)
 	SharedStats->queue_depth = 0;
 	SharedStats->distance = 0;
 }
+#endif
 
 static void
 XLogPrefetcherReleaseBlock(uintptr_t pgsr_private, uintptr_t read_private)
@@ -531,6 +540,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 	XLogReaderState *reader = prefetcher->reader;
 	XLogRecPtr replaying_lsn = reader->ReadRecPtr;
 
+	elog(LOG, "XLogPrefetcherNextBlock");
 	/*
 	 * We keep track of the record and block we're up to between calls with
 	 * prefetcher->record and prefetcher->next_block_id.  We loop, stepping
@@ -910,12 +920,15 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	XLogRecord *record_header;
 	DecodedXLogRecord *record;
 
+	elog(LOG, "XLogPrefetcherReadRecord");
 	/* Give the prefetcher a chance to get further ahead. */
 	pg_streaming_read_prefetch(prefetcher->streaming_read);
 
 	/* Read the next record. */
 	record_header = XLogReadRecord(prefetcher->reader, errmsg);
 	record = prefetcher->reader->record;
+	if (!record)
+		return NULL;
 
 	/*
 	 * Can we drop any pefetch filters yet, given the record we're about to
