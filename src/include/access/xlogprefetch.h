@@ -25,8 +25,6 @@ extern bool recovery_prefetch_fpw;
 struct XLogPrefetcher;
 typedef struct XLogPrefetcher XLogPrefetcher;
 
-extern int	XLogPrefetchReconfigureCount;
-
 
 extern void XLogPrefetchReconfigure(void);
 
@@ -42,38 +40,5 @@ extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
 
 
 extern XLogRecord *XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg);
-
-#if 0
-/*
- * Tell the prefetching module that we are now replaying a given LSN, so that
- * it can decide how far ahead to read in the WAL, if configured.  Return
- * true if more data is needed by the reader.
- */
-static inline void
-XLogPrefetch(XLogPrefetchState *state)
-{
-	/*
-	 * Handle any configuration changes.  Rather than trying to deal with
-	 * various parameter changes, we just tear down and set up a new
-	 * prefetcher if anything we depend on changes.
-	 */
-	if (unlikely(state->reconfigure_count != XLogPrefetchReconfigureCount))
-	{
-		/* If we had a prefetcher, tear it down. */
-		if (state->prefetcher)
-		{
-			XLogPrefetcherFree(state->prefetcher);
-			state->prefetcher = NULL;
-		}
-		/* If we want a prefetcher, set it up. */
-		if (recovery_prefetch)
-			state->prefetcher = XLogPrefetcherAllocate(state->reader);
-		state->reconfigure_count = XLogPrefetchReconfigureCount;
-	}
-
-	if (state->prefetcher)
-		XLogPrefetcherReadAhead(state->prefetcher);
-}
-#endif
 
 #endif
