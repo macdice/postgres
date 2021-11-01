@@ -397,7 +397,11 @@ XLogPrefetcherPeriodic(XLogPrefetcher *prefetcher)
 	 */
 	io_depth = pg_streaming_read_inflight(prefetcher->streaming_read);
 	if (io_depth == 0)
+	{
+		elog(LOG, "XXXXXX will call pg_streaming_read_prefetch");
 		pg_streaming_read_prefetch(prefetcher->streaming_read);
+		elog(LOG, "XXXXXX pg_stremaing_read_prefetch returned");
+	}
 
 	/* How far ahead of replay are we now? */
 	if (prefetcher->record)
@@ -485,8 +489,9 @@ XLogPrefetcherReadAhead(XLogPrefetcher *prefetcher)
 			uintptr_t recent_buffer_p PG_USED_FOR_ASSERTS_ONLY;
 
 			/* Wait for the IO to complete. */
-			elog(LOG, "will call read_get_next");
+			elog(LOG, "XXXXXXXXXXXXXX will call read_get_next");
 			recent_buffer_p = pg_streaming_read_get_next(prefetcher->streaming_read);
+			elog(LOG, "XXXXXXXXXXXXXX read_get_next returned");
 
 			/*
 			 * Assert that we're consuming blocks from the streaming read in
@@ -569,6 +574,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 
 		record = prefetcher->record;
 
+
+		
 		/*
 		 * If this is a record that creates a new SMGR relation, we'll avoid
 		 * prefetching anything from that rnode until it has been replayed.
@@ -589,6 +596,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			DecodedBkpBlock *block = &record->blocks[block_id];
 			SMgrRelation reln;
 			bool already_valid;
+
+			elog(LOG, "XXXXXXXX LSN = %lX, block = %u", record->lsn, block->blkno);
 
 			if (!block->in_use)
 				continue;
@@ -807,7 +816,7 @@ XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher, RelFileNode rnode,
 	XLogPrefetcherFilter *filter;
 	bool		found;
 
-	elog(LOG, "XLogPrefetcherCompleteFilters add filter rel %u, block %u, lsn = %lx", rnode.relNode, blockno, lsn);
+	elog(LOG, "XLogPrefetcherAddFilter rel %u, block %u, lsn = %lx", rnode.relNode, blockno, lsn);
 	filter = hash_search(prefetcher->filter_table, &rnode, HASH_ENTER, &found);
 	if (!found)
 	{
