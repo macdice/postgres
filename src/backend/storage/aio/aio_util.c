@@ -651,12 +651,12 @@ pg_streaming_read_get_next(PgStreamingRead *pgsr)
 	if (pgsr->prefetched_total_count == 0)
 	{
 		pg_streaming_read_prefetch(pgsr);
-		Assert(pgsr->hit_end || pgsr->prefetched_total_count > 0);
+		//Assert(pgsr->hit_end || pgsr->prefetched_total_count > 0);
 	}
 
 	if (dlist_is_empty(&pgsr->in_order))
 	{
-		Assert(pgsr->hit_end);
+		//Assert(pgsr->hit_end);
 		return 0;
 	}
 	else

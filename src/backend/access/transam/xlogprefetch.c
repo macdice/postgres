@@ -61,14 +61,14 @@
  */
 #define XLOGPREFETCHER_SAMPLE_DISTANCE BLCKSZ
 
-/* Flags used prefetch_flags. */
-#define XLOGPREFETCHER_IO 0x01
+/* Flags used in prefetch_flags. */
+#define XLOGPREFETCHER_PINNED 0x01
 
 /* GUCs */
 bool		recovery_prefetch = false;
 bool		recovery_prefetch_fpw = false;
 
-int			XLogPrefetchReconfigureCount;
+static int	XLogPrefetchReconfigureCount = 0;
 
 /*
  * A prefetcher.  This is a mechanism that wraps an XLogReader, prefetching
@@ -98,8 +98,9 @@ struct XLogPrefetcher
 	HTAB	   *filter_table;
 	dlist_head	filter_queue;
 
-	/* IO depth manager. */
+	/* IO depth manager. */	
 	PgStreamingRead *streaming_read;
+	int			reconfigure_count;
 };
 
 /*
@@ -361,6 +362,8 @@ XLogPrefetcherAllocate(XLogReaderState *reader)
 								(uintptr_t) prefetcher,
 								XLogPrefetcherNextBlock,
 								XLogPrefetcherReleaseBlock);
+
+	prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 
 	return prefetcher;
 }
@@ -706,6 +709,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				 * unlucky), because we don't hold pins.
 				 */
 				ReleaseBuffer(block->recent_buffer);
+				
 
 				return PGSR_NEXT_NO_IO;
 			}
@@ -720,6 +724,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 #ifndef FRONTEND
 				elog(LOG, "i said PGSR_NEXT_IO, aio = %u, blkno = %u", pgaio_io_id(aio), block->blkno);
 #endif
+				block->prefetch_flags |= XLOGPREFETCHER_PINNED;
 				return PGSR_NEXT_IO;
 			}
 			else
@@ -920,6 +925,20 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	XLogRecord *record_header;
 	DecodedXLogRecord *record;
 
+	if (unlikely(XLogPrefetchReconfigureCount != prefetcher->reconfigure_count))
+	{
+		pg_streaming_read_free(prefetcher->streaming_read);
+
+		prefetcher->streaming_read =
+			pg_streaming_read_alloc(maintenance_io_concurrency,
+									(uintptr_t) prefetcher,
+									XLogPrefetcherNextBlock,
+									XLogPrefetcherReleaseBlock);
+		/* XXX als destroy any unconsumed records in wal decoding buffer? */
+		
+		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;		
+	}
+	
 	elog(LOG, "XLogPrefetcherReadRecord");
 	/* Give the prefetcher a chance to get further ahead. */
 	pg_streaming_read_prefetch(prefetcher->streaming_read);
@@ -963,8 +982,12 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 		 * XLogReadBufferForRedo() to recognize that case so it doesn't
 		 * need to acquire a new pin.  For now, keep it simple.
 		 */
-		Assert(BufferIsValid(record->blocks[block_id].recent_buffer));
-		ReleaseBuffer(record->blocks[block_id].recent_buffer);
+		if (record->blocks[block_id].prefetch_flags & XLOGPREFETCHER_PINNED)
+		{
+			Assert(BufferIsValid(record->blocks[block_id].recent_buffer));
+			record->blocks[block_id].prefetch_flags &= ~XLOGPREFETCHER_PINNED;
+			ReleaseBuffer(record->blocks[block_id].recent_buffer);
+		}
 	}
 
 	return record_header;
