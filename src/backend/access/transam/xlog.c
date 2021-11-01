@@ -1,4 +1,4 @@
-X/*-------------------------------------------------------------------------
+/*-------------------------------------------------------------------------
  *
  * xlog.c
  *		PostgreSQL write-ahead log manager
@@ -1032,7 +1032,8 @@ static XLogRecord *ReadRecord(XLogPrefetcher *xlogprefetcher,
 							  XLogReaderState *xlogreader,
 							  int emode, bool fetching_ckpt);
 static void CheckRecoveryConsistency(void);
-static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
+static XLogRecord *ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
+										XLogReaderState *xlogreader,
 										XLogRecPtr RecPtr, int whichChkpt, bool report);
 static bool rescanLatestTimeLine(void);
 static void InitControlFile(uint64 sysidentifier);
@@ -8062,6 +8063,7 @@ StartupXLOG(void)
 	bool		backupEndRequired = false;
 	bool		backupFromStandby = false;
 	DBState		dbstate_at_startup;
+	XLogPrefetcher *xlogprefetcher;
 	XLogReaderState *xlogreader;
 	XLogPageReadPrivate private;
 	bool		promoted = false;
@@ -8242,6 +8244,9 @@ StartupXLOG(void)
 	 */
 	XLogReaderSetDecodeBuffer(xlogreader, NULL, wal_decode_buffer_size);
 
+	/* Create a WAL prefetcher. */
+	xlogprefetcher = XLogPrefetcherAllocate(xlogreader);
+	
 	/*
 	 * Allocate two page buffers dedicated to WAL consistency checks.  We do
 	 * it this way, rather than just making static arrays, for two reasons:
@@ -8270,7 +8275,7 @@ StartupXLOG(void)
 		 * When a backup_label file is present, we want to roll forward from
 		 * the checkpoint it identifies, rather than using pg_control.
 		 */
-		record = ReadCheckpointRecord(xlogreader, checkPointLoc, 0, true);
+		record = ReadCheckpointRecord(xlogprefetcher,xlogreader, checkPointLoc, 0, true);
 		if (record != NULL)
 		{
 			memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
@@ -8289,7 +8294,7 @@ StartupXLOG(void)
 			if (checkPoint.redo < checkPointLoc)
 			{
 				XLogBeginRead(xlogreader, checkPoint.redo);
-				if (!ReadRecord(xlogreader, LOG, false))
+				if (!ReadRecord(xlogprefetcher, xlogreader, LOG, false))
 					ereport(FATAL,
 							(errmsg("could not find redo location referenced by checkpoint record"),
 							 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" and add required recovery options.\n"
@@ -8405,7 +8410,7 @@ StartupXLOG(void)
 		/* Get the last valid checkpoint record. */
 		checkPointLoc = ControlFile->checkPoint;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
-		record = ReadCheckpointRecord(xlogreader, checkPointLoc, 1, true);
+		record = ReadCheckpointRecord(xlogprefetcher, xlogreader, checkPointLoc, 1, true);
 		if (record != NULL)
 		{
 			ereport(DEBUG1,
@@ -8899,19 +8904,18 @@ StartupXLOG(void)
 		{
 			/* back up to find the record */
 			XLogBeginRead(xlogreader, checkPoint.redo);
-			record = ReadRecord(xlogreader, PANIC, false);
+			record = ReadRecord(xlogprefetcher, xlogreader, PANIC, false);
 		}
 		else
 		{
 			/* just have to read next record after CheckPoint */
-			record = ReadRecord(xlogreader, LOG, false);
+			record = ReadRecord(xlogprefetcher, xlogreader, LOG, false);
 		}
 
 		if (record != NULL)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
-			XLogPrefetcher *prefetcher;
 			PGRUsage	ru0;
 
 			pg_rusage_init(&ru0);
@@ -9125,7 +9129,7 @@ StartupXLOG(void)
 						WalSndWakeup();
 
 					/* Reset the prefetcher. */
-					XLogPrefetchReconfigure(prefetcher);
+					XLogPrefetchReconfigure();
 				}
 
 				/* Exit loop if we reached inclusive recovery target */
@@ -9136,13 +9140,13 @@ StartupXLOG(void)
 				}
 
 				/* Else, try to fetch the next WAL record */
-				record = ReadRecord(xlogreader, LOG, false);
+				record = ReadRecord(xlogprefetcher, xlogreader, LOG, false);
 			} while (record != NULL);
 
 			/*
 			 * end of main redo apply loop
 			 */
-			XLogPrefetchEnd(prefetcher);
+			XLogPrefetcherFree(xlogprefetcher);
 
 			if (reachedRecoveryTarget)
 			{
@@ -9256,7 +9260,7 @@ StartupXLOG(void)
 	 * exact endpoint of what we consider the valid portion of WAL.
 	 */
 	XLogBeginRead(xlogreader, LastRec);
-	record = ReadRecord(xlogreader, PANIC, false);
+	record = ReadRecord(xlogprefetcher, xlogreader, PANIC, false);
 	EndOfLog = EndRecPtr;
 
 	/*
@@ -9943,7 +9947,9 @@ LocalSetXLogInsertAllowed(void)
  * 1 for "primary", 0 for "other" (backup_label)
  */
 static XLogRecord *
-ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
+ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
+					 XLogReaderState *xlogreader,
+					 XLogRecPtr RecPtr,
 					 int whichChkpt, bool report)
 {
 	XLogRecord *record;
@@ -9969,7 +9975,7 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 	}
 
 	XLogBeginRead(xlogreader, RecPtr);
-	record = ReadRecord(xlogreader, LOG, true);
+	record = ReadRecord(xlogprefetcher, xlogreader, LOG, true);
 
 	if (record == NULL)
 	{
@@ -14027,7 +14033,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					currentSource = XLOG_FROM_STREAM;
 					startWalReceiver = true;
-					XLogPrefetchReconfigure();
 					break;
 
 				case XLOG_FROM_STREAM:

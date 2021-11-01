@@ -28,12 +28,13 @@ typedef struct XLogPrefetcher XLogPrefetcher;
 extern int	XLogPrefetchReconfigureCount;
 
 
-
+extern void XLogPrefetchReconfigure(void);
 
 extern size_t XLogPrefetchShmemSize(void);
 extern void XLogPrefetchShmemInit(void);
 
-extern void XLogPrefetchReconfigure(void);
+extern void XLogPrefetcherReset(XLogPrefetcher *prefetcher);
+
 extern void XLogPrefetchRequestResetStats(void);
 
 extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader);
@@ -74,7 +75,5 @@ XLogPrefetch(XLogPrefetchState *state)
 		XLogPrefetcherReadAhead(state->prefetcher);
 }
 #endif
-
-extern void XLogPrefetchComplete(XLogPrefetcher *prefetch);
 
 #endif
