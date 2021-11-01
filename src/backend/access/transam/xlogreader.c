@@ -457,6 +457,9 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 		 * record.  The caller will access the decoded record through the
 		 * XLogRecGetXXX() macros.
 		 */
+#ifndef FRONTEND
+		elog(LOG, "XLogReadRecord returning record at LSN %lX", decoded->lsn);
+#endif
 		return &decoded->header;
 	}
 
