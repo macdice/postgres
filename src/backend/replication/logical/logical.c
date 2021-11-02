@@ -609,7 +609,7 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 		char	   *err = NULL;
 
 		/* the read_page callback waits for new WAL */
-		record = XLogReadRecord(ctx->reader, &err);
+		XLogReadRecord(ctx->reader, &record, &err);
 		if (err)
 			elog(ERROR, "%s", err);
 		if (!record)

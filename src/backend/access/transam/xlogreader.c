@@ -257,18 +257,24 @@ XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
  * XLogBeginRead() or XLogFindNextRecord() must be called before the first call
  * to XLogReadRecord().
  *
- * If the page_read callback fails to read the requested data, NULL is
- * returned.  The callback is expected to have reported the error; errormsg
- * is set to NULL.
+ * If the page_read callback fails to read the requested data, XLREAD_FAIL is
+ * returned.  The callback is expected to have reported the error; errormsg is
+ * set to NULL.
  *
- * If the reading fails for some other reason, NULL is also returned, and
+ * If the page_read callback would like to ask the caller to wait for more
+ * data (in some unspecified way), then its return value XLREAD_WAIT is
+ * returned.
+ *
+ * If the reading fails for some other reason, XLREAD_FAIL is also returned, and
  * *errormsg is set to a string with details of the failure.
  *
- * The returned pointer (or *errormsg) points to an internal buffer that's
+ * On success, XLREAD_SUCCESS is returned and *out_record points to a record.
+ *
+ * The returned record (or *errormsg) points to an internal buffer that's
  * valid until the next call to XLogReadRecord.
  */
-XLogRecord *
-XLogReadRecord(XLogReaderState *state, char **errormsg)
+XLogReadRecordResult
+XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 {
 	XLogRecPtr	RecPtr;
 	XLogRecord *record;
@@ -287,6 +293,8 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	 * sequentially, which is what we initially assume.
 	 */
 	randAccess = false;
+
+	*out_record = NULL;
 
 	/* reset error state */
 	*errormsg = NULL;
@@ -331,7 +339,9 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	 */
 	readOff = ReadPageInternal(state, targetPagePtr,
 							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ));
-	if (readOff < 0)
+	if (readOff == XLREAD_WAIT)
+		return XLREAD_WAIT;
+	else if (readOff < 0)
 		goto err;
 
 	/*
@@ -443,7 +453,9 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 									   Min(total_len - gotlen + SizeOfXLogShortPHD,
 										   XLOG_BLCKSZ));
 
-			if (readOff < 0)
+			if (readOff == XLREAD_WAIT)
+				return XLREAD_WAIT;
+			else if (readOff < 0)
 				goto err;
 
 			Assert(SizeOfXLogShortPHD <= readOff);
@@ -546,9 +558,12 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	}
 
 	if (DecodeXLogRecord(state, record, errormsg))
-		return record;
+	{
+		*out_record = record;
+		return XLREAD_SUCCESS;
+	}
 	else
-		return NULL;
+		return XLREAD_FAIL;
 
 err:
 
@@ -561,7 +576,7 @@ err:
 	if (state->errormsg_buf[0] != '\0')
 		*errormsg = state->errormsg_buf;
 
-	return NULL;
+	return XLREAD_FAIL;
 }
 
 /*
@@ -611,7 +626,9 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		readLen = state->routine.page_read(state, targetSegmentPtr, XLOG_BLCKSZ,
 										   state->currRecPtr,
 										   state->readBuf);
-		if (readLen < 0)
+		if (readLen == XLREAD_WAIT)
+			return XLREAD_WAIT;
+		else if (readLen < 0)
 			goto err;
 
 		/* we can be sure to have enough WAL available, we scrolled back */
@@ -629,7 +646,9 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	readLen = state->routine.page_read(state, pageptr, Max(reqLen, SizeOfXLogShortPHD),
 									   state->currRecPtr,
 									   state->readBuf);
-	if (readLen < 0)
+	if (readLen == XLREAD_WAIT)
+		return XLREAD_WAIT;
+	else if (readLen < 0)
 		goto err;
 
 	Assert(readLen <= XLOG_BLCKSZ);
@@ -648,7 +667,9 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		readLen = state->routine.page_read(state, pageptr, XLogPageHeaderSize(hdr),
 										   state->currRecPtr,
 										   state->readBuf);
-		if (readLen < 0)
+		if (readLen == XLREAD_WAIT)
+			return XLREAD_WAIT;
+		else if (readLen < 0)
 			goto err;
 	}
 
@@ -667,7 +688,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 
 err:
 	XLogReaderInvalReadState(state);
-	return -1;
+	return XLREAD_FAIL;
 }
 
 /*
@@ -939,6 +960,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 XLogRecPtr
 XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 {
+	XLogRecord *record;
 	XLogRecPtr	tmpRecPtr;
 	XLogRecPtr	found = InvalidXLogRecPtr;
 	XLogPageHeader header;
@@ -1024,7 +1046,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 	 * or we just jumped over the remaining data of a continuation.
 	 */
 	XLogBeginRead(state, tmpRecPtr);
-	while (XLogReadRecord(state, &errormsg) != NULL)
+	while (XLogReadRecord(state, &record, &errormsg) == XLREAD_SUCCESS)
 	{
 		/* past the record we've found, break out */
 		if (RecPtr <= state->ReadRecPtr)
