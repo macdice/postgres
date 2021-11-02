@@ -79,7 +79,7 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 	XLogBeginRead(xlogreader, startpoint);
 	do
 	{
-		record = XLogReadRecord(xlogreader, &errormsg);
+		XLogReadRecord(xlogreader, &record, &errormsg);
 
 		if (record == NULL)
 		{
@@ -135,7 +135,7 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex,
 		pg_fatal("out of memory");
 
 	XLogBeginRead(xlogreader, ptr);
-	record = XLogReadRecord(xlogreader, &errormsg);
+	XLogReadRecord(xlogreader, &record, &errormsg);
 	if (record == NULL)
 	{
 		if (errormsg)
@@ -200,7 +200,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 		uint8		info;
 
 		XLogBeginRead(xlogreader, searchptr);
-		record = XLogReadRecord(xlogreader, &errormsg);
+		XLogReadRecord(xlogreader, &record, &errormsg);
 
 		if (record == NULL)
 		{

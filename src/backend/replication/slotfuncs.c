@@ -527,7 +527,7 @@ pg_logical_replication_slot_advance(XLogRecPtr moveto)
 			 * Read records.  No changes are generated in fast_forward mode,
 			 * but snapbuilder/slot statuses are updated properly.
 			 */
-			record = XLogReadRecord(ctx->reader, &errm);
+			XLogReadRecord(ctx->reader, &record, &errm);
 			if (errm)
 				elog(ERROR, "%s", errm);
 

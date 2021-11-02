@@ -842,6 +842,9 @@ typedef struct XLogPageReadPrivate
 	int			emode;
 	bool		fetching_ckpt;	/* are we fetching a checkpoint record? */
 	bool		randAccess;
+	bool		fail_next_read;
+	XLogRecPtr	wait_page;
+	XLogRecPtr	wait_record;
 } XLogPageReadPrivate;
 
 /*
@@ -4428,7 +4431,33 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	{
 		char	   *errormsg;
 
-		record = XLogReadRecord(xlogreader, &errormsg);
+		if (XLogReadRecord(xlogreader, &record, &errormsg) == XLREAD_WAIT)
+		{
+			/*
+			 * This special value is returned to us if the page read function
+			 * we installed, XLogPageRead(), needs to open a new file, or to
+			 * wait for more WAL data to be streamed.
+			 */
+			if (!WaitForWALToBecomeAvailable(private->wait_page,
+											 private->randAccess,
+											 private->fetching_ckpt,
+											 private->wait_record))
+			{
+				if (readFile >= 0)
+					close(readFile);
+				readFile = -1;
+				readLen = 0;
+				readSource = XLOG_FROM_ANY;
+
+				/*
+				 * Go around again, but tell XLogPageRead() to report an
+				 * error.
+				 */
+				private->fail_next_read = true;
+			}
+			continue;
+		}
+
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -12370,6 +12399,12 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	XLogSegNo	targetSegNo PG_USED_FOR_ASSERTS_ONLY;
 	int			r;
 
+	if (private->fail_next_read)
+	{
+		private->fail_next_read = false;
+		return XLREAD_FAIL;
+	}
+
 	XLByteToSeg(targetPagePtr, targetSegNo, wal_segment_size);
 	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
 
@@ -12407,19 +12442,9 @@ retry:
 		(readSource == XLOG_FROM_STREAM &&
 		 flushedUpto < targetPagePtr + reqLen))
 	{
-		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
-										 private->randAccess,
-										 private->fetching_ckpt,
-										 targetRecPtr))
-		{
-			if (readFile >= 0)
-				close(readFile);
-			readFile = -1;
-			readLen = 0;
-			readSource = XLOG_FROM_ANY;
-
-			return -1;
-		}
+		private->wait_page = targetPagePtr + reqLen;
+		private->wait_record = targetRecPtr;
+		return XLREAD_WAIT;
 	}
 
 	/*
@@ -12543,7 +12568,7 @@ next_record_is_invalid:
 	if (StandbyMode)
 		goto retry;
 	else
-		return -1;
+		return XLREAD_FAIL;
 }
 
 /*

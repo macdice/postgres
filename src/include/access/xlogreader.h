@@ -280,9 +280,21 @@ extern void XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr);
 extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr);
 #endif							/* FRONTEND */
 
+/*
+ * Return code from XLogReadRecord.  These can also be returned by
+ * XLogPageReadCB.
+ */
+typedef enum XLogReadRecordResult
+{
+	XLREAD_SUCCESS = 0,			/* record is successfully read */
+	XLREAD_FAIL = -1,			/* failed during reading a record */
+	XLREAD_WAIT = -2			/* caller should wait for more data */
+}			XLogReadRecordResult;
+
 /* Read the next XLog record. Returns NULL on end-of-WAL or failure */
-extern struct XLogRecord *XLogReadRecord(XLogReaderState *state,
-										 char **errormsg);
+extern XLogReadRecordResult XLogReadRecord(XLogReaderState *state,
+										   XLogRecord **record,
+										   char **errormsg);
 
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
