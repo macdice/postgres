@@ -5910,6 +5910,8 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 		char	   *errormsg;
 
 		record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
+		if (record == NULL && private->
+		
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)

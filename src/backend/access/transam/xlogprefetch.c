@@ -474,62 +474,6 @@ XLogPrefetcherPeriodic(XLogPrefetcher *prefetcher)
 }
 #endif
 
-#if 0
-/*
- * Make sure that all IOs initiated for the record about to be replayed are
- * completed.  This causes more IOs to be initiated, later in the WAL.
- *
- * Perhaps we could do this in XLogReadBufferInRedo() instead, but it seems a
- * bit too fragile to make assumptions about record handlers accessing the
- * blocks.  Do it up front here in a deterministic order.
- *
- * Returns true if more data is needed.
- */
-void
-XLogPrefetcherReadAhead(XLogPrefetcher *prefetcher)
-{
-	XLogReaderState *reader = prefetcher->reader;
-	DecodedXLogRecord *record = reader->record;
-
-	/* Perform periodic work if LSN has advanced enough. */
-	if (unlikely(record->lsn > prefetcher->next_sample_lsn))
-		XLogPrefetcherPeriodic(prefetcher);
-
-	/*
-	 * Can we drop any pefetch filters yet, given the record we're now *
-	 * replaying?
-	 */
-	XLogPrefetcherCompleteFilters(prefetcher, record->lsn);
-
-	for (int block_id = 0; block_id <= record->max_block_id; ++block_id)
-	{
-		uintptr_t block_p PG_USED_FOR_ASSERTS_ONLY;
-		
-		if (!record->blocks[block_id].in_use)
-			continue;
-
-		elog(LOG, "XXXXXXXXXXXXXX will call read_get_next");
-		block_p = pg_streaming_read_get_next(prefetcher->streaming_read);
-		elog(LOG, "XXXXXXXXXXXXXX read_get_next returned");
-
-		/*
-		 * Assert that we're in sync with XLogPrefetcherNextBlock(), which is
-		 * feeding blocks into the far end of the pipe.
-		 */
-		elog(LOG, "XXXXXXXXXXXXXXXXXXXX block_p = %p, expecting %p", block_p, &record->blocks[block_id]);
-		Assert(block_p == (uintptr_t) &record->blocks[block_id]);
-
-		/*
-		 * We could potentially leave it pinned, and teach
-		 * XLogReadBufferForRedo() to recognize that case so it doesn't
-		 * need to acquire a new pin.  For now, keep it simple.
-		 */
-		Assert(BufferIsValid(record->blocks[block_id].recent_buffer));
-		ReleaseBuffer(record->blocks[block_id].recent_buffer);
-	}
-}
-#endif
-
 /*
  * A PgStreamingRead callback that reads ahead in the WAL and tries to
  * initiate one IO.
@@ -576,12 +520,14 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 					ereport(LOG,
 							(errmsg("recovery no longer prefetching: %s",
 									error)));
+					elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_END");
 					return PGSR_NEXT_END;
 				}
 				/*
 				 * No future WAL data available right now.  Tell
 				 * PgStreamingRead to try again later.
 				 */
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_AGAIN");
 				return PGSR_NEXT_AGAIN;
 			}
 
@@ -631,7 +577,10 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			
 			/* We don't try to prefetch anything but the main fork for now. */
 			if (block->forknum != MAIN_FORKNUM)
+			{
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (1)");
 				return PGSR_NEXT_NO_IO;
+			}
 
 			/*
 			 * If there is a full page image attached, we won't be reading the
@@ -643,6 +592,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			if (block->has_image && !recovery_prefetch_fpw)
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_fpw);
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (2)");
 				return PGSR_NEXT_NO_IO;
 			}
 			
@@ -656,6 +606,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetcherAddFilter(prefetcher, block->rnode, block->blkno,
 										record->lsn);
 				XLogPrefetchIncrement(&SharedStats->skip_new);
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (3)");
 				return PGSR_NEXT_NO_IO;
 			}
 
@@ -663,6 +614,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			if (XLogPrefetcherIsFiltered(prefetcher, block->rnode, block->blkno))
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_new);
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (4)");
 				return PGSR_NEXT_NO_IO;
 			}			
 
@@ -673,6 +625,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				if (block->blkno == prefetcher->last_blkno)
 				{
 					XLogPrefetchIncrement(&SharedStats->skip_seq);
+					elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (5)");
 					return PGSR_NEXT_NO_IO;
 				}
 
@@ -710,6 +663,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				 */
 				ReleaseBuffer(block->recent_buffer);
 				
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (6)");
 
 				return PGSR_NEXT_NO_IO;
 			}
@@ -721,10 +675,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetchIncrement(&SharedStats->prefetch);
 				//block->prefetch_flags = XLOGPREFETCHER_IO;
 
-#ifndef FRONTEND
-				elog(LOG, "i said PGSR_NEXT_IO, aio = %u, blkno = %u", pgaio_io_id(aio), block->blkno);
-#endif
 				block->prefetch_flags |= XLOGPREFETCHER_PINNED;
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (7), aio = %u, blkno = %u", pgaio_io_id(aio), block->blkno);
 				return PGSR_NEXT_IO;
 			}
 			else
@@ -754,6 +706,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 
 				/* XXX This can't actually happen yet, need to adjust ReadBufferAsyncSMgr()! */
+				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (8)");
 				return PGSR_NEXT_NO_IO;
 			}
 		}
@@ -917,7 +870,7 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
 /*
  * A wrapper for XLogReadRecord() that tries to initiate IO ahead of time.
  * When using a prefetcher, XLogReadRecord() should not be called directly, or
- * the two cursors through the WAL would not be correctly synchronized.
+ * the two cursors through the WAL would become desynchronized.
  */
 XLogRecord *
 XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
@@ -943,6 +896,13 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	/* Give the prefetcher a chance to get further ahead. */
 	pg_streaming_read_prefetch(prefetcher->streaming_read);
 
+	/*
+	 * XXX The problem here is that there may have been no data for
+	 * prefetching (PGSR_NEXT_AGAIN), and then the following read may block
+	 * waiting for data, at which point we are now "reading" a record without
+	 * every prefetching.  Need something smarter than this.
+	 */
+	
 	/* Read the next record. */
 	record_header = XLogReadRecord(prefetcher->reader, errmsg);
 	record = prefetcher->reader->record;
@@ -950,7 +910,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 		return NULL;
 
 	/*
-	 * Can we drop any pefetch filters yet, given the record we're about to
+	 * Can we drop any prefetch filters yet, given the record we're about to
 	 * return?  This assumes that any records with earlier LSNs have been
 	 * replayed, so if we were waiting for a relation to be created or
 	 * extended, it is now OK to access blocks in the covered range.
