@@ -98,7 +98,7 @@ struct XLogPrefetcher
 	HTAB	   *filter_table;
 	dlist_head	filter_queue;
 
-	/* IO depth manager. */	
+	/* IO depth manager. */
 	PgStreamingRead *streaming_read;
 	int			reconfigure_count;
 };
@@ -194,7 +194,7 @@ XLogPrefetchShmemInit(void)
 		pg_atomic_init_u32(&SharedStats->reset_request, 0);
 		SharedStats->reset_handled = 0;
 
-		
+
 		pg_atomic_init_u64(&SharedStats->reset_time, GetCurrentTimestamp());
 		pg_atomic_init_u64(&SharedStats->prefetch, 0);
 		pg_atomic_init_u64(&SharedStats->skip_hit, 0);
@@ -464,7 +464,7 @@ XLogPrefetcherPeriodic(XLogPrefetcher *prefetcher)
 			(SharedStats->queue_depth - prefetcher->avg_queue_depth) /
 			prefetcher->samples;
 	}
-	
+
 	/* Expose it in shared memory. */
 	SharedStats->avg_distance = prefetcher->avg_distance;
 	SharedStats->avg_queue_depth = prefetcher->avg_queue_depth;
@@ -506,7 +506,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			char	   *error;
 
 			prefetcher->record = XLogReadAhead(prefetcher->reader);
-			
+
 			if (prefetcher->record == NULL)
 			{
 				/* XXX FIXME */
@@ -539,7 +539,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		record = prefetcher->record;
 
 
-		
+
 		/*
 		 * If this is a record that creates a new SMGR relation, we'll avoid
 		 * prefetching anything from that rnode until it has been replayed.
@@ -575,7 +575,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			block->prefetch_flags = 0;
 			*read_private = (uintptr_t) block;
 			elog(LOG, "read_private = %p", block);
-			
+
 			/* We don't try to prefetch anything but the main fork for now. */
 			if (block->forknum != MAIN_FORKNUM)
 			{
@@ -596,7 +596,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (2)");
 				return PGSR_NEXT_NO_IO;
 			}
-			
+
 			/*
 			 * If this block will initialize a new page then it may be a
 			 * relation extension.  Skip prefetching, and add a filter so that
@@ -617,7 +617,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (4)");
 				return PGSR_NEXT_NO_IO;
-			}			
+			}
 
 			/* Fast path for repeated references to the same relation. */
 			if (RelFileNodeEquals(block->rnode, prefetcher->last_rnode))
@@ -663,7 +663,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				 * unlucky), because we don't hold pins.
 				 */
 				ReleaseBuffer(block->recent_buffer);
-				
+
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (6)");
 
 				return PGSR_NEXT_NO_IO;
@@ -891,10 +891,10 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 									XLogPrefetcherNextBlock,
 									XLogPrefetcherReleaseBlock);
 		/* XXX als destroy any unconsumed records in wal decoding buffer? */
-		
-		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;		
+
+		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
-	
+
 	elog(LOG, "XLogPrefetcherReadRecord");
 	/* Give the prefetcher a chance to get further ahead. */
 	pg_streaming_read_prefetch(prefetcher->streaming_read);
@@ -905,12 +905,12 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	 * waiting for data, at which point we are now "reading" a record without
 	 * every prefetching.  Need something smarter than this.
 	 */
-	
+
 	/* Read the next record. */
 	result = XLogNextRecord(prefetcher->reader, &record, errmsg);
 	if (result != XLREAD_SUCCESS)
 		return result;
-	
+
 	/*
 	 * Can we drop any prefetch filters yet, given the record we're about to
 	 * return?  This assumes that any records with earlier LSNs have been
@@ -918,12 +918,12 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	 * extended, it is now OK to access blocks in the covered range.
 	 */
 	XLogPrefetcherCompleteFilters(prefetcher, prefetcher->reader->record->lsn);
-	
+
 	/* Make sure that any IOs initiated due to this record are completed. */
 	for (int block_id = 0; block_id <= record->max_block_id; ++block_id)
 	{
 		uintptr_t block_p PG_USED_FOR_ASSERTS_ONLY;
-		
+
 		if (!record->blocks[block_id].in_use)
 			continue;
 
