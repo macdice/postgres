@@ -898,6 +898,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	elog(LOG, "XLogPrefetcherReadRecord");
 	/* Give the prefetcher a chance to get further ahead. */
 	pg_streaming_read_prefetch(prefetcher->streaming_read);
+	elog(LOG, "1111");
 
 	/*
 	 * XXX The problem here is that there may have been no data for
@@ -910,6 +911,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	result = XLogNextRecord(prefetcher->reader, &record, errmsg);
 	if (result != XLREAD_SUCCESS)
 		return result;
+	elog(LOG, "2222");
 
 	/*
 	 * Can we drop any prefetch filters yet, given the record we're about to
@@ -951,6 +953,8 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 			ReleaseBuffer(record->blocks[block_id].recent_buffer);
 		}
 	}
+
+	*out_record = &record->header;
 
 	return XLREAD_SUCCESS;
 }
