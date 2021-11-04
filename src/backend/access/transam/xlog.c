@@ -5911,7 +5911,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 	{
 		char	   *errormsg;
 
-		if (XLogPrefetcherReadRecord(xlogreader, &record, &errormsg) == XLREAD_WAIT)
+		if (XLogPrefetcherReadRecord(xlogprefetcher, &record, &errormsg) == XLREAD_WAIT)
 		{
 			/*
 			 * This special value is returned to us if the page read function

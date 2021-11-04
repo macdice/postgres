@@ -505,11 +505,12 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		{
 			char	   *error;
 
-			prefetcher->record = XLogReadAhead(prefetcher->reader, &error);
+			prefetcher->record = XLogReadAhead(prefetcher->reader);
 			
 			if (prefetcher->record == NULL)
 			{
-				if (error)
+				/* XXX FIXME */
+				if (false)
 				{
 					/*
 					 * We've hit the end of decodable WAL.  Stop trying to
@@ -872,10 +873,12 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
  * When using a prefetcher, XLogReadRecord() should not be called directly, or
  * the two cursors through the WAL would become desynchronized.
  */
-XLogRecord *
-XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
+XLogReadRecordResult
+XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
+						 XLogRecord **out_record,
+						 char **errmsg)
 {
-	XLogRecord *record_header;
+	XLogReadRecordResult result;
 	DecodedXLogRecord *record;
 
 	if (unlikely(XLogPrefetchReconfigureCount != prefetcher->reconfigure_count))
@@ -904,11 +907,10 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	 */
 	
 	/* Read the next record. */
-	record_header = XLogReadRecord(prefetcher->reader, errmsg);
-	record = prefetcher->reader->record;
-	if (!record)
-		return NULL;
-
+	result = XLogNextRecord(prefetcher->reader, &record, errmsg);
+	if (result != XLREAD_SUCCESS)
+		return result;
+	
 	/*
 	 * Can we drop any prefetch filters yet, given the record we're about to
 	 * return?  This assumes that any records with earlier LSNs have been
@@ -950,7 +952,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 		}
 	}
 
-	return record_header;
+	return XLREAD_SUCCESS;
 }
 
 void

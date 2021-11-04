@@ -39,6 +39,8 @@ extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader);
 extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
 
 
-extern XLogRecord *XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg);
+extern XLogReadRecordResult XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
+													 XLogRecord **out_record,
+													 char **errmsg);
 
 #endif
