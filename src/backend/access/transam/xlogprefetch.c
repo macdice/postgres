@@ -93,11 +93,6 @@ struct XLogPrefetcher
 	DecodedXLogRecord *record;
 	int			next_block_id;
 
-	/* Details of last prefetch to skip repeats and seq scans. */
-	SMgrRelation last_reln;
-	RelFileNode last_rnode;
-	BlockNumber last_blkno;
-
 	/* Online averages. */
 	uint64		samples;
 	double		avg_queue_depth;
@@ -137,7 +132,7 @@ typedef struct XLogPrefetchStats
 	pg_atomic_uint64 skip_hit;	/* Blocks already buffered. */
 	pg_atomic_uint64 skip_new;	/* New/missing blocks filtered. */
 	pg_atomic_uint64 skip_fpw;	/* FPWs skipped. */
-	pg_atomic_uint64 skip_seq;	/* Repeat blocks skipped. */
+	pg_atomic_uint64 skip_seq;	/* Repeat blocks skipped. */ /* XXX redundant */
 	float		avg_distance;
 	float		avg_queue_depth;
 
@@ -622,30 +617,12 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				return PGSR_NEXT_NO_IO;
 			}
 
-			/* Fast path for repeated references to the same relation. */
-			if (RelFileNodeEquals(block->rnode, prefetcher->last_rnode))
-			{
-				/* For repeat access to the same block, skip prefetching. */
-				if (block->blkno == prefetcher->last_blkno)
-				{
-					XLogPrefetchIncrement(&SharedStats->skip_seq);
-					elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (5)");
-					block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
-					return PGSR_NEXT_NO_IO;
-				}
-
-				/* We can avoid calling smgropen(). */
-				/* XXX this is not cool if it's freed by sinval! */
-				reln = prefetcher->last_reln;
-			}
-			else
-			{
-				/* Otherwise we have to open it. */
-				reln = smgropen(block->rnode, InvalidBackendId);
-				prefetcher->last_rnode = block->rnode;
-				prefetcher->last_reln = reln;
-			}
-			prefetcher->last_blkno = block->blkno;
+			/*
+			 * We could try to have a fast path for repeated references to the
+			 * same relation (with some scheme to handle invalidations
+			 * safely), but for now we'll call smgropen() every time.
+			 */
+			reln = smgropen(block->rnode, InvalidBackendId);
 
 			/* Try to prefetch this block! */
 //			elog(LOG, "inspecting prefetch_flags block_id = %d, address %p", block_id, block);
