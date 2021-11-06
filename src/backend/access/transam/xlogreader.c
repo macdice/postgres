@@ -364,7 +364,8 @@ XLogReleasePreviousRecord(XLogReaderState *state)
  * XXX Fix above!
  */
 XLogReadRecordResult
-XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **errormsg)
+XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **errormsg,
+			   bool queued_only)
 {
 	/* Release the last record returned by XLogNextRecord(). */
 	if (state->record)
@@ -392,6 +393,13 @@ XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **er
 
 			*out_record = NULL;
 			return XLREAD_FAIL;
+		}
+
+		if (queued_only)
+		{
+			*errormsg = NULL;
+			*out_record = NULL;
+			return XLREAD_WAIT;
 		}
 
 		/* Decode one more record into our queue. */
@@ -459,7 +467,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 #ifndef FRONTEND
 	elog(LOG, "XLogReadRecord");
 #endif
-	result = XLogNextRecord(state, &decoded, errormsg);
+	result = XLogNextRecord(state, &decoded, errormsg, false);
 	if (result == XLREAD_SUCCESS)
 	{
 #ifndef FRONTEND
@@ -912,14 +920,24 @@ err:
  * be returned by XLogNextRecord() or XLogReadRecord() after all queued up
  * records.
  */
-DecodedXLogRecord *
-XLogReadAhead(XLogReaderState *state)
+XLogReadRecordResult
+XLogReadAhead(XLogReaderState *state, DecodedXLogRecord **out_record)
 {
-	if (!state->errormsg_deferred &&
-		XLogReadRecordInternal(state, false /* allow_oversized */))
-		return state->decode_queue_head;
+	XLogReadRecordResult result;
+	
+	if (state->errormsg_deferred)
+		return XLREAD_FAIL;
 
-	return NULL;
+	result = XLogReadRecordInternal(state, false /* allow_oversized */);
+	if (result == XLREAD_SUCCESS)
+	{
+		Assert(state->decode_queue_head != NULL);
+		*out_record = state->decode_queue_head;
+	}
+	else
+		*out_record = NULL;
+
+	return result;
 }
 
 /*

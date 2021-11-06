@@ -937,9 +937,6 @@ typedef struct XLogPageReadPrivate
 	int			emode;
 	bool		fetching_ckpt;	/* are we fetching a checkpoint record? */
 	bool		randAccess;
-	bool		fail_next_read;
-	XLogRecPtr	wait_page;
-	XLogRecPtr	wait_record;
 } XLogPageReadPrivate;
 
 /*
@@ -1016,8 +1013,9 @@ static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
 static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
-static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-										bool fetching_ckpt, XLogRecPtr tliRecPtr);
+static XLogReadRecordResult WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
+														bool fetching_ckpt, XLogRecPtr tliRecPtr,
+														bool nowait);
 static void XLogShutdownWalRcv(void);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
@@ -5911,32 +5909,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 	{
 		char	   *errormsg;
 
-		if (XLogPrefetcherReadRecord(xlogprefetcher, &record, &errormsg) == XLREAD_WAIT)
-		{
-			/*
-			 * This special value is returned to us if the page read function
-			 * we installed, XLogPageRead(), needs to open a new file, or to
-			 * wait for more WAL data to be streamed.
-			 */
-			if (!WaitForWALToBecomeAvailable(private->wait_page,
-											 private->randAccess,
-											 private->fetching_ckpt,
-											 private->wait_record))
-			{
-				if (readFile >= 0)
-					close(readFile);
-				readFile = -1;
-				readLen = 0;
-				readSource = XLOG_FROM_ANY;
-
-				/*
-				 * Go around again, but tell XLogPageRead() to report an
-				 * error.
-				 */
-				private->fail_next_read = true;
-			}
-			continue;
-		}
+		XLogPrefetcherReadRecord(xlogprefetcher, &record, &errormsg);
 		elog(LOG, "XXX record = %p", record);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
@@ -13780,12 +13753,6 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	XLogSegNo	targetSegNo PG_USED_FOR_ASSERTS_ONLY;
 	int			r;
 
-	if (private->fail_next_read)
-	{
-		private->fail_next_read = false;
-		return XLREAD_FAIL;
-	}
-
 	XLByteToSeg(targetPagePtr, targetSegNo, wal_segment_size);
 	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
 
@@ -13823,9 +13790,43 @@ retry:
 		(readSource == XLOG_FROM_STREAM &&
 		 flushedUpto < targetPagePtr + reqLen))
 	{
-		private->wait_page = targetPagePtr + reqLen;
-		private->wait_record = targetRecPtr;
-		return XLREAD_WAIT;
+		bool nowait;
+		
+		/*
+		 * Don't block here if there are records queued up waiting to be
+		 * replayed or an error to report.  Otherwise, we'd delay replay of
+		 * records we've already got, while trying to read ahead.
+		 */
+		nowait = XLogReaderHasQueuedRecordOrError(xlogreader);
+		elog(LOG, "XXX nowait = %d", nowait);
+		
+		switch (WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
+											private->randAccess,
+											private->fetching_ckpt,
+											targetRecPtr,
+											nowait))
+		{
+		case XLREAD_FAIL:
+			if (readFile >= 0)
+				close(readFile);
+			readFile = -1;
+			readLen = 0;
+			readSource = XLOG_FROM_ANY;
+			return XLREAD_FAIL;
+		case XLREAD_WAIT:
+			/*
+			 * The prefetcher set private->nowait because there are other
+			 * records queued up to be replayed.  It turned out that the
+			 * request couldn't be satisfied right now, so return immediately.
+			 * Once all other work has been drained, we'll be called again
+			 * with nowait set to false, and at that time we'll block until
+			 * data is available.
+			 */
+			return XLREAD_WAIT;
+		case XLREAD_SUCCESS:
+			/* We can now read. */
+			break;
+		}
 	}
 
 	/*
@@ -13964,9 +13965,10 @@ next_record_is_invalid:
  * mode is triggered by the user, and there is no more WAL available, returns
  * false.
  */
-static bool
+static XLogReadRecordResult
 WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-							bool fetching_ckpt, XLogRecPtr tliRecPtr)
+							bool fetching_ckpt, XLogRecPtr tliRecPtr,
+							bool nowait)
 {
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
@@ -14034,7 +14036,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					if (StandbyMode && CheckForStandbyTrigger())
 					{
 						XLogShutdownWalRcv();
-						return false;
+						return XLREAD_FAIL;
 					}
 
 					/*
@@ -14042,7 +14044,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * and pg_wal.
 					 */
 					if (!StandbyMode)
-						return false;
+						return XLREAD_FAIL;
 
 					/*
 					 * Move to XLOG_FROM_STREAM state, and set to start a
@@ -14184,7 +14186,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 											  currentSource == XLOG_FROM_ARCHIVE ? XLOG_FROM_ANY :
 											  currentSource);
 				if (readFile >= 0)
-					return true;	/* success! */
+					return XLREAD_SUCCESS;	/* success! */
 
 				/*
 				 * Nope, not found in archive or pg_wal.
@@ -14342,7 +14344,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 							/* just make sure source info is correct... */
 							readSource = XLOG_FROM_STREAM;
 							XLogReceiptSource = XLOG_FROM_STREAM;
-							return true;
+							return XLREAD_SUCCESS;
 						}
 						break;
 					}
@@ -14354,7 +14356,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					if (CheckForStandbyTrigger())
 					{
 						/*
-						 * Note that we don't "return false" immediately here.
+						 * Note that we don't return XLREAD_FAIL immediately here.
 						 * After being triggered, we still want to replay all
 						 * the WAL that was already streamed. It's in pg_wal
 						 * now, so we just treat this as a failure, and the
@@ -14380,6 +14382,16 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					}
 
 					/*
+					 * If asked not to wait (ie because we are prefetching,
+					 * and there are queued records that should be replayed
+					 * first), then tell the caller that we would block.  The
+					 * caller should finish other work and then wait here
+					 * again.
+					 */
+					if (nowait)
+						return XLREAD_WAIT;
+					
+					/*
 					 * Wait for more WAL to arrive. Time out after 5 seconds
 					 * to react to a trigger file promptly and to check if the
 					 * WAL receiver is still active.
@@ -14402,7 +14414,12 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		 */
 		if (((volatile XLogCtlData *) XLogCtl)->recoveryPauseState !=
 			RECOVERY_NOT_PAUSED)
-			recoveryPausesHere(false);
+		{
+			if (nowait)
+				return XLREAD_WAIT;
+			else
+				recoveryPausesHere(false);
+		}
 
 		/*
 		 * This possibly-long loop needs to handle interrupts of startup
@@ -14411,7 +14428,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		HandleStartupProcInterrupts();
 	}
 
-	return false;				/* not reached */
+	return XLREAD_FAIL;				/* not reached */
 }
 
 /*

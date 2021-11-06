@@ -322,8 +322,12 @@ XLogPrefetcherReleaseBlock(uintptr_t pgsr_private, uintptr_t read_private)
 
 	if (block)
 	{
-		Assert(BufferIsValid(block->recent_buffer));
-		ReleaseBuffer(block->recent_buffer);
+		if (block->prefetch_flags & XLOGPREFETCHER_PINNED)
+		{
+			Assert(BufferIsValid(block->recent_buffer));
+			ReleaseBuffer(block->recent_buffer);
+			block->prefetch_flags &= ~XLOGPREFETCHER_PINNED;
+		}
 	}
 }
 
@@ -503,42 +507,30 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		/* Try to read a new future record, if we don't already have one. */
 		if (prefetcher->record == NULL)
 		{
-			char	   *error;
-
-			prefetcher->record = XLogReadAhead(prefetcher->reader);
-
-			if (prefetcher->record == NULL)
+			switch (XLogReadAhead(prefetcher->reader, &prefetcher->record))
 			{
-				/* XXX FIXME */
-				if (false)
-				{
-					/*
-					 * We've hit the end of decodable WAL.  Stop trying to
-					 * prefetch, leaving recovery to deal with error
-					 * reporting/failure if appropriate (the error will be
-					 * reported again by XLogReadRecord()).
-					 */
-					ereport(LOG,
-							(errmsg("recovery no longer prefetching: %s",
-									error)));
-					elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_END");
-					return PGSR_NEXT_END;
-				}
+			case XLREAD_FAIL:
 				/*
-				 * No future WAL data available right now.  Tell
-				 * PgStreamingRead to try again later.
+				 * We can't read any more.  The error will be returned via
+				 * XLogNextRecord() after any other records that appear before
+				 * it in the decoded record queue.
 				 */
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_AGAIN");
 				return PGSR_NEXT_AGAIN;
+			case XLREAD_WAIT:
+				/*
+				 * No future data available right now, and XLogReadPage()
+				 * decided not to wait, because there are decoded records in
+				 * the queue ready to be replayed first.
+				 */
+				return PGSR_NEXT_AGAIN;
+			case XLREAD_SUCCESS:
+				/* We have a new record to process. */
+				prefetcher->next_block_id = 0;
+				break;
 			}
-
-			/* * We have a new record to process. */
-			prefetcher->next_block_id = 0;
 		}
 
 		record = prefetcher->record;
-
-
 
 		/*
 		 * If this is a record that creates a new SMGR relation, we'll avoid
@@ -895,20 +887,15 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
 
+	
+	
 	elog(LOG, "XLogPrefetcherReadRecord");
 	/* Give the prefetcher a chance to get further ahead. */
 	pg_streaming_read_prefetch(prefetcher->streaming_read);
 	elog(LOG, "1111");
 
-	/*
-	 * XXX The problem here is that there may have been no data for
-	 * prefetching (PGSR_NEXT_AGAIN), and then the following read may block
-	 * waiting for data, at which point we are now "reading" a record without
-	 * every prefetching.  Need something smarter than this.
-	 */
-
 	/* Read the next record. */
-	result = XLogNextRecord(prefetcher->reader, &record, errmsg);
+	result = XLogNextRecord(prefetcher->reader, &record, errmsg, true);
 	if (result != XLREAD_SUCCESS)
 	{
 		elog(LOG, "XLogPrefetcherReadRecord result %d, reader->record = %p", result, prefetcher->reader->record);

@@ -311,6 +311,12 @@ struct XLogReaderState
 	bool		errormsg_deferred;
 };
 
+static inline bool
+XLogReaderHasQueuedRecordOrError(XLogReaderState *state)
+{
+	return state->decode_queue_tail != NULL || state->errormsg_deferred;
+}
+
 /* Get a new XLogReader */
 extern XLogReaderState *XLogReaderAllocate(int wal_segment_size,
 										   const char *waldir,
@@ -351,10 +357,12 @@ extern XLogReadRecordResult XLogReadRecord(XLogReaderState *state,
 /* Read the next record. XXX */
 extern XLogReadRecordResult XLogNextRecord(XLogReaderState *state,
 										   DecodedXLogRecord **out_record,
-										   char **errormsg);
+										   char **errormsg,
+										   bool queued_only);
 
 /* Try to read ahead, if there is data and space. */
-extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state);
+extern XLogReadRecordResult XLogReadAhead(XLogReaderState *state,
+										  DecodedXLogRecord **out_record);
 
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
