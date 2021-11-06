@@ -14390,7 +14390,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					if (nowait)
 						return XLREAD_WAIT;
-					
+						
 					/*
 					 * Wait for more WAL to arrive. Time out after 5 seconds
 					 * to react to a trigger file promptly and to check if the
@@ -14415,10 +14415,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		if (((volatile XLogCtlData *) XLogCtl)->recoveryPauseState !=
 			RECOVERY_NOT_PAUSED)
 		{
-			if (nowait)
-				return XLREAD_WAIT;
-			else
-				recoveryPausesHere(false);
+			recoveryPausesHere(false);
 		}
 
 		/*

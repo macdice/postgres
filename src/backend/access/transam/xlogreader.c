@@ -371,6 +371,10 @@ XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **er
 	if (state->record)
 		XLogReleasePreviousRecord(state);
 
+#ifndef FRONTEND
+	elog(LOG, "XLogNextRecord(); decode_queue_tail = %p, errormsg_deferred = %d", state->decode_queue_tail, state->errormsg_deferred);
+#endif
+	
 	/*
 	 * If we have an empty record queue, try to decode some more. */
 	while (state->decode_queue_tail == NULL)

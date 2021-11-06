@@ -496,11 +496,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 	elog(LOG, "XLogPrefetcherNextBlock");
 	/*
 	 * We keep track of the record and block we're up to between calls with
-	 * prefetcher->record and prefetcher->next_block_id.  We loop, stepping
-	 * over uninteresting blocks and records until we find an IO we can start
-	 * or the end of data.  As a useful side-effect, we also perform buffer
-	 * lookup for cached data so that recovery (usually) doesn't have to do
-	 * that again later.
+	 * prefetcher->record and prefetcher->next_block_id.
 	 */
 	for (;;)
 	{
@@ -908,6 +904,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	 * to complete earlier IOs, but if we didn't have a special case here we'd
 	 * never be able to get started.
 	 */
+	elog(LOG, "XLogPrefetcherReadReecord has-queued-record-or-error %d at point 1", XLogReaderHasQueuedRecordOrError(prefetcher->reader));
 	if (!XLogReaderHasQueuedRecordOrError(prefetcher->reader))
 		pg_streaming_read_prefetch(prefetcher->streaming_read);
 
@@ -915,6 +912,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	result = XLogNextRecord(prefetcher->reader, &record, errmsg, true);
 	if (result != XLREAD_SUCCESS)
 	{
+		elog(LOG, "XLogPrefetcherReadReecord has-queued-record-or-error %d at point 2", XLogReaderHasQueuedRecordOrError(prefetcher->reader));
 		elog(LOG, "XLogPrefetcherReadRecord result %d, reader->record = %p", result, prefetcher->reader->record);
 		*out_record = NULL;
 		return result;

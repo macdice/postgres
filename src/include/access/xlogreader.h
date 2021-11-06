@@ -311,10 +311,16 @@ struct XLogReaderState
 	bool		errormsg_deferred;
 };
 
+/*
+ * Check if the XLogNextRecord() has any more queued records or errors.  This
+ * can be used by a read_page callback to decide whether it should block.
+ */
 static inline bool
 XLogReaderHasQueuedRecordOrError(XLogReaderState *state)
 {
-	return state->decode_queue_tail != NULL || state->errormsg_deferred;
+	return (state->decode_queue_head != NULL &&
+			state->decode_queue_head != state->record) ||
+		state->errormsg_deferred;
 }
 
 /* Get a new XLogReader */
