@@ -62,7 +62,8 @@
 #define XLOGPREFETCHER_SAMPLE_DISTANCE BLCKSZ
 
 /* Flags used in prefetch_flags. */
-#define XLOGPREFETCHER_PINNED 0x01
+#define XLOGPREFETCHER_PREFETCHED 0x01
+#define XLOGPREFETCHER_PINNED 0x02
 
 /* GUCs */
 bool		recovery_prefetch = false;
@@ -328,6 +329,7 @@ XLogPrefetcherReleaseBlock(uintptr_t pgsr_private, uintptr_t read_private)
 			ReleaseBuffer(block->recent_buffer);
 			block->prefetch_flags &= ~XLOGPREFETCHER_PINNED;
 		}
+		block->prefetch_flags &= ~XLOGPREFETCHER_PREFETCHED;
 	}
 }
 
@@ -572,6 +574,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			if (block->forknum != MAIN_FORKNUM)
 			{
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (1)");
+				block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 				return PGSR_NEXT_NO_IO;
 			}
 
@@ -586,6 +589,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_fpw);
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (2)");
+				block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 				return PGSR_NEXT_NO_IO;
 			}
 
@@ -600,6 +604,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 										record->lsn);
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (3)");
+				block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 				return PGSR_NEXT_NO_IO;
 			}
 
@@ -608,6 +613,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (4)");
+				block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 				return PGSR_NEXT_NO_IO;
 			}
 
@@ -619,6 +625,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				{
 					XLogPrefetchIncrement(&SharedStats->skip_seq);
 					elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (5)");
+					block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 					return PGSR_NEXT_NO_IO;
 				}
 
@@ -657,6 +664,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				ReleaseBuffer(block->recent_buffer);
 
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (6)");
+				block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 
 				return PGSR_NEXT_NO_IO;
 			}
@@ -668,6 +676,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetchIncrement(&SharedStats->prefetch);
 				//block->prefetch_flags = XLOGPREFETCHER_IO;
 
+				block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 				block->prefetch_flags |= XLOGPREFETCHER_PINNED;
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (7), aio = %u, blkno = %u", pgaio_io_id(aio), block->blkno);
 				return PGSR_NEXT_IO;
@@ -700,6 +709,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 
 				/* XXX This can't actually happen yet, need to adjust ReadBufferAsyncSMgr()! */
 				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (8)");
+				block->prefetch_flags |= XLOGPREFETCHER_PREFETCHED;
 				return PGSR_NEXT_NO_IO;
 			}
 		}
@@ -873,6 +883,10 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	XLogReadRecordResult result;
 	DecodedXLogRecord *record;
 
+	/*
+	 * See if it's time to reconfigure the prefetching machinery, becauase a
+	 * relevant GUC was changed.
+	 */
 	if (unlikely(XLogPrefetchReconfigureCount != prefetcher->reconfigure_count))
 	{
 		pg_streaming_read_free(prefetcher->streaming_read);
@@ -885,14 +899,17 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		/* XXX als destroy any unconsumed records in wal decoding buffer? */
 
 		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
+		elog(LOG, "XXXXXXXXXX pg streaming read reset!");
 	}
-
 	
-	
-	elog(LOG, "XLogPrefetcherReadRecord");
-	/* Give the prefetcher a chance to get further ahead. */
-	pg_streaming_read_prefetch(prefetcher->streaming_read);
-	elog(LOG, "1111");
+	/*
+	 * If there's nothing queued yet, then start prefetching.  Normally this
+	 * happens automatically when we call pg_streaming_read_get_next() below
+	 * to complete earlier IOs, but if we didn't have a special case here we'd
+	 * never be able to get started.
+	 */
+	if (!XLogReaderHasQueuedRecordOrError(prefetcher->reader))
+		pg_streaming_read_prefetch(prefetcher->streaming_read);
 
 	/* Read the next record. */
 	result = XLogNextRecord(prefetcher->reader, &record, errmsg, true);
@@ -902,7 +919,12 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		*out_record = NULL;
 		return result;
 	}
+	elog(LOG, "XLogNextRecord() returned %p", record);
 
+	/*
+	 * The record we just got is the "current" one, for the benefit of the
+	 * XLogRecXXX() mascros.
+	 */
 	Assert(record == prefetcher->reader->record);
 
 	/*
@@ -911,19 +933,30 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	 * replayed, so if we were waiting for a relation to be created or
 	 * extended, it is now OK to access blocks in the covered range.
 	 */
-	XLogPrefetcherCompleteFilters(prefetcher, prefetcher->reader->record->lsn);
+	XLogPrefetcherCompleteFilters(prefetcher, record->lsn);
 
 	/* Make sure that any IOs initiated due to this record are completed. */
 	for (int block_id = 0; block_id <= record->max_block_id; ++block_id)
 	{
 		uintptr_t block_p PG_USED_FOR_ASSERTS_ONLY;
 
+		elog(LOG, "XXXXXXXXXXXXXXXXXXXX considering block @ %p", &record->blocks[block_id]);
 		if (!record->blocks[block_id].in_use)
+			continue;
+
+		/*
+		 * If the streaming read has forgotten about this block, when we can't
+		 * call pg_streaming_read_get_next().  This happens during release, if
+		 * we reconfigure the streaming read's parameters.
+		 */
+		if ((record->blocks[block_id].prefetch_flags & XLOGPREFETCHER_PREFETCHED) == 0)
 			continue;
 
 		elog(LOG, "XXXXXXXXXXXXXX will call read_get_next");
 		block_p = pg_streaming_read_get_next(prefetcher->streaming_read);
 		elog(LOG, "XXXXXXXXXXXXXX read_get_next returned");
+		
+		record->blocks[block_id].prefetch_flags &= ~XLOGPREFETCHER_PREFETCHED;
 
 		/*
 		 * Assert that we're in sync with XLogPrefetcherNextBlock(), which is
