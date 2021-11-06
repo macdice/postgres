@@ -370,33 +370,11 @@ XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **er
 	if (state->record)
 		XLogReleasePreviousRecord(state);
 
-	for (;;)
+	/*
+	 * If we have an empty record queue, try to decode some more. */
+	while (state->decode_queue_tail == NULL)
 	{
-		/* We can now return the tail item in the read queue, if there is one. */
-		if (state->decode_queue_tail)
-		{
-			/*
-			 * Record this as the most recent record returned, so that we'll
-			 * release it next time.  This also exposes it to the
-			 * XLogRecXXX(decoder) macros, which pass in the decode rather
-			 * than the record for historical reasons.
-			 */
-			state->record = state->decode_queue_tail;
-
-			/*
-			 * It should be immediately after the last the record returned by
-			 * XLogReadRecord(), or at the position set by XLogBeginRead() if
-			 * XLogReadRecord() hasn't been called yet.  It may be after a
-			 * page header, though.
-			 */
-			Assert(state->record->lsn == state->EndRecPtr ||
-				   (state->EndRecPtr % XLOG_BLCKSZ == 0 &&
-					(state->record->lsn == state->EndRecPtr + SizeOfXLogShortPHD ||
-					 state->record->lsn == state->EndRecPtr + SizeOfXLogLongPHD)));
-
-			break;
-		}
-		else if (state->errormsg_deferred)
+		if (state->errormsg_deferred)
 		{
 			/*
 			 * If we've run out of records, but we have a deferred error, now
@@ -416,7 +394,7 @@ XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **er
 			return XLREAD_FAIL;
 		}
 
-		/* We need to get a decoded record into our queue first. */
+		/* Decode one more record into our queue. */
 		if (XLogReadRecordInternal(state, true /* allow_oversized */) == XLREAD_WAIT)
 		{
 			*out_record = NULL;
@@ -439,16 +417,33 @@ XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **er
 	}
 
 	/*
-	 * Set ReadRecPtr and EndRecPtr to correspond to the record we're
-	 * returning.
-	 *
-	 * XXX Calling code should perhaps access these through the
-	 * returned decoded record, but for now we'll update them directly
-	 * here, for the benefit of existing code that thinks there's only
-	 * one record in the decoder.
+	 * Record this as the most recent record returned, so that we'll release
+	 * it next time.  This exposes it to the traditional
+	 * XLogRecXXX(xlogreader) macros, which work with the decoder rather than
+	 * the record for historical reasons.
+	 */
+	state->record = state->decode_queue_tail;
+	
+	/*
+	 * It should be immediately after the last the record returned by
+	 * XLogReadRecord(), or at the position set by XLogBeginRead() if
+	 * XLogReadRecord() hasn't been called yet.  It may be after a
+	 * page header, though.
+	 */
+	Assert(state->record->lsn == state->EndRecPtr ||
+		   (state->EndRecPtr % XLOG_BLCKSZ == 0 &&
+			(state->record->lsn == state->EndRecPtr + SizeOfXLogShortPHD ||
+			 state->record->lsn == state->EndRecPtr + SizeOfXLogLongPHD)));
+
+	/*
+	 * Update the pointers to the beginning and one-past-the-end of this
+	 * record, again for the benefit of historical code that expected the
+	 * decoder to track this rather than accessing these fields of the record
+	 * itself.
 	 */
 	state->ReadRecPtr = state->record->lsn;
 	state->EndRecPtr = state->record->next_lsn;
+
 	*errormsg = NULL;
 	*out_record = state->record;
 
@@ -473,8 +468,10 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 		/*
 		 * The traditional interface just returns the header, not the decoded
 		 * record.  The caller will access the decoded record through the
-		 * XLogRecGetXXX() macros.
+		 * XLogRecGetXXX() macros, which accesses the decoded recorded as
+		 * xlogreader->record.
 		 */
+		Assert(state->record == decoded);
 		*out_record = &decoded->header;
 	}
 	else
@@ -482,6 +479,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 #ifndef FRONTEND
 		elog(LOG, "22222");
 #endif
+		Assert(state->record == NULL);
 		*out_record = NULL;
 	}
 

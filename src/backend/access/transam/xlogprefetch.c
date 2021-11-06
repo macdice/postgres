@@ -910,8 +910,13 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	/* Read the next record. */
 	result = XLogNextRecord(prefetcher->reader, &record, errmsg);
 	if (result != XLREAD_SUCCESS)
+	{
+		elog(LOG, "XLogPrefetcherReadRecord result %d, reader->record = %p", result, prefetcher->reader->record);
+		*out_record = NULL;
 		return result;
-	elog(LOG, "2222");
+	}
+
+	Assert(record == prefetcher->reader->record);
 
 	/*
 	 * Can we drop any prefetch filters yet, given the record we're about to
@@ -955,6 +960,8 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	}
 
 	*out_record = &record->header;
+
+	Assert(*out_record == &prefetcher->reader->record->header);
 
 	return XLREAD_SUCCESS;
 }

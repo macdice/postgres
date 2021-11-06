@@ -5937,6 +5937,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 			}
 			continue;
 		}
+		elog(LOG, "XXX record = %p", record);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -5983,6 +5984,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 		if (record)
 		{
 			/* Great, got a record */
+			elog(LOG, "ReadRecord returning %p, xlogreader->record = %p", record, xlogreader->record);
 			return record;
 		}
 		else
@@ -8948,7 +8950,8 @@ StartupXLOG(void)
 			pg_rusage_init(&ru0);
 
 			InRedo = true;
-
+			
+			elog(LOG, "record = %p, reader->record = %p", record, xlogreader->record);
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							LSN_FORMAT_ARGS(ReadRecPtr))));
