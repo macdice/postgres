@@ -169,7 +169,6 @@ XLogPrefetchShmemSize(void)
 	return sizeof(XLogPrefetchStats);
 }
 
-#if 0
 static void
 XLogPrefetchResetStats(void)
 {
@@ -182,7 +181,6 @@ XLogPrefetchResetStats(void)
 	SharedStats->avg_distance = 0;
 	SharedStats->avg_queue_depth = 0;
 }
-#endif
 
 void
 XLogPrefetchShmemInit(void)
@@ -409,28 +407,13 @@ XLogPrefetcherFree(XLogPrefetcher *prefetcher)
 	pfree(prefetcher);
 }
 
-#ifdef UNUSED
 static void
-XLogPrefetcherPeriodic(XLogPrefetcher *prefetcher)
+XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 {
 	uint32 io_depth;
 	uint32 reset_request;
 	int64 distance;
 
-	/*
-	 * Normally we initiate new IOs when others complete, but we need to kick
-	 * the the streaming read object from time to time while it's idle, or
-	 * it'd never get started.
-	 */
-	io_depth = pg_streaming_read_inflight(prefetcher->streaming_read);
-#if 0
-	if (io_depth == 0)
-	{
-		elog(LOG, "XXXXXX will call pg_streaming_read_prefetch");
-		pg_streaming_read_prefetch(prefetcher->streaming_read);
-		elog(LOG, "XXXXXX pg_stremaing_read_prefetch returned");
-	}
-#endif
 
 	/* How far ahead of replay are we now? */
 	if (prefetcher->record)
@@ -438,6 +421,9 @@ XLogPrefetcherPeriodic(XLogPrefetcher *prefetcher)
 	else
 		distance = 0;
 
+	/* How many IOs are currently in flight? */
+	io_depth = pg_streaming_read_inflight(prefetcher->streaming_read);
+	
 	/* Update the instantaneous stats visible in pg_stat_prefetch_recovery. */
 	SharedStats->queue_depth = io_depth;
 	SharedStats->distance = distance;
@@ -482,7 +468,6 @@ XLogPrefetcherPeriodic(XLogPrefetcher *prefetcher)
 	prefetcher->next_sample_lsn =
 		prefetcher->reader->record->lsn + XLOGPREFETCHER_SAMPLE_DISTANCE;
 }
-#endif
 
 /*
  * A PgStreamingRead callback that reads ahead in the WAL and tries to
@@ -497,7 +482,6 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 	XLogReaderState *reader = prefetcher->reader;
 	XLogRecPtr replaying_lsn = reader->ReadRecPtr;
 
-	elog(LOG, "XLogPrefetcherNextBlock");
 	/*
 	 * We keep track of the record and block we're up to between calls with
 	 * prefetcher->record and prefetcher->next_block_id.
@@ -535,12 +519,11 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		record = prefetcher->record;
 
 		/*
-		 * If this is a record that creates a new SMGR relation, we'll avoid
-		 * prefetching anything from that rnode until it has been replayed.
+		 * If this is a record that manipulates an SMGR relation (creates,
+		 * truncates), we'll avoid accessing that rnode until it has been
+		 * replayed.
 		 */
-		if (replaying_lsn < record->lsn &&
-			record->header.xl_rmid == RM_SMGR_ID &&
-			(record->header.xl_info & ~XLR_INFO_MASK) == XLOG_SMGR_CREATE)
+		if (replaying_lsn < record->lsn && record->header.xl_rmid == RM_SMGR_ID)
 		{
 			xl_smgr_create *xlrec = (xl_smgr_create *) record->main_data;
 
@@ -555,8 +538,6 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			SMgrRelation reln;
 			bool already_valid;
 
-			elog(LOG, "XXXXXXXX LSN = %lX, block = %u", record->lsn, block->blkno);
-
 			if (!block->in_use)
 				continue;
 
@@ -568,12 +549,10 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			 */
 			block->prefetch_flags = 0;
 			*read_private = (uintptr_t) block;
-			elog(LOG, "read_private = %p", block);
 
 			/* We don't try to prefetch anything but the main fork for now. */
 			if (block->forknum != MAIN_FORKNUM)
 			{
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (1)");
 				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 				return PGSR_NEXT_NO_IO;
 			}
@@ -588,22 +567,6 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			if (block->has_image && !recovery_prefetch_fpw)
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_fpw);
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (2)");
-				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
-				return PGSR_NEXT_NO_IO;
-			}
-
-			/*
-			 * If this block will initialize a new page then it may be a
-			 * relation extension.  Skip prefetching, and add a filter so that
-			 * we'll keep doing that until this record is replayed.
-			 */
-			if (block->flags & BKPBLOCK_WILL_INIT)
-			{
-				XLogPrefetcherAddFilter(prefetcher, block->rnode, block->blkno,
-										record->lsn);
-				XLogPrefetchIncrement(&SharedStats->skip_new);
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (3)");
 				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 				return PGSR_NEXT_NO_IO;
 			}
@@ -612,7 +575,6 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			if (XLogPrefetcherIsFiltered(prefetcher, block->rnode, block->blkno))
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_new);
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (4)");
 				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 				return PGSR_NEXT_NO_IO;
 			}
@@ -624,8 +586,24 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			 */
 			reln = smgropen(block->rnode, InvalidBackendId);
 
+			/*
+			 * The block is past the end of the relation, filter out further
+			 * accesses until this record is replayed.  (It's almost, but not
+			 * quite, enough to test for BKPBLOCK_WILL_INIT; that would miss
+			 * cases like GIST creating a relation and then extending it with
+			 * unmarked FPIs).
+			 */
+			if (block->blkno >= smgrnblocks(reln, block->forknum))
+			{
+				XLogPrefetcherAddFilter(prefetcher, block->rnode, block->blkno,
+										record->lsn);
+				XLogPrefetchIncrement(&SharedStats->skip_new);
+				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
+				return PGSR_NEXT_NO_IO;
+			}
+			
+
 			/* Try to prefetch this block! */
-//			elog(LOG, "inspecting prefetch_flags block_id = %d, address %p", block_id, block);
 			Assert(block->prefetch_flags == 0);
 			block->recent_buffer = ReadBufferAsyncSMgr(reln,
 													   RELPERSISTENCE_PERMANENT,
@@ -645,7 +623,6 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				 */
 				ReleaseBuffer(block->recent_buffer);
 
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (6)");
 				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 
 				return PGSR_NEXT_NO_IO;
@@ -656,11 +633,10 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				 * I/O initiated!
 				 */
 				XLogPrefetchIncrement(&SharedStats->prefetch);
-				//block->prefetch_flags = XLOGPREFETCHER_IO;
 
 				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 				block->prefetch_flags |= XLOGPREFETCHER_PINNED;
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (7), aio = %u, blkno = %u", pgaio_io_id(aio), block->blkno);
+
 				return PGSR_NEXT_IO;
 			}
 			else
@@ -668,6 +644,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				/*
 				 * Neither cached nor initiated.  The underlying segment file
 				 * doesn't exist.
+				 *
+				 * XXX need to adjust ReadBufferAsyncSMgr() to produce this case!
 				 *
 				 * It might be missing becaused it was unlinked, we crashed,
 				 * and now we're replaying WAL.  When recovery reads this
@@ -688,9 +666,6 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetcherAddFilter(prefetcher, block->rnode, 0,
 										record->lsn);
 				XLogPrefetchIncrement(&SharedStats->skip_new);
-
-				/* XXX This can't actually happen yet, need to adjust ReadBufferAsyncSMgr()! */
-				elog(LOG, "XLogPrefetcherNextBlock -> PGSR_NEXT_NO_IO (8)");
 				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 				return PGSR_NEXT_NO_IO;
 			}
@@ -804,9 +779,10 @@ XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher, RelFileNode rnode,
 }
 
 /*
- * Have we replayed the records that caused us to begin filtering a block
+ * Have we replayed any records that caused us to begin filtering a block
  * range?  That means that relations should have been created, extended or
- * dropped as required, so we can drop relevant filters.
+ * dropped as required, so we can stop filtering out accesses to a given
+ * relfilenode.
  */
 static inline void
 XLogPrefetcherCompleteFilters(XLogPrefetcher *prefetcher, XLogRecPtr replaying_lsn)
@@ -819,7 +795,7 @@ XLogPrefetcherCompleteFilters(XLogPrefetcher *prefetcher, XLogRecPtr replaying_l
 
 		if (filter->filter_until_replayed >= replaying_lsn)
 			break;
-		elog(LOG, "XLogPrefetcherCompleteFilters drop filter rel = %u, block %u, filter_until = %lX because replaying %lX", filter->rnode.relNode, filter->filter_from_block, filter->filter_until_replayed, replaying_lsn);
+
 		dlist_delete(&filter->link);
 		hash_search(prefetcher->filter_table, filter, HASH_REMOVE, NULL);
 	}
@@ -838,15 +814,11 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
 	 */
 	if (unlikely(!dlist_is_empty(&prefetcher->filter_queue)))
 	{
-		XLogPrefetcherFilter *filter = hash_search(prefetcher->filter_table, &rnode,
-												   HASH_FIND, NULL);
+		XLogPrefetcherFilter *filter;
 
-		if (filter && filter->filter_from_block <= blockno) {
-			elog(LOG, "XLogPrefetcherIsFiltered rel = %u, block %u <= %u, filtered", rnode.relNode, filter->filter_from_block, blockno);
+		filter = hash_search(prefetcher->filter_table, &rnode, HASH_FIND, NULL);
+		if (filter && filter->filter_from_block <= blockno)
 			return true;
-		}
-		if (filter)
-			elog(LOG, "XLogPrefetcherIsFiltered rel = %u, block %u > %u, not filtered", rnode.relNode, filter->filter_from_block, blockno);
 	}
 
 	return false;
@@ -865,8 +837,8 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	XLogReadRecordResult result;
 	DecodedXLogRecord *record;
 
-	/*
-	 * See if it's time to reconfigure the prefetching machinery, becauase a
+	/*	
+	 * See if it's time to reset the prefetching machinery, because a
 	 * relevant GUC was changed.
 	 */
 	if (unlikely(XLogPrefetchReconfigureCount != prefetcher->reconfigure_count))
@@ -882,6 +854,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 
 		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
+
 	
 	/*
 	 * If there's nothing queued yet, then start prefetching.  Normally this
@@ -913,6 +886,13 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	 * extended, it is now OK to access blocks in the covered range.
 	 */
 	XLogPrefetcherCompleteFilters(prefetcher, record->lsn);
+
+	/*
+	 * See if it's time to compute some statistics, because enough WAL has
+	 * been processed.
+	 */
+	if (unlikely(record->lsn >= prefetcher->next_sample_lsn))
+		XLogPrefetcherComputeStats(prefetcher);
 
 	/* Make sure that any IOs initiated due to this record are completed. */
 	for (int block_id = 0; block_id <= record->max_block_id; ++block_id)

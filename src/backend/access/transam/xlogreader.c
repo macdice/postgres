@@ -371,10 +371,6 @@ XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **er
 	if (state->record)
 		XLogReleasePreviousRecord(state);
 
-#ifndef FRONTEND
-	elog(LOG, "XLogNextRecord(); decode_queue_tail = %p, errormsg_deferred = %d", state->decode_queue_tail, state->errormsg_deferred);
-#endif
-	
 	/*
 	 * If we have an empty record queue, try to decode some more. */
 	while (state->decode_queue_tail == NULL)
@@ -468,15 +464,9 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 	XLogReadRecordResult result;
 	DecodedXLogRecord *decoded;
 
-#ifndef FRONTEND
-	elog(LOG, "XLogReadRecord");
-#endif
 	result = XLogNextRecord(state, &decoded, errormsg, false);
 	if (result == XLREAD_SUCCESS)
 	{
-#ifndef FRONTEND
-		elog(LOG, "11111");
-#endif
 		/*
 		 * The traditional interface just returns the header, not the decoded
 		 * record.  The caller will access the decoded record through the
@@ -488,9 +478,6 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 	}
 	else
 	{
-#ifndef FRONTEND
-		elog(LOG, "22222");
-#endif
 		Assert(state->record == NULL);
 		*out_record = NULL;
 	}
@@ -1713,9 +1700,6 @@ DecodeXLogRecord(XLogReaderState *state,
 			blk->has_image = ((fork_flags & BKPBLOCK_HAS_IMAGE) != 0);
 			blk->has_data = ((fork_flags & BKPBLOCK_HAS_DATA) != 0);
 
-#ifndef FRONTEND
-//			elog(LOG, "clearing prefetch_flags block_id = %d, address = %p", (int) block_id, blk);
-#endif
 			blk->recent_buffer = InvalidBuffer;
 			blk->prefetch_flags = 0;
 
