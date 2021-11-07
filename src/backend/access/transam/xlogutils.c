@@ -366,7 +366,6 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		/* Caller specified a bogus block_id */
 		elog(PANIC, "failed to locate backup block with ID %d", block_id);
 	}
-	elog(LOG, "XLogReadBufferForRedoExtended lsn = %lX, blkno = %u", record->record->lsn, blkno);
 
 	/*
 	 * Make sure that if the block is marked with WILL_INIT, the caller is

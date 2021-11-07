@@ -753,7 +753,6 @@ XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher, RelFileNode rnode,
 	XLogPrefetcherFilter *filter;
 	bool		found;
 
-	elog(LOG, "XLogPrefetcherAddFilter rel %u, block %u, lsn = %lx", rnode.relNode, blockno, lsn);
 	filter = hash_search(prefetcher->filter_table, &rnode, HASH_ENTER, &found);
 	if (!found)
 	{

@@ -5900,7 +5900,6 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 	private->fetching_ckpt = fetching_ckpt;
 	private->emode = emode;
 	private->randAccess = (xlogreader->ReadRecPtr == InvalidXLogRecPtr);
-	/* XXX nowait could be here? */
 
 	/* This is the first attempt to read this page. */
 	lastSourceFailed = false;
@@ -5910,7 +5909,6 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 		char	   *errormsg;
 
 		XLogPrefetcherReadRecord(xlogprefetcher, &record, &errormsg);
-		elog(LOG, "XXX record = %p", record);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -5957,7 +5955,6 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 		if (record)
 		{
 			/* Great, got a record */
-			elog(LOG, "ReadRecord returning %p, xlogreader->record = %p", record, xlogreader->record);
 			return record;
 		}
 		else
@@ -13798,7 +13795,6 @@ retry:
 		 * records we've already got, while trying to read ahead.
 		 */
 		nowait = XLogReaderHasQueuedRecordOrError(xlogreader);
-		elog(LOG, "XXX nowait = %d", nowait);
 		
 		switch (WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 											private->randAccess,
