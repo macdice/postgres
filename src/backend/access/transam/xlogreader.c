@@ -42,7 +42,7 @@ static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
 							 int reqLen);
 static void XLogReaderInvalReadState(XLogReaderState *state);
-static XLogReadRecordResult XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized);
+static XLogReadRecordResult XLogDecodeNextRecord(XLogReaderState *state, bool allow_oversized);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 								  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
@@ -364,69 +364,35 @@ XLogReleasePreviousRecord(XLogReaderState *state)
  * XXX Fix above!
  */
 XLogReadRecordResult
-XLogNextRecord(XLogReaderState *state, DecodedXLogRecord **out_record, char **errormsg,
-			   bool queued_only)
+XLogNextRecord(XLogReaderState *state,
+			   DecodedXLogRecord **out_record,
+			   char **errormsg)
 {
 	/* Release the last record returned by XLogNextRecord(). */
 	if (state->record)
 		XLogReleasePreviousRecord(state);
 
-	/*
-	 * If we have an empty record queue, try to decode some more. */
-	while (state->decode_queue_tail == NULL)
+	if (state->decode_queue_tail == NULL)
 	{
 		if (state->errormsg_deferred)
 		{
-			/*
-			 * If we've run out of records, but we have a deferred error, now
-			 * is the time to report it.
-			 */
 			if (state->errormsg_buf[0] != '\0')
 				*errormsg = state->errormsg_buf;
 			else
 				*errormsg = NULL;
 			state->errormsg_deferred = false;
-
-			/* Report the location of the error. */
-			state->ReadRecPtr = state->DecodeRecPtr;
-			state->EndRecPtr = state->NextRecPtr;
-
-			*out_record = NULL;
 			return XLREAD_FAIL;
 		}
 
-		if (queued_only)
-		{
-			*errormsg = NULL;
-			*out_record = NULL;
-			return XLREAD_WAIT;
-		}
-
-		/* Decode one more record into our queue. */
-		if (XLogReadRecordInternal(state, true /* allow_oversized */) == XLREAD_WAIT)
-		{
-			*out_record = NULL;
-			*errormsg = NULL;
-			return XLREAD_WAIT;
-		}
-
-		/*
-		 * If that produced neither a queued record nor a queued error, then
-		 * we're at the end (for example, archive recovery with no more files
-		 * available).
-		 */
-		if (state->decode_queue_tail == NULL && !state->errormsg_deferred)
-		{
-			state->EndRecPtr = state->NextRecPtr;
-			*errormsg = NULL;
-			*out_record = NULL;
-			return XLREAD_FAIL;
-		}
+		/* Caller should use XLogReadAhead() to decode more records. */
+		*errormsg = NULL;
+		*out_record = NULL;
+		return XLREAD_WAIT;
 	}
 
 	/*
 	 * Record this as the most recent record returned, so that we'll release
-	 * it next time.  This exposes it to the traditional
+	 * it next time.  This also exposes it to the traditional
 	 * XLogRecXXX(xlogreader) macros, which work with the decoder rather than
 	 * the record for historical reasons.
 	 */
@@ -464,7 +430,8 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 	XLogReadRecordResult result;
 	DecodedXLogRecord *decoded;
 
-	result = XLogNextRecord(state, &decoded, errormsg, false);
+	XLogReadAhead(state, &decoded);
+	result = XLogNextRecord(state, &decoded, errormsg);
 	if (result == XLREAD_SUCCESS)
 	{
 		/*
@@ -557,7 +524,7 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 }
 
 static XLogReadRecordResult
-XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
+XLogDecodeNextRecord(XLogReaderState *state, bool allow_oversized)
 {
 	XLogRecPtr	RecPtr;
 	XLogRecord *record;
@@ -668,17 +635,15 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 	record = (XLogRecord *) (state->readBuf + RecPtr % XLOG_BLCKSZ);
 	total_len = record->xl_tot_len;
 
-	/* Find space to decode this record. */
-	decoded = XLogReadRecordAlloc(state, total_len, allow_oversized);
-	if (decoded == NULL)
+	/*
+	 * Since we don't currently have a way to resume at arbitrary points of
+	 * the code below, give up immediately if we don't have enough WAL data to
+	 * read all of a record and the caller doesn't want to wait.
+	 */
+	if (state->routine.page_ready &&
+		!state->routine.page_ready(state, state->RecPtr + total_len))
 	{
-		/*
-		 * We couldn't get space.  Usually this means that the decode buffer
-		 * was full, while trying to read ahead (that is, !force).  It's also
-		 * remotely possible for palloc() to have failed to allocate memory
-		 * for an oversized record.
-		 */
-		goto err;
+		return XLREAD_WAIT;
 	}
 
 	/*
@@ -708,6 +673,19 @@ XLogReadRecordInternal(XLogReaderState *state, bool allow_oversized)
 			goto err;
 		}
 		gotheader = false;
+	}
+
+	/* Find space to decode this record. */
+	decoded = XLogReadRecordAlloc(state, total_len, allow_oversized);
+	if (decoded == NULL)
+	{
+		/*
+		 * We couldn't get space.  Usually this means that the decode buffer
+		 * was full, while trying to read ahead (that is, !force).  It's also
+		 * remotely possible for palloc() to have failed to allocate memory
+		 * for an oversized record.
+		 */
+		goto err;
 	}
 
 	len = XLOG_BLCKSZ - RecPtr % XLOG_BLCKSZ;
@@ -919,7 +897,7 @@ XLogReadAhead(XLogReaderState *state, DecodedXLogRecord **out_record)
 	if (state->errormsg_deferred)
 		return XLREAD_FAIL;
 
-	result = XLogReadRecordInternal(state, false /* allow_oversized */);
+	result = XLogDecodeNextRecord(state, false /* allow_oversized */);
 	if (result == XLREAD_SUCCESS)
 	{
 		Assert(state->decode_queue_head != NULL);

@@ -363,8 +363,7 @@ extern XLogReadRecordResult XLogReadRecord(XLogReaderState *state,
 /* Read the next record. XXX */
 extern XLogReadRecordResult XLogNextRecord(XLogReaderState *state,
 										   DecodedXLogRecord **out_record,
-										   char **errormsg,
-										   bool queued_only);
+										   char **errormsg);
 
 /* Try to read ahead, if there is data and space. */
 extern XLogReadRecordResult XLogReadAhead(XLogReaderState *state,
