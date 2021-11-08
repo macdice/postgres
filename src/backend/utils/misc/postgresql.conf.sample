@@ -245,7 +245,6 @@
 
 #wal_decode_buffer_size = 512kB		# lookahead window used for prefetching
 #recovery_prefetch = off		# prefetch pages referenced in the WAL?
-#recovery_prefetch_fpw = off		# even pages logged with full page?
 
 # - Archiving -
 

@@ -18,7 +18,6 @@
 
 /* GUCs */
 extern bool recovery_prefetch;
-extern bool recovery_prefetch_fpw;
 
 struct XLogPrefetcher;
 typedef struct XLogPrefetcher XLogPrefetcher;

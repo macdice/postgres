@@ -3661,26 +3661,6 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-recovery-prefetch-fpw" xreflabel="recovery_prefetch_fpw">
-      <term><varname>recovery_prefetch_fpw</varname> (<type>boolean</type>)
-      <indexterm>
-       <primary><varname>recovery_prefetch_fpw</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Whether to prefetch blocks that were logged with full page images,
-        during recovery.  Often this doesn't help, since such blocks will not
-        be read the first time they are needed and might remain in the buffer
-        pool after that.  However, on file systems with a block size larger
-        than
-        <productname>PostgreSQL</productname>'s, prefetching can avoid a
-        costly read-before-write when blocks are later written.
-        The default is off.
-       </para>
-      </listitem>
-     </varlistentry>
-
      <varlistentry id="guc-wal-decode-buffer-size" xreflabel="wal_decode_buffer_size">
       <term><varname>wal_decode_buffer_size</varname> (<type>integer</type>)
       <indexterm>

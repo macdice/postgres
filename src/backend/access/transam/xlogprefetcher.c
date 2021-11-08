@@ -10,6 +10,7 @@
  * IDENTIFICATION
  *		src/backend/access/transam/xlogprefetcher.c
  *
+ * XXX rewrite me!
  * The goal of this module is to read future WAL records and issue
  * PrefetchSharedBuffer() calls for referenced blocks, so that we avoid I/O
  * stalls in the main recovery loop.
@@ -24,7 +25,7 @@
  * skipped for these reasons are counted as "skip_new" (that is, cases where we
  * didn't try to prefetch "new" blocks).
  *
- * Blocks found in the buffer pool already are counted as "skip_hit".
+ * Blocks found in the buffer pool already are counted as "hit".
  * Repeated access to the same buffer is detected and skipped, and this is
  * counted with "skip_seq".  Blocks that were logged with FPWs are skipped if
  * recovery_prefetch_fpw is off, since on most systems there will be no I/O
@@ -63,7 +64,6 @@
 
 /* GUCs */
 bool		recovery_prefetch = false;
-bool		recovery_prefetch_fpw = false;
 
 static int	XLogPrefetchReconfigureCount = 0;
 
@@ -552,30 +552,25 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 
 			/*
 			 * If there is a full page image attached, we won't be reading the
-			 * page, so normally we'll skip prefetching.  However, if the
-			 * underlying filesystem uses larger logical blocks than us, it
-			 * might still need to perform a read-before-write some time
-			 * later.  Therefore, skip prefetching unless configured to do so.
-			 *
-			 * XXX remove!
+			 * page, so don't both trying to prefetch.
 			 */
-			if (block->has_image && !recovery_prefetch_fpw)
+			if (block->has_image)
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_fpw);
 				block->prefetch_get_next = true;
 				return PGSR_NEXT_NO_IO;
 			}
 
-			/* Should we skip prefetching this block due to a filter? */
-			if (XLogPrefetcherIsFiltered(prefetcher, block->rnode, block->blkno))
+			/* There is no point in reading a page that will be zeroed. */
+			if (block->flags & BKPBLOCK_WILL_INIT)
 			{
-				XLogPrefetchIncrement(&SharedStats->skip_new);
+				XLogPrefetchIncrement(&SharedStats->skip_init);
 				block->prefetch_get_next = true;
 				return PGSR_NEXT_NO_IO;
 			}
 
-			/* There is no point in reading a page that will be zeroed. */
-			if (block->flags & BKPBLOCK_WILL_INIT)
+			/* Should we skip prefetching this block due to a filter? */
+			if (XLogPrefetcherIsFiltered(prefetcher, block->rnode, block->blkno))
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_new);
 				block->prefetch_get_next = true;
@@ -925,20 +920,6 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 		 * feeding blocks into the far end of the pipe.
 		 */
 		Assert(block_p == (uintptr_t) &record->blocks[block_id]);
-
-#if 0
-		/*
-		 * We could potentially leave it pinned, and teach
-		 * XLogReadBufferForRedo() to recognize that case so it doesn't
-		 * need to acquire a new pin.  For now, keep it simple.
-		 */
-		if (record->blocks[block_id].prefetch_buffer_pinned)
-		{
-			Assert(BufferIsValid(record->blocks[block_id].prefetch_buffer));
-			record->blocks[block_id].prefetch_buffer_pinned = false;
-			ReleaseBuffer(record->blocks[block_id].prefetch_buffer);
-		}
-#endif
 	}
 
 	Assert(record == prefetcher->reader->record);
@@ -951,15 +932,6 @@ assign_recovery_prefetch(bool new_value, void *extra)
 {
 	/* Reconfigure prefetching, because a setting it depends on changed. */
 	recovery_prefetch = new_value;
-	if (AmStartupProcess())
-		XLogPrefetchReconfigure();
-}
-
-void
-assign_recovery_prefetch_fpw(bool new_value, void *extra)
-{
-	/* Reconfigure prefetching, because a setting it depends on changed. */
-	recovery_prefetch_fpw = new_value;
 	if (AmStartupProcess())
 		XLogPrefetchReconfigure();
 }

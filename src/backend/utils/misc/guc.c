@@ -1324,18 +1324,6 @@ static struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, assign_recovery_prefetch, NULL
 	},
-	{
-		{"recovery_prefetch_fpw", PGC_SIGHUP, WAL_SETTINGS,
-			gettext_noop("Prefetch blocks that have full page images in the WAL"),
-			gettext_noop("On some systems, there is no benefit to prefetching pages that will be "
-						 "entirely overwritten, but if the logical page size of the filesystem is "
-						 "larger than PostgreSQL's, this can be beneficial.  This option has no "
-						 "effect unless recovery_prefetch is enabled.")
-		},
-		&recovery_prefetch_fpw,
-		false,
-		NULL, assign_recovery_prefetch_fpw, NULL
-	},
 
 	{
 		{"wal_log_hints", PGC_POSTMASTER, WAL_SETTINGS,
