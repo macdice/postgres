@@ -257,7 +257,7 @@ struct XLogReaderState
 	DecodedXLogRecord *decode_queue_head;	/* newest decoded record */
 	DecodedXLogRecord *decode_queue_tail;	/* oldest decoded record */
 
-	DecodedXLogRecord *decoding;	/* record currently being decoded */
+	DecodedXLogRecord *decoding;	/* record currently being decoded */ /* TM:XXX not needed */
 
 	/*
 	 * Buffer for currently read page (XLOG_BLCKSZ bytes, valid up to at least

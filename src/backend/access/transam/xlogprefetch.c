@@ -839,6 +839,7 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
 	 * Recreate streaming_read, so that all IO resources and pins are
 	 * released.
 	 */
+	prefetcher->record = NULL;
 	pg_streaming_read_free(prefetcher->streaming_read);
 	prefetcher->streaming_read =
 		pg_streaming_read_alloc(maintenance_io_concurrency,

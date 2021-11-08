@@ -267,7 +267,7 @@ XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
 
 /*
  * See if we can release the last record that was returned by
- * XLogReadRecord(), to free up space.
+ * XLogNextRecord(), to free up space.
  */
 static void
 XLogReleasePreviousRecord(XLogReaderState *state)
@@ -314,6 +314,7 @@ XLogReleasePreviousRecord(XLogReaderState *state)
 		}
 		else if (state->decoding && !state->decoding->oversized)
 		{
+			/* TM:XXX ??? not needed without state machine */
 			/*
 			 * We're releasing the last fully decoded record in
 			 * XLogReadRecord(), but some time earlier we partially decoded a
@@ -432,18 +433,19 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 
 	/*
 	 * Call XLogReadAhead() in blocking mode to make sure there is something
-	 * in the queue, but we don't use the result.
+	 * in the queue, though we don't use the result.
 	 */
-	XLogReadAhead(state, false /* nonblocking */);
+	if (!XLogReaderHasQueuedRecordOrError(state))
+		XLogReadAhead(state, false /* nonblocking */);
 
-	/* Now read the tail record. */
+	/* Consume the tail record or error. */
 	result = XLogNextRecord(state, &decoded, errormsg);
 	if (result == XLREAD_SUCCESS)
 	{
 		/*
 		 * XLogReadRecord() returns a pointer to the record's header, not the
 		 * actual decoded record.  The caller will access the decoded record
-		 * through the XLogRecGetXXX() macros, which access the decoded
+		 * through the XLogRecGetXXX() macros, which reach the decoded
 		 * recorded as xlogreader->record.
 		 */
 		Assert(state->record == decoded);
@@ -1528,6 +1530,7 @@ ResetDecoder(XLogReaderState *state)
 	/* Reset the decode buffer to empty. */
 	state->decode_buffer_head = state->decode_buffer;
 	state->decode_buffer_tail = state->decode_buffer;
+	state->decoding = NULL; /* TM:XXX drop */
 
 	/* Clear error state. */
 	state->errormsg_buf[0] = '\0';
