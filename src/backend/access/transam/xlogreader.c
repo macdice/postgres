@@ -42,7 +42,7 @@ static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
 							 int reqLen);
 static void XLogReaderInvalReadState(XLogReaderState *state);
-static XLogReadRecordResult XLogDecodeNextRecord(XLogReaderState *state, bool allow_oversized);
+static XLogReadRecordResult XLogDecodeNextRecord(XLogReaderState *state, bool non_blocking);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 								  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
@@ -196,7 +196,7 @@ allocate_recordbuf(XLogReaderState *state, uint32 reclength)
 
 	/*
 	 * Note that in much unlucky circumstances, the random data read from a
-	 * recycled segment can cause this routine to be called with a size
+x	 * recycled segment can cause this routine to be called with a size
 	 * causing a hard failure at allocation.  For a standby, this would cause
 	 * the instance to stop suddenly with a hard failure, preventing it to
 	 * retry fetching WAL from one of its sources which could allow it to move
@@ -397,7 +397,7 @@ XLogNextRecord(XLogReaderState *state,
 	 * the record for historical reasons.
 	 */
 	state->record = state->decode_queue_tail;
-	
+
 	/*
 	 * It should be immediately after the last the record returned by
 	 * XLogReadRecord(), or at the position set by XLogBeginRead() if
@@ -430,15 +430,15 @@ XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 	XLogReadRecordResult result;
 	DecodedXLogRecord *decoded;
 
-	XLogReadAhead(state, &decoded);
+	XLogReadAhead(state, &decoded, false /* nonblocking */);
 	result = XLogNextRecord(state, &decoded, errormsg);
 	if (result == XLREAD_SUCCESS)
 	{
 		/*
-		 * The traditional interface just returns the header, not the decoded
-		 * record.  The caller will access the decoded record through the
-		 * XLogRecGetXXX() macros, which accesses the decoded recorded as
-		 * xlogreader->record.
+		 * The traditional XLogReadRecord() interface returns a pointer to the
+		 * record's header, not the actual decoded record.  The caller will
+		 * access the decoded record through the XLogRecGetXXX() macros, which
+		 * access the decoded recorded as xlogreader->record.
 		 */
 		Assert(state->record == decoded);
 		*out_record = &decoded->header;
@@ -524,7 +524,7 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 }
 
 static XLogReadRecordResult
-XLogDecodeNextRecord(XLogReaderState *state, bool allow_oversized)
+XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 {
 	XLogRecPtr	RecPtr;
 	XLogRecord *record;
@@ -636,17 +636,6 @@ XLogDecodeNextRecord(XLogReaderState *state, bool allow_oversized)
 	total_len = record->xl_tot_len;
 
 	/*
-	 * Since we don't currently have a way to resume at arbitrary points of
-	 * the code below, give up immediately if we don't have enough WAL data to
-	 * read all of a record and the caller doesn't want to wait.
-	 */
-	if (state->routine.page_ready &&
-		!state->routine.page_ready(state, state->RecPtr + total_len))
-	{
-		return XLREAD_WAIT;
-	}
-
-	/*
 	 * If the whole record header is on this page, validate it immediately.
 	 * Otherwise do just a basic sanity check on xl_tot_len, and validate the
 	 * rest of the header after reading it from the next page.  The xl_tot_len
@@ -675,16 +664,46 @@ XLogDecodeNextRecord(XLogReaderState *state, bool allow_oversized)
 		gotheader = false;
 	}
 
-	/* Find space to decode this record. */
-	decoded = XLogReadRecordAlloc(state, total_len, allow_oversized);
+	/*
+	 * We don't currently have the infrastructure to resume decoding at
+	 * arbitrary points in the code below.  Give up immediately if the caller
+	 * is a performing a nonblocking readahead, and the data_ready function
+	 * reports that there might not be enough data to read the whole record
+	 * immediately without waiting in the page_read function.
+	 */
+	if (nonblocking)
+	{
+		/*
+		 * To use nonblocking mode, you have to supply a data_ready
+		 * function.
+		 */
+		Assert(state->routine.data_ready);
+		if (!state->routine.data_ready(state, RecPtr, total_len))
+			return XLREAD_WAIT;
+	}
+
+	/*
+	 * Find space to decode this record.  Don't allow oversized allocation if
+	 * the caller requested nonblocking.  Otherwise, we *have* to try to
+	 * decode the record now because the caller has nothing else to do, so
+	 * allow an oversized record to be palloc'd if that turns out to be
+	 * necessary.
+	 */
+	decoded = XLogReadRecordAlloc(state,
+								  total_len,
+								  !nonblocking /* allow_oversized */);
 	if (decoded == NULL)
 	{
 		/*
-		 * We couldn't get space.  Usually this means that the decode buffer
-		 * was full, while trying to read ahead (that is, !force).  It's also
-		 * remotely possible for palloc() to have failed to allocate memory
-		 * for an oversized record.
+		 * There is no space in the decode buffer.  The caller should help
+		 * with that problem by consuming some records.
 		 */
+		if (nonblocking)
+			return XLREAD_WAIT;
+
+		/* We failed to allocate memory for an  oversized record. */
+		report_invalid_record(state,
+							  "out-of-memory while trying to decode a record of length %u", total_len);
 		goto err;
 	}
 
@@ -883,21 +902,24 @@ err:
 }
 
 /*
- * Try to decode the next available record.  The next record will also be
- * returned to XLogRecordRead().  If no more records are currently available
- * or an error has occurred, returns NULL.  In case of error, the error will
- * be returned by XLogNextRecord() or XLogReadRecord() after all queued up
- * records.
+ * Try to decode the next available record, and return it.  The record will
+ * also be returned to XLogNextRecord(), which must be called to 'consume'
+ * each record.
+ *
+ * If nonblocking is true, may return NULL due to lack of data or WAL decoding
+ * space.
  */
 XLogReadRecordResult
-XLogReadAhead(XLogReaderState *state, DecodedXLogRecord **out_record)
+XLogReadAhead(XLogReaderState *state,
+			  DecodedXLogRecord **out_record,
+			  bool nonblocking)
 {
 	XLogReadRecordResult result;
-	
+
 	if (state->errormsg_deferred)
 		return XLREAD_FAIL;
 
-	result = XLogDecodeNextRecord(state, false /* allow_oversized */);
+	result = XLogDecodeNextRecord(state, nonblocking);
 	if (result == XLREAD_SUCCESS)
 	{
 		Assert(state->decode_queue_head != NULL);

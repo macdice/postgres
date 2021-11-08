@@ -59,6 +59,9 @@ typedef struct WALSegmentContext
 typedef struct XLogReaderState XLogReaderState;
 
 /* Function type definitions for various xlogreader interactions */
+typedef bool (*XLogDataReadyCB) (XLogReaderState *xlogreader,
+								 XLogRecPtr targetPagePtr,
+								 int reqLen);
 typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen,
@@ -71,6 +74,15 @@ typedef void (*WALSegmentCloseCB) (XLogReaderState *xlogreader);
 
 typedef struct XLogReaderRoutine
 {
+	/*
+	 * Data ready callback
+	 *
+	 * This optional callback reports whether it is possible to read a whole
+	 * record of a given length without waiting.  It must be supplied if the
+	 * XLogReadAhead() is called with non_blocking set to true.
+	 */
+	XLogDataReadyCB data_ready;
+
 	/*
 	 * Data input callback
 	 *
@@ -367,7 +379,8 @@ extern XLogReadRecordResult XLogNextRecord(XLogReaderState *state,
 
 /* Try to read ahead, if there is data and space. */
 extern XLogReadRecordResult XLogReadAhead(XLogReaderState *state,
-										  DecodedXLogRecord **out_record);
+										  DecodedXLogRecord **out_record,
+										  bool nonblocking);
 
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,

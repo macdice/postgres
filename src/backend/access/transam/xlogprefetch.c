@@ -493,7 +493,19 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		/* Try to read a new future record, if we don't already have one. */
 		if (prefetcher->record == NULL)
 		{
-			switch (XLogReadAhead(prefetcher->reader, &prefetcher->record))
+			int nonblocking;
+
+			/*
+			 * If there are already records or an error queued up that could
+			 * be replayed, we don't want to block here.  Otherwise, it's OK
+			 * to wait for more data because there's nothing else for the
+			 * caller to do.
+			 */
+			nonblocking = XLogReaderHasQueuedRecordOrError(reader);
+			
+			switch (XLogReadAhead(prefetcher->reader,
+								  &prefetcher->record,
+								  nonblocking))
 			{
 			case XLREAD_FAIL:
 				/*
@@ -865,7 +877,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		pg_streaming_read_prefetch(prefetcher->streaming_read);
 
 	/* Read the next record. */
-	result = XLogNextRecord(prefetcher->reader, &record, errmsg, true);
+	result = XLogNextRecord(prefetcher->reader, &record, errmsg);
 	if (result != XLREAD_SUCCESS)
 	{
 		*out_record = NULL;
