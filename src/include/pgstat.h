@@ -208,10 +208,10 @@ typedef struct PgStat_TableXactStatus
 typedef struct PgStat_RecoveryPrefetchStats
 {
 	PgStat_Counter prefetch;
-	PgStat_Counter skip_hit;
+	PgStat_Counter hit;
+	PgStat_Counter skip_init;
 	PgStat_Counter skip_new;
 	PgStat_Counter skip_fpw;
-	PgStat_Counter skip_seq;
 	TimestampTz stat_reset_timestamp;
 } PgStat_RecoveryPrefetchStats;
 

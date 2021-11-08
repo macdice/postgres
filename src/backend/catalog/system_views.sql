@@ -903,10 +903,10 @@ CREATE VIEW pg_stat_prefetch_recovery AS
     SELECT
             s.stats_reset,
             s.prefetch,
-            s.skip_hit,
+            s.hit,
+            s.skip_init,
             s.skip_new,
             s.skip_fpw,
-            s.skip_seq,
             s.distance,
             s.queue_depth,
 	    s.avg_distance,
