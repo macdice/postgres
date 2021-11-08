@@ -312,20 +312,6 @@ XLogReleasePreviousRecord(XLogReaderState *state)
 			/* Adjust tail to release space up to the next record. */
 			state->decode_buffer_tail = (char *) record;
 		}
-		else if (state->decoding && !state->decoding->oversized)
-		{
-			/* TM:XXX ??? not needed without state machine */
-			/*
-			 * We're releasing the last fully decoded record in
-			 * XLogReadRecord(), but some time earlier we partially decoded a
-			 * record in XLogReadAhead() and were unable to complete the job.
-			 * We'll set the buffer head and tail to point to the record we
-			 * started working on, so that we can continue (perhaps from a
-			 * different source).
-			 */
-			state->decode_buffer_tail = (char *) state->decoding;
-			state->decode_buffer_head = (char *) state->decoding;
-		}
 		else
 		{
 			/*
@@ -1530,7 +1516,6 @@ ResetDecoder(XLogReaderState *state)
 	/* Reset the decode buffer to empty. */
 	state->decode_buffer_head = state->decode_buffer;
 	state->decode_buffer_tail = state->decode_buffer;
-	state->decoding = NULL; /* TM:XXX drop */
 
 	/* Clear error state. */
 	state->errormsg_buf[0] = '\0';
