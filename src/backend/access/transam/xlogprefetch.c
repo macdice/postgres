@@ -423,7 +423,7 @@ XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 
 	/* How many IOs are currently in flight? */
 	io_depth = pg_streaming_read_inflight(prefetcher->streaming_read);
-	
+
 	/* Update the instantaneous stats visible in pg_stat_prefetch_recovery. */
 	SharedStats->queue_depth = io_depth;
 	SharedStats->distance = distance;
@@ -606,7 +606,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				block->prefetch_flags |= XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 				return PGSR_NEXT_NO_IO;
 			}
-			
+
 
 			/* Try to prefetch this block! */
 			Assert(block->prefetch_flags == 0);
@@ -862,7 +862,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	XLogPageReadResult result;
 	DecodedXLogRecord *record;
 
-	/*	
+	/*
 	 * See if it's time to reset the prefetching machinery, because a
 	 * relevant GUC was changed.
 	 */
@@ -875,12 +875,10 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 									(uintptr_t) prefetcher,
 									XLogPrefetcherNextBlock,
 									XLogPrefetcherReleaseBlock);
-		/* XXX als destroy any unconsumed records in wal decoding buffer? */
 
 		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
 
-	
 	/*
 	 * If there's nothing queued yet, then start prefetching.  Normally this
 	 * happens automatically when we call pg_streaming_read_get_next() below
@@ -930,12 +928,17 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		if (!record->blocks[block_id].in_use)
 			continue;
 
-		/* TODO explain */
+		/*
+		 * When streaming_read is freed due to a relevant GUC change or being
+		 * repositioned with XLogPrefetcherBeginRead(), it clears this flag so
+		 * that we know that we don't need to call
+		 * pg_streaming_read_get_next().
+		 */
 		if ((record->blocks[block_id].prefetch_flags & XLOGPREFETCHER_MUST_CALL_GET_NEXT) == 0)
 			continue;
 
+		/* Otherwise we have to call it to stay in sync. */
 		block_p = pg_streaming_read_get_next(prefetcher->streaming_read);
-		
 		record->blocks[block_id].prefetch_flags &= ~XLOGPREFETCHER_MUST_CALL_GET_NEXT;
 
 		/*

@@ -5908,7 +5908,10 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 	{
 		char	   *errormsg;
 
-		XLogPrefetcherReadRecord(xlogprefetcher, &record, &errormsg);
+		if (xlogprefetcher)
+			XLogPrefetcherReadRecord(xlogprefetcher, &record, &errormsg);
+		else
+			record = XLogReadRecord(xlogreader, &errormsg);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -8292,7 +8295,6 @@ StartupXLOG(void)
 			 */
 			if (checkPoint.redo < checkPointLoc)
 			{
-				/* TM:XXX this case is broken in t/002_archive.pl, the read spins! */
 				XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
 				if (!ReadRecord(xlogprefetcher, xlogreader, LOG, false))
 					ereport(FATAL,
@@ -9256,11 +9258,17 @@ StartupXLOG(void)
 	StandbyMode = false;
 
 	/*
+	 * Shut down the prefetcher.  We need to use the XLogReader directly, in
+	 * order for readBuf and readOff to refer to the final page of LastRec.
+	 */
+	XLogPrefetcherFree(xlogprefetcher);
+
+	/*
 	 * Re-fetch the last valid or last applied record, so we can identify the
 	 * exact endpoint of what we consider the valid portion of WAL.
 	 */
-	XLogPrefetcherBeginRead(xlogprefetcher, LastRec);
-	record = ReadRecord(xlogprefetcher, xlogreader, PANIC, false);
+	XLogBeginRead(xlogreader, LastRec);
+	record = ReadRecord(NULL, xlogreader, PANIC, false);
 	EndOfLog = EndRecPtr;
 
 	/*
@@ -9617,9 +9625,6 @@ StartupXLOG(void)
 	 */
 	if (standbyState != STANDBY_DISABLED)
 		ShutdownRecoveryTransactionEnvironment();
-
-	/* Shut down xlogprefetcher */
-	XLogPrefetcherFree(xlogprefetcher);
 
 	/* Shut down xlogreader */
 	if (readFile >= 0)
