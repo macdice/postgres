@@ -907,10 +907,8 @@ CREATE VIEW pg_stat_prefetch_recovery AS
             s.skip_init,
             s.skip_new,
             s.skip_fpw,
-            s.distance,
-            s.queue_depth,
-	    s.avg_distance,
-	    s.avg_queue_depth
+            s.wal_distance,
+            s.io_depth
      FROM pg_stat_get_prefetch_recovery() s;
 
 CREATE VIEW pg_stat_subscription AS

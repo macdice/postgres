@@ -55,11 +55,7 @@
 #include "utils/guc.h"
 #include "utils/hsearch.h"
 
-/*
- * Sample the queue depth and distance every time we replay this much WAL.
- * This is used to compute avg_queue_depth and avg_distance for the log
- * message that appears at the end of crash recovery.
- */
+/* Every time we process this much WAL, we update stats in shared memory. */
 #define XLOGPREFETCHER_SAMPLE_DISTANCE BLCKSZ
 
 /* GUCs */
@@ -78,11 +74,8 @@ struct XLogPrefetcher
 	DecodedXLogRecord *record;
 	int			next_block_id;
 
-	/* Online averages. */
-	uint64		samples;
-	double		avg_queue_depth;
-	double		avg_distance;
-	XLogRecPtr	next_sample_lsn;
+	/* When to next write stats to shared memory. */
+	XLogRecPtr	next_stats_lsn;
 
 	/* Book-keeping required to avoid accessing non-existing blocks. */
 	HTAB	   *filter_table;
@@ -118,16 +111,14 @@ typedef struct XLogPrefetchStats
 	pg_atomic_uint64 skip_init;	/* Zero-inited blocks skipped. */
 	pg_atomic_uint64 skip_new;	/* New/missing blocks filtered. */
 	pg_atomic_uint64 skip_fpw;	/* FPWs skipped. */
-	float		avg_distance;
-	float		avg_queue_depth;
 
 	/* Reset counters */
 	pg_atomic_uint32 reset_request;
 	uint32		reset_handled;
 
 	/* Dynamic values */
-	int			distance;		/* Number of bytes ahead in the WAL. */
-	int			queue_depth;	/* Number of I/Os in progress. */
+	int			wal_distance;	/* Number of bytes ahead in the WAL. */
+	int			io_depth;		/* Number of I/Os in progress. */
 } XLogPrefetchStats;
 
 static inline void XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher,
@@ -163,8 +154,6 @@ XLogPrefetchResetStats(void)
 	pg_atomic_write_u64(&SharedStats->skip_init, 0);
 	pg_atomic_write_u64(&SharedStats->skip_new, 0);
 	pg_atomic_write_u64(&SharedStats->skip_fpw, 0);
-	SharedStats->avg_distance = 0;
-	SharedStats->avg_queue_depth = 0;
 }
 
 void
@@ -189,10 +178,6 @@ XLogPrefetchShmemInit(void)
 		pg_atomic_init_u64(&SharedStats->skip_init, 0);
 		pg_atomic_init_u64(&SharedStats->skip_new, 0);
 		pg_atomic_init_u64(&SharedStats->skip_fpw, 0);
-		SharedStats->avg_distance = 0;
-		SharedStats->avg_queue_depth = 0;
-		SharedStats->distance = 0;
-		SharedStats->queue_depth = 0;
 	}
 }
 
@@ -298,7 +283,7 @@ XLogPrefetchEnd(XLogPrefetchState *state)
 		XLogPrefetcherFree(state->prefetcher);
 	state->prefetcher = NULL;
 
-	SharedStats->queue_depth = 0;
+	SharedStats->io_depth = 0;
 	SharedStats->distance = 0;
 }
 #endif
@@ -341,8 +326,8 @@ XLogPrefetcherAllocate(XLogReaderState *reader)
 										   HASH_ELEM | HASH_BLOBS);
 	dlist_init(&prefetcher->filter_queue);
 
-	SharedStats->queue_depth = 0;
-	SharedStats->distance = 0;
+	SharedStats->io_depth = 0;
+	SharedStats->wal_distance = 0;
 
 	/*
 	 * The allowed IO depth is based on the maintenance_io_concurrency setting.
@@ -368,26 +353,6 @@ void
 XLogPrefetcherFree(XLogPrefetcher *prefetcher)
 {
 	pg_streaming_read_free(prefetcher->streaming_read);
-
-	/* Log final statistics. */
-	ereport(LOG,
-			(errmsg("recovery finished prefetching at %X/%X; "
-					"prefetch = " UINT64_FORMAT ", "
-					"hit = " UINT64_FORMAT ", "
-					"skip_init = " UINT64_FORMAT ", "
-					"skip_new = " UINT64_FORMAT ", "
-					"skip_fpw = " UINT64_FORMAT ", "
-					"avg_distance = %f, "
-					"avg_queue_depth = %f",
-					(uint32) (prefetcher->reader->EndRecPtr << 32),
-					(uint32) (prefetcher->reader->EndRecPtr),
-					pg_atomic_read_u64(&SharedStats->prefetch),
-					pg_atomic_read_u64(&SharedStats->hit),
-					pg_atomic_read_u64(&SharedStats->skip_init),
-					pg_atomic_read_u64(&SharedStats->skip_new),
-					pg_atomic_read_u64(&SharedStats->skip_fpw),
-					SharedStats->avg_distance,
-					SharedStats->avg_queue_depth)));
 	hash_destroy(prefetcher->filter_table);
 	pfree(prefetcher);
 }
@@ -397,21 +362,21 @@ XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 {
 	uint32 io_depth;
 	uint32 reset_request;
-	int64 distance;
+	int64 wal_distance;
 
 
 	/* How far ahead of replay are we now? */
 	if (prefetcher->record)
-		distance = prefetcher->record->lsn - prefetcher->reader->record->lsn;
+		wal_distance = prefetcher->record->lsn - prefetcher->reader->record->lsn;
 	else
-		distance = 0;
+		wal_distance = 0;
 
 	/* How many IOs are currently in flight? */
 	io_depth = pg_streaming_read_inflight(prefetcher->streaming_read);
 
 	/* Update the instantaneous stats visible in pg_stat_prefetch_recovery. */
-	SharedStats->queue_depth = io_depth;
-	SharedStats->distance = distance;
+	SharedStats->io_depth = io_depth;
+	SharedStats->wal_distance = wal_distance;
 
 	/*
 	 * Have we been asked to reset our stats counters?  This is checked with
@@ -423,34 +388,9 @@ XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 	{
 		XLogPrefetchResetStats();
 		SharedStats->reset_handled = reset_request;
-
-		prefetcher->avg_distance = 0;
-		prefetcher->avg_queue_depth = 0;
-		prefetcher->samples = 0;
 	}
 
-	/* Compute online averages. */
-	prefetcher->samples++;
-	if (prefetcher->samples == 1)
-	{
-		prefetcher->avg_distance = SharedStats->distance;
-		prefetcher->avg_queue_depth = SharedStats->queue_depth;
-	}
-	else
-	{
-		prefetcher->avg_distance +=
-			(SharedStats->distance - prefetcher->avg_distance) /
-			prefetcher->samples;
-		prefetcher->avg_queue_depth +=
-			(SharedStats->queue_depth - prefetcher->avg_queue_depth) /
-			prefetcher->samples;
-	}
-
-	/* Expose it in shared memory. */
-	SharedStats->avg_distance = prefetcher->avg_distance;
-	SharedStats->avg_queue_depth = prefetcher->avg_queue_depth;
-
-	prefetcher->next_sample_lsn =
+	prefetcher->next_stats_lsn =
 		prefetcher->reader->record->lsn + XLOGPREFETCHER_SAMPLE_DISTANCE;
 }
 
@@ -716,10 +656,8 @@ pg_stat_get_prefetch_recovery(PG_FUNCTION_ARGS)
 	values[3] = Int64GetDatum(pg_atomic_read_u64(&SharedStats->skip_init));
 	values[4] = Int64GetDatum(pg_atomic_read_u64(&SharedStats->skip_new));
 	values[5] = Int64GetDatum(pg_atomic_read_u64(&SharedStats->skip_fpw));
-	values[6] = Int32GetDatum(SharedStats->distance);
-	values[7] = Int32GetDatum(SharedStats->queue_depth);
-	values[8] = Float4GetDatum(SharedStats->avg_distance);
-	values[9] = Float4GetDatum(SharedStats->avg_queue_depth);
+	values[6] = Int32GetDatum(SharedStats->wal_distance);
+	values[7] = Int32GetDatum(SharedStats->io_depth);
 	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	tuplestore_donestoring(tupstore);
 
@@ -888,7 +826,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	 * See if it's time to compute some statistics, because enough WAL has
 	 * been processed.
 	 */
-	if (unlikely(record->lsn >= prefetcher->next_sample_lsn))
+	if (unlikely(record->lsn >= prefetcher->next_stats_lsn))
 		XLogPrefetcherComputeStats(prefetcher);
 
 	/*
