@@ -829,6 +829,28 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
 }
 
 /*
+ * A wrapper for XLogBeginRead() that also resets the prefetcher.
+ */
+void
+XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
+						XLogRecPtr recPtr)
+{
+	/*
+	 * Recreate streaming_read, so that all IO resources and pins are
+	 * released.
+	 */
+	pg_streaming_read_free(prefetcher->streaming_read);
+	prefetcher->streaming_read =
+		pg_streaming_read_alloc(maintenance_io_concurrency,
+								(uintptr_t) prefetcher,
+								XLogPrefetcherNextBlock,
+								XLogPrefetcherReleaseBlock);
+
+	/* This will forget about any queued up records in the decoder. */
+	XLogBeginRead(prefetcher->reader, recPtr);
+}
+
+/*
  * A wrapper for XLogReadRecord() that provides the same interface, but also
  * tries to initiate IO ahead of time.
  */

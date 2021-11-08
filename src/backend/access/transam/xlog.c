@@ -5881,7 +5881,7 @@ CleanupBackupHistory(void)
  * Attempt to read the next XLOG record.
  *
  * Before first call, the reader needs to be positioned to the first record
- * by calling XLogBeginRead().
+ * by calling XLogPrefetcherBeginRead().
  *
  * If no valid record is available, returns NULL, or fails if emode is PANIC.
  * (emode must be either PANIC, LOG). In standby mode, retries until a valid
@@ -8293,7 +8293,7 @@ StartupXLOG(void)
 			if (checkPoint.redo < checkPointLoc)
 			{
 				/* TM:XXX this case is broken in t/002_archive.pl, the read spins! */
-				XLogBeginRead(xlogreader, checkPoint.redo);
+				XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
 				if (!ReadRecord(xlogprefetcher, xlogreader, LOG, false))
 					ereport(FATAL,
 							(errmsg("could not find redo location referenced by checkpoint record"),
@@ -8903,7 +8903,7 @@ StartupXLOG(void)
 		if (checkPoint.redo < RecPtr)
 		{
 			/* back up to find the record */
-			XLogBeginRead(xlogreader, checkPoint.redo);
+			XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
 			record = ReadRecord(xlogprefetcher, xlogreader, PANIC, false);
 		}
 		else
@@ -9259,7 +9259,7 @@ StartupXLOG(void)
 	 * Re-fetch the last valid or last applied record, so we can identify the
 	 * exact endpoint of what we consider the valid portion of WAL.
 	 */
-	XLogBeginRead(xlogreader, LastRec);
+	XLogPrefetcherBeginRead(xlogprefetcher, LastRec);
 	record = ReadRecord(xlogprefetcher, xlogreader, PANIC, false);
 	EndOfLog = EndRecPtr;
 
@@ -9977,7 +9977,7 @@ ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
 		return NULL;
 	}
 
-	XLogBeginRead(xlogreader, RecPtr);
+	XLogPrefetcherBeginRead(xlogprefetcher, RecPtr);
 	record = ReadRecord(xlogprefetcher, xlogreader, LOG, true);
 
 	if (record == NULL)
