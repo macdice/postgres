@@ -22,6 +22,7 @@
 #include "access/timeline.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "access/xlogprefetcher.h"
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -355,13 +356,14 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
-	Buffer		recent_buffer;
+	Buffer		prefetch_buffer;
+	bool		prefetch_buffer_pinned;
 	Page		page;
 	bool		zeromode;
 	bool		willinit;
 
-	if (!XLogRecGetRecentBuffer(record, block_id, &rnode, &forknum, &blkno,
-								&recent_buffer))
+	if (!XLogRecGetBlockInfo(record, block_id, &rnode, &forknum, &blkno,
+							 &prefetch_buffer, &prefetch_buffer_pinned))
 	{
 		/* Caller specified a bogus block_id */
 		elog(PANIC, "failed to locate backup block with ID %d", block_id);
@@ -378,13 +380,36 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	if (!willinit && zeromode)
 		elog(PANIC, "block to be initialized in redo routine must be marked with WILL_INIT flag in the WAL record");
 
+	/* Has xlogprefetcher.c already pinned this buffer for us? */
+	if (prefetch_buffer_pinned)
+	{
+		Assert(!BufferIsInvalid(prefetch_buffer));
+		Assert(mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK);
+
+		*buf = prefetch_buffer;
+
+		if (get_cleanup_lock)
+			LockBufferForCleanup(*buf);
+		else
+			LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
+		if (lsn <= PageGetLSN(BufferGetPage(*buf)))
+			return BLK_DONE;
+		else
+			return BLK_NEEDS_REDO;
+	}
+
+	/*
+	 * Even though it's not pinned, prefetch_buffer may still allow faster
+	 * lookup by skipping the buffer mapping table probe.
+	 */
+
 	/* If it has a full-page image and it should be restored, do it. */
 	if (XLogRecBlockImageApply(record, block_id))
 	{
 		Assert(XLogRecHasBlockImage(record, block_id));
 		*buf = XLogReadBufferExtended(rnode, forknum, blkno,
 									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK,
-									  recent_buffer);
+									  prefetch_buffer);
 		page = BufferGetPage(*buf);
 		if (!RestoreBlockImage(record, block_id, page))
 			elog(ERROR, "failed to restore block image");
@@ -414,7 +439,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	else
 	{
 		*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode,
-									  recent_buffer);
+									  prefetch_buffer);
 		if (BufferIsValid(*buf))
 		{
 			if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)

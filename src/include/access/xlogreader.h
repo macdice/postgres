@@ -126,15 +126,10 @@ typedef struct
 	ForkNumber	forknum;
 	BlockNumber blkno;
 
-	/*
-	 * A buffer the block was recently seen in.  This can be set by
-	 * xlogprefetcher.c, so that XLogReadBufferForRedo() can potentially avoid
-	 * a (second) buffer mapping table lookup.
-	 */
-	Buffer		recent_buffer;
-
-	/* Workspace used by xlogprefetcher.c */
-	uint8		prefetch_flags;
+	/* Prefetching workspace. */
+	Buffer		prefetch_buffer;
+	bool		prefetch_buffer_pinned;
+	bool		prefetch_get_next;
 
 	/* copy of the fork_flags field from the XLogRecordBlockHeader */
 	uint8		flags;
@@ -427,8 +422,9 @@ extern char *XLogRecGetBlockData(XLogReaderState *record, uint8 block_id, Size *
 extern bool XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 							   RelFileNode *rnode, ForkNumber *forknum,
 							   BlockNumber *blknum);
-extern bool XLogRecGetRecentBuffer(XLogReaderState *record, uint8 block_id,
-								   RelFileNode *rnode, ForkNumber *forknum,
-								   BlockNumber *blknum, Buffer *recent_buffer);
+extern bool XLogRecGetBlockInfo(XLogReaderState *record, uint8 block_id,
+								RelFileNode *rnode, ForkNumber *forknum,
+								BlockNumber *blknum,
+								Buffer *prefetch_buffer, bool *prefetch_flags);
 
 #endif							/* XLOGREADER_H */

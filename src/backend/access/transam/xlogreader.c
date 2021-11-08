@@ -1659,8 +1659,9 @@ DecodeXLogRecord(XLogReaderState *state,
 			blk->has_image = ((fork_flags & BKPBLOCK_HAS_IMAGE) != 0);
 			blk->has_data = ((fork_flags & BKPBLOCK_HAS_DATA) != 0);
 
-			blk->recent_buffer = InvalidBuffer;
-			blk->prefetch_flags = 0;
+			blk->prefetch_buffer = InvalidBuffer;
+			blk->prefetch_buffer_pinned = false;
+			blk->prefetch_get_next = false;
 
 			COPY_HEADER_FIELD(&blk->data_len, sizeof(uint16));
 			/* cross-check that the HAS_DATA flag is set iff data_length > 0 */
@@ -1869,14 +1870,15 @@ bool
 XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 				   RelFileNode *rnode, ForkNumber *forknum, BlockNumber *blknum)
 {
-	return XLogRecGetRecentBuffer(record, block_id, rnode, forknum, blknum,
-								  NULL);
+	return XLogRecGetBlockInfo(record, block_id, rnode, forknum, blknum,
+							   NULL, NULL);
 }
 
 bool
-XLogRecGetRecentBuffer(XLogReaderState *record, uint8 block_id,
-					   RelFileNode *rnode, ForkNumber *forknum,
-					   BlockNumber *blknum, Buffer *recent_buffer)
+XLogRecGetBlockInfo(XLogReaderState *record, uint8 block_id,
+					RelFileNode *rnode, ForkNumber *forknum,
+					BlockNumber *blknum,
+					Buffer *prefetch_buffer, bool *prefetch_buffer_pinned)
 {
 	DecodedBkpBlock *bkpb;
 
@@ -1891,8 +1893,22 @@ XLogRecGetRecentBuffer(XLogReaderState *record, uint8 block_id,
 		*forknum = bkpb->forknum;
 	if (blknum)
 		*blknum = bkpb->blkno;
-	if (recent_buffer)
-		*recent_buffer = bkpb->recent_buffer;
+	if (prefetch_buffer)
+		*prefetch_buffer = bkpb->prefetch_buffer;
+	if (prefetch_buffer_pinned)
+	{
+		if (bkpb->prefetch_buffer_pinned)
+		{
+			/*
+			 * Clear the flag.  The caller now "owns" the pin, so the
+			 * prefetcher won't try to release it if it's reset or freed.
+			 */
+			*prefetch_buffer_pinned = true;
+			bkpb->prefetch_buffer_pinned = false;
+		}
+		else
+			*prefetch_buffer_pinned = false;
+	}
 	return true;
 }
 

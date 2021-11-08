@@ -5018,14 +5018,14 @@ BufferCheckOneLocalPin(Buffer buffer)
 	{
 		/* There should be exactly one pin */
 		if (LocalRefCount[-buffer - 1] != 1)
-			elog(ERROR, "incorrect local pin count: %d",
+			elog(PANIC, "incorrect local pin count: %d",
 				 LocalRefCount[-buffer - 1]);
 	}
 	else
 	{
 		/* There should be exactly one local pin */
 		if (GetPrivateRefCount(buffer) != 1)
-			elog(ERROR, "incorrect local pin count: %d",
+			elog(PANIC, "incorrect local pin count: %d",
 				 GetPrivateRefCount(buffer));
 	}
 }
@@ -5057,7 +5057,9 @@ LockBufferForCleanup(Buffer buffer)
 	Assert(BufferIsPinned(buffer));
 	Assert(PinCountWaitBuf == NULL);
 
-	BufferCheckOneLocalPin(buffer);
+	/* Due to prefetching, recovery might hold more than one private pin. */
+	if (!InRecovery)
+		BufferCheckOneLocalPin(buffer);
 
 	/* Nobody else to wait for */
 	if (BufferIsLocal(buffer))
