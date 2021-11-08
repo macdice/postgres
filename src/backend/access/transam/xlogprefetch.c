@@ -836,9 +836,8 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
 }
 
 /*
- * A wrapper for XLogReadRecord() that tries to initiate IO ahead of time.
- * When using a prefetcher, XLogReadRecord() should not be called directly, or
- * the two cursors through the WAL would become desynchronized.
+ * A wrapper for XLogReadRecord() that provides the same interface, but also
+ * tries to initiate IO ahead of time.
  */
 XLogReadRecordResult
 XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
@@ -870,8 +869,8 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	/*
 	 * If there's nothing queued yet, then start prefetching.  Normally this
 	 * happens automatically when we call pg_streaming_read_get_next() below
-	 * to complete earlier IOs, but if we didn't have a special case here we'd
-	 * never be able to get started.
+	 * to complete earlier IOs, but if we didn't have a special case for an
+	 * empty queue we'd never be able to get started.
 	 */
 	if (!XLogReaderHasQueuedRecordOrError(prefetcher->reader))
 		pg_streaming_read_prefetch(prefetcher->streaming_read);
@@ -905,7 +904,10 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	if (unlikely(record->lsn >= prefetcher->next_sample_lsn))
 		XLogPrefetcherComputeStats(prefetcher);
 
-	/* Make sure that any IOs initiated due to this record are completed. */
+	/*
+	 * Make sure that any IOs we initiated earlier for this record are
+	 * completed.
+	 */
 	for (int block_id = 0; block_id <= record->max_block_id; ++block_id)
 	{
 		uintptr_t block_p PG_USED_FOR_ASSERTS_ONLY;
@@ -913,11 +915,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		if (!record->blocks[block_id].in_use)
 			continue;
 
-		/*
-		 * If the streaming read has forgotten about this block, when we can't
-		 * call pg_streaming_read_get_next().  This happens during release, if
-		 * we reconfigure the streaming read's parameters.
-		 */
+		/* TODO explain */
 		if ((record->blocks[block_id].prefetch_flags & XLOGPREFETCHER_MUST_CALL_GET_NEXT) == 0)
 			continue;
 

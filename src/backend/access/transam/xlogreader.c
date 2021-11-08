@@ -523,12 +523,45 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 	return decoded;
 }
 
+/*
+ * Given a record pointer and the xl_tot_len value from the start of the
+ * record, what is the maximum possible LSN for the next record?  Exaggerates,
+ * assuming long page headers.
+ */
+static XLogRecPtr
+XLogPastRecord(XLogRecPtr recordPtr, uint32 xl_tot_len)
+{
+	int space_per_page;
+	int offset_on_first_page;
+	int bytes_on_first_page;
+	int overflow_bytes;
+	int overflow_pages;
+	int length_with_headers;
+
+	/* How much of the record needs to spill into future pages? */
+	offset_on_first_page = recordPtr % XLOG_BLCKSZ;
+	bytes_on_first_page = Min(XLOG_BLCKSZ - offset_on_first_page, xl_tot_len);
+	overflow_bytes = xl_tot_len - bytes_on_first_page;
+
+	/* Assume that all future pages will have long headers. */
+	space_per_page = XLOG_BLCKSZ - SizeOfXLogLongPHD;
+
+	/* How many pages will that occupy? */
+	overflow_pages = (overflow_bytes + space_per_page - 1) / space_per_page;
+
+	/* Account for the headers at the start of each page. */
+	length_with_headers = xl_tot_len + overflow_pages * SizeOfXLogLongPHD;
+
+	return recordPtr + length_with_headers;
+}
+
 static XLogReadRecordResult
 XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 {
 	XLogRecPtr	RecPtr;
 	XLogRecord *record;
 	XLogRecPtr	targetPagePtr;
+	XLogRecPtr	dataReadyPtr;
 	bool		randAccess;
 	uint32		len,
 				total_len;
@@ -538,6 +571,12 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	int			readOff;
 	DecodedXLogRecord *decoded;
 	char	   *errormsg; /* not used */
+
+	/* How far are we prepared to read ahead? */
+	if (nonblocking)
+		dataReadyPtr = state->routine.data_ready(state);
+	else
+		dataReadyPtr = UINT64_MAX;
 
 	/*
 	 * randAccess indicates whether to verify the previous-record pointer of
@@ -581,15 +620,20 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	targetRecOff = RecPtr % XLOG_BLCKSZ;
 
 	/*
+	 * Make sure we can read at least the length without blocking, if we're in
+	 * nonblocking mode.
+	 */
+	if (nonblocking && RecPtr + sizeof(total_len) > dataReadyPtr)
+			return XLREAD_WAIT;
+
+	/*
 	 * Read the page containing the record into state->readBuf. Request enough
 	 * byte to cover the whole record header, or at least the part of it that
 	 * fits on the same page.
 	 */
 	readOff = ReadPageInternal(state, targetPagePtr,
 							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ));
-	if (readOff == XLREAD_WAIT)
-		return XLREAD_WAIT;
-	else if (readOff < 0)
+	if (readOff < 0)
 		goto err;
 
 	/*
@@ -665,22 +709,12 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	}
 
 	/*
-	 * We don't currently have the infrastructure to resume decoding at
-	 * arbitrary points in the code below.  Give up immediately if the caller
-	 * is a performing a nonblocking readahead, and the data_ready function
-	 * reports that there might not be enough data to read the whole record
-	 * immediately without waiting in the page_read function.
+	 * Make we can read the whole record, even if it's multi-page, in
+	 * nonblocking mode.  Note that if we give up here, we still have the
+	 * previous buffer contents, so we can retry.
 	 */
-	if (nonblocking)
-	{
-		/*
-		 * To use nonblocking mode, you have to supply a data_ready
-		 * function.
-		 */
-		Assert(state->routine.data_ready);
-		if (!state->routine.data_ready(state, RecPtr, total_len))
-			return XLREAD_WAIT;
-	}
+	if (nonblocking && XLogPastRecord(RecPtr, total_len) > dataReadyPtr)
+		return XLREAD_WAIT;
 
 	/*
 	 * Find space to decode this record.  Don't allow oversized allocation if

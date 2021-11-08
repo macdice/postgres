@@ -59,9 +59,7 @@ typedef struct WALSegmentContext
 typedef struct XLogReaderState XLogReaderState;
 
 /* Function type definitions for various xlogreader interactions */
-typedef bool (*XLogDataReadyCB) (XLogReaderState *xlogreader,
-								 XLogRecPtr targetPagePtr,
-								 int reqLen);
+typedef XLogRecPtr (*XLogDataReadyCB) (XLogReaderState *xlogreader);
 typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen,
@@ -77,9 +75,9 @@ typedef struct XLogReaderRoutine
 	/*
 	 * Data ready callback
 	 *
-	 * This optional callback reports whether it is possible to read a whole
-	 * record of a given length without waiting.  It must be supplied if the
-	 * XLogReadAhead() is called with non_blocking set to true.
+	 * This optional callback reports how far ahead XLogReadAhead() can read
+	 * without blocking.  It must be supplied if XLogReadAhead() is called
+	 * with nonblocking set to true.
 	 */
 	XLogDataReadyCB data_ready;
 

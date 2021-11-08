@@ -1011,8 +1011,7 @@ static bool InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 						 XLogSource source, bool notfoundOk);
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
-static bool	XLogDataReady(XLogReaderState *xlogreader, XLogRecPtr recordPtr,
-						  int length);
+static XLogRecPtr XLogDataReady(XLogReaderState *xlogreader);
 static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
@@ -13716,57 +13715,19 @@ CancelBackup(void)
 }
 
 /*
- * Check if XLogPageRead() could return data without blocking.
- *
- * Errs on the size of claiming that data is not ready yet, due to lack of
- * information about future page header size and an out of date "flushedUpTo"
- * variable.
+ * How far could XLogPageRead() read without blocking?
+
+ * Errs on the size of claiming that data is not ready yet, by using the
+ * out-of-date "flushedUpTo" variable.  This is acceptable for the current
+ * use, allowing opportunistic readahead.
  */
-static bool
-XLogDataReady(XLogReaderState *xlogreader, XLogRecPtr recordPtr,
-			  int length)
+static XLogRecPtr
+XLogDataReady(XLogReaderState *xlogreader)
 {
-	/* Records always start after a page header. */
-	Assert((recordPtr % XLOG_BLCKSZ) > 0);
-
-	/*
-	 * For streaming, estimate the LSN past the end of the target record, and
-	 * see if XLogPageRead() might need to block.
-	 */
 	if (readSource == XLOG_FROM_STREAM)
-	{
-		int space_per_page;
-		int bytes_on_first_page;
-		int overflow_bytes;
-		int overflow_pages;
-		int length_with_headers;
-
-		/* How much of the record needs to spill into future pages? */
-		bytes_on_first_page = Min(XLOG_BLCKSZ - (recordPtr % XLOG_BLCKSZ), length);
-		overflow_bytes = length - bytes_on_first_page;
-
-		/* Assume that all future pages will have long headers. */
-		space_per_page = XLOG_BLCKSZ - SizeOfXLogLongPHD;
-
-		/* How many pages will that occupy? */
-		overflow_pages = (overflow_bytes + space_per_page - 1) / space_per_page;
-
-		/* Account for the headers at the start of each page. */
-		length_with_headers = length + overflow_pages * SizeOfXLogLongPHD;
-
-		return flushedUpto < recordPtr + length_with_headers;
-	}
-
-	/*
-	 * Otherwise, assume that XLogPageRead() won't block.  We no longer
-	 * support "waiting" restore_command programs (like the historical
-	 * pg_standby program), but if someone wanted really wanted to use one,
-	 * the consequence would be that we sometimes block waiting for new WAL
-	 * data when we have some already queued decoded records that could be
-	 * replayed.
-	 */
-
-	return true;
+		return flushedUpto;
+	else
+		return UINT64_MAX;
 }
 
 /*
@@ -13791,9 +13752,6 @@ XLogDataReady(XLogReaderState *xlogreader, XLogRecPtr recordPtr,
  * and call XLogPageRead() again with the same arguments. This lets
  * XLogPageRead() to try fetching the record from another source, or to
  * sleep and retry.
- *
- * If nowait is true, then return false immediately if the requested data isn't
- * available yet.
  */
 static int
 XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
@@ -13844,8 +13802,8 @@ retry:
 		 flushedUpto < targetPagePtr + reqLen))
 	{
 		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
-											private->randAccess,
-											private->fetching_ckpt,
+										 private->randAccess,
+										 private->fetching_ckpt,
 										 targetRecPtr))
 		{
 			if (readFile >= 0)
