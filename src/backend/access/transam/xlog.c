@@ -8924,7 +8924,6 @@ StartupXLOG(void)
 
 			InRedo = true;
 
-			elog(LOG, "record = %p, reader->record = %p", record, xlogreader->record);
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							LSN_FORMAT_ARGS(ReadRecPtr))));
