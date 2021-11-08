@@ -783,6 +783,21 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 {
 	DecodedXLogRecord *record;
 
+#ifdef USE_ASSERT_CHECKING
+	if (prefetcher->reader->record)
+	{
+		DecodedXLogRecord *last_record = prefetcher->reader->record;
+
+		for (int i = 0; i < last_record->max_block_id; ++i)
+		{
+			if (last_record->blocks[i].in_use &&
+				last_record->blocks[i].prefetch_buffer_pinned)
+				elog(ERROR,
+					 "redo routine did not read buffer pinned by prefetcher");
+		}
+	}
+#endif
+
 	/*
 	 * See if it's time to reset the prefetching machinery, because a
 	 * relevant GUC was changed.
