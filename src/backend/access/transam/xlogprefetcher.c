@@ -454,15 +454,42 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		}
 
 		/*
-		 * If this is a record that manipulates an SMGR relation (creates,
-		 * truncates), we'll avoid accessing that rnode until it has been
-		 * replayed.
+		 * If this is a record that manipulates an SMGR relation in ways that
+		 * would clash with future references, don't access anything in the
+		 * dangerous range until the record has been replayed.
 		 */
 		if (replaying_lsn < record->lsn && record->header.xl_rmid == RM_SMGR_ID)
 		{
-			xl_smgr_create *xlrec = (xl_smgr_create *) record->main_data;
+			switch (record->header.xl_info & ~XLR_INFO_MASK)
+			{
+			case XLOG_SMGR_CREATE:
+				{
+					xl_smgr_create *xlrec = record->main_data;
 
-			XLogPrefetcherAddFilter(prefetcher, xlrec->rnode, 0, record->lsn);
+					/*
+					 * Don't prefetch anything for this whole relation until
+					 * it has been created.
+					 */
+					XLogPrefetcherAddFilter(prefetcher, xlrec->rnode, 0,
+											record->lsn);
+					break;
+				}
+			case XLOG_SMGR_TRUNCATE:
+				{
+					xl_smgr_truncate *xlrec = record->main_data;
+
+					/*
+					 * Don't prefetch anything in the truncated range until
+					 * the truncation has been performed.
+					 */
+					XLogPrefetcherAddFilter(prefetcher, xlrec->rnode,
+											xlrec->blkno,
+											record->lsn);
+					break;
+			default:
+					break;
+				}
+			}
 		}
 
 		/* Scan the block references, starting where we left off last time. */
