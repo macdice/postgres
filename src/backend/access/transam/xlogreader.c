@@ -424,32 +424,33 @@ XLogNextRecord(XLogReaderState *state,
 	return XLREAD_SUCCESS;
 }
 
-XLogPageReadResult
-XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
+XLogRecord *
+XLogReadRecord(XLogReaderState *state, char **errormsg)
 {
 	XLogPageReadResult result;
 	DecodedXLogRecord *decoded;
 
-	XLogReadAhead(state, &decoded, false /* nonblocking */);
+	/*
+	 * Call XLogReadAhead() in blocking mode to make sure there is something
+	 * in the queue, but we don't use the result.
+	 */
+	XLogReadAhead(state, false /* nonblocking */);
+
+	/* Now read the tail record. */
 	result = XLogNextRecord(state, &decoded, errormsg);
 	if (result == XLREAD_SUCCESS)
 	{
 		/*
-		 * The traditional XLogReadRecord() interface returns a pointer to the
-		 * record's header, not the actual decoded record.  The caller will
-		 * access the decoded record through the XLogRecGetXXX() macros, which
-		 * access the decoded recorded as xlogreader->record.
+		 * XLogReadRecord() returns a pointer to the record's header, not the
+		 * actual decoded record.  The caller will access the decoded record
+		 * through the XLogRecGetXXX() macros, which access the decoded
+		 * recorded as xlogreader->record.
 		 */
 		Assert(state->record == decoded);
-		*out_record = &decoded->header;
-	}
-	else
-	{
-		Assert(state->record == NULL);
-		*out_record = NULL;
+		return &decoded->header;
 	}
 
-	return result;
+	return NULL;
 }
 
 /*
@@ -893,26 +894,23 @@ err:
  * If nonblocking is true, may return NULL due to lack of data or WAL decoding
  * space.
  */
-XLogPageReadResult
+DecodedXLogRecord *
 XLogReadAhead(XLogReaderState *state,
-			  DecodedXLogRecord **out_record,
 			  bool nonblocking)
 {
 	XLogPageReadResult result;
 
 	if (state->errormsg_deferred)
-		return XLREAD_FAIL;
+		return NULL;
 
 	result = XLogDecodeNextRecord(state, nonblocking);
 	if (result == XLREAD_SUCCESS)
 	{
 		Assert(state->decode_queue_head != NULL);
-		*out_record = state->decode_queue_head;
+		return state->decode_queue_head;
 	}
-	else
-		*out_record = NULL;
 
-	return result;
+	return NULL;
 }
 
 /*
@@ -1300,7 +1298,6 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 XLogRecPtr
 XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 {
-	XLogRecord *record;
 	XLogRecPtr	tmpRecPtr;
 	XLogRecPtr	found = InvalidXLogRecPtr;
 	XLogPageHeader header;
@@ -1386,7 +1383,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 	 * or we just jumped over the remaining data of a continuation.
 	 */
 	XLogBeginRead(state, tmpRecPtr);
-	while (XLogReadRecord(state, &record, &errormsg) == XLREAD_SUCCESS)
+	while (XLogReadRecord(state, &errormsg))
 	{
 		/* past the record we've found, break out */
 		if (RecPtr <= state->ReadRecPtr)

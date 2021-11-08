@@ -2838,7 +2838,7 @@ XLogSendLogical(void)
 	 */
 	WalSndCaughtUp = false;
 
-	XLogReadRecord(logical_decoding_ctx->reader, &record, &errm);
+	record = XLogReadRecord(logical_decoding_ctx->reader, &errm);
 
 	/* xlog record was invalid */
 	if (errm != NULL)

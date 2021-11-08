@@ -1087,7 +1087,7 @@ main(int argc, char **argv)
 	for (;;)
 	{
 		/* try to read the next record */
-		XLogReadRecord(xlogreader_state, &record, &errormsg);
+		record = XLogReadRecord(xlogreader_state, &errormsg);
 		if (!record)
 		{
 			if (!config.follow || private.endptr_reached)

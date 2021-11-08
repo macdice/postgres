@@ -359,18 +359,16 @@ typedef enum XLogPageReadResultResult
 }			XLogPageReadResult;
 
 /* Read the next XLog record. Returns NULL on end-of-WAL or failure */
-extern XLogPageReadResult XLogReadRecord(XLogReaderState *state,
-										 XLogRecord **record,
-										 char **errormsg);
+extern XLogRecord *XLogReadRecord(XLogReaderState *state,
+								  char **errormsg);
 
-/* Read the next record. XXX */
+/* Read the next record. TM:XXX */
 extern XLogPageReadResult XLogNextRecord(XLogReaderState *state,
 										 DecodedXLogRecord **out_record,
 										 char **errormsg);
 
 /* Try to read ahead, if there is data and space. */
-extern XLogPageReadResult XLogReadAhead(XLogReaderState *state,
-										DecodedXLogRecord **out_record,
+extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state,
 										bool nonblocking);
 
 /* Validate a page */

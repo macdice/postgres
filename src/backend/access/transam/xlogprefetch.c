@@ -502,33 +502,26 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			 * nothing else to do.
 			 */
 			nonblocking = XLogReaderHasQueuedRecordOrError(reader);
-			
-			switch (XLogReadAhead(prefetcher->reader,
-								  &prefetcher->record,
-								  nonblocking))
-			{
-			case XLREAD_FAIL:
-				/*
-				 * We can't read any more.  The error will be returned via
-				 * XLogNextRecord() after any other records that appear before
-				 * it in the decoded record queue.
-				 */
-				return PGSR_NEXT_AGAIN;
-			case XLREAD_WOULDBLOCK:
-				/*
-				 * No future data available right now, and XLogReadPage()
-				 * decided not to wait, because there are decoded records in
-				 * the queue ready to be replayed first.
-				 */
-				return PGSR_NEXT_AGAIN;
-			case XLREAD_SUCCESS:
-				/* We have a new record to process. */
-				prefetcher->next_block_id = 0;
-				break;
-			}
-		}
 
-		record = prefetcher->record;
+			record = XLogReadAhead(prefetcher->reader, nonblocking);
+			if (record == NULL)
+			{
+				/*
+				 * We can't read any more, due to an error or lack of data in
+				 * nonblocking mode.
+				 */
+				return PGSR_NEXT_AGAIN;
+			}
+
+			/* We have a new record to process. */
+			prefetcher->record = record;
+			prefetcher->next_block_id = 0;
+		}
+		else
+		{
+			/* Continue to process from last call, or last loop. */
+			record = prefetcher->record;
+		}
 
 		/*
 		 * If this is a record that manipulates an SMGR relation (creates,
