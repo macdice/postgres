@@ -498,8 +498,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			/*
 			 * If there are already records or an error queued up that could
 			 * be replayed, we don't want to block here.  Otherwise, it's OK
-			 * to wait for more data because there's nothing else for the
-			 * caller to do.
+			 * to block waiting for more data: presumably the caller has
+			 * nothing else to do.
 			 */
 			nonblocking = XLogReaderHasQueuedRecordOrError(reader);
 			
