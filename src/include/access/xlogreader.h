@@ -59,7 +59,6 @@ typedef struct WALSegmentContext
 typedef struct XLogReaderState XLogReaderState;
 
 /* Function type definitions for various xlogreader interactions */
-typedef XLogRecPtr (*XLogDataReadyCB) (XLogReaderState *xlogreader);
 typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen,
@@ -72,15 +71,6 @@ typedef void (*WALSegmentCloseCB) (XLogReaderState *xlogreader);
 
 typedef struct XLogReaderRoutine
 {
-	/*
-	 * Data ready callback
-	 *
-	 * This optional callback reports how far ahead XLogReadAhead() can read
-	 * without blocking.  It must be supplied if XLogReadAhead() is called
-	 * with nonblocking set to true.
-	 */
-	XLogDataReadyCB data_ready;
-
 	/*
 	 * Data input callback
 	 *
@@ -319,6 +309,12 @@ struct XLogReaderState
 	/* Buffer to hold error message */
 	char	   *errormsg_buf;
 	bool		errormsg_deferred;
+
+	/*
+	 * Flag to indicate to XLogPageReadCB that it should not block, during
+	 * read ahead.
+	 */
+	bool		nonblocking;
 };
 
 /*
@@ -354,31 +350,28 @@ extern void XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr);
 extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr);
 #endif							/* FRONTEND */
 
-/*
- * Return code from XLogReadRecord.  These can also be returned by
- * XLogPageReadCB.
- */
-typedef enum XLogReadRecordResult
+/* Return values from XLogPageReadCB. */
+typedef enum XLogPageReadResultResult
 {
 	XLREAD_SUCCESS = 0,			/* record is successfully read */
 	XLREAD_FAIL = -1,			/* failed during reading a record */
-	XLREAD_WAIT = -2			/* caller should wait for more data */
-}			XLogReadRecordResult;
+	XLREAD_WOULDBLOCK = -2		/* nonblocking mode only, no data */
+}			XLogPageReadResult;
 
 /* Read the next XLog record. Returns NULL on end-of-WAL or failure */
-extern XLogReadRecordResult XLogReadRecord(XLogReaderState *state,
-										   XLogRecord **record,
-										   char **errormsg);
+extern XLogPageReadResult XLogReadRecord(XLogReaderState *state,
+										 XLogRecord **record,
+										 char **errormsg);
 
 /* Read the next record. XXX */
-extern XLogReadRecordResult XLogNextRecord(XLogReaderState *state,
-										   DecodedXLogRecord **out_record,
-										   char **errormsg);
+extern XLogPageReadResult XLogNextRecord(XLogReaderState *state,
+										 DecodedXLogRecord **out_record,
+										 char **errormsg);
 
 /* Try to read ahead, if there is data and space. */
-extern XLogReadRecordResult XLogReadAhead(XLogReaderState *state,
-										  DecodedXLogRecord **out_record,
-										  bool nonblocking);
+extern XLogPageReadResult XLogReadAhead(XLogReaderState *state,
+										DecodedXLogRecord **out_record,
+										bool nonblocking);
 
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,

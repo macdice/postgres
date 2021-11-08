@@ -1014,8 +1014,9 @@ static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
 static XLogRecPtr XLogDataReady(XLogReaderState *xlogreader);
 static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
-static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-										bool fetching_ckpt, XLogRecPtr tliRecPtr);
+static XLogPageReadResult WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
+													  bool fetching_ckpt, XLogRecPtr tliRecPtr,
+													  bool nonblocking);
 static void XLogShutdownWalRcv(void);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
@@ -8226,8 +8227,7 @@ StartupXLOG(void)
 	MemSet(&private, 0, sizeof(XLogPageReadPrivate));
 	xlogreader =
 		XLogReaderAllocate(wal_segment_size, NULL,
-						   XL_ROUTINE(.data_ready = &XLogDataReady,
-									  .page_read = &XLogPageRead,
+						   XL_ROUTINE(.page_read = &XLogPageRead,
 									  .segment_open = NULL,
 									  .segment_close = wal_segment_close),
 						   &private);
@@ -9147,7 +9147,6 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
-			XLogPrefetcherFree(xlogprefetcher);
 
 			if (reachedRecoveryTarget)
 			{
@@ -9618,6 +9617,9 @@ StartupXLOG(void)
 	 */
 	if (standbyState != STANDBY_DISABLED)
 		ShutdownRecoveryTransactionEnvironment();
+
+	/* Shut down xlogprefetcher */
+	XLogPrefetcherFree(xlogprefetcher);
 
 	/* Shut down xlogreader */
 	if (readFile >= 0)
@@ -13715,22 +13717,6 @@ CancelBackup(void)
 }
 
 /*
- * How far could XLogPageRead() read without blocking?
-
- * Errs on the size of claiming that data is not ready yet, by using the
- * out-of-date "flushedUpTo" variable.  This is acceptable for the current
- * use, allowing opportunistic readahead.
- */
-static XLogRecPtr
-XLogDataReady(XLogReaderState *xlogreader)
-{
-	if (readSource == XLOG_FROM_STREAM)
-		return flushedUpto;
-	else
-		return UINT64_MAX;
-}
-
-/*
  * Read the XLOG page containing RecPtr into readBuf (if not read already).
  * Returns number of bytes read, if the page is read successfully, or -1
  * in case of errors.  When errors occur, they are ereport'ed, but only
@@ -13752,6 +13738,9 @@ XLogDataReady(XLogReaderState *xlogreader)
  * and call XLogPageRead() again with the same arguments. This lets
  * XLogPageRead() to try fetching the record from another source, or to
  * sleep and retry.
+ *
+ * While prefetching, xlogreader->nonblocking may be set.  In that case,
+ * return XLREAD_WOULDBLOCK if we'd otherwise have to wait.
  */
 static int
 XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
@@ -13801,17 +13790,23 @@ retry:
 		(readSource == XLOG_FROM_STREAM &&
 		 flushedUpto < targetPagePtr + reqLen))
 	{
-		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
-										 private->randAccess,
-										 private->fetching_ckpt,
-										 targetRecPtr))
+		switch (WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
+											private->randAccess,
+											private->fetching_ckpt,
+											targetRecPtr,
+											xlogreader->nonblocking))
 		{
+		case XLREAD_WOULDBLOCK:
+			return XLREAD_WOULDBLOCK;
+		case XLREAD_FAIL:
 			if (readFile >= 0)
 				close(readFile);
 			readFile = -1;
 			readLen = 0;
 			readSource = XLOG_FROM_ANY;
-			return -1;
+			return XLREAD_FAIL;
+		case XLREAD_SUCCESS:
+			break;
 		}
 	}
 
@@ -13922,7 +13917,7 @@ next_record_is_invalid:
 	if (StandbyMode)
 		goto retry;
 	else
-		return -1;
+		return XLREAD_FAIL;
 }
 
 /*
@@ -13950,10 +13945,14 @@ next_record_is_invalid:
  * containing it (if not open already), and returns true. When end of standby
  * mode is triggered by the user, and there is no more WAL available, returns
  * false.
+ *
+ * If nonblocking is true, then give up immediately if we can't satisfy the
+ * request, returning XLREAD_WOULDBLOCK instead of waiting.
  */
-static bool
+static XLogPageReadResult
 WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-							bool fetching_ckpt, XLogRecPtr tliRecPtr)
+							bool fetching_ckpt, XLogRecPtr tliRecPtr,
+							bool nonblocking)
 {
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
@@ -14007,6 +14006,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		 */
 		if (lastSourceFailed)
 		{
+			/*
+			 * Don't allow any retry loops to occur during nonblocking
+			 * readahead.  Let the caller process everything that has been
+			 * decoded already first.
+			 */
+			if (nonblocking)
+				return XLREAD_WOULDBLOCK;
+
 			switch (currentSource)
 			{
 				case XLOG_FROM_ARCHIVE:
@@ -14021,7 +14028,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					if (StandbyMode && CheckForStandbyTrigger())
 					{
 						XLogShutdownWalRcv();
-						return false;
+						return XLREAD_FAIL;
 					}
 
 					/*
@@ -14029,7 +14036,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * and pg_wal.
 					 */
 					if (!StandbyMode)
-						return false;
+						return XLREAD_FAIL;
 
 					/*
 					 * Move to XLOG_FROM_STREAM state, and set to start a
@@ -14037,7 +14044,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					currentSource = XLOG_FROM_STREAM;
 					startWalReceiver = true;
-					XLogPrefetchReconfigure();
+					XLogPrefetchReconfigure(); /* TM:XXX why? */
 					break;
 
 				case XLOG_FROM_STREAM:
@@ -14171,7 +14178,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 											  currentSource == XLOG_FROM_ARCHIVE ? XLOG_FROM_ANY :
 											  currentSource);
 				if (readFile >= 0)
-					return true;		/* success! */
+					return XLREAD_SUCCESS;		/* success! */
 
 				/*
 				 * Nope, not found in archive or pg_wal.
@@ -14329,10 +14336,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 							/* just make sure source info is correct... */
 							readSource = XLOG_FROM_STREAM;
 							XLogReceiptSource = XLOG_FROM_STREAM;
-							return true;
+							return XLREAD_SUCCESS;
 						}
 						break;
 					}
+
+					/* In nonblocking mode, return rather than sleeping. */
+					if (nonblocking)
+						return XLREAD_WOULDBLOCK;
 
 					/*
 					 * Data not here yet. Check for trigger, then wait for
@@ -14341,7 +14352,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					if (CheckForStandbyTrigger())
 					{
 						/*
-						 * Note that we don't return false immediately here.
+						 * Note that we don't return XLREAD_FAIL immediately here.
 						 * After being triggered, we still want to replay all
 						 * the WAL that was already streamed. It's in pg_wal
 						 * now, so we just treat this as a failure, and the
@@ -14400,7 +14411,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		HandleStartupProcInterrupts();
 	}
 
-	return false;				/* not reached */
+	return XLREAD_FAIL;				/* not reached */
 }
 
 /*

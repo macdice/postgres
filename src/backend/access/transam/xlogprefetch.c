@@ -514,7 +514,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				 * it in the decoded record queue.
 				 */
 				return PGSR_NEXT_AGAIN;
-			case XLREAD_WAIT:
+			case XLREAD_WOULDBLOCK:
 				/*
 				 * No future data available right now, and XLogReadPage()
 				 * decided not to wait, because there are decoded records in
@@ -839,12 +839,12 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
  * A wrapper for XLogReadRecord() that provides the same interface, but also
  * tries to initiate IO ahead of time.
  */
-XLogReadRecordResult
+XLogPageReadResult
 XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 						 XLogRecord **out_record,
 						 char **errmsg)
 {
-	XLogReadRecordResult result;
+	XLogPageReadResult result;
 	DecodedXLogRecord *record;
 
 	/*	

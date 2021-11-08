@@ -42,7 +42,7 @@ static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
 							 int reqLen);
 static void XLogReaderInvalReadState(XLogReaderState *state);
-static XLogReadRecordResult XLogDecodeNextRecord(XLogReaderState *state, bool non_blocking);
+static XLogPageReadResult XLogDecodeNextRecord(XLogReaderState *state, bool non_blocking);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 								  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
@@ -363,7 +363,7 @@ XLogReleasePreviousRecord(XLogReaderState *state)
  *
  * XXX Fix above!
  */
-XLogReadRecordResult
+XLogPageReadResult
 XLogNextRecord(XLogReaderState *state,
 			   DecodedXLogRecord **out_record,
 			   char **errormsg)
@@ -387,7 +387,7 @@ XLogNextRecord(XLogReaderState *state,
 		/* Caller should use XLogReadAhead() to decode more records. */
 		*errormsg = NULL;
 		*out_record = NULL;
-		return XLREAD_WAIT;
+		return XLREAD_WOULDBLOCK;
 	}
 
 	/*
@@ -424,10 +424,10 @@ XLogNextRecord(XLogReaderState *state,
 	return XLREAD_SUCCESS;
 }
 
-XLogReadRecordResult
+XLogPageReadResult
 XLogReadRecord(XLogReaderState *state, XLogRecord **out_record, char **errormsg)
 {
-	XLogReadRecordResult result;
+	XLogPageReadResult result;
 	DecodedXLogRecord *decoded;
 
 	XLogReadAhead(state, &decoded, false /* nonblocking */);
@@ -523,45 +523,12 @@ XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversi
 	return decoded;
 }
 
-/*
- * Given a record pointer and the xl_tot_len value from the start of the
- * record, what is the maximum possible LSN for the next record?  Exaggerates,
- * assuming long page headers.
- */
-static XLogRecPtr
-XLogPastRecord(XLogRecPtr recordPtr, uint32 xl_tot_len)
-{
-	int space_per_page;
-	int offset_on_first_page;
-	int bytes_on_first_page;
-	int overflow_bytes;
-	int overflow_pages;
-	int length_with_headers;
-
-	/* How much of the record needs to spill into future pages? */
-	offset_on_first_page = recordPtr % XLOG_BLCKSZ;
-	bytes_on_first_page = Min(XLOG_BLCKSZ - offset_on_first_page, xl_tot_len);
-	overflow_bytes = xl_tot_len - bytes_on_first_page;
-
-	/* Assume that all future pages will have long headers. */
-	space_per_page = XLOG_BLCKSZ - SizeOfXLogLongPHD;
-
-	/* How many pages will that occupy? */
-	overflow_pages = (overflow_bytes + space_per_page - 1) / space_per_page;
-
-	/* Account for the headers at the start of each page. */
-	length_with_headers = xl_tot_len + overflow_pages * SizeOfXLogLongPHD;
-
-	return recordPtr + length_with_headers;
-}
-
-static XLogReadRecordResult
+static XLogPageReadResult
 XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 {
 	XLogRecPtr	RecPtr;
 	XLogRecord *record;
 	XLogRecPtr	targetPagePtr;
-	XLogRecPtr	dataReadyPtr;
 	bool		randAccess;
 	uint32		len,
 				total_len;
@@ -571,12 +538,6 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	int			readOff;
 	DecodedXLogRecord *decoded;
 	char	   *errormsg; /* not used */
-
-	/* How far are we prepared to read ahead? */
-	if (nonblocking)
-		dataReadyPtr = state->routine.data_ready(state);
-	else
-		dataReadyPtr = UINT64_MAX;
 
 	/*
 	 * randAccess indicates whether to verify the previous-record pointer of
@@ -614,17 +575,12 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 		randAccess = true;
 	}
 
+	state->nonblocking = nonblocking;
+	
 	state->currRecPtr = RecPtr;
 
 	targetPagePtr = RecPtr - (RecPtr % XLOG_BLCKSZ);
 	targetRecOff = RecPtr % XLOG_BLCKSZ;
-
-	/*
-	 * Make sure we can read at least the length without blocking, if we're in
-	 * nonblocking mode.
-	 */
-	if (nonblocking && RecPtr + sizeof(total_len) > dataReadyPtr)
-			return XLREAD_WAIT;
 
 	/*
 	 * Read the page containing the record into state->readBuf. Request enough
@@ -633,7 +589,9 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	 */
 	readOff = ReadPageInternal(state, targetPagePtr,
 							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ));
-	if (readOff < 0)
+	if (readOff == XLREAD_WOULDBLOCK)
+		return XLREAD_WOULDBLOCK;
+	else if (readOff < 0)
 		goto err;
 
 	/*
@@ -709,14 +667,6 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	}
 
 	/*
-	 * Make we can read the whole record, even if it's multi-page, in
-	 * nonblocking mode.  Note that if we give up here, we still have the
-	 * previous buffer contents, so we can retry.
-	 */
-	if (nonblocking && XLogPastRecord(RecPtr, total_len) > dataReadyPtr)
-		return XLREAD_WAIT;
-
-	/*
 	 * Find space to decode this record.  Don't allow oversized allocation if
 	 * the caller requested nonblocking.  Otherwise, we *have* to try to
 	 * decode the record now because the caller has nothing else to do, so
@@ -733,7 +683,7 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 		 * with that problem by consuming some records.
 		 */
 		if (nonblocking)
-			return XLREAD_WAIT;
+			return XLREAD_WOULDBLOCK;
 
 		/* We failed to allocate memory for an  oversized record. */
 		report_invalid_record(state,
@@ -778,8 +728,8 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 									   Min(total_len - gotlen + SizeOfXLogShortPHD,
 										   XLOG_BLCKSZ));
 
-			if (readOff == XLREAD_WAIT)
-				return XLREAD_WAIT;
+			if (readOff == XLREAD_WOULDBLOCK)
+				return XLREAD_WOULDBLOCK;
 			else if (readOff < 0)
 				goto err;
 
@@ -859,8 +809,8 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 		/* Wait for the record data to become available */
 		readOff = ReadPageInternal(state, targetPagePtr,
 								   Min(targetRecOff + total_len, XLOG_BLCKSZ));
-		if (readOff == XLREAD_WAIT)
-			return XLREAD_WAIT;
+		if (readOff == XLREAD_WOULDBLOCK)
+			return XLREAD_WOULDBLOCK;
 		else if (readOff < 0)
 			goto err;
 
@@ -943,12 +893,12 @@ err:
  * If nonblocking is true, may return NULL due to lack of data or WAL decoding
  * space.
  */
-XLogReadRecordResult
+XLogPageReadResult
 XLogReadAhead(XLogReaderState *state,
 			  DecodedXLogRecord **out_record,
 			  bool nonblocking)
 {
-	XLogReadRecordResult result;
+	XLogPageReadResult result;
 
 	if (state->errormsg_deferred)
 		return XLREAD_FAIL;
@@ -1012,8 +962,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		readLen = state->routine.page_read(state, targetSegmentPtr, XLOG_BLCKSZ,
 										   state->currRecPtr,
 										   state->readBuf);
-		if (readLen == XLREAD_WAIT)
-			return XLREAD_WAIT;
+		if (readLen == XLREAD_WOULDBLOCK)
+			return XLREAD_WOULDBLOCK;
 		else if (readLen < 0)
 			goto err;
 
@@ -1032,8 +982,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	readLen = state->routine.page_read(state, pageptr, Max(reqLen, SizeOfXLogShortPHD),
 									   state->currRecPtr,
 									   state->readBuf);
-	if (readLen == XLREAD_WAIT)
-		return XLREAD_WAIT;
+	if (readLen == XLREAD_WOULDBLOCK)
+		return XLREAD_WOULDBLOCK;
 	else if (readLen < 0)
 		goto err;
 
@@ -1053,8 +1003,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		readLen = state->routine.page_read(state, pageptr, XLogPageHeaderSize(hdr),
 										   state->currRecPtr,
 										   state->readBuf);
-		if (readLen == XLREAD_WAIT)
-			return XLREAD_WAIT;
+		if (readLen == XLREAD_WOULDBLOCK)
+			return XLREAD_WOULDBLOCK;
 		else if (readLen < 0)
 			goto err;
 	}
