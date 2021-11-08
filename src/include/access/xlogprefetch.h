@@ -39,8 +39,7 @@ extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
 extern void XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
 									XLogRecPtr recPtr);
 
-extern XLogPageReadResult XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
-												   XLogRecord **out_record,
-												   char **errmsg);
+extern XLogRecord *XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
+											char **errmsg);
 
 #endif

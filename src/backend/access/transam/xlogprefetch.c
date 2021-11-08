@@ -855,12 +855,9 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
  * A wrapper for XLogReadRecord() that provides the same interface, but also
  * tries to initiate IO ahead of time.
  */
-XLogPageReadResult
-XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
-						 XLogRecord **out_record,
-						 char **errmsg)
+XLogRecord *
+XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 {
-	XLogPageReadResult result;
 	DecodedXLogRecord *record;
 
 	/*
@@ -890,12 +887,9 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		pg_streaming_read_prefetch(prefetcher->streaming_read);
 
 	/* Read the next record. */
-	result = XLogNextRecord(prefetcher->reader, &record, errmsg);
-	if (result != XLREAD_SUCCESS)
-	{
-		*out_record = NULL;
-		return result;
-	}
+	record = XLogNextRecord(prefetcher->reader, errmsg);
+	if (!record)
+		return NULL;
 
 	/*
 	 * The record we just got is the "current" one, for the benefit of the
@@ -961,11 +955,9 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 		}
 	}
 
-	*out_record = &record->header;
+	Assert(record == prefetcher->reader->record);
 
-	Assert(*out_record == &prefetcher->reader->record->header);
-
-	return XLREAD_SUCCESS;
+	return &record->header;
 }
 
 void

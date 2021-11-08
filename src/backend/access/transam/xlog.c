@@ -5909,7 +5909,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 		char	   *errormsg;
 
 		if (xlogprefetcher)
-			XLogPrefetcherReadRecord(xlogprefetcher, &record, &errormsg);
+			record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
 		else
 			record = XLogReadRecord(xlogreader, &errormsg);
 		ReadRecPtr = xlogreader->ReadRecPtr;

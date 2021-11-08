@@ -360,9 +360,8 @@ typedef enum XLogPageReadResultResult
 extern XLogRecord *XLogReadRecord(XLogReaderState *state,
 								  char **errormsg);
 
-/* Read the next record. TM:XXX */
-extern XLogPageReadResult XLogNextRecord(XLogReaderState *state,
-										 DecodedXLogRecord **out_record,
+/* Consume the next record or error. */
+extern DecodedXLogRecord *XLogNextRecord(XLogReaderState *state,
 										 char **errormsg);
 
 /* Try to read ahead, if there is data and space. */

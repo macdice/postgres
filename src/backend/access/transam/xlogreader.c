@@ -350,10 +350,8 @@ XLogReleasePreviousRecord(XLogReaderState *state)
  *
  * XXX Fix above!
  */
-XLogPageReadResult
-XLogNextRecord(XLogReaderState *state,
-			   DecodedXLogRecord **out_record,
-			   char **errormsg)
+DecodedXLogRecord *
+XLogNextRecord(XLogReaderState *state, char **errormsg)
 {
 	/* Release the last record returned by XLogNextRecord(). */
 	if (state->record)
@@ -368,13 +366,8 @@ XLogNextRecord(XLogReaderState *state,
 			else
 				*errormsg = NULL;
 			state->errormsg_deferred = false;
-			return XLREAD_FAIL;
 		}
-
-		/* Caller should use XLogReadAhead() to decode more records. */
-		*errormsg = NULL;
-		*out_record = NULL;
-		return XLREAD_WOULDBLOCK;
+		return NULL;
 	}
 
 	/*
@@ -406,15 +399,13 @@ XLogNextRecord(XLogReaderState *state,
 	state->EndRecPtr = state->record->next_lsn;
 
 	*errormsg = NULL;
-	*out_record = state->record;
 
-	return XLREAD_SUCCESS;
+	return state->record;
 }
 
 XLogRecord *
 XLogReadRecord(XLogReaderState *state, char **errormsg)
 {
-	XLogPageReadResult result;
 	DecodedXLogRecord *decoded;
 
 	/*
@@ -425,8 +416,8 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 		XLogReadAhead(state, false /* nonblocking */);
 
 	/* Consume the tail record or error. */
-	result = XLogNextRecord(state, &decoded, errormsg);
-	if (result == XLREAD_SUCCESS)
+	decoded = XLogNextRecord(state, errormsg);
+	if (decoded)
 	{
 		/*
 		 * XLogReadRecord() returns a pointer to the record's header, not the
@@ -883,8 +874,7 @@ err:
  * space.
  */
 DecodedXLogRecord *
-XLogReadAhead(XLogReaderState *state,
-			  bool nonblocking)
+XLogReadAhead(XLogReaderState *state, bool nonblocking)
 {
 	XLogPageReadResult result;
 
