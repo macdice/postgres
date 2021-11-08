@@ -8292,6 +8292,7 @@ StartupXLOG(void)
 			 */
 			if (checkPoint.redo < checkPointLoc)
 			{
+				/* TM:XXX this case is broken in t/002_archive.pl, the read spins! */
 				XLogBeginRead(xlogreader, checkPoint.redo);
 				if (!ReadRecord(xlogprefetcher, xlogreader, LOG, false))
 					ereport(FATAL,
