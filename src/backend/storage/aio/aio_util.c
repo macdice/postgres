@@ -415,6 +415,12 @@ pg_streaming_read_inflight(PgStreamingRead *pgsr)
 	return pgsr->inflight_count;
 }
 
+uint32
+pg_streaming_read_completed(PgStreamingRead *pgsr)
+{
+	return pgsr->completed_count;
+}
+
 PgStreamingRead *
 pg_streaming_read_alloc(uint32 iodepth, uintptr_t pgsr_private,
 						PgStreamingReadDetermineNextCB determine_next_cb,

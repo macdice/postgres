@@ -117,7 +117,8 @@ typedef struct XLogPrefetchStats
 	uint32		reset_handled;
 
 	/* Dynamic values */
-	int			wal_distance;	/* Number of bytes ahead in the WAL. */
+	int			wal_distance;	/* Number of WAL bytes ahead. */
+	int			block_distance;	/* Number of block references ahead. */
 	int			io_depth;		/* Number of I/Os in progress. */
 } XLogPrefetchStats;
 
@@ -326,8 +327,9 @@ XLogPrefetcherAllocate(XLogReaderState *reader)
 										   HASH_ELEM | HASH_BLOBS);
 	dlist_init(&prefetcher->filter_queue);
 
-	SharedStats->io_depth = 0;
 	SharedStats->wal_distance = 0;
+	SharedStats->block_distance = 0;
+	SharedStats->io_depth = 0;
 
 	/*
 	 * The allowed IO depth is based on the maintenance_io_concurrency setting.
@@ -361,6 +363,7 @@ static void
 XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 {
 	uint32 io_depth;
+	uint32 completed;
 	uint32 reset_request;
 	int64 wal_distance;
 
@@ -371,11 +374,13 @@ XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 	else
 		wal_distance = 0;
 
-	/* How many IOs are currently in flight? */
+	/* How many IOs are currently in flight and completed? */
 	io_depth = pg_streaming_read_inflight(prefetcher->streaming_read);
+	completed = pg_streaming_read_completed(prefetcher->streaming_read);
 
 	/* Update the instantaneous stats visible in pg_stat_prefetch_recovery. */
 	SharedStats->io_depth = io_depth;
+	SharedStats->block_distance = io_depth + completed;
 	SharedStats->wal_distance = wal_distance;
 
 	/*
@@ -657,7 +662,8 @@ pg_stat_get_prefetch_recovery(PG_FUNCTION_ARGS)
 	values[4] = Int64GetDatum(pg_atomic_read_u64(&SharedStats->skip_new));
 	values[5] = Int64GetDatum(pg_atomic_read_u64(&SharedStats->skip_fpw));
 	values[6] = Int32GetDatum(SharedStats->wal_distance);
-	values[7] = Int32GetDatum(SharedStats->io_depth);
+	values[7] = Int32GetDatum(SharedStats->block_distance);
+	values[8] = Int32GetDatum(SharedStats->io_depth);
 	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	tuplestore_donestoring(tupstore);
 

@@ -287,5 +287,6 @@ extern void pg_streaming_read_free(PgStreamingRead *pgsr);
 extern uintptr_t pg_streaming_read_get_next(PgStreamingRead *pgsr);
 extern void pg_streaming_read_prefetch(PgStreamingRead *pgsr);
 extern uint32 pg_streaming_read_inflight(PgStreamingRead *pgsr);
+extern uint32 pg_streaming_read_completed(PgStreamingRead *pgsr);
 
 #endif							/* AIO_H */

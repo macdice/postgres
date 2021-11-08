@@ -908,6 +908,7 @@ CREATE VIEW pg_stat_prefetch_recovery AS
             s.skip_new,
             s.skip_fpw,
             s.wal_distance,
+            s.block_distance,
             s.io_depth
      FROM pg_stat_get_prefetch_recovery() s;
 
