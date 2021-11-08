@@ -128,12 +128,12 @@ typedef struct
 
 	/*
 	 * A buffer the block was recently seen in.  This can be set by
-	 * xlogprefetch.c, so that XLogReadBufferForRedo() can potentially avoid a
-	 * (second) buffer mapping table lookup.
+	 * xlogprefetcher.c, so that XLogReadBufferForRedo() can potentially avoid
+	 * a (second) buffer mapping table lookup.
 	 */
 	Buffer		recent_buffer;
 
-	/* Workspace used by xlogprefetch.c */
+	/* Workspace used by xlogprefetcher.c */
 	uint8		prefetch_flags;
 
 	/* copy of the fork_flags field from the XLogRecordBlockHeader */

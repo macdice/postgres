@@ -22,7 +22,7 @@
 #include "access/subtrans.h"
 #include "access/syncscan.h"
 #include "access/twophase.h"
-#include "access/xlogprefetch.h"
+#include "access/xlogprefetcher.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"

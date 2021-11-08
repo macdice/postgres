@@ -1,17 +1,17 @@
 /*-------------------------------------------------------------------------
  *
- * xlogprefetch.h
+ * xlogprefetcher.h
  *		Declarations for the recovery prefetching module.
  *
  * Portions Copyright (c) 2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
- *		src/include/access/xlogprefetch.h
+ *		src/include/access/xlogprefetcher.h
  *-------------------------------------------------------------------------
  */
-#ifndef XLOGPREFETCH_H
-#define XLOGPREFETCH_H
+#ifndef XLOGPREFETCHER_H
+#define XLOGPREFETCHER_H
 
 #include "access/xlogdefs.h"
 #include "storage/aio.h"

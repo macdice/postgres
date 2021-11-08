@@ -203,7 +203,7 @@ typedef struct PgStat_TableXactStatus
 
 /*
  * Recovery prefetching statistics persisted on disk by pgstat.c, but kept in
- * shared memory by xlogprefetch.c.
+ * shared memory by xlogprefetcher.c.
  */
 typedef struct PgStat_RecoveryPrefetchStats
 {

@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * xlogprefetch.c
+ * xlogprefetcher.c
  *		Prefetching support for recovery.
  *
  * Portions Copyright (c) 2021, PostgreSQL Global Development Group
@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *		src/backend/access/transam/xlogprefetch.c
+ *		src/backend/access/transam/xlogprefetcher.c
  *
  * The goal of this module is to read future WAL records and issue
  * PrefetchSharedBuffer() calls for referenced blocks, so that we avoid I/O
@@ -36,7 +36,7 @@
 #include "postgres.h"
 
 #include "access/xlog.h"
-#include "access/xlogprefetch.h"
+#include "access/xlogprefetcher.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/pg_class.h"

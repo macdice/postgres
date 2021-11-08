@@ -38,7 +38,7 @@
 #include "access/transam.h"
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
-#include "access/xlogprefetch.h"
+#include "access/xlogprefetcher.h"
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_database.h"
