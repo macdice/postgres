@@ -464,7 +464,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			{
 			case XLOG_SMGR_CREATE:
 				{
-					xl_smgr_create *xlrec = record->main_data;
+					xl_smgr_create *xlrec = (xl_smgr_create *)
+						record->main_data;
 
 					/*
 					 * Don't prefetch anything for this whole relation until
@@ -476,7 +477,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				}
 			case XLOG_SMGR_TRUNCATE:
 				{
-					xl_smgr_truncate *xlrec = record->main_data;
+					xl_smgr_truncate *xlrec = (xl_smgr_truncate *)
+						record->main_data;
 
 					/*
 					 * Don't prefetch anything in the truncated range until
