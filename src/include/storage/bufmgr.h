@@ -18,6 +18,7 @@
 #include "storage/buf.h"
 #include "storage/bufpage.h"
 #include "storage/relfilenode.h"
+#include "storage/smgr.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 
@@ -195,6 +196,10 @@ extern Buffer ReadBufferWithoutRelcache(RelFileNode rnode,
 										ForkNumber forkNum, BlockNumber blockNum,
 										ReadBufferMode mode, BufferAccessStrategy strategy);
 struct PgAioInProgress;
+extern Buffer ReadBufferAsyncSMgr(SMgrRelation smgr_reln, char relpersistence,
+								  ForkNumber forkNum, BlockNumber blockNum,
+								  ReadBufferMode mode, BufferAccessStrategy strategy,
+								  bool *already_valid, struct PgAioInProgress** aio);
 extern Buffer ReadBufferAsync(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 							  ReadBufferMode mode, BufferAccessStrategy strategy,
 							  bool *already_valid, struct PgAioInProgress** aio);
