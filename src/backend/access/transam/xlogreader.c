@@ -359,12 +359,11 @@ XLogNextRecord(XLogReaderState *state, char **errormsg)
 
 	if (state->decode_queue_tail == NULL)
 	{
+		*errormsg = NULL;
 		if (state->errormsg_deferred)
 		{
 			if (state->errormsg_buf[0] != '\0')
 				*errormsg = state->errormsg_buf;
-			else
-				*errormsg = NULL;
 			state->errormsg_deferred = false;
 		}
 		return NULL;
