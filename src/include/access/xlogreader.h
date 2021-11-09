@@ -430,5 +430,9 @@ extern char *XLogRecGetBlockData(XLogReaderState *record, uint8 block_id, Size *
 extern bool XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 							   RelFileNode *rnode, ForkNumber *forknum,
 							   BlockNumber *blknum);
+extern bool XLogRecGetBlockInfo(XLogReaderState *record, uint8 block_id,
+								RelFileNode *rnode, ForkNumber *forknum,
+								BlockNumber *blknum,
+								Buffer *prefetch_buffer);
 
 #endif							/* XLOGREADER_H */

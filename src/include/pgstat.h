@@ -200,7 +200,6 @@ typedef struct PgStat_TableXactStatus
 	struct PgStat_TableXactStatus *next;	/* next of same subxact */
 } PgStat_TableXactStatus;
 
-
 /* ------------------------------------------------------------
  * Message formats follow
  * ------------------------------------------------------------
@@ -535,7 +534,6 @@ typedef struct PgStat_MsgReplSlot
 	PgStat_Counter m_total_txns;
 	PgStat_Counter m_total_bytes;
 } PgStat_MsgReplSlot;
-
 
 /* ----------
  * PgStat_MsgRecoveryConflict	Sent by the backend upon recovery conflict

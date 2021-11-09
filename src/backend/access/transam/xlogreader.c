@@ -1899,6 +1899,15 @@ bool
 XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 				   RelFileNode *rnode, ForkNumber *forknum, BlockNumber *blknum)
 {
+	return XLogRecGetBlockInfo(record, block_id, rnode, forknum, blknum, NULL);
+}
+
+bool
+XLogRecGetBlockInfo(XLogReaderState *record, uint8 block_id,
+					RelFileNode *rnode, ForkNumber *forknum,
+					BlockNumber *blknum,
+					Buffer *prefetch_buffer)
+{
 	DecodedBkpBlock *bkpb;
 
 	if (block_id > record->record->max_block_id ||
@@ -1912,6 +1921,8 @@ XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 		*forknum = bkpb->forknum;
 	if (blknum)
 		*blknum = bkpb->blkno;
+	if (prefetch_buffer)
+		*prefetch_buffer = bkpb->prefetch_buffer;
 	return true;
 }
 
