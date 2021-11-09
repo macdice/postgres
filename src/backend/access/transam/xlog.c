@@ -35,6 +35,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "access/xloginsert.h"
+#include "access/xlogprefetcher.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/catversion.h"
@@ -114,6 +115,7 @@ int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
+int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
 
 #ifdef WAL_DEBUG
@@ -918,10 +920,13 @@ static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
 static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
-static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-										bool fetching_ckpt, XLogRecPtr tliRecPtr,
-										TimeLineID replayTLI,
-										XLogRecPtr replayLSN);
+static XLogPageReadResult WaitForWALToBecomeAvailable(XLogRecPtr RecPtr,
+													  bool randAccess,
+													  bool fetching_ckpt,
+													  XLogRecPtr tliRecPtr,
+													  TimeLineID replayTLI,
+													  XLogRecPtr replayLSN,
+													  bool nonblocking);
 static void XLogShutdownWalRcv(void);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
@@ -935,12 +940,12 @@ static void UpdateLastRemovedPtr(char *filename);
 static void ValidateXLOGDirectoryStructure(void);
 static void CleanupBackupHistory(void);
 static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
-static XLogRecord *ReadRecord(XLogReaderState *xlogreader,
+static XLogRecord *ReadRecord(XLogPrefetcher *xlogprefetcher,
 							  int emode, bool fetching_ckpt,
 							  TimeLineID replayTLI);
 static void CheckRecoveryConsistency(void);
 static bool PerformRecoveryXLogAction(void);
-static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
+static XLogRecord *ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
 										XLogRecPtr RecPtr, int whichChkpt, bool report,
 										TimeLineID replayTLI);
 static bool rescanLatestTimeLine(TimeLineID replayTLI,
@@ -1482,7 +1487,7 @@ checkXLogConsistency(XLogReaderState *record)
 		 * temporary page.
 		 */
 		buf = XLogReadBufferExtended(rnode, forknum, blkno,
-									 RBM_NORMAL_NO_LOG);
+									 RBM_NORMAL_NO_LOG, InvalidBuffer);
 		if (!BufferIsValid(buf))
 			continue;
 
@@ -3786,7 +3791,6 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 			snprintf(activitymsg, sizeof(activitymsg), "waiting for %s",
 					 xlogfname);
 			set_ps_display(activitymsg);
-
 			if (!RestoreArchivedFile(path, xlogfname,
 									 "RECOVERYXLOG",
 									 wal_segment_size,
@@ -4444,17 +4448,19 @@ CleanupBackupHistory(void)
  * Attempt to read the next XLOG record.
  *
  * Before first call, the reader needs to be positioned to the first record
- * by calling XLogBeginRead().
+ * by calling XLogPrefetcherBeginRead().
  *
  * If no valid record is available, returns NULL, or fails if emode is PANIC.
  * (emode must be either PANIC, LOG). In standby mode, retries until a valid
  * record is available.
  */
 static XLogRecord *
-ReadRecord(XLogReaderState *xlogreader, int emode,
+ReadRecord(XLogPrefetcher *xlogprefetcher,
+		   int emode,
 		   bool fetching_ckpt, TimeLineID replayTLI)
 {
 	XLogRecord *record;
+	XLogReaderState *xlogreader = XLogPrefetcherReader(xlogprefetcher);
 	XLogPageReadPrivate *private = (XLogPageReadPrivate *) xlogreader->private_data;
 
 	/* Pass through parameters to XLogPageRead */
@@ -4470,7 +4476,7 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	{
 		char	   *errormsg;
 
-		record = XLogReadRecord(xlogreader, &errormsg);
+		record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
 		if (record == NULL)
 		{
 			/*
@@ -6685,6 +6691,7 @@ StartupXLOG(void)
 	bool		backupEndRequired = false;
 	bool		backupFromStandby = false;
 	DBState		dbstate_at_startup;
+	XLogPrefetcher *xlogprefetcher;
 	XLogReaderState *xlogreader;
 	XLogPageReadPrivate private;
 	bool		promoted = false;
@@ -6865,6 +6872,15 @@ StartupXLOG(void)
 	xlogreader->system_identifier = ControlFile->system_identifier;
 
 	/*
+	 * Set the WAL decode buffer size.  This limits how far ahead we can read
+	 * in the WAL.
+	 */
+	XLogReaderSetDecodeBuffer(xlogreader, NULL, wal_decode_buffer_size);
+
+	/* Create a WAL prefetcher. */
+	xlogprefetcher = XLogPrefetcherAllocate(xlogreader);
+
+	/*
 	 * Allocate two page buffers dedicated to WAL consistency checks.  We do
 	 * it this way, rather than just making static arrays, for two reasons:
 	 * (1) no need to waste the storage in most instantiations of the backend;
@@ -6892,7 +6908,8 @@ StartupXLOG(void)
 		 * When a backup_label file is present, we want to roll forward from
 		 * the checkpoint it identifies, rather than using pg_control.
 		 */
-		record = ReadCheckpointRecord(xlogreader, checkPointLoc, 0, true,
+		record = ReadCheckpointRecord(xlogprefetcher,
+									  checkPointLoc, 0, true,
 									  replayTLI);
 		if (record != NULL)
 		{
@@ -6911,8 +6928,9 @@ StartupXLOG(void)
 			 */
 			if (checkPoint.redo < checkPointLoc)
 			{
-				XLogBeginRead(xlogreader, checkPoint.redo);
-				if (!ReadRecord(xlogreader, LOG, false,
+				XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
+				if (!ReadRecord(xlogprefetcher,
+								LOG, false,
 								checkPoint.ThisTimeLineID))
 					ereport(FATAL,
 							(errmsg("could not find redo location referenced by checkpoint record"),
@@ -7030,7 +7048,8 @@ StartupXLOG(void)
 		checkPointLoc = ControlFile->checkPoint;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
 		replayTLI = ControlFile->checkPointCopy.ThisTimeLineID;
-		record = ReadCheckpointRecord(xlogreader, checkPointLoc, 1, true,
+		record = ReadCheckpointRecord(xlogprefetcher,
+									  checkPointLoc, 1, true,
 									  replayTLI);
 		if (record != NULL)
 		{
@@ -7530,13 +7549,17 @@ StartupXLOG(void)
 		if (checkPoint.redo < RecPtr)
 		{
 			/* back up to find the record */
-			XLogBeginRead(xlogreader, checkPoint.redo);
-			record = ReadRecord(xlogreader, PANIC, false, replayTLI);
+			XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
+			record = ReadRecord(xlogprefetcher,
+								PANIC, false,
+								replayTLI);
 		}
 		else
 		{
 			/* just have to read next record after CheckPoint */
-			record = ReadRecord(xlogreader, LOG, false, replayTLI);
+			record = ReadRecord(xlogprefetcher,
+								LOG, false,
+								replayTLI);
 		}
 
 		if (record != NULL)
@@ -7764,6 +7787,9 @@ StartupXLOG(void)
 					 */
 					if (AllowCascadeReplication())
 						WalSndWakeup();
+
+					/* Reset the prefetcher. */
+					XLogPrefetchReconfigure();
 				}
 
 				/* Exit loop if we reached inclusive recovery target */
@@ -7774,7 +7800,9 @@ StartupXLOG(void)
 				}
 
 				/* Else, try to fetch the next WAL record */
-				record = ReadRecord(xlogreader, LOG, false, replayTLI);
+				record = ReadRecord(xlogprefetcher,
+									LOG, false,
+									replayTLI);
 			} while (record != NULL);
 
 			/*
@@ -7898,7 +7926,8 @@ StartupXLOG(void)
 	 * what we consider the valid portion of WAL.
 	 */
 	XLogBeginRead(xlogreader, LastRec);
-	record = ReadRecord(xlogreader, PANIC, false, replayTLI);
+	record = ReadRecord(xlogprefetcher,
+						PANIC, false, replayTLI);
 	EndOfLog = xlogreader->EndRecPtr;
 
 	/*
@@ -8133,6 +8162,8 @@ StartupXLOG(void)
 		readFile = -1;
 	}
 	XLogReaderFree(xlogreader);
+
+	XLogPrefetcherFree(xlogprefetcher);
 
 	/* Enable WAL writes for this backend only. */
 	LocalSetXLogInsertAllowed();
@@ -8561,7 +8592,8 @@ LocalSetXLogInsertAllowed(void)
  * 1 for "primary", 0 for "other" (backup_label)
  */
 static XLogRecord *
-ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
+ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
+					 XLogRecPtr RecPtr,
 					 int whichChkpt, bool report, TimeLineID replayTLI)
 {
 	XLogRecord *record;
@@ -8586,8 +8618,9 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 		return NULL;
 	}
 
-	XLogBeginRead(xlogreader, RecPtr);
-	record = ReadRecord(xlogreader, LOG, true, replayTLI);
+	XLogPrefetcherBeginRead(xlogprefetcher, RecPtr);
+	record = ReadRecord(xlogprefetcher,
+						LOG, true, replayTLI);
 
 	if (record == NULL)
 	{
@@ -12417,6 +12450,9 @@ CancelBackup(void)
  * and call XLogPageRead() again with the same arguments. This lets
  * XLogPageRead() to try fetching the record from another source, or to
  * sleep and retry.
+ *
+ * While prefetching, xlogreader->nonblocking may be set.  In that case,
+ * return XLREAD_WOULDBLOCK if we'd otherwise have to wait.
  */
 static int
 XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
@@ -12466,20 +12502,31 @@ retry:
 		(readSource == XLOG_FROM_STREAM &&
 		 flushedUpto < targetPagePtr + reqLen))
 	{
-		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
-										 private->randAccess,
-										 private->fetching_ckpt,
-										 targetRecPtr,
-										 private->replayTLI,
-										 xlogreader->EndRecPtr))
-		{
-			if (readFile >= 0)
-				close(readFile);
-			readFile = -1;
-			readLen = 0;
-			readSource = XLOG_FROM_ANY;
+		if (readFile >= 0 &&
+			xlogreader->nonblocking &&
+			readSource == XLOG_FROM_STREAM &&
+			flushedUpto < targetPagePtr + reqLen)
+			return XLREAD_WOULDBLOCK;
 
-			return -1;
+		switch (WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
+											private->randAccess,
+											private->fetching_ckpt,
+											targetRecPtr,
+											private->replayTLI,
+											xlogreader->EndRecPtr,
+											xlogreader->nonblocking))
+		{
+			case XLREAD_WOULDBLOCK:
+				return XLREAD_WOULDBLOCK;
+			case XLREAD_FAIL:
+				if (readFile >= 0)
+					close(readFile);
+				readFile = -1;
+				readLen = 0;
+				readSource = XLOG_FROM_ANY;
+				return XLREAD_FAIL;
+			case XLREAD_SUCCESS:
+				break;
 		}
 	}
 
@@ -12604,7 +12651,7 @@ next_record_is_invalid:
 	if (StandbyMode)
 		goto retry;
 	else
-		return -1;
+		return XLREAD_FAIL;
 }
 
 /*
@@ -12636,11 +12683,15 @@ next_record_is_invalid:
  * containing it (if not open already), and returns true. When end of standby
  * mode is triggered by the user, and there is no more WAL available, returns
  * false.
+ *
+ * If nonblocking is true, then give up immediately if we can't satisfy the
+ * request, returning XLREAD_WOULDBLOCK instead of waiting.
  */
-static bool
+static XLogPageReadResult
 WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 							bool fetching_ckpt, XLogRecPtr tliRecPtr,
-							TimeLineID replayTLI, XLogRecPtr replayLSN)
+							TimeLineID replayTLI, XLogRecPtr replayLSN,
+							bool nonblocking)
 {
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
@@ -12694,6 +12745,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		 */
 		if (lastSourceFailed)
 		{
+			/*
+			 * Don't allow any retry loops to occur during nonblocking
+			 * readahead.  Let the caller process everything that has been
+			 * decoded already first.
+			 */
+			if (nonblocking)
+				return XLREAD_WOULDBLOCK;
+
 			switch (currentSource)
 			{
 				case XLOG_FROM_ARCHIVE:
@@ -12708,7 +12767,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					if (StandbyMode && CheckForStandbyTrigger())
 					{
 						XLogShutdownWalRcv();
-						return false;
+						return XLREAD_FAIL;
 					}
 
 					/*
@@ -12716,7 +12775,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * and pg_wal.
 					 */
 					if (!StandbyMode)
-						return false;
+						return XLREAD_FAIL;
 
 					/*
 					 * Move to XLOG_FROM_STREAM state, and set to start a
@@ -12857,7 +12916,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 											  currentSource == XLOG_FROM_ARCHIVE ? XLOG_FROM_ANY :
 											  currentSource);
 				if (readFile >= 0)
-					return true;	/* success! */
+					return XLREAD_SUCCESS;	/* success! */
 
 				/*
 				 * Nope, not found in archive or pg_wal.
@@ -12981,6 +13040,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						else
 							havedata = false;
 					}
+
 					if (havedata)
 					{
 						/*
@@ -13014,10 +13074,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 							/* just make sure source info is correct... */
 							readSource = XLOG_FROM_STREAM;
 							XLogReceiptSource = XLOG_FROM_STREAM;
-							return true;
+							return XLREAD_SUCCESS;
 						}
 						break;
 					}
+
+					/* In nonblocking mode, return rather than sleeping. */
+					if (nonblocking)
+						return XLREAD_WOULDBLOCK;
 
 					/*
 					 * Data not here yet. Check for trigger, then wait for
@@ -13026,13 +13090,13 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					if (CheckForStandbyTrigger())
 					{
 						/*
-						 * Note that we don't "return false" immediately here.
-						 * After being triggered, we still want to replay all
-						 * the WAL that was already streamed. It's in pg_wal
-						 * now, so we just treat this as a failure, and the
-						 * state machine will move on to replay the streamed
-						 * WAL from pg_wal, and then recheck the trigger and
-						 * exit replay.
+						 * Note that we don't return XLREAD_FAIL immediately
+						 * here. After being triggered, we still want to
+						 * replay all the WAL that was already streamed. It's
+						 * in pg_wal now, so we just treat this as a failure,
+						 * and the state machine will move on to replay the
+						 * streamed WAL from pg_wal, and then recheck the
+						 * trigger and exit replay.
 						 */
 						lastSourceFailed = true;
 						break;
@@ -13074,7 +13138,9 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		 */
 		if (((volatile XLogCtlData *) XLogCtl)->recoveryPauseState !=
 			RECOVERY_NOT_PAUSED)
+		{
 			recoveryPausesHere(false);
+		}
 
 		/*
 		 * This possibly-long loop needs to handle interrupts of startup
@@ -13083,7 +13149,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		HandleStartupProcInterrupts();
 	}
 
-	return false;				/* not reached */
+	return XLREAD_FAIL;			/* not reached */
 }
 
 /*
