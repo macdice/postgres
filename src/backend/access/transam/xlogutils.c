@@ -22,6 +22,7 @@
 #include "access/timeline.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "access/xlogprefetcher.h"
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -355,11 +356,14 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
+	Buffer		prefetch_buffer;
+	bool		prefetch_buffer_pinned;
 	Page		page;
 	bool		zeromode;
 	bool		willinit;
 
-	if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+	if (!XLogRecGetBlockInfo(record, block_id, &rnode, &forknum, &blkno,
+							 &prefetch_buffer, &prefetch_buffer_pinned))
 	{
 		/* Caller specified a bogus block_id */
 		elog(PANIC, "failed to locate backup block with ID %d", block_id);
@@ -375,6 +379,24 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		elog(PANIC, "block with WILL_INIT flag in WAL record must be zeroed by redo routine");
 	if (!willinit && zeromode)
 		elog(PANIC, "block to be initialized in redo routine must be marked with WILL_INIT flag in the WAL record");
+
+	/* Has xlogprefetcher.c already pinned this buffer for us? */
+	if (prefetch_buffer_pinned)
+	{
+		Assert(!BufferIsInvalid(prefetch_buffer));
+		Assert(mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK);
+
+		*buf = prefetch_buffer;
+
+		if (get_cleanup_lock)
+			LockBufferForCleanup(*buf);
+		else
+			LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
+		if (lsn <= PageGetLSN(BufferGetPage(*buf)))
+			return BLK_DONE;
+		else
+			return BLK_NEEDS_REDO;
+	}
 
 	/* If it has a full-page image and it should be restored, do it. */
 	if (XLogRecBlockImageApply(record, block_id))

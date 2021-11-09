@@ -1875,6 +1875,16 @@ bool
 XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 				   RelFileNode *rnode, ForkNumber *forknum, BlockNumber *blknum)
 {
+	return XLogRecGetBlockInfo(record, block_id, rnode, forknum, blknum,
+								   NULL, NULL);
+}
+
+bool
+XLogRecGetBlockInfo(XLogReaderState *record, uint8 block_id,
+					RelFileNode *rnode, ForkNumber *forknum,
+					BlockNumber *blknum,
+					Buffer *prefetch_buffer, bool *prefetch_buffer_pinned)
+{
 	DecodedBkpBlock *bkpb;
 
 	if (block_id > record->record->max_block_id ||
@@ -1888,6 +1898,22 @@ XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 		*forknum = bkpb->forknum;
 	if (blknum)
 		*blknum = bkpb->blkno;
+	if (prefetch_buffer)
+		*prefetch_buffer = bkpb->prefetch_buffer;
+	if (prefetch_buffer_pinned)
+	{
+		if (bkpb->prefetch_buffer_pinned)
+		{
+			/*
+			 * Clear the flag.  The caller now "owns" the pin, so the
+			 * prefetcher won't try to release it if it's reset or freed.
+			 */
+			*prefetch_buffer_pinned = true;
+			bkpb->prefetch_buffer_pinned = false;
+		}
+		else
+			*prefetch_buffer_pinned = false;
+	}
 	return true;
 }
 

@@ -5057,7 +5057,9 @@ LockBufferForCleanup(Buffer buffer)
 	Assert(BufferIsPinned(buffer));
 	Assert(PinCountWaitBuf == NULL);
 
-	BufferCheckOneLocalPin(buffer);
+	/* Due to prefetching, recovery might hold more than one private pin. */
+	if (!InRecovery)
+		BufferCheckOneLocalPin(buffer);
 
 	/* Nobody else to wait for */
 	if (BufferIsLocal(buffer))
