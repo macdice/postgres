@@ -408,7 +408,18 @@ struct PgStreamingRead
 };
 
 static void pg_streaming_read_complete(PgAioOnCompletionLocalContext *ocb, PgAioInProgress *io);
-static void pg_streaming_read_prefetch(PgStreamingRead *pgsr);
+
+uint32
+pg_streaming_read_inflight(PgStreamingRead *pgsr)
+{
+	return pgsr->inflight_count;
+}
+
+uint32
+pg_streaming_read_completed(PgStreamingRead *pgsr)
+{
+	return pgsr->completed_count;
+}
 
 PgStreamingRead *
 pg_streaming_read_alloc(uint32 iodepth, uintptr_t pgsr_private,
@@ -511,14 +522,13 @@ pg_streaming_read_complete(PgAioOnCompletionLocalContext *ocb, PgAioInProgress *
 	pg_streaming_read_prefetch(pgsr);
 }
 
-static void
+static bool
 pg_streaming_read_prefetch_one(PgStreamingRead *pgsr)
 {
 	PgStreamingReadItem *this_read;
 	PgStreamingReadNextStatus status;
 
 	Assert(!dlist_is_empty(&pgsr->available));
-
 	this_read = dlist_container(PgStreamingReadItem, node, dlist_pop_head_node(&pgsr->available));
 	Assert(!this_read->valid);
 	Assert(!this_read->in_progress);
@@ -529,6 +539,14 @@ pg_streaming_read_prefetch_one(PgStreamingRead *pgsr)
 		this_read->aio = pgaio_io_get();
 	}
 
+	status = pgsr->determine_next_cb(pgsr->pgsr_private, this_read->aio, &this_read->read_private);
+	if (status == PGSR_NEXT_AGAIN)
+	{
+		pgaio_io_recycle(this_read->aio);
+		dlist_push_tail(&pgsr->available, &this_read->node);
+		return false;
+	}
+
 	pgaio_io_on_completion_local(this_read->aio, &this_read->on_completion);
 	this_read->in_progress = true;
 	this_read->valid = true;
@@ -536,8 +554,6 @@ pg_streaming_read_prefetch_one(PgStreamingRead *pgsr)
 	dlist_push_tail(&pgsr->in_order, &this_read->sequence_node);
 	pgsr->inflight_count++;
 	pgsr->prefetched_total_count++;
-
-	status = pgsr->determine_next_cb(pgsr->pgsr_private, this_read->aio, &this_read->read_private);
 
 	if (status == PGSR_NEXT_END)
 	{
@@ -553,7 +569,6 @@ pg_streaming_read_prefetch_one(PgStreamingRead *pgsr)
 	}
 	else if (status == PGSR_NEXT_NO_IO)
 	{
-		Assert(this_read->read_private != 0);
 		pgsr->inflight_count--;
 		pgsr->no_io_count++;
 		pgsr->completed_count++;
@@ -565,9 +580,11 @@ pg_streaming_read_prefetch_one(PgStreamingRead *pgsr)
 	{
 		Assert(this_read->read_private != 0);
 	}
+
+	return true;
 }
 
-static void
+void
 pg_streaming_read_prefetch(PgStreamingRead *pgsr)
 {
 	uint32 min_issue;
@@ -625,9 +642,9 @@ pg_streaming_read_prefetch(PgStreamingRead *pgsr)
 
 	while (!pgsr->hit_end &&
 		   (pgsr->inflight_count < pgsr->current_window) &&
-		   (pgsr->completed_count < pgsr->current_window))
+		   (pgsr->completed_count < pgsr->current_window) &&
+		   pg_streaming_read_prefetch_one(pgsr))
 	{
-		pg_streaming_read_prefetch_one(pgsr);
 		pgaio_limit_pending(false, min_issue);
 
 		CHECK_FOR_INTERRUPTS();
