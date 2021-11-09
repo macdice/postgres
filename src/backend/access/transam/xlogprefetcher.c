@@ -10,26 +10,11 @@
  * IDENTIFICATION
  *		src/backend/access/transam/xlogprefetcher.c
  *
- * XXX rewrite me!
- * The goal of this module is to read future WAL records and issue
- * PrefetchSharedBuffer() calls for referenced blocks, so that we avoid I/O
- * stalls in the main recovery loop.
- *
- * When examining a WAL record from the future, we need to consider that a
- * referenced block or segment file might not exist on disk until this record
- * or some earlier record has been replayed.  After a crash, a file might also
- * be missing because it was dropped by a later WAL record; in that case, it
- * will be recreated when this record is replayed.  These cases are handled by
- * recognizing them and adding a "filter" that prevents all prefetching of a
- * certain block range until the present WAL record has been replayed.  Blocks
- * skipped for these reasons are counted as "skip_new" (that is, cases where we
- * didn't try to prefetch "new" blocks).
- *
- * Blocks found in the buffer pool already are counted as "hit".
- * Repeated access to the same buffer is detected and skipped, and this is
- * counted with "skip_seq".  Blocks that were logged with FPWs are skipped if
- * recovery_prefetch_fpw is off, since on most systems there will be no I/O
- * stall; this is counted with "skip_fpw".
+ * This module provides a drop-in replacement for an XLogReader that tries to
+ * minimize I/O stalls by looking up future blocks in the buffer cache, and
+ * initiating I/Os that might complete before the caller eventually needs the
+ * data.  XLogRecBufferForRedo() cooperates uses information stored in the
+ * decoded record to find buffers efficiently.
  *
  *-------------------------------------------------------------------------
  */
@@ -173,7 +158,6 @@ XLogPrefetchShmemInit(void)
 		pg_atomic_init_u32(&SharedStats->reset_request, 0);
 		SharedStats->reset_handled = 0;
 
-
 		pg_atomic_init_u64(&SharedStats->reset_time, GetCurrentTimestamp());
 		pg_atomic_init_u64(&SharedStats->prefetch, 0);
 		pg_atomic_init_u64(&SharedStats->hit, 0);
@@ -254,41 +238,6 @@ XLogPrefetchIncrement(pg_atomic_uint64 *counter)
 	Assert(AmStartupProcess() || !IsUnderPostmaster);
 	pg_atomic_write_u64(counter, pg_atomic_read_u64(counter) + 1);
 }
-
-#if 0
-/*
- * Initialize an XLogPrefetchState object and restore the last saved
- * statistics from disk.
- */
-void
-XLogPrefetchBegin(XLogPrefetchState *state, XLogReaderState *reader)
-{
-	XLogPrefetchRestoreStats();
-
-	/* We'll reconfigure on the first call to XLogPrefetch(). */
-	state->reader = reader;
-	state->prefetcher = NULL;
-	state->reconfigure_count = XLogPrefetchReconfigureCount - 1;
-}
-#endif
-
-#if 0
-/*
- * Shut down the prefetching infrastructure, if configured.
- */
-void
-XLogPrefetchEnd(XLogPrefetchState *state)
-{
-	XLogPrefetchSaveStats();
-
-	if (state->prefetcher)
-		XLogPrefetcherFree(state->prefetcher);
-	state->prefetcher = NULL;
-
-	SharedStats->io_depth = 0;
-	SharedStats->distance = 0;
-}
-#endif
 
 static void
 XLogPrefetcherReleaseBlock(uintptr_t pgsr_private, uintptr_t read_private)
@@ -455,17 +404,16 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		}
 
 		/*
-		 * Look out for operations that establish the identity of blocks by
-		 * creating and thus potentiallyu recycling relfilenodes, or
-		 * truncating and thus recycling blocks.  These must be treated as
-		 * barriers to prefetching.
-		 *
-		 * Any future operations that create, truncate or copy data without
-		 * referring to individual blocks will need to be added to this logic.
+		 * Check for operations that change the identity of buffer tags.
+		 * These must be treated as barriers that prevent prefetching for
+		 * certain ranges of buffer tags, so that we can't be confused by OID
+		 * wraparound, and can't hold pins on buffers that need to be dropped.
 		 *
 		 * XXX Perhaps this information could be derived automatically if we
 		 * had some standardized header flags and fields for these fields,
 		 * instead of special logic.
+		 *
+		 * XXX Are there other operations that need this treatment?
 		 */
 		if (replaying_lsn < record->lsn)
 		{
@@ -483,7 +431,12 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 					/*
 					 * Don't try to prefetch anything in this database until
 					 * it has been created, or we might confuse blocks on OID
-					 * wraparound.
+					 * wraparound.  (We could use XLOG_DBASE_DROP instead, but
+					 * there shouldn't be any reference to blocks in a
+					 * database between DROP and CREATE for the same OID, and
+					 * doing it on CREATE avoids the more expensive
+					 * ENOENT-handling if we didn't treat CREATE as a
+					 * barrier).
 					 */					
 					XLogPrefetcherAddFilter(prefetcher, rnode, 0, record->lsn);
 				}
@@ -587,10 +540,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			reln = smgropen(block->rnode, InvalidBackendId);
 
 			/*
-			 * The block is past the end of the relation, filter out further
-			 * accesses until this record is replayed.  (It's almost, but not
-			 * quite, enough to test for BKPBLOCK_WILL_INIT; for example, that
-			 * would miss relations that are extended by FPI records).
+			 * If the block is past the end of the relation, filter out
+			 * further accesses until this record is replayed.
 			 */
 			if (block->blkno >= smgrnblocks(reln, block->forknum))
 			{
@@ -629,13 +580,15 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			{
 				/*
 				 * Neither cached nor initiated.  The underlying segment file
-				 * doesn't exist.
+				 * doesn't exist. (ENOENT)
 				 *
 				 * XXX need to adjust ReadBufferAsyncSMgr() to produce this case!
 				 *
 				 * It might be missing becaused it was unlinked, we crashed,
 				 * and now we're replaying WAL.  When recovery reads this
-				 * block, it will use the EXTENSION_CREATE_RECOVERY.  We
+				 * block, it will use the EXTENSION_CREATE_RECOVERY, so by
+				 * waiting until this
+
 				 * certainly don't want to do that sort of thing while merely
 				 * prefetching, so let's just ignore references to this
 				 * relation until this record is replayed, and let recovery
