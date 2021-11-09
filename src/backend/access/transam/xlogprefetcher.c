@@ -42,6 +42,7 @@
 #include "access/xlogutils.h"
 #include "catalog/pg_class.h"
 #include "catalog/storage_xlog.h"
+#include "commands/dbcommands_xlog.h"
 #include "utils/fmgrprotos.h"
 #include "utils/timestamp.h"
 #include "funcapi.h"
@@ -454,42 +455,69 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 		}
 
 		/*
-		 * If this is a record that manipulates an SMGR relation in ways that
-		 * would clash with future references, don't access anything in the
-		 * dangerous range until the record has been replayed.
+		 * Look out for operations that establish the identity of blocks by
+		 * creating and thus potentiallyu recycling relfilenodes, or
+		 * truncating and thus recycling blocks.  These must be treated as
+		 * barriers to prefetching.
+		 *
+		 * Any future operations that create, truncate or copy data without
+		 * referring to individual blocks will need to be added to this logic.
+		 *
+		 * XXX Perhaps this information could be derived automatically if we
+		 * had some standardized header flags and fields for these fields,
+		 * instead of special logic.
 		 */
-		if (replaying_lsn < record->lsn && record->header.xl_rmid == RM_SMGR_ID)
+		if (replaying_lsn < record->lsn)
 		{
-			switch (record->header.xl_info & ~XLR_INFO_MASK)
+			uint8 rmid = record->header.xl_rmid;
+			uint8 record_type = record->header.xl_info & ~XLR_INFO_MASK;
+			
+			if (rmid == RM_DBASE_ID)
 			{
-			case XLOG_SMGR_CREATE:
+				if (record_type == XLOG_DBASE_CREATE)
+				{
+					xl_dbase_create_rec *xlrec = (xl_dbase_create_rec *)
+						record->main_data;
+					RelFileNode rnode = {InvalidOid, xlrec->db_id, InvalidOid};
+					
+					/*
+					 * Don't try to prefetch anything in this database until
+					 * it has been created, or we might confuse blocks on OID
+					 * wraparound.
+					 */					
+					XLogPrefetcherAddFilter(prefetcher, rnode, 0, record->lsn);
+				}
+			}
+			else if (rmid == RM_SMGR_ID)
+			{
+				if (record_type == XLOG_SMGR_CREATE)
 				{
 					xl_smgr_create *xlrec = (xl_smgr_create *)
 						record->main_data;
 
 					/*
 					 * Don't prefetch anything for this whole relation until
-					 * it has been created.
+					 * it has been created, or we might confuse blocks on OID
+					 * wraparound.
 					 */
 					XLogPrefetcherAddFilter(prefetcher, xlrec->rnode, 0,
 											record->lsn);
-					break;
 				}
-			case XLOG_SMGR_TRUNCATE:
+				else if (record_type == XLOG_SMGR_TRUNCATE)
 				{
 					xl_smgr_truncate *xlrec = (xl_smgr_truncate *)
 						record->main_data;
 
 					/*
 					 * Don't prefetch anything in the truncated range until
-					 * the truncation has been performed.
+					 * the truncation has been performed, or we might try to
+					 * pin a buffer that is about to be truncated (becuase
+					 * it's referenced again later), causing the truncation to
+					 * fail.
 					 */
 					XLogPrefetcherAddFilter(prefetcher, xlrec->rnode,
 											xlrec->blkno,
 											record->lsn);
-					break;
-			default:
-					break;
 				}
 			}
 		}
@@ -772,6 +800,13 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileNode rnode,
 	{
 		XLogPrefetcherFilter *filter;
 
+		/* See if the block range is filtered. */
+		filter = hash_search(prefetcher->filter_table, &rnode, HASH_FIND, NULL);
+		if (filter && filter->filter_from_block <= blockno)
+			return true;
+
+		/* See if the whole database is filtered. */
+		rnode.relNode = InvalidOid;
 		filter = hash_search(prefetcher->filter_table, &rnode, HASH_FIND, NULL);
 		if (filter && filter->filter_from_block <= blockno)
 			return true;
