@@ -803,6 +803,10 @@ void
 XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
 						XLogRecPtr recPtr)
 {
+	/* This will forget about any in-flight IO. */
+	/* XXX not the right approach; it's weird, and it's also making src/test/recovery slow with recovery_prefetch=on due to extra waits!  FIXME */
+	XLogPrefetchReconfigureCount++;
+
 	/* This will forget about any queued up records in the decoder. */
 	XLogBeginRead(prefetcher->reader, recPtr);
 }
