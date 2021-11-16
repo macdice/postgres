@@ -842,6 +842,8 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
 
+	XLogReleasePreviousRecord(prefetcher->reader);
+	
 	/* If there's nothing queued yet, then start prefetching. */
 	if (!XLogReaderHasQueuedRecordOrError(prefetcher->reader))
 		lrq_prefetch(prefetcher->streaming_read);

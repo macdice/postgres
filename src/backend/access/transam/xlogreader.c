@@ -269,11 +269,14 @@ XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
  * See if we can release the last record that was returned by
  * XLogNextRecord(), to free up space.
  */
-static void
+void
 XLogReleasePreviousRecord(XLogReaderState *state)
 {
 	DecodedXLogRecord *record;
 
+	if (!state->record)
+		return;
+	
 	/*
 	 * Remove it from the decoded record queue.  It must be the oldest
 	 * item decoded, decode_queue_tail.

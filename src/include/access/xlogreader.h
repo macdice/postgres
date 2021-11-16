@@ -365,6 +365,8 @@ extern XLogRecord *XLogReadRecord(XLogReaderState *state,
 extern DecodedXLogRecord *XLogNextRecord(XLogReaderState *state,
 										 char **errormsg);
 
+extern void XLogReleasePreviousRecord(XLogReaderState *state);
+
 /* Try to read ahead, if there is data and space. */
 extern DecodedXLogRecord *XLogReadAhead(XLogReaderState *state,
 										bool nonblocking);
