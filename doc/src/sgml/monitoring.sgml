@@ -2962,12 +2962,12 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     <row>
      <entry><structfield>skip_init</structfield></entry>
      <entry><type>bigint</type></entry>
-     <entry>Number of blocks not prefetched because they will be initialized</entry>
+     <entry>Number of blocks not prefetched because they would be zero-initialized</entry>
     </row>
     <row>
      <entry><structfield>skip_new</structfield></entry>
      <entry><type>bigint</type></entry>
-     <entry>Number of blocks not prefetched because they were new (usually relation extension)</entry>
+     <entry>Number of blocks not prefetched because they didn't exist yet</entry>
     </row>
     <row>
      <entry><structfield>skip_fpw</structfield></entry>
