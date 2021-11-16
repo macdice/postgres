@@ -12519,6 +12519,12 @@ retry:
 		(readSource == XLOG_FROM_STREAM &&
 		 flushedUpto < targetPagePtr + reqLen))
 	{
+		if (readFile >= 0 &&
+			xlogreader->nonblocking &&
+			readSource == XLOG_FROM_STREAM &&
+			flushedUpto < targetPagePtr + reqLen)
+			return XLREAD_WOULDBLOCK;
+
 		switch (WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 											private->randAccess,
 											private->fetching_ckpt,

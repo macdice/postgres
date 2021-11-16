@@ -917,6 +917,9 @@ XLogReadAhead(XLogReaderState *state, bool nonblocking)
 {
 	XLogPageReadResult result;
 
+#ifndef FRONTEND
+	elog(LOG, "XLogReadAhead nonblocking = %d", nonblocking);
+#endif
 	if (state->errormsg_deferred)
 		return NULL;
 
