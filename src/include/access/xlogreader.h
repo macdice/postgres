@@ -325,9 +325,7 @@ struct XLogReaderState
 static inline bool
 XLogReaderHasQueuedRecordOrError(XLogReaderState *state)
 {
-	return (state->decode_queue_head != NULL &&
-			state->decode_queue_head != state->record) ||
-		state->errormsg_deferred;
+	return (state->decode_queue_head != NULL) || state->errormsg_deferred;
 }
 
 /* Get a new XLogReader */

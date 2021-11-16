@@ -354,6 +354,13 @@ XLogNextRecord(XLogReaderState *state, char **errormsg)
 				*errormsg = state->errormsg_buf;
 			state->errormsg_deferred = false;
 		}
+
+		/*
+		 * state->EndRecPtr is expected to have been set by the last call to
+		 * XLogBeginRead() or XLogNextRecord(), and is the location of the
+		 * error.
+		 */
+
 		return NULL;
 	}
 
@@ -666,7 +673,7 @@ restart:
 
 		/* We failed to allocate memory for an  oversized record. */
 		report_invalid_record(state,
-							  "out-of-memory while trying to decode a record of length %u", total_len);
+							  "out of memory while trying to decode a record of length %u", total_len);
 		goto err;
 	}
 
@@ -729,6 +736,7 @@ restart:
 			if (pageHeader->xlp_info & XLP_FIRST_IS_OVERWRITE_CONTRECORD)
 			{
 				state->overwrittenRecPtr = state->currRecPtr;
+				ResetDecoder(state); /* XXX? */
 				RecPtr = targetPagePtr;
 				goto restart;
 			}
