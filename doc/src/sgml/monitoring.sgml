@@ -2982,7 +2982,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     <row>
      <entry><structfield>block_distance</structfield></entry>
      <entry><type>integer</type></entry>
-     <entry>How many block references ahead the prefetcher is looking</entry>
+     <entry>How many blocks ahead the prefetcher is looking</entry>
     </row>
     <row>
      <entry><structfield>io_depth</structfield></entry>
