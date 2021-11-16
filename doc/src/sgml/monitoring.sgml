@@ -2955,9 +2955,14 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
      <entry>Number of blocks prefetched because they were not in the buffer pool</entry>
     </row>
     <row>
-     <entry><structfield>skip_hit</structfield></entry>
+     <entry><structfield>hit</structfield></entry>
      <entry><type>bigint</type></entry>
      <entry>Number of blocks not prefetched because they were already in the buffer pool</entry>
+    </row>
+    <row>
+     <entry><structfield>skip_init</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Number of blocks not prefetched because they will be initialized</entry>
     </row>
     <row>
      <entry><structfield>skip_new</structfield></entry>
@@ -2967,32 +2972,22 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     <row>
      <entry><structfield>skip_fpw</structfield></entry>
      <entry><type>bigint</type></entry>
-     <entry>Number of blocks not prefetched because a full page image was included in the WAL and <xref linkend="guc-recovery-prefetch-fpw"/> was set to <literal>off</literal></entry>
+     <entry>Number of blocks not prefetched because a full page image was included in the WAL</entry>
     </row>
     <row>
-     <entry><structfield>skip_seq</structfield></entry>
-     <entry><type>bigint</type></entry>
-     <entry>Number of blocks not prefetched because of repeated access</entry>
-    </row>
-    <row>
-     <entry><structfield>distance</structfield></entry>
+     <entry><structfield>wal_distance</structfield></entry>
      <entry><type>integer</type></entry>
-     <entry>How far ahead of recovery the prefetcher is currently reading, in bytes</entry>
+     <entry>How many bytes ahead the prefetcher is looking</entry>
     </row>
     <row>
-     <entry><structfield>queue_depth</structfield></entry>
+     <entry><structfield>block_distance</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>How many block references ahead the prefetcher is looking</entry>
+    </row>
+    <row>
+     <entry><structfield>io_depth</structfield></entry>
      <entry><type>integer</type></entry>
      <entry>How many prefetches have been initiated but are not yet known to have completed</entry>
-    </row>
-    <row>
-     <entry><structfield>avg_distance</structfield></entry>
-     <entry><type>float4</type></entry>
-     <entry>How far ahead of recovery the prefetcher is on average, while recovery is not idle</entry>
-    </row>
-    <row>
-     <entry><structfield>avg_queue_depth</structfield></entry>
-     <entry><type>float4</type></entry>
-     <entry>Average number of prefetches in flight while recovery is not idle</entry>
     </row>
     </tbody>
    </tgroup>
@@ -3002,11 +2997,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    The <structname>pg_stat_prefetch_recovery</structname> view will contain only
    one row.  It is filled with nulls if recovery is not running or WAL
    prefetching is not enabled.  See <xref linkend="guc-recovery-prefetch"/>
-   for more information.  The counters in this view are reset whenever the
-   <xref linkend="guc-recovery-prefetch"/>,
-   <xref linkend="guc-recovery-prefetch-fpw"/> or
-   <xref linkend="guc-maintenance-io-concurrency"/> setting is changed and
-   the server configuration is reloaded.
+   for more information.
   </para>
 
   <table id="pg-stat-subscription" xreflabel="pg_stat_subscription">
