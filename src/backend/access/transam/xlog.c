@@ -4549,7 +4549,6 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 		else
 		{
 			/* No valid record available from this source */
-			elog(LOG, "XXX lastSourceFailed = true because null");
 			lastSourceFailed = true;
 
 			/*
@@ -12515,8 +12514,6 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	XLByteToSeg(targetPagePtr, readSegNo, wal_segment_size);
 
 retry:
-	elog(LOG, "%lX < %lX = %d (targetPagePtr = %lX, reqLen = %d)", flushedUpto, targetPagePtr + reqLen, flushedUpto < targetPagePtr + reqLen, targetPagePtr, reqLen);
-		
 	/* See if we need to retrieve more data */
 	if (readFile < 0 ||
 		(readSource == XLOG_FROM_STREAM &&
@@ -12766,10 +12763,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			 * decoded already first.
 			 */
 			if (nonblocking)
-			{
-				elog(LOG, " -> XLREAD_WOULDBLOCK because last source failed");
 				return XLREAD_WOULDBLOCK;
-			}
 
 			switch (currentSource)
 			{
@@ -12896,7 +12890,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		}
 
 		if (currentSource != oldSource)
-			elog(LOG, "switched WAL source from %s to %s after %s",
+			elog(DEBUG2, "switched WAL source from %s to %s after %s",
 				 xlogSourceNames[oldSource], xlogSourceNames[currentSource],
 				 lastSourceFailed ? "failure" : "success");
 
@@ -12940,7 +12934,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				/*
 				 * Nope, not found in archive or pg_wal.
 				 */
-				elog(LOG, "XXXXX1 lastSourceFailed = true");
 				lastSourceFailed = true;
 				break;
 
@@ -13025,7 +13018,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					if (!WalRcvStreaming())
 					{
-				elog(LOG, "XXXXX2 lastSourceFailed = true");
 						lastSourceFailed = true;
 						break;
 					}
@@ -13049,7 +13041,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						XLogRecPtr	latestChunkStart;
 
 						flushedUpto = GetWalRcvFlushRecPtr(&latestChunkStart, &receiveTLI);
-						elog(LOG, "XXX flushedUpto = %lX", flushedUpto);
 						if (RecPtr < flushedUpto && receiveTLI == curFileTLI)
 						{
 							havedata = true;
@@ -13103,10 +13094,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 
 					/* In nonblocking mode, return rather than sleeping. */
 					if (nonblocking)
-					{
-						elog(LOG, " -> XLREAD_WOULDBLOCK just before CheckForStandbyTrigger()");
 						return XLREAD_WOULDBLOCK;
-					}
 
 					/*
 					 * Data not here yet. Check for trigger, then wait for
@@ -13124,7 +13112,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						 * exit replay.
 						 */
 						lastSourceFailed = true;
-						elog(LOG, "lastSourceFailed = true because CheckForStandbyTRigger");
 						break;
 					}
 

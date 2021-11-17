@@ -842,6 +842,10 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
 
+	/*
+	 * Release last returned record, if there is one.  We need to do this so
+	 * that we can check for empty decode queue accurately.
+	 */
 	XLogReleasePreviousRecord(prefetcher->reader);
 	
 	/* If there's nothing queued yet, then start prefetching. */
