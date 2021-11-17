@@ -276,7 +276,7 @@ XLogReleasePreviousRecord(XLogReaderState *state)
 
 	if (!state->record)
 		return;
-	
+
 	/*
 	 * Remove it from the decoded record queue.  It must be the oldest
 	 * item decoded, decode_queue_tail.
@@ -411,6 +411,9 @@ XLogRecord *
 XLogReadRecord(XLogReaderState *state, char **errormsg)
 {
 	DecodedXLogRecord *decoded;
+
+	if (state->record)
+		XLogReleasePreviousRecord(state);
 
 	/*
 	 * Call XLogReadAhead() in blocking mode to make sure there is something
