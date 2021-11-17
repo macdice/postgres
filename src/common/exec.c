@@ -25,6 +25,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifdef EXEC_BACKEND
+#if defined(HAVE_SYS_PERSONALITY_H)
+#include <sys/personality.h>
+#elif defined(HAVE_SYS_PROCCTL_H)
+#include <sys/procctl.h>
+#endif
+#endif
+
 /*
  * Hacky solution to allow expressing both frontend and backend error reports
  * in one macro call.  First argument of log_error is an errcode() call of
@@ -469,6 +477,30 @@ set_pglocale_pgservice(const char *argv0, const char *app)
 		setenv("PGSYSCONFDIR", path, 0);
 	}
 }
+
+#ifdef EXEC_BACKEND
+/*
+ * For the benefit of PostgreSQL developers testing EXEC_BACKEND code paths on
+ * Unix systems (ie paths normally exercised only on Windows), provide a way to
+ * disable ASLR so that we avoid memory map in developer-only builds, if we
+ * know how on this platform.  (See also the macOS-specific hack in
+ * sysv_shmem.c.)
+ */
+int
+pg_disable_aslr(void)
+{
+#if defined(HAVE_SYS_PERSONALITY_H)
+	return personality(ADDR_NO_RANDOMIZE);
+#elif defined(HAVE_SYS_PROCCTL_H) && defined(PROC_ASLR_FORCE_DISABLE)
+	int			data = PROC_ASLR_FORCE_DISABLE;
+
+	return procctl(P_PID, 0, PROC_ASLR_CTL, &data);
+#else
+	errno = ENOSYS;
+	return -1;
+#endif
+}
+#endif
 
 #ifdef WIN32
 

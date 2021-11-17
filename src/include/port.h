@@ -42,6 +42,12 @@ typedef SOCKET pgsocket;
 typedef unsigned int socklen_t;
 #endif
 
+#ifdef EXEC_BACKEND
+#if defined(HAVE_SYS_PROCCTL_H)
+#include <sys/procctl.h>
+#endif
+#endif
+
 /* non-blocking */
 extern bool pg_set_noblock(pgsocket sock);
 extern bool pg_set_block(pgsocket sock);
@@ -139,6 +145,11 @@ extern char *pipe_read_line(char *cmd, char *line, int maxsize);
 
 /* Doesn't belong here, but this is used with find_other_exec(), so... */
 #define PG_BACKEND_VERSIONSTR "postgres (PostgreSQL) " PG_VERSION "\n"
+
+#ifdef EXEC_BACKEND
+/* Disable ASLR before exec, for developer builds only (in exec.c) */
+extern int pg_disable_aslr(void);
+#endif
 
 
 #if defined(WIN32) || defined(__CYGWIN__)
