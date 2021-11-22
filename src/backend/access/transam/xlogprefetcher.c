@@ -108,6 +108,9 @@ struct XLogPrefetcher
 
 	/* IO depth manager. */
 	LsnReadQueue *streaming_read;
+
+	XLogRecPtr	begin_ptr;
+
 	int			reconfigure_count;
 };
 
@@ -435,7 +438,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 		/* Try to read a new future record, if we don't already have one. */
 		if (prefetcher->record == NULL)
 		{
-			int nonblocking;
+			bool nonblocking;
 
 			/*
 			 * If there are already records or an error queued up that could
@@ -647,6 +650,22 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			}
 		}
 
+		/*
+		 * Several callsites need to be able to read exactly one record
+		 * without any internal readahead.  Examples: xlog.c reading
+		 * checkpoint records with emode set to PANIC, which might otherwise
+		 * cause XLogPageRead() to panic on some future page, and xlog.c
+		 * determining where to start writing WAL next, which depends on the
+		 * contents of the reader's internal buffer after reading one record.
+		 * Therefore, don't even think about prefetching until the first
+		 * record after XLogPrefetcherBeginRead() has been consumed.
+		 */
+#if 1
+		if (prefetcher->reader->decode_queue_tail &&
+			prefetcher->reader->decode_queue_tail->lsn == prefetcher->begin_ptr)
+			return LRQ_NEXT_AGAIN;
+#endif
+
 		/* Advance to the next record. */
 		prefetcher->record = NULL;
 	}
@@ -813,8 +832,10 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
 						XLogRecPtr recPtr)
 {
 	/* This will forget about any in-flight IO. */
-	/* XXX not the right approach; it's weird, and it's also making src/test/recovery slow with recovery_prefetch=on due to extra waits!  FIXME */
 	prefetcher->reconfigure_count--;
+
+	/* Book-keeping to avoid readahead on first read. */
+	prefetcher->begin_ptr = recPtr;
 
 	/* This will forget about any queued up records in the decoder. */
 	XLogBeginRead(prefetcher->reader, recPtr);
@@ -826,7 +847,6 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
  */
 XLogRecord *
 XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
-						 bool allow_prefetching,
 						 char **errmsg)
 {
 	DecodedXLogRecord *record;
@@ -841,8 +861,8 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 			lrq_free(prefetcher->streaming_read);
 
 		/*
-		 * Arbitrarily allow us to look up to 4 times further ahead than the
-		 * number of IOs we're allowed to run concurrently.
+		 * Arbitrarily look up to 4 times further ahead than the number of IOs
+		 * we're allowed to run concurrently.
 		 */
 		prefetcher->streaming_read =
 			lrq_alloc(recovery_prefetch ? maintenance_io_concurrency * 4 : 1,
@@ -858,7 +878,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
 	 * that we can check for empty decode queue accurately.
 	 */
 	XLogReleasePreviousRecord(prefetcher->reader);
-	
+
 	/* If there's nothing queued yet, then start prefetching. */
 	if (!XLogReaderHasQueuedRecordOrError(prefetcher->reader))
 		lrq_prefetch(prefetcher->streaming_read);

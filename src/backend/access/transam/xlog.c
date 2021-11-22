@@ -946,7 +946,6 @@ static void ValidateXLOGDirectoryStructure(void);
 static void CleanupBackupHistory(void);
 static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
 static XLogRecord *ReadRecord(XLogPrefetcher *xlogprefetcher,
-							  bool allow_prefetching,
 							  int emode, bool fetching_ckpt,
 							  TimeLineID replayTLI);
 static void CheckRecoveryConsistency(void);
@@ -4461,7 +4460,6 @@ CleanupBackupHistory(void)
  */
 static XLogRecord *
 ReadRecord(XLogPrefetcher *xlogprefetcher,
-		   bool allow_prefetching,
 		   int emode,
 		   bool fetching_ckpt, TimeLineID replayTLI)
 {
@@ -4482,7 +4480,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 	{
 		char	   *errormsg;
 
-		record = XLogPrefetcherReadRecord(xlogprefetcher, allow_prefetching, &errormsg);
+		record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -6936,7 +6934,6 @@ StartupXLOG(void)
 			{
 				XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
 				if (!ReadRecord(xlogprefetcher,
-								false /* allow_prefetching */,
 								LOG, false,
 								checkPoint.ThisTimeLineID))
 					ereport(FATAL,
@@ -7558,7 +7555,6 @@ StartupXLOG(void)
 			/* back up to find the record */
 			XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
 			record = ReadRecord(xlogprefetcher,
-								false /* allow_prefetching */,
 								PANIC, false,
 								replayTLI);
 		}
@@ -7566,7 +7562,6 @@ StartupXLOG(void)
 		{
 			/* just have to read next record after CheckPoint */
 			record = ReadRecord(xlogprefetcher,
-								false /* allow_prefetching */,
 								LOG, false,
 								replayTLI);
 		}
@@ -7809,7 +7804,6 @@ StartupXLOG(void)
 
 				/* Else, try to fetch the next WAL record */
 				record = ReadRecord(xlogprefetcher,
-									recovery_prefetch /* allow_prefetching */,
 									LOG, false,
 									replayTLI);
 			} while (record != NULL);
@@ -7936,7 +7930,6 @@ StartupXLOG(void)
 	 */
 	XLogBeginRead(xlogreader, LastRec);
 	record = ReadRecord(xlogprefetcher,
-						false /* allow_prefetching */,
 						PANIC, false, replayTLI);
 	EndOfLog = EndRecPtr;
 
@@ -8630,7 +8623,6 @@ ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
 
 	XLogPrefetcherBeginRead(xlogprefetcher, RecPtr);
 	record = ReadRecord(xlogprefetcher,
-						false /* allow_prefetching */,
 						LOG, true, replayTLI);
 
 	if (record == NULL)
