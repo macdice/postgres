@@ -366,6 +366,15 @@ XLogPrefetcherFree(XLogPrefetcher *prefetcher)
 	pfree(prefetcher);
 }
 
+/*
+ * Provide access to the reader.
+ */
+XLogReaderState *
+XLogPrefetcherReader(XLogPrefetcher *prefetcher)
+{
+	return prefetcher->reader;
+}
+
 static void
 XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher, XLogRecPtr lsn)
 {
@@ -813,10 +822,12 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
 
 /*
  * A wrapper for XLogReadRecord() that provides the same interface, but also
- * tries to initiate IO ahead of time.
+ * tries to initiate IO ahead of time unless asked not to.
  */
 XLogRecord *
-XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
+XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
+						 bool allow_prefetching,
+						 char **errmsg)
 {
 	DecodedXLogRecord *record;
 

@@ -946,13 +946,12 @@ static void ValidateXLOGDirectoryStructure(void);
 static void CleanupBackupHistory(void);
 static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
 static XLogRecord *ReadRecord(XLogPrefetcher *xlogprefetcher,
-							  XLogReaderState *xlogreader,
+							  bool allow_prefetching,
 							  int emode, bool fetching_ckpt,
 							  TimeLineID replayTLI);
 static void CheckRecoveryConsistency(void);
 static bool PerformRecoveryXLogAction(void);
 static XLogRecord *ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
-										XLogReaderState *xlogreader,
 										XLogRecPtr RecPtr, int whichChkpt, bool report,
 										TimeLineID replayTLI);
 static bool rescanLatestTimeLine(TimeLineID replayTLI);
@@ -4462,10 +4461,12 @@ CleanupBackupHistory(void)
  */
 static XLogRecord *
 ReadRecord(XLogPrefetcher *xlogprefetcher,
-		   XLogReaderState *xlogreader, int emode,
+		   bool allow_prefetching,
+		   int emode,
 		   bool fetching_ckpt, TimeLineID replayTLI)
 {
 	XLogRecord *record;
+	XLogReaderState *xlogreader = XLogPrefetcherReader(xlogprefetcher);
 	XLogPageReadPrivate *private = (XLogPageReadPrivate *) xlogreader->private_data;
 
 	/* Pass through parameters to XLogPageRead */
@@ -4481,10 +4482,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher,
 	{
 		char	   *errormsg;
 
-		if (xlogprefetcher)
-			record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
-		else
-			record = XLogReadRecord(xlogreader, &errormsg);
+		record = XLogPrefetcherReadRecord(xlogprefetcher, allow_prefetching, &errormsg);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
@@ -6916,7 +6914,7 @@ StartupXLOG(void)
 		 * When a backup_label file is present, we want to roll forward from
 		 * the checkpoint it identifies, rather than using pg_control.
 		 */
-		record = ReadCheckpointRecord(xlogprefetcher, xlogreader,
+		record = ReadCheckpointRecord(xlogprefetcher,
 									  checkPointLoc, 0, true,
 									  replayTLI);
 		if (record != NULL)
@@ -6937,7 +6935,9 @@ StartupXLOG(void)
 			if (checkPoint.redo < checkPointLoc)
 			{
 				XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
-				if (!ReadRecord(xlogprefetcher, xlogreader, LOG, false,
+				if (!ReadRecord(xlogprefetcher,
+								false /* allow_prefetching */,
+								LOG, false,
 								checkPoint.ThisTimeLineID))
 					ereport(FATAL,
 							(errmsg("could not find redo location referenced by checkpoint record"),
@@ -7055,7 +7055,7 @@ StartupXLOG(void)
 		checkPointLoc = ControlFile->checkPoint;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
 		replayTLI = ControlFile->checkPointCopy.ThisTimeLineID;
-		record = ReadCheckpointRecord(xlogprefetcher, xlogreader,
+		record = ReadCheckpointRecord(xlogprefetcher,
 									  checkPointLoc, 1, true,
 									  replayTLI);
 		if (record != NULL)
@@ -7557,13 +7557,17 @@ StartupXLOG(void)
 		{
 			/* back up to find the record */
 			XLogPrefetcherBeginRead(xlogprefetcher, checkPoint.redo);
-			record = ReadRecord(xlogprefetcher, xlogreader, PANIC, false,
+			record = ReadRecord(xlogprefetcher,
+								false /* allow_prefetching */,
+								PANIC, false,
 								replayTLI);
 		}
 		else
 		{
 			/* just have to read next record after CheckPoint */
-			record = ReadRecord(xlogprefetcher, xlogreader, LOG, false,
+			record = ReadRecord(xlogprefetcher,
+								false /* allow_prefetching */,
+								LOG, false,
 								replayTLI);
 		}
 
@@ -7804,7 +7808,9 @@ StartupXLOG(void)
 				}
 
 				/* Else, try to fetch the next WAL record */
-				record = ReadRecord(xlogprefetcher, xlogreader, LOG, false,
+				record = ReadRecord(xlogprefetcher,
+									recovery_prefetch /* allow_prefetching */,
+									LOG, false,
 									replayTLI);
 			} while (record != NULL);
 
@@ -7921,12 +7927,6 @@ StartupXLOG(void)
 	StandbyMode = false;
 
 	/*
-	 * Shut down the prefetcher.  We need to use the XLogReader directly, in
-	 * order for readBuf and readOff to refer to the final page of LastRec.
-	 */
-	XLogPrefetcherFree(xlogprefetcher);
-
-	/*
 	 * Determine where to start writing WAL next.
 	 *
 	 * When recovery ended in an incomplete record, write a WAL record about
@@ -7935,7 +7935,9 @@ StartupXLOG(void)
 	 * what we consider the valid portion of WAL.
 	 */
 	XLogBeginRead(xlogreader, LastRec);
-	record = ReadRecord(NULL, xlogreader, PANIC, false, replayTLI);
+	record = ReadRecord(xlogprefetcher,
+						false /* allow_prefetching */,
+						PANIC, false, replayTLI);
 	EndOfLog = EndRecPtr;
 
 	/*
@@ -8170,6 +8172,8 @@ StartupXLOG(void)
 		readFile = -1;
 	}
 	XLogReaderFree(xlogreader);
+
+	XLogPrefetcherFree(xlogprefetcher);
 
 	/* Enable WAL writes for this backend only. */
 	LocalSetXLogInsertAllowed();
@@ -8599,7 +8603,7 @@ LocalSetXLogInsertAllowed(void)
  */
 static XLogRecord *
 ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
-					 XLogReaderState *xlogreader, XLogRecPtr RecPtr,
+					 XLogRecPtr RecPtr,
 					 int whichChkpt, bool report, TimeLineID replayTLI)
 {
 	XLogRecord *record;
@@ -8625,7 +8629,9 @@ ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher,
 	}
 
 	XLogPrefetcherBeginRead(xlogprefetcher, RecPtr);
-	record = ReadRecord(xlogprefetcher, xlogreader, LOG, true, replayTLI);
+	record = ReadRecord(xlogprefetcher,
+						false /* allow_prefetching */,
+						LOG, true, replayTLI);
 
 	if (record == NULL)
 	{

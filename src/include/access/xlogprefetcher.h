@@ -32,10 +32,13 @@ extern void XLogPrefetchRequestResetStats(void);
 extern XLogPrefetcher *XLogPrefetcherAllocate(XLogReaderState *reader);
 extern void XLogPrefetcherFree(XLogPrefetcher *prefetcher);
 
+extern XLogReaderState *XLogPrefetcherReader(XLogPrefetcher *prefetcher);
+
 extern void XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher,
 									XLogRecPtr recPtr);
 
 extern XLogRecord *XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher,
+											bool allow_prefetching,
 											char **errmsg);
 
 #endif
