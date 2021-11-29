@@ -670,7 +670,7 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid,
 	if (InRecovery)
 		remove_tablespace_symlink(linkloc);
 
-#ifndef WIN32
+#ifndef WIN32xx
 	/*
 	 * If location is relative to pgdata, prefix it with ".." so that we have a
 	 * path relative to the symlink.  (Not needed for Windows, because our
