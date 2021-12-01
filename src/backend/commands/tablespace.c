@@ -280,6 +280,8 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 				 errmsg("tablespace location must be an absolute path or a relative path under pg_user_files/")));
 
+	/* XXX absolute pathname would be too long inside junction! */
+
 	/*
 	 * Check that location isn't too long. Remember that we're going to append
 	 * 'PG_XXX/<dboid>/<relid>_<fork>.<nnn>'.  FYI, we never actually

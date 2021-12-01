@@ -182,6 +182,10 @@ pgsymlink(const char *oldpath, const char *newpath)
 	while ((p = strchr(p, '/')) != NULL)
 		*p++ = '\\';
 
+	/* collapse useless instances of "\.\" to "\" */
+	while ((p = strstr(nativeTarget, "\\.\\")) != NULL)
+		memmove(p, p + 2, strlen(p + 2));
+
 	len = strlen(nativeTarget) * sizeof(WCHAR);
 	reparseBuf->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
 	reparseBuf->ReparseDataLength = len + 12;
