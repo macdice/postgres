@@ -190,9 +190,6 @@ pgsymlink(const char *oldpath, const char *newpath)
 	reparseBuf->SubstituteNameLength = len;
 	reparseBuf->PrintNameOffset = len + sizeof(WCHAR);
 	reparseBuf->PrintNameLength = 0;
-#ifndef FRONTEND
-	elog(LOG, "symlink.... old = [%s] -> [%s], new = [%s]", oldpath, nativeTarget, newpath);
-#endif
 	MultiByteToWideChar(CP_ACP, 0, nativeTarget, -1,
 						reparseBuf->PathBuffer, MAX_PATH);
 
