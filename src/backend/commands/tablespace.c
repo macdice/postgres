@@ -670,16 +670,19 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid,
 	if (InRecovery)
 		remove_tablespace_symlink(linkloc);
 
-	/*
-	 * If location is relative to pgdata, prefix it with ".." so that we have a
-	 * path relative to the symlink.  On Windows, this doesn't work with our
-	 * junction-based symlink() emulation, so build a relative path instead.
-	 */
 	if (!is_absolute_path(location))
 	{
-#ifndef WIN32
+#ifdef WIN32
+		/*
+		 * Our Windows junction-based symlink() emulation can't handle relative
+		 * paths, so convert "pg_user_files" to an absolute path.
+		 */
 		snprintf(buffer, sizeof(buffer), "%s/%s", DataDir, location);
 #else
+		/*
+		 * Add a ".." prefix so that we have a path relative to the symlink,
+		 * rather than DataDir.
+		 */
 		snprintf(buffer, sizeof(buffer), "../%s", location);
 #endif
 		location = buffer;
