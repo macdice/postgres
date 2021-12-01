@@ -184,7 +184,7 @@ pgsymlink(const char *oldpath, const char *newpath)
 
 	/* collapse useless instances of "\.\" to "\" */
 	while ((p = strstr(nativeTarget, "\\.\\")) != NULL)
-		memmove(p, p + 2, strlen(p + 2));
+		memmove(p, p + 2, strlen(p + 2) + 1);
 
 	len = strlen(nativeTarget) * sizeof(WCHAR);
 	reparseBuf->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
