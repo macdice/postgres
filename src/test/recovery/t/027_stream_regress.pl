@@ -1,12 +1,12 @@
 # Run the standard regression tests with streaming replication
 use strict;
 use warnings;
-use PostgresNode;
-use TestLib;
+use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Utils;
 use Test::More tests => 4;
 
 # Initialize primary node
-my $node_primary = PostgresNode->new('primary');
+my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(allows_streaming => 1);
 
 # WAL consistency checking is resource intensive so require opt-in with the
@@ -29,7 +29,7 @@ my $backup_name = 'my_backup';
 $node_primary->backup($backup_name);
 
 # Create streaming standby linking to primary
-my $node_standby_1 = PostgresNode->new('standby_1');
+my $node_standby_1 = PostgreSQL::Test::Cluster->new('standby_1');
 $node_standby_1->init_from_backup($node_primary, $backup_name,
 	has_streaming => 1);
 $node_standby_1->append_conf('postgresql.conf',
