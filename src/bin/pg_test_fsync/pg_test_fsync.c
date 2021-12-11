@@ -339,7 +339,7 @@ test_sync(int writes_per_op)
 	printf(LABEL_FORMAT, "fdatasync");
 	fflush(stdout);
 
-#ifdef HAVE_FDATASYNC
+#if defined(HAVE_FDATASYNC) || defined(WIN32)
 	if ((tmpfile = open(filename, O_RDWR | PG_BINARY, 0)) == -1)
 		die("could not open output file");
 	START_TIMER;
