@@ -294,14 +294,45 @@ test_sync(int writes_per_op)
 		printf(_("\nCompare file sync methods using two %dkB writes:\n"), XLOG_BLCKSZ_K);
 	printf(_("(in wal_sync_method preference order, except fdatasync is Linux's default)\n"));
 
+/*
+ * Test open_datasync with O_DIRECT if available
+ */
+	printf(LABEL_FORMAT, "open_datasync (direct)");
+	fflush(stdout);
+
+#if defined(OPEN_DATASYNC_FLAG) && (defined(O_DIRECT) || defined(F_NOCACHE))
+	if ((tmpfile = open_direct(filename, O_RDWR | O_DSYNC | PG_BINARY, 0)) == -1)
+	{
+		printf(NA_FORMAT, _("n/a*"));
+		fs_warning = true;
+	}
+	else
+	{
+		START_TIMER;
+		for (ops = 0; alarm_triggered == false; ops++)
+		{
+			for (writes = 0; writes < writes_per_op; writes++)
+				if (pg_pwrite(tmpfile,
+							  buf,
+							  XLOG_BLCKSZ,
+							  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
+					die("write failed");
+		}
+		STOP_TIMER;
+		close(tmpfile);
+	}
+#else
+	printf(NA_FORMAT, _("n/a"));
+#endif
+
 	/*
-	 * Test open_datasync if available
+	 * Test open_datasync buffered if available
 	 */
-	printf(LABEL_FORMAT, "open_datasync");
+	printf(LABEL_FORMAT, "open_datasync (buffered)");
 	fflush(stdout);
 
 #ifdef OPEN_DATASYNC_FLAG
-	if ((tmpfile = open_direct(filename, O_RDWR | O_DSYNC | PG_BINARY, 0)) == -1)
+	if ((tmpfile = open(filename, O_RDWR | O_DSYNC | PG_BINARY, 0)) == -1)
 	{
 		printf(NA_FORMAT, _("n/a*"));
 		fs_warning = true;
@@ -402,12 +433,12 @@ test_sync(int writes_per_op)
 #endif
 
 /*
- * Test open_sync if available
+ * Test open_sync with O_DIRECT if available
  */
-	printf(LABEL_FORMAT, "open_sync");
+	printf(LABEL_FORMAT, "open_sync (direct)");
 	fflush(stdout);
 
-#ifdef OPEN_SYNC_FLAG
+#if defined(OPEN_SYNC_FLAG) && (defined(O_DIRECT) || defined(F_NOCACHE))
 	if ((tmpfile = open_direct(filename, O_RDWR | OPEN_SYNC_FLAG | PG_BINARY, 0)) == -1)
 	{
 		printf(NA_FORMAT, _("n/a*"));
@@ -438,6 +469,38 @@ test_sync(int writes_per_op)
 #else
 	printf(NA_FORMAT, _("n/a"));
 #endif
+
+/*
+ * Test open_sync if available
+ */
+	printf(LABEL_FORMAT, "open_sync (buffered)");
+	fflush(stdout);
+
+#ifdef OPEN_SYNC_FLAG
+	if ((tmpfile = open(filename, O_RDWR | OPEN_SYNC_FLAG | PG_BINARY, 0)) == -1)
+	{
+		printf(NA_FORMAT, _("n/a*"));
+		fs_warning = true;
+	}
+	else
+	{
+		START_TIMER;
+		for (ops = 0; alarm_triggered == false; ops++)
+		{
+			for (writes = 0; writes < writes_per_op; writes++)
+				if (pg_pwrite(tmpfile,
+							  buf,
+							  XLOG_BLCKSZ,
+							  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
+					die("write failed");
+		}
+		STOP_TIMER;
+		close(tmpfile);
+	}
+#else
+	printf(NA_FORMAT, _("n/a"));
+#endif
+
 
 	if (fs_warning)
 	{
