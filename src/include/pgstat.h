@@ -691,5 +691,4 @@ extern PGDLLIMPORT SessionEndType pgStatSessionEndCause;
 /* updated directly by backends and background processes */
 extern PGDLLIMPORT PgStat_WalStats PendingWalStats;
 
-
 #endif							/* PGSTAT_H */

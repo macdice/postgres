@@ -32,6 +32,7 @@
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "pg_trace.h"
+#include "storage/bufmgr.h"
 #include "utils/snapmgr.h"
 
 
@@ -63,15 +64,7 @@
 static TransactionId cachedFetchSubXid = InvalidTransactionId;
 static TransactionId cachedFetchTopmostXid = InvalidTransactionId;
 
-/*
- * Link to shared-memory data structures for SUBTRANS control
- */
-static SlruCtlData SubTransCtlData;
-
-#define SubTransCtl  (&SubTransCtlData)
-
-
-static int	ZeroSUBTRANSPage(int pageno);
+static Buffer ZeroSUBTRANSPage(int pageno);
 static bool SubTransPagePrecedes(int page1, int page2);
 
 
@@ -83,16 +76,15 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 {
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
-	int			slotno;
 	TransactionId *ptr;
+	Buffer		buffer;
 
 	Assert(TransactionIdIsValid(parent));
 	Assert(TransactionIdFollows(xid, parent));
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
-
-	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+	buffer = ReadSlruBuffer(SLRU_SUBTRANS_REL_ID, pageno);
+	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+	ptr = (TransactionId *) BufferGetPage(buffer);
 	ptr += entryno;
 
 	/*
@@ -104,10 +96,10 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	{
 		Assert(*ptr == InvalidTransactionId);
 		*ptr = parent;
-		SubTransCtl->shared->page_dirty[slotno] = true;
+		MarkBufferDirty(buffer);
 	}
 
-	LWLockRelease(SubtransSLRULock);
+	UnlockReleaseBuffer(buffer);
 }
 
 /*
@@ -118,9 +110,9 @@ SubTransGetParent(TransactionId xid)
 {
 	int			pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
-	int			slotno;
 	TransactionId *ptr;
 	TransactionId parent;
+	Buffer		buffer;
 
 	/* Can't ask about stuff that might not be around anymore */
 	Assert(TransactionIdFollowsOrEquals(xid, TransactionXmin));
@@ -129,15 +121,14 @@ SubTransGetParent(TransactionId xid)
 	if (!TransactionIdIsNormal(xid))
 		return InvalidTransactionId;
 
-	/* lock is acquired by SimpleLruReadPage_ReadOnly */
+	buffer = ReadSlruBuffer(SLRU_SUBTRANS_REL_ID, pageno);
 
-	slotno = SimpleLruReadPage_ReadOnly(SubTransCtl, pageno, xid);
-	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+	ptr = (TransactionId *) BufferGetPage(buffer);
 	ptr += entryno;
 
 	parent = *ptr;
 
-	LWLockRelease(SubtransSLRULock);
+	ReleaseBuffer(buffer);
 
 	return parent;
 }
@@ -195,26 +186,6 @@ SubTransGetTopmostTransaction(TransactionId xid)
 	return previousXid;
 }
 
-
-/*
- * Initialization of shared memory for SUBTRANS
- */
-Size
-SUBTRANSShmemSize(void)
-{
-	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
-}
-
-void
-SUBTRANSShmemInit(void)
-{
-	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
-				  SubtransSLRULock, "pg_subtrans",
-				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
-	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
-}
-
 /*
  * This func must be called ONCE on system install.  It creates
  * the initial SUBTRANS segment.  (The SUBTRANS directory is assumed to
@@ -228,18 +199,16 @@ SUBTRANSShmemInit(void)
 void
 BootStrapSUBTRANS(void)
 {
-	int			slotno;
+	Buffer		buffer;
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+	SlruPagePrecedesUnitTests(SubTransPagePrecedes, SUBTRANS_XACTS_PER_PAGE);
 
 	/* Create and zero the first page of the subtrans log */
-	slotno = ZeroSUBTRANSPage(0);
+	buffer = ZeroSUBTRANSPage(0);
 
 	/* Make sure it's written out */
-	SimpleLruWritePage(SubTransCtl, slotno);
-	Assert(!SubTransCtl->shared->page_dirty[slotno]);
-
-	LWLockRelease(SubtransSLRULock);
+	FlushOneBuffer(buffer);
+	UnlockReleaseBuffer(buffer);
 }
 
 /*
@@ -250,10 +219,15 @@ BootStrapSUBTRANS(void)
  *
  * Control lock must be held at entry, and will be held at exit.
  */
-static int
+static Buffer
 ZeroSUBTRANSPage(int pageno)
 {
-	return SimpleLruZeroPage(SubTransCtl, pageno);
+	Buffer		buffer;
+
+	buffer = ZeroSlruBuffer(SLRU_SUBTRANS_REL_ID, pageno);
+	MarkBufferDirty(buffer);
+
+	return buffer;
 }
 
 /*
@@ -276,7 +250,6 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	 * Whenever we advance into a new page, ExtendSUBTRANS will likewise zero
 	 * the new page without regard to whatever was previously on disk.
 	 */
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
 
 	startPage = TransactionIdToPage(oldestActiveXID);
 	nextXid = ShmemVariableCache->nextXid;
@@ -284,35 +257,14 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 
 	while (startPage != endPage)
 	{
-		(void) ZeroSUBTRANSPage(startPage);
+		UnlockReleaseBuffer(ZeroSUBTRANSPage(startPage));
 		startPage++;
 		/* must account for wraparound */
 		if (startPage > TransactionIdToPage(MaxTransactionId))
 			startPage = 0;
 	}
-	(void) ZeroSUBTRANSPage(startPage);
-
-	LWLockRelease(SubtransSLRULock);
+	UnlockReleaseBuffer(ZeroSUBTRANSPage(startPage));
 }
-
-/*
- * Perform a checkpoint --- either during shutdown, or on-the-fly
- */
-void
-CheckPointSUBTRANS(void)
-{
-	/*
-	 * Write dirty SUBTRANS pages to disk
-	 *
-	 * This is not actually necessary from a correctness point of view. We do
-	 * it merely to improve the odds that writing of dirty pages is done by
-	 * the checkpoint process and not by backends.
-	 */
-	TRACE_POSTGRESQL_SUBTRANS_CHECKPOINT_START(true);
-	SimpleLruWriteAll(SubTransCtl, true);
-	TRACE_POSTGRESQL_SUBTRANS_CHECKPOINT_DONE(true);
-}
-
 
 /*
  * Make sure that SUBTRANS has room for a newly-allocated XID.
@@ -337,12 +289,8 @@ ExtendSUBTRANS(TransactionId newestXact)
 
 	pageno = TransactionIdToPage(newestXact);
 
-	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
-
 	/* Zero the page */
-	ZeroSUBTRANSPage(pageno);
-
-	LWLockRelease(SubtransSLRULock);
+	UnlockReleaseBuffer(ZeroSUBTRANSPage(pageno));
 }
 
 
@@ -368,7 +316,7 @@ TruncateSUBTRANS(TransactionId oldestXact)
 	TransactionIdRetreat(oldestXact);
 	cutoffPage = TransactionIdToPage(oldestXact);
 
-	SimpleLruTruncate(SubTransCtl, cutoffPage);
+	SimpleLruTruncate(SLRU_SUBTRANS_REL_ID, SubTransPagePrecedes, cutoffPage);
 }
 
 

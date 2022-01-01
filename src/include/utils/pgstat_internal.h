@@ -14,6 +14,7 @@
 #define PGSTAT_INTERNAL_H
 
 
+#include "access/slru.h"
 #include "common/hashfn.h"
 #include "lib/dshash.h"
 #include "lib/ilist.h"
@@ -260,28 +261,6 @@ typedef struct PgStat_KindInfo
 } PgStat_KindInfo;
 
 
-/*
- * List of SLRU names that we keep stats for.  There is no central registry of
- * SLRUs, so we use this fixed list instead.  The "other" entry is used for
- * all SLRUs without an explicit entry (e.g. SLRUs in extensions).
- *
- * This is only defined here so that SLRU_NUM_ELEMENTS is known for later type
- * definitions.
- */
-static const char *const slru_names[] = {
-	"CommitTs",
-	"MultiXactMember",
-	"MultiXactOffset",
-	"Notify",
-	"Serial",
-	"Subtrans",
-	"Xact",
-	"other"						/* has to be last */
-};
-
-#define SLRU_NUM_ELEMENTS	lengthof(slru_names)
-
-
 /* ----------
  * Types and definitions for different kinds of fixed-amount stats.
  *
@@ -333,7 +312,7 @@ typedef struct PgStatShared_SLRU
 {
 	/* lock protects ->stats */
 	LWLock		lock;
-	PgStat_SLRUStats stats[SLRU_NUM_ELEMENTS];
+	PgStat_SLRUStats stats[SLRU_NUM_RELS];
 } PgStatShared_SLRU;
 
 typedef struct PgStatShared_Wal
@@ -442,7 +421,7 @@ typedef struct PgStat_Snapshot
 
 	PgStat_CheckpointerStats checkpointer;
 
-	PgStat_SLRUStats slru[SLRU_NUM_ELEMENTS];
+	PgStat_SLRUStats slru[SLRU_NUM_RELS];
 
 	PgStat_WalStats wal;
 
