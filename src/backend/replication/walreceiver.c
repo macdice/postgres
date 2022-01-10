@@ -507,13 +507,9 @@ WalReceiverMain(void)
 				 * could add and remove just the socket each time, potentially
 				 * avoiding some system calls.
 				 */
-				Assert(wait_fd != PGINVALID_SOCKET);
-				rc = WaitLatchOrSocket(MyLatch,
-									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
-									   WL_TIMEOUT | WL_LATCH_SET,
-									   wait_fd,
-									   NAPTIME_PER_CYCLE,
-									   WAIT_EVENT_WAL_RECEIVER_MAIN);
+				//Assert(wait_fd != PGINVALID_SOCKET);
+				rc = walrcv_wait(wrconn, NAPTIME_PER_CYCLE,
+								 WAIT_EVENT_WAL_RECEIVER_MAIN);
 				if (rc & WL_LATCH_SET)
 				{
 					ResetLatch(MyLatch);
@@ -532,7 +528,7 @@ WalReceiverMain(void)
 						XLogWalRcvSendReply(true, false);
 					}
 				}
-				if (rc & WL_TIMEOUT)
+				if (rc == 0)
 				{
 					/*
 					 * We didn't receive anything new. If we haven't heard
