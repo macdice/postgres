@@ -496,24 +496,9 @@ WalReceiverMain(void)
 				if (endofwal)
 					break;
 
-				/*
-				 * Ideally we would reuse a WaitEventSet object repeatedly
-				 * here to avoid the overheads of WaitLatchOrSocket on epoll
-				 * systems, but we can't be sure that libpq (or any other
-				 * walreceiver implementation) has the same socket (even if
-				 * the fd is the same number, it may have been closed and
-				 * reopened since the last time).  In future, if there is a
-				 * function for removing sockets from WaitEventSet, then we
-				 * could add and remove just the socket each time, potentially
-				 * avoiding some system calls.
-				 */
-				Assert(wait_fd != PGINVALID_SOCKET);
-				rc = WaitLatchOrSocket(MyLatch,
-									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
-									   WL_TIMEOUT | WL_LATCH_SET,
-									   wait_fd,
-									   NAPTIME_PER_CYCLE,
-									   WAIT_EVENT_WAL_RECEIVER_MAIN);
+				/* Wait for data or latch. */
+				rc = walrcv_wait(wrconn, NAPTIME_PER_CYCLE,
+								 WAIT_EVENT_WAL_RECEIVER_MAIN);
 				if (rc & WL_LATCH_SET)
 				{
 					ResetLatch(MyLatch);
@@ -532,7 +517,7 @@ WalReceiverMain(void)
 						XLogWalRcvSendReply(true, false);
 					}
 				}
-				if (rc & WL_TIMEOUT)
+				if (rc == 0)
 				{
 					/*
 					 * We didn't receive anything new. If we haven't heard
