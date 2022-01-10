@@ -147,6 +147,7 @@ typedef struct WaitEvent
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
+	bool		closed;			/* Has FD_CLOSE been reported? */
 #endif
 } WaitEvent;
 

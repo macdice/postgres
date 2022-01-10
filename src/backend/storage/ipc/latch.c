@@ -899,6 +899,7 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	event->user_data = user_data;
 #ifdef WIN32
 	event->reset = false;
+	event->closed = false;
 #endif
 
 	if (events == WL_LATCH_SET)
@@ -1882,6 +1883,19 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 				return 1;
 			}
 		}
+
+		/*
+		 * Windows only reports FD_CLOSE once.  If we've seen that already,
+		 * continue to report that the socket is ready.
+		 */
+		if ((cur_event->events & WL_SOCKET_MASK) && cur_event->closed)
+		{
+			occurred_events->pos = cur_event->pos;
+			occurred_events->user_data = cur_event->user_data;
+			occurred_events->events = (cur_event->events & WL_SOCKET_MASK);
+			occurred_events->fd = cur_event->fd;
+			return 1;
+		}
 	}
 
 	/*
@@ -2002,6 +2016,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		{
 			/* EOF/error, so signal all caller-requested socket flags */
 			occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
+			cur_event->closed = true;
 		}
 
 		if (occurred_events->events != 0)
