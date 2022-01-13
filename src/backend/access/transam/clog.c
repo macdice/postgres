@@ -41,6 +41,7 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
+#include "port/atomics.h"
 #include "storage/proc.h"
 #include "storage/sync.h"
 
@@ -80,6 +81,127 @@
  * hurt performance.
  */
 #define THRESHOLD_SUBTRANS_CLOG_OPT	5
+
+/*
+ * The number of transactions to summarize into a single bit of shared memory
+ * that says 'everything in this group has committed'.  Must be a power of two
+ * and <= CLOG_XACTS_PER_PAGE.  Currently set so that it corresponds to one
+ * cache line of CLOG page, so that it's cheap to scan a group on every
+ * commit.  That results in a 1MB summary array.  XXX Many other policies
+ * including lazy computation and course granularity are possible.
+ */
+#define CLOG_XACTS_PER_SUMMARY_GROUP (64 * CLOG_XACTS_PER_BYTE)
+
+/* Fixed size of the array of all-committed summary bits, in bytes. */
+#define CLOG_SUMMARY_SIZE (0x80000000 / CLOG_XACTS_PER_SUMMARY_GROUP / 8)
+
+static pg_atomic_uint32 *CLOGSummary;
+
+/*
+ * Write the all-committed bit for the summary group containing 'xid'.
+ */
+static void
+TransactionXidSetSummaryBit(TransactionId xid, bool value)
+{
+	size_t bit_index = (xid & 0x7fffffff) / CLOG_XACTS_PER_SUMMARY_GROUP;
+	size_t bits_per_word = sizeof(uint32) * 8;
+	size_t word_index = bit_index / bits_per_word;
+	uint32 mask = 1 << (bit_index % bits_per_word);
+
+	if (value)
+		pg_atomic_fetch_or_u32(&CLOGSummary[word_index], mask);
+	else
+		pg_atomic_fetch_and_u32(&CLOGSummary[word_index], ~mask);
+}
+
+/*
+ * Read the all-committed bit for the summary group containing 'xid'.
+ */
+static bool
+TransactionXidGetSummaryBit(TransactionId xid)
+{
+	size_t bit_index = (xid & 0x7fffffff) / CLOG_XACTS_PER_SUMMARY_GROUP;
+	size_t bits_per_word = sizeof(uint32) * 8;
+	size_t word_index = bit_index / bits_per_word;
+	uint32 mask = 1 << (bit_index % bits_per_word);
+
+	return (pg_atomic_read_u32(&CLOGSummary[word_index]) & mask) != 0;
+}
+
+/*
+ * Summarize a cache line's worth of CLOG statuses into an all-committed bit,
+ * if possible.  Called for each CLOG commit, so had better be fast.
+ */
+static void
+TransactionXidSummarizeGroup(TransactionId xid, char *page)
+{
+	int first_chunk;
+	int end_chunk;
+	uint64 all_committed_chunk;
+	uint64 *page_chunks = (uint64 *) page;
+
+	/* Already set? */
+	if (unlikely(TransactionXidGetSummaryBit(xid)))
+		return;
+
+	/*
+	 * XXX Async commit LSNs should prevent this from happening.
+	 */
+
+	/*
+	  What does a uint64 full of commits look like?  This is computed
+	  symbolically here, but should be a constant-folded at compile time.
+	 */
+	all_committed_chunk = 0;
+	for (int i = 0; i < CLOG_XACTS_PER_BYTE * sizeof(all_committed_chunk); ++i)
+	{
+		all_committed_chunk <<= CLOG_BITS_PER_XACT;
+		all_committed_chunk |= TRANSACTION_STATUS_COMMITTED;
+	}
+
+	/* Rewind to start of group. */
+	xid &= ~(CLOG_XACTS_PER_SUMMARY_GROUP - 1);
+
+	/* Scan summary group looking for non-committed xacts, chunk at a time. */
+	first_chunk = TransactionIdToByte(xid) / sizeof(all_committed_chunk);
+	end_chunk =
+		first_chunk + (CLOG_XACTS_PER_SUMMARY_GROUP /
+					   (CLOG_XACTS_PER_BYTE * sizeof(all_committed_chunk)));
+	for (int i = first_chunk; i < end_chunk; ++i)
+		if (page_chunks[i] != all_committed_chunk)
+			return;
+
+	TransactionXidSetSummaryBit(xid, true);
+}
+
+#if 0
+/*
+ * Summarize a whole page of CLOG statuses into all-committed bits, if
+ * possible.  XXX Could be called after loading due to cache miss (?), but
+ * currently this fact is not exposed by slru.c.
+ */
+static void
+TransactionXidSummarizePage(int pageno, char *page)
+{
+	for (TransactionId xid = pageno * CLOG_XACTS_PER_PAGE;
+		 xid < (pageno + 1) * CLOG_XACTS_PER_PAGE;
+		 xid += CLOG_XACTS_PER_SUMMARY_GROUP)
+		 TransactionXidSummarizeGroup(xid, page);
+}
+#endif
+
+/*
+ * Summarize a zero'd page of CLOG statuses into zero all-committed bits.
+ * Called when extending a the CLOG.
+ */
+static void
+TransactionXidSummarizeNewPage(int pageno)
+{
+	for (TransactionId xid = pageno * CLOG_XACTS_PER_PAGE;
+		 xid < (pageno + 1) * CLOG_XACTS_PER_PAGE;
+		 xid += CLOG_XACTS_PER_SUMMARY_GROUP)
+		 TransactionXidSetSummaryBit(xid, false);
+}
 
 /*
  * Link to shared-memory data structures for CLOG control
@@ -618,6 +740,11 @@ TransactionIdSetStatusBit(TransactionId xid, XidStatus status, XLogRecPtr lsn, i
 		if (XactCtl->shared->group_lsn[lsnindex] < lsn)
 			XactCtl->shared->group_lsn[lsnindex] = lsn;
 	}
+
+	/* Scan a cache line of statuses to see if we can set a summary bit. */
+	/* XXX: Move this up so we do it just once for page update? */
+	if (status == TRANSACTION_STATUS_COMMITTED)
+		TransactionXidSummarizeGroup(xid, XactCtl->shared->page_buffer[slotno]);
 }
 
 /*
@@ -645,6 +772,10 @@ TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn)
 	int			lsnindex;
 	char	   *byteptr;
 	XidStatus	status;
+
+	/* See if we can take the lock-free path using a summary bit. */
+	if (TransactionXidGetSummaryBit(xid))
+		return TRANSACTION_STATUS_COMMITTED;
 
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
 
@@ -689,17 +820,26 @@ CLOGShmemBuffers(void)
 Size
 CLOGShmemSize(void)
 {
-	return SimpleLruShmemSize(CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE);
+	return SimpleLruShmemSize(CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE) +
+		CLOG_SUMMARY_SIZE;
 }
 
 void
 CLOGShmemInit(void)
 {
+	bool found;
+
 	XactCtl->PagePrecedes = CLOGPagePrecedes;
 	SimpleLruInit(XactCtl, "Xact", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
 				  XactSLRULock, "pg_xact", LWTRANCHE_XACT_BUFFER,
 				  SYNC_HANDLER_CLOG);
 	SlruPagePrecedesUnitTests(XactCtl, CLOG_XACTS_PER_PAGE);
+	CLOGSummary = ShmemInitStruct("pg_xact summary", CLOG_SUMMARY_SIZE, &found);
+	if (!found)
+	{
+		for (int i = 0; i < CLOG_SUMMARY_SIZE / sizeof(pg_atomic_uint32); ++i)
+			pg_atomic_init_u32(&CLOGSummary[i], 0);
+	}
 }
 
 /*
@@ -738,6 +878,8 @@ static int
 ZeroCLOGPage(int pageno, bool writeXlog)
 {
 	int			slotno;
+
+	TransactionXidSummarizeNewPage(pageno);
 
 	slotno = SimpleLruZeroPage(XactCtl, pageno);
 
