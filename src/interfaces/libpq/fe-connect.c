@@ -452,7 +452,19 @@ pqDropConnection(PGconn *conn, bool flushInput)
 
 	/* Close the socket itself */
 	if (conn->sock != PGINVALID_SOCKET)
+	{
+		/* Report that the socket is closing. */
+		for (int i = 0; i < conn->nEvents; i++)
+		{
+			PGEventSocket evt;
+
+			evt.conn = conn;
+			evt.socket = conn->sock;
+			(void) conn->events[i].proc(PGEVT_SOCKETCLOSE, &evt,
+										conn->events[i].passThrough);
+		}
 		closesocket(conn->sock);
+	}
 	conn->sock = PGINVALID_SOCKET;
 
 	/* Optionally discard any unread data */
@@ -2574,6 +2586,17 @@ keep_going:						/* We will come back to here until there is
 										  libpq_gettext("could not create socket: %s\n"),
 										  SOCK_STRERROR(errorno, sebuf, sizeof(sebuf)));
 						goto error_return;
+					}
+
+					/* Report that a new socket has been created. */
+					for (int i = 0; i < conn->nEvents; i++)
+					{
+						PGEventSocket evt;
+
+						evt.conn = conn;
+						evt.socket = conn->sock;
+						(void) conn->events[i].proc(PGEVT_SOCKET, &evt,
+													conn->events[i].passThrough);
 					}
 
 					/*

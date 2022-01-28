@@ -31,7 +31,9 @@ typedef enum
 	PGEVT_CONNDESTROY,
 	PGEVT_RESULTCREATE,
 	PGEVT_RESULTCOPY,
-	PGEVT_RESULTDESTROY
+	PGEVT_RESULTDESTROY,
+	PGEVT_SOCKET,
+	PGEVT_SOCKETCLOSE
 } PGEventId;
 
 typedef struct
@@ -65,6 +67,12 @@ typedef struct
 {
 	PGresult   *result;
 } PGEventResultDestroy;
+
+typedef struct
+{
+	PGconn	   *conn;
+	pgsocket   socket;
+} PGEventSocket;
 
 typedef int (*PGEventProc) (PGEventId evtId, void *evtInfo, void *passThrough);
 
