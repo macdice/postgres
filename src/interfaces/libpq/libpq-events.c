@@ -87,6 +87,17 @@ PQregisterEventProc(PGconn *conn, PGEventProc proc,
 		return false;
 	}
 
+	/* If we already have a socket, report a socket event immediately. */
+	if (conn->sock != PGINVALID_SOCKET)
+	{
+		PGEventSocket evt;
+
+		evt.conn = conn;
+		evt.socket = conn->sock;
+		(void) proc(PGEVT_SOCKET, &evt, passThrough);
+		/* XXX check return and fail (callback out of memory) */
+	}
+
 	return true;
 }
 
