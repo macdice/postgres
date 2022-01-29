@@ -244,28 +244,25 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 	appendstate->as_nasyncresults = 0;
 	appendstate->as_nasyncremain = 0;
 	appendstate->as_needrequest = NULL;
-	appendstate->as_eventset = NULL;
 	appendstate->as_valid_asyncplans = NULL;
 
 	if (nasyncplans > 0)
 	{
-		appendstate->as_asyncrequests = (AsyncRequest **)
-			palloc0(nplans * sizeof(AsyncRequest *));
+		appendstate->as_asyncrequests = (AsyncRequest *)
+			palloc0(nplans * sizeof(AsyncRequest));
 
 		i = -1;
 		while ((i = bms_next_member(asyncplans, i)) >= 0)
 		{
 			AsyncRequest *areq;
 
-			areq = palloc(sizeof(AsyncRequest));
+			areq = &appendstate->as_asyncrequests[i];
 			areq->requestor = (PlanState *) appendstate;
 			areq->requestee = appendplanstates[i];
 			areq->request_index = i;
 			areq->callback_pending = false;
 			areq->request_complete = false;
 			areq->result = NULL;
-
-			appendstate->as_asyncrequests[i] = areq;
 		}
 
 		appendstate->as_asyncresults = (TupleTableSlot **)
@@ -460,7 +457,7 @@ ExecReScanAppend(AppendState *node)
 		i = -1;
 		while ((i = bms_next_member(node->as_asyncplans, i)) >= 0)
 		{
-			AsyncRequest *areq = node->as_asyncrequests[i];
+			AsyncRequest *areq = &node->as_asyncrequests[i];
 
 			areq->callback_pending = false;
 			areq->request_complete = false;
@@ -898,7 +895,7 @@ ExecAppendAsyncBegin(AppendState *node)
 	i = -1;
 	while ((i = bms_next_member(node->as_valid_asyncplans, i)) >= 0)
 	{
-		AsyncRequest *areq = node->as_asyncrequests[i];
+		AsyncRequest *areq = &node->as_asyncrequests[i];
 
 		Assert(areq->request_index == i);
 		Assert(!areq->callback_pending);
@@ -993,7 +990,7 @@ ExecAppendAsyncRequest(AppendState *node, TupleTableSlot **result)
 	i = -1;
 	while ((i = bms_next_member(needrequest, i)) >= 0)
 	{
-		AsyncRequest *areq = node->as_asyncrequests[i];
+		AsyncRequest *areq = &node->as_asyncrequests[i];
 
 		/* Do the actual work. */
 		ExecAsyncRequest(areq);
@@ -1025,34 +1022,28 @@ ExecAppendAsyncEventWait(AppendState *node)
 	WaitEvent	occurred_event[EVENT_BUFFER_SIZE];
 	int			noccurred;
 	int			i;
+	int			num_configured_events;
 
 	/* We should never be called when there are no valid async subplans. */
 	Assert(node->as_nasyncremain > 0);
 
-	node->as_eventset = CreateWaitEventSet(CurrentMemoryContext, nevents);
-	AddWaitEventToSet(node->as_eventset, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-					  NULL, NULL);
-
-	/* Give each waiting subplan a chance to add an event. */
+	/* Give each waiting subplan a chance to configure an event. */
 	i = -1;
+	num_configured_events = 0;
 	while ((i = bms_next_member(node->as_asyncplans, i)) >= 0)
 	{
-		AsyncRequest *areq = node->as_asyncrequests[i];
+		AsyncRequest *areq = &node->as_asyncrequests[i];
 
 		if (areq->callback_pending)
-			ExecAsyncConfigureWait(areq);
+		{
+			if (ExecAsyncConfigureWait(areq))
+				num_configured_events++;
+		}
 	}
 
-	/*
-	 * No need for further processing if there are no configured events other
-	 * than the postmaster death event.
-	 */
-	if (GetNumRegisteredWaitEvents(node->as_eventset) == 1)
-	{
-		FreeWaitEventSet(node->as_eventset);
-		node->as_eventset = NULL;
+	/* No need for further processing if there are no configured events. */
+	if (num_configured_events == 0)
 		return;
-	}
 
 	/* We wait on at most EVENT_BUFFER_SIZE events. */
 	if (nevents > EVENT_BUFFER_SIZE)
@@ -1062,10 +1053,8 @@ ExecAppendAsyncEventWait(AppendState *node)
 	 * If the timeout is -1, wait until at least one event occurs.  If the
 	 * timeout is 0, poll for events, but do not wait at all.
 	 */
-	noccurred = WaitEventSetWait(node->as_eventset, timeout, occurred_event,
+	noccurred = WaitEventSetWait(LatchWaitSet, timeout, occurred_event,
 								 nevents, WAIT_EVENT_APPEND_READY);
-	FreeWaitEventSet(node->as_eventset);
-	node->as_eventset = NULL;
 	if (noccurred == 0)
 		return;
 
@@ -1073,14 +1062,36 @@ ExecAppendAsyncEventWait(AppendState *node)
 	for (i = 0; i < noccurred; i++)
 	{
 		WaitEvent  *w = &occurred_event[i];
+		AsyncRequest *areq = (AsyncRequest *) w->user_data;
+
+		if (w->events & WL_LATCH_SET)
+		{
+			ResetLatch(MyLatch);
+			/* XXX */
+			continue;
+		}
 
 		/*
 		 * Each waiting subplan should have registered its wait event with
 		 * user_data pointing back to its AsyncRequest.
 		 */
+		if (areq < node->as_asyncrequests ||
+			areq >= node->as_asyncrequests + node->as_nplans)
+		{
+			/*
+			 * This event was not for us (for example, a postgres_fdw
+			 * connection that is not relevant to this Append node).  Disable
+			 * it; any code that wants to poll it must modify it to
+			 * re-establish the wait condition, just as we did.  This lazy
+			 * disabling of irrelevant (to us) socket events is better than
+			 * explicitly doing it up front, and hopefully unlikely to happen.
+			 */
+			ModifyWaitEvent(LatchWaitSet, w->pos, 0, NULL, NULL);
+			continue;
+		}
+
 		if ((w->events & WL_SOCKET_READABLE) != 0)
 		{
-			AsyncRequest *areq = (AsyncRequest *) w->user_data;
 
 			if (areq->callback_pending)
 			{

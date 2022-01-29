@@ -261,7 +261,7 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 			io_flag = WL_SOCKET_WRITEABLE;
 
 		Assert(conn->wes_socket_index != -1);
-		ModifyWaitEvent(conn->wes, conn->wes_socket_index, io_flag, NULL);
+		ModifyWaitEvent(conn->wes, conn->wes_socket_index, io_flag, NULL, NULL);
 		if (WaitEventSetWait(conn->wes, -1, &event, 1,
 							 WAIT_EVENT_LIBPQWALRECEIVER_CONNECT) < 1)
 			continue;
@@ -767,7 +767,7 @@ libpqrcv_PQgetResult(WalReceiverConn *conn)
 		 */
 		Assert(conn->wes_socket_index != -1);
 		ModifyWaitEvent(conn->wes, conn->wes_socket_index,
-						WL_SOCKET_READABLE, NULL);
+						WL_SOCKET_READABLE, NULL, NULL);
 
 		if (WaitEventSetWait(conn->wes, -1, &event, 1,
 							 WAIT_EVENT_LIBPQWALRECEIVER_RECEIVE) < 1)
@@ -815,7 +815,7 @@ libpqrcv_wait(WalReceiverConn *conn, int timeout, int wait_event)
 
 	Assert(conn->wes_socket_index != -1);
 	ModifyWaitEvent(conn->wes, conn->wes_socket_index,
-					WL_SOCKET_READABLE, NULL);
+					WL_SOCKET_READABLE, NULL, NULL);
 	if (WaitEventSetWait(conn->wes, timeout, &event, 1, wait_event) == 1)
 		return event.events;
 

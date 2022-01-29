@@ -1262,15 +1262,13 @@ struct AppendState
 	bool		as_begun;		/* false means need to initialize */
 	Bitmapset  *as_asyncplans;	/* asynchronous plans indexes */
 	int			as_nasyncplans; /* # of asynchronous plans */
-	AsyncRequest **as_asyncrequests;	/* array of AsyncRequests */
+	AsyncRequest *as_asyncrequests;	/* array of AsyncRequests */
 	TupleTableSlot **as_asyncresults;	/* unreturned results of async plans */
 	int			as_nasyncresults;	/* # of valid entries in as_asyncresults */
 	bool		as_syncdone;	/* true if all synchronous plans done in
 								 * asynchronous mode, else false */
 	int			as_nasyncremain;	/* # of remaining asynchronous plans */
 	Bitmapset  *as_needrequest; /* asynchronous plans needing a new request */
-	struct WaitEventSet *as_eventset;	/* WaitEventSet used to configure file
-										 * descriptor wait events */
 	int			as_first_partial_plan;	/* Index of 'appendplans' containing
 										 * the first partial plan */
 	ParallelAppendState *as_pstate; /* parallel coordination info */

@@ -16,7 +16,7 @@
 #include "nodes/execnodes.h"
 
 extern void ExecAsyncRequest(AsyncRequest *areq);
-extern void ExecAsyncConfigureWait(AsyncRequest *areq);
+extern bool ExecAsyncConfigureWait(AsyncRequest *areq);
 extern void ExecAsyncNotify(AsyncRequest *areq);
 extern void ExecAsyncResponse(AsyncRequest *areq);
 extern void ExecAsyncRequestDone(AsyncRequest *areq, TupleTableSlot *result);

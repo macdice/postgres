@@ -58,9 +58,11 @@ ExecAsyncRequest(AsyncRequest *areq)
  *
  * AddWaitEventToSet(set, WL_SOCKET_READABLE, fd, NULL, areq);
  */
-void
+bool
 ExecAsyncConfigureWait(AsyncRequest *areq)
 {
+	bool		result = false;
+
 	/* must provide our own instrumentation support */
 	if (areq->requestee->instrument)
 		InstrStartNode(areq->requestee->instrument);
@@ -68,7 +70,7 @@ ExecAsyncConfigureWait(AsyncRequest *areq)
 	switch (nodeTag(areq->requestee))
 	{
 		case T_ForeignScanState:
-			ExecAsyncForeignScanConfigureWait(areq);
+			result = ExecAsyncForeignScanConfigureWait(areq);
 			break;
 		default:
 			/* If the node doesn't support async, caller messed up. */
@@ -79,6 +81,8 @@ ExecAsyncConfigureWait(AsyncRequest *areq)
 	/* must provide our own instrumentation support */
 	if (areq->requestee->instrument)
 		InstrStopNode(areq->requestee->instrument, 0.0);
+
+	return result;
 }
 
 /*

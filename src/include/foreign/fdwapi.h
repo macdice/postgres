@@ -187,7 +187,7 @@ typedef bool (*IsForeignPathAsyncCapable_function) (ForeignPath *path);
 
 typedef void (*ForeignAsyncRequest_function) (AsyncRequest *areq);
 
-typedef void (*ForeignAsyncConfigureWait_function) (AsyncRequest *areq);
+typedef bool (*ForeignAsyncConfigureWait_function) (AsyncRequest *areq);
 
 typedef void (*ForeignAsyncNotify_function) (AsyncRequest *areq);
 

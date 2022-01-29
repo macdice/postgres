@@ -131,6 +131,7 @@ typedef struct PgFdwRelationInfo
  */
 typedef struct PgFdwConnState
 {
+	int			wait_set_pos;	/* position of socket in LatchWaitSet, or -1 */
 	AsyncRequest *pendingAreq;	/* pending async request */
 } PgFdwConnState;
 

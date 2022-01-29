@@ -458,14 +458,14 @@ ExecAsyncForeignScanRequest(AsyncRequest *areq)
  *		In async mode, configure for a wait
  * ----------------------------------------------------------------
  */
-void
+bool
 ExecAsyncForeignScanConfigureWait(AsyncRequest *areq)
 {
 	ForeignScanState *node = (ForeignScanState *) areq->requestee;
 	FdwRoutine *fdwroutine = node->fdwroutine;
 
 	Assert(fdwroutine->ForeignAsyncConfigureWait != NULL);
-	fdwroutine->ForeignAsyncConfigureWait(areq);
+	return fdwroutine->ForeignAsyncConfigureWait(areq);
 }
 
 /* ----------------------------------------------------------------

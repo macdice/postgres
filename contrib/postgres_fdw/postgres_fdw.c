@@ -416,7 +416,7 @@ static void postgresGetForeignUpperPaths(PlannerInfo *root,
 										 void *extra);
 static bool postgresIsForeignPathAsyncCapable(ForeignPath *path);
 static void postgresForeignAsyncRequest(AsyncRequest *areq);
-static void postgresForeignAsyncConfigureWait(AsyncRequest *areq);
+static bool postgresForeignAsyncConfigureWait(AsyncRequest *areq);
 static void postgresForeignAsyncNotify(AsyncRequest *areq);
 
 /*
@@ -6857,14 +6857,13 @@ postgresForeignAsyncRequest(AsyncRequest *areq)
  * postgresForeignAsyncConfigureWait
  *		Configure a file descriptor event for which we wish to wait.
  */
-static void
+static bool
 postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 {
 	ForeignScanState *node = (ForeignScanState *) areq->requestee;
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	AsyncRequest *pendingAreq = fsstate->conn_state->pendingAreq;
 	AppendState *requestor = (AppendState *) areq->requestor;
-	WaitEventSet *set = requestor->as_eventset;
 
 	/* This should not be called unless callback_pending */
 	Assert(areq->callback_pending);
@@ -6878,15 +6877,12 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 	{
 		complete_pending_request(areq);
 		if (areq->request_complete)
-			return;
+			return false;
 		Assert(areq->callback_pending);
 	}
 
 	/* We must have run out of tuples */
 	Assert(fsstate->next_tuple >= fsstate->num_tuples);
-
-	/* The core code would have registered postmaster death event */
-	Assert(GetNumRegisteredWaitEvents(set) >= 1);
 
 	/* Begin an asynchronous data fetch if not already done */
 	if (!pendingAreq)
@@ -6905,9 +6901,9 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 		 * with no configured events other than the postmaster death event.
 		 */
 		if (!bms_is_empty(requestor->as_needrequest))
-			return;
-		if (GetNumRegisteredWaitEvents(set) > 1)
-			return;
+			return false;
+		//if (GetNumRegisteredWaitEvents(set) > 1)
+		//	return false;
 		process_pending_request(pendingAreq);
 		fetch_more_data_begin(areq);
 	}
@@ -6918,13 +6914,19 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 		 * parent but for a different child.  Since we configure only the
 		 * event for the request made for that child, skip the given request.
 		 */
-		return;
+		return false;
 	}
 	else
 		Assert(pendingAreq == areq);
 
-	AddWaitEventToSet(set, WL_SOCKET_READABLE, PQsocket(fsstate->conn),
-					  NULL, areq);
+	Assert(fsstate->conn_state->wait_set_pos != -1);
+	ModifyWaitEvent(LatchWaitSet,
+					fsstate->conn_state->wait_set_pos,
+					WL_SOCKET_READABLE,
+					NULL,
+					areq);
+
+	return true;
 }
 
 /*

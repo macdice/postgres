@@ -17,6 +17,7 @@
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "funcapi.h"
+#include "libpq-events.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -280,6 +281,37 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 }
 
 /*
+ * Automatically add and remove sockets owned by libpq connections.
+ */
+static int
+pgfdw_eventproc(PGEventId evtId, void *evtInfo, void *passThrough)
+{
+	if (evtId == PGEVT_SOCKET)
+	{
+		PGEventSocket *evt = (PGEventSocket *) evtInfo;
+		ConnCacheEntry *entry = (ConnCacheEntry *) passThrough;
+
+elog(LOG, "PGEVT_SOCKET");
+		Assert(entry->state.wait_set_pos == -1);
+		entry->state.wait_set_pos = AddWaitEventToSet(LatchWaitSet,
+													  WL_SOCKET_READABLE,
+													  evt->socket,
+													  NULL,
+													  NULL);
+	}
+	else if (evtId == PGEVT_SOCKETCLOSE)
+	{
+		ConnCacheEntry *entry = (ConnCacheEntry *) passThrough;
+
+elog(LOG, "PGEVT_SOCKETCLOSE");
+		Assert(entry->state.wait_set_pos != -1);
+		RemoveWaitEventFromSet(LatchWaitSet, entry->state.wait_set_pos);
+		entry->state.wait_set_pos = -1;
+	}
+	return 1;
+}
+
+/*
  * Reset all transient state fields in the cached connection entry and
  * establish new connection to the remote server.
  */
@@ -305,6 +337,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 		GetSysCacheHashValue1(USERMAPPINGOID,
 							  ObjectIdGetDatum(user->umid));
 	memset(&entry->state, 0, sizeof(entry->state));
+	entry->state.wait_set_pos = -1;
 
 	/*
 	 * Determine whether to keep the connection that we're about to make here
@@ -331,6 +364,18 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 
 	elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
 		 entry->conn, server->servername, user->umid, user->userid);
+
+	/*
+	 * Configure our event handler, so that this connection's socket is
+	 * automatically added to and removed from LatchWaitSet.  This allows
+	 * the socket to be multiplexed with others.
+	 */
+	if (PQregisterEventProc(entry->conn, pgfdw_eventproc, "postgres_fdw",
+							entry) == 0)
+	{
+		/* XXX: drop connection! */
+		elog(ERROR, "postgres_fdw could not register for libpq events");
+	}
 }
 
 /*
@@ -585,12 +630,12 @@ check_conn_params(const char **keywords, const char **values, UserMapping *user)
  * there are any number of ways to break things.
  */
 static void
-configure_remote_session(PGconn *conn)
+configure_remote_session(ConnCacheEntry *entry)
 {
-	int			remoteversion = PQserverVersion(conn);
+	int			remoteversion = PQserverVersion(entry->conn);
 
 	/* Force the search path to contain only pg_catalog (see deparse.c) */
-	do_sql_command(conn, "SET search_path = pg_catalog");
+	do_sql_command(entry, "SET search_path = pg_catalog");
 
 	/*
 	 * Set remote timezone; this is basically just cosmetic, since all
@@ -601,28 +646,29 @@ configure_remote_session(PGconn *conn)
 	 * server might use a different timezone database.  Instead, use UTC
 	 * (quoted, because very old servers are picky about case).
 	 */
-	do_sql_command(conn, "SET timezone = 'UTC'");
+	do_sql_command(entry, "SET timezone = 'UTC'");
 
 	/*
 	 * Set values needed to ensure unambiguous data output from remote.  (This
 	 * logic should match what pg_dump does.  See also set_transmission_modes
 	 * in postgres_fdw.c.)
 	 */
-	do_sql_command(conn, "SET datestyle = ISO");
+	do_sql_command(entry, "SET datestyle = ISO");
 	if (remoteversion >= 80400)
-		do_sql_command(conn, "SET intervalstyle = postgres");
+		do_sql_command(entry, "SET intervalstyle = postgres");
 	if (remoteversion >= 90000)
-		do_sql_command(conn, "SET extra_float_digits = 3");
+		do_sql_command(entry, "SET extra_float_digits = 3");
 	else
-		do_sql_command(conn, "SET extra_float_digits = 2");
+		do_sql_command(entry, "SET extra_float_digits = 2");
 }
 
 /*
  * Convenience subroutine to issue a non-data-returning SQL command to remote
  */
 void
-do_sql_command(PGconn *conn, const char *sql)
+do_sql_command(ConnCacheEntry *entry, const char *sql)
 {
+	PGconn	   *conn = entry->conn;
 	PGresult   *res;
 
 	if (!PQsendQuery(conn, sql))
@@ -661,7 +707,7 @@ begin_remote_xact(ConnCacheEntry *entry)
 		else
 			sql = "START TRANSACTION ISOLATION LEVEL REPEATABLE READ";
 		entry->changing_xact_state = true;
-		do_sql_command(entry->conn, sql);
+		do_sql_command(entry, sql);
 		entry->xact_depth = 1;
 		entry->changing_xact_state = false;
 	}
@@ -677,7 +723,7 @@ begin_remote_xact(ConnCacheEntry *entry)
 
 		snprintf(sql, sizeof(sql), "SAVEPOINT s%d", entry->xact_depth + 1);
 		entry->changing_xact_state = true;
-		do_sql_command(entry->conn, sql);
+		do_sql_command(entry, sql);
 		entry->xact_depth++;
 		entry->changing_xact_state = false;
 	}
@@ -752,6 +798,30 @@ pgfdw_exec_query(PGconn *conn, const char *query, PgFdwConnState *state)
 	return pgfdw_get_result(conn, query);
 }
 
+static int
+pgfdw_wait_socket(PGFPGconn *conn, int timeout)
+{
+	WaitEvent		event;
+
+	ModifyWaitEvent(LatchWaitSet, state->wait_set_pos, WL_READABLE, NULL, NULL);
+	if (WaitEventSetWait(LatchWaitSet, timeout, &event, 1, PG_WAIT_EXTENSION) == 0)
+		return 0;
+
+	/*
+	 * We might receive a readiness event another sockets, which may even be
+	 * a sibling under the same the same async Append.  Disable it and return
+	 * spuriously, because we can't process that data now (once the first byte
+	 * arrives, we block and consume all).
+	 */
+	if ((event.events & WL_SOCKET_MASK) && event.fd != PQsocket(conn))
+	{
+		ModifyWaitEvent(LatchWaitSet, event.pos, 0, NULL, NULL);
+		return 0;
+	}
+
+	return event.events;
+}
+
 /*
  * Wait for the result from a prior asynchronous execution function call.
  *
@@ -779,11 +849,14 @@ pgfdw_get_result(PGconn *conn, const char *query)
 				int			wc;
 
 				/* Sleep until there's something to do */
+				wc = pgfdw_wait_socket(conn, -1);
+/*
 				wc = WaitLatchOrSocket(MyLatch,
 									   WL_LATCH_SET | WL_SOCKET_READABLE |
 									   WL_EXIT_ON_PM_DEATH,
 									   PQsocket(conn),
 									   -1L, PG_WAIT_EXTENSION);
+*/
 				ResetLatch(MyLatch);
 
 				CHECK_FOR_INTERRUPTS();
@@ -925,7 +998,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 
 					/* Commit all remote transactions during pre-commit */
 					entry->changing_xact_state = true;
-					do_sql_command(entry->conn, "COMMIT TRANSACTION");
+					do_sql_command(entry, "COMMIT TRANSACTION");
 					entry->changing_xact_state = false;
 
 					/*
@@ -1063,7 +1136,7 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 			/* Commit all remote subtransactions during pre-commit */
 			snprintf(sql, sizeof(sql), "RELEASE SAVEPOINT s%d", curlevel);
 			entry->changing_xact_state = true;
-			do_sql_command(entry->conn, sql);
+			do_sql_command(entry, sql);
 			entry->changing_xact_state = false;
 		}
 		else
@@ -1339,11 +1412,14 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime, PGresult **result,
 				}
 
 				/* Sleep until there's something to do */
+				wc = pgfdw_wait_socket(conn, cur_timeout);
+/*
 				wc = WaitLatchOrSocket(MyLatch,
 									   WL_LATCH_SET | WL_SOCKET_READABLE |
 									   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 									   PQsocket(conn),
 									   cur_timeout, PG_WAIT_EXTENSION);
+*/
 				ResetLatch(MyLatch);
 
 				CHECK_FOR_INTERRUPTS();

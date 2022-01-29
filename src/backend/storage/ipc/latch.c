@@ -142,7 +142,7 @@ struct WaitEventSet
 };
 
 /* A common WaitEventSet used to implement WatchLatch() */
-static WaitEventSet *LatchWaitSet;
+WaitEventSet *LatchWaitSet;
 
 /* The position of the latch in LatchWaitSet. */
 #define LatchWaitSetLatchPos 0
@@ -299,7 +299,7 @@ InitializeLatchWaitSet(void)
 	Assert(LatchWaitSet == NULL);
 
 	/* Set up the WaitEventSet used by WaitLatch(). */
-	LatchWaitSet = CreateWaitEventSet(TopMemoryContext, 2);
+	LatchWaitSet = CreateWaitEventSet(TopMemoryContext, 1024);
 	latch_pos = AddWaitEventToSet(LatchWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
 								  MyLatch, NULL);
 	if (IsUnderPostmaster)
@@ -471,7 +471,8 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	 */
 	if (!(wakeEvents & WL_LATCH_SET))
 		latch = NULL;
-	ModifyWaitEvent(LatchWaitSet, LatchWaitSetLatchPos, WL_LATCH_SET, latch);
+	ModifyWaitEvent(LatchWaitSet, LatchWaitSetLatchPos, WL_LATCH_SET, latch,
+					NULL);
 	LatchWaitSet->exit_on_postmaster_death =
 		((wakeEvents & WL_EXIT_ON_PM_DEATH) != 0);
 
@@ -972,12 +973,14 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 /*
  * Change the event mask and, in the WL_LATCH_SET case, the latch associated
  * with the WaitEvent.  The latch may be changed to NULL to disable the latch
- * temporarily, and then set back to a latch later.
+ * temporarily, and then set back to a latch later.  The user_data field is
+ * updated.
  *
  * 'pos' is the id returned by AddWaitEventToSet.
  */
 void
-ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
+ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch,
+				void *user_data)
 {
 	WaitEvent  *event;
 #if defined(WAIT_USE_KQUEUE)
@@ -990,6 +993,8 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 #if defined(WAIT_USE_KQUEUE)
 	old_events = event->events;
 #endif
+
+	event->user_data = user_data;
 
 	/*
 	 * If neither the event mask nor the associated latch changes, return
@@ -1111,28 +1116,25 @@ WaitEventAdjustEpoll(WaitEventSet *set, WaitEvent *event, int action)
 
 	/* pointer to our event, returned by epoll_wait */
 	epoll_ev.data.ptr = event;
-	/* always wait for errors */
-	epoll_ev.events = EPOLLERR | EPOLLHUP;
 
 	/* prepare pollfd entry once */
 	if (event->events == WL_LATCH_SET)
 	{
 		Assert(set->latch != NULL);
-		epoll_ev.events |= EPOLLIN;
+		epoll_ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
 	}
 	else if (event->events == WL_POSTMASTER_DEATH)
 	{
-		epoll_ev.events |= EPOLLIN;
+		epoll_ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
 	}
 	else
 	{
 		Assert(event->fd != PGINVALID_SOCKET);
-		Assert(event->events & (WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE));
 
 		if (event->events & WL_SOCKET_READABLE)
-			epoll_ev.events |= EPOLLIN;
+			epoll_ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
 		if (event->events & WL_SOCKET_WRITEABLE)
-			epoll_ev.events |= EPOLLOUT;
+			epoll_ev.events = EPOLLOUT | EPOLLERR | EPOLLHUP;
 	}
 
 	/*
