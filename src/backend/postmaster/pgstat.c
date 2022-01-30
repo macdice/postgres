@@ -382,6 +382,7 @@ static void pgstat_recv_replslot(PgStat_MsgReplSlot *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
 static void pgstat_recv_subscription_purge(PgStat_MsgSubscriptionPurge *msg, int len);
 static void pgstat_recv_subworker_error(PgStat_MsgSubWorkerError *msg, int len);
+static void pgstat_release_socket(void);
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -483,8 +484,7 @@ pgstat_init(void)
 			ereport(LOG,
 					(errcode_for_socket_access(),
 					 errmsg("could not bind socket for statistics collector: %m")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 
@@ -494,8 +494,7 @@ pgstat_init(void)
 			ereport(LOG,
 					(errcode_for_socket_access(),
 					 errmsg("could not get address of socket for statistics collector: %m")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 
@@ -510,8 +509,7 @@ pgstat_init(void)
 			ereport(LOG,
 					(errcode_for_socket_access(),
 					 errmsg("could not connect socket for statistics collector: %m")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 
@@ -531,8 +529,7 @@ retry1:
 			ereport(LOG,
 					(errcode_for_socket_access(),
 					 errmsg("could not send test message on socket for statistics collector: %m")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 
@@ -557,8 +554,7 @@ retry1:
 			ereport(LOG,
 					(errcode_for_socket_access(),
 					 errmsg("select() failed in statistics collector: %m")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 		if (sel_res == 0 || !FD_ISSET(pgStatSock, &rset))
@@ -572,8 +568,7 @@ retry1:
 			ereport(LOG,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
 					 errmsg("test message did not get through on socket for statistics collector")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 
@@ -587,8 +582,7 @@ retry2:
 			ereport(LOG,
 					(errcode_for_socket_access(),
 					 errmsg("could not receive test message on socket for statistics collector: %m")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 
@@ -597,8 +591,7 @@ retry2:
 			ereport(LOG,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("incorrect test message transmission on socket for statistics collector")));
-			closesocket(pgStatSock);
-			pgStatSock = PGINVALID_SOCKET;
+			pgstat_release_socket();
 			continue;
 		}
 
@@ -669,7 +662,7 @@ startup_failed:
 		pg_freeaddrinfo_all(hints.ai_family, addrs);
 
 	if (pgStatSock != PGINVALID_SOCKET)
-		closesocket(pgStatSock);
+		pgstat_release_socket();
 	pgStatSock = PGINVALID_SOCKET;
 
 	/*
@@ -3526,6 +3519,9 @@ PgstatCollectorMain(int argc, char *argv[])
 	 */
 	pgStatRunningInCollector = true;
 	pgStatDBHash = pgstat_read_statsfiles(InvalidOid, true, true);
+
+	/* Make sure pgStatSock can be used in a WaitEventSet on Windows. */
+	SocketTableAdd(pgStatSock, false);
 
 	/* Prepare to wait for our latch or data in our socket. */
 	wes = CreateWaitEventSet(CurrentMemoryContext, 3);
@@ -6417,4 +6413,12 @@ void
 pgstat_count_slru_truncate(int slru_idx)
 {
 	slru_entry(slru_idx)->m_truncate += 1;
+}
+
+static void
+pgstat_release_socket(void)
+{
+	SocketTableDrop(pgStatSock);
+	closesocket(pgStatSock);
+	pgStatSock = PGINVALID_SOCKET;
 }

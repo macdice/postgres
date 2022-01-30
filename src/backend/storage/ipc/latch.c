@@ -60,6 +60,7 @@
 #include "storage/shmem.h"
 #include "utils/memutils.h"
 
+
 /*
  * Select the fd readiness primitive to use. Normally the "most modern"
  * primitive supported by the OS will be used, but for testing it can be
@@ -803,28 +804,6 @@ FreeWaitEventSet(WaitEventSet *set)
 #elif defined(WAIT_USE_KQUEUE)
 	close(set->kqueue_fd);
 	ReleaseExternalFD();
-#elif defined(WAIT_USE_WIN32)
-	WaitEvent  *cur_event;
-
-	for (cur_event = set->events;
-		 cur_event < (set->events + set->nevents);
-		 cur_event++)
-	{
-		if (cur_event->events & WL_LATCH_SET)
-		{
-			/* uses the latch's HANDLE */
-		}
-		else if (cur_event->events & WL_POSTMASTER_DEATH)
-		{
-			/* uses PostmasterHandle */
-		}
-		else
-		{
-			/* Clean up the event object we created for the socket */
-			WSAEventSelect(cur_event->fd, NULL, 0);
-			WSACloseEvent(set->handles[cur_event->pos + 1]);
-		}
-	}
 #endif
 
 	pfree(set);
@@ -897,9 +876,17 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	event->fd = fd;
 	event->events = events;
 	event->user_data = user_data;
+
+	if (events & WL_SOCKET_MASK)
+	{
 #ifdef WIN32
-	event->reset = false;
+		/* Point to our Windows event tracking state for the socket. */
+		event->extra_socket_state = SocketTableGet(fd);
+#else
+		/* On Unix, check it's registered to avoid portability bugs. */
+		(void) SocketTableGet(fd);
 #endif
+	}
 
 	if (events == WL_LATCH_SET)
 	{
@@ -1265,6 +1252,7 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 	}
 	else
 	{
+		ExtraSocketState *ess;
 		int			flags = FD_CLOSE;	/* always check for errors/EOF */
 
 		if (event->events & WL_SOCKET_READABLE)
@@ -1274,18 +1262,19 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 		if (event->events & WL_SOCKET_CONNECTED)
 			flags |= FD_CONNECT;
 
-		if (*handle == WSA_INVALID_EVENT)
-		{
-			*handle = WSACreateEvent();
-			if (*handle == WSA_INVALID_EVENT)
-				elog(ERROR, "failed to create event for socket: error code %d",
-					 WSAGetLastError());
-		}
-		if (WSAEventSelect(event->fd, *handle, flags) != 0)
+		/* Find the event associated with this socket. */
+		ess = event->extra_socket_state;
+		*handle = ess->event_handle;
+
+		/*
+		 * Adjust the flags for this event, if they don't already match what we
+		 * want to wait for.
+		 */
+		if (ess->flags != flags &&
+			WSAEventSelect(event->fd, *handle, flags) != 0)
 			elog(ERROR, "failed to set up event for socket: error code %d",
 				 WSAGetLastError());
-
-		Assert(event->fd != PGINVALID_SOCKET);
+		ess->flags = flags;
 	}
 }
 #endif
@@ -1845,10 +1834,19 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		 cur_event < (set->events + set->nevents);
 		 cur_event++)
 	{
-		if (cur_event->reset)
-		{
+		/* Reset the event mask if necessary. */
+		if (cur_event->events & WL_SOCKET_MASK)
 			WaitEventAdjustWin32(set, cur_event);
-			cur_event->reset = false;
+
+		/* If we've already seen FD_CLOSE, keep reporting readiness. */
+		if ((cur_event->events & WL_SOCKET_MASK) &&
+			cur_event->extra_socket_state->seen_fd_close)
+		{
+			occurred_events->pos = cur_event->pos;
+			occurred_events->user_data = cur_event->user_data;
+			occurred_events->events = cur_event->events;
+			occurred_events->fd = cur_event->fd;
+			return 1;
 		}
 
 		/*
@@ -1984,7 +1982,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			 * for the behavior of socket events.
 			 *------
 			 */
-			cur_event->reset = true;
+			cur_event->extra_socket_state->flags = 0;
 		}
 		if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
 			(resEvents.lNetworkEvents & FD_WRITE))
@@ -2002,6 +2000,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		{
 			/* EOF/error, so signal all caller-requested socket flags */
 			occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
+			cur_event->extra_socket_state->seen_fd_close = true;
 		}
 
 		if (occurred_events->events != 0)

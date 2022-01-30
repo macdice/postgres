@@ -17,6 +17,7 @@
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "funcapi.h"
+#include "libpq-events.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -109,6 +110,7 @@ static void pgfdw_abort_cleanup(ConnCacheEntry *entry, const char *sql,
 								bool toplevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
+static int	pgfdw_eventproc(PGEventId evtId, void *evtInfo, void *passThrough);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -468,6 +470,10 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 					 errmsg("could not connect to server \"%s\"",
 							server->servername),
 					 errdetail_internal("%s", pchomp(PQerrorMessage(conn)))));
+
+		/* Make sure that all sockets are registered for use by latch.c. */
+		if (!PQregisterEventProc(conn, pgfdw_eventproc, "postgres_fdw", NULL))
+			elog(ERROR, "postgres_fdw could not register for libpq events");
 
 		/*
 		 * Check that non-superuser has used password to establish connection;
@@ -1708,4 +1714,23 @@ disconnect_cached_connections(Oid serverid)
 	}
 
 	return result;
+}
+
+/*
+ * A callback for libpq to allow its sockets to be used in WaitEventSet on Windows.
+ */
+static int
+pgfdw_eventproc(PGEventId evtId, void *evtInfo, void *passThrough)
+{
+	if (evtId == PGEVT_SOCKET)
+	{
+		PGEventSocket *evt = (PGEventSocket *) evtInfo;
+		return SocketTableAdd(evt->socket, true) ? 1 : 0;
+	}
+	else if (evtId == PGEVT_SOCKETCLOSE)
+	{
+		PGEventSocket *evt = (PGEventSocket *) evtInfo;
+		SocketTableDrop(evt->socket);
+	}
+	return 1;
 }

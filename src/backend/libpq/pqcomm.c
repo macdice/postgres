@@ -204,6 +204,9 @@ pq_init(void)
 				(errmsg("could not set socket to nonblocking mode: %m")));
 #endif
 
+	/* Make sure the socket can be used in a WaitEventSet on Windows. */
+	SocketTableAdd(MyProcPort->sock, false);
+
 	FeBeWaitSet = CreateWaitEventSet(TopMemoryContext, 3);
 	socket_pos = AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE,
 								   MyProcPort->sock, NULL, NULL);

@@ -301,6 +301,9 @@ SysLoggerMain(int argc, char *argv[])
 	 */
 	whereToSendOutput = DestNone;
 
+	/* Make sure the pipe can be used in a WaitEventSet on Windows. */
+	SocketTableAdd((pgsocket) syslogPipe[0], false);
+
 	/*
 	 * Set up a reusable WaitEventSet object we'll use to wait for our latch,
 	 * and (except on Windows) our socket.

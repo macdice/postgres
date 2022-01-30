@@ -23,6 +23,7 @@
 #include "catalog/pg_type.h"
 #include "common/connect.h"
 #include "funcapi.h"
+#include "libpq-events.h"
 #include "libpq-fe.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -82,6 +83,10 @@ static WalRcvExecResult *libpqrcv_exec(WalReceiverConn *conn,
 									   const int nRetTypes,
 									   const Oid *retTypes);
 static void libpqrcv_disconnect(WalReceiverConn *conn);
+
+static int libpqrcv_eventproc(PGEventId evtId,
+							  void *evtInfo,
+							  void *passThrough);
 
 static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	libpqrcv_connect,
@@ -179,6 +184,15 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 	if (PQstatus(conn->streamConn) == CONNECTION_BAD)
 	{
 		*err = pchomp(PQerrorMessage(conn->streamConn));
+		return NULL;
+	}
+
+	if (PQregisterEventProc(conn->streamConn, libpqrcv_eventproc,
+							"libwalrcv", NULL) == 0)
+	{
+		PQfinish(conn->streamConn);
+		conn->streamConn = NULL;
+		*err = pstrdup("could not register for libpq events");
 		return NULL;
 	}
 
@@ -1164,4 +1178,23 @@ stringlist_to_identifierstr(PGconn *conn, List *strings)
 	}
 
 	return res.data;
+}
+
+/*
+ * A callback for libpq to allow its sockets to be used in WaitEventSet on Windows.
+ */
+static int
+libpqrcv_eventproc(PGEventId evtId, void *evtInfo, void *passThrough)
+{
+	if (evtId == PGEVT_SOCKET)
+	{
+		PGEventSocket *evt = (PGEventSocket *) evtInfo;
+		return SocketTableAdd(evt->socket, true) ? 1 : 0;
+	}
+	else if (evtId == PGEVT_SOCKETCLOSE)
+	{
+		PGEventSocket *evt = (PGEventSocket *) evtInfo;
+		SocketTableDrop(evt->socket);
+	}
+	return 1;
 }

@@ -25,7 +25,8 @@ OBJS = \
 	$(TAS) \
 	atomics.o \
 	pg_sema.o \
-	pg_shmem.o
+	pg_shmem.o\
+	socket_table.o
 
 ifeq ($(PORTNAME), win32)
 SUBDIRS += win32

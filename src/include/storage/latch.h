@@ -146,7 +146,7 @@ typedef struct WaitEvent
 	pgsocket	fd;				/* socket fd associated with event */
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
 #ifdef WIN32
-	bool		reset;			/* Is reset of the event required? */
+	ExtraSocketState *extra_socket_state;
 #endif
 } WaitEvent;
 

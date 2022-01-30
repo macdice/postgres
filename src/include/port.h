@@ -543,4 +543,22 @@ extern char *wait_result_to_str(int exit_status);
 extern bool wait_result_is_signal(int exit_status, int signum);
 extern bool wait_result_is_any_signal(int exit_status, bool include_command_not_found);
 
+/* backend/port/socket_table.c */
+#if !defined(FRONTEND)
+struct ExtraSocketState
+{
+#ifdef WIN32
+	HANDLE		event_handle;		/* one event for the life of the socket */
+	int			flags;				/* most recent WSAEventSelect() flags */
+	bool		seen_fd_close;		/* has FD_CLOSE been received? */
+#else
+	int			dummy;				/* none of this is needed for Unix */
+#endif
+};
+typedef struct ExtraSocketState ExtraSocketState;
+extern ExtraSocketState *SocketTableAdd(pgsocket sock, bool no_oom);
+extern ExtraSocketState *SocketTableGet(pgsocket sock);
+extern void SocketTableDrop(pgsocket sock);
+#endif
+
 #endif							/* PG_PORT_H */
