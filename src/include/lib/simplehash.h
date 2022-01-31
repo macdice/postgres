@@ -41,7 +41,11 @@
  *	  - SH_SCOPE - in which scope (e.g. extern, static inline) do function
  *		declarations reside
  *	  - SH_RAW_ALLOCATOR - if defined, memory contexts are not used; instead,
- *	    use this to allocate bytes. The allocator must zero the returned space.
+ *	    use this to allocate bytes. The allocator must zero the returned space,
+ *	    or SH_RAW_ALLOCATOR_NOZERO must also be defined.
+ *	  - SH_RAW_FREE - if defined, use this to free memory, instead of pfree()
+ *	  - SH_NO_OOM - if defined, the allocator can fail by returning NULL,
+ *	    otherwise allocator failure is assumed to exit nonlocally (ERROR)
  *	  - SH_USE_NONDEFAULT_ALLOCATOR - if defined no element allocator functions
  *		are defined, so you can supply your own
  *	  The following parameters are only relevant when SH_DEFINE is defined:
@@ -204,14 +208,14 @@ SH_SCOPE void SH_DESTROY(SH_TYPE * tb);
 SH_SCOPE void SH_RESET(SH_TYPE * tb);
 
 /* void <prefix>_grow(<prefix>_hash *tb, uint64 newsize) */
-SH_SCOPE void SH_GROW(SH_TYPE * tb, uint64 newsize);
+SH_SCOPE bool SH_GROW(SH_TYPE * tb, uint64 newsize);
 
 /* <element> *<prefix>_insert(<prefix>_hash *tb, <key> key, bool *found) */
 SH_SCOPE	SH_ELEMENT_TYPE *SH_INSERT(SH_TYPE * tb, SH_KEY_TYPE key, bool *found);
 
 /*
  * <element> *<prefix>_insert_hash(<prefix>_hash *tb, <key> key, uint32 hash,
- * 								  bool *found)
+ *								  bool *found)
  */
 SH_SCOPE	SH_ELEMENT_TYPE *SH_INSERT_HASH(SH_TYPE * tb, SH_KEY_TYPE key,
 											uint32 hash, bool *found);
@@ -280,6 +284,12 @@ SH_SCOPE void SH_STAT(SH_TYPE * tb);
 #define SH_COMPARE_KEYS(tb, ahash, akey, b) (ahash == SH_GET_HASH(tb, b) && SH_EQUAL(tb, b->SH_KEY, akey))
 #else
 #define SH_COMPARE_KEYS(tb, ahash, akey, b) (SH_EQUAL(tb, b->SH_KEY, akey))
+#endif
+
+#ifdef SH_NO_OOM
+#define SH_MCXT_FLAGS (MCXT_ALLOC_ZERO | MCXT_ALLOC_NO_OOM)
+#else
+#define SH_MCXT_FLAGS MCXT_ALLOC_ZERO
 #endif
 
 /*
@@ -400,10 +410,18 @@ static inline void *
 SH_ALLOCATE(SH_TYPE * type, Size size)
 {
 #ifdef SH_RAW_ALLOCATOR
-	return SH_RAW_ALLOCATOR(size);
+	void *result = SH_RAW_ALLOCATOR(size);
+#ifdef SH_RAW_ALLOCATOR_NOZERO
+#ifdef SH_NO_OOM
+	if (!result)
+		return NULL;
+#endif
+	memset(result, 0, size);
+#endif
+	return result;
 #else
 	return MemoryContextAllocExtended(type->ctx, size,
-									  MCXT_ALLOC_HUGE | MCXT_ALLOC_ZERO);
+									  SH_MCXT_FLAGS | MCXT_ALLOC_HUGE);
 #endif
 }
 
@@ -411,7 +429,11 @@ SH_ALLOCATE(SH_TYPE * type, Size size)
 static inline void
 SH_FREE(SH_TYPE * type, void *pointer)
 {
+#ifdef SH_RAW_FREE
+	SH_RAW_FREE(pointer);
+#else
 	pfree(pointer);
+#endif
 }
 
 #endif
@@ -439,7 +461,16 @@ SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 #ifdef SH_RAW_ALLOCATOR
 	tb = SH_RAW_ALLOCATOR(sizeof(SH_TYPE));
 #else
-	tb = MemoryContextAllocZero(ctx, sizeof(SH_TYPE));
+	tb = MemoryContextAllocExtended(ctx, sizeof(SH_TYPE), SH_MCXT_FLAGS);
+#endif
+#ifdef SH_NO_OOM
+	if (!tb)
+		return NULL;
+#endif
+#ifdef SH_RAW_ALLOCATOR_NOZERO
+	memset(tb, 0, sizeof(SH_TYPE));
+#endif
+#ifndef SH_RAW_ALLOCATOR
 	tb->ctx = ctx;
 #endif
 	tb->private_data = private_data;
@@ -450,6 +481,14 @@ SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 	SH_COMPUTE_PARAMETERS(tb, size);
 
 	tb->data = SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * tb->size);
+
+#ifdef SH_NO_OOM
+	if (!tb->data)
+	{
+		SH_FREE(tb, tb);
+		return NULL;
+	}
+#endif
 
 	return tb;
 }
@@ -476,8 +515,10 @@ SH_RESET(SH_TYPE * tb)
  * Usually this will automatically be called by insertions/deletions, when
  * necessary. But resizing to the exact input size can be advantageous
  * performance-wise, when known at some point.
+ *
+ * Return true on success.  Can only return false if SH_NO_OOM is defined.
  */
-SH_SCOPE void
+SH_SCOPE bool
 SH_GROW(SH_TYPE * tb, uint64 newsize)
 {
 	uint64		oldsize = tb->size;
@@ -494,9 +535,18 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 	/* compute parameters for new table */
 	SH_COMPUTE_PARAMETERS(tb, newsize);
 
-	tb->data = SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * tb->size);
+	newdata = SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * newsize);
 
-	newdata = tb->data;
+#ifdef SH_NO_OOM
+	if (!newdata)
+		return false;
+#endif
+#ifdef SH_RAW_ALLOCATOR_NOZERO
+	memset(newdata, 0, sizeof(SH_ELEMENT_TYPE) * newsize);
+#endif
+
+	tb->data = newdata;
+	tb->size = newsize;
 
 	/*
 	 * Copy entries from the old data to newdata. We theoretically could use
@@ -581,6 +631,8 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 	}
 
 	SH_FREE(tb, olddata);
+
+	return true;
 }
 
 /*
@@ -615,7 +667,8 @@ restart:
 		 * When optimizing, it can be very useful to print these out.
 		 */
 		/* SH_STAT(tb); */
-		SH_GROW(tb, tb->size * 2);
+		if (!SH_GROW(tb, tb->size * 2))
+			return NULL;
 		/* SH_STAT(tb); */
 	}
 
@@ -1147,6 +1200,7 @@ SH_STAT(SH_TYPE * tb)
 #undef SH_GROW_MAX_MOVE
 #undef SH_GROW_MIN_FILLFACTOR
 #undef SH_MAX_SIZE
+#undef SH_MCXT_FLAGS
 
 /* types */
 #undef SH_TYPE
