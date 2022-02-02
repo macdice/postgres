@@ -145,10 +145,8 @@ typedef struct WaitEvent
 	int			pos;			/* position in the event data structure */
 	uint32		events;			/* triggered events */
 	pgsocket	fd;				/* socket fd associated with event */
+	PGEventSocket eventsock;	/* socket associated with event */
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
-#ifdef WIN32
-	bool		reset;			/* Is reset of the event required? */
-#endif
 } WaitEvent;
 
 /* forward declaration to avoid exposing latch.c implementation details */
@@ -168,7 +166,9 @@ extern void ShutdownLatchSupport(void);
 
 extern WaitEventSet *CreateWaitEventSet(MemoryContext context, int nevents);
 extern void FreeWaitEventSet(WaitEventSet *set);
-extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
+extern void FreeWaitEventSetInChild(WaitEventSet *set);
+extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events,
+							  PGEventSocket eventsock,
 							  Latch *latch, void *user_data);
 extern void ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch);
 
@@ -178,7 +178,8 @@ extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
 extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
 					  uint32 wait_event_info);
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
-							  pgsocket sock, long timeout, uint32 wait_event_info);
+							  PGEventSocket eventsock, long timeout,
+							  uint32 wait_event_info);
 extern void InitializeLatchWaitSet(void);
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool	WaitEventSetCanReportClosed(void);

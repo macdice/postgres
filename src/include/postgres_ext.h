@@ -46,6 +46,35 @@ typedef unsigned int Oid;
 /* Define a signed 64-bit integer type for use in client API declarations. */
 typedef PG_INT64_TYPE pg_int64;
 
+/*
+ * On Unix, a PGEventSocket is a struct, copied by value, that wraps a plain
+ * file descriptor (it could be an int instead, but this acts as a strong
+ * typedef to avoid confusion).  On Windows, it's a pointer to a struct
+ * allocated on the heap that wraps a socket and associated kernel event.
+ */
+struct PGEventSocketData;
+#ifndef WIN32
+typedef struct PGEventSocketData
+{
+	int		sock;
+} PGEventSocket;
+
+static inline PGEventSocket
+pg_eventsocket_wrap(int sock)
+{
+	PGEventSocket result = {sock};
+	return result;
+}
+
+#define PGINVALID_EVENTSOCKET pg_eventsocket_wrap(PGINVALID_SOCKET)
+#define PGINVALID_EVENTSOCKET_STATIC {PGINVALID_SOCKET}
+#define PG_EVENTSOCKET_IS_VALID(eventsock) ((eventsock).sock != -1)
+#else
+typedef struct PGEventSocketData *PGEventSocket;
+#define PGINVALID_EVENTSOCKET NULL
+#define PGINVALID_EVENTSOCKET_STATIC NULL
+#define PG_EVENTSOCKET_IS_VALID(eventsock) ((eventsock) != NULL)
+#endif
 
 /*
  * Identifiers of error message fields.  Kept here to keep common

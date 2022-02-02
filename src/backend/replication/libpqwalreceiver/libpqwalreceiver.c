@@ -67,7 +67,7 @@ static bool libpqrcv_startstreaming(WalReceiverConn *conn,
 static void libpqrcv_endstreaming(WalReceiverConn *conn,
 								  TimeLineID *next_tli);
 static int	libpqrcv_receive(WalReceiverConn *conn, char **buffer,
-							 pgsocket *wait_fd);
+							 PGEventSocket *eventsock);
 static void libpqrcv_send(WalReceiverConn *conn, const char *buffer,
 						  int nbytes);
 static char *libpqrcv_create_slot(WalReceiverConn *conn,
@@ -205,7 +205,7 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 
 		rc = WaitLatchOrSocket(MyLatch,
 							   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | io_flag,
-							   PQsocket(conn->streamConn),
+							   PQeventsocket(conn->streamConn),
 							   0,
 							   WAIT_EVENT_LIBPQWALRECEIVER_CONNECT);
 
@@ -708,7 +708,7 @@ libpqrcv_PQgetResult(PGconn *streamConn)
 		rc = WaitLatchOrSocket(MyLatch,
 							   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
 							   WL_LATCH_SET,
-							   PQsocket(streamConn),
+							   PQeventsocket(streamConn),
 							   0,
 							   WAIT_EVENT_LIBPQWALRECEIVER_RECEIVE);
 
@@ -752,7 +752,7 @@ libpqrcv_disconnect(WalReceiverConn *conn)
  *	 point to a buffer holding the received message. The buffer is only valid
  *	 until the next libpqrcv_* call.
  *
- *	 If no data was available immediately, returns 0, and *wait_fd is set to a
+ *	 If no data was available immediately, returns 0, and *eventsock is set to a
  *	 socket descriptor which can be waited on before trying again.
  *
  *	 -1 if the server ended the COPY.
@@ -761,7 +761,7 @@ libpqrcv_disconnect(WalReceiverConn *conn)
  */
 static int
 libpqrcv_receive(WalReceiverConn *conn, char **buffer,
-				 pgsocket *wait_fd)
+				 PGEventSocket *eventsock)
 {
 	int			rawlen;
 
@@ -785,7 +785,7 @@ libpqrcv_receive(WalReceiverConn *conn, char **buffer,
 		if (rawlen == 0)
 		{
 			/* Tell caller to try again when our socket is ready. */
-			*wait_fd = PQsocket(conn->streamConn);
+			*eventsock = PQeventsocket(conn->streamConn);
 			return 0;
 		}
 	}

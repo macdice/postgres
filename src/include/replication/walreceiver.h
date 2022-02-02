@@ -324,7 +324,7 @@ typedef void (*walrcv_endstreaming_fn) (WalReceiverConn *conn,
  */
 typedef int (*walrcv_receive_fn) (WalReceiverConn *conn,
 								  char **buffer,
-								  pgsocket *wait_fd);
+								  PGEventSocket *eventsock);
 
 /*
  * walrcv_send_fn
@@ -419,8 +419,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_startstreaming(conn, options)
 #define walrcv_endstreaming(conn, next_tli) \
 	WalReceiverFunctions->walrcv_endstreaming(conn, next_tli)
-#define walrcv_receive(conn, buffer, wait_fd) \
-	WalReceiverFunctions->walrcv_receive(conn, buffer, wait_fd)
+#define walrcv_receive(conn, buffer, eventsock) \
+	WalReceiverFunctions->walrcv_receive(conn, buffer, eventsock)
 #define walrcv_send(conn, buffer, nbytes) \
 	WalReceiverFunctions->walrcv_send(conn, buffer, nbytes)
 #define walrcv_create_slot(conn, slotname, temporary, two_phase, snapshot_action, lsn) \

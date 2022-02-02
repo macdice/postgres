@@ -483,9 +483,6 @@ int			pgwin32_connect(SOCKET s, const struct sockaddr *name, int namelen);
 int			pgwin32_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
 int			pgwin32_recv(SOCKET s, char *buf, int len, int flags);
 int			pgwin32_send(SOCKET s, const void *buf, int len, int flags);
-int			pgwin32_waitforsinglesocket(SOCKET s, int what, int timeout);
-
-extern int	pgwin32_noblock;
 
 #endif							/* FRONTEND */
 

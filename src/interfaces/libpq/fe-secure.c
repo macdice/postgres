@@ -48,6 +48,7 @@
 #include "fe-auth.h"
 #include "libpq-fe.h"
 #include "libpq-int.h"
+#include "port/pg_eventsocket.h"
 
 /*
  * Macros to handle disabling and then restoring the state of SIGPIPE handling.
@@ -235,7 +236,7 @@ pqsecure_raw_read(PGconn *conn, void *ptr, size_t len)
 	int			result_errno = 0;
 	char		sebuf[PG_STRERROR_R_BUFLEN];
 
-	n = recv(conn->sock, ptr, len, 0);
+	n = pg_eventsocket_recv(conn->eventsock, ptr, len, 0);
 
 	if (n < 0)
 	{
@@ -376,7 +377,7 @@ retry_masked:
 
 	DISABLE_SIGPIPE(conn, spinfo, return -1);
 
-	n = send(conn->sock, ptr, len, flags);
+	n = pg_eventsocket_send(conn->eventsock, ptr, len, flags);
 
 	if (n < 0)
 	{

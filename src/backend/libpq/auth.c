@@ -1873,7 +1873,7 @@ auth_peer(hbaPort *port)
 	int			ret;
 #endif
 
-	if (getpeereid(port->sock, &uid, &gid) != 0)
+	if (getpeereid(pg_eventsocket_socket(port->eventsock), &uid, &gid) != 0)
 	{
 		/* Provide special error message if getpeereid is a stub */
 		if (errno == ENOSYS)

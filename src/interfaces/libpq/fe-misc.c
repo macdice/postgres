@@ -570,7 +570,7 @@ pqReadData(PGconn *conn)
 	int			someread = 0;
 	int			nread;
 
-	if (conn->sock == PGINVALID_SOCKET)
+	if (!PG_EVENTSOCKET_IS_VALID(conn->eventsock))
 	{
 		appendPQExpBufferStr(&conn->errorMessage,
 							 libpq_gettext("connection not open\n"));
@@ -806,7 +806,7 @@ pqSendSome(PGconn *conn, int len)
 		/* conn->write_err_msg should be set up already */
 		conn->outCount = 0;
 		/* Absorb input data if any, and detect socket closure */
-		if (conn->sock != PGINVALID_SOCKET)
+		if (PG_EVENTSOCKET_IS_VALID(conn->eventsock))
 		{
 			if (pqReadData(conn) < 0)
 				return -1;
@@ -814,7 +814,7 @@ pqSendSome(PGconn *conn, int len)
 		return 0;
 	}
 
-	if (conn->sock == PGINVALID_SOCKET)
+	if (!PG_EVENTSOCKET_IS_VALID(conn->eventsock))
 	{
 		conn->write_failed = true;
 		/* Store error message in conn->write_err_msg, if possible */
@@ -863,7 +863,7 @@ pqSendSome(PGconn *conn, int len)
 					conn->outCount = 0;
 
 					/* Absorb input data if any, and detect socket closure */
-					if (conn->sock != PGINVALID_SOCKET)
+					if (PG_EVENTSOCKET_IS_VALID(conn->eventsock))
 					{
 						if (pqReadData(conn) < 0)
 							return -1;
@@ -1047,7 +1047,7 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 
 	if (!conn)
 		return -1;
-	if (conn->sock == PGINVALID_SOCKET)
+	if (!PG_EVENTSOCKET_IS_VALID(conn->eventsock))
 	{
 		appendPQExpBufferStr(&conn->errorMessage,
 							 libpq_gettext("invalid socket\n"));
@@ -1065,7 +1065,8 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 
 	/* We will retry as long as we get EINTR */
 	do
-		result = pqSocketPoll(conn->sock, forRead, forWrite, end_time);
+		result = pqSocketPoll(pg_eventsocket_socket(conn->eventsock),
+							  forRead, forWrite, end_time);
 	while (result < 0 && SOCK_ERRNO == EINTR);
 
 	if (result < 0)

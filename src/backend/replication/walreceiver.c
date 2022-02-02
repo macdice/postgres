@@ -424,7 +424,7 @@ WalReceiverMain(void)
 				char	   *buf;
 				int			len;
 				bool		endofwal = false;
-				pgsocket	wait_fd = PGINVALID_SOCKET;
+				PGEventSocket eventsock = PGINVALID_EVENTSOCKET;
 				int			rc;
 
 				/*
@@ -447,7 +447,7 @@ WalReceiverMain(void)
 				}
 
 				/* See if we can read data immediately */
-				len = walrcv_receive(wrconn, &buf, &wait_fd);
+				len = walrcv_receive(wrconn, &buf, &eventsock);
 				if (len != 0)
 				{
 					/*
@@ -479,7 +479,7 @@ WalReceiverMain(void)
 							endofwal = true;
 							break;
 						}
-						len = walrcv_receive(wrconn, &buf, &wait_fd);
+						len = walrcv_receive(wrconn, &buf, &eventsock);
 					}
 
 					/* Let the primary know that we received some data. */
@@ -508,11 +508,11 @@ WalReceiverMain(void)
 				 * could add and remove just the socket each time, potentially
 				 * avoiding some system calls.
 				 */
-				Assert(wait_fd != PGINVALID_SOCKET);
+				Assert(PG_EVENTSOCKET_IS_VALID(eventsock));
 				rc = WaitLatchOrSocket(MyLatch,
 									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
 									   WL_TIMEOUT | WL_LATCH_SET,
-									   wait_fd,
+									   eventsock,
 									   NAPTIME_PER_CYCLE,
 									   WAIT_EVENT_WAL_RECEIVER_MAIN);
 				if (rc & WL_LATCH_SET)

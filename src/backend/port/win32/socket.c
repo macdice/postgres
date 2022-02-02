@@ -13,20 +13,6 @@
 
 #include "postgres.h"
 
-/*
- * Indicate if pgwin32_recv() and pgwin32_send() should operate
- * in non-blocking mode.
- *
- * Since the socket emulation layer always sets the actual socket to
- * non-blocking mode in order to be able to deliver signals, we must
- * specify this in a separate flag if we actually need non-blocking
- * operation.
- *
- * This flag changes the behaviour *globally* for all socket operations,
- * so it should only be set for very short periods of time.
- */
-int			pgwin32_noblock = 0;
-
 /* Undef the macros defined in win32.h, so we can access system functions */
 #undef socket
 #undef bind
@@ -36,11 +22,6 @@ int			pgwin32_noblock = 0;
 #undef select
 #undef recv
 #undef send
-
-/*
- * Blocking socket functions implemented so they listen on both
- * the socket and the signal event, required for signal handling.
- */
 
 /*
  * Convert the last socket error code into errno
@@ -165,125 +146,6 @@ pgwin32_poll_signals(void)
 	return 0;
 }
 
-static int
-isDataGram(SOCKET s)
-{
-	int			type;
-	int			typelen = sizeof(type);
-
-	if (getsockopt(s, SOL_SOCKET, SO_TYPE, (char *) &type, &typelen))
-		return 1;
-
-	return (type == SOCK_DGRAM) ? 1 : 0;
-}
-
-int
-pgwin32_waitforsinglesocket(SOCKET s, int what, int timeout)
-{
-	static HANDLE waitevent = INVALID_HANDLE_VALUE;
-	static SOCKET current_socket = INVALID_SOCKET;
-	static int	isUDP = 0;
-	HANDLE		events[2];
-	int			r;
-
-	/* Create an event object just once and use it on all future calls */
-	if (waitevent == INVALID_HANDLE_VALUE)
-	{
-		waitevent = CreateEvent(NULL, TRUE, FALSE, NULL);
-
-		if (waitevent == INVALID_HANDLE_VALUE)
-			ereport(ERROR,
-					(errmsg_internal("could not create socket waiting event: error code %lu", GetLastError())));
-	}
-	else if (!ResetEvent(waitevent))
-		ereport(ERROR,
-				(errmsg_internal("could not reset socket waiting event: error code %lu", GetLastError())));
-
-	/*
-	 * Track whether socket is UDP or not.  (NB: most likely, this is both
-	 * useless and wrong; there is no reason to think that the behavior of
-	 * WSAEventSelect is different for TCP and UDP.)
-	 */
-	if (current_socket != s)
-		isUDP = isDataGram(s);
-	current_socket = s;
-
-	/*
-	 * Attach event to socket.  NOTE: we must detach it again before
-	 * returning, since other bits of code may try to attach other events to
-	 * the socket.
-	 */
-	if (WSAEventSelect(s, waitevent, what) != 0)
-	{
-		TranslateSocketError();
-		return 0;
-	}
-
-	events[0] = pgwin32_signal_event;
-	events[1] = waitevent;
-
-	/*
-	 * Just a workaround of unknown locking problem with writing in UDP socket
-	 * under high load: Client's pgsql backend sleeps infinitely in
-	 * WaitForMultipleObjectsEx, pgstat process sleeps in pgwin32_select().
-	 * So, we will wait with small timeout(0.1 sec) and if socket is still
-	 * blocked, try WSASend (see comments in pgwin32_select) and wait again.
-	 */
-	if ((what & FD_WRITE) && isUDP)
-	{
-		for (;;)
-		{
-			r = WaitForMultipleObjectsEx(2, events, FALSE, 100, TRUE);
-
-			if (r == WAIT_TIMEOUT)
-			{
-				char		c;
-				WSABUF		buf;
-				DWORD		sent;
-
-				buf.buf = &c;
-				buf.len = 0;
-
-				r = WSASend(s, &buf, 1, &sent, 0, NULL, NULL);
-				if (r == 0)		/* Completed - means things are fine! */
-				{
-					WSAEventSelect(s, NULL, 0);
-					return 1;
-				}
-				else if (WSAGetLastError() != WSAEWOULDBLOCK)
-				{
-					TranslateSocketError();
-					WSAEventSelect(s, NULL, 0);
-					return 0;
-				}
-			}
-			else
-				break;
-		}
-	}
-	else
-		r = WaitForMultipleObjectsEx(2, events, FALSE, timeout, TRUE);
-
-	WSAEventSelect(s, NULL, 0);
-
-	if (r == WAIT_OBJECT_0 || r == WAIT_IO_COMPLETION)
-	{
-		pgwin32_dispatch_queued_signals();
-		errno = EINTR;
-		return 0;
-	}
-	if (r == WAIT_OBJECT_0 + 1)
-		return 1;
-	if (r == WAIT_TIMEOUT)
-	{
-		errno = EWOULDBLOCK;
-		return 0;
-	}
-	ereport(ERROR,
-			(errmsg_internal("unrecognized return value from WaitForMultipleObjects: %d (error code %lu)", r, GetLastError())));
-	return 0;
-}
-
 /*
  * Create a socket, setting it to overlapped and non-blocking
  */
@@ -291,21 +153,11 @@ SOCKET
 pgwin32_socket(int af, int type, int protocol)
 {
 	SOCKET		s;
-	unsigned long on = 1;
 
-	s = WSASocket(af, type, protocol, NULL, 0, WSA_FLAG_OVERLAPPED);
-	if (s == INVALID_SOCKET)
-	{
-		TranslateSocketError();
-		return INVALID_SOCKET;
-	}
-
-	if (ioctlsocket(s, FIONBIO, &on))
-	{
-		TranslateSocketError();
-		return INVALID_SOCKET;
-	}
 	errno = 0;
+	s = socket(af, type, protocol);
+	if (s == INVALID_SOCKET)
+		TranslateSocketError();
 
 	return s;
 }
@@ -357,151 +209,35 @@ pgwin32_accept(SOCKET s, struct sockaddr *addr, int *addrlen)
 int
 pgwin32_connect(SOCKET s, const struct sockaddr *addr, int addrlen)
 {
-	int			r;
+	int			res;
 
-	r = WSAConnect(s, addr, addrlen, NULL, NULL, NULL, NULL);
-	if (r == 0)
-		return 0;
-
-	if (WSAGetLastError() != WSAEWOULDBLOCK)
-	{
-		TranslateSocketError();
+	res = connect(s, addr, addrlen);
+	if (res < 0)
 		return -1;
-	}
 
-	while (pgwin32_waitforsinglesocket(s, FD_CONNECT, INFINITE) == 0)
-	{
-		/* Loop endlessly as long as we are just delivering signals */
-	}
-
-	return 0;
+	return res;
 }
 
 int
 pgwin32_recv(SOCKET s, char *buf, int len, int f)
 {
-	WSABUF		wbuf;
-	int			r;
-	DWORD		b;
-	DWORD		flags = f;
-	int			n;
+	int			res;
 
-	if (pgwin32_poll_signals())
-		return -1;
-
-	wbuf.len = len;
-	wbuf.buf = buf;
-
-	r = WSARecv(s, &wbuf, 1, &b, &flags, NULL, NULL);
-	if (r != SOCKET_ERROR)
-		return b;				/* success */
-
-	if (WSAGetLastError() != WSAEWOULDBLOCK)
-	{
+	res = recv(s, buf, len, f);
+	if (res < 0)
 		TranslateSocketError();
-		return -1;
-	}
-
-	if (pgwin32_noblock)
-	{
-		/*
-		 * No data received, and we are in "emulated non-blocking mode", so
-		 * return indicating that we'd block if we were to continue.
-		 */
-		errno = EWOULDBLOCK;
-		return -1;
-	}
-
-	/* We're in blocking mode, so wait for data */
-
-	for (n = 0; n < 5; n++)
-	{
-		if (pgwin32_waitforsinglesocket(s, FD_READ | FD_CLOSE | FD_ACCEPT,
-										INFINITE) == 0)
-			return -1;			/* errno already set */
-
-		r = WSARecv(s, &wbuf, 1, &b, &flags, NULL, NULL);
-		if (r != SOCKET_ERROR)
-			return b;			/* success */
-		if (WSAGetLastError() != WSAEWOULDBLOCK)
-		{
-			TranslateSocketError();
-			return -1;
-		}
-
-		/*
-		 * There seem to be cases on win2k (at least) where WSARecv can return
-		 * WSAEWOULDBLOCK even when pgwin32_waitforsinglesocket claims the
-		 * socket is readable.  In this case, just sleep for a moment and try
-		 * again.  We try up to 5 times - if it fails more than that it's not
-		 * likely to ever come back.
-		 */
-		pg_usleep(10000);
-	}
-	ereport(NOTICE,
-			(errmsg_internal("could not read from ready socket (after retries)")));
-	errno = EWOULDBLOCK;
-	return -1;
+	return res;
 }
-
-/*
- * The second argument to send() is defined by SUS to be a "const void *"
- * and so we use the same signature here to keep compilers happy when
- * handling callers.
- *
- * But the buf member of a WSABUF struct is defined as "char *", so we cast
- * the second argument to that here when assigning it, also to keep compilers
- * happy.
- */
 
 int
 pgwin32_send(SOCKET s, const void *buf, int len, int flags)
 {
-	WSABUF		wbuf;
-	int			r;
-	DWORD		b;
+	int			res;
 
-	if (pgwin32_poll_signals())
-		return -1;
-
-	wbuf.len = len;
-	wbuf.buf = (char *) buf;
-
-	/*
-	 * Readiness of socket to send data to UDP socket may be not true: socket
-	 * can become busy again! So loop until send or error occurs.
-	 */
-	for (;;)
-	{
-		r = WSASend(s, &wbuf, 1, &b, flags, NULL, NULL);
-		if (r != SOCKET_ERROR && b > 0)
-			/* Write succeeded right away */
-			return b;
-
-		if (r == SOCKET_ERROR &&
-			WSAGetLastError() != WSAEWOULDBLOCK)
-		{
-			TranslateSocketError();
-			return -1;
-		}
-
-		if (pgwin32_noblock)
-		{
-			/*
-			 * No data sent, and we are in "emulated non-blocking mode", so
-			 * return indicating that we'd block if we were to continue.
-			 */
-			errno = EWOULDBLOCK;
-			return -1;
-		}
-
-		/* No error, zero bytes (win2000+) or error+WSAEWOULDBLOCK (<=nt4) */
-
-		if (pgwin32_waitforsinglesocket(s, FD_WRITE | FD_CLOSE, INFINITE) == 0)
-			return -1;
-	}
-
-	return -1;
+	res = send(s, buf, len, flags);
+	if (res < 0)
+		TranslateSocketError();
+	return res;
 }
 
 

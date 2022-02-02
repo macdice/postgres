@@ -16887,6 +16887,16 @@ fi
 
 fi
 
+# On Windows, we need have an abstraction for event-driven sockets.
+if test "$PORTNAME" = "win32"; then
+	case " $LIBOBJS " in
+  *" pg_eventsocket.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS pg_eventsocket.$ac_objext"
+ ;;
+esac
+
+fi
+
 if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
 	# Cygwin and (apparently, based on test results) Mingw both
 	# have a broken strtof(), so substitute the same replacement

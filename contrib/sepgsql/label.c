@@ -242,7 +242,8 @@ sepgsql_client_auth(Port *port, int status)
 	/*
 	 * Getting security label of the peer process using API of libselinux.
 	 */
-	if (getpeercon_raw(port->sock, &client_label_peer) < 0)
+	if (getpeercon_raw(pg_eventsocket_socket(port->eventsock),
+					   &client_label_peer) < 0)
 		ereport(FATAL,
 				(errcode(ERRCODE_INTERNAL_ERROR),
 				 errmsg("SELinux: unable to get peer label: %m")));

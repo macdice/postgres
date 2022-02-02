@@ -1765,7 +1765,7 @@ pqGetline3(PGconn *conn, char *s, int maxlen)
 {
 	int			status;
 
-	if (conn->sock == PGINVALID_SOCKET ||
+	if (!PG_EVENTSOCKET_IS_VALID(conn->eventsock) ||
 		(conn->asyncStatus != PGASYNC_COPY_OUT &&
 		 conn->asyncStatus != PGASYNC_COPY_BOTH) ||
 		conn->copy_is_binary)

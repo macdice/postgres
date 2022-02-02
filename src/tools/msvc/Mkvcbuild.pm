@@ -103,7 +103,7 @@ sub mkvcbuild
 	  getaddrinfo.c gettimeofday.c inet_net_ntop.c kill.c open.c
 	  snprintf.c strlcat.c strlcpy.c dirmod.c noblock.c path.c
 	  dirent.c dlopen.c getopt.c getopt_long.c link.c
-	  pread.c preadv.c pwrite.c pwritev.c pg_bitutils.c
+	  pread.c preadv.c pwrite.c pwritev.c pg_bitutils.c pg_eventsocket.c
 	  pg_strong_random.c pgcheckdir.c pgmkdirp.c pgsleep.c pgstrcasecmp.c
 	  pqsignal.c mkdtemp.c qsort.c qsort_arg.c bsearch_arg.c quotes.c system.c
 	  strerror.c tar.c

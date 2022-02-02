@@ -32,6 +32,7 @@
 #include "libpq/libpq.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_eventsocket.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
@@ -241,13 +242,7 @@ secure_raw_read(Port *port, void *ptr, size_t len)
 	 * Try to read from the socket without blocking. If it succeeds we're
 	 * done, otherwise we'll wait for the socket using the latch mechanism.
 	 */
-#ifdef WIN32
-	pgwin32_noblock = true;
-#endif
-	n = recv(port->sock, ptr, len, 0);
-#ifdef WIN32
-	pgwin32_noblock = false;
-#endif
+	n = pg_eventsocket_recv(port->eventsock, ptr, len, 0);
 
 	return n;
 }
@@ -333,13 +328,7 @@ secure_raw_write(Port *port, const void *ptr, size_t len)
 {
 	ssize_t		n;
 
-#ifdef WIN32
-	pgwin32_noblock = true;
-#endif
-	n = send(port->sock, ptr, len, 0);
-#ifdef WIN32
-	pgwin32_noblock = false;
-#endif
+	n = pg_eventsocket_send(port->eventsock, ptr, len, 0);
 
 	return n;
 }

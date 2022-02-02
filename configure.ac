@@ -1907,6 +1907,11 @@ if test "$enable_thread_safety" = yes; then
   AC_REPLACE_FUNCS(pthread_barrier_wait)
 fi
 
+# On Windows, we need have an abstraction for event-driven sockets.
+if test "$PORTNAME" = "win32"; then
+	AC_LIBOBJ([pg_eventsocket])
+fi
+
 if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
 	# Cygwin and (apparently, based on test results) Mingw both
 	# have a broken strtof(), so substitute the same replacement

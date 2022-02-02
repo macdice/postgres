@@ -124,7 +124,8 @@ typedef struct
 
 typedef struct Port
 {
-	pgsocket	sock;			/* File descriptor */
+	//pgsocket	sock;			/* File descriptor */
+	PGEventSocket eventsock;	/* Socket, and on Windows, event state */
 	bool		noblock;		/* is the socket in non-blocking mode? */
 	ProtocolVersion proto;		/* FE/BE protocol version */
 	SockAddr	laddr;			/* local addr (postmaster) */

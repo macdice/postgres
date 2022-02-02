@@ -441,8 +441,7 @@ struct pg_conn
 	PGcmdQueueEntry *cmd_queue_recycle;
 
 	/* Connection data */
-	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
-								 * unconnected */
+	PGEventSocket eventsock;	/* PGEventSocket, or PGINVALID_EVENTSOCKET */
 	SockAddr	laddr;			/* Local address */
 	SockAddr	raddr;			/* Remote address */
 	ProtocolVersion pversion;	/* FE/BE protocol version in use */

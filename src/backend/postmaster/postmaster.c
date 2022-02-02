@@ -109,6 +109,7 @@
 #include "pg_getopt.h"
 #include "pgstat.h"
 #include "port/pg_bswap.h"
+#include "port/pg_eventsocket.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/bgworker_internals.h"
@@ -121,6 +122,7 @@
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/latch.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -220,7 +222,8 @@ int			ReservedBackends;
 
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
-static pgsocket ListenSocket[MAXLISTEN];
+static PGEventSocket ListenEventSocket[MAXLISTEN];
+static WaitEventSet *ListenWaitSet;
 
 /*
  * These globals control the behavior of the postmaster in case some
@@ -421,7 +424,6 @@ static int	BackendStartup(Port *port);
 static int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void processCancelRequest(Port *port, void *pkt);
-static int	initMasks(fd_set *rmask);
 static void report_fork_failure_to_client(Port *port, int errnum);
 static CAC_state canAcceptConnections(int backend_type);
 static bool RandomCancelKey(int32 *cancel_key);
@@ -1185,7 +1187,7 @@ PostmasterMain(int argc, char *argv[])
 	 * charged with closing the sockets again at postmaster shutdown.
 	 */
 	for (i = 0; i < MAXLISTEN; i++)
-		ListenSocket[i] = PGINVALID_SOCKET;
+		ListenEventSocket[i] = PGINVALID_EVENTSOCKET;
 
 	on_proc_exit(CloseServerPorts, 0);
 
@@ -1217,12 +1219,12 @@ PostmasterMain(int argc, char *argv[])
 				status = StreamServerPort(AF_UNSPEC, NULL,
 										  (unsigned short) PostPortNumber,
 										  NULL,
-										  ListenSocket, MAXLISTEN);
+										  ListenEventSocket, MAXLISTEN);
 			else
 				status = StreamServerPort(AF_UNSPEC, curhost,
 										  (unsigned short) PostPortNumber,
 										  NULL,
-										  ListenSocket, MAXLISTEN);
+										  ListenEventSocket, MAXLISTEN);
 
 			if (status == STATUS_OK)
 			{
@@ -1250,7 +1252,7 @@ PostmasterMain(int argc, char *argv[])
 
 #ifdef USE_BONJOUR
 	/* Register for Bonjour only if we opened TCP socket(s) */
-	if (enable_bonjour && ListenSocket[0] != PGINVALID_SOCKET)
+	if (enable_bonjour && PG_EVENTSOCKET_IS_VALID(ListenEventSocket[0]))
 	{
 		DNSServiceErrorType err;
 
@@ -1315,7 +1317,7 @@ PostmasterMain(int argc, char *argv[])
 			status = StreamServerPort(AF_UNIX, NULL,
 									  (unsigned short) PostPortNumber,
 									  socketdir,
-									  ListenSocket, MAXLISTEN);
+									  ListenEventSocket, MAXLISTEN);
 
 			if (status == STATUS_OK)
 			{
@@ -1342,7 +1344,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * check that we have some socket to listen on
 	 */
-	if (ListenSocket[0] == PGINVALID_SOCKET)
+	if (!PG_EVENTSOCKET_IS_VALID(ListenEventSocket[0]))
 		ereport(FATAL,
 				(errmsg("no socket created for listening")));
 
@@ -1497,10 +1499,10 @@ CloseServerPorts(int status, Datum arg)
 	 */
 	for (i = 0; i < MAXLISTEN; i++)
 	{
-		if (ListenSocket[i] != PGINVALID_SOCKET)
+		if (PG_EVENTSOCKET_IS_VALID(ListenEventSocket[i]))
 		{
-			StreamClose(ListenSocket[i]);
-			ListenSocket[i] = PGINVALID_SOCKET;
+			pg_eventsocket_close(ListenEventSocket[i]);
+			ListenEventSocket[i] = PGINVALID_EVENTSOCKET;
 		}
 	}
 
@@ -1607,7 +1609,7 @@ checkControlFile(void)
 }
 
 /*
- * Determine how long should we let ServerLoop sleep.
+ * Determine how long should we let ServerLoop sleep, in milliseconds.
  *
  * In normal conditions we wait at most one minute, to ensure that the other
  * background tasks handled by ServerLoop get done even when no requests are
@@ -1615,8 +1617,8 @@ checkControlFile(void)
  * we don't actually sleep so that they are quickly serviced.  Other exception
  * cases are as shown in the code.
  */
-static void
-DetermineSleepTime(struct timeval *timeout)
+static int
+DetermineSleepTime(void)
 {
 	TimestampTz next_wakeup = 0;
 
@@ -1630,25 +1632,15 @@ DetermineSleepTime(struct timeval *timeout)
 		if (AbortStartTime != 0)
 		{
 			/* time left to abort; clamp to 0 in case it already expired */
-			timeout->tv_sec = SIGKILL_CHILDREN_AFTER_SECS -
-				(time(NULL) - AbortStartTime);
-			timeout->tv_sec = Max(timeout->tv_sec, 0);
-			timeout->tv_usec = 0;
+			return Max(0, (SIGKILL_CHILDREN_AFTER_SECS -
+						   (time(NULL) - AbortStartTime)) * 1000);
 		}
 		else
-		{
-			timeout->tv_sec = 60;
-			timeout->tv_usec = 0;
-		}
-		return;
+			return 60 * 1000;
 	}
 
 	if (StartWorkerNeeded)
-	{
-		timeout->tv_sec = 0;
-		timeout->tv_usec = 0;
-		return;
-	}
+		return 0;
 
 	if (HaveCrashedWorker)
 	{
@@ -1686,26 +1678,13 @@ DetermineSleepTime(struct timeval *timeout)
 
 	if (next_wakeup != 0)
 	{
-		long		secs;
-		int			microsecs;
-
-		TimestampDifference(GetCurrentTimestamp(), next_wakeup,
-							&secs, &microsecs);
-		timeout->tv_sec = secs;
-		timeout->tv_usec = microsecs;
-
 		/* Ensure we don't exceed one minute */
-		if (timeout->tv_sec > 60)
-		{
-			timeout->tv_sec = 60;
-			timeout->tv_usec = 0;
-		}
+		return Min(60 * 1000,
+				   TimestampDifferenceMilliseconds(GetCurrentTimestamp(),
+												   next_wakeup));
 	}
 	else
-	{
-		timeout->tv_sec = 60;
-		timeout->tv_usec = 0;
-	}
+		return 60 * 1000;
 }
 
 /*
@@ -1716,19 +1695,25 @@ DetermineSleepTime(struct timeval *timeout)
 static int
 ServerLoop(void)
 {
-	fd_set		readmask;
-	int			nSockets;
+	WaitEvent	event;
+	int	   		nevents;
 	time_t		last_lockfile_recheck_time,
 				last_touch_time;
 
 	last_lockfile_recheck_time = last_touch_time = time(NULL);
 
-	nSockets = initMasks(&readmask);
-
+	/* Prepare to wait for the set of server sockets. */
+	ListenWaitSet = CreateWaitEventSet(TopMemoryContext, MAXLISTEN);
+	for (int i = 0;
+		 i < MAXLISTEN && PG_EVENTSOCKET_IS_VALID(ListenEventSocket[i]);
+		 ++i)
+		AddWaitEventToSet(ListenWaitSet, WL_SOCKET_READABLE,
+						  ListenEventSocket[i],
+						  NULL,
+						  &ListenEventSocket[i]);
+	
 	for (;;)
 	{
-		fd_set		rmask;
-		int			selres;
 		time_t		now;
 
 		/*
@@ -1739,36 +1724,34 @@ ServerLoop(void)
 		 * do nontrivial work.
 		 *
 		 * If we are in PM_WAIT_DEAD_END state, then we don't want to accept
-		 * any new connections, so we don't call select(), and just sleep.
+		 * any new connections, so we just sleep.
 		 */
-		memcpy((char *) &rmask, (char *) &readmask, sizeof(fd_set));
 
 		if (pmState == PM_WAIT_DEAD_END)
 		{
 			PG_SETMASK(&UnBlockSig);
 
 			pg_usleep(100000L); /* 100 msec seems reasonable */
-			selres = 0;
+			nevents = 0;
 
 			PG_SETMASK(&BlockSig);
 		}
 		else
 		{
-			/* must set timeout each time; some OSes change it! */
-			struct timeval timeout;
+			int		nap;
 
 			/* Needs to run with blocked signals! */
-			DetermineSleepTime(&timeout);
+			nap = DetermineSleepTime();
 
 			PG_SETMASK(&UnBlockSig);
 
-			selres = select(nSockets, &rmask, NULL, NULL, &timeout);
+			nevents = WaitEventSetWait(ListenWaitSet, nap, &event, 1, 0);
 
 			PG_SETMASK(&BlockSig);
 		}
 
 		/* Now check the select() result */
-		if (selres < 0)
+		if (nevents < 0)
 		{
 			if (errno != EINTR && errno != EWOULDBLOCK)
 			{
@@ -1783,30 +1766,25 @@ ServerLoop(void)
 		 * New connection pending on any of our sockets? If so, fork a child
 		 * process to deal with it.
 		 */
-		if (selres > 0)
+		if (nevents > 0)
 		{
-			int			i;
-
-			for (i = 0; i < MAXLISTEN; i++)
+			if (event.events & WL_SOCKET_READABLE)
 			{
-				if (ListenSocket[i] == PGINVALID_SOCKET)
-					break;
-				if (FD_ISSET(ListenSocket[i], &rmask))
+				Port	   *port;
+				PGEventSocket *ss;
+
+				ss = (PGEventSocket *) event.user_data;
+				port = ConnCreate(pg_eventsocket_socket(*ss));
+				if (port)
 				{
-					Port	   *port;
+					BackendStartup(port);
 
-					port = ConnCreate(ListenSocket[i]);
-					if (port)
-					{
-						BackendStartup(port);
-
-						/*
-						 * We no longer need the open socket or port structure
-						 * in this process
-						 */
-						StreamClose(port->sock);
-						ConnFree(port);
-					}
+					/*
+					 * We no longer need the open socket or port structure
+					 * in this process
+					 */
+					pg_eventsocket_close(port->eventsock);
+					ConnFree(port);
 				}
 			}
 		}
@@ -1952,34 +1930,6 @@ ServerLoop(void)
 }
 
 /*
- * Initialise the masks for select() for the ports we are listening on.
- * Return the number of sockets to listen on.
- */
-static int
-initMasks(fd_set *rmask)
-{
-	int			maxsock = -1;
-	int			i;
-
-	FD_ZERO(rmask);
-
-	for (i = 0; i < MAXLISTEN; i++)
-	{
-		int			fd = ListenSocket[i];
-
-		if (fd == PGINVALID_SOCKET)
-			break;
-		FD_SET(fd, rmask);
-
-		if (fd > maxsock)
-			maxsock = fd;
-	}
-
-	return maxsock + 1;
-}
-
-
-/*
  * Read a client's startup packet and do something according to it.
  *
  * Returns STATUS_OK or STATUS_ERROR, or might call ereport(FATAL) and
@@ -2095,7 +2045,7 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 #endif
 
 retry1:
-		if (send(port->sock, &SSLok, 1, 0) != 1)
+		if (pg_eventsocket_send(port->eventsock, &SSLok, 1, 0) != 1)
 		{
 			if (errno == EINTR)
 				goto retry1;	/* if interrupted, just retry */
@@ -2139,7 +2089,7 @@ retry1:
 			GSSok = 'G';
 #endif
 
-		while (send(port->sock, &GSSok, 1, 0) != 1)
+		while (pg_eventsocket_send(port->eventsock, &GSSok, 1, 0) != 1)
 		{
 			if (errno == EINTR)
 				continue;
@@ -2599,8 +2549,8 @@ ConnCreate(int serverFd)
 
 	if (StreamConnection(serverFd, port) != STATUS_OK)
 	{
-		if (port->sock != PGINVALID_SOCKET)
-			StreamClose(port->sock);
+		if (PG_EVENTSOCKET_IS_VALID(port->eventsock))
+			pg_eventsocket_close(port->eventsock);
 		ConnFree(port);
 		return NULL;
 	}
@@ -2659,11 +2609,20 @@ ClosePostmasterPorts(bool am_syslogger)
 	 */
 	for (i = 0; i < MAXLISTEN; i++)
 	{
-		if (ListenSocket[i] != PGINVALID_SOCKET)
+		if (PG_EVENTSOCKET_IS_VALID(ListenEventSocket[i]))
 		{
-			StreamClose(ListenSocket[i]);
-			ListenSocket[i] = PGINVALID_SOCKET;
+			pg_eventsocket_close(ListenEventSocket[i]);
+			ListenEventSocket[i] = PGINVALID_EVENTSOCKET;
 		}
+	}
+	if (ListenWaitSet)
+	{
+#ifdef EXEC_BACKEND
+		FreeWaitEventSet(ListenWaitSet);
+#else
+		FreeWaitEventSetInChild(ListenWaitSet);
+#endif
+		ListenWaitSet = NULL;
 	}
 
 	/*
@@ -4340,7 +4299,8 @@ BackendStartup(Port *port)
 	/* in parent, successful fork */
 	ereport(DEBUG2,
 			(errmsg_internal("forked new backend, pid=%d socket=%d",
-							 (int) pid, (int) port->sock)));
+							 (int) pid,
+							 (int) pg_eventsocket_socket(port->eventsock))));
 
 	/*
 	 * Everything's been successful, it's safe to add this backend to our list
@@ -4378,13 +4338,13 @@ report_fork_failure_to_client(Port *port, int errnum)
 			 strerror(errnum));
 
 	/* Set port to non-blocking.  Don't do send() if this fails */
-	if (!pg_set_noblock(port->sock))
+	if (!pg_set_noblock(pg_eventsocket_socket(port->eventsock)))
 		return;
 
 	/* We'll retry after EINTR, but ignore all other failures */
 	do
 	{
-		rc = send(port->sock, buffer, strlen(buffer) + 1, 0);
+		rc = pg_eventsocket_send(port->eventsock, buffer, strlen(buffer) + 1, 0);
 	} while (rc < 0 && errno == EINTR);
 }
 
@@ -6192,7 +6152,7 @@ extern slock_t *ShmemLock;
 extern slock_t *ProcStructLock;
 extern PGPROC *AuxiliaryProcs;
 extern PMSignalData *PMSignalState;
-extern pgsocket pgStatSock;
+extern PGEventSocket pgStatEventSock;
 extern pg_time_t first_syslogger_file_time;
 
 #ifndef WIN32
@@ -6217,12 +6177,18 @@ save_backend_variables(BackendParameters *param, Port *port,
 #endif
 {
 	memcpy(&param->port, port, sizeof(Port));
-	if (!write_inheritable_socket(&param->portsocket, port->sock, childPid))
+	if (PG_EVENTSOCKET_IS_VALID(port->eventsock) &&
+		!write_inheritable_socket(&param->portsocket,
+								  pg_eventsocket_socket(port->eventsock),
+								  childPid))
 		return false;
 
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
 
-	memcpy(&param->ListenSocket, &ListenSocket, sizeof(ListenSocket));
+	for (int i = 0; i < MAXLISTEN; ++i)
+		param->ListenSocket[i] =
+			PG_EVENTSOCKET_IS_VALID(ListenEventSocket[i]) ?
+			pg_eventsocket_socket(ListenEventSocket[i]) : PGINVALID_SOCKET;
 
 	param->MyCancelKey = MyCancelKey;
 	param->MyPMChildSlot = MyPMChildSlot;
@@ -6248,7 +6214,10 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->AuxiliaryProcs = AuxiliaryProcs;
 	param->PreparedXactProcs = PreparedXactProcs;
 	param->PMSignalState = PMSignalState;
-	if (!write_inheritable_socket(&param->pgStatSock, pgStatSock, childPid))
+	if (PG_EVENTSOCKET_IS_VALID(pgStatEventSock) &&
+		!write_inheritable_socket(&param->pgStatSock,
+								  pg_eventsocket_socket(pgStatEventSock),
+								  childPid))
 		return false;
 
 	param->PostmasterPid = PostmasterPid;
@@ -6452,12 +6421,20 @@ read_backend_variables(char *id, Port *port)
 static void
 restore_backend_variables(BackendParameters *param, Port *port)
 {
-	memcpy(port, &param->port, sizeof(Port));
-	read_inheritable_socket(&port->sock, &param->portsocket);
+	pgsocket		sock;
 
+	memcpy(port, &param->port, sizeof(Port));
+	read_inheritable_socket(&sock, &param->portsocket);
+
+	port->eventsock = pg_eventsocket_open(sock);
+	
 	SetDataDir(param->DataDir);
 
-	memcpy(&ListenSocket, &param->ListenSocket, sizeof(ListenSocket));
+	for (int i = 0; i < MAXLISTEN; ++i)
+		ListenEventSocket[i] =
+			param->ListenSocket[i] == PGINVALID_SOCKET ?
+			PGINVALID_EVENTSOCKET :
+			pg_eventsocket_open(param->ListenSocket[i]);
 
 	MyCancelKey = param->MyCancelKey;
 	MyPMChildSlot = param->MyPMChildSlot;
@@ -6483,7 +6460,9 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	AuxiliaryProcs = param->AuxiliaryProcs;
 	PreparedXactProcs = param->PreparedXactProcs;
 	PMSignalState = param->PMSignalState;
-	read_inheritable_socket(&pgStatSock, &param->pgStatSock);
+	read_inheritable_socket(&sock, &param->pgStatSock);
+
+	pgStatEventSock = pg_eventsocket_open(sock);
 
 	PostmasterPid = param->PostmasterPid;
 	PgStartTime = param->PgStartTime;
@@ -6514,7 +6493,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	/*
 	 * We need to restore fd.c's counts of externally-opened FDs; to avoid
 	 * confusion, be sure to do this after restoring max_safe_fds.  (Note:
-	 * BackendInitialize will handle this for port->sock.)
+	 * BackendInitialize will handle this for port->eventsock.)
 	 */
 #ifndef WIN32
 	if (postmaster_alive_fds[0] >= 0)
@@ -6522,7 +6501,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	if (postmaster_alive_fds[1] >= 0)
 		ReserveExternalFD();
 #endif
-	if (pgStatSock != PGINVALID_SOCKET)
+	if (PG_EVENTSOCKET_IS_VALID(pgStatEventSock))
 		ReserveExternalFD();
 }
 

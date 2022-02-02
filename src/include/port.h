@@ -28,11 +28,28 @@
 #ifndef WIN32
 typedef int pgsocket;
 
-#define PGINVALID_SOCKET (-1)
+#define PGINVALID_SOCKET -1
+
+#define pg_eventsocket_open(sock) pg_eventsocket_wrap(sock)
+#define pg_eventsocket_close(eventsock) close((eventsock).sock)
+#define pg_eventsocket_socket(eventsock) ((eventsock).sock)
 #else
 typedef SOCKET pgsocket;
 
 #define PGINVALID_SOCKET INVALID_SOCKET
+
+struct PGEventSocketData
+{
+	SOCKET		sock;
+	HANDLE		event_handle;			/* One event for lifetime of socket */
+	int			selected_flags;			/* Most recent WSAEventSelect() */
+	int			received_flags;			/* Flags for edge->level conversion */
+};
+
+
+extern struct PGEventSocketData *pg_eventsocket_open(SOCKET sock);
+extern void pg_eventsocket_close(struct PGEventSocketData *eventsock);
+extern pgsocket pg_eventsocket_socket(struct PGEventSocketData *eventsock);
 #endif
 
 /* if platform lacks socklen_t, we assume this will work */
@@ -42,7 +59,6 @@ typedef unsigned int socklen_t;
 
 /* non-blocking */
 extern bool pg_set_noblock(pgsocket sock);
-extern bool pg_set_block(pgsocket sock);
 
 /* Portable path handling for Unix/Win32 (in path.c) */
 

@@ -437,7 +437,7 @@ be_tls_open_server(Port *port)
 						SSLerrmessage(ERR_get_error()))));
 		return -1;
 	}
-	if (!my_SSL_set_fd(port, port->sock))
+	if (!my_SSL_set_fd(port, pg_eventsocket_socket(port->eventsock)))
 	{
 		ereport(COMMERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -489,7 +489,7 @@ aloop:
 				else
 					waitfor = WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH;
 
-				(void) WaitLatchOrSocket(MyLatch, waitfor, port->sock, 0,
+				(void) WaitLatchOrSocket(MyLatch, waitfor, port->eventsock, 0,
 										 WAIT_EVENT_SSL_OPEN_SERVER);
 				goto aloop;
 			case SSL_ERROR_SYSCALL:
