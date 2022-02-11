@@ -1002,7 +1002,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
 
 #if defined(USE_BARRIER_SMGRRELEASE)
-	/* Close all smgr fds in other backends. */
+	/* Close all smgr fds in all backends. */
 	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 
@@ -1255,7 +1255,7 @@ movedb(const char *dbname, const char *tblspcname)
 					  | CHECKPOINT_FLUSH_ALL);
 
 #if defined(USE_BARRIER_SMGRRELEASE)
-	/* Close all smgr fds in other backends. */
+	/* Close all smgr fds in all backends. */
 	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 
@@ -2267,7 +2267,7 @@ dbase_redo(XLogReaderState *record)
 		XLogDropDatabase(xlrec->db_id);
 
 #if defined(USE_BARRIER_SMGRRELEASE)
-		/* Close all sgmr fds in other backends. */
+		/* Close all sgmr fds in all backends. */
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 

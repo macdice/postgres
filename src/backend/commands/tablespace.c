@@ -1591,7 +1591,7 @@ tblspc_redo(XLogReaderState *record)
 		if (!destroy_tablespace_directories(xlrec->ts_id, true))
 		{
 #if defined(USE_BARRIER_SMGRRELEASE)
-			/* Close all smgr fds in other backends. */
+			/* Close all smgr fds in all backends. */
 			WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 
