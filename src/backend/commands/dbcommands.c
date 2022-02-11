@@ -1001,8 +1001,8 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	 */
 	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
 
-#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
-	/* Close all fds in other Windows processes. */
+#if defined(USE_BARRIER_SMGRRELEASE)
+	/* Close all smgr fds in other backends. */
 	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 
@@ -1254,8 +1254,8 @@ movedb(const char *dbname, const char *tblspcname)
 	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT
 					  | CHECKPOINT_FLUSH_ALL);
 
-#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
-	/* Close all fds in other Windows processes. */
+#if defined(USE_BARRIER_SMGRRELEASE)
+	/* Close all smgr fds in other backends. */
 	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 
@@ -2266,8 +2266,8 @@ dbase_redo(XLogReaderState *record)
 		/* Clean out the xlog relcache too */
 		XLogDropDatabase(xlrec->db_id);
 
-#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
-		/* Close all fds in other Windows processes. */
+#if defined(USE_BARRIER_SMGRRELEASE)
+		/* Close all sgmr fds in other backends. */
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 

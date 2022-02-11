@@ -546,10 +546,8 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 		 * guarantees they'll be processed in time.  So, we'll also use a
 		 * global barrier to ask all backends to close all files, and wait
 		 * until they're finished.
-		 *
-		 * For test coverage, also do this on Unix systems in assert builds.
 		 */
-#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
+#if defined(USE_BARRIER_SMGRRELEASE)
 		LWLockRelease(TablespaceCreateLock);
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 		LWLockAcquire(TablespaceCreateLock, LW_EXCLUSIVE);
@@ -1592,8 +1590,8 @@ tblspc_redo(XLogReaderState *record)
 		 */
 		if (!destroy_tablespace_directories(xlrec->ts_id, true))
 		{
-#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
-			/* Close fds in other Windows processes. */
+#if defined(USE_BARRIER_SMGRRELEASE)
+			/* Close all smgr fds in other backends. */
 			WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 #endif
 
