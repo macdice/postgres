@@ -1776,7 +1776,9 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
 
 	/* Close all smgr fds in all backends. */
+	elog(LOG, "start waiting for barrier: dropdb");
 	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+	elog(LOG, "done waiting for barrier: dropdb");
 
 	/*
 	 * Remove all tablespace subdirs belonging to the database.
@@ -2024,7 +2026,9 @@ movedb(const char *dbname, const char *tblspcname)
 					  | CHECKPOINT_FLUSH_ALL);
 
 	/* Close all smgr fds in all backends. */
+	elog(LOG, "start waiting for barrier: movedb");
 	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+	elog(LOG, "start waiting for barrier: movedb");
 
 	/*
 	 * Now drop all buffers holding data of the target database; they should
@@ -3244,7 +3248,9 @@ dbase_redo(XLogReaderState *record)
 		FlushDatabaseBuffers(xlrec->src_db_id);
 
 		/* Close all sgmr fds in all backends. */
+		elog(LOG, "start waiting for barrier: XLOG_DBASE_CREATE_FILE_COPY");
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+		elog(LOG, "start waiting for barrier: XLOG_DBASE_CREATE_FILE_COPY");
 
 		/*
 		 * Copy this subdirectory to the new location
@@ -3310,7 +3316,10 @@ dbase_redo(XLogReaderState *record)
 		XLogDropDatabase(xlrec->db_id);
 
 		/* Close all sgmr fds in all backends. */
+		elog(LOG, "start waiting for barrier DBASE_DROP");
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+		elog(LOG, "done waiting for barrier DBASE_DROP");
+
 
 		for (i = 0; i < xlrec->ntablespaces; i++)
 		{
