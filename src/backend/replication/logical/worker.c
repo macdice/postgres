@@ -2597,7 +2597,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 	/* This outer loop iterates once per wait. */
 	for (;;)
 	{
-		pgsocket	fd = PGINVALID_SOCKET;
+		Socket	   *wait_sock = NULL;
 		int			rc;
 		int			len;
 		char	   *buf = NULL;
@@ -2608,7 +2608,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 
 		MemoryContextSwitchTo(ApplyMessageContext);
 
-		len = walrcv_receive(LogRepWorkerWalRcvConn, &buf, &fd);
+		len = walrcv_receive(LogRepWorkerWalRcvConn, &buf, &wait_sock);
 
 		if (len != 0)
 		{
@@ -2688,7 +2688,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 					MemoryContextReset(ApplyMessageContext);
 				}
 
-				len = walrcv_receive(LogRepWorkerWalRcvConn, &buf, &fd);
+				len = walrcv_receive(LogRepWorkerWalRcvConn, &buf, &wait_sock);
 			}
 		}
 
@@ -2732,7 +2732,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 		rc = WaitLatchOrSocket(MyLatch,
 							   WL_SOCKET_READABLE | WL_LATCH_SET |
 							   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-							   fd, wait_time,
+							   wait_sock, wait_time,
 							   WAIT_EVENT_LOGICAL_APPLY_MAIN);
 
 		if (rc & WL_LATCH_SET)

@@ -30,6 +30,7 @@
 #include "fe-auth.h"
 #include "fe-secure-common.h"
 #include "libpq-int.h"
+#include "port/pg_stream.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -1072,7 +1073,7 @@ initialize_SSL(PGconn *conn)
 	 */
 	if (!(conn->ssl = SSL_new(SSL_context)) ||
 		!SSL_set_app_data(conn->ssl, conn) ||
-		!my_SSL_set_fd(conn, conn->sock))
+		!my_SSL_set_fd(conn, pg_stream_descriptor(conn->stream)))
 	{
 		char	   *err = SSLerrmessage(ERR_get_error());
 

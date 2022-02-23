@@ -100,6 +100,8 @@
 #ifndef LATCH_H
 #define LATCH_H
 
+#include "port/pg_socket.h"
+
 #include <signal.h>
 
 /*
@@ -144,7 +146,8 @@ typedef struct WaitEvent
 {
 	int			pos;			/* position in the event data structure */
 	uint32		events;			/* triggered events */
-	pgsocket	fd;				/* socket fd associated with event */
+	pgsocket	fd;				/* socket associated with event */
+	Socket	   *sock;			/* socket associated with event */
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
@@ -168,7 +171,8 @@ extern void ShutdownLatchSupport(void);
 
 extern WaitEventSet *CreateWaitEventSet(MemoryContext context, int nevents);
 extern void FreeWaitEventSet(WaitEventSet *set);
-extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
+extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events,
+							  Socket *sock,
 							  Latch *latch, void *user_data);
 extern void ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch);
 
@@ -178,7 +182,8 @@ extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
 extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
 					  uint32 wait_event_info);
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
-							  pgsocket sock, long timeout, uint32 wait_event_info);
+							  Socket *sock, long timeout,
+							  uint32 wait_event_info);
 extern void InitializeLatchWaitSet(void);
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool	WaitEventSetCanReportClosed(void);

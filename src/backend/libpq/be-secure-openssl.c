@@ -437,7 +437,7 @@ be_tls_open_server(Port *port)
 						SSLerrmessage(ERR_get_error()))));
 		return -1;
 	}
-	if (!my_SSL_set_fd(port, port->sock))
+	if (!my_SSL_set_fd(port, pg_socket_descriptor(port->sock)))
 	{
 		ereport(COMMERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),

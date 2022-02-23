@@ -71,4 +71,7 @@ typedef PG_INT64_TYPE pg_int64;
 #define PG_DIAG_SOURCE_LINE		'L'
 #define PG_DIAG_SOURCE_FUNCTION 'R'
 
+struct Socket;
+typedef struct Socket Socket;
+
 #endif							/* POSTGRES_EXT_H */

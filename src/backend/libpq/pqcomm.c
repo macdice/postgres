@@ -199,7 +199,7 @@ pq_init(void)
 	 * infinite recursion.
 	 */
 #ifndef WIN32
-	if (!pg_set_noblock(MyProcPort->sock))
+	if (pg_socket_set_blocking(MyProcPort->sock, false) != 0)
 		ereport(COMMERROR,
 				(errmsg("could not set socket to nonblocking mode: %m")));
 #endif
@@ -207,10 +207,9 @@ pq_init(void)
 	FeBeWaitSet = CreateWaitEventSet(TopMemoryContext, FeBeWaitSetNEvents);
 	socket_pos = AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE,
 								   MyProcPort->sock, NULL, NULL);
-	latch_pos = AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
+	latch_pos = AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, NULL,
 								  MyLatch, NULL);
-	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
-					  NULL, NULL);
+	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, NULL, NULL, NULL);
 
 	/*
 	 * The event positions match the order we added them, but let's sanity
@@ -296,12 +295,12 @@ socket_close(int code, Datum arg)
 		 * Windows too.  But it's a lot more fragile than the other way.
 		 */
 #ifdef WIN32
-		shutdown(MyProcPort->sock, SD_SEND);
-		closesocket(MyProcPort->sock);
+		shutdown(pg_socket_descriptor(MyProcPort->sock), SD_SEND);
+		pg_socket_close(MyProcPort->sock);
 #endif
 
-		/* In any case, set sock to PGINVALID_SOCKET to prevent further I/O */
-		MyProcPort->sock = PGINVALID_SOCKET;
+		/* In any case, set sock to NULL to prevent further I/O */
+		MyProcPort->sock = NULL;
 	}
 }
 
@@ -720,7 +719,7 @@ Setup_AF_UNIX(const char *sock_path)
 
 /*
  * StreamConnection -- create a new connection with client using
- *		server port.  Set port->sock to the FD of the new connection.
+ *		server port.  Set port->sock to the socket of the new connection.
  *
  * ASSUME: that this doesn't need to be non-blocking because
  *		the Postmaster uses select() to tell when the socket is ready for
@@ -731,11 +730,13 @@ Setup_AF_UNIX(const char *sock_path)
 int
 StreamConnection(pgsocket server_fd, Port *port)
 {
+	pgsocket		sock;
+
 	/* accept connection and fill in the client (remote) address */
 	port->raddr.salen = sizeof(port->raddr.addr);
-	if ((port->sock = accept(server_fd,
-							 (struct sockaddr *) &port->raddr.addr,
-							 &port->raddr.salen)) == PGINVALID_SOCKET)
+	if ((sock = accept(server_fd,
+					   (struct sockaddr *) &port->raddr.addr,
+					   &port->raddr.salen)) == PGINVALID_SOCKET)
 	{
 		ereport(LOG,
 				(errcode_for_socket_access(),
@@ -754,7 +755,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 
 	/* fill in the server (local) address */
 	port->laddr.salen = sizeof(port->laddr.addr);
-	if (getsockname(port->sock,
+	if (getsockname(sock,
 					(struct sockaddr *) &port->laddr.addr,
 					&port->laddr.salen) < 0)
 	{
@@ -775,7 +776,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 
 #ifdef	TCP_NODELAY
 		on = 1;
-		if (setsockopt(port->sock, IPPROTO_TCP, TCP_NODELAY,
+		if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
 					   (char *) &on, sizeof(on)) < 0)
 		{
 			ereport(LOG,
@@ -784,7 +785,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		}
 #endif
 		on = 1;
-		if (setsockopt(port->sock, SOL_SOCKET, SO_KEEPALIVE,
+		if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
 					   (char *) &on, sizeof(on)) < 0)
 		{
 			ereport(LOG,
@@ -816,7 +817,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		 * https://msdn.microsoft.com/en-us/library/bb736549%28v=vs.85%29.aspx
 		 */
 		optlen = sizeof(oldopt);
-		if (getsockopt(port->sock, SOL_SOCKET, SO_SNDBUF, (char *) &oldopt,
+		if (getsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *) &oldopt,
 					   &optlen) < 0)
 		{
 			ereport(LOG,
@@ -826,7 +827,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		newopt = PQ_SEND_BUFFER_SIZE * 4;
 		if (oldopt < newopt)
 		{
-			if (setsockopt(port->sock, SOL_SOCKET, SO_SNDBUF, (char *) &newopt,
+			if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *) &newopt,
 						   sizeof(newopt)) < 0)
 			{
 				ereport(LOG,
@@ -848,6 +849,8 @@ StreamConnection(pgsocket server_fd, Port *port)
 		(void) pq_setkeepalivescount(tcp_keepalives_count, port);
 		(void) pq_settcpusertimeout(tcp_user_timeout, port);
 	}
+
+	port->sock = pg_socket_open(sock);
 
 	return STATUS_OK;
 }
@@ -1611,7 +1614,7 @@ pq_setkeepaliveswin32(Port *port, int idle, int interval)
 	ka.keepalivetime = idle * 1000;
 	ka.keepaliveinterval = interval * 1000;
 
-	if (WSAIoctl(port->sock,
+	if (WSAIoctl(pg_socket_descriptor(port->sock),
 				 SIO_KEEPALIVE_VALS,
 				 (LPVOID) &ka,
 				 sizeof(ka),
@@ -1650,7 +1653,8 @@ pq_getkeepalivesidle(Port *port)
 #ifndef WIN32
 		socklen_t	size = sizeof(port->default_keepalives_idle);
 
-		if (getsockopt(port->sock, IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE,
+		if (getsockopt(pg_socket_descriptor(port->sock),
+					   IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE,
 					   (char *) &port->default_keepalives_idle,
 					   &size) < 0)
 		{
@@ -1696,7 +1700,8 @@ pq_setkeepalivesidle(int idle, Port *port)
 	if (idle == 0)
 		idle = port->default_keepalives_idle;
 
-	if (setsockopt(port->sock, IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE,
+	if (setsockopt(pg_socket_descriptor(port->sock),
+				   IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE,
 				   (char *) &idle, sizeof(idle)) < 0)
 	{
 		ereport(LOG,
@@ -1735,7 +1740,8 @@ pq_getkeepalivesinterval(Port *port)
 #ifndef WIN32
 		socklen_t	size = sizeof(port->default_keepalives_interval);
 
-		if (getsockopt(port->sock, IPPROTO_TCP, TCP_KEEPINTVL,
+		if (getsockopt(pg_socket_descriptor(port->sock),
+					   IPPROTO_TCP, TCP_KEEPINTVL,
 					   (char *) &port->default_keepalives_interval,
 					   &size) < 0)
 		{
@@ -1780,7 +1786,8 @@ pq_setkeepalivesinterval(int interval, Port *port)
 	if (interval == 0)
 		interval = port->default_keepalives_interval;
 
-	if (setsockopt(port->sock, IPPROTO_TCP, TCP_KEEPINTVL,
+	if (setsockopt(pg_socket_descriptor(port->sock),
+				   IPPROTO_TCP, TCP_KEEPINTVL,
 				   (char *) &interval, sizeof(interval)) < 0)
 	{
 		ereport(LOG,
@@ -1818,7 +1825,8 @@ pq_getkeepalivescount(Port *port)
 	{
 		socklen_t	size = sizeof(port->default_keepalives_count);
 
-		if (getsockopt(port->sock, IPPROTO_TCP, TCP_KEEPCNT,
+		if (getsockopt(pg_socket_descriptor(port->sock),
+					   IPPROTO_TCP, TCP_KEEPCNT,
 					   (char *) &port->default_keepalives_count,
 					   &size) < 0)
 		{
@@ -1858,7 +1866,8 @@ pq_setkeepalivescount(int count, Port *port)
 	if (count == 0)
 		count = port->default_keepalives_count;
 
-	if (setsockopt(port->sock, IPPROTO_TCP, TCP_KEEPCNT,
+	if (setsockopt(pg_socket_descriptor(port->sock),
+				   IPPROTO_TCP, TCP_KEEPCNT,
 				   (char *) &count, sizeof(count)) < 0)
 	{
 		ereport(LOG,
@@ -1893,7 +1902,8 @@ pq_gettcpusertimeout(Port *port)
 	{
 		socklen_t	size = sizeof(port->default_tcp_user_timeout);
 
-		if (getsockopt(port->sock, IPPROTO_TCP, TCP_USER_TIMEOUT,
+		if (getsockopt(pg_socket_descriptor(port->sock),
+					   IPPROTO_TCP, TCP_USER_TIMEOUT,
 					   (char *) &port->default_tcp_user_timeout,
 					   &size) < 0)
 		{
@@ -1933,7 +1943,8 @@ pq_settcpusertimeout(int timeout, Port *port)
 	if (timeout == 0)
 		timeout = port->default_tcp_user_timeout;
 
-	if (setsockopt(port->sock, IPPROTO_TCP, TCP_USER_TIMEOUT,
+	if (setsockopt(pg_socket_descriptor(port->sock),
+				   IPPROTO_TCP, TCP_USER_TIMEOUT,
 				   (char *) &timeout, sizeof(timeout)) < 0)
 	{
 		ereport(LOG,

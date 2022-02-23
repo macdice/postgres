@@ -294,11 +294,10 @@ InitializeLatchWaitSet(void)
 
 	/* Set up the WaitEventSet used by WaitLatch(). */
 	LatchWaitSet = CreateWaitEventSet(TopMemoryContext, 2);
-	latch_pos = AddWaitEventToSet(LatchWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
+	latch_pos = AddWaitEventToSet(LatchWaitSet, WL_LATCH_SET, NULL,
 								  MyLatch, NULL);
 	if (IsUnderPostmaster)
-		AddWaitEventToSet(LatchWaitSet, WL_EXIT_ON_PM_DEATH,
-						  PGINVALID_SOCKET, NULL, NULL);
+		AddWaitEventToSet(LatchWaitSet, WL_EXIT_ON_PM_DEATH, NULL, NULL, NULL);
 
 	Assert(latch_pos == LatchWaitSetLatchPos);
 }
@@ -496,7 +495,7 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
  * WaitEventSet instead; that's more efficient.
  */
 int
-WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
+WaitLatchOrSocket(Latch *latch, int wakeEvents, Socket *sock,
 				  long timeout, uint32 wait_event_info)
 {
 	int			ret = 0;
@@ -510,8 +509,7 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 		timeout = -1;
 
 	if (wakeEvents & WL_LATCH_SET)
-		AddWaitEventToSet(set, WL_LATCH_SET, PGINVALID_SOCKET,
-						  latch, NULL);
+		AddWaitEventToSet(set, WL_LATCH_SET, NULL, latch, NULL);
 
 	/* Postmaster-managed callers must handle postmaster death somehow. */
 	Assert(!IsUnderPostmaster ||
@@ -519,12 +517,10 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 		   (wakeEvents & WL_POSTMASTER_DEATH));
 
 	if ((wakeEvents & WL_POSTMASTER_DEATH) && IsUnderPostmaster)
-		AddWaitEventToSet(set, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
+		AddWaitEventToSet(set, WL_POSTMASTER_DEATH, NULL, NULL, NULL);
 
 	if ((wakeEvents & WL_EXIT_ON_PM_DEATH) && IsUnderPostmaster)
-		AddWaitEventToSet(set, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
+		AddWaitEventToSet(set, WL_EXIT_ON_PM_DEATH, NULL, NULL, NULL);
 
 	if (wakeEvents & WL_SOCKET_MASK)
 	{
@@ -859,8 +855,8 @@ FreeWaitEventSet(WaitEventSet *set)
  * events.
  */
 int
-AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
-				  void *user_data)
+AddWaitEventToSet(WaitEventSet *set, uint32 events, Socket *sock,
+				  Latch *latch, void *user_data)
 {
 	WaitEvent  *event;
 
@@ -889,12 +885,14 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	}
 
 	/* waiting for socket readiness without a socket indicates a bug */
-	if (fd == PGINVALID_SOCKET && (events & WL_SOCKET_MASK))
+	if (!sock && (events & WL_SOCKET_MASK))
 		elog(ERROR, "cannot wait on socket event without a socket");
 
 	event = &set->events[set->nevents];
 	event->pos = set->nevents++;
-	event->fd = fd;
+	event->sock = sock;
+	if (sock)
+		event->fd = pg_socket_descriptor(sock);
 	event->events = events;
 	event->user_data = user_data;
 #ifdef WIN32

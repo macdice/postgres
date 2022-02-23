@@ -17,6 +17,7 @@
 #include "getaddrinfo.h"		/* for NI_MAXHOST */
 #include "pgtime.h"
 #include "port/atomics.h"
+#include "port/pg_socket.h"
 #include "replication/logicalproto.h"
 #include "replication/walsender.h"
 #include "storage/condition_variable.h"
@@ -324,7 +325,7 @@ typedef void (*walrcv_endstreaming_fn) (WalReceiverConn *conn,
  */
 typedef int (*walrcv_receive_fn) (WalReceiverConn *conn,
 								  char **buffer,
-								  pgsocket *wait_fd);
+								  Socket **wait_sock);
 
 /*
  * walrcv_send_fn
@@ -419,8 +420,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_startstreaming(conn, options)
 #define walrcv_endstreaming(conn, next_tli) \
 	WalReceiverFunctions->walrcv_endstreaming(conn, next_tli)
-#define walrcv_receive(conn, buffer, wait_fd) \
-	WalReceiverFunctions->walrcv_receive(conn, buffer, wait_fd)
+#define walrcv_receive(conn, buffer, wait_sock) \
+	WalReceiverFunctions->walrcv_receive(conn, buffer, wait_sock)
 #define walrcv_send(conn, buffer, nbytes) \
 	WalReceiverFunctions->walrcv_send(conn, buffer, nbytes)
 #define walrcv_create_slot(conn, slotname, temporary, two_phase, snapshot_action, lsn) \

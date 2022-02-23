@@ -816,7 +816,7 @@ pgfdw_get_result(PGconn *conn, const char *query)
 				wc = WaitLatchOrSocket(MyLatch,
 									   WL_LATCH_SET | WL_SOCKET_READABLE |
 									   WL_EXIT_ON_PM_DEATH,
-									   PQsocket(conn),
+									   PQbackendsocket(conn),
 									   -1L, PG_WAIT_EXTENSION);
 				ResetLatch(MyLatch);
 
@@ -1423,7 +1423,7 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime, PGresult **result,
 				wc = WaitLatchOrSocket(MyLatch,
 									   WL_LATCH_SET | WL_SOCKET_READABLE |
 									   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-									   PQsocket(conn),
+									   PQbackendsocket(conn),
 									   cur_timeout, PG_WAIT_EXTENSION);
 				ResetLatch(MyLatch);
 

@@ -1804,7 +1804,7 @@ ServerLoop(void)
 						 * We no longer need the open socket or port structure
 						 * in this process
 						 */
-						StreamClose(port->sock);
+						pg_socket_close(port->sock);
 						ConnFree(port);
 					}
 				}
@@ -2095,7 +2095,7 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 #endif
 
 retry1:
-		if (send(port->sock, &SSLok, 1, 0) != 1)
+		if (pg_socket_send(port->sock, &SSLok, 1, 0) != 1)
 		{
 			if (errno == EINTR)
 				goto retry1;	/* if interrupted, just retry */
@@ -2139,7 +2139,7 @@ retry1:
 			GSSok = 'G';
 #endif
 
-		while (send(port->sock, &GSSok, 1, 0) != 1)
+		while (pg_socket_send(port->sock, &GSSok, 1, 0) != 1)
 		{
 			if (errno == EINTR)
 				continue;
@@ -2599,8 +2599,8 @@ ConnCreate(int serverFd)
 
 	if (StreamConnection(serverFd, port) != STATUS_OK)
 	{
-		if (port->sock != PGINVALID_SOCKET)
-			StreamClose(port->sock);
+		if (port->sock)
+			pg_socket_close(port->sock);
 		ConnFree(port);
 		return NULL;
 	}
@@ -4340,7 +4340,8 @@ BackendStartup(Port *port)
 	/* in parent, successful fork */
 	ereport(DEBUG2,
 			(errmsg_internal("forked new backend, pid=%d socket=%d",
-							 (int) pid, (int) port->sock)));
+							 (int) pid,
+							 (int) pg_socket_descriptor(port->sock))));
 
 	/*
 	 * Everything's been successful, it's safe to add this backend to our list
@@ -4378,13 +4379,13 @@ report_fork_failure_to_client(Port *port, int errnum)
 			 strerror(errnum));
 
 	/* Set port to non-blocking.  Don't do send() if this fails */
-	if (!pg_set_noblock(port->sock))
+	if (pg_socket_set_blocking(port->sock, false) != 0)
 		return;
 
 	/* We'll retry after EINTR, but ignore all other failures */
 	do
 	{
-		rc = send(port->sock, buffer, strlen(buffer) + 1, 0);
+		rc = pg_socket_send(port->sock, buffer, strlen(buffer) + 1, 0);
 	} while (rc < 0 && errno == EINTR);
 }
 
@@ -6192,7 +6193,7 @@ extern slock_t *ShmemLock;
 extern slock_t *ProcStructLock;
 extern PGPROC *AuxiliaryProcs;
 extern PMSignalData *PMSignalState;
-extern pgsocket pgStatSock;
+extern Socket *pgStatSock;
 extern pg_time_t first_syslogger_file_time;
 
 #ifndef WIN32
@@ -6217,7 +6218,10 @@ save_backend_variables(BackendParameters *param, Port *port,
 #endif
 {
 	memcpy(&param->port, port, sizeof(Port));
-	if (!write_inheritable_socket(&param->portsocket, port->sock, childPid))
+	if (port->sock &&
+		!write_inheritable_socket(&param->portsocket,
+								  pg_socket_descriptor(port->sock),
+								  childPid))
 		return false;
 
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
@@ -6248,7 +6252,10 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->AuxiliaryProcs = AuxiliaryProcs;
 	param->PreparedXactProcs = PreparedXactProcs;
 	param->PMSignalState = PMSignalState;
-	if (!write_inheritable_socket(&param->pgStatSock, pgStatSock, childPid))
+	if (pgStatSock &&
+		!write_inheritable_socket(&param->pgStatSock,
+								  pg_socket_descriptor(pgStatSock),
+								  childPid))
 		return false;
 
 	param->PostmasterPid = PostmasterPid;
@@ -6452,8 +6459,12 @@ read_backend_variables(char *id, Port *port)
 static void
 restore_backend_variables(BackendParameters *param, Port *port)
 {
+	pgsocket				raw_sock;
+
 	memcpy(port, &param->port, sizeof(Port));
-	read_inheritable_socket(&port->sock, &param->portsocket);
+	read_inheritable_socket(&raw_sock, &param->portsocket);
+
+	port->sock = pg_socket_open(raw_sock);
 
 	SetDataDir(param->DataDir);
 
@@ -6483,7 +6494,9 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	AuxiliaryProcs = param->AuxiliaryProcs;
 	PreparedXactProcs = param->PreparedXactProcs;
 	PMSignalState = param->PMSignalState;
-	read_inheritable_socket(&pgStatSock, &param->pgStatSock);
+	read_inheritable_socket(&raw_sock, &param->pgStatSock);
+
+	pgStatSock = pg_socket_open(raw_sock);
 
 	PostmasterPid = param->PostmasterPid;
 	PgStartTime = param->PgStartTime;
@@ -6522,7 +6535,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	if (postmaster_alive_fds[1] >= 0)
 		ReserveExternalFD();
 #endif
-	if (pgStatSock != PGINVALID_SOCKET)
+	if (pgStatSock)
 		ReserveExternalFD();
 }
 

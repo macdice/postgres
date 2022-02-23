@@ -42,6 +42,7 @@
 #include "fe-auth.h"
 #include "fe-auth-sasl.h"
 #include "libpq-fe.h"
+#include "port/pg_socket.h"
 
 #ifdef ENABLE_GSS
 /*
@@ -750,7 +751,7 @@ pg_local_sendauth(PGconn *conn)
 	cmsg->cmsg_level = SOL_SOCKET;
 	cmsg->cmsg_type = SCM_CREDS;
 
-	if (sendmsg(conn->sock, &msg, 0) == -1)
+	if (sendmsg(pg_stream_descriptor(conn->stream), &msg, 0) == -1)
 	{
 		char		sebuf[PG_STRERROR_R_BUFLEN];
 

@@ -39,6 +39,7 @@
 #include "pgstat.h"
 #include "pgtime.h"
 #include "port/pg_bitutils.h"
+#include "port/pg_socket.h"
 #include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
@@ -118,6 +119,8 @@ int			syslogPipe[2] = {-1, -1};
 #else
 HANDLE		syslogPipe[2] = {0, 0};
 #endif
+
+static Socket *syslogSock;
 
 #ifdef WIN32
 static HANDLE threadHandle = 0;
@@ -234,6 +237,7 @@ SysLoggerMain(int argc, char *argv[])
 	if (syslogPipe[1] >= 0)
 		close(syslogPipe[1]);
 	syslogPipe[1] = -1;
+	syslogSock = pg_socket_open(syslogPipe[0]);
 #else
 	if (syslogPipe[1])
 		CloseHandle(syslogPipe[1]);
@@ -312,9 +316,9 @@ SysLoggerMain(int argc, char *argv[])
 	 * (including the postmaster).
 	 */
 	wes = CreateWaitEventSet(CurrentMemoryContext, 2);
-	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+	AddWaitEventToSet(wes, WL_LATCH_SET, NULL, MyLatch, NULL);
 #ifndef WIN32
-	AddWaitEventToSet(wes, WL_SOCKET_READABLE, syslogPipe[0], NULL, NULL);
+	AddWaitEventToSet(wes, WL_SOCKET_READABLE, syslogSock, NULL, NULL);
 #endif
 
 	/* main worker loop */
@@ -612,6 +616,9 @@ SysLogger_Start(void)
 					 errmsg("could not create pipe for syslog: %m")));
 	}
 #endif
+
+	/* XXX: This is used for waiting on Unix only. */
+	syslogSock = pg_socket_open((pgsocket) syslogPipe[0]);
 
 	/*
 	 * Create log directory if not present; ignore errors
