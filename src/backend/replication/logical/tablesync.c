@@ -637,14 +637,14 @@ copy_read_data(void *outbuf, int minread, int maxread)
 
 	while (maxread > 0 && bytesread < minread)
 	{
-		pgsocket	fd = PGINVALID_SOCKET;
+		pg_stream  *wait_stream = NULL;
 		int			len;
 		char	   *buf = NULL;
 
 		for (;;)
 		{
 			/* Try read the data. */
-			len = walrcv_receive(LogRepWorkerWalRcvConn, &buf, &fd);
+			len = walrcv_receive(LogRepWorkerWalRcvConn, &buf, &wait_stream);
 
 			CHECK_FOR_INTERRUPTS();
 
@@ -679,7 +679,9 @@ copy_read_data(void *outbuf, int minread, int maxread)
 		(void) WaitLatchOrSocket(MyLatch,
 								 WL_SOCKET_READABLE | WL_LATCH_SET |
 								 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-								 fd, 1000L, WAIT_EVENT_LOGICAL_SYNC_DATA);
+								 wait_stream,
+								 1000L,
+								 WAIT_EVENT_LOGICAL_SYNC_DATA);
 
 		ResetLatch(MyLatch);
 	}

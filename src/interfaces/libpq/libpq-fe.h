@@ -191,6 +191,9 @@ typedef struct pgNotify
 	struct pgNotify *next;		/* list link */
 } PGnotify;
 
+/* Forward declare pg_stream so we don't have to include "port/pg_stream.h". */
+struct pg_stream;
+
 /* Function types for notice-handling callbacks */
 typedef void (*PQnoticeReceiver) (void *arg, const PGresult *res);
 typedef void (*PQnoticeProcessor) (void *arg, const char *message);
@@ -348,6 +351,7 @@ extern int	PQprotocolVersion(const PGconn *conn);
 extern int	PQserverVersion(const PGconn *conn);
 extern char *PQerrorMessage(const PGconn *conn);
 extern int	PQsocket(const PGconn *conn);
+extern struct pg_stream *PQstream(PGconn *conn);
 extern int	PQbackendPID(const PGconn *conn);
 extern PGpipelineStatus PQpipelineStatus(const PGconn *conn);
 extern int	PQconnectionNeedsPassword(const PGconn *conn);

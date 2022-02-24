@@ -67,7 +67,7 @@ static bool libpqrcv_startstreaming(WalReceiverConn *conn,
 static void libpqrcv_endstreaming(WalReceiverConn *conn,
 								  TimeLineID *next_tli);
 static int	libpqrcv_receive(WalReceiverConn *conn, char **buffer,
-							 pgsocket *wait_fd);
+							 pg_stream **wait_stream);
 static void libpqrcv_send(WalReceiverConn *conn, const char *buffer,
 						  int nbytes);
 static char *libpqrcv_create_slot(WalReceiverConn *conn,
@@ -205,7 +205,7 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 
 		rc = WaitLatchOrSocket(MyLatch,
 							   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | io_flag,
-							   PQsocket(conn->streamConn),
+							   PQstream(conn->streamConn),
 							   0,
 							   WAIT_EVENT_LIBPQWALRECEIVER_CONNECT);
 
@@ -708,7 +708,7 @@ libpqrcv_PQgetResult(PGconn *streamConn)
 		rc = WaitLatchOrSocket(MyLatch,
 							   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
 							   WL_LATCH_SET,
-							   PQsocket(streamConn),
+							   PQstream(streamConn),
 							   0,
 							   WAIT_EVENT_LIBPQWALRECEIVER_RECEIVE);
 
@@ -760,8 +760,7 @@ libpqrcv_disconnect(WalReceiverConn *conn)
  * ereports on error.
  */
 static int
-libpqrcv_receive(WalReceiverConn *conn, char **buffer,
-				 pgsocket *wait_fd)
+libpqrcv_receive(WalReceiverConn *conn, char **buffer, pg_stream **wait_stream)
 {
 	int			rawlen;
 
@@ -785,7 +784,7 @@ libpqrcv_receive(WalReceiverConn *conn, char **buffer,
 		if (rawlen == 0)
 		{
 			/* Tell caller to try again when our socket is ready. */
-			*wait_fd = PQsocket(conn->streamConn);
+			*wait_stream = PQstream(conn->streamConn);
 			return 0;
 		}
 	}

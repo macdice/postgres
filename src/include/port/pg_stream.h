@@ -1,7 +1,11 @@
 #ifndef PG_STREAM_H
 #define PG_STREAM_H
 
+#ifdef FRONTEND
+#include "postgres_fe.h"
+#else
 #include "postgres.h"
+#endif
 
 /*
  * This is the native type for sockets on the platform, but we'll give it a
@@ -9,8 +13,10 @@
  */
 typedef pgsocket pg_stream_descriptor_t;
 
-struct pg_stream;
-typedef struct pg_stream pg_stream;
+/*
+ * Note: The type pg_stream is defined in postgres_ext.h so that a libpq API
+ * can use it.
+ */
 
 extern pg_stream *pg_stream_open(pg_stream_descriptor_t descriptor);
 

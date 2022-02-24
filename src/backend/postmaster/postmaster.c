@@ -1804,7 +1804,7 @@ ServerLoop(void)
 						 * We no longer need the open socket or port structure
 						 * in this process
 						 */
-						StreamClose(port->sock);
+						pg_stream_close(port->stream);
 						ConnFree(port);
 					}
 				}
@@ -2095,7 +2095,7 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 #endif
 
 retry1:
-		if (send(port->sock, &SSLok, 1, 0) != 1)
+		if (pg_stream_send(port->stream, &SSLok, 1, 0) != 1)
 		{
 			if (errno == EINTR)
 				goto retry1;	/* if interrupted, just retry */
@@ -2139,7 +2139,7 @@ retry1:
 			GSSok = 'G';
 #endif
 
-		while (send(port->sock, &GSSok, 1, 0) != 1)
+		while (pg_stream_send(port->stream, &GSSok, 1, 0) != 1)
 		{
 			if (errno == EINTR)
 				continue;
@@ -2599,8 +2599,8 @@ ConnCreate(int serverFd)
 
 	if (StreamConnection(serverFd, port) != STATUS_OK)
 	{
-		if (port->sock != PGINVALID_SOCKET)
-			StreamClose(port->sock);
+		if (port->stream)
+			pg_stream_close(port->stream);
 		ConnFree(port);
 		return NULL;
 	}
@@ -4340,7 +4340,8 @@ BackendStartup(Port *port)
 	/* in parent, successful fork */
 	ereport(DEBUG2,
 			(errmsg_internal("forked new backend, pid=%d socket=%d",
-							 (int) pid, (int) port->sock)));
+							 (int) pid,
+							 (int) pg_stream_descriptor(port->stream))));
 
 	/*
 	 * Everything's been successful, it's safe to add this backend to our list
@@ -4378,13 +4379,13 @@ report_fork_failure_to_client(Port *port, int errnum)
 			 strerror(errnum));
 
 	/* Set port to non-blocking.  Don't do send() if this fails */
-	if (!pg_set_noblock(port->sock))
+	if (pg_stream_set_blocking(port->stream, false) != 0)
 		return;
 
 	/* We'll retry after EINTR, but ignore all other failures */
 	do
 	{
-		rc = send(port->sock, buffer, strlen(buffer) + 1, 0);
+		rc = pg_stream_send(port->stream, buffer, strlen(buffer) + 1, 0);
 	} while (rc < 0 && errno == EINTR);
 }
 
@@ -6217,7 +6218,10 @@ save_backend_variables(BackendParameters *param, Port *port,
 #endif
 {
 	memcpy(&param->port, port, sizeof(Port));
-	if (!write_inheritable_socket(&param->portsocket, port->sock, childPid))
+	if (port->stream &&
+		!write_inheritable_socket(&param->portsocket,
+								  pg_stream_descriptor(port->stream),
+								  childPid))
 		return false;
 
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
@@ -6452,9 +6456,13 @@ read_backend_variables(char *id, Port *port)
 static void
 restore_backend_variables(BackendParameters *param, Port *port)
 {
-	memcpy(port, &param->port, sizeof(Port));
-	read_inheritable_socket(&port->sock, &param->portsocket);
+	pgsocket				sock;
 
+	memcpy(port, &param->port, sizeof(Port));
+	read_inheritable_socket(&sock, &param->portsocket);
+
+	port->stream = pg_stream_open(sock);
+	
 	SetDataDir(param->DataDir);
 
 	memcpy(&ListenSocket, &param->ListenSocket, sizeof(ListenSocket));

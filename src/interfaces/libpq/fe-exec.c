@@ -2938,7 +2938,7 @@ PQfn(PGconn *conn,
 		return NULL;
 	}
 
-	if (conn->sock == PGINVALID_SOCKET || conn->asyncStatus != PGASYNC_IDLE ||
+	if (!conn->stream || conn->asyncStatus != PGASYNC_IDLE ||
 		conn->result || conn->error_result)
 	{
 		appendPQExpBufferStr(&conn->errorMessage,

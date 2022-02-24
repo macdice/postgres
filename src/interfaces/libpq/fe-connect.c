@@ -31,6 +31,7 @@
 #include "mb/pg_wchar.h"
 #include "pg_config_paths.h"
 #include "port/pg_bswap.h"
+#include "port/pg_stream.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -451,9 +452,9 @@ pqDropConnection(PGconn *conn, bool flushInput)
 	pqsecure_close(conn);
 
 	/* Close the socket itself */
-	if (conn->sock != PGINVALID_SOCKET)
-		closesocket(conn->sock);
-	conn->sock = PGINVALID_SOCKET;
+	if (conn->stream)
+		pg_stream_close(conn->stream);
+	conn->stream = NULL;
 
 	/* Optionally discard any unread data */
 	if (flushInput)
@@ -1634,7 +1635,7 @@ connectNoDelay(PGconn *conn)
 #ifdef	TCP_NODELAY
 	int			on = 1;
 
-	if (setsockopt(conn->sock, IPPROTO_TCP, TCP_NODELAY,
+	if (setsockopt(pg_stream_descriptor(conn->stream), IPPROTO_TCP, TCP_NODELAY,
 				   (char *) &on,
 				   sizeof(on)) < 0)
 	{
@@ -1852,7 +1853,8 @@ setKeepalivesIdle(PGconn *conn)
 		idle = 0;
 
 #ifdef PG_TCP_KEEPALIVE_IDLE
-	if (setsockopt(conn->sock, IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE,
+	if (setsockopt(pg_stream_descriptor(conn->stream),
+				   IPPROTO_TCP, PG_TCP_KEEPALIVE_IDLE,
 				   (char *) &idle, sizeof(idle)) < 0)
 	{
 		char		sebuf[PG_STRERROR_R_BUFLEN];
@@ -1887,7 +1889,8 @@ setKeepalivesInterval(PGconn *conn)
 		interval = 0;
 
 #ifdef TCP_KEEPINTVL
-	if (setsockopt(conn->sock, IPPROTO_TCP, TCP_KEEPINTVL,
+	if (setsockopt(pg_stream_descriptor(conn->stream),
+				   IPPROTO_TCP, TCP_KEEPINTVL,
 				   (char *) &interval, sizeof(interval)) < 0)
 	{
 		char		sebuf[PG_STRERROR_R_BUFLEN];
@@ -1923,7 +1926,8 @@ setKeepalivesCount(PGconn *conn)
 		count = 0;
 
 #ifdef TCP_KEEPCNT
-	if (setsockopt(conn->sock, IPPROTO_TCP, TCP_KEEPCNT,
+	if (setsockopt(pg_stream_descriptor(conn->stream),
+				   IPPROTO_TCP, TCP_KEEPCNT,
 				   (char *) &count, sizeof(count)) < 0)
 	{
 		char		sebuf[PG_STRERROR_R_BUFLEN];
@@ -1991,7 +1995,7 @@ prepKeepalivesWin32(PGconn *conn)
 						 "keepalives_interval"))
 		return 0;
 
-	if (!setKeepalivesWin32(conn->sock, idle, interval))
+	if (!setKeepalivesWin32(pg_stream_desciptor(conn->stream), idle, interval))
 	{
 		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("%s(%s) failed: error code %d\n"),
@@ -2023,7 +2027,8 @@ setTCPUserTimeout(PGconn *conn)
 		timeout = 0;
 
 #ifdef TCP_USER_TIMEOUT
-	if (setsockopt(conn->sock, IPPROTO_TCP, TCP_USER_TIMEOUT,
+	if (setsockopt(pg_stream_descriptor(conn->stream),
+				   IPPROTO_TCP, TCP_USER_TIMEOUT,
 				   (char *) &timeout, sizeof(timeout)) < 0)
 	{
 		char		sebuf[256];
@@ -2522,6 +2527,7 @@ keep_going:						/* We will come back to here until there is
 				{
 					struct addrinfo *addr_cur = conn->addr_cur;
 					char		host_addr[NI_MAXHOST];
+					pgsocket	sock;
 
 					/*
 					 * Advance to next possible host, if we've tried all of
@@ -2552,8 +2558,8 @@ keep_going:						/* We will come back to here until there is
 						conn->connip = strdup(host_addr);
 
 					/* Try to create the socket */
-					conn->sock = socket(addr_cur->ai_family, SOCK_STREAM, 0);
-					if (conn->sock == PGINVALID_SOCKET)
+					sock = socket(addr_cur->ai_family, SOCK_STREAM, 0);
+					if (!conn->stream)
 					{
 						int			errorno = SOCK_ERRNO;
 
@@ -2575,6 +2581,8 @@ keep_going:						/* We will come back to here until there is
 										  SOCK_STRERROR(errorno, sebuf, sizeof(sebuf)));
 						goto error_return;
 					}
+
+					conn->stream = pg_stream_open(sock);
 
 					/*
 					 * Once we've identified a target address, all errors
@@ -2599,7 +2607,7 @@ keep_going:						/* We will come back to here until there is
 							goto keep_going;
 						}
 					}
-					if (!pg_set_noblock(conn->sock))
+					if (pg_stream_set_blocking(conn->stream, false) != 0)
 					{
 						appendPQExpBuffer(&conn->errorMessage,
 										  libpq_gettext("could not set socket to nonblocking mode: %s\n"),
@@ -2609,7 +2617,8 @@ keep_going:						/* We will come back to here until there is
 					}
 
 #ifdef F_SETFD
-					if (fcntl(conn->sock, F_SETFD, FD_CLOEXEC) == -1)
+					if (fcntl(pg_stream_descriptor(conn->stream),
+							  F_SETFD, FD_CLOEXEC) == -1)
 					{
 						appendPQExpBuffer(&conn->errorMessage,
 										  libpq_gettext("could not set socket to close-on-exec mode: %s\n"),
@@ -2638,7 +2647,7 @@ keep_going:						/* We will come back to here until there is
 							/* Do nothing */
 						}
 #ifndef WIN32
-						else if (setsockopt(conn->sock,
+						else if (setsockopt(pg_stream_descriptor(conn->stream),
 											SOL_SOCKET, SO_KEEPALIVE,
 											(char *) &on, sizeof(on)) < 0)
 						{
@@ -2713,7 +2722,8 @@ keep_going:						/* We will come back to here until there is
 					 * Start/make connection.  This should not block, since we
 					 * are in nonblock mode.  If it does, well, too bad.
 					 */
-					if (connect(conn->sock, addr_cur->ai_addr,
+					if (connect(pg_stream_descriptor(conn->stream),
+								addr_cur->ai_addr,
 								addr_cur->ai_addrlen) < 0)
 					{
 						if (SOCK_ERRNO == EINPROGRESS ||
@@ -2767,7 +2777,8 @@ keep_going:						/* We will come back to here until there is
 				 * state waiting for us on the socket.
 				 */
 
-				if (getsockopt(conn->sock, SOL_SOCKET, SO_ERROR,
+				if (getsockopt(pg_stream_descriptor(conn->stream),
+							   SOL_SOCKET, SO_ERROR,
 							   (char *) &optval, &optlen) == -1)
 				{
 					appendPQExpBuffer(&conn->errorMessage,
@@ -2794,7 +2805,7 @@ keep_going:						/* We will come back to here until there is
 
 				/* Fill in the client address */
 				conn->laddr.salen = sizeof(conn->laddr.addr);
-				if (getsockname(conn->sock,
+				if (getsockname(pg_stream_descriptor(conn->stream),
 								(struct sockaddr *) &conn->laddr.addr,
 								&conn->laddr.salen) < 0)
 				{
@@ -2830,7 +2841,8 @@ keep_going:						/* We will come back to here until there is
 					gid_t		gid;
 
 					errno = 0;
-					if (getpeereid(conn->sock, &uid, &gid) != 0)
+					if (getpeereid(pg_stream_descriptor(conn->stream),
+								   &uid, &gid) != 0)
 					{
 						/*
 						 * Provide special error message if getpeereid is a
@@ -3990,7 +4002,7 @@ makeEmptyPGconn(void)
 	conn->in_hot_standby = PG_BOOL_UNKNOWN;
 	conn->verbosity = PQERRORS_DEFAULT;
 	conn->show_context = PQSHOW_CONTEXT_ERRORS;
-	conn->sock = PGINVALID_SOCKET;
+	conn->stream = NULL;
 	conn->Pfdebug = NULL;
 
 	/*
@@ -4193,7 +4205,7 @@ sendTerminateConn(PGconn *conn)
 	 * Note that the protocol doesn't allow us to send Terminate messages
 	 * during the startup phase.
 	 */
-	if (conn->sock != PGINVALID_SOCKET && conn->status == CONNECTION_OK)
+	if (conn->stream && conn->status == CONNECTION_OK)
 	{
 		/*
 		 * Try to send "close connection" message to backend. Ignore any
@@ -4365,7 +4377,7 @@ PQgetCancel(PGconn *conn)
 	if (!conn)
 		return NULL;
 
-	if (conn->sock == PGINVALID_SOCKET)
+	if (!conn->stream)
 		return NULL;
 
 	cancel = malloc(sizeof(PGcancel));
@@ -4681,7 +4693,7 @@ PQrequestCancel(PGconn *conn)
 	if (!conn)
 		return false;
 
-	if (conn->sock == PGINVALID_SOCKET)
+	if (!conn->stream)
 	{
 		strlcpy(conn->errorMessage.data,
 				"PQrequestCancel() -- connection is not open\n",
@@ -6930,7 +6942,13 @@ PQsocket(const PGconn *conn)
 {
 	if (!conn)
 		return -1;
-	return (conn->sock != PGINVALID_SOCKET) ? conn->sock : -1;
+	return conn->stream ? pg_stream_descriptor(conn->stream) : -1;
+}
+
+pg_stream *
+PQstream(PGconn *conn)
+{
+	return conn->stream;
 }
 
 int
