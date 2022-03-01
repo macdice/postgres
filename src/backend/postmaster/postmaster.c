@@ -6193,7 +6193,7 @@ extern slock_t *ShmemLock;
 extern slock_t *ProcStructLock;
 extern PGPROC *AuxiliaryProcs;
 extern PMSignalData *PMSignalState;
-extern pgsocket pgStatSock;
+extern pg_stream *pgStatStream;
 extern pg_time_t first_syslogger_file_time;
 
 #ifndef WIN32
@@ -6252,7 +6252,10 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->AuxiliaryProcs = AuxiliaryProcs;
 	param->PreparedXactProcs = PreparedXactProcs;
 	param->PMSignalState = PMSignalState;
-	if (!write_inheritable_socket(&param->pgStatSock, pgStatSock, childPid))
+	if (pgStatStream &&
+		!write_inheritable_socket(&param->pgStatSock,
+								  pg_stream_descriptor(pgStatStream),
+								  childPid))
 		return false;
 
 	param->PostmasterPid = PostmasterPid;
@@ -6491,7 +6494,9 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	AuxiliaryProcs = param->AuxiliaryProcs;
 	PreparedXactProcs = param->PreparedXactProcs;
 	PMSignalState = param->PMSignalState;
-	read_inheritable_socket(&pgStatSock, &param->pgStatSock);
+	read_inheritable_socket(&sock, &param->pgStatSock);
+
+	pgStatStream = pg_stream_open(sock);
 
 	PostmasterPid = param->PostmasterPid;
 	PgStartTime = param->PgStartTime;
@@ -6530,7 +6535,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	if (postmaster_alive_fds[1] >= 0)
 		ReserveExternalFD();
 #endif
-	if (pgStatSock != PGINVALID_SOCKET)
+	if (pgStatStream)
 		ReserveExternalFD();
 }
 

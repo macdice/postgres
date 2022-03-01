@@ -1030,8 +1030,7 @@ ExecAppendAsyncEventWait(AppendState *node)
 	Assert(node->as_nasyncremain > 0);
 
 	node->as_eventset = CreateWaitEventSet(CurrentMemoryContext, nevents);
-	AddWaitEventToSet(node->as_eventset, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-					  NULL, NULL);
+	AddWaitEventToSet(node->as_eventset, WL_EXIT_ON_PM_DEATH, NULL, NULL, NULL);
 
 	/* Give each waiting subplan a chance to add an event. */
 	i = -1;

@@ -49,6 +49,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_stream.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
@@ -172,7 +173,7 @@ static PgStat_MsgSLRU SLRUStats[SLRU_NUM_ELEMENTS];
  * Local data
  * ----------
  */
-NON_EXEC_STATIC pgsocket pgStatSock = PGINVALID_SOCKET;
+NON_EXEC_STATIC pg_stream *pgStatStream = NULL;
 
 static struct sockaddr_storage pgStatAddr;
 
@@ -410,6 +411,7 @@ pgstat_init(void)
 	char		test_byte;
 	int			sel_res;
 	int			tries = 0;
+	pgsocket	pgStatSock = PGINVALID_SOCKET;
 
 #define TESTBYTEVAL ((char) 199)
 
@@ -473,6 +475,8 @@ pgstat_init(void)
 					 errmsg("could not create socket for statistics collector: %m")));
 			continue;
 		}
+
+		pgStatStream = pg_stream_open(pgStatSock);
 
 		/*
 		 * Bind it to a kernel assigned port on localhost and get the assigned
@@ -615,7 +619,7 @@ retry2:
 	 * falls behind, statistics messages will be discarded; backends won't
 	 * block waiting to send messages to the collector.
 	 */
-	if (!pg_set_noblock(pgStatSock))
+	if (pg_stream_set_blocking(pgStatStream, false) != 0)
 	{
 		ereport(LOG,
 				(errcode_for_socket_access(),
@@ -784,7 +788,7 @@ pgstat_start(void)
 	 * Check that the socket is there, else pgstat_init failed and we can do
 	 * nothing useful.
 	 */
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return 0;
 
 	/*
@@ -1000,7 +1004,7 @@ pgstat_send_tabstat(PgStat_MsgTabstat *tsmsg, TimestampTz now)
 	int			len;
 
 	/* It's unlikely we'd get here with no socket, but maybe not impossible */
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	/*
@@ -1135,7 +1139,7 @@ pgstat_vacuum_stat(void)
 	PgStat_StatFuncEntry *funcentry;
 	int			len;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	/*
@@ -1445,7 +1449,7 @@ pgstat_drop_database(Oid databaseid)
 {
 	PgStat_MsgDropdb msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_DROPDB);
@@ -1500,7 +1504,7 @@ pgstat_reset_counters(void)
 {
 	PgStat_MsgResetcounter msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETCOUNTER);
@@ -1522,7 +1526,7 @@ pgstat_reset_shared_counters(const char *target)
 {
 	PgStat_MsgResetsharedcounter msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	if (strcmp(target, "archiver") == 0)
@@ -1556,7 +1560,7 @@ pgstat_reset_single_counter(Oid objoid, Oid subobjoid,
 {
 	PgStat_MsgResetsinglecounter msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSINGLECOUNTER);
@@ -1583,7 +1587,7 @@ pgstat_reset_slru_counter(const char *name)
 {
 	PgStat_MsgResetslrucounter msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSLRUCOUNTER);
@@ -1607,7 +1611,7 @@ pgstat_reset_replslot_counter(const char *name)
 {
 	PgStat_MsgResetreplslotcounter msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	if (name)
@@ -1636,7 +1640,7 @@ pgstat_report_autovac(Oid dboid)
 {
 	PgStat_MsgAutovacStart msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_AUTOVAC_START);
@@ -1659,7 +1663,7 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 {
 	PgStat_MsgVacuum msg;
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (!pgStatStream || !pgstat_track_counts)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_VACUUM);
@@ -1688,7 +1692,7 @@ pgstat_report_analyze(Relation rel,
 {
 	PgStat_MsgAnalyze msg;
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (!pgStatStream || !pgstat_track_counts)
 		return;
 
 	/*
@@ -1742,7 +1746,7 @@ pgstat_report_recovery_conflict(int reason)
 {
 	PgStat_MsgRecoveryConflict msg;
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (!pgStatStream || !pgstat_track_counts)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RECOVERYCONFLICT);
@@ -1762,7 +1766,7 @@ pgstat_report_deadlock(void)
 {
 	PgStat_MsgDeadlock msg;
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (!pgStatStream || !pgstat_track_counts)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_DEADLOCK);
@@ -1783,7 +1787,7 @@ pgstat_report_checksum_failures_in_db(Oid dboid, int failurecount)
 {
 	PgStat_MsgChecksumFailure msg;
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (!pgStatStream || !pgstat_track_counts)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_CHECKSUMFAILURE);
@@ -1817,7 +1821,7 @@ pgstat_report_tempfile(size_t filesize)
 {
 	PgStat_MsgTempFile msg;
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (!pgStatStream || !pgstat_track_counts)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_TEMPFILE);
@@ -2004,7 +2008,7 @@ pgstat_ping(void)
 {
 	PgStat_MsgDummy msg;
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_DUMMY);
@@ -2179,7 +2183,7 @@ pgstat_initstats(Relation rel)
 		return;
 	}
 
-	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+	if (!pgStatStream || !pgstat_track_counts)
 	{
 		/* We're not counting at all */
 		rel->pgstat_info = NULL;
@@ -3227,7 +3231,7 @@ pgstat_send(void *msg, int len)
 
 	pgstat_assert_is_up();
 
-	if (pgStatSock == PGINVALID_SOCKET)
+	if (!pgStatStream)
 		return;
 
 	((PgStat_MsgHdr *) msg)->m_size = len;
@@ -3235,7 +3239,7 @@ pgstat_send(void *msg, int len)
 	/* We'll retry after EINTR, but ignore all other failures */
 	do
 	{
-		rc = send(pgStatSock, msg, len, 0);
+		rc = pg_stream_send(pgStatStream, msg, len, 0);
 	} while (rc < 0 && errno == EINTR);
 
 #ifdef USE_ASSERT_CHECKING
@@ -3529,9 +3533,9 @@ PgstatCollectorMain(int argc, char *argv[])
 
 	/* Prepare to wait for our latch or data in our socket. */
 	wes = CreateWaitEventSet(CurrentMemoryContext, 3);
-	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
-	AddWaitEventToSet(wes, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL, NULL);
-	AddWaitEventToSet(wes, WL_SOCKET_READABLE, pgStatSock, NULL, NULL);
+	AddWaitEventToSet(wes, WL_LATCH_SET, NULL, MyLatch, NULL);
+	AddWaitEventToSet(wes, WL_POSTMASTER_DEATH, NULL, NULL, NULL);
+	AddWaitEventToSet(wes, WL_SOCKET_READABLE, pgStatStream, NULL, NULL);
 
 	/*
 	 * Loop to process messages until we get SIGQUIT or detect ungraceful
@@ -3588,16 +3592,8 @@ PgstatCollectorMain(int argc, char *argv[])
 			 * despite the previous use of pg_set_noblock() on the socket.
 			 * This is extremely broken and should be fixed someday.
 			 */
-#ifdef WIN32
-			pgwin32_noblock = 1;
-#endif
-
-			len = recv(pgStatSock, (char *) &msg,
-					   sizeof(PgStat_Msg), 0);
-
-#ifdef WIN32
-			pgwin32_noblock = 0;
-#endif
+			len = pg_stream_recv(pgStatStream, (char *) &msg,
+								 sizeof(PgStat_Msg), 0);
 
 			if (len < 0)
 			{

@@ -39,6 +39,7 @@
 #include "pgstat.h"
 #include "pgtime.h"
 #include "port/pg_bitutils.h"
+#include "port/pg_stream.h"
 #include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
@@ -118,6 +119,8 @@ int			syslogPipe[2] = {-1, -1};
 #else
 HANDLE		syslogPipe[2] = {0, 0};
 #endif
+
+static pg_stream *syslogStream;
 
 #ifdef WIN32
 static HANDLE threadHandle = 0;
@@ -312,9 +315,9 @@ SysLoggerMain(int argc, char *argv[])
 	 * (including the postmaster).
 	 */
 	wes = CreateWaitEventSet(CurrentMemoryContext, 2);
-	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+	AddWaitEventToSet(wes, WL_LATCH_SET, NULL, MyLatch, NULL);
 #ifndef WIN32
-	AddWaitEventToSet(wes, WL_SOCKET_READABLE, syslogPipe[0], NULL, NULL);
+	AddWaitEventToSet(wes, WL_SOCKET_READABLE, syslogStream, NULL, NULL);
 #endif
 
 	/* main worker loop */
@@ -613,6 +616,8 @@ SysLogger_Start(void)
 	}
 #endif
 
+	syslogStream = pg_stream_open((pgsocket) syslogPipe[0]);
+	
 	/*
 	 * Create log directory if not present; ignore errors
 	 */
