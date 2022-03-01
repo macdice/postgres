@@ -2283,6 +2283,14 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 					if (XLogCheckpointNeeded(openLogSegNo))
 						RequestCheckpoint(CHECKPOINT_CAUSE_XLOG);
 				}
+
+				/*
+				 * In any case, set the checkpointer's latch each time we
+				 * finish a segment, so that it knows we're onto a new segment
+				 * for the purposes of checkpoint spreading.
+				 */
+				if (IsUnderPostmaster)
+					SetLatch(ProcGlobal->checkpointerLatch);
 			}
 		}
 

@@ -33,6 +33,7 @@
  */
 #include "postgres.h"
 
+#include <math.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -163,7 +164,7 @@ static pg_time_t last_xlog_switch_time;
 
 static void HandleCheckpointerInterrupts(void);
 static void CheckArchiveTimeout(void);
-static bool IsCheckpointOnSchedule(double progress);
+static bool IsCheckpointOnSchedule(double progress, int *sleep_ms);
 static bool ImmediateCheckpointRequested(void);
 static bool CompactCheckpointerRequestQueue(void);
 static void UpdateSharedMemoryConfig(void);
@@ -691,6 +692,7 @@ ImmediateCheckpointRequested(void)
 void
 CheckpointWriteDelay(int flags, double progress)
 {
+	int			sleep_ms;
 	static int	absorb_counter = WRITES_PER_ABSORB;
 
 	/* Do nothing if checkpoint is being executed by non-checkpointer process */
@@ -704,7 +706,7 @@ CheckpointWriteDelay(int flags, double progress)
 	if (!(flags & CHECKPOINT_IMMEDIATE) &&
 		!ShutdownRequestPending &&
 		!ImmediateCheckpointRequested() &&
-		IsCheckpointOnSchedule(progress))
+		IsCheckpointOnSchedule(progress, &sleep_ms))
 	{
 		if (ConfigReloadPending)
 		{
@@ -725,13 +727,13 @@ CheckpointWriteDelay(int flags, double progress)
 		pgstat_send_checkpointer();
 
 		/*
-		 * This sleep used to be connected to bgwriter_delay, typically 200ms.
-		 * That resulted in more frequent wakeups if not much work to do.
-		 * Checkpointer and bgwriter are no longer related so take the Big
-		 * Sleep.
+		 * Take a nap, for the amount of time computed by
+		 * IsCheckpointOnSchedule().  We might also be woken up by our latch
+		 * being set, if we enough WAL is written or someone wants us to
+		 * absorb sync requests.
 		 */
 		WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_TIMEOUT,
-				  100,
+				  sleep_ms,
 				  WAIT_EVENT_CHECKPOINT_WRITE_DELAY);
 		ResetLatch(MyLatch);
 	}
@@ -758,9 +760,12 @@ CheckpointWriteDelay(int flags, double progress)
  * Compares the current progress against the time/segments elapsed since last
  * checkpoint, and returns true if the progress we've made this far is greater
  * than the elapsed time/segments.
+ *
+ * If true, *sleep_ms is set to the number of milliseconds we should sleep, to
+ * keep up with checkpoint_timeout.
  */
 static bool
-IsCheckpointOnSchedule(double progress)
+IsCheckpointOnSchedule(double progress, int *sleep_ms)
 {
 	XLogRecPtr	recptr;
 	struct timeval now;
@@ -827,7 +832,19 @@ IsCheckpointOnSchedule(double progress)
 		return false;
 	}
 
-	/* It looks like we're on schedule. */
+	/*
+	 * It looks like we're on schedule.  Compute the time we can stay asleep
+	 * according to CheckPointTimeout.  We don't have to consider
+	 * CheckPointSegments here, since XLogWrite() sets our latch each segment
+	 * and we recompute.  Always sleep at least 100ms, so that we can build up
+	 * a batch of I/O.  This avoids smearing the checkpoint too finely, which
+	 * could introduce scheduling overhead.  We don't want to wake up 1,000
+	 * times per second to write one page each time.
+	 */
+	elog(LOG, "progress = %f, elapse = %f", progress, elapsed_time);
+	*sleep_ms = Max(100,
+					ceil((progress - elapsed_time) * CheckPointTimeout * 1000));
+
 	return true;
 }
 
