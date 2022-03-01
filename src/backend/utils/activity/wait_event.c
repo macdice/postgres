@@ -346,6 +346,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_EXECUTE_GATHER:
 			event_name = "ExecuteGather";
 			break;
+		case WAIT_EVENT_FORWARD_SYNC_REQUEST:
+			event_name = "ForwardSyncRequest";
+			break;
 		case WAIT_EVENT_HASH_BATCH_ALLOCATE:
 			event_name = "HashBatchAllocate";
 			break;
@@ -496,9 +499,6 @@ pgstat_get_wait_timeout(WaitEventTimeout w)
 			break;
 		case WAIT_EVENT_RECOVERY_RETRIEVE_RETRY_INTERVAL:
 			event_name = "RecoveryRetrieveRetryInterval";
-			break;
-		case WAIT_EVENT_REGISTER_SYNC_REQUEST:
-			event_name = "RegisterSyncRequest";
 			break;
 		case WAIT_EVENT_VACUUM_DELAY:
 			event_name = "VacuumDelay";
