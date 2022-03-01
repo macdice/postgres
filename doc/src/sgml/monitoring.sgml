@@ -1627,6 +1627,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        executing a <literal>Gather</literal> plan node.</entry>
      </row>
      <row>
+      <entry><literal>ForwardSyncRequest</literal></entry>
+      <entry>Waiting while sending synchronization requests to the
+       checkpointer, because the request queue is full.</entry>
+     </row>
+     <row>
       <entry><literal>HashBatchAllocate</literal></entry>
       <entry>Waiting for an elected Parallel Hash participant to allocate a hash
        table.</entry>
@@ -2253,11 +2258,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry><literal>RecoveryRetrieveRetryInterval</literal></entry>
       <entry>Waiting during recovery when WAL data is not available from any
        source (<filename>pg_wal</filename>, archive or stream).</entry>
-     </row>
-     <row>
-      <entry><literal>RegisterSyncRequest</literal></entry>
-      <entry>Waiting while sending synchronization requests to the
-       checkpointer, because the request queue is full.</entry>
      </row>
      <row>
       <entry><literal>VacuumDelay</literal></entry>
