@@ -2559,7 +2559,7 @@ keep_going:						/* We will come back to here until there is
 
 					/* Try to create the socket */
 					sock = socket(addr_cur->ai_family, SOCK_STREAM, 0);
-					if (!conn->stream)
+					if (sock == PGINVALID_SOCKET)
 					{
 						int			errorno = SOCK_ERRNO;
 
@@ -2710,7 +2710,8 @@ keep_going:						/* We will come back to here until there is
 
 #ifdef SO_NOSIGPIPE
 					optval = 1;
-					if (setsockopt(conn->sock, SOL_SOCKET, SO_NOSIGPIPE,
+					if (setsockopt(pg_stream_descriptor(conn->stream),
+								   SOL_SOCKET, SO_NOSIGPIPE,
 								   (char *) &optval, sizeof(optval)) == 0)
 					{
 						conn->sigpipe_so = true;

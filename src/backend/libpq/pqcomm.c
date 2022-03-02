@@ -199,7 +199,7 @@ pq_init(void)
 	 * infinite recursion.
 	 */
 #ifndef WIN32
-	if (!pg_stream_set_blocking(MyProcPort->stream, false))
+	if (pg_stream_set_blocking(MyProcPort->stream, false) != 0)
 		ereport(COMMERROR,
 				(errmsg("could not set socket to nonblocking mode: %m")));
 #endif
