@@ -891,6 +891,8 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pg_stream *stream,
 	event = &set->events[set->nevents];
 	event->pos = set->nevents++;
 	event->stream = stream;
+	if (stream)
+		event->fd = pg_stream_descriptor(stream);
 	event->events = events;
 	event->user_data = user_data;
 #ifdef WIN32
