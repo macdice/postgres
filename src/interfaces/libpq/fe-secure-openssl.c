@@ -30,6 +30,7 @@
 #include "fe-auth.h"
 #include "fe-secure-common.h"
 #include "libpq-int.h"
+#include "port/pg_stream.h"
 
 #ifdef WIN32
 #include "win32.h"
