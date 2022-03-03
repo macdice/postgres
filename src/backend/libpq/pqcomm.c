@@ -719,7 +719,7 @@ Setup_AF_UNIX(const char *sock_path)
 
 /*
  * StreamConnection -- create a new connection with client using
- *		server port.  Set port->sock to the FD of the new connection.
+ *		server port.  Set port->stream to the FD of the new connection.
  *
  * ASSUME: that this doesn't need to be non-blocking because
  *		the Postmaster uses select() to tell when the socket is ready for
@@ -1614,7 +1614,7 @@ pq_setkeepaliveswin32(Port *port, int idle, int interval)
 	ka.keepalivetime = idle * 1000;
 	ka.keepaliveinterval = interval * 1000;
 
-	if (WSAIoctl(port->sock,
+	if (WSAIoctl(pg_stream_descriptor(port->stream),
 				 SIO_KEEPALIVE_VALS,
 				 (LPVOID) &ka,
 				 sizeof(ka),
