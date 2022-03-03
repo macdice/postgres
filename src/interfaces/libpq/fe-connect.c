@@ -1995,7 +1995,7 @@ prepKeepalivesWin32(PGconn *conn)
 						 "keepalives_interval"))
 		return 0;
 
-	if (!setKeepalivesWin32(pg_stream_desciptor(conn->stream), idle, interval))
+	if (!setKeepalivesWin32(pg_stream_descriptor(conn->stream), idle, interval))
 	{
 		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("%s(%s) failed: error code %d\n"),
