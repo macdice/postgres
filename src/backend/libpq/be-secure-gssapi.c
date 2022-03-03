@@ -451,7 +451,7 @@ read_or_wait(Port *port, ssize_t len)
 		{
 			WaitLatchOrSocket(MyLatch,
 							  WL_SOCKET_READABLE | WL_EXIT_ON_PM_DEATH,
-							  port->sock, 0, WAIT_EVENT_GSS_OPEN_SERVER);
+							  port->stream, 0, WAIT_EVENT_GSS_OPEN_SERVER);
 
 			/*
 			 * If we got back zero bytes, and then waited on the socket to be
@@ -655,7 +655,7 @@ secure_open_gssapi(Port *port)
 				{
 					WaitLatchOrSocket(MyLatch,
 									  WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH,
-									  port->sock, 0, WAIT_EVENT_GSS_OPEN_SERVER);
+									  port->stream, 0, WAIT_EVENT_GSS_OPEN_SERVER);
 					continue;
 				}
 
