@@ -243,6 +243,8 @@ SysLoggerMain(int argc, char *argv[])
 	syslogPipe[1] = 0;
 #endif
 
+	syslogStream = pg_stream_open(syslogPipe[0]);
+
 	/*
 	 * Properly accept or ignore signals the postmaster might send us
 	 *
