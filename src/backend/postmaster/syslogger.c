@@ -237,13 +237,12 @@ SysLoggerMain(int argc, char *argv[])
 	if (syslogPipe[1] >= 0)
 		close(syslogPipe[1]);
 	syslogPipe[1] = -1;
+	syslogStream = pg_stream_open(syslogPipe[0]);
 #else
 	if (syslogPipe[1])
 		CloseHandle(syslogPipe[1]);
 	syslogPipe[1] = 0;
 #endif
-
-	syslogStream = pg_stream_open(syslogPipe[0]);
 
 	/*
 	 * Properly accept or ignore signals the postmaster might send us
