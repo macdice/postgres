@@ -1915,7 +1915,9 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 	}
 
 	AddUserToTokenDacl(restrictedToken);
-	r = CreateProcessAsUser(restrictedToken, NULL, cmd, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &si, processInfo);
+	r = CreateProcessAsUser(restrictedToken, NULL, cmd, NULL, NULL, TRUE,
+							CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP,
+							NULL, NULL, &si, processInfo);
 
 	Kernel32Handle = LoadLibrary("KERNEL32.DLL");
 	if (Kernel32Handle != NULL)
