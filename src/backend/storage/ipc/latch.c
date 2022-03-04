@@ -1287,18 +1287,13 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 		if (event->events & WL_SOCKET_CONNECTED)
 			flags |= FD_CONNECT;
 
-		if (*handle == WSA_INVALID_EVENT)
-		{
-			*handle = WSACreateEvent();
-			if (*handle == WSA_INVALID_EVENT)
-				elog(ERROR, "failed to create event for socket: error code %d",
-					 WSAGetLastError());
-		}
-		if (WSAEventSelect(event->fd, *handle, flags) != 0)
+		*handle = event->sock->event_handle;
+		if (event->eventsock->selected_flags != flags &&
+			WSAEventSelect(event->fd, *handle, flags) != 0)
 			elog(ERROR, "failed to set up event for socket: error code %d",
 				 WSAGetLastError());
 
-		Assert(event->fd != PGINVALID_SOCKET);
+		event->sock->selected_flags = flags;
 	}
 }
 #endif
@@ -1888,39 +1883,35 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		 cur_event < (set->events + set->nevents);
 		 cur_event++)
 	{
-		if (cur_event->reset)
+		if (cur_event->sock)
 		{
+
+			/*
+			 * If a single Socket is used in multiple WaitEventSets at the
+			 * same time, we might need to switch back to this set's selected
+			 * events.  Otherwise, this is most likely a no-op.
+			 */
 			WaitEventAdjustWin32(set, cur_event);
-			cur_event->reset = false;
-		}
 
-		/*
-		 * Windows does not guarantee to log an FD_WRITE network event
-		 * indicating that more data can be sent unless the previous send()
-		 * failed with WSAEWOULDBLOCK.  While our caller might well have made
-		 * such a call, we cannot assume that here.  Therefore, if waiting for
-		 * write-ready, force the issue by doing a dummy send().  If the dummy
-		 * send() succeeds, assume that the socket is in fact write-ready, and
-		 * return immediately.  Also, if it fails with something other than
-		 * WSAEWOULDBLOCK, return a write-ready indication to let our caller
-		 * deal with the error condition.
-		 */
-		if (cur_event->events & WL_SOCKET_WRITEABLE)
-		{
-			char		c;
-			WSABUF		buf;
-			DWORD		sent;
-			int			r;
-
-			buf.buf = &c;
-			buf.len = 0;
-
-			r = WSASend(cur_event->fd, &buf, 1, &sent, 0, NULL, NULL);
-			if (r == 0 || WSAGetLastError() != WSAEWOULDBLOCK)
+			/*
+			 * The WaitEventSet API is level-triggered.  Winsock FD_READ and
+			 * FD_WRITE are edge-triggered and reset by calling recv/send, and
+			 * FD_CLOSE is only reported once and can't be reset.  Therefore,
+			 * we'll use our own memory of recent events to continue to report
+			 * them as long as necessary.  Not that this only works correctly
+			 * if all send/recv traffic goes through
+			 * pg_socket_send()/pg_socket_recv(), which clear these flags.
+			 */
+			stick_events = 0;
+			if (cur_event->sock->received_flags & (FD_CLOSE | FD_READ))
+				sticky_events |= WL_SOCKET_READABLE;
+			if (cur_event->sock->received_flags & (FD_CLOSE | FD_WRITE))
+				sticky_events |= WL_SOCKET_WRITABLE;
+			if (cur_event->events & sticky_events)
 			{
 				occurred_events->pos = cur_event->pos;
 				occurred_events->user_data = cur_event->user_data;
-				occurred_events->events = WL_SOCKET_WRITEABLE;
+				occurred_events->events = cur_event->events & sticky_events;
 				occurred_events->fd = cur_event->fd;
 				return 1;
 			}
@@ -2017,23 +2008,17 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			/* data available in socket */
 			occurred_events->events |= WL_SOCKET_READABLE;
 
-			/*------
-			 * WaitForMultipleObjects doesn't guarantee that a read event will
-			 * be returned if the latch is set at the same time.  Even if it
-			 * did, the caller might drop that event expecting it to reoccur
-			 * on next call.  So, we must force the event to be reset if this
-			 * WaitEventSet is used again in order to avoid an indefinite
-			 * hang.  Refer https://msdn.microsoft.com/en-us/library/windows/desktop/ms741576(v=vs.85).aspx
-			 * for the behavior of socket events.
-			 *------
-			 */
-			cur_event->reset = true;
+			/* keep reporting this until the next pg_socket_recv() */
+			cur_event->sock->received_flags |= FD_READ;
 		}
 		if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
 			(resEvents.lNetworkEvents & FD_WRITE))
 		{
 			/* writeable */
 			occurred_events->events |= WL_SOCKET_WRITEABLE;
+
+			/* keep reporting this until the next pg_socket_send() */
+			cur_event->sock->received_flags |= FD_WRITE;
 		}
 		if ((cur_event->events & WL_SOCKET_CONNECTED) &&
 			(resEvents.lNetworkEvents & FD_CONNECT))
@@ -2045,6 +2030,9 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		{
 			/* EOF/error, so signal all caller-requested socket flags */
 			occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
+
+			/* keep reporting this forever */
+			cur_event->sock->received_flags |= FD_CLOSE;
 		}
 
 		if (occurred_events->events != 0)
