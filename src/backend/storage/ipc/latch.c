@@ -1887,7 +1887,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		if (cur_event->sock)
 		{
 			int			sticky_event;
-			
+
 			/*
 			 * If a single Socket is used in multiple WaitEventSets at the
 			 * same time, we might need to switch back to this set's selected
