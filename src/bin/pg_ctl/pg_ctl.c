@@ -1859,7 +1859,7 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 		if (Advapi32Handle != NULL)
 			FreeLibrary(Advapi32Handle);
 		return CreateProcess(NULL, cmd, NULL, NULL, FALSE,
-							 CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+							 CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE,
 							 NULL, NULL, &si, processInfo);
 	}
 
@@ -1919,7 +1919,7 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 	AddUserToTokenDacl(restrictedToken);
 	r = CreateProcessAsUser(restrictedToken, NULL, cmd, NULL, NULL, TRUE,
 							CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP |
-							DETACHED_PROCESS,
+							CREATE_NEW_CONSOLE,
 							NULL, NULL, &si, processInfo);
 
 	Kernel32Handle = LoadLibrary("KERNEL32.DLL");
