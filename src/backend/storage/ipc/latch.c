@@ -54,6 +54,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "port/pg_socket.h"
 #include "portability/instr_time.h"
 #include "postmaster/postmaster.h"
 #include "storage/fd.h"
@@ -1885,7 +1886,8 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	{
 		if (cur_event->sock)
 		{
-
+			int			sticky_event;
+			
 			/*
 			 * If a single Socket is used in multiple WaitEventSets at the
 			 * same time, we might need to switch back to this set's selected
