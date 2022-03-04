@@ -1858,7 +1858,7 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 		write_stderr(_("%s: WARNING: cannot create restricted tokens on this platform\n"), progname);
 		if (Advapi32Handle != NULL)
 			FreeLibrary(Advapi32Handle);
-		return CreateProcess(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, processInfo);
+		return CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP, NULL, NULL, &si, processInfo);
 	}
 
 	/* Open the current token to use as a base for the restricted one */
