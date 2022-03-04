@@ -17,7 +17,7 @@
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "port/pg_bswap.h"
-#include "port/pg_stream.h"
+#include "port/pg_socket.h"
 
 
 /*

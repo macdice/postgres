@@ -191,9 +191,6 @@ typedef struct pgNotify
 	struct pgNotify *next;		/* list link */
 } PGnotify;
 
-/* Forward declare pg_stream so we don't have to include "port/pg_stream.h". */
-struct pg_stream;
-
 /* Function types for notice-handling callbacks */
 typedef void (*PQnoticeReceiver) (void *arg, const PGresult *res);
 typedef void (*PQnoticeProcessor) (void *arg, const char *message);

@@ -1995,7 +1995,7 @@ prepKeepalivesWin32(PGconn *conn)
 						 "keepalives_interval"))
 		return 0;
 
-	if (!setKeepalivesWin32(pg_stream_descriptor(conn->stream), idle, interval))
+	if (!setKeepalivesWin32(pg_socket_descriptor(conn->sock), idle, interval))
 	{
 		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("%s(%s) failed: error code %d\n"),
@@ -2710,7 +2710,7 @@ keep_going:						/* We will come back to here until there is
 
 #ifdef SO_NOSIGPIPE
 					optval = 1;
-					if (setsockopt(pg_stream_descriptor(conn->stream),
+					if (setsockopt(pg_socket_descriptor(conn->sock),
 								   SOL_SOCKET, SO_NOSIGPIPE,
 								   (char *) &optval, sizeof(optval)) == 0)
 					{
