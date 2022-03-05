@@ -1859,7 +1859,7 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 		if (Advapi32Handle != NULL)
 			FreeLibrary(Advapi32Handle);
 		return CreateProcess(NULL, cmd, NULL, NULL, FALSE,
-							 CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE,
+							 CREATE_NEW_PROCESS_GROUP,
 							 NULL, NULL, &si, processInfo);
 	}
 
@@ -1918,8 +1918,7 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 
 	AddUserToTokenDacl(restrictedToken);
 	r = CreateProcessAsUser(restrictedToken, NULL, cmd, NULL, NULL, TRUE,
-							CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP |
-							CREATE_NEW_CONSOLE,
+							CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP,
 							NULL, NULL, &si, processInfo);
 
 	Kernel32Handle = LoadLibrary("KERNEL32.DLL");
@@ -1977,7 +1976,7 @@ CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_ser
 					ZeroMemory(&uiRestrictions, sizeof(uiRestrictions));
 					ZeroMemory(&securityLimit, sizeof(securityLimit));
 
-					basicLimit.LimitFlags = JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_PRIORITY_CLASS;
+					basicLimit.LimitFlags = JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_PRIORITY_CLASS | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
 					basicLimit.PriorityClass = NORMAL_PRIORITY_CLASS;
 					_SetInformationJobObject(job, JobObjectBasicLimitInformation, &basicLimit, sizeof(basicLimit));
 
