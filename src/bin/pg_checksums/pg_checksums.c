@@ -404,7 +404,7 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 #ifndef WIN32
 		else if (S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
 #else
-		else if (S_ISDIR(st.st_mode) || pgwin32_is_junction(fn))
+		else if (S_ISDIR(st.st_mode) || pgwin32_is_junction(fn, false, 1))
 #endif
 		{
 			/*

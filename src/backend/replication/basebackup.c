@@ -1352,7 +1352,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 #ifndef WIN32
 			S_ISLNK(statbuf.st_mode)
 #else
-			pgwin32_is_junction(pathbuf)
+			pgwin32_is_junction(pathbuf, true, ERROR)
 #endif
 			)
 		{
@@ -1840,7 +1840,7 @@ convert_link_to_directory(const char *pathbuf, struct stat *statbuf)
 #ifndef WIN32
 	if (S_ISLNK(statbuf->st_mode))
 #else
-	if (pgwin32_is_junction(pathbuf))
+	if (pgwin32_is_junction(pathbuf, true, ERROR))
 #endif
 		statbuf->st_mode = S_IFDIR | pg_dir_create_mode;
 }

@@ -337,19 +337,49 @@ pgreadlink(const char *path, char *buf, size_t size)
 }
 
 /*
- * Assumes the file exists, so will return false if it doesn't
- * (since a nonexistent file is not a junction)
+ * In frontend code, elevel must be 0 or 1, where 1 means write an error and
+ * exit(1); in backend code it should be 0 or a level from elog.h, to pass to
+ * ereport().  If elevel is 0, or missing_ok is set and the path doesn't exist,
+ * no logging is done.  The caller should check errno on false return, unless
+ * elevel is set to a level that doesn't return on error.
  */
 bool
-pgwin32_is_junction(const char *path)
+pgwin32_is_junction(const char *path, bool missing_ok, int elevel)
 {
 	DWORD		attr = GetFileAttributes(path);
+
+#ifdef FRONTEND
+	/*
+	 * We can't use ereport, and libport can't use the logging from libcommon
+	 * due to library order, so the options for logging are limited.
+	 */
+	Assert(elevel == 0 || elevel == 1);
+#endif
 
 	if (attr == INVALID_FILE_ATTRIBUTES)
 	{
 		_dosmaperr(GetLastError());
+
+		if (errno == ENOENT && missing_ok)
+			return false;
+
+		if (elevel != 0)
+		{
+#ifndef FRONTEND
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not get attributes for file \"%s\": %m",
+							path)));
+#else
+			int save_errno = errno;
+			fprintf(stderr, _("could not get attributes for file \"%s\": %s\n"),
+					path, strerror(save_errno));
+			exit(1);
+#endif
+		}
 		return false;
 	}
+	errno = 0;
 	return ((attr & FILE_ATTRIBUTE_REPARSE_POINT) == FILE_ATTRIBUTE_REPARSE_POINT);
 }
 #endif							/* defined(WIN32) && !defined(__CYGWIN__) */

@@ -434,7 +434,7 @@ recurse_dir(const char *datadir, const char *parentpath,
 #ifndef WIN32
 		else if (S_ISLNK(fst.st_mode))
 #else
-		else if (pgwin32_is_junction(fullpath))
+		else if (pgwin32_is_junction(fullpath, false, 1))
 #endif
 		{
 #if defined(HAVE_READLINK) || defined(WIN32)

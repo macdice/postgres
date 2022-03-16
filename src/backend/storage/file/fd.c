@@ -3453,7 +3453,7 @@ SyncDataDirectory(void)
 			xlog_is_symlink = true;
 	}
 #else
-	if (pgwin32_is_junction("pg_wal"))
+	if (pgwin32_is_junction("pg_wal", false, LOG))
 		xlog_is_symlink = true;
 #endif
 

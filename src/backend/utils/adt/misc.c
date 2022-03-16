@@ -317,7 +317,7 @@ pg_tablespace_location(PG_FUNCTION_ARGS)
 	 * found, a relative path to the data directory is returned.
 	 */
 #ifdef WIN32
-	if (!pgwin32_is_junction(sourcepath))
+	if (!pgwin32_is_junction(sourcepath, false, ERROR))
 		PG_RETURN_TEXT_P(cstring_to_text(sourcepath));
 #else
 	if (lstat(sourcepath, &st) < 0)

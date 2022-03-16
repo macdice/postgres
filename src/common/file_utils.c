@@ -88,8 +88,11 @@ fsync_pgdata(const char *pg_data,
 		else if (S_ISLNK(st.st_mode))
 			xlog_is_symlink = true;
 	}
+#elif defined(FRONTEND)
+	if (pgwin32_is_junction(pg_wal, false, 1))
+		xlog_is_symlink = true;
 #else
-	if (pgwin32_is_junction(pg_wal))
+	if (pgwin32_is_junction(pg_wal, false, ERROR))
 		xlog_is_symlink = true;
 #endif
 

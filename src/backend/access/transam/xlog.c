@@ -8314,7 +8314,7 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 			 * directories directly under pg_tblspc, which would fail below.
 			 */
 #ifdef WIN32
-			if (!pgwin32_is_junction(fullpath))
+			if (!pgwin32_is_junction(fullpath, false, ERROR))
 				continue;
 #else
 			if (get_dirent_type(fullpath, de, false, ERROR) != PGFILETYPE_LNK)
