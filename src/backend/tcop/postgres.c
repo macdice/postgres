@@ -172,6 +172,7 @@ static bool EchoQuery = false;	/* -E switch */
 static bool UseSemiNewlineNewline = false;	/* -j switch */
 
 /* whether or not, and why, we were canceled by conflict with recovery */
+volatile sig_atomic_t RecoveryConflictInterruptPending[NUM_PROCSIGNALS];
 static bool RecoveryConflictPending = false;
 static bool RecoveryConflictRetryable = true;
 static ProcSignalReason RecoveryConflictReason;
@@ -2993,22 +2994,28 @@ FloatExceptionHandler(SIGNAL_ARGS)
 }
 
 /*
- * RecoveryConflictInterrupt: out-of-line portion of recovery conflict
- * handling following receipt of SIGUSR1. Designed to be similar to die()
- * and StatementCancelHandler(). Called only by a normal user backend
- * that begins a transaction during recovery.
+ * Tell the next CHECK_FOR_INTERRUPTS() to check for a particular type of
+ * recovery conflict.  Runs in a SIGUSR1 handler.
  */
 void
-RecoveryConflictInterrupt(ProcSignalReason reason)
+HandleRecoveryConflictInterrupt(ProcSignalReason reason)
 {
-	int			save_errno = errno;
+	RecoveryConflictInterruptPending[reason] = true;
+	InterruptPending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
 
+/*
+ * Check one recovery conflict reason.
+ */
+static void
+ProcessRecoveryConflictInterrupt(ProcSignalReason reason)
+{
 	/*
 	 * Don't joggle the elbow of proc_exit
 	 */
 	if (!proc_exit_inprogress)
 	{
-		RecoveryConflictReason = reason;
 		switch (reason)
 		{
 			case PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK:
@@ -3084,6 +3091,7 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 					if (IsAbortedTransactionBlockState())
 						return;
 
+					RecoveryConflictReason = reason;
 					RecoveryConflictPending = true;
 					QueryCancelPending = true;
 					InterruptPending = true;
@@ -3094,6 +3102,7 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 				/* FALLTHROUGH */
 
 			case PROCSIG_RECOVERY_CONFLICT_DATABASE:
+				RecoveryConflictReason = reason;
 				RecoveryConflictPending = true;
 				ProcDiePending = true;
 				InterruptPending = true;
@@ -3115,15 +3124,6 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 		if (reason == PROCSIG_RECOVERY_CONFLICT_DATABASE)
 			RecoveryConflictRetryable = false;
 	}
-
-	/*
-	 * Set the process latch. This function essentially emulates signal
-	 * handlers like die() and StatementCancelHandler() and it seems prudent
-	 * to behave similarly as they do.
-	 */
-	SetLatch(MyLatch);
-
-	errno = save_errno;
 }
 
 /*
@@ -3146,6 +3146,23 @@ ProcessInterrupts(void)
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
 	InterruptPending = false;
+
+	/*
+	 * Have we been asked to check for a recovery conflict?
+	 */
+	for (int i = 0; i < NUM_PROCSIGNALS; ++i)
+	{
+		if (RecoveryConflictInterruptPending[i])
+		{
+			/*
+			 * We've only been asked to check for a recovery conflict.
+			 * Processing the interrupt might result in RecoveryConflictPending
+			 * being set, which will be handled further down.
+			 */
+			RecoveryConflictInterruptPending[i] = false;
+			ProcessRecoveryConflictInterrupt(i);
+		}
+	}
 
 	if (ProcDiePending)
 	{
