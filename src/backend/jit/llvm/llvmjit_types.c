@@ -48,7 +48,12 @@
 PGFunction	TypePGFunction;
 size_t		TypeSizeT;
 bool		TypeStorageBool;
-ExprStateEvalFunc TypeExprStateEvalFunc;
+
+Datum TypeExprStateEvalFunc(struct ExprState *expression,
+							struct ExprContext *econtext,
+							bool *isNull);
+_Static_assert(__builtin_types_compatible_p(typeof(&TypeExprStateEvalFunc), ExprStateEvalFunc), "mismatch");
+
 ExecEvalSubroutine TypeExecEvalSubroutine;
 ExecEvalBoolSubroutine TypeExecEvalBoolSubroutine;
 
@@ -66,6 +71,8 @@ TupleTableSlot StructTupleTableSlot;
 HeapTupleTableSlot StructHeapTupleTableSlot;
 MinimalTupleTableSlot StructMinimalTupleTableSlot;
 TupleDescData StructTupleDescData;
+PlanState StructPlanState;
+MinimalTupleData StructMinimalTupleData;
 
 
 /*
@@ -138,4 +145,5 @@ void	   *referenced_functions[] =
 	slot_getsomeattrs_int,
 	strlen,
 	varsize_any,
+	ExecInterpExprStillValid,
 };

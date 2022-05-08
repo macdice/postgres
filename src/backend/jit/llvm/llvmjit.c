@@ -85,6 +85,7 @@ LLVMTypeRef StructExprState;
 LLVMTypeRef StructAggState;
 LLVMTypeRef StructAggStatePerGroupData;
 LLVMTypeRef StructAggStatePerTransData;
+LLVMTypeRef StructPlanState;
 
 LLVMValueRef AttributeTemplate;
 
@@ -382,11 +383,15 @@ llvm_pg_var_type(const char *varname)
 	if (!v_srcvar)
 		elog(ERROR, "variable %s not in llvmjit_types.c", varname);
 
+#if 0
 	/* look at the contained type */
 	typ = LLVMTypeOf(v_srcvar);
 	Assert(typ != NULL && LLVMGetTypeKind(typ) == LLVMPointerTypeKind);
 	typ = LLVMGetElementType(typ);
 	Assert(typ != NULL);
+#else
+	typ = LLVMGlobalGetValueType(v_srcvar);
+#endif
 
 	return typ;
 }
@@ -398,12 +403,39 @@ llvm_pg_var_type(const char *varname)
 LLVMTypeRef
 llvm_pg_var_func_type(const char *varname)
 {
+	LLVMValueRef v_srcvar;
+	LLVMTypeRef typ;
+
+#if 0
 	LLVMTypeRef typ = llvm_pg_var_type(varname);
 
 	/* look at the contained type */
 	Assert(LLVMGetTypeKind(typ) == LLVMPointerTypeKind);
 	typ = LLVMGetElementType(typ);
 	Assert(typ != NULL && LLVMGetTypeKind(typ) == LLVMFunctionTypeKind);
+#elif 0
+	v_srcvar = LLVMGetNamedGlobal(llvm_types_module, varname);
+	if (!v_srcvar)
+		elog(ERROR, "variable %s not in llvmjit_types.c", varname);
+
+	typ = LLVMGlobalGetValueType(v_srcvar);
+	LLVMDumpType(typ);
+	fprintf(stderr, "\n");
+	typ = LLVMGetFunctionType(typ);
+	LLVMDumpType(typ);
+	fprintf(stderr, "\n");
+#endif
+
+	v_srcvar = LLVMGetNamedFunction(llvm_types_module, varname);
+	if (!v_srcvar)
+		elog(ERROR, "function %s not in llvmjit_types.c", varname);
+
+	LLVMDumpValue(v_srcvar);
+	fprintf(stderr, "\n");
+
+	typ = LLVMGetFunctionType(v_srcvar);
+	LLVMDumpType(typ);
+	fprintf(stderr, "\n");
 
 	return typ;
 }
@@ -433,7 +465,8 @@ llvm_pg_func(LLVMModuleRef mod, const char *funcname)
 
 	v_fn = LLVMAddFunction(mod,
 						   funcname,
-						   LLVMGetElementType(LLVMTypeOf(v_srcfn)));
+						   LLVMGetFunctionType(v_srcfn));
+	//LLVMGetElementType(LLVMTypeOf(v_srcfn)));
 	llvm_copy_attributes(v_srcfn, v_fn);
 
 	return v_fn;
@@ -529,7 +562,7 @@ llvm_function_reference(LLVMJitContext *context,
 							fcinfo->flinfo->fn_oid);
 		v_fn = LLVMGetNamedGlobal(mod, funcname);
 		if (v_fn != 0)
-			return LLVMBuildLoad(builder, v_fn, "");
+			return LLVMBuildLoad2(builder, TypePGFunction, v_fn, "");
 
 		v_fn_addr = l_ptr_const(fcinfo->flinfo->fn_addr, TypePGFunction);
 
@@ -539,7 +572,7 @@ llvm_function_reference(LLVMJitContext *context,
 		LLVMSetLinkage(v_fn, LLVMPrivateLinkage);
 		LLVMSetUnnamedAddr(v_fn, true);
 
-		return LLVMBuildLoad(builder, v_fn, "");
+		return LLVMBuildLoad2(builder, TypePGFunction, v_fn, "");
 	}
 
 	/* check if function already has been added */
@@ -547,7 +580,8 @@ llvm_function_reference(LLVMJitContext *context,
 	if (v_fn != 0)
 		return v_fn;
 
-	v_fn = LLVMAddFunction(mod, funcname, LLVMGetElementType(TypePGFunction));
+	LLVMDumpValue(v_fn);
+	v_fn = LLVMAddFunction(mod, funcname, LLVMGetFunctionType(v_fn));
 
 	return v_fn;
 }
@@ -956,6 +990,7 @@ load_return_type(LLVMModuleRef mod, const char *name)
 	if (!value)
 		elog(ERROR, "function %s is unknown", name);
 
+#if 0
 	/* get type of function pointer */
 	typ = LLVMTypeOf(value);
 	Assert(typ != NULL);
@@ -965,6 +1000,10 @@ load_return_type(LLVMModuleRef mod, const char *name)
 	/* and look at return type */
 	typ = LLVMGetReturnType(typ);
 	Assert(typ != NULL);
+#else
+	//typ = LLVMTypeOf(value);
+	typ = LLVMGetFunctionReturnType(value);		/* in llvmjit_wrap.cpp */
+#endif
 
 	return typ;
 }
@@ -1023,6 +1062,8 @@ llvm_create_types(void)
 	StructAggState = llvm_pg_var_type("StructAggState");
 	StructAggStatePerGroupData = llvm_pg_var_type("StructAggStatePerGroupData");
 	StructAggStatePerTransData = llvm_pg_var_type("StructAggStatePerTransData");
+	StructPlanState = llvm_pg_var_type("StructPlanState");
+	StructMinimalTupleData = llvm_pg_var_type("StructMinimalTupleData");
 
 	AttributeTemplate = LLVMGetNamedFunction(llvm_types_module, "AttributeTemplate");
 }

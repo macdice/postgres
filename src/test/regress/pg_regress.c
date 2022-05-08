@@ -2361,6 +2361,7 @@ regression_main(int argc, char *argv[],
 		snprintf(buf, sizeof(buf),
 				 "\"%s%spostgres\" -D \"%s/data\" -F%s "
 				 "-c \"listen_addresses=%s\" -k \"%s\" "
+				 "-c restart_after_crash=off "
 				 "> \"%s/log/postmaster.log\" 2>&1",
 				 bindir ? bindir : "",
 				 bindir ? "/" : "",

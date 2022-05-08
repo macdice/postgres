@@ -67,6 +67,7 @@ extern PGDLLIMPORT LLVMTypeRef TypeStorageBool;
 extern PGDLLIMPORT LLVMTypeRef StructNullableDatum;
 extern PGDLLIMPORT LLVMTypeRef StructTupleDescData;
 extern PGDLLIMPORT LLVMTypeRef StructHeapTupleData;
+extern PGDLLIMPORT LLVMTypeRef StructMinimalTupleData;
 extern PGDLLIMPORT LLVMTypeRef StructTupleTableSlot;
 extern PGDLLIMPORT LLVMTypeRef StructHeapTupleTableSlot;
 extern PGDLLIMPORT LLVMTypeRef StructMinimalTupleTableSlot;
@@ -78,7 +79,8 @@ extern PGDLLIMPORT LLVMTypeRef StructExprState;
 extern PGDLLIMPORT LLVMTypeRef StructAggState;
 extern PGDLLIMPORT LLVMTypeRef StructAggStatePerTransData;
 extern PGDLLIMPORT LLVMTypeRef StructAggStatePerGroupData;
-
+extern PGDLLIMPORT LLVMTypeRef StructPlanState;
+	
 extern PGDLLIMPORT LLVMValueRef AttributeTemplate;
 
 
@@ -133,6 +135,8 @@ extern char *LLVMGetHostCPUFeatures(void);
 #endif
 
 extern unsigned LLVMGetAttributeCountAtIndexPG(LLVMValueRef F, uint32 Idx);
+extern LLVMTypeRef LLVMGetFunctionReturnType(LLVMValueRef r);
+extern LLVMTypeRef LLVMGetFunctionType(LLVMValueRef r);
 
 #ifdef __cplusplus
 } /* extern "C" */
