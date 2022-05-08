@@ -541,6 +541,10 @@ ProcessProcSignalBarrier(void)
 				type = (ProcSignalBarrierType) pg_rightmost_one_pos32(flags);
 				switch (type)
 				{
+					case PROCSIGNAL_BARRIER_TEST:
+						processed = true;		/* dummy test barrier */
+						break;
+
 					case PROCSIGNAL_BARRIER_SMGRRELEASE:
 						processed = ProcessBarrierSmgrRelease();
 						break;
@@ -678,4 +682,20 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	SetLatch(MyLatch);
 
 	errno = save_errno;
+}
+
+/*
+ * A user-callable test of ProcSignalBarrier speed, that does nothing.
+ */
+Datum
+pg_test_procsignal_barrier(PG_FUNCTION_ARGS)
+{
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be superuser")));
+
+	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_TEST));
+
+	PG_RETURN_VOID();
 }
