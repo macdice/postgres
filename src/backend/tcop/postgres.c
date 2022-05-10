@@ -171,10 +171,9 @@ static const char *userDoption = NULL;	/* -D switch */
 static bool EchoQuery = false;	/* -E switch */
 static bool UseSemiNewlineNewline = false;	/* -j switch */
 
-/* whether or not, and why, we were canceled by conflict with recovery */
-static bool RecoveryConflictPending = false;
-static bool RecoveryConflictRetryable = true;
-static ProcSignalReason RecoveryConflictReason;
+/* whether or not, and why, we were cancelled by conflict with recovery */
+static volatile sig_atomic_t RecoveryConflictPending = false;
+static volatile sig_atomic_t RecoveryConflictPendingReasons[NUM_PROCSIGNALS];
 
 /* reused buffer to pass to SendRowDescriptionMessage() */
 static MemoryContext row_description_context = NULL;
@@ -193,7 +192,6 @@ static bool check_log_statement(List *stmt_list);
 static int	errdetail_execute(List *raw_parsetree_list);
 static int	errdetail_params(ParamListInfo params);
 static int	errdetail_abort(void);
-static int	errdetail_recovery_conflict(void);
 static void bind_param_error_callback(void *arg);
 static void start_xact_command(void);
 static void finish_xact_command(void);
@@ -2465,9 +2463,9 @@ errdetail_abort(void)
  * Add an errdetail() line showing conflict source.
  */
 static int
-errdetail_recovery_conflict(void)
+errdetail_recovery_conflict(ProcSignalReason reason)
 {
-	switch (RecoveryConflictReason)
+	switch (reason)
 	{
 		case PROCSIG_RECOVERY_CONFLICT_BUFFERPIN:
 			errdetail("User was holding shared buffer pin for too long.");
@@ -2992,22 +2990,46 @@ FloatExceptionHandler(SIGNAL_ARGS)
 }
 
 /*
- * RecoveryConflictInterrupt: out-of-line portion of recovery conflict
- * handling following receipt of SIGUSR1. Designed to be similar to die()
- * and StatementCancelHandler(). Called only by a normal user backend
- * that begins a transaction during recovery.
+ * Tell the next CHECK_FOR_INTERRUPTS() to check for a particular type of
+ * recovery conflict.  Runs in a SIGUSR1 handler.
  */
 void
-RecoveryConflictInterrupt(ProcSignalReason reason)
+HandleRecoveryConflictInterrupt(ProcSignalReason reason)
 {
-	int			save_errno = errno;
+	RecoveryConflictPendingReasons[reason] = true;
+	RecoveryConflictPending = true;
+	InterruptPending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
+
+/*
+ * Check individual recovery conflict reasons.  Called when
+ * RecoveryConflictPending is set.
+ */
+static void
+ProcessRecoveryConflictInterrupts(void)
+{
+	ProcSignalReason reason;
 
 	/*
-	 * Don't joggle the elbow of proc_exit
+	 * We don't need to worry about joggling the elbow of proc_exit, because
+	 * proc_exit_prepare() holds interrupts, so ProcessInterrupts() won't call
+	 * us.
 	 */
-	if (!proc_exit_inprogress)
+	Assert(!proc_exit_inprogress);
+	Assert(InterruptHoldoffCount == 0);
+	Assert(RecoveryConflictPending);
+
+	RecoveryConflictPending = false;
+
+	for (reason = PROCSIG_RECOVERY_CONFLICT_FIRST;
+		 reason <= PROCSIG_RECOVERY_CONFLICT_LAST;
+		 reason++)
 	{
-		RecoveryConflictReason = reason;
+		if (!RecoveryConflictPendingReasons[reason])
+			continue;
+		RecoveryConflictPendingReasons[reason] = false;
+
 		switch (reason)
 		{
 			case PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK:
@@ -3016,7 +3038,7 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 				 * If we aren't waiting for a lock we can never deadlock.
 				 */
 				if (!IsWaitingForLock())
-					return;
+					continue;
 
 				/* Intentional fall through to check wait for pin */
 				/* FALLTHROUGH */
@@ -3039,7 +3061,7 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 					if (reason == PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK &&
 						GetStartupBufferPinWaitBufId() < 0)
 						CheckDeadLockAlert();
-					return;
+					continue;
 				}
 
 				MyProc->recoveryConflictPending = true;
@@ -3055,7 +3077,7 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 				 * If we aren't in a transaction any longer then ignore.
 				 */
 				if (!IsTransactionOrTransactionBlock())
-					return;
+					continue;
 
 				/*
 				 * If we can abort just the current subtransaction then we are
@@ -3081,11 +3103,47 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 					 * subtransactions, which must cause FATAL, currently.
 					 */
 					if (IsAbortedTransactionBlockState())
-						return;
+						continue;
 
-					RecoveryConflictPending = true;
-					QueryCancelPending = true;
-					InterruptPending = true;
+					/*
+					 * If a recovery conflict happens while we are waiting for
+					 * input from the client, the client is presumably just
+					 * sitting idle in a transaction, preventing recovery from
+					 * making progress.  Terminate the connection to dislodge
+					 * it.
+					 */
+					if (DoingCommandRead)
+					{
+						LockErrorCleanup();
+						pgstat_report_recovery_conflict(reason);
+						ereport(FATAL,
+								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+								 errmsg("terminating connection due to conflict with recovery"),
+								 errdetail_recovery_conflict(reason),
+								 errhint("In a moment you should be able to reconnect to the"
+										 " database and repeat your command.")));
+					}
+
+					/* Avoid losing sync in the FE/BE protocol. */
+					if (QueryCancelHoldoffCount != 0)
+					{
+						/*
+						 * Re-arm and defer this interrupt until later.  See
+						 * similar code in ProcessInterrupts().
+						 */
+						RecoveryConflictPendingReasons[reason] = true;
+						RecoveryConflictPending = true;
+						InterruptPending = true;
+						continue;
+					}
+
+					/* We can use ERROR, because this conflict is retryable. */
+					LockErrorCleanup();
+					pgstat_report_recovery_conflict(reason);
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("canceling statement due to conflict with recovery"),
+							 errdetail_recovery_conflict(reason)));
 					break;
 				}
 
@@ -3093,36 +3151,24 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 				/* FALLTHROUGH */
 
 			case PROCSIG_RECOVERY_CONFLICT_DATABASE:
-				RecoveryConflictPending = true;
-				ProcDiePending = true;
-				InterruptPending = true;
+				pgstat_report_recovery_conflict(reason);
+				if (reason == PROCSIG_RECOVERY_CONFLICT_DATABASE)
+					ereport(FATAL,
+							(errcode(ERRCODE_DATABASE_DROPPED),
+							 errmsg("terminating connection due to conflict with recovery"),
+							 errdetail_recovery_conflict(reason)));
+				else
+					ereport(FATAL,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("terminating connection due to conflict with recovery"),
+							 errdetail_recovery_conflict(reason)));
 				break;
 
 			default:
 				elog(FATAL, "unrecognized conflict mode: %d",
 					 (int) reason);
 		}
-
-		Assert(RecoveryConflictPending && (QueryCancelPending || ProcDiePending));
-
-		/*
-		 * All conflicts apart from database cause dynamic errors where the
-		 * command or transaction can be retried at a later point with some
-		 * potential for success. No need to reset this, since non-retryable
-		 * conflict errors are currently FATAL.
-		 */
-		if (reason == PROCSIG_RECOVERY_CONFLICT_DATABASE)
-			RecoveryConflictRetryable = false;
 	}
-
-	/*
-	 * Set the process latch. This function essentially emulates signal
-	 * handlers like die() and StatementCancelHandler() and it seems prudent
-	 * to behave similarly as they do.
-	 */
-	SetLatch(MyLatch);
-
-	errno = save_errno;
 }
 
 /*
@@ -3145,6 +3191,9 @@ ProcessInterrupts(void)
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
 	InterruptPending = false;
+
+	if (RecoveryConflictPending)
+		ProcessRecoveryConflictInterrupts();
 
 	if (ProcDiePending)
 	{
@@ -3176,24 +3225,6 @@ ProcessInterrupts(void)
 			 * Use exit status 1 so the background worker is restarted.
 			 */
 			proc_exit(1);
-		}
-		else if (RecoveryConflictPending && RecoveryConflictRetryable)
-		{
-			pgstat_report_recovery_conflict(RecoveryConflictReason);
-			ereport(FATAL,
-					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-					 errmsg("terminating connection due to conflict with recovery"),
-					 errdetail_recovery_conflict()));
-		}
-		else if (RecoveryConflictPending)
-		{
-			/* Currently there is only one non-retryable recovery conflict */
-			Assert(RecoveryConflictReason == PROCSIG_RECOVERY_CONFLICT_DATABASE);
-			pgstat_report_recovery_conflict(RecoveryConflictReason);
-			ereport(FATAL,
-					(errcode(ERRCODE_DATABASE_DROPPED),
-					 errmsg("terminating connection due to conflict with recovery"),
-					 errdetail_recovery_conflict()));
 		}
 		else if (IsBackgroundWorker)
 			ereport(FATAL,
@@ -3238,30 +3269,12 @@ ProcessInterrupts(void)
 	}
 
 	/*
-	 * If a recovery conflict happens while we are waiting for input from the
-	 * client, the client is presumably just sitting idle in a transaction,
-	 * preventing recovery from making progress.  Terminate the connection to
-	 * dislodge it.
-	 */
-	if (RecoveryConflictPending && DoingCommandRead)
-	{
-		QueryCancelPending = false; /* this trumps QueryCancel */
-		RecoveryConflictPending = false;
-		LockErrorCleanup();
-		pgstat_report_recovery_conflict(RecoveryConflictReason);
-		ereport(FATAL,
-				(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-				 errmsg("terminating connection due to conflict with recovery"),
-				 errdetail_recovery_conflict(),
-				 errhint("In a moment you should be able to reconnect to the"
-						 " database and repeat your command.")));
-	}
-
-	/*
 	 * Don't allow query cancel interrupts while reading input from the
 	 * client, because we might lose sync in the FE/BE protocol.  (Die
 	 * interrupts are OK, because we won't read any further messages from the
 	 * client in that case.)
+	 *
+	 * See similar logic in ProcessRecoveryConflictInterrupts().
 	 */
 	if (QueryCancelPending && QueryCancelHoldoffCount != 0)
 	{
@@ -3319,16 +3332,6 @@ ProcessInterrupts(void)
 			ereport(ERROR,
 					(errcode(ERRCODE_QUERY_CANCELED),
 					 errmsg("canceling autovacuum task")));
-		}
-		if (RecoveryConflictPending)
-		{
-			RecoveryConflictPending = false;
-			LockErrorCleanup();
-			pgstat_report_recovery_conflict(RecoveryConflictReason);
-			ereport(ERROR,
-					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-					 errmsg("canceling statement due to conflict with recovery"),
-					 errdetail_recovery_conflict()));
 		}
 
 		/*
