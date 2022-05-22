@@ -128,6 +128,8 @@ typedef struct
 
 	/* Prefetching workspace. */
 	Buffer		prefetch_buffer;
+	bool		prefetch_buffer_pinned;
+	bool		prefetch_get_next;
 
 	/* copy of the fork_flags field from the XLogRecordBlockHeader */
 	uint8		flags;
@@ -438,6 +440,7 @@ extern void XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 extern bool XLogRecGetBlockTagExtended(XLogReaderState *record, uint8 block_id,
 									   RelFileLocator *rlocator, ForkNumber *forknum,
 									   BlockNumber *blknum,
-									   Buffer *prefetch_buffer);
+									   Buffer *prefetch_buffer,
+									   bool *prefetch_buffer_pinned);
 
 #endif							/* XLOGREADER_H */

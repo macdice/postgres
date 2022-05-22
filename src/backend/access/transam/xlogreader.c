@@ -1748,6 +1748,8 @@ DecodeXLogRecord(XLogReaderState *state,
 			blk->has_data = ((fork_flags & BKPBLOCK_HAS_DATA) != 0);
 
 			blk->prefetch_buffer = InvalidBuffer;
+			blk->prefetch_buffer_pinned = false;
+			blk->prefetch_get_next = false;
 
 			COPY_HEADER_FIELD(&blk->data_len, sizeof(uint16));
 			/* cross-check that the HAS_DATA flag is set iff data_length > 0 */
@@ -1957,7 +1959,7 @@ XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 				   BlockNumber *blknum)
 {
 	if (!XLogRecGetBlockTagExtended(record, block_id, rlocator, forknum,
-									blknum, NULL))
+									blknum, NULL, NULL))
 	{
 #ifndef FRONTEND
 		elog(ERROR, "could not locate backup block with ID %d in WAL record",
@@ -1976,12 +1978,17 @@ XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
  * If the WAL record contains a block reference with the given ID, *rlocator,
  * *forknum, *blknum and *prefetch_buffer are filled in (if not NULL), and
  * returns true.  Otherwise returns false.
+ *
+ * If prefetch_buffer_pinned is not NULL, it is also filled in.  If the value
+ * is true, the buffer identified by prefetch_buffer has been pinned already,
+ * and ownership of the pin is transferred to the caller.
  */
 bool
 XLogRecGetBlockTagExtended(XLogReaderState *record, uint8 block_id,
 						   RelFileLocator *rlocator, ForkNumber *forknum,
 						   BlockNumber *blknum,
-						   Buffer *prefetch_buffer)
+						   Buffer *prefetch_buffer,
+						   bool *prefetch_buffer_pinned)
 {
 	DecodedBkpBlock *bkpb;
 
@@ -1997,6 +2004,11 @@ XLogRecGetBlockTagExtended(XLogReaderState *record, uint8 block_id,
 		*blknum = bkpb->blkno;
 	if (prefetch_buffer)
 		*prefetch_buffer = bkpb->prefetch_buffer;
+	if (prefetch_buffer_pinned)
+	{
+		*prefetch_buffer_pinned = bkpb->prefetch_buffer_pinned;
+		bkpb->prefetch_buffer_pinned = false;
+	}
 	return true;
 }
 

@@ -267,7 +267,7 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 
 	XLogRecGetBlockTag(record, 0, NULL, NULL, &origpagenumber);
 	XLogRecGetBlockTag(record, 1, NULL, NULL, &rightpagenumber);
-	if (!XLogRecGetBlockTagExtended(record, 2, NULL, NULL, &spagenumber, NULL))
+	if (!XLogRecGetBlockTagExtended(record, 2, NULL, NULL, &spagenumber, NULL, NULL))
 		spagenumber = P_NONE;
 
 	/*
