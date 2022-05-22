@@ -5073,7 +5073,11 @@ LockBufferForCleanup(Buffer buffer)
 	Assert(BufferIsPinned(buffer));
 	Assert(PinCountWaitBuf == NULL);
 
-	CheckBufferIsPinnedOnce(buffer);
+#if 0
+	/* Due to prefetching, recovery might hold more than one local pin. */
+	if (!InRecovery)
+		BufferCheckOneLocalPin(buffer);
+#endif
 
 	/* Nobody else to wait for */
 	if (BufferIsLocal(buffer))

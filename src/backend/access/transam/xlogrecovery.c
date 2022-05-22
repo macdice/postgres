@@ -1568,8 +1568,8 @@ ShutdownWalRecovery(void)
 		close(readFile);
 		readFile = -1;
 	}
-	XLogReaderFree(xlogreader);
 	XLogPrefetcherFree(xlogprefetcher);
+	XLogReaderFree(xlogreader);
 
 	if (ArchiveRecoveryRequested)
 	{
@@ -2448,8 +2448,7 @@ verifyBackupPageConsistency(XLogReaderState *record)
 		 * temporary page.
 		 */
 		buf = XLogReadBufferExtended(rlocator, forknum, blkno,
-									 RBM_NORMAL_NO_LOG,
-									 InvalidBuffer);
+									 RBM_NORMAL_NO_LOG);
 		if (!BufferIsValid(buf))
 			continue;
 
