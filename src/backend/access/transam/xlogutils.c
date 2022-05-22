@@ -384,13 +384,31 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	if (!willinit && zeromode)
 		elog(PANIC, "block to be initialized in redo routine must be marked with WILL_INIT flag in the WAL record");
 
+	/* Has xlogprefetcher.c already pinned this buffer for us? */
+	if (BufferIsValid(prefetch_buffer))
+	{
+		Assert(!BufferIsInvalid(prefetch_buffer));
+		Assert(!XLogRecHasBlockImage(record, block_id));
+		Assert(mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK);
+
+		*buf = prefetch_buffer;
+
+		if (get_cleanup_lock)
+			LockBufferForCleanup(*buf);
+		else
+			LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
+		if (lsn <= PageGetLSN(BufferGetPage(*buf)))
+			return BLK_DONE;
+		else
+			return BLK_NEEDS_REDO;
+	}
+
 	/* If it has a full-page image and it should be restored, do it. */
 	if (XLogRecBlockImageApply(record, block_id))
 	{
 		Assert(XLogRecHasBlockImage(record, block_id));
 		*buf = XLogReadBufferExtended(rlocator, forknum, blkno,
-									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK,
-									  prefetch_buffer);
+									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK);
 		page = BufferGetPage(*buf);
 		if (!RestoreBlockImage(record, block_id, page))
 			ereport(ERROR,
@@ -421,7 +439,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	}
 	else
 	{
-		*buf = XLogReadBufferExtended(rlocator, forknum, blkno, mode, prefetch_buffer);
+		*buf = XLogReadBufferExtended(rlocator, forknum, blkno, mode);
 		if (BufferIsValid(*buf))
 		{
 			if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
@@ -472,23 +490,13 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
  */
 Buffer
 XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
-					   BlockNumber blkno, ReadBufferMode mode,
-					   Buffer recent_buffer)
+					   BlockNumber blkno, ReadBufferMode mode)
 {
 	BlockNumber lastblock;
 	Buffer		buffer;
 	SMgrRelation smgr;
 
 	Assert(blkno != P_NEW);
-
-	/* Do we have a clue where the buffer might be already? */
-	if (BufferIsValid(recent_buffer) &&
-		mode == RBM_NORMAL &&
-		ReadRecentBuffer(rlocator, forknum, blkno, recent_buffer))
-	{
-		buffer = recent_buffer;
-		goto recent_buffer_fast_path;
-	}
 
 	/* Open the relation at smgr level */
 	smgr = smgropen(rlocator, InvalidBackendId);
@@ -533,7 +541,6 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 									 mode);
 	}
 
-recent_buffer_fast_path:
 	if (mode == RBM_NORMAL)
 	{
 		/* check that page has been initialized */
