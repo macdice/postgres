@@ -445,7 +445,7 @@ XLogRecordMatchesRelationBlock(XLogReaderState *record,
 		BlockNumber blk;
 
 		if (!XLogRecGetBlockTagExtended(record, block_id,
-										&rlocator, &forknum, &blk, NULL))
+										&rlocator, &forknum, &blk, NULL, NULL))
 			continue;
 
 		if ((matchFork == InvalidForkNumber || matchFork == forknum) &&
@@ -511,7 +511,7 @@ XLogRecordSaveFPWs(XLogReaderState *record, const char *savepath)
 			pg_fatal("%s", record->errormsg_buf);
 
 		(void) XLogRecGetBlockTagExtended(record, block_id,
-										  &rnode, &fork, &blk, NULL);
+										  &rnode, &fork, &blk, NULL, NULL);
 
 		if (fork >= 0 && fork <= MAX_FORKNUM)
 			sprintf(forkname, "_%s", forkNames[fork]);

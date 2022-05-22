@@ -228,7 +228,7 @@ XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
 		BlockNumber blk;
 
 		if (!XLogRecGetBlockTagExtended(record, block_id,
-										&rlocator, &forknum, &blk, NULL))
+										&rlocator, &forknum, &blk, NULL, NULL))
 			continue;
 
 		if (detailed_format)

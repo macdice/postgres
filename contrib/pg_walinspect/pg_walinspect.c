@@ -286,7 +286,7 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record,
 		blk = XLogRecGetBlock(record, block_id);
 
 		(void) XLogRecGetBlockTagExtended(record, block_id,
-										  &rnode, &forknum, &blkno, NULL);
+										  &rnode, &forknum, &blkno, NULL, NULL);
 
 		/* Save block_data_len */
 		if (blk->has_data)

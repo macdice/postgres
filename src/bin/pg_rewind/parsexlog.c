@@ -450,7 +450,7 @@ extractPageInfo(XLogReaderState *record)
 		BlockNumber blkno;
 
 		if (!XLogRecGetBlockTagExtended(record, block_id,
-										&rlocator, &forknum, &blkno, NULL))
+										&rlocator, &forknum, &blkno, NULL, NULL))
 			continue;
 
 		/* We only care about the main fork; others are copied in toto */

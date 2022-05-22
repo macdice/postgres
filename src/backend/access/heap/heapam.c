@@ -9704,7 +9704,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	oldtup.t_len = 0;
 
 	XLogRecGetBlockTag(record, 0, &rlocator, NULL, &newblk);
-	if (XLogRecGetBlockTagExtended(record, 1, NULL, NULL, &oldblk, NULL))
+	if (XLogRecGetBlockTagExtended(record, 1, NULL, NULL, &oldblk, NULL, NULL))
 	{
 		/* HOT updates are never done across pages */
 		Assert(!hot_update);
