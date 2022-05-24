@@ -464,6 +464,21 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 						 rlocator.dbOid,
 						 LSN_FORMAT_ARGS(record->lsn));
 #endif
+
+					/*
+					 * Don't prefetch anything in the source database either,
+					 * because FlushDatabaseBuffers() doesn't like to see any
+					 * pinned buffers.
+					 */
+					rnode.dbNode = xlrec->src_db_id;
+					XLogPrefetcherAddFilter(prefetcher, rnode, 0, record->lsn - 1);
+
+#ifdef XLOGPREFETCHER_DEBUG_LEVEL
+					elog(XLOGPREFETCHER_DEBUG_LEVEL,
+						 "suppressing prefetch in database %u until %X/%X is replayed due to raw file copy",
+						 rnode.dbNode,
+						 LSN_FORMAT_ARGS(record->lsn));
+#endif
 				}
 			}
 			else if (rmid == RM_SMGR_ID)
@@ -678,6 +693,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetchIncrement(&SharedStats->prefetch);
 				block->prefetch_buffer_pinned = true;
 				block->prefetch_get_next = true;
+elog(LOG, "prefetched a block in db %u", reln->smgr_rnode.node.dbNode);
 				return PGSR_NEXT_IO;
 			}
 		}
