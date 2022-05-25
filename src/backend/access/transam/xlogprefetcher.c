@@ -693,7 +693,6 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 				XLogPrefetchIncrement(&SharedStats->prefetch);
 				block->prefetch_buffer_pinned = true;
 				block->prefetch_get_next = true;
-elog(LOG, "prefetched a block in db %u", reln->smgr_rnode.node.dbNode);
 				return PGSR_NEXT_IO;
 			}
 		}
