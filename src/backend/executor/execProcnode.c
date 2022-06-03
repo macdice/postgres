@@ -769,7 +769,7 @@ ExecEndNode(PlanState *node)
  * and release any resources still held.
  */
 bool
-ExecShutdownNode(PlanState *node)
+ExecShutdownNode(PlanState *node, void *context)
 {
 	if (node == NULL)
 		return false;

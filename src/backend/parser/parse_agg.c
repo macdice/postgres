@@ -55,8 +55,7 @@ static int	check_agg_arguments(ParseState *pstate,
 								List *directargs,
 								List *args,
 								Expr *filter);
-static bool check_agg_arguments_walker(Node *node,
-									   check_agg_arguments_context *context);
+static bool check_agg_arguments_walker(Node *node, void *context);
 static void check_ungrouped_columns(Node *node, ParseState *pstate, Query *qry,
 									List *groupClauses, List *groupClauseCommonVars,
 									bool have_non_var_grouping,
@@ -702,9 +701,11 @@ check_agg_arguments(ParseState *pstate,
 }
 
 static bool
-check_agg_arguments_walker(Node *node,
-						   check_agg_arguments_context *context)
+check_agg_arguments_walker(Node *node, void *void_context)
 {
+	check_agg_arguments_context *context =
+		(check_agg_arguments_context *) void_context;
+
 	if (node == NULL)
 		return false;
 	if (IsA(node, Var))

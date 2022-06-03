@@ -56,7 +56,7 @@ static Node *variable_paramref_hook(ParseState *pstate, ParamRef *pref);
 static Node *variable_coerce_param_hook(ParseState *pstate, Param *param,
 										Oid targetTypeId, int32 targetTypeMod,
 										int location);
-static bool check_parameter_resolution_walker(Node *node, ParseState *pstate);
+static bool check_parameter_resolution_walker(Node *node, void *context);
 static bool query_contains_extern_params_walker(Node *node, void *context);
 
 
@@ -287,8 +287,10 @@ check_variable_parameters(ParseState *pstate, Query *query)
  * and yet other instances seen later might have gotten coerced.
  */
 static bool
-check_parameter_resolution_walker(Node *node, ParseState *pstate)
+check_parameter_resolution_walker(Node *node, void *context)
 {
+	ParseState *pstate = (ParseState *) context;
+
 	if (node == NULL)
 		return false;
 	if (IsA(node, Param))

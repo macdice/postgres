@@ -1691,7 +1691,7 @@ ExecutePlan(EState *estate,
 	 * point.
 	 */
 	if (!(estate->es_top_eflags & EXEC_FLAG_BACKWARD))
-		(void) ExecShutdownNode(planstate);
+		(void) ExecShutdownNode(planstate, NULL);
 
 	if (use_parallel_mode)
 		ExitParallelMode();

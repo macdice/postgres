@@ -2013,7 +2013,7 @@ check_functions_in_node(Node *node, check_function_callback checker,
 
 bool
 expression_tree_walker(Node *node,
-					   bool (*walker) (),
+					   bool (*walker) (Node *, void *),
 					   void *context)
 {
 	ListCell   *temp;
@@ -3862,7 +3862,7 @@ query_or_expression_tree_mutator(Node *node,
  */
 bool
 raw_expression_tree_walker(Node *node,
-						   bool (*walker) (),
+						   bool (*walker) (Node *, void *),
 						   void *context)
 {
 	ListCell   *temp;
@@ -4574,7 +4574,7 @@ raw_expression_tree_walker(Node *node,
  */
 bool
 planstate_tree_walker(PlanState *planstate,
-					  bool (*walker) (),
+					  bool (*walker) (Node *, void *),
 					  void *context)
 {
 	Plan	   *plan = planstate->plan;

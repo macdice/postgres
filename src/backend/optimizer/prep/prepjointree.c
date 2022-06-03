@@ -3398,9 +3398,11 @@ typedef struct
 } find_dependent_phvs_context;
 
 static bool
-find_dependent_phvs_walker(Node *node,
-						   find_dependent_phvs_context *context)
+find_dependent_phvs_walker(Node *node, void *vcontext)
 {
+	find_dependent_phvs_context *context =
+		(find_dependent_phvs_context *) vcontext;
+
 	if (node == NULL)
 		return false;
 	if (IsA(node, PlaceHolderVar))
@@ -3517,9 +3519,11 @@ typedef struct
 } substitute_phv_relids_context;
 
 static bool
-substitute_phv_relids_walker(Node *node,
-							 substitute_phv_relids_context *context)
+substitute_phv_relids_walker(Node *node, void *vcontext)
 {
+	substitute_phv_relids_context *context =
+		(substitute_phv_relids_context *) vcontext;
+
 	if (node == NULL)
 		return false;
 	if (IsA(node, PlaceHolderVar))
