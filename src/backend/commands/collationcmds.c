@@ -853,6 +853,26 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 					CreateComments(collid, CollationRelationId, 0,
 								   icucomment);
 			}
+
+			/* Also create an object pinned to an ICU major version. */
+			collid = CollationCreate(psprintf("%s-x-icu-%d", langtag, U_ICU_VERSION_MAJOR_NUM),
+									 nspid, GetUserId(),
+									 COLLPROVIDER_ICU, true, -1,
+									 NULL, NULL,
+									 psprintf("%d:%s", U_ICU_VERSION_MAJOR_NUM, iculocstr),
+									 get_collation_actual_version(COLLPROVIDER_ICU, iculocstr),
+									 true, true);
+			if (OidIsValid(collid))
+			{
+				ncreated++;
+
+				CommandCounterIncrement();
+
+				icucomment = get_icu_locale_comment(name);
+				if (icucomment)
+					CreateComments(collid, CollationRelationId, 0,
+								   icucomment);
+			}
 		}
 	}
 #endif							/* USE_ICU */

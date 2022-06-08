@@ -317,6 +317,7 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	char	   *collate;
 	char	   *ctype;
 	char	   *iculocale;
+	char	   *collversion;
 
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
@@ -404,6 +405,9 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datctype, &isnull);
 	Assert(!isnull);
 	ctype = TextDatumGetCString(datum);
+	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datcollversion,
+							&isnull);
+	collversion = isnull ? NULL : TextDatumGetCString(datum);
 
 	if (pg_perm_setlocale(LC_COLLATE, collate) == NULL)
 		ereport(FATAL,
@@ -424,7 +428,20 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_daticulocale, &isnull);
 		Assert(!isnull);
 		iculocale = TextDatumGetCString(datum);
-		make_icu_collator(iculocale, &default_locale);
+		if (make_icu_collator(iculocale, collversion, &default_locale))
+		{
+			ereport(WARNING,
+					errmsg("database \"%s\" has a collation version mismatch",
+						   name),
+					errdetail("The database was created using ICU locale \"%s\" version %s, "
+							  "but no ICU library with a matching collator is available",
+							  iculocale, collversion),
+					errhint("Install a version of ICU that provides locale \"%s\" "
+							"version %s, or rebuild all objects "
+							"in this database that use the default collation and run "
+							"ALTER DATABASE %s REFRESH COLLATION VERSION.",
+							iculocale, collversion, name));
+		}
 	}
 	else
 		iculocale = NULL;
@@ -443,32 +460,29 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	 * pg_newlocale_from_collation().  Note that here we warn instead of error
 	 * in any case, so that we don't prevent connecting.
 	 */
-	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datcollversion,
-							&isnull);
-	if (!isnull)
+	if (dbform->datlocprovider == COLLPROVIDER_LIBC && collversion)
 	{
 		char	   *actual_versionstr;
-		char	   *collversionstr;
 
-		collversionstr = TextDatumGetCString(datum);
-
-		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, dbform->datlocprovider == COLLPROVIDER_ICU ? iculocale : collate);
+		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, collate);
 		if (!actual_versionstr)
 			/* should not happen */
 			elog(WARNING,
 				 "database \"%s\" has no actual collation version, but a version was recorded",
 				 name);
-		else if (strcmp(actual_versionstr, collversionstr) != 0)
+		else if (strcmp(actual_versionstr, collversion) != 0)
+		{
 			ereport(WARNING,
 					(errmsg("database \"%s\" has a collation version mismatch",
 							name),
 					 errdetail("The database was created using collation version %s, "
 							   "but the operating system provides version %s.",
-							   collversionstr, actual_versionstr),
+							   collversion, actual_versionstr),
 					 errhint("Rebuild all objects in this database that use the default collation and run "
 							 "ALTER DATABASE %s REFRESH COLLATION VERSION, "
 							 "or build PostgreSQL with the right library version.",
 							 quote_identifier(name))));
+		}
 	}
 
 	/* Make the locale settings visible as GUC variables, too */

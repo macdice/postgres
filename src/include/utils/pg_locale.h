@@ -17,6 +17,7 @@
 #endif
 #ifdef USE_ICU
 #include <unicode/ucol.h>
+#include <unicode/ubrk.h>
 #endif
 
 #ifdef USE_ICU
@@ -40,6 +41,9 @@ extern PGDLLIMPORT char *locale_messages;
 extern PGDLLIMPORT char *locale_monetary;
 extern PGDLLIMPORT char *locale_numeric;
 extern PGDLLIMPORT char *locale_time;
+extern PGDLLIMPORT char *icu_library_path;
+extern PGDLLIMPORT char *icu_library_versions;
+extern PGDLLIMPORT char *default_icu_library_version;
 
 /* lc_time localization cache */
 extern PGDLLIMPORT char *localized_abbrev_days[];
@@ -63,6 +67,78 @@ extern struct lconv *PGLC_localeconv(void);
 
 extern void cache_locale_time(void);
 
+#ifdef USE_ICU
+
+/*
+ * An ICU library version that we're either linked against or have loaded at
+ * runtime.
+ */
+typedef struct pg_icu_library
+{
+	int			major_version;
+	int			minor_version;
+	void		(*getICUVersion) (UVersionInfo info);
+	void		(*getUnicodeVersion) (UVersionInfo into);
+	void		(*getCLDRVersion) (UVersionInfo info, UErrorCode *status);
+	UCollator  *(*open) (const char *loc, UErrorCode *status);
+	void		(*close) (UCollator *coll);
+	void		(*getCollatorVersion) (const UCollator *coll, UVersionInfo info);
+	void		(*getUCAVersion) (const UCollator *coll, UVersionInfo info);
+	void		(*versionToString) (const UVersionInfo versionArray,
+									char *versionString);
+	UCollationResult (*strcoll) (const UCollator *coll,
+								 const UChar *source,
+								 int32_t sourceLength,
+								 const UChar *target,
+								 int32_t targetLength);
+	UCollationResult (*strcollUTF8) (const UCollator *coll,
+									 const char *source,
+									 int32_t sourceLength,
+									 const char *target,
+									 int32_t targetLength,
+									 UErrorCode *status);
+	int32_t		(*getSortKey) (const UCollator *coll,
+							   const UChar *source,
+							   int32_t sourceLength,
+							   uint8_t *result,
+							   int32_t resultLength);
+	int32_t		(*nextSortKeyPart) (const UCollator *coll,
+									UCharIterator *iter,
+									uint32_t state[2],
+									uint8_t *dest,
+									int32_t count,
+									UErrorCode *status);
+	void		(*setUTF8) (UCharIterator *iter,
+							const char *s,
+							int32_t length);
+	const char *(*errorName) (UErrorCode code);
+	int32_t		(*strToUpper) (UChar *dest,
+							   int32_t destCapacity,
+							   const UChar *src,
+							   int32_t srcLength,
+							   const char *locale,
+							   UErrorCode *pErrorCode);
+	int32_t		(*strToLower) (UChar *dest,
+							   int32_t destCapacity,
+							   const UChar *src,
+							   int32_t srcLength,
+							   const char *locale,
+							   UErrorCode *pErrorCode);
+	int32_t		(*strToTitle) (UChar *dest,
+							   int32_t destCapacity,
+							   const UChar *src,
+							   int32_t srcLength,
+							   UBreakIterator *titleIter,
+							   const char *locale,
+							   UErrorCode *pErrorCode);
+	void		(*setAttribute) (UCollator *coll,
+								 UColAttribute attr,
+								 UColAttributeValue value,
+								 UErrorCode *status);
+	struct pg_icu_library *next;
+} pg_icu_library;
+
+#endif
 
 /*
  * We define our own wrapper around locale_t so we can keep the same
@@ -84,17 +160,24 @@ struct pg_locale_struct
 		{
 			const char *locale;
 			UCollator  *ucol;
+			pg_icu_library *lib;
 		}			icu;
 #endif
 		int			dummy;		/* in case we have neither LOCALE_T nor ICU */
 	}			info;
 };
 
+#ifdef USE_ICU
+#define PG_ICU_LIB(x) ((x)->info.icu.lib)
+#define PG_ICU_COL(x) ((x)->info.icu.ucol)
+#endif
+
 typedef struct pg_locale_struct *pg_locale_t;
 
 extern PGDLLIMPORT struct pg_locale_struct default_locale;
 
-extern void make_icu_collator(const char *iculocstr,
+extern bool make_icu_collator(const char *iculocstr,
+							  const char *collversion,
 							  struct pg_locale_struct *resultp);
 
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);

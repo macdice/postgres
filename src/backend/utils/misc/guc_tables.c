@@ -3941,7 +3941,45 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"krb_server_keyfile", PGC_SIGHUP, CONN_AUTH_AUTH,
+		{"icu_library_path", PGC_SUSET, COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("Sets the path for dynamically loadable ICU libraries."),
+			gettext_noop("If versions of ICU other than the one that "
+						 "PostgreSQL is linked against are needed, they will "
+						 "be opened from this directory.  If empty, the "
+						 "system linker search path will be used."),
+			GUC_SUPERUSER_ONLY
+		},
+		&icu_library_path,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"icu_library_versions", PGC_SUSET, COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("Sets the available ICU library versions."),
+			gettext_noop("A comma-separated list of major or major.minor ICU versions "
+						 "that will be searched for referenced collation versions.  Use * "
+						 "for all possible versions."),
+			GUC_SUPERUSER_ONLY
+		},
+		&icu_library_versions,
+		"*",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"default_icu_library_version", PGC_SIGHUP, COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("Sets the ICU library version used to create new collations and databases."),
+			gettext_noop("A major or major.minor ICU version, or empty string for the linked version."),
+			GUC_SUPERUSER_ONLY
+		},
+		&default_icu_library_version,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"krb_server_keyfile", PGC_POSTMASTER, CONN_AUTH_AUTH,
 			gettext_noop("Sets the location of the Kerberos server key file."),
 			NULL,
 			GUC_SUPERUSER_ONLY
