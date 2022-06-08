@@ -1100,6 +1100,7 @@ HeapTupleTableSlot
 HistControl
 HotStandbyState
 I32
+ICU_Convert_BI_Func
 ICU_Convert_Func
 ID
 INFIX
@@ -2858,6 +2859,7 @@ TypeName
 U
 U32
 U8
+UBreakIterator
 UChar
 UCharIterator
 UColAttribute
@@ -3485,6 +3487,7 @@ pg_funcptr_t
 pg_gssinfo
 pg_hmac_ctx
 pg_hmac_errno
+pg_icu_library
 pg_int64
 pg_local_to_utf_combined
 pg_locale_t

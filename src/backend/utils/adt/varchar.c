@@ -1025,11 +1025,11 @@ hashbpchar(PG_FUNCTION_ARGS)
 
 			ulen = icu_to_uchar(&uchar, keydata, keylen);
 
-			bsize = ucol_getSortKey(mylocale->info.icu.ucol,
-									uchar, ulen, NULL, 0);
+			bsize = PG_ICU_LIB(mylocale)->getSortKey(PG_ICU_COL(mylocale),
+													 uchar, ulen, NULL, 0);
 			buf = palloc(bsize);
-			ucol_getSortKey(mylocale->info.icu.ucol,
-							uchar, ulen, buf, bsize);
+			PG_ICU_LIB(mylocale)->getSortKey(PG_ICU_COL(mylocale),
+											 uchar, ulen, buf, bsize);
 
 			result = hash_any(buf, bsize);
 
@@ -1086,11 +1086,11 @@ hashbpcharextended(PG_FUNCTION_ARGS)
 
 			ulen = icu_to_uchar(&uchar, VARDATA_ANY(key), VARSIZE_ANY_EXHDR(key));
 
-			bsize = ucol_getSortKey(mylocale->info.icu.ucol,
-									uchar, ulen, NULL, 0);
+			bsize = PG_ICU_LIB(mylocale)->getSortKey(PG_ICU_COL(mylocale),
+													 uchar, ulen, NULL, 0);
 			buf = palloc(bsize);
-			ucol_getSortKey(mylocale->info.icu.ucol,
-							uchar, ulen, buf, bsize);
+			PG_ICU_LIB(mylocale)->getSortKey(PG_ICU_COL(mylocale),
+											 uchar, ulen, buf, bsize);
 
 			result = hash_any_extended(buf, bsize, PG_GETARG_INT64(1));
 

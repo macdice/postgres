@@ -58,6 +58,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_control.h"
 #include "mb/pg_wchar.h"
+#include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/formatting.h"
 #include "utils/hsearch.h"
@@ -68,6 +69,7 @@
 
 #ifdef USE_ICU
 #include <unicode/ucnv.h>
+#include <unicode/ustring.h>
 #endif
 
 #ifdef __GLIBC__
@@ -78,7 +80,26 @@
 #include <shlwapi.h>
 #endif
 
+#ifdef HAVE_DLOPEN
+#include <dlfcn.h>
+#endif
+
 #define		MAX_L10N_DATA		80
+
+#ifdef USE_ICU
+
+/*
+ * We don't want to call into dlopen'd ICU libraries that are newer than the
+ * one we were compiled and linked against, just in case there is an
+ * incompatible API change.
+ */
+#define PG_MAX_ICU_MAJOR_VERSION U_ICU_VERSION_MAJOR_NUM
+
+/* An old ICU release that we know has the right API. */
+/* XXX check if this is actually true, and if we could go back further */
+#define PG_MIN_ICU_MAJOR_VERSION 54
+
+#endif
 
 
 /* GUC settings */
@@ -1435,29 +1456,337 @@ lc_ctype_is_c(Oid collation)
 	return (lookup_collation_cache(collation, true))->ctype_is_c;
 }
 
+#ifdef USE_ICU
+
 struct pg_locale_struct default_locale;
+
+/* Linked list of ICU libraries we have loaded. */
+static pg_icu_library *icu_library_list = NULL;
+
+/*
+ * Free an ICU library.  pg_icu_library objects that are successfully
+ * constructed stick around for the lifetime of the backend, but this is used
+ * to clean up if initialization fails.
+ */
+static void
+free_icu_library(pg_icu_library *lib)
+{
+	if (lib->libicui18n_handle)
+		dlclose(lib->libicui18n_handle);
+	if (lib->libicuuc_handle)
+		dlclose(lib->libicuuc_handle);
+	pfree(lib);
+}
+
+static void *
+get_icu_function(void *handle, const char *function, int version)
+{
+	char		name[80];
+
+	snprintf(name, sizeof(name), "%s_%d", function, version);
+
+	return dlsym(handle, name);
+}
+
+/*
+ * Probe a dynamically loaded library to see which major version of ICU it
+ * contains.
+ */
+static int
+get_icu_library_major_version(void *handle)
+{
+	for (int i = PG_MIN_ICU_MAJOR_VERSION; i <= PG_MAX_ICU_MAJOR_VERSION; ++i)
+		if (get_icu_function(handle, "ucol_open", i) ||
+			get_icu_function(handle, "u_strToUpper", i))
+			return i;
+
+	/*
+	 * It's a later version we don't dare use, an old version we don't
+	 * support, an ICU build with symbol suffixes disabled, or not ICU.
+	 */
+	return -1;
+}
+
+/*
+ * We have to load a couple of different libraries, so we'll reuse the code to
+ * do that.
+ */
+static void *
+load_icu_library(pg_icu_library *lib, const char *name)
+{
+	void	   *handle;
+	int			found_major_version;
+
+	handle = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+	if (handle == NULL)
+	{
+		int			errno_save = errno;
+
+		free_icu_library(lib);
+		errno = errno_save;
+
+		ereport(ERROR,
+				(errmsg("could not load library \"%s\": %m", name)));
+	}
+
+	found_major_version = get_icu_library_major_version(handle);
+	if (found_major_version < 0)
+	{
+		free_icu_library(lib);
+		ereport(ERROR,
+				(errmsg("could not find compatible ICU major version in library \"%s\"",
+						name)));
+	}
+
+	if (found_major_version != lib->major_version)
+	{
+		free_icu_library(lib);
+		ereport(ERROR,
+				(errmsg("expected to find ICU major version %d in library \"%s\", but found %d",
+						lib->major_version, name, found_major_version)));
+	}
+
+	return handle;
+}
+
+/*
+ * Given an ICU major version number, return the object we need to access it,
+ * or fail while trying to load it.
+ */
+static pg_icu_library *
+get_icu_library(int major_version)
+{
+	pg_icu_library *lib;
+
+	Assert(major_version >= PG_MIN_ICU_MAJOR_VERSION &&
+		   major_version <= PG_MAX_ICU_MAJOR_VERSION);
+
+	/* Try to find it in our list of existing libraries. */
+	for (lib = icu_library_list; lib; lib = lib->next)
+		if (lib->major_version == major_version)
+			return lib;
+
+	/* Make a new entry. */
+	lib = MemoryContextAllocZero(TopMemoryContext, sizeof(*lib));
+	if (major_version == U_ICU_VERSION_MAJOR_NUM)
+	{
+		/*
+		 * This is the version we were compiled and linked against.  Simply
+		 * assign the function pointers.
+		 *
+		 * These assignments will fail to compile if an incompatible API
+		 * change is made to some future version of ICU, at which point we
+		 * might need to consider special treatment for different major
+		 * version ranges, with intermediate trampoline functions.
+		 */
+		lib->major_version = major_version;
+		lib->open = ucol_open;
+		lib->close = ucol_close;
+		lib->getVersion = ucol_getVersion;
+		lib->versionToString = u_versionToString;
+		lib->strcoll = ucol_strcoll;
+		lib->strcollUTF8 = ucol_strcollUTF8;
+		lib->getSortKey = ucol_getSortKey;
+		lib->nextSortKeyPart = ucol_nextSortKeyPart;
+		lib->setUTF8 = uiter_setUTF8;
+		lib->errorName = u_errorName;
+		lib->strToUpper = u_strToUpper;
+		lib->strToLower = u_strToLower;
+		lib->strToTitle = u_strToTitle;
+
+		/*
+		 * Also assert the size of a couple of types used as output buffers,
+		 * as a canary to tell us to add extra padding in the (unlikely) event
+		 * that a later release makes these values smaller.
+		 */
+		StaticAssertStmt(U_MAX_VERSION_STRING_LENGTH == 20,
+						 "u_versionToString output buffer size changed incompatibly");
+		StaticAssertStmt(U_MAX_VERSION_LENGTH == 4,
+						 "ucol_getVersion output buffer size changed incompatibly");
+	}
+	else
+	{
+		/* This is an older version, so we'll need to use dlopen(). */
+#ifdef HAVE_DLOPEN
+		char		libicui18n_name[MAXPGPATH];
+		char		libicuuc_name[MAXPGPATH];
+
+		/*
+		 * We don't like to open versions newer than what we're linked
+		 * against, to reduce the risk of an API change biting us.
+		 */
+		if (major_version > U_ICU_VERSION_MAJOR_NUM)
+			elog(ERROR, "ICU major version %d higher than linked version %d, refusing to open",
+				 major_version, U_ICU_VERSION_MAJOR_NUM);
+
+		lib->major_version = major_version;
+
+		/*
+		 * XXX using pkglib_path to look for libraries.  The idea is that an
+		 * administrator would drop symlinks in there.
+		 *
+		 * Perhaps should do something like dfmgr.c's dynamic_library_path
+		 * search to find it?
+		 */
+
+		/* Load the collation library. */
+		snprintf(libicui18n_name,
+				 sizeof(libicui18n_name),
+				 "%s/libicui18n" DLSUFFIX ".%d",
+				 pkglib_path,
+				 major_version);
+		lib->libicui18n_handle = load_icu_library(lib, libicui18n_name);
+
+		/* Load the ctype library. */
+		snprintf(libicuuc_name,
+				 sizeof(libicuuc_name),
+				 "%s/libicuuc" DLSUFFIX ".%d",
+				 pkglib_path,
+				 major_version);
+		lib->libicuuc_handle = load_icu_library(lib, libicuuc_name);
+
+		/* Look up all the functions we need. */
+		lib->open = get_icu_function(lib->libicui18n_handle,
+									 "ucol_open",
+									 major_version);
+		lib->close = get_icu_function(lib->libicui18n_handle,
+									  "ucol_close",
+									  major_version);
+		lib->getVersion = get_icu_function(lib->libicui18n_handle,
+										   "ucol_getVersion",
+										   major_version);
+		lib->versionToString = get_icu_function(lib->libicui18n_handle,
+												"u_versionToString",
+												major_version);
+		lib->strcoll = get_icu_function(lib->libicui18n_handle,
+										"ucol_strcoll",
+										major_version);
+		lib->strcollUTF8 = get_icu_function(lib->libicui18n_handle,
+											"ucol_strcollUTF8",
+											major_version);
+		lib->getSortKey = get_icu_function(lib->libicui18n_handle,
+										   "ucol_getSortKey",
+										   major_version);
+		lib->nextSortKeyPart = get_icu_function(lib->libicui18n_handle,
+												"ucol_nextSortKeyPart",
+												major_version);
+		lib->setUTF8 = get_icu_function(lib->libicui18n_handle,
+										"uiter_setUTF8",
+										major_version);
+		lib->errorName = get_icu_function(lib->libicui18n_handle,
+										  "u_errorName",
+										  major_version);
+		lib->strToUpper = get_icu_function(lib->libicuuc_handle,
+										   "u_strToUpper",
+										   major_version);
+		lib->strToLower = get_icu_function(lib->libicuuc_handle,
+										   "u_strToLower",
+										   major_version);
+		lib->strToTitle = get_icu_function(lib->libicuuc_handle,
+										   "u_strToTitle",
+										   major_version);
+		if (!lib->open ||
+			!lib->close ||
+			!lib->getVersion ||
+			!lib->versionToString ||
+			!lib->strcoll ||
+			!lib->strcollUTF8 ||
+			!lib->getSortKey ||
+			!lib->nextSortKeyPart ||
+			!lib->setUTF8 ||
+			!lib->errorName ||
+			!lib->strToUpper ||
+			!lib->strToLower ||
+			!lib->strToTitle)
+		{
+			free_icu_library(lib);
+			ereport(ERROR,
+					(errmsg("could not find expected symbols in library \"%s\"",
+							libicui18n_name)));
+		}
+#else
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("dynamically loaded ICU libraries are not supported in this build")));
+#endif
+	}
+
+	lib->next = icu_library_list;
+	icu_library_list = lib;
+
+	return lib;
+}
+
+/*
+ * Look up the library to use for a given collcollate string.
+ */
+static pg_icu_library *
+get_icu_library_for_collation(const char *collcollate, const char **rest)
+{
+	int			major_version;
+	char	   *separator;
+	char	   *after_prefix;
+
+	separator = strchr(collcollate, ':');
+
+	/*
+	 * If it's a traditional value without a prefix, use the library we are
+	 * linked against.
+	 */
+	if (separator == NULL)
+	{
+		*rest = collcollate;
+		return get_icu_library(U_ICU_VERSION_MAJOR_NUM);
+	}
+
+	/* If it has a prefix, interpret it as an ICU major version. */
+	major_version = strtol(collcollate, &after_prefix, 10);
+	if (after_prefix != separator)
+		elog(ERROR,
+			 "could not parse ICU major library version: \"%s\"",
+			 collcollate);
+	if (major_version < PG_MIN_ICU_MAJOR_VERSION ||
+		major_version > PG_MAX_ICU_MAJOR_VERSION)
+		elog(ERROR,
+			 "ICU major library verision out of supported range: \"%s\"",
+			 collcollate);
+
+	/* The part after the separate will be passed to the library. */
+	*rest = separator + 1;
+
+	return get_icu_library(major_version);
+}
+
+#endif
 
 void
 make_icu_collator(const char *iculocstr,
 				  struct pg_locale_struct *resultp)
 {
 #ifdef USE_ICU
+	pg_icu_library *lib;
 	UCollator  *collator;
 	UErrorCode	status;
 
+	lib = get_icu_library_for_collation(iculocstr, &iculocstr);
 	status = U_ZERO_ERROR;
-	collator = ucol_open(iculocstr, &status);
+	collator = lib->open(iculocstr, &status);
 	if (U_FAILURE(status))
 		ereport(ERROR,
 				(errmsg("could not open collator for locale \"%s\": %s",
-						iculocstr, u_errorName(status))));
+						iculocstr, lib->errorName(status))));
 
-	if (U_ICU_VERSION_MAJOR_NUM < 54)
+	/*
+	 * XXX can we just drop this cruft and make 54 the minimum supported
+	 * version?
+	 */
+	if (lib->major_version < 54)
 		icu_set_collation_attributes(collator, iculocstr);
 
 	/* We will leak this string if the caller errors later :-( */
 	resultp->info.icu.locale = MemoryContextStrdup(TopMemoryContext, iculocstr);
 	resultp->info.icu.ucol = collator;
+	resultp->info.icu.lib = lib;
 #else							/* not USE_ICU */
 	/* could get here if a collation was created by a build with ICU */
 	ereport(ERROR,
@@ -1688,21 +2017,23 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 #ifdef USE_ICU
 	if (collprovider == COLLPROVIDER_ICU)
 	{
+		pg_icu_library *lib;
 		UCollator  *collator;
 		UErrorCode	status;
 		UVersionInfo versioninfo;
 		char		buf[U_MAX_VERSION_STRING_LENGTH];
 
+		lib = get_icu_library_for_collation(collcollate, &collcollate);
 		status = U_ZERO_ERROR;
-		collator = ucol_open(collcollate, &status);
+		collator = lib->open(collcollate, &status);
 		if (U_FAILURE(status))
 			ereport(ERROR,
 					(errmsg("could not open collator for locale \"%s\": %s",
-							collcollate, u_errorName(status))));
-		ucol_getVersion(collator, versioninfo);
-		ucol_close(collator);
+							collcollate, lib->errorName(status))));
+		lib->getVersion(collator, versioninfo);
+		lib->close(collator);
 
-		u_versionToString(versioninfo, buf);
+		lib->versionToString(versioninfo, buf);
 		collversion = pstrdup(buf);
 	}
 	else
@@ -1770,6 +2101,8 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 
 
 #ifdef USE_ICU
+
+
 /*
  * Converter object for converting between ICU's UChar strings and C strings
  * in database encoding.  Since the database encoding doesn't change, we only
@@ -1991,19 +2324,22 @@ void
 check_icu_locale(const char *icu_locale)
 {
 #ifdef USE_ICU
+	pg_icu_library *lib;
 	UCollator  *collator;
 	UErrorCode	status;
 
+	lib = get_icu_library_for_collation(icu_locale, &icu_locale);
 	status = U_ZERO_ERROR;
-	collator = ucol_open(icu_locale, &status);
+	collator = lib->open(icu_locale, &status);
 	if (U_FAILURE(status))
 		ereport(ERROR,
 				(errmsg("could not open collator for locale \"%s\": %s",
-						icu_locale, u_errorName(status))));
+						icu_locale, lib->errorName(status))));
 
-	if (U_ICU_VERSION_MAJOR_NUM < 54)
+	/* XXX can we just drop this cruft? */
+	if (lib->major_version < 54)
 		icu_set_collation_attributes(collator, icu_locale);
-	ucol_close(collator);
+	lib->close(collator);
 #else
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
