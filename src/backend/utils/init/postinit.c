@@ -449,26 +449,52 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	{
 		char	   *actual_versionstr;
 		char	   *collversionstr;
+		char	   *locale;
 
 		collversionstr = TextDatumGetCString(datum);
+		locale = dbform->datlocprovider == COLLPROVIDER_ICU ? iculocale : collate;
 
-		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, dbform->datlocprovider == COLLPROVIDER_ICU ? iculocale : collate);
+		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, locale);
 		if (!actual_versionstr)
 			/* should not happen */
 			elog(WARNING,
 				 "database \"%s\" has no actual collation version, but a version was recorded",
 				 name);
 		else if (strcmp(actual_versionstr, collversionstr) != 0)
-			ereport(WARNING,
-					(errmsg("database \"%s\" has a collation version mismatch",
-							name),
-					 errdetail("The database was created using collation version %s, "
-							   "but the operating system provides version %s.",
-							   collversionstr, actual_versionstr),
-					 errhint("Rebuild all objects in this database that use the default collation and run "
-							 "ALTER DATABASE %s REFRESH COLLATION VERSION, "
-							 "or build PostgreSQL with the right library version.",
-							 quote_identifier(name))));
+		{
+			if (dbform->datlocprovider == COLLPROVIDER_ICU)
+			{
+				ereport(WARNING,
+						(errmsg("database \"%s\" has a collation version mismatch",
+								name),
+						 errdetail("The database was created using collation version %s, "
+								   "but the ICU library provides version %s.",
+								   collversionstr, actual_versionstr),
+						 strchr(locale, ':') != NULL ?
+						 errhint("Rebuild all objects in this database that use the default collation and run "
+								 "ALTER DATABASE %s REFRESH COLLATION VERSION, "
+								 "or build PostgreSQL with the right library version.",
+								 quote_identifier(name)) :
+						 errhint("Install another version of ICU and select it using default_icu_library_verison, or "
+								 "rebuild all objects in this database that use the default collation and run "
+								 "ALTER DATABASE %s REFRESH COLLATION VERSION, "
+								 "or build PostgreSQL with the right library version.",
+								 quote_identifier(name))));
+			}
+			else
+			{
+				ereport(WARNING,
+						(errmsg("database \"%s\" has a collation version mismatch",
+								name),
+						 errdetail("The database was created using collation version %s, "
+								   "but the operating system provides version %s.",
+								   collversionstr, actual_versionstr),
+						 errhint("Rebuild all objects in this database that use the default collation and run "
+								 "ALTER DATABASE %s REFRESH COLLATION VERSION, "
+								 "or build PostgreSQL with the right library version.",
+								 quote_identifier(name))));
+			}
+		}
 	}
 
 	/* Make the locale settings visible as GUC variables, too */

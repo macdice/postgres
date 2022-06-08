@@ -727,6 +727,11 @@
 #lc_numeric = 'C'			# locale for number formatting
 #lc_time = 'C'				# locale for time formatting
 
+#default_icu_library_version = 0	# default major version of ICU library
+					# (0 for the linked version)
+#icu_library_path = ''			# path for dynamically loaded ICU
+					# libraries
+
 # default configuration for text search
 #default_text_search_config = 'pg_catalog.simple'
 

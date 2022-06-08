@@ -2938,6 +2938,20 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"default_icu_library_version",
+			PGC_SUSET,
+			COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("Default major version of ICU library to use for collations if not specified."),
+			NULL
+		},
+		&default_icu_library_version,
+		0,
+		0,
+		1000,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"max_logical_replication_workers",
 			PGC_POSTMASTER,
 			REPLICATION_SUBSCRIBERS,
@@ -3917,6 +3931,20 @@ struct config_string ConfigureNamesString[] =
 		},
 		&Dynamic_library_path,
 		"$libdir",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"icu_library_path", PGC_SUSET, COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("Sets the path for dynamically loadable ICU libraries."),
+			gettext_noop("If versions of ICU other than the one that "
+						 "PostgreSQL is linked against are needed, they will "
+						 "be opened from this directory.  If empty, the "
+						 "system linker search path will be used."),
+			GUC_SUPERUSER_ONLY
+		},
+		&icu_library_path,
+		"",
 		NULL, NULL, NULL
 	},
 

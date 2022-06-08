@@ -11707,6 +11707,9 @@
   proname => 'pg_database_collation_actual_version', procost => '100',
   provolatile => 'v', prorettype => 'text', proargtypes => 'oid',
   prosrc => 'pg_database_collation_actual_version' },
+{ oid => '8888', descr => 'get ICU library version string',
+  proname => 'pg_icu_library_version', provolatile => 'v', prorettype => 'text',
+  proargtypes => 'int4', prosrc => 'pg_icu_library_version' },
 
 # system management/monitoring related functions
 { oid => '3353', descr => 'list files in the log directory',
