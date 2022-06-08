@@ -51,6 +51,7 @@
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
+#include "utils/pg_locale.h"
 #include "utils/pidfile.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
@@ -164,6 +165,10 @@ InitPostmasterChild(void)
 
 	/* Request a signal if the postmaster dies, if possible. */
 	PostmasterDeathSignalInit();
+
+#ifdef USE_ICU
+	pg_icu_activate_major_version(-1);
+#endif
 }
 
 /*
@@ -208,6 +213,10 @@ InitStandaloneProcess(const char *argv0)
 
 	if (pkglib_path[0] == '\0')
 		get_pkglib_path(my_exec_path, pkglib_path);
+
+#ifdef USE_ICU
+	pg_icu_activate_major_version(-1);
+#endif
 }
 
 void

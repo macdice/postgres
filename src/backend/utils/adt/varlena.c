@@ -1666,10 +1666,11 @@ varstr_cmp(const char *arg1, int len1, const char *arg2, int len2, Oid collid)
 					UErrorCode	status;
 
 					status = U_ZERO_ERROR;
-					result = ucol_strcollUTF8(mylocale->info.icu.ucol,
-											  arg1, len1,
-											  arg2, len2,
-											  &status);
+					result = current_icu_library->strcollUTF8(pg_icu_collator(current_icu_library,
+																			  mylocale),
+															  arg1, len1,
+															  arg2, len2,
+															  &status);
 					if (U_FAILURE(status))
 						ereport(ERROR,
 								(errmsg("collation failed: %s", u_errorName(status))));
@@ -1685,9 +1686,10 @@ varstr_cmp(const char *arg1, int len1, const char *arg2, int len2, Oid collid)
 					ulen1 = icu_to_uchar(&uchar1, arg1, len1);
 					ulen2 = icu_to_uchar(&uchar2, arg2, len2);
 
-					result = ucol_strcoll(mylocale->info.icu.ucol,
-										  uchar1, ulen1,
-										  uchar2, ulen2);
+					result = current_icu_library->strcoll(pg_icu_collator(current_icu_library,
+																		  mylocale),
+														  uchar1, ulen1,
+														  uchar2, ulen2);
 
 					pfree(uchar1);
 					pfree(uchar2);
@@ -2389,13 +2391,15 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
 				UErrorCode	status;
 
 				status = U_ZERO_ERROR;
-				result = ucol_strcollUTF8(sss->locale->info.icu.ucol,
-										  a1p, len1,
-										  a2p, len2,
-										  &status);
+				result = current_icu_library->strcollUTF8(pg_icu_collator(current_icu_library,
+																		  sss->locale),
+														  a1p, len1,
+														  a2p, len2,
+														  &status);
 				if (U_FAILURE(status))
 					ereport(ERROR,
-							(errmsg("collation failed: %s", u_errorName(status))));
+							(errmsg("collation failed: %s",
+									current_icu_library->errorName(status))));
 			}
 			else
 #endif
@@ -2408,9 +2412,10 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
 				ulen1 = icu_to_uchar(&uchar1, a1p, len1);
 				ulen2 = icu_to_uchar(&uchar2, a2p, len2);
 
-				result = ucol_strcoll(sss->locale->info.icu.ucol,
-									  uchar1, ulen1,
-									  uchar2, ulen2);
+				result = current_icu_library->strcoll(pg_icu_collator(current_icu_library,
+																	  sss->locale),
+													  uchar1, ulen1,
+													  uchar2, ulen2);
 
 				pfree(uchar1);
 				pfree(uchar2);
@@ -2574,21 +2579,23 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 					uiter_setUTF8(&iter, sss->buf1, len);
 					state[0] = state[1] = 0;	/* won't need that again */
 					status = U_ZERO_ERROR;
-					bsize = ucol_nextSortKeyPart(sss->locale->info.icu.ucol,
-												 &iter,
-												 state,
-												 (uint8_t *) sss->buf2,
-												 Min(sizeof(Datum), sss->buflen2),
-												 &status);
+					bsize = current_icu_library->nextSortKeyPart(pg_icu_collator(current_icu_library,
+																				 sss->locale),
+																 &iter,
+																 state,
+																 (uint8_t *) sss->buf2,
+																 Min(sizeof(Datum), sss->buflen2),
+																 &status);
 					if (U_FAILURE(status))
 						ereport(ERROR,
 								(errmsg("sort key generation failed: %s",
-										u_errorName(status))));
+										current_icu_library->errorName(status))));
 				}
 				else
-					bsize = ucol_getSortKey(sss->locale->info.icu.ucol,
-											uchar, ulen,
-											(uint8_t *) sss->buf2, sss->buflen2);
+					bsize = current_icu_library->getSortKey(pg_icu_collator(current_icu_library,
+																			sss->locale),
+															uchar, ulen,
+															(uint8_t *) sss->buf2, sss->buflen2);
 			}
 			else
 #endif

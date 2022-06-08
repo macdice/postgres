@@ -74,6 +74,68 @@ extern struct lconv *PGLC_localeconv(void);
 
 extern void cache_locale_time(void);
 
+#ifdef USE_ICU
+
+/*
+ * We don't want to call into dlopen'd ICU libraries that are newer than the
+ * one we were compiled and linked against, just in case there is an
+ * incompatible API change.
+ */
+#define PG_MAX_ICU_MAJOR_VERSION U_ICU_VERSION_MAJOR_NUM
+
+/* An old ICU release that we know has the right API. */
+#define PG_MIN_ICU_MAJOR_VERSION 54
+
+/*
+ * In a couple of places we use an array of possible versions as a fast
+ * associative table, which isn't too big for now.
+ */
+#define PG_NUM_ICU_MAJOR_VERSIONS								\
+	(PG_MAX_ICU_MAJOR_VERSION - PG_MIN_ICU_MAJOR_VERSION + 1)
+#define PG_ICU_SLOT(major_version)					\
+	((major_version) - PG_MIN_ICU_MAJOR_VERSION)
+
+/*
+ * An ICU library version that we're either linked against or have loaded at
+ * runtime.
+ */
+typedef struct pg_icu_library
+{
+	void	   *handle;			/* if loaded with dlopen() */
+	int			major_version;	/* major version of ICU */
+	UCollator *(*open)(const char *loc, UErrorCode *status);
+	void (*close)(UCollator *coll);
+	void (*getVersion)(const UCollator *coll, UVersionInfo info);
+	void (*versionToString)(const UVersionInfo versionArray,
+							char *versionString);
+	UCollationResult (*strcoll)(const UCollator *coll,
+								const UChar *source,
+								int32_t sourceLength,
+								const UChar *target,
+								int32_t targetLength);
+	UCollationResult (*strcollUTF8)(const UCollator *coll,
+									const char *source,
+									int32_t sourceLength,
+									const char *target,
+									int32_t targetLength,
+									UErrorCode *status);
+	int32_t (*getSortKey)(const UCollator *coll,
+						  const UChar *source,
+						  int32_t sourceLength,
+						  uint8_t *result,
+						  int32_t resultLength);
+	int32_t (*nextSortKeyPart)(const UCollator *coll,
+							   UCharIterator *iter,
+							   uint32_t state[2],
+							   uint8_t *dest,
+							   int32_t count,
+							   UErrorCode *status);
+	const char *(*errorName)(UErrorCode code);
+} pg_icu_library;
+
+extern pg_icu_library *current_icu_library;
+
+#endif
 
 /*
  * We define our own wrapper around locale_t so we can keep the same
@@ -94,7 +156,7 @@ struct pg_locale_struct
 		struct
 		{
 			const char *locale;
-			UCollator  *ucol;
+			UCollator  *ucol[PG_NUM_ICU_MAJOR_VERSIONS];
 		}			icu;
 #endif
 		int			dummy;		/* in case we have neither LOCALE_T nor ICU */
@@ -102,6 +164,36 @@ struct pg_locale_struct
 };
 
 typedef struct pg_locale_struct *pg_locale_t;
+
+#ifdef USE_ICU
+/*
+ * Get a collator for 'loc' suitable for use with ICU library 'lib'.
+ */
+static inline UCollator *
+pg_icu_collator(pg_icu_library *lib, pg_locale_t loc)
+{
+	int major_version = lib->major_version;
+	UCollator *collator = loc->info.icu.ucol[PG_ICU_SLOT(major_version)];
+
+	if (unlikely(!collator))
+	{
+		UErrorCode status;
+
+		collator =lib->open(loc->info.icu.locale, &status);
+		if (U_FAILURE(status))
+			ereport(ERROR,
+					(errmsg("could not open collator for locale \"%s\", ICU major version %d: %s",
+							loc->info.icu.locale,
+							major_version,
+							lib->errorName(status))));
+		loc->info.icu.ucol[PG_ICU_SLOT(major_version)] = collator;
+	}
+
+	return collator;
+}
+
+extern void pg_icu_activate_major_version(int major_version);
+#endif
 
 extern PGDLLIMPORT struct pg_locale_struct default_locale;
 

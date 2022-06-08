@@ -214,6 +214,7 @@ static const char *const subdirs[] = {
 	"pg_wal/archive_status",
 	"pg_commit_ts",
 	"pg_dynshmem",
+	"pg_icu_lib",
 	"pg_notify",
 	"pg_serial",
 	"pg_snapshots",
