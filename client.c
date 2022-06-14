@@ -66,8 +66,7 @@ main()
 	 * yet.
 	 */
 printf("1\n");
-	/* XXX well damn, we can't set external IO mode until after it's too late for connect()! */
-	conn = PQconnectStart("dbname = postgres");
+	conn = PQconnectStartExternalIO("dbname = postgres");
 	if (conn == NULL) {
 		fprintf(stderr, "out of memory\n");
 		return EXIT_FAILURE;
