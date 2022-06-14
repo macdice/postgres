@@ -150,3 +150,31 @@ pqio_connect(PGconn *conn, const struct sockaddr *name, socklen_t namelen)
 
 	return connect(conn->sock, name, namelen);
 }
+
+void
+PQsetExternalIo(PGconn *conn, int value)
+{
+	conn->io_external = value;
+}
+
+int
+PQpendingIo(PGconn *conn, PQIO **ios, size_t len)
+{
+	/* Output buffer had better have space. */
+	if (len < 1)
+		return 0;
+	
+	/*
+	 * XXX We might be able to report more than one at a time, to start a
+	 * send() and recv() for the expected response at the same time (perhaps
+	 * the client can start both of those with one system call).  For now it's
+	 * 0 or 1.
+	 */
+	if (conn->io.error == EINPROGRESS)
+	{
+		ios[0] = &conn->io;
+		return 1;
+	}
+
+	return 0;
+}

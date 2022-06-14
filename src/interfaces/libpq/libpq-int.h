@@ -340,47 +340,6 @@ typedef struct pg_conn_host
 								 * found in password file. */
 } pg_conn_host;
 
-/* Operation that might be requested in external IO mode */
-typedef enum
-{
-	PQIO_OP_NONE,				/* No IO is currently requested */
-	PQIO_OP_CONNECT,			/* libpq wants the client to call connect() */
-	PQIO_OP_RECV,				/* libpq wants the client to call recv() */
-	PQIO_OP_SEND				/* libpq wants the client to call send() */
-} PQIOOp;
-
-/* One IO operation that libpq wants the client to perform */
-typedef struct PQIO
-{
-	PQIOOp		op;
-	union
-	{
-		struct
-		{
-			int			s;
-			void	   *buf;
-			size_t		len;
-			int			flags;
-		} recv_args;
-		struct
-		{
-			int			s;
-			const void *buf;
-			size_t		len;
-			int			flags;
-		} send_args;
-		struct
-		{
-			int			s;
-			const struct sockaddr *name;
-			socklen_t	namelen;
-		} connect_args;
-	} u;
-	ssize_t		result;			/* return value of system call */
-	int			error;			/* error value of system call, or EINPROGRESS */
-	void	   *user_data;		/* scratch space for client code */
-} PQIO;
-
 /*
  * PGconn stores all the state data associated with a single connection
  * to a backend.

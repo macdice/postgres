@@ -22,6 +22,8 @@ extern "C"
 
 #include <stdio.h>
 
+#include <sys/socket.h> /* XXX or use void * instead of sockname etc? */
+
 /*
  * postgres_ext.h defines the backend's externally visible types,
  * such as Oid.
@@ -269,6 +271,47 @@ typedef struct pgresAttDesc
 	int			atttypmod;		/* type-specific modifier info */
 } PGresAttDesc;
 
+/* Operation that might be requested in external IO mode */
+typedef enum
+{
+	PQIO_OP_NONE,				/* No IO is currently requested */
+	PQIO_OP_CONNECT,			/* libpq wants the client to call connect() */
+	PQIO_OP_RECV,				/* libpq wants the client to call recv() */
+	PQIO_OP_SEND				/* libpq wants the client to call send() */
+} PQIOOp;
+
+/* An operation that libpq wants the client to perform in external IO mode */
+typedef struct PQIO
+{
+	PQIOOp		op;
+	union
+	{
+		struct
+		{
+			int			s;
+			void	   *buf;
+			size_t		len;
+			int			flags;
+		} recv_args;
+		struct
+		{
+			int			s;
+			const void *buf;
+			size_t		len;
+			int			flags;
+		} send_args;
+		struct
+		{
+			int			s;
+			const struct sockaddr *name;
+			socklen_t	namelen;
+		} connect_args;
+	} u;
+	ssize_t		result;			/* return value of system call */
+	int			error;			/* error value of system call, or EINPROGRESS */
+	void	   *user_data;		/* scratch space for client code */
+} PQIO;
+
 /* ----------------
  * Exported functions of libpq
  * ----------------
@@ -467,6 +510,10 @@ extern PGresult *PQgetResult(PGconn *conn);
 /* Routines for managing an asynchronous query */
 extern int	PQisBusy(PGconn *conn);
 extern int	PQconsumeInput(PGconn *conn);
+
+/* Routines for external IO */
+extern void PQsetExternalIo(PGconn *conn, int value);
+extern int	PQpendingIo(PGconn *conn, PQIO **ios, size_t len);
 
 /* Routines for pipeline mode management */
 extern int	PQenterPipelineMode(PGconn *conn);
