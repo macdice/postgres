@@ -151,12 +151,6 @@ pqio_connect(PGconn *conn, const struct sockaddr *name, socklen_t namelen)
 	return connect(conn->sock, name, namelen);
 }
 
-void
-PQsetExternalIo(PGconn *conn, int value)
-{
-	conn->io_external = value;
-}
-
 int
 PQpendingIo(PGconn *conn, PQIO **ios, size_t len)
 {

@@ -326,6 +326,9 @@ extern PGconn *PQconnectStartParams(const char *const *keywords,
 									const char *const *values, int expand_dbname);
 extern PostgresPollingStatusType PQconnectPoll(PGconn *conn);
 
+/* Asynchronous (external IO routines) */
+extern PGconn *PQconnectStartExternalIO(const char *conninfo);
+
 /* Synchronous (blocking) */
 extern PGconn *PQconnectdb(const char *conninfo);
 extern PGconn *PQconnectdbParams(const char *const *keywords,
@@ -512,7 +515,6 @@ extern int	PQisBusy(PGconn *conn);
 extern int	PQconsumeInput(PGconn *conn);
 
 /* Routines for external IO */
-extern void PQsetExternalIo(PGconn *conn, int value);
 extern int	PQpendingIo(PGconn *conn, PQIO **ios, size_t len);
 
 /* Routines for pipeline mode management */

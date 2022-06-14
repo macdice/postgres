@@ -428,6 +428,7 @@ static void default_threadlock(int acquire);
 static bool sslVerifyProtocolVersion(const char *version);
 static bool sslVerifyProtocolRange(const char *min, const char *max);
 
+static void do_connect_start(PGconn *conn, const char *conninfo);
 
 /* global variable because fe-auth.c needs to access it */
 pgthreadlock_t pg_g_threadlock = default_threadlock;
@@ -851,17 +852,41 @@ PQconnectStart(const char *conninfo)
 	if (conn == NULL)
 		return NULL;
 
+	do_connect_start(conn, conninfo);
+	
+	return conn;
+}
+	
+PGconn *
+PQconnectStartExternalIO(const char *conninfo)
+{
+	PGconn	   *conn;
+
+	conn = makeEmptyPGconn();
+	if (conn == NULL)
+		return NULL;
+
+	conn->io_external = true;
+	
+	do_connect_start(conn, conninfo);
+
+	return conn;
+}
+
+static void
+do_connect_start(PGconn *conn, const char *conninfo)
+{
 	/*
 	 * Parse the conninfo string
 	 */
 	if (!connectOptions1(conn, conninfo))
-		return conn;
+		return;
 
 	/*
 	 * Compute derived options
 	 */
 	if (!connectOptions2(conn))
-		return conn;
+		return;
 
 	/*
 	 * Connect to the database
@@ -871,8 +896,6 @@ PQconnectStart(const char *conninfo)
 		/* Just in case we failed to set it in connectDBStart */
 		conn->status = CONNECTION_BAD;
 	}
-
-	return conn;
 }
 
 /*
@@ -3694,6 +3717,11 @@ keep_going:						/* We will come back to here until there is
 
 				/* We are open for business! */
 				conn->status = CONNECTION_OK;
+
+				/* XXX */
+				if (conn->io_external)
+					PQsetnonblocking(conn, 1);
+				
 				return PGRES_POLLING_OK;
 			}
 
