@@ -1,13 +1,18 @@
 #include "libpq-fe.h"
 
+#include <errno.h>
+#include <stdbool.h>
+#include <stdlib.h>
+
 static void
-do_ios_(PGconn *conn)
+do_ios(PGconn *conn)
 {
-	PGIOOp *ios[2];
+	PQIO *ios[2];
 	int nios;
 
-	nios = PQios(conn, ios, lengthof(ios));
+	nios = PQpendingIo(conn, ios, sizeof(ios) / sizeof(ios[0]));
 
+printf("got %d ios\n", nios);
 #ifndef USE_IO_URING
 	/*
 	 * Example of handling IO requests synchronously.  Something like this
@@ -15,30 +20,34 @@ do_ios_(PGconn *conn)
 	 * it's just a way of demonstrating the PQios interface with portable code.
 	 */
 	for (int i = 0; i < nios; ++i) {
-		switch (ios[i].op) {
+		PQIO *io = ios[i];
+		switch (io->op) {
 		case PQIO_OP_CONNECT:
-			ios[i].result = connect(ios[i].u.connect_args.s,
-									ios[i].u.connect_args.name,
-									ios[i].u.connect_args.namelen);
-			ios[i].error = errno;
+			io->result = connect(io->u.connect_args.s,
+								 io->u.connect_args.name,
+								 io->u.connect_args.namelen);
+			io->error = errno;
+printf("connect -> %s\n", io->result);
 			break;
 		case PQIO_OP_RECV:
-			ios[i].result = recv(ios[i].u.recv_args.s,
-								 ios[i].u.recv_args.buf,
-								 ios[i].u.recv_args.len,
-								 ios[i].u.recv_args.flags);
-			ios[i].error = errno;
+			io->result = recv(io->u.recv_args.s,
+							  io->u.recv_args.buf,
+							  io->u.recv_args.len,
+							  io->u.recv_args.flags);
+			io->error = errno;
+printf("recv -> %s\n", io->result);
 			break;
 		case PQIO_OP_SEND:
-			ios[i].result = send(ios[i].u.send_args.s,
-								 ios[i].u.send_args.buf,
-								 ios[i].u.send_args.len,
-								 ios[i].u.send_args.flags);
-			ios[i].error = errno;
+			io->result = send(io->u.send_args.s,
+							  io->u.send_args.buf,
+							  io->u.send_args.len,
+							  io->u.send_args.flags);
+			io->error = errno;
+printf("send -> %s\n", io->result);
 			break;
 		default:
-			ios[i].result = -1;
-			ios[i].error = ENOSYS;		/* unexpected */
+			io->result = -1;
+			io->error = ENOSYS;		/* unexpected */
 			break;
 		}
 	}
@@ -56,38 +65,46 @@ main()
 	 * Try to start a connection.  This doesn't actually do any socket IO,
 	 * yet.
 	 */
+printf("1\n");
+	/* XXX well damn, we can't set external IO mode until after it's too late for connect()! */
 	conn = PQconnectStart("dbname = postgres");
 	if (conn == NULL) {
 		fprintf(stderr, "out of memory\n");
 		return EXIT_FAILURE;
 	}
 
+printf("2\n");
 	/* Handle bad connection string format etc. */
 	if (PQstatus(conn) == CONNECTION_BAD) {
-		fprintf(stderr, "connection bad before we even begin\n");
+		fprintf(stderr, "connection bad before we even begin: %s\n",
+				PQerrorMessage(conn));
 		return EXIT_FAILURE;
 	}
 
+printf("3\n");
 	/* Process IO until we reach connection OK or failed state. */
 	while (PQstatus(conn) != CONNECTION_OK) {
+printf("3.1\n");
 		do_ios(conn);
-		if (PQconnectPoll(conn) == PGRESS_POLLING_FAILED) {
+		if (PQconnectPoll(conn) == PGRES_POLLING_FAILED) {
 			fprintf(stderr, "failed to connect\n");
 			return EXIT_FAILURE;
 		}
 	}
 
+printf("4\n");
 	/* Now send a query.  This doesn't really send anything yet... */
 	if (PQsendQuery(conn, "SELECT 42") != 1) {
 		fprintf(stderr, "PQsendQuery failed\n");
 		return EXIT_FAILURE;
 	}
 
+printf("5\n");
 	/*
 	 * Now perform the socket IO.  This will send() and then recv() until we
 	 * have results.
 	 */
-	while (PQisbusy(conn)) {
+	while (PQisBusy(conn)) {
 		do_ios(conn);
 		PQconsumeInput(conn);
 	}
