@@ -69,6 +69,7 @@ typedef enum
 	 */
 	CONNECTION_STARTED,			/* Waiting for connection to be made.  */
 	CONNECTION_MADE,			/* Connection OK; waiting to send.     */
+	CONNECTION_SENDING_STARTUP,	/* Trying to send the startup packet. */
 	CONNECTION_AWAITING_RESPONSE,	/* Waiting for a response from the
 									 * postmaster.        */
 	CONNECTION_AUTH_OK,			/* Received authentication; waiting for

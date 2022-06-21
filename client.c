@@ -86,7 +86,8 @@ printf("3\n");
 printf("3.1\n");
 		do_ios(conn);
 		if (PQconnectPoll(conn) == PGRES_POLLING_FAILED) {
-			fprintf(stderr, "failed to connect\n");
+			fprintf(stderr, "failed to connect: %s\n",
+					PQerrorMessage(conn));
 			return EXIT_FAILURE;
 		}
 	}

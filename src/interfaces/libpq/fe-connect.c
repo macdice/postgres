@@ -2326,6 +2326,7 @@ PQconnectPoll(PGconn *conn)
 			/* These are writing states, so we just proceed. */
 		case CONNECTION_STARTED:
 		case CONNECTION_MADE:
+		case CONNECTION_SENDING_STARTUP:
 			break;
 
 			/* Special cases: proceed without waiting. */
@@ -2845,6 +2846,15 @@ keep_going:						/* We will come back to here until there is
 				int			packetlen;
 
 				/*
+				 * Switch to non-blocking mode immediately if we're using
+				 * external IO.
+				 *
+				 * XXX Where should this go?
+				 */
+				if (conn->io_external)
+					PQsetnonblocking(conn, 1);
+				
+				/*
 				 * Implement requirepeer check, if requested and it's a
 				 * Unix-domain socket.
 				 */
@@ -3009,19 +3019,40 @@ keep_going:						/* We will come back to here until there is
 				 */
 				if (pqPacketSend(conn, 0, startpacket, packetlen) != STATUS_OK)
 				{
+					free(startpacket);
+					if (SOCK_ERRNO == EWOULDBLOCK || SOCK_ERRNO == EAGAIN)
+					{
+						/* Couldn't flush nonblocking socket; try again! */
+						conn->status = CONNECTION_SENDING_STARTUP;
+						return PGRES_POLLING_WRITING;
+					}
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("could not send startup packet: %s\n"),
 									  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
-					free(startpacket);
 					goto error_return;
 				}
 
-				free(startpacket);
-
+				free(startpacket);					
 				conn->status = CONNECTION_AWAITING_RESPONSE;
 				return PGRES_POLLING_READING;
 			}
 
+		case CONNECTION_SENDING_STARTUP:
+			switch (pqFlush(conn))
+			{
+			case -1:
+				appendPQExpBuffer(&conn->errorMessage,
+								  libpq_gettext("could not send startup packet: %s\n"),
+								  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+				goto error_return;
+			case 1:
+				return PGRES_POLLING_WRITING;
+			default:
+				conn->status = CONNECTION_AWAITING_RESPONSE;
+				return PGRES_POLLING_READING;
+			}
+			break;
+			
 			/*
 			 * Handle SSL negotiation: wait for postmaster messages and
 			 * respond as necessary.
@@ -3718,10 +3749,6 @@ keep_going:						/* We will come back to here until there is
 				/* We are open for business! */
 				conn->status = CONNECTION_OK;
 
-				/* XXX */
-				if (conn->io_external)
-					PQsetnonblocking(conn, 1);
-				
 				return PGRES_POLLING_OK;
 			}
 
@@ -4758,7 +4785,7 @@ PQrequestCancel(PGconn *conn)
  * buf, buf_len: contents of message.  The given length includes only what
  * is in buf; the message type and message length fields are added here.
  *
- * RETURNS: STATUS_ERROR if the write fails, STATUS_OK otherwise.
+ * RETURNS: STATUS_ERROR if the write fails, and STATUS_OK otherwise.
  * SIDE_EFFECTS: may block.
  */
 int
