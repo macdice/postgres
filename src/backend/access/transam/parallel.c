@@ -1019,6 +1019,22 @@ ProcessParallelMessages(void)
 	static MemoryContext hpm_context = NULL;
 
 	/*
+	 * Parallel messages might cause an ERROR to be thrown.  In order to avoid
+	 * losing sync in the FE/BE protocol or aborting other code that holds
+	 * query cancelation, decline to process parallel messages until later.
+	 */
+	if (QueryCancelHoldoffCount > 0)
+	{
+		/*
+		 * Re-arm and defer this interrupt until later.  See similar code in
+		 * ProcessInterrupts().
+		 */
+		ParallelMessagePending = true;
+		InterruptPending = true;
+		return;
+	}
+
+	/*
 	 * This is invoked from ProcessInterrupts(), and since some of the
 	 * functions it calls contain CHECK_FOR_INTERRUPTS(), there is a potential
 	 * for recursive calls if more signals are received while this runs.  It's
