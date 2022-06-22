@@ -149,7 +149,7 @@ static const struct
 };
 
 /* Private functions. */
-static void HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg);
+static void ProcessParallelMessage(ParallelContext *pcxt, int i, StringInfo msg);
 static void WaitForParallelWorkersToExit(ParallelContext *pcxt);
 static parallel_worker_main_type LookupParallelWorkerFunction(const char *libraryname, const char *funcname);
 static void ParallelWorkerShutdown(int code, Datum arg);
@@ -1008,10 +1008,10 @@ HandleParallelMessageInterrupt(void)
 }
 
 /*
- * Handle any queued protocol messages received from parallel workers.
+ * Process any queued protocol messages received from parallel workers.
  */
 void
-HandleParallelMessages(void)
+ProcessParallelMessages(void)
 {
 	dlist_iter	iter;
 	MemoryContext oldcontext;
@@ -1077,7 +1077,7 @@ HandleParallelMessages(void)
 
 					initStringInfo(&msg);
 					appendBinaryStringInfo(&msg, data, nbytes);
-					HandleParallelMessage(pcxt, i, &msg);
+					ProcessParallelMessage(pcxt, i, &msg);
 					pfree(msg.data);
 				}
 				else
@@ -1097,10 +1097,10 @@ HandleParallelMessages(void)
 }
 
 /*
- * Handle a single protocol message received from a single parallel worker.
+ * Process a single protocol message received from a single parallel worker.
  */
 static void
-HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
+ProcessParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 {
 	char		msgtype;
 
