@@ -1800,6 +1800,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	kqueue
 	mbstowcs_l
 	memset_s
+	pollset_poll_ext
 	posix_fallocate
 	ppoll
 	pthread_is_threaded_np
