@@ -90,7 +90,7 @@ simple_prompt_extended(const char *prompt, bool echo,
 
 	/*
 	 * Do not try to collapse these into one "w+" mode file. Doesn't work on
-	 * some platforms (eg, HPUX 10.20).
+	 * some platforms.
 	 */
 	termin = fopen("/dev/tty", "r");
 	termout = fopen("/dev/tty", "w");
