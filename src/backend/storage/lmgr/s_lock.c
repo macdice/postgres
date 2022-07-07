@@ -14,9 +14,7 @@
  *
  * Note: you might think MIN_SPINS_PER_DELAY should be just 1, but you'd
  * be wrong; there are platforms where that can result in a "stuck
- * spinlock" failure.  This has been seen particularly on Alphas; it seems
- * that the first TAS after returning from kernel space will always fail
- * on that hardware.
+ * spinlock" failure.  (This was seen particularly on Alphas.)
  *
  * Once we do decide to block, we use randomly increasing pg_usleep()
  * delays. The first delay is 1 msec, then the delay randomly increases to
@@ -218,71 +216,6 @@ update_spins_per_delay(int shared_spins_per_delay)
 	 */
 	return (shared_spins_per_delay * 15 + spins_per_delay) / 16;
 }
-
-
-/*
- * Various TAS implementations that cannot live in s_lock.h as no inline
- * definition exists (yet).
- * In the future, get rid of tas.[cso] and fold it into this file.
- *
- * If you change something here, you will likely need to modify s_lock.h too,
- * because the definitions for these are split between this file and s_lock.h.
- */
-
-
-#ifdef HAVE_SPINLOCKS			/* skip spinlocks if requested */
-
-
-#if defined(__GNUC__)
-
-/*
- * All the gcc flavors that are not inlined
- */
-
-
-/*
- * Note: all the if-tests here probably ought to be testing gcc version
- * rather than platform, but I don't have adequate info to know what to
- * write.  Ideally we'd flush all this in favor of the inline version.
- */
-#if defined(__m68k__) && !defined(__linux__)
-/* really means: extern int tas(slock_t* **lock); */
-static void
-tas_dummy()
-{
-	__asm__ __volatile__(
-#if (defined(__NetBSD__) || defined(__OpenBSD__)) && defined(__ELF__)
-/* no underscore for label and % for registers */
-						 "\
-.global		tas 				\n\
-tas:							\n\
-			movel	%sp@(0x4),%a0	\n\
-			tas 	%a0@		\n\
-			beq 	_success	\n\
-			moveq	#-128,%d0	\n\
-			rts 				\n\
-_success:						\n\
-			moveq	#0,%d0		\n\
-			rts 				\n"
-#else
-						 "\
-.global		_tas				\n\
-_tas:							\n\
-			movel	sp@(0x4),a0	\n\
-			tas 	a0@			\n\
-			beq 	_success	\n\
-			moveq 	#-128,d0	\n\
-			rts					\n\
-_success:						\n\
-			moveq 	#0,d0		\n\
-			rts					\n"
-#endif							/* (__NetBSD__ || __OpenBSD__) && __ELF__ */
-		);
-}
-#endif							/* __m68k__ && !__linux__ */
-#endif							/* not __GNUC__ */
-#endif							/* HAVE_SPINLOCKS */
-
 
 
 /*****************************************************************************/
