@@ -446,14 +446,6 @@ extern size_t strlcpy(char *dst, const char *src, size_t siz);
 extern size_t strnlen(const char *str, size_t maxlen);
 #endif
 
-#ifndef HAVE_SETENV
-extern int	setenv(const char *name, const char *value, int overwrite);
-#endif
-
-#ifndef HAVE_UNSETENV
-extern int	unsetenv(const char *name);
-#endif
-
 #ifndef HAVE_DLOPEN
 extern void *dlopen(const char *file, int mode);
 extern void *dlsym(void *handle, const char *symbol);
