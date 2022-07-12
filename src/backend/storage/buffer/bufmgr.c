@@ -515,7 +515,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 	Assert(BlockNumberIsValid(blockNum));
 
 	/* create a tag so we can lookup the buffer */
-	INIT_BUFFERTAG(newTag, smgr_reln->smgr_rlocator.locator,
+	INIT_BUFFERTAG(&newTag, &smgr_reln->smgr_rlocator.locator,
 				   forkNum, blockNum);
 
 	/* determine its hash code and partition lock ID */
@@ -632,7 +632,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 	ReservePrivateRefCountEntry();
-	INIT_BUFFERTAG(tag, rlocator, forkNum, blockNum);
+	INIT_BUFFERTAG(&tag, &rlocator, forkNum, blockNum);
 
 	if (BufferIsLocal(recent_buffer))
 	{
@@ -640,7 +640,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		/* Is it still valid and holding the right tag? */
-		if ((buf_state & BM_VALID) && BUFFERTAGS_EQUAL(tag, bufHdr->tag))
+		if ((buf_state & BM_VALID) && BUFFERTAGS_EQUAL(&tag, &bufHdr->tag))
 		{
 			/* Bump local buffer's ref and usage counts. */
 			ResourceOwnerRememberBuffer(CurrentResourceOwner, recent_buffer);
@@ -669,7 +669,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 		else
 			buf_state = LockBufHdr(bufHdr);
 
-		if ((buf_state & BM_VALID) && BUFFERTAGS_EQUAL(tag, bufHdr->tag))
+		if ((buf_state & BM_VALID) && BUFFERTAGS_EQUAL(&tag, &bufHdr->tag))
 		{
 			/*
 			 * It's now safe to pin the buffer.  We can't pin first and ask
@@ -1124,7 +1124,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	uint32		buf_state;
 
 	/* create a tag so we can lookup the buffer */
-	INIT_BUFFERTAG(newTag, smgr->smgr_rlocator.locator, forkNum, blockNum);
+	INIT_BUFFERTAG(&newTag, &smgr->smgr_rlocator.locator, forkNum, blockNum);
 
 	/* determine its hash code and partition lock ID */
 	newHash = BufTableHashCode(&newTag);
@@ -1507,7 +1507,7 @@ retry:
 	buf_state = LockBufHdr(buf);
 
 	/* If it's changed while we were waiting for lock, do nothing */
-	if (!BUFFERTAGS_EQUAL(buf->tag, oldTag))
+	if (!BUFFERTAGS_EQUAL(&buf->tag, &oldTag))
 	{
 		UnlockBufHdr(buf, buf_state);
 		LWLockRelease(oldPartitionLock);
@@ -1539,7 +1539,7 @@ retry:
 	 * linear scans of the buffer array don't think the buffer is valid.
 	 */
 	oldFlags = buf_state & BUF_FLAG_MASK;
-	CLEAR_BUFFERTAG(buf->tag);
+	CLEAR_BUFFERTAG(&buf->tag);
 	buf_state &= ~(BUF_FLAG_MASK | BUF_USAGECOUNT_MASK);
 	UnlockBufHdr(buf, buf_state);
 
@@ -3355,7 +3355,7 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		uint32		buf_state;
 
 		/* create a tag so we can lookup the buffer */
-		INIT_BUFFERTAG(bufTag, rlocator, forkNum, curBlock);
+		INIT_BUFFERTAG(&bufTag, &rlocator, forkNum, curBlock);
 
 		/* determine its hash code and partition lock ID */
 		bufHash = BufTableHashCode(&bufTag);
