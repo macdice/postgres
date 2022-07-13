@@ -1647,8 +1647,8 @@ ReleaseAndReadBuffer(Buffer buffer,
 		{
 			bufHdr = GetLocalBufferDescriptor(-buffer - 1);
 			if (bufHdr->tag.blockNum == blockNum &&
-				RelFileLocatorEquals(bufHdr->tag.rlocator, relation->rd_locator) &&
-				bufHdr->tag.forkNum == forkNum)
+				BufTagMatchesRelFileLocator(&bufHdr->tag, &relation->rd_locator) &&
+				BufTagGetForkNum(&bufHdr->tag) == forkNum)
 				return buffer;
 			ResourceOwnerForgetBuffer(CurrentResourceOwner, buffer);
 			LocalRefCount[-buffer - 1]--;
@@ -1658,8 +1658,8 @@ ReleaseAndReadBuffer(Buffer buffer,
 			bufHdr = GetBufferDescriptor(buffer - 1);
 			/* we have pin, so it's ok to examine tag without spinlock */
 			if (bufHdr->tag.blockNum == blockNum &&
-				RelFileLocatorEquals(bufHdr->tag.rlocator, relation->rd_locator) &&
-				bufHdr->tag.forkNum == forkNum)
+				BufTagMatchesRelFileLocator(&bufHdr->tag, &relation->rd_locator) &&
+				BufTagGetForkNum(&bufHdr->tag) == forkNum)
 				return buffer;
 			UnpinBuffer(bufHdr, true);
 		}
@@ -2000,9 +2000,9 @@ BufferSync(int flags)
 
 			item = &CkptBufferIds[num_to_scan++];
 			item->buf_id = buf_id;
-			item->tsId = bufHdr->tag.rlocator.spcOid;
-			item->relNumber = bufHdr->tag.rlocator.relNumber;
-			item->forkNum = bufHdr->tag.forkNum;
+			item->tsId = bufHdr->tag.spcOid;
+			item->relNumber = BufTagGetRelNumber(&bufHdr->tag);
+			item->forkNum = BufTagGetForkNum(&bufHdr->tag);
 			item->blockNum = bufHdr->tag.blockNum;
 		}
 
@@ -2692,6 +2692,7 @@ PrintBufferLeakWarning(Buffer buffer)
 	char	   *path;
 	BackendId	backend;
 	uint32		buf_state;
+	RelFileLocator rlocator;
 
 	Assert(BufferIsValid(buffer));
 	if (BufferIsLocal(buffer))
@@ -2707,8 +2708,10 @@ PrintBufferLeakWarning(Buffer buffer)
 		backend = InvalidBackendId;
 	}
 
+	rlocator = BufTagGetRelFileLocator(&buf->tag);
+
 	/* theoretically we should lock the bufhdr here */
-	path = relpathbackend(buf->tag.rlocator, backend, buf->tag.forkNum);
+	path = relpathbackend(rlocator, backend, BufTagGetForkNum(&buf->tag));
 	buf_state = pg_atomic_read_u32(&buf->state);
 	elog(WARNING,
 		 "buffer refcount leak: [%03d] "
@@ -2787,8 +2790,8 @@ BufferGetTag(Buffer buffer, RelFileLocator *rlocator, ForkNumber *forknum,
 		bufHdr = GetBufferDescriptor(buffer - 1);
 
 	/* pinned, so OK to read tag without spinlock */
-	*rlocator = bufHdr->tag.rlocator;
-	*forknum = bufHdr->tag.forkNum;
+	*rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
+	*forknum = BufTagGetForkNum(&bufHdr->tag);
 	*blknum = bufHdr->tag.blockNum;
 }
 
@@ -2838,9 +2841,14 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(buf->tag.rlocator, InvalidBackendId);
+	{
+		RelFileLocator rlocator;
 
-	TRACE_POSTGRESQL_BUFFER_FLUSH_START(buf->tag.forkNum,
+		rlocator = BufTagGetRelFileLocator(&buf->tag);
+		reln = smgropen(rlocator, InvalidBackendId);
+	}
+
+	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(&buf->tag),
 										buf->tag.blockNum,
 										reln->smgr_rlocator.locator.spcOid,
 										reln->smgr_rlocator.locator.dbOid,
@@ -2899,7 +2907,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * bufToWrite is either the shared buffer or a copy, as appropriate.
 	 */
 	smgrwrite(reln,
-			  buf->tag.forkNum,
+			  BufTagGetForkNum(&buf->tag),
 			  buf->tag.blockNum,
 			  bufToWrite,
 			  false);
@@ -2920,7 +2928,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 */
 	TerminateBufferIO(buf, true, 0);
 
-	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(buf->tag.forkNum,
+	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(BufTagGetForkNum(&buf->tag),
 									   buf->tag.blockNum,
 									   reln->smgr_rlocator.locator.spcOid,
 									   reln->smgr_rlocator.locator.dbOid,
@@ -3141,15 +3149,15 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		 * We could check forkNum and blockNum as well as the rlocator, but
 		 * the incremental win from doing so seems small.
 		 */
-		if (!RelFileLocatorEquals(bufHdr->tag.rlocator, rlocator.locator))
+		if (!BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator.locator))
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
 
 		for (j = 0; j < nforks; j++)
 		{
-			if (RelFileLocatorEquals(bufHdr->tag.rlocator, rlocator.locator) &&
-				bufHdr->tag.forkNum == forkNum[j] &&
+			if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator.locator) &&
+				BufTagGetForkNum(&bufHdr->tag) == forkNum[j] &&
 				bufHdr->tag.blockNum >= firstDelBlock[j])
 			{
 				InvalidateBuffer(bufHdr);	/* releases spinlock */
@@ -3300,7 +3308,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 
 			for (j = 0; j < n; j++)
 			{
-				if (RelFileLocatorEquals(bufHdr->tag.rlocator, locators[j]))
+				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &locators[j]))
 				{
 					rlocator = &locators[j];
 					break;
@@ -3309,7 +3317,10 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 		}
 		else
 		{
-			rlocator = bsearch((const void *) &(bufHdr->tag.rlocator),
+			RelFileLocator locator;
+
+			locator = BufTagGetRelFileLocator(&bufHdr->tag);
+			rlocator = bsearch((const void *) &(locator),
 							   locators, n, sizeof(RelFileLocator),
 							   rlocator_comparator);
 		}
@@ -3319,7 +3330,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (RelFileLocatorEquals(bufHdr->tag.rlocator, (*rlocator)))
+		if (BufTagMatchesRelFileLocator(&bufHdr->tag, rlocator))
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);
@@ -3379,8 +3390,8 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		 */
 		buf_state = LockBufHdr(bufHdr);
 
-		if (RelFileLocatorEquals(bufHdr->tag.rlocator, rlocator) &&
-			bufHdr->tag.forkNum == forkNum &&
+		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator) &&
+			BufTagGetForkNum(&bufHdr->tag) == forkNum &&
 			bufHdr->tag.blockNum >= firstDelBlock)
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
@@ -3418,11 +3429,11 @@ DropDatabaseBuffers(Oid dbid)
 		 * As in DropRelationBuffers, an unlocked precheck should be
 		 * safe and saves some cycles.
 		 */
-		if (bufHdr->tag.rlocator.dbOid != dbid)
+		if (bufHdr->tag.dbOid != dbid)
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (bufHdr->tag.rlocator.dbOid == dbid)
+		if (bufHdr->tag.dbOid == dbid)
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);
@@ -3446,13 +3457,16 @@ PrintBufferDescs(void)
 	{
 		BufferDesc *buf = GetBufferDescriptor(i);
 		Buffer		b = BufferDescriptorGetBuffer(buf);
+		RelFileLocator rlocator;
+
+		rlocator = BufTagGetRelFileLocator(&buf->tag);
 
 		/* theoretically we should lock the bufhdr here */
 		elog(LOG,
 			 "[%02d] (freeNext=%d, rel=%s, "
 			 "blockNum=%u, flags=0x%x, refcount=%u %d)",
 			 i, buf->freeNext,
-			 relpathbackend(buf->tag.rlocator, InvalidBackendId, buf->tag.forkNum),
+			 relpathbackend(rlocator, InvalidBackendId, BufTagGetForkNum(&buf->tag)),
 			 buf->tag.blockNum, buf->flags,
 			 buf->refcount, GetPrivateRefCount(b));
 	}
@@ -3472,12 +3486,16 @@ PrintPinnedBufs(void)
 
 		if (GetPrivateRefCount(b) > 0)
 		{
+			RelFileLocator rlocator;
+
+			rlocator = BufTagGetRelFileLocator(&buf->tag);
+
 			/* theoretically we should lock the bufhdr here */
 			elog(LOG,
 				 "[%02d] (freeNext=%d, rel=%s, "
 				 "blockNum=%u, flags=0x%x, refcount=%u %d)",
 				 i, buf->freeNext,
-				 relpathperm(buf->tag.rlocator, buf->tag.forkNum),
+				 relpathperm(rlocator, BufTagGetForkNum(&buf->tag)),
 				 buf->tag.blockNum, buf->flags,
 				 buf->refcount, GetPrivateRefCount(b));
 		}
@@ -3516,7 +3534,7 @@ FlushRelationBuffers(Relation rel)
 			uint32		buf_state;
 
 			bufHdr = GetLocalBufferDescriptor(i);
-			if (RelFileLocatorEquals(bufHdr->tag.rlocator, rel->rd_locator) &&
+			if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rel->rd_locator) &&
 				((buf_state = pg_atomic_read_u32(&bufHdr->state)) &
 				 (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 			{
@@ -3534,7 +3552,7 @@ FlushRelationBuffers(Relation rel)
 				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 				smgrwrite(RelationGetSmgr(rel),
-						  bufHdr->tag.forkNum,
+						  BufTagGetForkNum(&bufHdr->tag),
 						  bufHdr->tag.blockNum,
 						  localpage,
 						  false);
@@ -3563,13 +3581,13 @@ FlushRelationBuffers(Relation rel)
 		 * As in DropRelationBuffers, an unlocked precheck should be
 		 * safe and saves some cycles.
 		 */
-		if (!RelFileLocatorEquals(bufHdr->tag.rlocator, rel->rd_locator))
+		if (!BufTagMatchesRelFileLocator(&bufHdr->tag, &rel->rd_locator))
 			continue;
 
 		ReservePrivateRefCountEntry();
 
 		buf_state = LockBufHdr(bufHdr);
-		if (RelFileLocatorEquals(bufHdr->tag.rlocator, rel->rd_locator) &&
+		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rel->rd_locator) &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
@@ -3643,7 +3661,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 
 			for (j = 0; j < nrels; j++)
 			{
-				if (RelFileLocatorEquals(bufHdr->tag.rlocator, srels[j].rlocator))
+				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &srels[j].rlocator))
 				{
 					srelent = &srels[j];
 					break;
@@ -3652,7 +3670,10 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 		}
 		else
 		{
-			srelent = bsearch((const void *) &(bufHdr->tag.rlocator),
+			RelFileLocator rlocator;
+
+			rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
+			srelent = bsearch((const void *) &(rlocator),
 							  srels, nrels, sizeof(SMgrSortArray),
 							  rlocator_comparator);
 		}
@@ -3664,7 +3685,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 		ReservePrivateRefCountEntry();
 
 		buf_state = LockBufHdr(bufHdr);
-		if (RelFileLocatorEquals(bufHdr->tag.rlocator, srelent->rlocator) &&
+		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &srelent->rlocator) &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
@@ -3866,13 +3887,13 @@ FlushDatabaseBuffers(Oid dbid)
 		 * As in DropRelationBuffers, an unlocked precheck should be
 		 * safe and saves some cycles.
 		 */
-		if (bufHdr->tag.rlocator.dbOid != dbid)
+		if (bufHdr->tag.dbOid != dbid)
 			continue;
 
 		ReservePrivateRefCountEntry();
 
 		buf_state = LockBufHdr(bufHdr);
-		if (bufHdr->tag.rlocator.dbOid == dbid &&
+		if (bufHdr->tag.dbOid == dbid &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
@@ -4032,6 +4053,10 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		if (XLogHintBitIsNeeded() &&
 			(pg_atomic_read_u32(&bufHdr->state) & BM_PERMANENT))
 		{
+			RelFileLocator rlocator;
+
+			rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
+
 			/*
 			 * If we must not write WAL, due to a relfilelocator-specific
 			 * condition or being in recovery, don't dirty the page.  We can
@@ -4040,8 +4065,7 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 			 *
 			 * See src/backend/storage/page/README for longer discussion.
 			 */
-			if (RecoveryInProgress() ||
-				RelFileLocatorSkippingWAL(bufHdr->tag.rlocator))
+			if (RecoveryInProgress() || RelFileLocatorSkippingWAL(rlocator))
 				return;
 
 			/*
@@ -4649,8 +4673,10 @@ AbortBufferIO(void)
 			{
 				/* Buffer is pinned, so we can read tag without spinlock */
 				char	   *path;
+				RelFileLocator rlocator;
 
-				path = relpathperm(buf->tag.rlocator, buf->tag.forkNum);
+				rlocator = BufTagGetRelFileLocator(&buf->tag);
+				path = relpathperm(rlocator, BufTagGetForkNum(&buf->tag));
 				ereport(WARNING,
 						(errcode(ERRCODE_IO_ERROR),
 						 errmsg("could not write block %u of %s",
@@ -4674,7 +4700,11 @@ shared_buffer_write_error_callback(void *arg)
 	/* Buffer is pinned, so we can read the tag without locking the spinlock */
 	if (bufHdr != NULL)
 	{
-		char	   *path = relpathperm(bufHdr->tag.rlocator, bufHdr->tag.forkNum);
+		char	   *path;
+		RelFileLocator rlocator;
+
+		rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
+		path = relpathperm(rlocator, BufTagGetForkNum(&bufHdr->tag));
 
 		errcontext("writing block %u of relation %s",
 				   bufHdr->tag.blockNum, path);
@@ -4692,8 +4722,12 @@ local_buffer_write_error_callback(void *arg)
 
 	if (bufHdr != NULL)
 	{
-		char	   *path = relpathbackend(bufHdr->tag.rlocator, MyBackendId,
-										  bufHdr->tag.forkNum);
+		char	   *path;
+		RelFileLocator rlocator;
+
+		rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
+		path = relpathbackend(rlocator, MyBackendId,
+							  BufTagGetForkNum(&bufHdr->tag));
 
 		errcontext("writing block %u of relation %s",
 				   bufHdr->tag.blockNum, path);
@@ -4787,15 +4821,20 @@ static inline int
 buffertag_comparator(const BufferTag *ba, const BufferTag *bb)
 {
 	int			ret;
+	RelFileLocator rlocatora;
+	RelFileLocator rlocatorb;
 
-	ret = rlocator_comparator(&ba->rlocator, &bb->rlocator);
+	rlocatora = BufTagGetRelFileLocator(ba);
+	rlocatorb = BufTagGetRelFileLocator(bb);
+
+	ret = rlocator_comparator(&rlocatora, &rlocatorb);
 
 	if (ret != 0)
 		return ret;
 
-	if (ba->forkNum < bb->forkNum)
+	if (BufTagGetForkNum(ba) < BufTagGetForkNum(bb))
 		return -1;
-	if (ba->forkNum > bb->forkNum)
+	if (BufTagGetForkNum(ba) > BufTagGetForkNum(bb))
 		return 1;
 
 	if (ba->blockNum < bb->blockNum)
@@ -4945,10 +4984,12 @@ IssuePendingWritebacks(WritebackContext *context)
 		SMgrRelation reln;
 		int			ahead;
 		BufferTag	tag;
+		RelFileLocator currlocator;
 		Size		nblocks = 1;
 
 		cur = &context->pending_writebacks[i];
 		tag = cur->tag;
+		currlocator = BufTagGetRelFileLocator(&tag);
 
 		/*
 		 * Peek ahead, into following writeback requests, to see if they can
@@ -4956,11 +4997,14 @@ IssuePendingWritebacks(WritebackContext *context)
 		 */
 		for (ahead = 0; i + ahead + 1 < context->nr_pending; ahead++)
 		{
+			RelFileLocator nextrlocator;
+
 			next = &context->pending_writebacks[i + ahead + 1];
+			nextrlocator = BufTagGetRelFileLocator(&next->tag);
 
 			/* different file, stop */
-			if (!RelFileLocatorEquals(cur->tag.rlocator, next->tag.rlocator) ||
-				cur->tag.forkNum != next->tag.forkNum)
+			if (!RelFileLocatorEquals(currlocator, nextrlocator) ||
+				BufTagGetForkNum(&cur->tag) != BufTagGetForkNum(&next->tag))
 				break;
 
 			/* ok, block queued twice, skip */
@@ -4978,8 +5022,8 @@ IssuePendingWritebacks(WritebackContext *context)
 		i += ahead;
 
 		/* and finally tell the kernel to write the data to storage */
-		reln = smgropen(tag.rlocator, InvalidBackendId);
-		smgrwriteback(reln, tag.forkNum, tag.blockNum, nblocks);
+		reln = smgropen(currlocator, InvalidBackendId);
+		smgrwriteback(reln, BufTagGetForkNum(&tag), tag.blockNum, nblocks);
 	}
 
 	context->nr_pending = 0;

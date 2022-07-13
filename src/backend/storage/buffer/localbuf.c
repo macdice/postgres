@@ -213,15 +213,18 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	{
 		SMgrRelation oreln;
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+		RelFileLocator rlocator;
+
+		rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
 
 		/* Find smgr relation for buffer */
-		oreln = smgropen(bufHdr->tag.rlocator, MyBackendId);
+		oreln = smgropen(rlocator, MyBackendId);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 		/* And write... */
 		smgrwrite(oreln,
-				  bufHdr->tag.forkNum,
+				  BufTagGetForkNum(&bufHdr->tag),
 				  bufHdr->tag.blockNum,
 				  localpage,
 				  false);
@@ -337,16 +340,22 @@ DropRelationLocalBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			RelFileLocatorEquals(bufHdr->tag.rlocator, rlocator) &&
-			bufHdr->tag.forkNum == forkNum &&
+			BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator) &&
+			BufTagGetForkNum(&bufHdr->tag) == forkNum &&
 			bufHdr->tag.blockNum >= firstDelBlock)
 		{
 			if (LocalRefCount[i] != 0)
+			{
+				RelFileLocator rlocator;
+
+				rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
 				elog(ERROR, "block %u of %s is still referenced (local %u)",
 					 bufHdr->tag.blockNum,
-					 relpathbackend(bufHdr->tag.rlocator, MyBackendId,
-									bufHdr->tag.forkNum),
+					 relpathbackend(rlocator, MyBackendId,
+									BufTagGetForkNum(&bufHdr->tag)),
 					 LocalRefCount[i]);
+			}
+
 			/* Remove entry from hashtable */
 			hresult = (LocalBufferLookupEnt *)
 				hash_search(LocalBufHash, (void *) &bufHdr->tag,
@@ -383,13 +392,16 @@ DropRelationAllLocalBuffers(RelFileLocator rlocator)
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			RelFileLocatorEquals(bufHdr->tag.rlocator, rlocator))
+			BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator))
 		{
+			RelFileLocator rlocator;
+
+			rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
 			if (LocalRefCount[i] != 0)
 				elog(ERROR, "block %u of %s is still referenced (local %u)",
 					 bufHdr->tag.blockNum,
-					 relpathbackend(bufHdr->tag.rlocator, MyBackendId,
-									bufHdr->tag.forkNum),
+					 relpathbackend(rlocator, MyBackendId,
+									BufTagGetForkNum(&bufHdr->tag)),
 					 LocalRefCount[i]);
 			/* Remove entry from hashtable */
 			hresult = (LocalBufferLookupEnt *)
