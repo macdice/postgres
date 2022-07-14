@@ -250,6 +250,8 @@ main(int argc, char *argv[])
 	printf(_("Latest checkpoint's NextXID:          %u:%u\n"),
 		   EpochFromFullTransactionId(ControlFile->checkPointCopy.nextXid),
 		   XidFromFullTransactionId(ControlFile->checkPointCopy.nextXid));
+	printf(_("Latest checkpoint's NextRelFileNumber:  " INT64_FORMAT "\n"),
+		   ControlFile->checkPointCopy.nextRelFileNumber);
 	printf(_("Latest checkpoint's NextOID:          %u\n"),
 		   ControlFile->checkPointCopy.nextOid);
 	printf(_("Latest checkpoint's NextMultiXactId:  %u\n"),

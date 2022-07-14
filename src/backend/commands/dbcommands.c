@@ -250,7 +250,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	BlockNumber nblocks;
 	BlockNumber blkno;
 	Buffer		buf;
-	Oid			relfilenumber;
+	RelFileNumber relfilenumber;
 	Page		page;
 	List	   *rlocatorlist = NIL;
 	LockRelId	relid;
@@ -397,7 +397,7 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 {
 	CreateDBRelInfo *relinfo;
 	Form_pg_class classForm;
-	Oid			relfilenumber = InvalidRelFileNumber;
+	RelFileNumber relfilenumber = InvalidRelFileNumber;
 
 	classForm = (Form_pg_class) GETSTRUCT(tuple);
 

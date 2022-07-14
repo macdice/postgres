@@ -38,8 +38,14 @@ extern bool IsPinnedObject(Oid classId, Oid objectId);
 
 extern Oid	GetNewOidWithIndex(Relation relation, Oid indexId,
 							   AttrNumber oidcolumn);
-extern RelFileNumber GetNewRelFileNumber(Oid reltablespace,
-										 Relation pg_class,
-										 char relpersistence);
+
+#ifdef USE_ASSERT_CHECKING
+extern void AssertRelfileNumberFileNotExists(Oid spcoid,
+											 RelFileNumber relnumber,
+											 char relpersistence);
+#else
+#define AssertRelfileNumberFileNotExists(spcoid, relnumber, relpersistence) \
+										((void)true)
+#endif
 
 #endif							/* CATALOG_H */

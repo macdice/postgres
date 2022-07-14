@@ -196,6 +196,21 @@ FullTransactionIdAdvance(FullTransactionId *dest)
 #define FirstUnpinnedObjectId	12000
 #define FirstNormalObjectId		16384
 
+/* ----------
+ * RelFileNumber zero is InvalidRelFileNumber.
+ *
+ * For the system tables (OID < FirstNormalObjectId) the initial storage
+ * will be created with the relfilenumber same as their oid.  And, later for
+ * any storage the relfilenumber allocated by GetNewRelFileNumber() will start
+ * at 100000.  Thus, when upgrading from an older cluster, the relation storage
+ * path for the user table from the old cluster will not conflict with the
+ * relation storage path for the system table from the new cluster.  Anyway,
+ * the new cluster must not have any user tables while upgrading, so we needn't
+ * worry about them.
+ * ----------
+ */
+#define FirstNormalRelFileNumber	((RelFileNumber) 100000)
+
 /*
  * VariableCache is a data structure in shared memory that is used to track
  * OID and XID assignment state.  For largely historical reasons, there is
@@ -213,6 +228,10 @@ typedef struct VariableCacheData
 	 */
 	Oid			nextOid;		/* next OID to assign */
 	uint32		oidCount;		/* OIDs available before must do XLOG work */
+	RelFileNumber nextRelFileNumber;	/* next relfilenumber to assign */
+	RelFileNumber loggedRelFileNumber;	/* last logged relfilenumber */
+	XLogRecPtr	loggedRelFileNumberRecPtr;	/* xlog record pointer w.r.t.
+											 * loggedRelFileNumber */
 
 	/*
 	 * These fields are protected by XidGenLock.
@@ -293,6 +312,8 @@ extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
+extern RelFileNumber GetNewRelFileNumber(void);
+extern void SetNextRelFileNumber(RelFileNumber relnumber);
 extern void StopGeneratingPinnedObjectIds(void);
 
 #ifdef USE_ASSERT_CHECKING
