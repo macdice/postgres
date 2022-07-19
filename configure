@@ -16745,19 +16745,6 @@ $as_echo "#define HAVE_PS_STRINGS 1" >>confdefs.h
 
 fi
 
-ac_fn_c_check_func "$LINENO" "dlopen" "ac_cv_func_dlopen"
-if test "x$ac_cv_func_dlopen" = xyes; then :
-  $as_echo "#define HAVE_DLOPEN 1" >>confdefs.h
-
-else
-  case " $LIBOBJS " in
-  *" dlopen.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS dlopen.$ac_objext"
- ;;
-esac
-
-fi
-
 ac_fn_c_check_func "$LINENO" "explicit_bzero" "ac_cv_func_explicit_bzero"
 if test "x$ac_cv_func_explicit_bzero" = xyes; then :
   $as_echo "#define HAVE_EXPLICIT_BZERO 1" >>confdefs.h
@@ -17129,6 +17116,12 @@ fi
   case " $LIBOBJS " in
   *" dirmod.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS dirmod.$ac_objext"
+ ;;
+esac
+
+  case " $LIBOBJS " in
+  *" dlopen.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS dlopen.$ac_objext"
  ;;
 esac
 

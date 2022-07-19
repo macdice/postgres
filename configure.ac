@@ -1909,7 +1909,6 @@ if test "$pgac_cv_var_PS_STRINGS" = yes ; then
 fi
 
 AC_REPLACE_FUNCS(m4_normalize([
-	dlopen
 	explicit_bzero
 	fls
 	getopt
@@ -1988,6 +1987,7 @@ if test "$PORTNAME" = "win32"; then
   AC_CHECK_FUNCS(_configthreadlocale)
   AC_REPLACE_FUNCS(gettimeofday)
   AC_LIBOBJ(dirmod)
+  AC_LIBOBJ(dlopen)
   AC_LIBOBJ(kill)
   AC_LIBOBJ(open)
   AC_LIBOBJ(system)

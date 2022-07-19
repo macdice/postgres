@@ -252,7 +252,6 @@ sub GenerateFiles
 		HAVE_DECL_STRNLEN                           => 1,
 		HAVE_DECL_STRTOLL                           => 1,
 		HAVE_DECL_STRTOULL                          => 1,
-		HAVE_DLOPEN                                 => undef,
 		HAVE_EDITLINE_HISTORY_H                     => undef,
 		HAVE_EDITLINE_READLINE_H                    => undef,
 		HAVE_EXECINFO_H                             => undef,

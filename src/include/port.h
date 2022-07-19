@@ -459,7 +459,8 @@ extern int	setenv(const char *name, const char *value, int overwrite);
 extern int	unsetenv(const char *name);
 #endif
 
-#ifndef HAVE_DLOPEN
+#ifdef WIN32
+/* src/port/dlopen.c has an implementation of dlopen for Windows */
 extern void *dlopen(const char *file, int mode);
 extern void *dlsym(void *handle, const char *symbol);
 extern int	dlclose(void *handle);
