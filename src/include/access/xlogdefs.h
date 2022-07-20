@@ -70,27 +70,10 @@ typedef uint16 RepOriginId;
  * default method.  We assume that fsync() is always available, and that
  * configure determined whether fdatasync() is.
  */
-#if defined(O_SYNC)
-#define OPEN_SYNC_FLAG		O_SYNC
-#elif defined(O_FSYNC)
-#define OPEN_SYNC_FLAG		O_FSYNC
-#endif
-
-#if defined(O_DSYNC)
-#if defined(OPEN_SYNC_FLAG)
-/* O_DSYNC is distinct? */
-#if O_DSYNC != OPEN_SYNC_FLAG
-#define OPEN_DATASYNC_FLAG		O_DSYNC
-#endif
-#else							/* !defined(OPEN_SYNC_FLAG) */
-/* Win32 only has O_DSYNC */
-#define OPEN_DATASYNC_FLAG		O_DSYNC
-#endif
-#endif
 
 #if defined(PLATFORM_DEFAULT_SYNC_METHOD)
 #define DEFAULT_SYNC_METHOD		PLATFORM_DEFAULT_SYNC_METHOD
-#elif defined(OPEN_DATASYNC_FLAG)
+#elif defined(O_DSYNC) && O_DSYNC != O_SYNC
 #define DEFAULT_SYNC_METHOD		SYNC_METHOD_OPEN_DSYNC
 #elif defined(HAVE_FDATASYNC)
 #define DEFAULT_SYNC_METHOD		SYNC_METHOD_FDATASYNC
