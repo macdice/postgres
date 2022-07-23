@@ -24,9 +24,7 @@
  * declare them in <wchar.h>, so include that too.
  */
 #include <wchar.h>
-#ifdef HAVE_WCTYPE_H
 #include <wctype.h>
-#endif
 
 /* working state for tsearch_readline (should be a local var in caller) */
 typedef struct

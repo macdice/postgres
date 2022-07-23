@@ -75,9 +75,7 @@
  * declare them in <wchar.h>, so include that too.
  */
 #include <wchar.h>
-#ifdef HAVE_WCTYPE_H
 #include <wctype.h>
-#endif
 
 #ifdef USE_ICU
 #include <unicode/ustring.h>

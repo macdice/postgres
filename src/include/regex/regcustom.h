@@ -46,9 +46,7 @@
  * declare them in <wchar.h>, so include that too.
  */
 #include <wchar.h>
-#ifdef HAVE_WCTYPE_H
 #include <wctype.h>
-#endif
 
 #include "mb/pg_wchar.h"
 
