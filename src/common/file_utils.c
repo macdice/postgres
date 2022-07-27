@@ -465,5 +465,19 @@ get_dirent_type(const char *path,
 #endif
 	}
 
+#if defined(WIN32) && !defined(_MSC_VER)
+	/*
+	 * If we're on native Windows (not Cygwin, which has its own POSIX
+	 * symlinks), but not using the MSVC compiler, then we're using a readdir()
+	 * emulation provided by the compiler's runtime that has no concept of
+	 * symlinks.  It sees junction points as directories, so we need an extra
+	 * system call to recognize them as symlinks, following our convention.
+	 */
+	if (result == PGFILETYPE_DIR &&
+		!look_through_symlinks &&
+		pgwin32_is_junction(path))
+		result = PGFILETYPE_LNK;
+#endif
+
 	return result;
 }
