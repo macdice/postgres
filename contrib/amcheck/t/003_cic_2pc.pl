@@ -6,6 +6,7 @@ use strict;
 use warnings;
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Psql;
 use PostgreSQL::Test::Utils;
 
 use Test::More;
@@ -24,77 +25,56 @@ $node->append_conf('postgresql.conf', 'max_prepared_transactions = 10');
 $node->append_conf('postgresql.conf',
 	'lock_timeout = ' . (1000 * $PostgreSQL::Test::Utils::timeout_default));
 $node->start;
-$node->safe_psql('postgres', q(CREATE EXTENSION amcheck));
-$node->safe_psql('postgres', q(CREATE TABLE tbl(i int)));
+
+# We'll use three separate PSQL sessions
+my $main_psql = PostgreSQL::Test::Psql->new($node);
+my $side_psql = PostgreSQL::Test::Psql->new($node);
+my $cic_psql = PostgreSQL::Test::Psql->new($node);
+
+$main_psql->query(q(CREATE EXTENSION amcheck));
+$main_psql->query(q(CREATE TABLE tbl(i int)));
 
 
 #
 # Run 3 overlapping 2PC transactions with CIC
 #
-# We have two concurrent background psql processes: $main_h for INSERTs and
-# $cic_h for CIC.  Also, we use non-background psql for some COMMIT PREPARED
-# statements.
-#
 
-my $main_in    = '';
-my $main_out   = '';
-my $main_timer = IPC::Run::timeout($PostgreSQL::Test::Utils::timeout_default);
-
-my $main_h =
-  $node->background_psql('postgres', \$main_in, \$main_out,
-	$main_timer, on_error_stop => 1);
-$main_in .= q(
+$main_psql->query(q(
 BEGIN;
 INSERT INTO tbl VALUES(0);
-\echo syncpoint1
-);
-pump $main_h until $main_out =~ /syncpoint1/ || $main_timer->is_expired;
+));
 
-my $cic_in    = '';
-my $cic_out   = '';
-my $cic_timer = IPC::Run::timeout($PostgreSQL::Test::Utils::timeout_default);
-my $cic_h =
-  $node->background_psql('postgres', \$cic_in, \$cic_out,
-	$cic_timer, on_error_stop => 1);
-$cic_in .= q(
-\echo start
+$cic_psql->query_start(q(
 CREATE INDEX CONCURRENTLY idx ON tbl(i);
-);
-pump $cic_h until $cic_out =~ /start/ || $cic_timer->is_expired;
+));
 
-$main_in .= q(
+$main_psql->query(q(
 PREPARE TRANSACTION 'a';
-);
+));
 
-$main_in .= q(
+$main_psql->query(q(
 BEGIN;
 INSERT INTO tbl VALUES(0);
-\echo syncpoint2
-);
-pump $main_h until $main_out =~ /syncpoint2/ || $main_timer->is_expired;
+));
 
-$node->safe_psql('postgres', q(COMMIT PREPARED 'a';));
+$side_psql->query(q(COMMIT PREPARED 'a';));
 
-$main_in .= q(
+$main_psql->query(q(
 PREPARE TRANSACTION 'b';
 BEGIN;
 INSERT INTO tbl VALUES(0);
-\echo syncpoint3
-);
-pump $main_h until $main_out =~ /syncpoint3/ || $main_timer->is_expired;
+));
 
-$node->safe_psql('postgres', q(COMMIT PREPARED 'b';));
+$side_psql->query(q(COMMIT PREPARED 'b';));
 
-$main_in .= q(
+$main_psql->query(q(
 PREPARE TRANSACTION 'c';
 COMMIT PREPARED 'c';
-);
-$main_h->pump_nb;
+));
 
-$main_h->finish;
-$cic_h->finish;
+$cic_psql->query_complete;
 
-$result = $node->psql('postgres', q(SELECT bt_index_check('idx',true)));
+$result = $main_psql->query_success(q(SELECT bt_index_check('idx',true);));
 is($result, '0', 'bt_index_check after overlapping 2PC');
 
 
@@ -102,8 +82,7 @@ is($result, '0', 'bt_index_check after overlapping 2PC');
 # Server restart shall not change whether prepared xact blocks CIC
 #
 
-$node->safe_psql(
-	'postgres', q(
+$main_psql->query(q(
 BEGIN;
 INSERT INTO tbl VALUES(0);
 PREPARE TRANSACTION 'spans_restart';
@@ -111,25 +90,25 @@ BEGIN;
 CREATE TABLE unused ();
 PREPARE TRANSACTION 'persists_forever';
 ));
+
+$main_psql->finish;
+$side_psql->finish;
+$cic_psql->finish;
+
 $node->restart;
 
-my $reindex_in  = '';
-my $reindex_out = '';
-my $reindex_timer =
-  IPC::Run::timeout($PostgreSQL::Test::Utils::timeout_default);
-my $reindex_h =
-  $node->background_psql('postgres', \$reindex_in, \$reindex_out,
-	$reindex_timer, on_error_stop => 1);
-$reindex_in .= q(
-\echo start
+$main_psql = PostgreSQL::Test::Psql->new($node);
+$side_psql = PostgreSQL::Test::Psql->new($node);
+
+$main_psql->query_start(q(
 DROP INDEX CONCURRENTLY idx;
 CREATE INDEX CONCURRENTLY idx ON tbl(i);
-);
-pump $reindex_h until $reindex_out =~ /start/ || $reindex_timer->is_expired;
+));
 
-$node->safe_psql('postgres', "COMMIT PREPARED 'spans_restart'");
-$reindex_h->finish;
-$result = $node->psql('postgres', q(SELECT bt_index_check('idx',true)));
+$side_psql->query("COMMIT PREPARED 'spans_restart'");
+$main_psql->query_complete;
+
+$result = $main_psql->query_success(q(SELECT bt_index_check('idx',true)));
 is($result, '0', 'bt_index_check after 2PC and restart');
 
 
@@ -141,7 +120,7 @@ is($result, '0', 'bt_index_check after 2PC and restart');
 # lock to ensure only one CIC runs at a time.
 
 # Fix broken index first
-$node->safe_psql('postgres', q(REINDEX TABLE tbl;));
+$main_psql->query(q(REINDEX TABLE tbl;));
 
 # Run pgbench.
 $node->pgbench(
@@ -183,5 +162,7 @@ $node->pgbench(
 		  )
 	});
 
+$main_psql->finish;
+$side_psql->finish;
 $node->stop;
 done_testing();

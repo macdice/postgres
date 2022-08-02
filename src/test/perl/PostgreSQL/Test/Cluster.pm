@@ -1,4 +1,3 @@
-
 # Copyright (c) 2021-2022, PostgreSQL Global Development Group
 
 =pod
@@ -1875,7 +1874,7 @@ sub psql
 
 =pod
 
-=item $node->background_psql($dbname, \$stdin, \$stdout, $timer, %params) => harness
+=item $node->background_psql($dbname, \$stdin, \$stdout, \$stderr, $timer, %params) => harness
 
 Invoke B<psql> on B<$dbname> and return an IPC::Run harness object, which the
 caller may use to send input to B<psql>.  The process's stdin is sourced from
@@ -1921,7 +1920,7 @@ If given, it must be an array reference containing additional parameters to B<ps
 
 sub background_psql
 {
-	my ($self, $dbname, $stdin, $stdout, $timer, %params) = @_;
+	my ($self, $dbname, $stdin, $stdout, $stderr, $timer, %params) = @_;
 
 	local %ENV = $self->_get_env();
 
@@ -1946,9 +1945,10 @@ sub background_psql
 	$$stdin = "" if ref($stdin);
 	# IPC::Run would otherwise append to existing contents:
 	$$stdout = "" if ref($stdout);
+	$$stderr = "" if ref($stderr);
 
 	my $harness = IPC::Run::start \@psql_params,
-	  '<', $stdin, '>', $stdout, $timer;
+	  '<', $stdin, '>', $stdout, '2>', $stderr, $timer;
 
 	# Request some output, and pump until we see it.  This means that psql
 	# connection failures are caught here, relieving callers of the need to
