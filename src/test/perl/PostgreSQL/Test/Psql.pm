@@ -34,98 +34,80 @@ sub new
 	if (!$dbname) {
 		$dbname = "postgres";
 	}
-
-	# Since harnesses need references to variables for the
-	# input/output streams, we'll create a bunch of lexically scoped
-	# variables and return an anonymous function that captures them.
-	my $stdin = "";
-	my $stdout = "";
-	my $stderr = "";
-	my $last_query = "";
-	my $timer = IPC::Run::timeout(180);
-	my $harness = $cluster->background_psql($dbname,
-											\$stdin,
-											\$stdout,
-											\$stderr,
-											$timer,
-											on_error_stop => 0);
-	my $closure = sub {
-		my ($command, $argument) = @_;
-		if ($command eq "QUERY_START") {
-			# Add trailing semi-colon if necessary
-			if (!($argument =~ /;$/)) {
-				$argument .= ";"
-			}
-			# Add trailing newline if necessary
-			if (!($argument =~ /\n$/)) {
-				$argument .= "\n";
-			}
-			$last_query = $argument;
-			$stdin = $argument . "\n\\echo ___SYNC___\n";
-			$harness->pump_nb;
-		} elsif ($command eq "QUERY_COMPLETE") {
-			$stdout = "";
-			$stderr = "";
-			$harness->pump until $stdout =~ /___SYNC___\n/;
-			$stdout =~ s/___SYNC___\n//;
-			return $stdout;
-		} elsif ($command eq "LAST_QUERY") {
-			return $last_query;
-		} elsif ($command eq "STDERR") {
-			return $stderr;
-		} elsif ($command eq "CLUSTER") {
-			return $cluster;
-		} elsif ($command eq "FINISH") {
-			#print "XXX begin psql->finish";
-			$stdout = undef;
-			$stdin = undef;
-			$harness->pump_nb;
-			#print "XXX before $harness->finish\n";
-			#$harness->finish;
-			#print "XXX after $harness->finish\n";
-			#print "XXX end psql->finish";
-		}
-	};
-
-	bless $closure, "PostgreSQL::Test::Psql";
-	return $closure;
+	my %psql = (
+		"stdin" => "",
+		"stdout" => "",
+		"stderr" => "",
+		"last_query" => "",
+		"timer" => IPC::Run::timeout($PostgreSQL::Test::Utils::timeout_default),
+		"harness" => undef
+	);
+	$psql{harness} = $cluster->background_psql(\$psql{stdin},
+											   \$psql{stdout},
+											   \$psql{stderr},
+											   \$psql{timer},
+											   on_error_stop => 0);
+	bless %psql, "PostgreSQL::Test::Psql";
+	return %psql;
 }
 
 sub query_start
 {
-	my ($self, $query) = @_;
-	($self)->("QUERY_START", $query);
+	my (%self, $query) = @_;
+
+	# Add trailing semi-colon if necessary
+	if (!($query =~ /;$/)) {
+		$query .= ";"
+	}
+	# Add trailing newline if necessary
+	if (!($query =~ /\n$/)) {
+		$query .= "\n";
+	}
+	$self{query} = $query;
+	$self{stdin} = $query . "\n\\echo ___SYNC___\n";
+	$self{harness}->pump_nb;
 }
 
 sub query_complete
 {
-	my ($self) = @_;
-	my $stdout = ($self)->("QUERY_COMPLETE");
-	my $stderr = stderr($self);
-	my $query = ($self)->("LAST_QUERY");
-	if ($stderr =~ "ERROR:") {
-		BAIL_OUT("query \"$query\" failed with: $stderr");
+	my (%self) = @_;
+
+	$self{stdout} = "";
+	$self{stderr} = "";
+	$self{harness}->pump until $self{_stdout} =~ /___SYNC___\n/;
+	$self{stdout} =~ s/___SYNC___\n//;
+	if ($self{_stderr} =~ "ERROR:") {
+		BAIL_OUT("query \"$self{_query}\" failed with: $self{stderr}");
 	}
-	return $stdout;
+	return $self{stdout};
 }
 
 sub query
 {
 	my ($self, $query) = @_;
-	($self)->query_start($query);
-	return ($self)->query_complete();
+	$self->query_start($query);
+	return $self->query_complete();
+}
+
+sub query_complete_success
+{
+	my (%self) = @_;
+
+	$self{stdout} = "";
+	$self{stderr} = "";
+	$self{harness}->pump until $self{_stdout} =~ /___SYNC___\n/;
+	$self{stdout} =~ s/___SYNC___\n//;
+	if ($self{stderr} =~ "ERROR:") {
+		return 1;
+	}
+	return 0;
 }
 
 sub query_success
 {
 	my ($self, $query) = @_;
-	($self)->("QUERY_START", $query);
-	my $stdout = ($self)->("QUERY_COMPLETE", $query);
-	my $stderr = $self->stderr;
-	if ($stderr =~ "ERROR:") {
-		return 1;
-	}
-	return 0;
+	$self->query_start($query);
+	return $self->query_complete_success;
 }
 
 sub query_one
@@ -139,21 +121,24 @@ sub query_one
 
 sub stderr
 {
-	my ($self) = @_;
-	return ($self)->("STDERR");
+	my (%self) = @_;
+	return $self{stderr};
 }
 
 sub cluster
 {
-	my ($self) = @_;
-	return ($self)->("CLUSTER");
+	my (%self) = @_;
+	return $self{cluster};
 }
 
 sub finish
 {
-	my ($self) = @_;
-	print "XXX i will finish\n";
-	return ($self)->("FINISH");
+	my (%self) = @_;
+	#print "XXX begin psql->finish";
+	$self{stdout} = undef;
+	$self{stdin} = undef;
+	$self{harness}->pump_nb;
+	#$self{harness}->finish;
 }
 
 sub lsn
