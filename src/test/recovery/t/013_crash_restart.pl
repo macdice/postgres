@@ -20,6 +20,7 @@ use Test::More;
 my $psql_timeout = IPC::Run::timer($PostgreSQL::Test::Utils::timeout_default);
 
 my $node = PostgreSQL::Test::Cluster->new('primary');
+$node->enable_psql_reuse(0);
 $node->init(allows_streaming => 1);
 $node->start();
 

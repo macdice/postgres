@@ -20,6 +20,7 @@ my $psql_timeout = IPC::Run::timer($PostgreSQL::Test::Utils::timeout_default);
 my $node = PostgreSQL::Test::Cluster->new('node_crash');
 $node->init();
 $node->start();
+$node->enable_psql_reuse(0);
 
 # By default, PostgreSQL::Test::Cluster doesn't restart after crash
 # Reduce work_mem to generate temporary file with a few number of rows

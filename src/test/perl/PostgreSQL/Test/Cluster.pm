@@ -43,12 +43,12 @@ PostgreSQL::Test::Cluster - class representing PostgreSQL server instance
 
   # Similar thing, more convenient in common cases
   my ($cmdret, $stdout, $stderr) =
-      $node->psql('postgres', 'SELECT 1');
+	  $node->psql('postgres', 'SELECT 1');
 
   # run query every second until it returns 't'
   # or times out
   $node->poll_query_until('postgres', q|SELECT random() < 0.1;|')
-    or die "timed out";
+	or die "timed out";
 
   # Do an online pg_basebackup
   my $ret = $node->backup('testbackup1');
@@ -100,6 +100,7 @@ use File::stat qw(stat);
 use File::Temp ();
 use IPC::Run;
 use PostgreSQL::Version;
+use PostgreSQL::Test::Psql;
 use PostgreSQL::Test::RecursiveCopy;
 use Socket;
 use Test::More;
@@ -896,6 +897,8 @@ sub stop
 
 	local %ENV = $self->_get_env();
 
+	$self->_close_psqls;
+
 	$mode = 'fast' unless defined $mode;
 	return 1 unless defined $self->{_pid};
 
@@ -958,6 +961,8 @@ sub restart
 	my $name    = $self->name;
 
 	local %ENV = $self->_get_env(PGAPPNAME => undef);
+
+	$self->_close_psqls;
 
 	print "### Restarting node \"$name\"\n";
 
@@ -1259,7 +1264,9 @@ sub new
 		_logfile_base =>
 		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}",
 		_logfile =>
-		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log"
+		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log",
+		_psql_reuse => 1,
+		_psqls	 => {}
 	};
 
 	if ($params{install_path})
@@ -1344,6 +1351,18 @@ sub _set_pg_version
 
 	BAIL_OUT("could not parse pg_config --version output: $version_line")
 	  unless defined $self->{_pg_version};
+}
+
+# Private routine to close and forget any psql processes we may be
+# holding onto.
+sub _close_psqls
+{
+	my ($self) = @_;
+	foreach my $dbname (keys %{$self->{_psqls}}) {
+		my $psql = $self->{_psqls}{$dbname};
+		delete $self->{_psqls}{$dbname};
+		$psql->finish;
+	}
 }
 
 # Private routine to return a copy of the environment with the PATH and
@@ -1438,6 +1457,25 @@ sub installed_command
 	# to find the right binary, which should not cause %cmd_cache confusion,
 	# because no nodes with other installation paths do it that way.
 	return $cmd;
+}
+
+=pod
+
+=item enable_psql_reuse()
+
+Enable or disable the automatic reuse of Psql connections.
+
+=cut
+
+sub enable_psql_reuse
+{
+	my $self = shift;
+	my $value = shift;
+
+	$self->{_psql_reuse} = $value;
+	if (!$value) {
+		$self->_close_psqls;
+	}
 }
 
 =pod
@@ -1609,13 +1647,27 @@ sub safe_psql
 
 	my ($stdout, $stderr);
 
-	my $ret = $self->psql(
-		$dbname, $sql,
-		%params,
-		stdout        => \$stdout,
-		stderr        => \$stderr,
-		on_error_die  => 1,
-		on_error_stop => 1);
+	# If there are no special parameters, use a long-lived psql
+	# process, created on demand.
+	if (!%params and $self->{_psql_reuse}) {
+		if (!exists($self->{_psqls}{$dbname})) {
+			$self->{_psqls}{$dbname} = PostgreSQL::Test::Psql->new($self, $dbname);
+		} else {
+			print "*** reusing psql\n";
+		}
+		my $psql = $self->{_psqls}{$dbname};
+		$stdout = $psql->query($sql);
+		chomp($stdout);
+		$stderr = $psql->stderr;
+	} else {
+		my $ret = $self->psql(
+			$dbname, $sql,
+			%params,
+			stdout        => \$stdout,
+			stderr        => \$stderr,
+			on_error_die  => 1,
+			on_error_stop => 1);
+	}
 
 	# psql can emit stderr from NOTICEs etc
 	if ($stderr ne "")
@@ -1962,6 +2014,8 @@ sub background_psql
 
 	return $harness;
 }
+
+
 
 =pod
 
@@ -2595,8 +2649,8 @@ sub wait_for_catchup
 	# Before release 12 walreceiver just set the application name to
 	# "walreceiver"
 	my $query = qq[SELECT '$target_lsn' <= ${mode}_lsn AND state = 'streaming'
-         FROM pg_catalog.pg_stat_replication
-         WHERE application_name IN ('$standby_name', 'walreceiver')];
+		 FROM pg_catalog.pg_stat_replication
+		 WHERE application_name IN ('$standby_name', 'walreceiver')];
 	$self->poll_query_until('postgres', $query)
 	  or croak "timed out waiting for catchup";
 	print "done\n";

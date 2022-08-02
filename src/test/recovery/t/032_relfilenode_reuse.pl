@@ -7,6 +7,7 @@ use File::Basename;
 
 
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
+$node_primary->enable_psql_reuse(0);
 $node_primary->init(allows_streaming => 1);
 $node_primary->append_conf(
 	'postgresql.conf', q[
@@ -24,6 +25,7 @@ $node_primary->start;
 my $backup_name = 'my_backup';
 $node_primary->backup($backup_name);
 my $node_standby = PostgreSQL::Test::Cluster->new('standby');
+$node_standby->enable_psql_reuse(0);
 $node_standby->init_from_backup($node_primary, $backup_name,
 	has_streaming => 1);
 $node_standby->start;

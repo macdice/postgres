@@ -15,6 +15,7 @@ use Config;
 
 # Initialize primary node
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
+$node_primary->enable_psql_reuse(0);
 $node_primary->init(allows_streaming => 1);
 $node_primary->append_conf(
 	'postgresql.conf', qq(
