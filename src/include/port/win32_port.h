@@ -181,9 +181,8 @@
 
 /* MinW has gettimeofday(), but MSVC doesn't */
 #ifdef _MSC_VER
-struct timezone;
 /* Last parameter not used */
-extern int	gettimeofday(struct timeval *tp, struct timezone *tzp);
+extern int	gettimeofday(struct timeval *tp, void *tzp);
 #endif
 
 /* for setitimer in backend/port/win32/timer.c */
