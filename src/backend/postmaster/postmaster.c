@@ -4041,9 +4041,6 @@ PostmasterStateMachine(void)
 static void
 signal_child(pid_t pid, int signal)
 {
-	if (kill(pid, signal) < 0)
-		elog(DEBUG3, "kill(%ld,%d) failed: %m", (long) pid, signal);
-#ifdef HAVE_SETSID
 	switch (signal)
 	{
 		case SIGINT:
@@ -4051,13 +4048,13 @@ signal_child(pid_t pid, int signal)
 		case SIGQUIT:
 		case SIGSTOP:
 		case SIGKILL:
-			if (kill(-pid, signal) < 0)
-				elog(DEBUG3, "kill(%ld,%d) failed: %m", (long) (-pid), signal);
+			pid = -pid;
 			break;
 		default:
 			break;
 	}
-#endif
+	if (kill(pid, signal) < 0)
+		elog(DEBUG3, "kill(%ld,%d) failed: %m", (long) pid, signal);
 }
 
 /*

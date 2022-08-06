@@ -16889,12 +16889,6 @@ esac
 esac
 
   case " $LIBOBJS " in
-  *" kill.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS kill.$ac_objext"
- ;;
-esac
-
-  case " $LIBOBJS " in
   *" open.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS open.$ac_objext"
  ;;
@@ -16927,6 +16921,12 @@ esac
   case " $LIBOBJS " in
   *" win32fdatasync.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS win32fdatasync.$ac_objext"
+ ;;
+esac
+
+  case " $LIBOBJS " in
+  *" win32kill.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32kill.$ac_objext"
  ;;
 esac
 

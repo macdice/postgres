@@ -145,7 +145,7 @@ InitPostmasterChild(void)
 	 * children, but for consistency we make all postmaster child processes do
 	 * this.
 	 */
-#ifdef HAVE_SETSID
+#ifndef WIN32
 	if (setsid() < 0)
 		elog(FATAL, "setsid() failed: %m");
 #endif

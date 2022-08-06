@@ -3865,15 +3865,8 @@ TerminateOtherDBBackends(Oid databaseId)
 
 			if (proc != NULL)
 			{
-				/*
-				 * If we have setsid(), signal the backend's whole process
-				 * group
-				 */
-#ifdef HAVE_SETSID
+				/* Signal the backend's whole process group */
 				(void) kill(-pid, SIGTERM);
-#else
-				(void) kill(pid, SIGTERM);
-#endif
 			}
 		}
 	}
