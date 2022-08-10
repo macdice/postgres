@@ -220,6 +220,57 @@ filesystem_metadata_tests(void)
 	PG_EXPECT(readlink("does-not-exist", path3, sizeof(path3)) == -1, "readlink fails on missing path");
 	PG_EXPECT_EQ(errno, ENOENT);
 
+	/*
+	 * Checks that we don't corrupt non-drive-absolute paths when peforming
+	 * internal conversions.
+	 */
+
+	/*
+	 * Typical case: Windows drive absolute.  This should also be accepted on
+	 * POSIX systems, because they are required not to validate the target
+	 * string as a path.
+	 */
+	make_path(path2, "my_symlink");
+	PG_EXPECT_SYS(symlink("c:\\foo", path2) == 0);
+	size = readlink(path2, path3, sizeof(path3));
+	PG_EXPECT_SYS(size != -1, "readlink succeeds");
+	PG_EXPECT_EQ(size, 6);
+	path3[Max(size, 0)] = '\0';
+	PG_EXPECT_EQ_STR(path3, "c:\\foo");
+	PG_EXPECT_SYS(unlink(path2) == 0);
+
+	/*
+	 * Drive absolute given in full NT format will be stripped on round-trip
+	 * through our Windows emulations.
+	 */
+	make_path(path2, "my_symlink");
+	PG_EXPECT_SYS(symlink("\\??\\c:\\foo", path2) == 0);
+	size = readlink(path2, path3, sizeof(path3));
+	PG_EXPECT_SYS(size != -1, "readlink succeeds");
+	path3[Max(size, 0)] = '\0';
+#ifdef WIN32
+	PG_EXPECT_EQ(size, 6);
+	PG_EXPECT_EQ_STR(path3, "c:\\foo");
+#else
+	PG_EXPECT_EQ(size, 10);
+	PG_EXPECT_EQ_STR(path3, "\\??\\c:\\foo");
+#endif
+	PG_EXPECT_SYS(unlink(path2) == 0);
+
+	/*
+	 * Anything that doesn't look like the NT pattern that symlink() creates
+	 * will be returned verbatim.  This will allow our stat() to handle paths
+	 * that were not created by symlink().
+	 */
+	make_path(path2, "my_symlink");
+	PG_EXPECT_SYS(symlink("\\??\\Volume1234", path2) == 0);
+	size = readlink(path2, path3, sizeof(path3));
+	PG_EXPECT_SYS(size != -1, "readlink succeeds");
+	PG_EXPECT_EQ(size, 14);
+	path3[Max(size, 0)] = '\0';
+	PG_EXPECT_EQ_STR(path3, "\\??\\Volume1234");
+	PG_EXPECT_SYS(unlink(path2) == 0);
+
 	/* Tests for fstat(). */
 
 	make_path(path, "dir1/test.txt");
