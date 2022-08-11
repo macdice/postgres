@@ -305,6 +305,61 @@ filesystem_metadata_tests(void)
 	PG_EXPECT(stat(path, &statbuf) == 0, "stat symlink");
 	PG_EXPECT(S_ISDIR(statbuf.st_mode));
 
+	/* Recursive symlinks. */
+	make_path(path, "dir1");
+	make_path(path2, "sym001");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym001 -> dir1");
+	make_path(path, "sym001");
+	make_path(path2, "sym002");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym002 -> sym001");
+	make_path(path, "sym002");
+	make_path(path2, "sym003");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym003 -> sym002");
+	make_path(path, "sym003");
+	make_path(path2, "sym004");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym004 -> sym003");
+	make_path(path, "sym004");
+	make_path(path2, "sym005");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym005 -> sym004");
+	make_path(path, "sym005");
+	make_path(path2, "sym006");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym006 -> sym005");
+	make_path(path, "sym006");
+	make_path(path2, "sym007");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym007 -> sym006");
+	make_path(path, "sym007");
+	make_path(path2, "sym008");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym008 -> sym007");
+	make_path(path, "sym008");
+	make_path(path2, "sym009");
+	PG_EXPECT_SYS(symlink(path, path2) == 0, "sym009 -> sym008");
+
+	/* POSIX says SYMLOOP_MAX should be at least 8. */
+	make_path(path, "sym008");
+	memset(&statbuf, 0, sizeof(statbuf));
+	PG_EXPECT_SYS(stat(path, &statbuf) == 0, "stat sym008");
+	PG_EXPECT(S_ISDIR(statbuf.st_mode));
+
+#ifdef WIN32
+
+	/*
+	 * Test ELOOP failure in our Windows implementation of stat(), because we
+	 * know it gives up after 8.
+	 */
+	make_path(path, "sym009");
+	memset(&statbuf, 0, sizeof(statbuf));
+	PG_EXPECT(stat(path, &statbuf) == -1, "Windows: stat sym009 fails");
+	PG_EXPECT_EQ(errno, ELOOP);
+#endif
+
+	/* If we break the chain we get ENOENT. */
+	make_path(path, "sym003");
+	PG_EXPECT_SYS(unlink(path) == 0);
+	make_path(path, "sym008");
+	memset(&statbuf, 0, sizeof(statbuf));
+	PG_EXPECT(stat(path, &statbuf) == -1, "stat broken symlink chain fails");
+	PG_EXPECT_EQ(errno, ENOENT);
+
 	/* Tests for lstat(). */
 
 	PG_EXPECT(stat("does-not-exist.txt", &statbuf) == -1, "lstat missing file fails");
