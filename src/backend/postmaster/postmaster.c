@@ -620,10 +620,10 @@ PostmasterMain(int argc, char *argv[])
 	 * is used by all child processes and client processes).  That has a
 	 * couple of special behaviors:
 	 *
-	 * 1. Except on Windows, we tell sigaction() to block all signals for the
-	 * duration of the signal handler.  This is faster than our old approach
-	 * of blocking/unblocking explicitly in the signal handler, and it should
-	 * also prevent excessive stack consumption if signals arrive quickly.
+	 * 1. We tell sigaction() to block all signals for the duration of the
+	 * signal handler.  This is faster than our old approach of
+	 * blocking/unblocking explicitly in the signal handler, and it should also
+	 * prevent excessive stack consumption if signals arrive quickly.
 	 *
 	 * 2. We do not set the SA_RESTART flag.  This is because signals will be
 	 * blocked at all times except when ServerLoop is waiting for something to
@@ -2730,14 +2730,6 @@ SIGHUP_handler(SIGNAL_ARGS)
 {
 	int			save_errno = errno;
 
-	/*
-	 * We rely on the signal mechanism to have blocked all signals ... except
-	 * on Windows, which lacks sigaction(), so we have to do it manually.
-	 */
-#ifdef WIN32
-	PG_SETMASK(&BlockSig);
-#endif
-
 	if (Shutdown <= SmartShutdown)
 	{
 		ereport(LOG,
@@ -2794,10 +2786,6 @@ SIGHUP_handler(SIGNAL_ARGS)
 #endif
 	}
 
-#ifdef WIN32
-	PG_SETMASK(&UnBlockSig);
-#endif
-
 	errno = save_errno;
 }
 
@@ -2809,14 +2797,6 @@ static void
 pmdie(SIGNAL_ARGS)
 {
 	int			save_errno = errno;
-
-	/*
-	 * We rely on the signal mechanism to have blocked all signals ... except
-	 * on Windows, which lacks sigaction(), so we have to do it manually.
-	 */
-#ifdef WIN32
-	PG_SETMASK(&BlockSig);
-#endif
 
 	ereport(DEBUG2,
 			(errmsg_internal("postmaster received signal %d",
@@ -2942,10 +2922,6 @@ pmdie(SIGNAL_ARGS)
 			break;
 	}
 
-#ifdef WIN32
-	PG_SETMASK(&UnBlockSig);
-#endif
-
 	errno = save_errno;
 }
 
@@ -2958,14 +2934,6 @@ reaper(SIGNAL_ARGS)
 	int			save_errno = errno;
 	int			pid;			/* process id of dead child process */
 	int			exitstatus;		/* its exit status */
-
-	/*
-	 * We rely on the signal mechanism to have blocked all signals ... except
-	 * on Windows, which lacks sigaction(), so we have to do it manually.
-	 */
-#ifdef WIN32
-	PG_SETMASK(&BlockSig);
-#endif
 
 	ereport(DEBUG4,
 			(errmsg_internal("reaping dead processes")));
@@ -3258,11 +3226,6 @@ reaper(SIGNAL_ARGS)
 	 * or actions to make.
 	 */
 	PostmasterStateMachine();
-
-	/* Done with signal handler */
-#ifdef WIN32
-	PG_SETMASK(&UnBlockSig);
-#endif
 
 	errno = save_errno;
 }
@@ -5111,14 +5074,6 @@ sigusr1_handler(SIGNAL_ARGS)
 	int			save_errno = errno;
 
 	/*
-	 * We rely on the signal mechanism to have blocked all signals ... except
-	 * on Windows, which lacks sigaction(), so we have to do it manually.
-	 */
-#ifdef WIN32
-	PG_SETMASK(&BlockSig);
-#endif
-
-	/*
 	 * RECOVERY_STARTED and BEGIN_HOT_STANDBY signals are ignored in
 	 * unexpected states. If the startup process quickly starts up, completes
 	 * recovery, exits, we might process the death of the startup process
@@ -5257,10 +5212,6 @@ sigusr1_handler(SIGNAL_ARGS)
 		 */
 		signal_child(StartupPID, SIGUSR2);
 	}
-
-#ifdef WIN32
-	PG_SETMASK(&UnBlockSig);
-#endif
 
 	errno = save_errno;
 }
