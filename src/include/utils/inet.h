@@ -30,11 +30,10 @@ typedef struct
 /*
  * We use these values for the "family" field.
  *
- * Referencing all of the non-AF_INET types to AF_INET lets us work on
- * machines which may not have the appropriate address family (like
- * inet6 addresses when AF_INET6 isn't present) but doesn't cause a
- * dump/reload requirement.  Pre-7.4 databases used AF_INET for the family
- * type on disk.
+ * We started when operating system support for IPv6 was not ubiquitous.
+ * Since we couldn't rely on AF_INET6 being defined yet, we used AF_INET + 1.
+ * We continue to do that so that on-disk data originating on such systems
+ * survives pg_upgrade.
  */
 #define PGSQL_AF_INET	(AF_INET + 0)
 #define PGSQL_AF_INET6	(AF_INET + 1)
