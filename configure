@@ -16529,26 +16529,8 @@ fi
 done
 
   case " $LIBOBJS " in
-  *" dirmod.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS dirmod.$ac_objext"
- ;;
-esac
-
-  case " $LIBOBJS " in
-  *" kill.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS kill.$ac_objext"
- ;;
-esac
-
-  case " $LIBOBJS " in
-  *" open.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS open.$ac_objext"
- ;;
-esac
-
-  case " $LIBOBJS " in
-  *" system.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS system.$ac_objext"
+  *" win32dirmod.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32dirmod.$ac_objext"
  ;;
 esac
 
@@ -16583,6 +16565,12 @@ esac
 esac
 
   case " $LIBOBJS " in
+  *" win32kill.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32kill.$ac_objext"
+ ;;
+esac
+
+  case " $LIBOBJS " in
   *" win32link.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS win32link.$ac_objext"
  ;;
@@ -16591,6 +16579,12 @@ esac
   case " $LIBOBJS " in
   *" win32ntdll.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS win32ntdll.$ac_objext"
+ ;;
+esac
+
+  case " $LIBOBJS " in
+  *" win32open.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32open.$ac_objext"
  ;;
 esac
 
@@ -16624,12 +16618,18 @@ esac
  ;;
 esac
 
+  case " $LIBOBJS " in
+  *" win32system.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32system.$ac_objext"
+ ;;
+esac
+
 fi
 # Cygwin needs only a bit of that
 if test "$PORTNAME" = "cygwin"; then
   case " $LIBOBJS " in
-  *" dirmod.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS dirmod.$ac_objext"
+  *" win32dirmod.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32dirmod.$ac_objext"
  ;;
 esac
 

@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * kill.c
+ * win32kill.c
  *	  kill()
  *
  * Copyright (c) 1996-2022, PostgreSQL Global Development Group
@@ -9,14 +9,13 @@
  *	signals that the backend can recognize.
  *
  * IDENTIFICATION
- *	  src/port/kill.c
+ *	  src/port/win32kill.c
  *
  *-------------------------------------------------------------------------
  */
 
 #include "c.h"
 
-#ifdef WIN32
 /* signal sending */
 int
 pgkill(int pid, int sig)
@@ -93,5 +92,3 @@ pgkill(int pid, int sig)
 			return -1;
 	}
 }
-
-#endif

@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * system.c
+ * win32system.c
  *	   Win32 system() and popen() replacements
  *
  *
@@ -31,12 +31,10 @@
  *
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  *
- * src/port/system.c
+ * src/port/win32system.c
  *
  *-------------------------------------------------------------------------
  */
-
-#if defined(WIN32) && !defined(__CYGWIN__)
 
 #ifndef FRONTEND
 #include "postgres.h"
@@ -113,5 +111,3 @@ pgwin32_popen(const char *command, const char *type)
 
 	return res;
 }
-
-#endif

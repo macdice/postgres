@@ -1,17 +1,15 @@
 /*-------------------------------------------------------------------------
  *
- * open.c
+ * win32open.c
  *	   Win32 open() replacement
  *
  *
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  *
- * src/port/open.c
+ * src/port/win32open.c
  *
  *-------------------------------------------------------------------------
  */
-
-#ifdef WIN32
 
 #define UMDF_USING_NTSTATUS
 
@@ -220,5 +218,3 @@ pgwin32_fopen(const char *fileName, const char *mode)
 		return NULL;
 	return _fdopen(fd, mode);
 }
-
-#endif

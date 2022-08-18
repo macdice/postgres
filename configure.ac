@@ -1867,26 +1867,26 @@ fi
 # Win32 (really MinGW) support
 if test "$PORTNAME" = "win32"; then
   AC_CHECK_FUNCS(_configthreadlocale)
-  AC_LIBOBJ(dirmod)
-  AC_LIBOBJ(kill)
-  AC_LIBOBJ(open)
-  AC_LIBOBJ(system)
+  AC_LIBOBJ(win32dirmod)
   AC_LIBOBJ(win32dlopen)
   AC_LIBOBJ(win32env)
   AC_LIBOBJ(win32error)
   AC_LIBOBJ(win32fdatasync)
   AC_LIBOBJ(win32getrusage)
+  AC_LIBOBJ(win32kill)
   AC_LIBOBJ(win32link)
   AC_LIBOBJ(win32ntdll)
+  AC_LIBOBJ(win32open)
   AC_LIBOBJ(win32pread)
   AC_LIBOBJ(win32pwrite)
   AC_LIBOBJ(win32security)
   AC_LIBOBJ(win32setlocale)
   AC_LIBOBJ(win32stat)
+  AC_LIBOBJ(win32system)
 fi
 # Cygwin needs only a bit of that
 if test "$PORTNAME" = "cygwin"; then
-  AC_LIBOBJ(dirmod)
+  AC_LIBOBJ(win32dirmod)
 fi
 
 AC_CHECK_FUNC(syslog,

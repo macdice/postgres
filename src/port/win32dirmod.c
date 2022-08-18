@@ -1,16 +1,15 @@
 /*-------------------------------------------------------------------------
  *
- * dirmod.c
+ * win32dirmod.c
  *	  directory handling functions
  *
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *	This includes replacement versions of functions that work on
- *	Win32 (NT4 and newer).
+ *	This includes replacement versions of functions that work on Windows.
  *
  * IDENTIFICATION
- *	  src/port/dirmod.c
+ *	  src/port/win32dirmod.c
  *
  *-------------------------------------------------------------------------
  */

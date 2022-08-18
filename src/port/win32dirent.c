@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * dirent.c
+ * win32dirent.c
  *	  opendir/readdir/closedir for win32/msvc
  *
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	  src/port/dirent.c
+ *	  src/port/win32dirent.c
  *
  *-------------------------------------------------------------------------
  */
