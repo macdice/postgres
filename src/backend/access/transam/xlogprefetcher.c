@@ -67,7 +67,7 @@
 #define XLOGPREFETCHER_DISTANCE_MULTIPLIER 4
 
 /* Define to log internal debugging messages. */
-/* #define XLOGPREFETCHER_DEBUG_LEVEL LOG */
+#define XLOGPREFETCHER_DEBUG_LEVEL LOG
 
 /* GUCs */
 int			recovery_prefetch = RECOVERY_PREFETCH_TRY;
@@ -680,6 +680,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 											   &aio);
 			if (already_valid)
 			{
+elog(LOG, "buffer %u, rel %u block %u hit, pinned", block->prefetch_buffer, reln->smgr_rlocator.locator.relNumber, block->blkno);
 				/* Cache hit, nothing to do. */
 				XLogPrefetchIncrement(&SharedStats->hit);
 				block->prefetch_buffer_pinned = true;
@@ -688,6 +689,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 			}
 			else
 			{
+elog(LOG, "buffer %u, rel %u block %u miss, IO started, pinned", block->prefetch_buffer, reln->smgr_rlocator.locator.relNumber, block->blkno);
 				/* Cache miss, I/O started. */
 				Assert(BufferIsValid(block->prefetch_buffer));
 				XLogPrefetchIncrement(&SharedStats->prefetch);
