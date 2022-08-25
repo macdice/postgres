@@ -470,8 +470,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 					 * because FlushDatabaseBuffers() doesn't like to see any
 					 * pinned buffers.
 					 */
-					rnode.dbNode = xlrec->src_db_id;
-					XLogPrefetcherAddFilter(prefetcher, rnode, 0, record->lsn - 1);
+					rlocator.dbOid = xlrec->src_db_id;
+					XLogPrefetcherAddFilter(prefetcher, rlocator, 0, record->lsn - 1);
 
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 					elog(XLOGPREFETCHER_DEBUG_LEVEL,
