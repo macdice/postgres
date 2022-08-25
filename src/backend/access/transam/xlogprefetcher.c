@@ -476,7 +476,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private,
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 					elog(XLOGPREFETCHER_DEBUG_LEVEL,
 						 "suppressing prefetch in database %u until %X/%X is replayed due to raw file copy",
-						 rnode.dbNode,
+						 rlocator.dbOid,
 						 LSN_FORMAT_ARGS(record->lsn));
 #endif
 				}
