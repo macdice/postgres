@@ -16204,20 +16204,6 @@ esac
 fi
 
 
-# This is probably only present on macOS, but may as well check always
-ac_fn_c_check_decl "$LINENO" "F_FULLFSYNC" "ac_cv_have_decl_F_FULLFSYNC" "#include <fcntl.h>
-"
-if test "x$ac_cv_have_decl_F_FULLFSYNC" = xyes; then :
-  ac_have_decl=1
-else
-  ac_have_decl=0
-fi
-
-cat >>confdefs.h <<_ACEOF
-#define HAVE_DECL_F_FULLFSYNC $ac_have_decl
-_ACEOF
-
-
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PS_STRINGS" >&5
 $as_echo_n "checking for PS_STRINGS... " >&6; }
 if ${pgac_cv_var_PS_STRINGS+:} false; then :

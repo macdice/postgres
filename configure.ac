@@ -1798,9 +1798,6 @@ AC_CHECK_DECLS([strlcat, strlcpy, strnlen])
 AC_CHECK_DECLS([preadv], [], [AC_LIBOBJ(preadv)], [#include <sys/uio.h>])
 AC_CHECK_DECLS([pwritev], [], [AC_LIBOBJ(pwritev)], [#include <sys/uio.h>])
 
-# This is probably only present on macOS, but may as well check always
-AC_CHECK_DECLS(F_FULLFSYNC, [], [], [#include <fcntl.h>])
-
 AC_CACHE_CHECK([for PS_STRINGS], [pgac_cv_var_PS_STRINGS],
 [AC_LINK_IFELSE([AC_LANG_PROGRAM(
 [#include <machine/vmparam.h>
