@@ -3061,7 +3061,7 @@ include_dir 'conf.d'
         </listitem>
         <listitem>
         <para>
-         <literal>fsync_writethrough</literal> (call <function>fsync()</function> at each commit, forcing write-through of any disk write cache)
+         <literal>fsync_writethrough</literal> (macOS only: call <function>fcntl(F_FULLSYNC)</function> at each commit, flushing any disk write cache)
         </para>
         </listitem>
         <listitem>
@@ -3071,7 +3071,6 @@ include_dir 'conf.d'
         </listitem>
        </itemizedlist>
        <para>
-        The <literal>open_</literal>* options also use <literal>O_DIRECT</literal> if available.
         Not all of these choices are available on all platforms.
         The default is the first method in the above list that is supported
         by the platform, except that <literal>fdatasync</literal> is the default on

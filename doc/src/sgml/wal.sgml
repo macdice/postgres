@@ -109,13 +109,13 @@
         by unchecking <literal>My Computer\Open\<replaceable>disk drive</replaceable>\Properties\Hardware\Properties\Policies\Enable write caching on the disk</literal>.
         Alternatively, set <varname>wal_sync_method</varname> to
         <literal>fdatasync</literal> (NTFS only) or <literal>fsync</literal>,
-        which prevent write caching.
+        which flush write caches.
       </para>
     </listitem>
 
     <listitem>
       <para>
-        On <productname>macOS</productname>, write caching can be prevented by
+        On <productname>macOS</productname>, write caches can be flushed by
         setting <varname>wal_sync_method</varname> to <literal>fsync_writethrough</literal>.
       </para>
     </listitem>
@@ -756,10 +756,8 @@
    The <xref linkend="guc-wal-sync-method"/> parameter determines how
    <productname>PostgreSQL</productname> will ask the kernel to force
    <acronym>WAL</acronym> updates out to disk.
-   All the options should be the same in terms of reliability, with
-   the exception of <literal>fsync_writethrough</literal>, which can sometimes
-   force a flush of the disk cache even when other options do not do so.
-   However, it's quite platform-specific which one will be the fastest.
+   It is platform-specific, and some cases also device-specific, which options
+   flush or write through volatile write caches.
    You can test the speeds of different options using the <xref
    linkend="pgtestfsync"/> program.
    Note that this parameter is irrelevant if <varname>fsync</varname>
