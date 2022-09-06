@@ -187,8 +187,20 @@ GETTEMP(char *path, int *doopen, int domkdir)
 		}
 		else if (domkdir)
 		{
+#ifdef WIN32
+			SECURITY_ATTRIBUTES sa = {
+				.nLength = sizeof(SECURITY_ATTRIBUTES),
+				.lpSecurityDescriptor = NULL,
+				.bInheritHandle = false
+			};
+
+			if (CreateDirectory(path, &sa))
+				return 1;
+			_dosmaperr(GetLastError());
+#else
 			if (mkdir(path, 0700) >= 0)
 				return 1;
+#endif
 			if (errno != EEXIST)
 				return 0;
 		}
