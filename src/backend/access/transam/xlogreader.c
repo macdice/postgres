@@ -367,6 +367,7 @@ XLogNextRecord(XLogReaderState *state, char **errormsg)
 		{
 			if (state->errormsg_buf[0] != '\0')
 				*errormsg = state->errormsg_buf;
+			state->errormsg_buf[0] = '\0';
 			state->errormsg_deferred = false;
 		}
 
