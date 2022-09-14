@@ -282,7 +282,7 @@ XLogRecPtr
 XLogReleasePreviousRecord(XLogReaderState *state)
 {
 	DecodedXLogRecord *record;
-	XLogRecPtr		next_lsn;
+	XLogRecPtr	next_lsn;
 
 	if (!state->record)
 		return InvalidXLogRecPtr;
@@ -913,15 +913,11 @@ err:
 		state->missingContrecPtr = targetPagePtr;
 
 		/*
-		 * If we got here without reporting an error, report one now so that
-		 * XLogPrefetcherReadRecord() doesn't bring us back a second time and
-		 * clobber the above state.  Otherwise, the existing error takes
-		 * precedence.
+		 * If we arrived here while prefetching, the the above state would not
+		 * survive retrying.  Make sure an error (possibly without message) is
+		 * queued and reported after all decoded messages without retrying.
 		 */
-		if (!state->errormsg_buf[0])
-			report_invalid_record(state,
-								  "missing contrecord at %X/%X",
-								  LSN_FORMAT_ARGS(RecPtr));
+		state->errormsg_deferred = true;
 	}
 
 	if (decoded && decoded->oversized)
