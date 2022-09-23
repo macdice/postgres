@@ -1,0 +1,4 @@
+comment = 'Test code for sharedtuplestore.c'
+default_version = '1.0'
+module_pathname = '$libdir/test_sts'
+relocatable = true
