@@ -556,17 +556,10 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 	HeapTuple	tuple;
 
 	/*
-	 * Force a checkpoint before starting the copy. This will force all dirty
-	 * buffers, including those of unlogged tables, out to disk, to ensure
-	 * source database is up-to-date on disk for the copy.
-	 * FlushDatabaseBuffers() would suffice for that, but we also want to
-	 * process any pending unlink requests. Otherwise, if a checkpoint
-	 * happened while we're copying files, a file might be deleted just when
-	 * we're about to copy it, causing the lstat() call in copydir() to fail
-	 * with ENOENT.
+	 * Force all dirty buffers, including those of unlogged tables, out to
+	 * disk, to ensure source database is up-to-date on disk for the copy.
 	 */
-	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE |
-					  CHECKPOINT_WAIT | CHECKPOINT_FLUSH_ALL);
+	FlushDatabaseBuffers(src_dboid);
 
 	/*
 	 * Iterate through all tablespaces of the template database, and copy each
@@ -1473,11 +1466,11 @@ createdb_failure_callback(int code, Datum arg)
 	/*
 	 * If we were copying database at block levels then drop pages for the
 	 * destination database that are in the shared buffer cache.  And tell
-	 * checkpointer to forget any pending fsync and unlink requests for files
-	 * in the database.  The reasoning behind doing this is same as explained
-	 * in dropdb function.  But unlike dropdb we don't need to call
-	 * pgstat_drop_database because this database is still not created so
-	 * there should not be any stat for this.
+	 * checkpointer to forget any pending fsync requests for files in the
+	 * database.  The reasoning behind doing this is same as explained in
+	 * dropdb function.  But unlike dropdb we don't need to call
+	 * pgstat_drop_database because this database is still not created so there
+	 * should not be any stat for this.
 	 */
 	if (fparms->strategy == CREATEDB_WAL_LOG)
 	{
@@ -1671,10 +1664,8 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	pgstat_drop_database(db_id);
 
 	/*
-	 * Tell checkpointer to forget any pending fsync and unlink requests for
-	 * files in the database; else the fsyncs will fail at next checkpoint, or
-	 * worse, it will delete files that belong to a newly created database
-	 * with the same OID.
+	 * Tell checkpointer to forget any pending fsync requests for files in the
+	 * database; else the fsyncs will fail at next checkpoint.
 	 */
 	ForgetDatabaseSyncRequests(db_id);
 
@@ -1919,18 +1910,10 @@ movedb(const char *dbname, const char *tblspcname)
 	dst_dbpath = GetDatabasePath(db_id, dst_tblspcoid);
 
 	/*
-	 * Force a checkpoint before proceeding. This will force all dirty
-	 * buffers, including those of unlogged tables, out to disk, to ensure
-	 * source database is up-to-date on disk for the copy.
-	 * FlushDatabaseBuffers() would suffice for that, but we also want to
-	 * process any pending unlink requests. Otherwise, the check for existing
-	 * files in the target directory might fail unnecessarily, not to mention
-	 * that the copy might fail due to source files getting deleted under it.
-	 * On Windows, this also ensures that background procs don't hold any open
-	 * files, which would cause rmdir() to fail.
+	 * Force all dirty buffers, including those of unlogged tables, out to
+	 * disk, to ensure source database is up-to-date on disk for the copy.
 	 */
-	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT
-					  | CHECKPOINT_FLUSH_ALL);
+	FlushDatabaseBuffers(db_id);
 
 	/* Close all smgr fds in all backends. */
 	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));

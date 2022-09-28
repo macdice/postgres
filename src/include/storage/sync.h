@@ -23,7 +23,6 @@
 typedef enum SyncRequestType
 {
 	SYNC_REQUEST,				/* schedule a call of sync function */
-	SYNC_UNLINK_REQUEST,		/* schedule a call of unlink function */
 	SYNC_FORGET_REQUEST,		/* forget all calls for a tag */
 	SYNC_FILTER_REQUEST			/* forget all calls satisfying match fn */
 } SyncRequestType;
@@ -57,7 +56,6 @@ typedef struct FileTag
 
 extern void InitSync(void);
 extern void SyncPreCheckpoint(void);
-extern void SyncPostCheckpoint(void);
 extern void ProcessSyncRequests(void);
 extern void RememberSyncRequest(const FileTag *ftag, SyncRequestType type);
 extern bool RegisterSyncRequest(const FileTag *ftag, SyncRequestType type,

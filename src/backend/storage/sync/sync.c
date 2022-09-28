@@ -52,8 +52,7 @@ static MemoryContext pendingOpsCxt; /* context for the pending ops state  */
  * a hash table, because we don't expect there to be any duplicate requests.
  *
  * These mechanisms are only used for non-temp relations; we never fsync
- * temp rels, nor do we need to postpone their deletion (see comments in
- * mdunlink).
+ * temp rels.
  *
  * (Regular backends do not track pending operations locally, but forward
  * them to the checkpointer.)
@@ -75,7 +74,6 @@ typedef struct
 } PendingUnlinkEntry;
 
 static HTAB *pendingOps = NULL;
-static List *pendingUnlinks = NIL;
 static MemoryContext pendingOpsCxt; /* context for the above  */
 
 static CycleCtr sync_cycle_ctr = 0;
@@ -83,15 +81,13 @@ static CycleCtr checkpoint_cycle_ctr = 0;
 
 /* Intervals for calling AbsorbSyncRequests */
 #define FSYNCS_PER_ABSORB		10
-#define UNLINKS_PER_ABSORB		10
 
 /*
- * Function pointers for handling sync and unlink requests.
+ * Function pointers for handling sync requests.
  */
 typedef struct SyncOps
 {
 	int			(*sync_syncfiletag) (const FileTag *ftag, char *path);
-	int			(*sync_unlinkfiletag) (const FileTag *ftag, char *path);
 	bool		(*sync_filetagmatches) (const FileTag *ftag,
 										const FileTag *candidate);
 } SyncOps;
@@ -103,7 +99,6 @@ static const SyncOps syncsw[] = {
 	/* magnetic disk */
 	[SYNC_HANDLER_MD] = {
 		.sync_syncfiletag = mdsyncfiletag,
-		.sync_unlinkfiletag = mdunlinkfiletag,
 		.sync_filetagmatches = mdfiletagmatches
 	},
 	/* pg_xact */
@@ -160,7 +155,6 @@ InitSync(void)
 								 100L,
 								 &hash_ctl,
 								 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
-		pendingUnlinks = NIL;
 	}
 }
 
@@ -198,92 +192,6 @@ SyncPreCheckpoint(void)
 	 * cycle counter, and won't be unlinked until next checkpoint.
 	 */
 	checkpoint_cycle_ctr++;
-}
-
-/*
- * SyncPostCheckpoint() -- Do post-checkpoint work
- *
- * Remove any lingering files that can now be safely removed.
- */
-void
-SyncPostCheckpoint(void)
-{
-	int			absorb_counter;
-	ListCell   *lc;
-
-	absorb_counter = UNLINKS_PER_ABSORB;
-	foreach(lc, pendingUnlinks)
-	{
-		PendingUnlinkEntry *entry = (PendingUnlinkEntry *) lfirst(lc);
-		char		path[MAXPGPATH];
-
-		/* Skip over any canceled entries */
-		if (entry->canceled)
-			continue;
-
-		/*
-		 * New entries are appended to the end, so if the entry is new we've
-		 * reached the end of old entries.
-		 *
-		 * Note: if just the right number of consecutive checkpoints fail, we
-		 * could be fooled here by cycle_ctr wraparound.  However, the only
-		 * consequence is that we'd delay unlinking for one more checkpoint,
-		 * which is perfectly tolerable.
-		 */
-		if (entry->cycle_ctr == checkpoint_cycle_ctr)
-			break;
-
-		/* Unlink the file */
-		if (syncsw[entry->tag.handler].sync_unlinkfiletag(&entry->tag,
-														  path) < 0)
-		{
-			/*
-			 * There's a race condition, when the database is dropped at the
-			 * same time that we process the pending unlink requests. If the
-			 * DROP DATABASE deletes the file before we do, we will get ENOENT
-			 * here. rmtree() also has to ignore ENOENT errors, to deal with
-			 * the possibility that we delete the file first.
-			 */
-			if (errno != ENOENT)
-				ereport(WARNING,
-						(errcode_for_file_access(),
-						 errmsg("could not remove file \"%s\": %m", path)));
-		}
-
-		/* Mark the list entry as canceled, just in case */
-		entry->canceled = true;
-
-		/*
-		 * As in ProcessSyncRequests, we don't want to stop absorbing fsync
-		 * requests for a long time when there are many deletions to be done.
-		 * We can safely call AbsorbSyncRequests() at this point in the loop.
-		 */
-		if (--absorb_counter <= 0)
-		{
-			AbsorbSyncRequests();
-			absorb_counter = UNLINKS_PER_ABSORB;
-		}
-	}
-
-	/*
-	 * If we reached the end of the list, we can just remove the whole list
-	 * (remembering to pfree all the PendingUnlinkEntry objects).  Otherwise,
-	 * we must keep the entries at or after "lc".
-	 */
-	if (lc == NULL)
-	{
-		list_free_deep(pendingUnlinks);
-		pendingUnlinks = NIL;
-	}
-	else
-	{
-		int			ntodelete = list_cell_number(pendingUnlinks, lc);
-
-		for (int i = 0; i < ntodelete; i++)
-			pfree(list_nth(pendingUnlinks, i));
-
-		pendingUnlinks = list_delete_first_n(pendingUnlinks, ntodelete);
-	}
 }
 
 /*
@@ -485,8 +393,7 @@ ProcessSyncRequests(void)
  * RememberSyncRequest() -- callback from checkpointer side of sync request
  *
  * We stuff fsync requests into the local hash table for execution
- * during the checkpointer's next checkpoint.  UNLINK requests go into a
- * separate linked list, however, because they get processed separately.
+ * during the checkpointer's next checkpoint.
  *
  * See sync.h for more information on the types of sync requests supported.
  */
@@ -511,7 +418,6 @@ RememberSyncRequest(const FileTag *ftag, SyncRequestType type)
 	{
 		HASH_SEQ_STATUS hstat;
 		PendingFsyncEntry *pfe;
-		ListCell   *cell;
 
 		/* Cancel matching fsync requests */
 		hash_seq_init(&hstat, pendingOps);
@@ -521,31 +427,6 @@ RememberSyncRequest(const FileTag *ftag, SyncRequestType type)
 				syncsw[ftag->handler].sync_filetagmatches(ftag, &pfe->tag))
 				pfe->canceled = true;
 		}
-
-		/* Cancel matching unlink requests */
-		foreach(cell, pendingUnlinks)
-		{
-			PendingUnlinkEntry *pue = (PendingUnlinkEntry *) lfirst(cell);
-
-			if (pue->tag.handler == ftag->handler &&
-				syncsw[ftag->handler].sync_filetagmatches(ftag, &pue->tag))
-				pue->canceled = true;
-		}
-	}
-	else if (type == SYNC_UNLINK_REQUEST)
-	{
-		/* Unlink request: put it in the linked list */
-		MemoryContext oldcxt = MemoryContextSwitchTo(pendingOpsCxt);
-		PendingUnlinkEntry *entry;
-
-		entry = palloc(sizeof(PendingUnlinkEntry));
-		entry->tag = *ftag;
-		entry->cycle_ctr = checkpoint_cycle_ctr;
-		entry->canceled = false;
-
-		pendingUnlinks = lappend(pendingUnlinks, entry);
-
-		MemoryContextSwitchTo(oldcxt);
 	}
 	else
 	{
@@ -603,11 +484,7 @@ RegisterSyncRequest(const FileTag *ftag, SyncRequestType type,
 		 * retryOnError mode, we have to sleep and try again ... ugly, but
 		 * hopefully won't happen often.
 		 *
-		 * XXX should we CHECK_FOR_INTERRUPTS in this loop?  Escaping with an
-		 * error in the case of SYNC_UNLINK_REQUEST would leave the
-		 * no-longer-used file still present on disk, which would be bad, so
-		 * I'm inclined to assume that the checkpointer will always empty the
-		 * queue soon.
+		 * XXX should we CHECK_FOR_INTERRUPTS in this loop?
 		 */
 		ret = ForwardSyncRequest(ftag, type);
 

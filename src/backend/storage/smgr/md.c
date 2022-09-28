@@ -126,8 +126,6 @@ static void mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum,
 static MdfdVec *mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior);
 static void register_dirty_segment(SMgrRelation reln, ForkNumber forknum,
 								   MdfdVec *seg);
-static void register_unlink_segment(RelFileLocatorBackend rlocator, ForkNumber forknum,
-									BlockNumber segno);
 static void register_forget_request(RelFileLocatorBackend rlocator, ForkNumber forknum,
 									BlockNumber segno);
 static void _fdvec_resize(SMgrRelation reln,
@@ -240,42 +238,6 @@ mdcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
  * forknum can be a fork number to delete a specific fork, or InvalidForkNumber
  * to delete all forks.
  *
- * For regular relations, we don't unlink the first segment file of the rel,
- * but just truncate it to zero length, and record a request to unlink it after
- * the next checkpoint.  Additional segments can be unlinked immediately,
- * however.  Leaving the empty file in place prevents that relfilenumber
- * from being reused.  The scenario this protects us from is:
- * 1. We delete a relation (and commit, and actually remove its file).
- * 2. We create a new relation, which by chance gets the same relfilenumber as
- *	  the just-deleted one (OIDs must've wrapped around for that to happen).
- * 3. We crash before another checkpoint occurs.
- * During replay, we would delete the file and then recreate it, which is fine
- * if the contents of the file were repopulated by subsequent WAL entries.
- * But if we didn't WAL-log insertions, but instead relied on fsyncing the
- * file after populating it (as we do at wal_level=minimal), the contents of
- * the file would be lost forever.  By leaving the empty file until after the
- * next checkpoint, we prevent reassignment of the relfilenumber until it's
- * safe, because relfilenumber assignment skips over any existing file.
- *
- * XXX. Although all of this was true when relfilenumbers were 32 bits wide,
- * they are now 56 bits wide and do not wrap around, so in the future we can
- * change the code to immediately unlink the first segment of the relation
- * along with all the others. We still do reuse relfilenumbers when createdb()
- * is performed using the file-copy method or during movedb(), but the scenario
- * described above can only happen when creating a new relation.
- *
- * We do not need to go through this dance for temp relations, though, because
- * we never make WAL entries for temp rels, and so a temp rel poses no threat
- * to the health of a regular rel that has taken over its relfilenumber.
- * The fact that temp rels and regular rels have different file naming
- * patterns provides additional safety.
- *
- * All the above applies only to the relation's main fork; other forks can
- * just be removed immediately, since they are not needed to prevent the
- * relfilenumber from being recycled.  Also, we do not carefully
- * track whether other forks have been created or not, but just attempt to
- * unlink them unconditionally; so we should never complain about ENOENT.
- *
  * If isRedo is true, it's unsurprising for the relation to be already gone.
  * Also, we should remove the file immediately instead of queuing a request
  * for later, since during redo there's no possibility of creating a
@@ -324,106 +286,40 @@ do_truncate(const char *path)
 static void
 mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum, bool isRedo)
 {
+	char		segpath[MAXPGPATH];
 	char	   *path;
-	int			ret;
-	BlockNumber segno = 0;
 
 	path = relpath(rlocator, forknum);
 
-	/*
-	 * Delete or truncate the first segment.
-	 */
-	if (isRedo || forknum != MAIN_FORKNUM || RelFileLocatorBackendIsTemp(rlocator))
+	for (BlockNumber segno = 0;; segno++)
 	{
+		if (segno == 0)
+			strlcpy(segpath, path, sizeof(segpath));
+		else
+			snprintf(segpath, sizeof(segpath), "%s.%u", path, segno);
+
 		if (!RelFileLocatorBackendIsTemp(rlocator))
 		{
-			/* Prevent other backends' fds from holding on to the disk space */
-			ret = do_truncate(path);
+			/* Prevent other backends from holding on to the disk space. */
+			if (do_truncate(segpath) < 0 && errno == ENOENT)
+				break;
 
-			/* Forget any pending sync requests for the first segment */
-			register_forget_request(rlocator, forknum, 0 /* first seg */ );
+			/*
+			 * Forget any pending sync requests for this segment before we try
+			 * to unlink.
+			 */
+			register_forget_request(rlocator, forknum, segno);
 		}
-		else
-			ret = 0;
 
-		/* Next unlink the file, unless it was already found to be missing */
-		if (ret == 0 || errno != ENOENT)
+		if (unlink(segpath) < 0)
 		{
-			ret = unlink(path);
-			if (ret < 0 && errno != ENOENT)
+			/* ENOENT is expected after the last segment... */
+			if (errno != ENOENT)
 				ereport(WARNING,
 						(errcode_for_file_access(),
-						 errmsg("could not remove file \"%s\": %m", path)));
+						 errmsg("could not remove file \"%s\": %m", segpath)));
+			break;
 		}
-	}
-	else
-	{
-		/* Prevent other backends' fds from holding on to the disk space */
-		ret = do_truncate(path);
-
-		/*
-		 * Except during a binary upgrade, register request to unlink first
-		 * segment later, rather than now.
-		 *
-		 * If we're performing a binary upgrade, the dangers described in the
-		 * header comments for mdunlink() do not exist, since after a crash
-		 * or even a simple ERROR, the upgrade fails and the whole new cluster
-		 * must be recreated from scratch. And, on the other hand, it is
-		 * important to remove the files from disk immediately, because we
-		 * may be about to reuse the same relfilenumber.
-		 */
-		if (!IsBinaryUpgrade)
-		{
-			register_unlink_segment(rlocator, forknum, 0 /* first seg */ );
-			++segno;
-		}
-	}
-
-	/*
-	 * Delete any additional segments.
-	 */
-	if (ret >= 0)
-	{
-		char	   *segpath = (char *) palloc(strlen(path) + 12);
-
-		/*
-		 * Note that because we loop until getting ENOENT, we will correctly
-		 * remove all inactive segments as well as active ones.
-		 */
-		for (;; segno++)
-		{
-			if (segno == 0)
-				strcpy(segpath, path);
-			else
-				sprintf(segpath, "%s.%u", path, segno);
-
-			if (!RelFileLocatorBackendIsTemp(rlocator))
-			{
-				/*
-				 * Prevent other backends' fds from holding on to the disk
-				 * space.
-				 */
-				if (do_truncate(segpath) < 0 && errno == ENOENT)
-					break;
-
-				/*
-				 * Forget any pending sync requests for this segment before we
-				 * try to unlink.
-				 */
-				register_forget_request(rlocator, forknum, segno);
-			}
-
-			if (unlink(segpath) < 0)
-			{
-				/* ENOENT is expected after the last segment... */
-				if (errno != ENOENT)
-					ereport(WARNING,
-							(errcode_for_file_access(),
-							 errmsg("could not remove file \"%s\": %m", segpath)));
-				break;
-			}
-		}
-		pfree(segpath);
 	}
 
 	pfree(path);
@@ -1023,23 +919,6 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 					 errmsg("could not fsync file \"%s\": %m",
 							FilePathName(seg->mdfd_vfd))));
 	}
-}
-
-/*
- * register_unlink_segment() -- Schedule a file to be deleted after next checkpoint
- */
-static void
-register_unlink_segment(RelFileLocatorBackend rlocator, ForkNumber forknum,
-						BlockNumber segno)
-{
-	FileTag		tag;
-
-	INIT_MD_FILETAG(tag, rlocator.locator, forknum, segno);
-
-	/* Should never be used with temp relations */
-	Assert(!RelFileLocatorBackendIsTemp(rlocator));
-
-	RegisterSyncRequest(&tag, SYNC_UNLINK_REQUEST, true /* retryOnError */ );
 }
 
 /*
