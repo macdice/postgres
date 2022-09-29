@@ -130,6 +130,17 @@ pqGets_internal(PQExpBuffer buf, PGconn *conn, bool resetbuffer)
 
 	appendBinaryPQExpBuffer(buf, inBuffer + conn->inCursor, slen);
 
+	/* XXX begin hack */
+	{
+		FILE *log = fopen("/tmp/libpq.log", "a");
+		fprintf(log, "XXX received: ");
+		for (int i = 0; i < slen; ++i)
+			fprintf(log, "%02x ", inBuffer[conn->inCursor + i]);
+		fprintf(log, "\n");
+		fclose(log);
+	}
+	/* XXX end hack */
+
 	conn->inCursor = ++inCursor;
 
 	return 0;
