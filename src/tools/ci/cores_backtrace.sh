@@ -23,8 +23,8 @@ case $os in
             binary=`basename "$stack" .stackdump`
             echo;echo;
             echo "dumping ${stack} for ${binary}"
-            awk '/^0/{print $2}' $stack |addr2line -f -i -e ./src/backend/postgres.exe
-            #awk '/^0/{print $2}' $stack |addr2line -f -i -e "./src/backend/$binary.exe"
+            awk '/^0/{print $2}' $stack |addr2line -f -i -e ./build/tmp_install/usr/local/pgsql/bin/postgres.exe
+            #awk '/^0/{print $2}' $stack |addr2line -f -i -e "./build/src/backend/$binary.exe"
         done
         exit 0
         ;;
