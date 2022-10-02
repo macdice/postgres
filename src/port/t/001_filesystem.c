@@ -476,6 +476,42 @@ filesystem_metadata_tests(void)
 	PG_EXPECT_SYS(unlink(path) == 0, "Windows: can rename file after non-shared handle asynchronously closed");
 #endif
 
+	/*
+	 * Our Windows unlink() wrapper blocks in a retry loop if you try to
+	 * unlink a file in STATUS_DELETE_PENDING (ie that has already been
+	 * unlinked but is still open), until it times out with EACCES or reaches
+	 * ENOENT.  That may be useful for waiting for files to be asynchronously
+	 * unlinked while performing a recursive unlink on
+	 * !have_posix_unlink_semantics systems, so that rmdir(parent) works.
+	 */
+	make_path(path, "dir2");
+	PG_EXPECT_SYS(mkdir(path, 0777) == 0);
+	make_path(path, "dir2/test-file");
+	fd = open(path, O_CREAT | O_EXCL | O_RDWR | PG_BINARY, 0777);
+	PG_EXPECT_SYS(fd >= 0, "open dir2/test-file");
+	PG_EXPECT_SYS(unlink(path) == 0, "unlink file while it's open, once");
+#ifdef WIN32
+	pgwin32_dirmod_loops = 2;	/* minimize looping to fail fast in testing */
+#endif
+	PG_EXPECT(unlink(path) == -1, "can't unlink again");
+	if (have_posix_unlink_semantics)
+	{
+		PG_EXPECT_EQ(errno, ENOENT, "POSIX: we expect ENOENT");
+	}
+	else
+	{
+		PG_EXPECT_EQ(errno, EACCES, "Windows non-POSIX: we expect EACCES (delete already pending)");
+#ifdef WIN32
+		pgwin32_dirmod_loops = 1800;	/* loop for up to 180s to make sure
+										 * our 100ms callback is run */
+		run_async_procedure_after_delay(close_fd, &fd, 100);	/* close fd after 100ms */
+#endif
+		PG_EXPECT(unlink(path) == -1, "Windows non-POSIX: trying again fails");
+		PG_EXPECT_EQ(errno, ENOENT, "Windows non-POSIX: ... but blocked until ENOENT was reached due to asynchronous close");
+	}
+	make_path(path, "dir2");
+	PG_EXPECT_SYS(rmdir(path) == 0, "now we can remove the directory");
+
 	/* Tests for rename(). */
 
 	make_path(path, "name1.txt");
