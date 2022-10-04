@@ -1925,6 +1925,33 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+    {
+        {"io_data_direct", PGC_SUSET, RESOURCES_DISK,
+            gettext_noop("data file IO uses direct IO."),
+        },
+        &io_data_direct,
+        false,
+        NULL, NULL, NULL
+    },
+
+    {
+        {"io_wal_direct", PGC_SUSET, RESOURCES_DISK,
+            gettext_noop("wal file IO uses direct IO."),
+        },
+        &io_wal_direct,
+        false,
+        NULL, NULL, NULL
+    },
+
+    {
+        {"io_wal_init_direct", PGC_SUSET, RESOURCES_DISK,
+            gettext_noop("wal file initialization IO uses direct IO."),
+        },
+        &io_wal_init_direct,
+        false,
+        NULL, NULL, NULL
+    },
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL

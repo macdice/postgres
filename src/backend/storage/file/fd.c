@@ -2021,6 +2021,12 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	if (nbytes <= 0)
 		return;
 
+#ifdef O_DIRECT
+	/* no point */
+	if (VfdCache[file].fileFlags & O_DIRECT)
+		return;
+#endif
+
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return;
@@ -2276,7 +2282,14 @@ FilePathName(File file)
 int
 FileGetRawDesc(File file)
 {
+	int			returnCode;
+
 	Assert(FileIsValid(file));
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return returnCode;
+
 	return VfdCache[file].fd;
 }
 
