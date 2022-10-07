@@ -18,7 +18,8 @@
  * don't need to register a signal handler or create our own self-pipe.  We
  * assume that any system that has Linux epoll() also has Linux signalfd().
  *
- * The kqueue() implementation waits for SIGURG with EVFILT_SIGNAL.
+ * The kqueue() implementation waits for SIGURG with EVFILT_SIGNAL, or, if
+ * available, uses EVFILT_UMTX to model the latch directly as a futex.
  *
  * The Windows implementation uses Windows events that are inherited by all
  * postmaster child processes. There's no need for the self-pipe trick there.
@@ -82,6 +83,11 @@
 #define WAIT_USE_WIN32
 #else
 #error "no wait set implementation available"
+#endif
+
+#if defined(WAIT_USE_KQUEUE) && defined(EVFILT_UMTX)
+#define WAIT_USE_KQUEUE_UMTX
+#include <sys/umtx.h>
 #endif
 
 /*
@@ -590,10 +596,10 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 void
 SetLatch(Latch *latch)
 {
-#ifndef WIN32
-	pid_t		owner_pid;
-#else
+#ifdef WIN32
 	HANDLE		handle;
+#elif !defined(WAIT_USE_KQUEUE_UMTX)
+	pid_t		owner_pid;
 #endif
 
 	/*
@@ -613,7 +619,9 @@ SetLatch(Latch *latch)
 	if (!latch->maybe_sleeping)
 		return;
 
-#ifndef WIN32
+#ifdef WAIT_USE_KQUEUE_UMTX
+	_umtx_op(&latch->is_set, UMTX_OP_WAKE, 1, NULL, NULL);
+#elif !defined(WIN32)
 
 	/*
 	 * See if anyone's waiting for the latch. It can be the current process if
@@ -1168,15 +1176,25 @@ WaitEventAdjustKqueueAddPostmaster(struct kevent *k_ev, WaitEvent *event)
 }
 
 static inline void
-WaitEventAdjustKqueueAddLatch(struct kevent *k_ev, WaitEvent *event)
+WaitEventAdjustKqueueAddLatch(struct kevent *k_ev, WaitEventSet *set)
 {
 	/* For now latch can only be added, not removed. */
+#ifdef WAIT_USE_KQUEUE_UMTX
+	k_ev->ident = (uintptr_t) &set->latch->is_set;
+	k_ev->filter = EVFILT_UMTX;
+	k_ev->flags = EV_ADD;
+	/* XXX this is a sig_atomic_t, how to select the appropriate size? */
+	Assert(sizeof(set->latch->is_set) == sizeof(unsigned long));
+	k_ev->fflags = NOTE_UMTX_WAIT_ULONG;
+	k_ev->data = 0;		/* expected futex value */
+#else
 	k_ev->ident = SIGURG;
 	k_ev->filter = EVFILT_SIGNAL;
 	k_ev->flags = EV_ADD;
 	k_ev->fflags = 0;
 	k_ev->data = 0;
-	AccessWaitEvent(k_ev) = event;
+#endif
+	AccessWaitEvent(k_ev) = &set->events[set->latch_pos];
 }
 
 /*
@@ -1215,7 +1233,7 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 	else if (event->events == WL_LATCH_SET)
 	{
 		/* We detect latch wakeup using a signal event. */
-		WaitEventAdjustKqueueAddLatch(&k_ev[count++], event);
+		WaitEventAdjustKqueueAddLatch(&k_ev[count++], set);
 	}
 	else
 	{
@@ -1646,9 +1664,30 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	}
 
 	/* Sleep */
-	rc = kevent(set->kqueue_fd, NULL, 0,
-				set->kqueue_ret_events, nevents,
-				timeout_p);
+#ifdef WAIT_USE_KQUEUE_UMTX
+	if (set->latch)
+	{
+		struct kevent kev;
+
+		/*
+		 * We have to keep re-adding the latch futex because a umtx event is
+		 * alway one-shot so when it fires it's gone.  This does nothing if
+		 * it's already added, and fires immediately if the value is non-zero.
+		 */
+		WaitEventAdjustKqueueAddLatch(&kev, set);
+		rc = kevent(set->kqueue_fd,
+					&kev, 1,
+					set->kqueue_ret_events, nevents,
+					timeout_p);
+
+	}
+	else
+#endif
+	{
+		rc = kevent(set->kqueue_fd, NULL, 0,
+					set->kqueue_ret_events, nevents,
+					timeout_p);
+	}
 
 	/* Check return code */
 	if (rc < 0)
@@ -1687,8 +1726,13 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		occurred_events->user_data = cur_event->user_data;
 		occurred_events->events = 0;
 
+#ifdef WAIT_USE_KQUEUE_UMTX
+		if (cur_event->events == WL_LATCH_SET &&
+			cur_kqueue_event->filter == EVFILT_UMTX)
+#else
 		if (cur_event->events == WL_LATCH_SET &&
 			cur_kqueue_event->filter == EVFILT_SIGNAL)
+#endif
 		{
 			if (set->latch && set->latch->is_set)
 			{
