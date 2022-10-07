@@ -18,7 +18,8 @@
  * don't need to register a signal handler or create our own self-pipe.  We
  * assume that any system that has Linux epoll() also has Linux signalfd().
  *
- * The kqueue() implementation waits for SIGURG with EVFILT_SIGNAL.
+ * The kqueue() implementation waits with SIGURG via EVFILT_SIGNAL, or, if
+ * available, NOTE_TRIGGER and EVFILT_USERMEM.
  *
  * The Windows implementation uses Windows events that are inherited by all
  * postmaster child processes. There's no need for the self-pipe trick there.
@@ -82,6 +83,10 @@
 #define WAIT_USE_WIN32
 #else
 #error "no wait set implementation available"
+#endif
+
+#if defined(WAIT_USE_KQUEUE) && defined(EVFILT_USERMEM)
+#define WAIT_USE_KQUEUE_USERMEM
 #endif
 
 /*
@@ -590,10 +595,12 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 void
 SetLatch(Latch *latch)
 {
-#ifndef WIN32
-	pid_t		owner_pid;
-#else
+#ifdef WIN32
 	HANDLE		handle;
+#elif defined(WAIT_USE_KQUEUE_USERMEM)
+	struct kevent kev;
+#else
+	pid_t		owner_pid;
 #endif
 
 	/*
@@ -613,7 +620,10 @@ SetLatch(Latch *latch)
 	if (!latch->maybe_sleeping)
 		return;
 
-#ifndef WIN32
+#ifdef WAIT_USE_KQUEUE_USERMEM
+	EV_SET(&kev, (intptr_t) &latch->is_set, EVFILT_USERMEM, EV_ANON, NOTE_TRIGGER, INT_MAX, 0);
+	kevent(KQUEUE_FD_ANON, &kev, 1, NULL, 0, NULL);
+#elif !defined(WIN32)
 
 	/*
 	 * See if anyone's waiting for the latch. It can be the current process if
@@ -1023,6 +1033,13 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 #if defined(WAIT_USE_WIN32)
 		if (!latch)
 			return;
+#elif defined(WAIT_USE_KQUEUE_USERMEM)
+		/*
+		 * Actually we do need to adjust a kernel object for EVFILT_USERMEM.
+		 * XXX We should also delete the previous latch if there was one. */
+		if (!latch || !latch->is_shared)
+			return;
+		old_events = -1;
 #else
 		return;
 #endif
@@ -1168,15 +1185,23 @@ WaitEventAdjustKqueueAddPostmaster(struct kevent *k_ev, WaitEvent *event)
 }
 
 static inline void
-WaitEventAdjustKqueueAddLatch(struct kevent *k_ev, WaitEvent *event)
+WaitEventAdjustKqueueAddLatch(struct kevent *k_ev, WaitEventSet *set)
 {
 	/* For now latch can only be added, not removed. */
+#ifdef WAIT_USE_KQUEUE_USERMEM
+	k_ev->ident = (uintptr_t) &set->latch->is_set;
+	k_ev->filter = EVFILT_USERMEM;
+	k_ev->flags = EV_ADD;
+	k_ev->fflags = NOTE_USERMEM_INT;
+	k_ev->data = 0;
+#else
 	k_ev->ident = SIGURG;
 	k_ev->filter = EVFILT_SIGNAL;
 	k_ev->flags = EV_ADD;
 	k_ev->fflags = 0;
 	k_ev->data = 0;
-	AccessWaitEvent(k_ev) = event;
+#endif
+	AccessWaitEvent(k_ev) = &set->events[set->latch_pos];
 }
 
 /*
@@ -1215,7 +1240,8 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 	else if (event->events == WL_LATCH_SET)
 	{
 		/* We detect latch wakeup using a signal event. */
-		WaitEventAdjustKqueueAddLatch(&k_ev[count++], event);
+		if (set->latch->is_shared)
+			WaitEventAdjustKqueueAddLatch(&k_ev[count++], set);
 	}
 	else
 	{
@@ -1687,8 +1713,13 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		occurred_events->user_data = cur_event->user_data;
 		occurred_events->events = 0;
 
+#ifdef WAIT_USE_KQUEUE_USERMEM
+		if (cur_event->events == WL_LATCH_SET &&
+			cur_kqueue_event->filter == EVFILT_USERMEM)
+#else
 		if (cur_event->events == WL_LATCH_SET &&
 			cur_kqueue_event->filter == EVFILT_SIGNAL)
+#endif
 		{
 			if (set->latch && set->latch->is_set)
 			{
