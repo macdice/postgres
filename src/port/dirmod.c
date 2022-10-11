@@ -45,6 +45,9 @@
 
 #if defined(WIN32) || defined(__CYGWIN__)
 
+/* Externally visable only to allow testing. */
+int			pgwin32_dirmod_loops = 100;
+
 /*
  *	pgrename
  */
@@ -88,7 +91,7 @@ pgrename(const char *from, const char *to)
 			return -1;
 #endif
 
-		if (++loops > 100)		/* time out after 10 sec */
+		if (++loops > pgwin32_dirmod_loops) /* time out after 10 sec */
 			return -1;
 		pg_usleep(100000);		/* us */
 	}
@@ -171,7 +174,7 @@ pgunlink(const char *path)
 	{
 		if (errno != EACCES)
 			return -1;
-		if (++loops > 100)		/* time out after 10 sec */
+		if (++loops > pgwin32_dirmod_loops) /* time out after 10 sec */
 			return -1;
 		pg_usleep(100000);		/* us */
 	}
