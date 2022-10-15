@@ -277,6 +277,13 @@ filesystem_metadata_tests(void)
 	PG_EXPECT(S_ISLNK(statbuf.st_mode));
 	PG_EXPECT_EQ(statbuf.st_size, strlen(path2), "got expected symlink size");
 
+	make_path(path, "broken-symlink");
+	make_path(path2, "does-not-exist");
+	PG_EXPECT_SYS(symlink(path2, path) == 0, "make a broken symlink");
+	PG_EXPECT_SYS(lstat(path, &statbuf) == 0, "lstat broken symlink");
+	PG_EXPECT(S_ISLNK(statbuf.st_mode));
+	PG_EXPECT_SYS(unlink(path) == 0);
+
 	/* Tests for link() and unlink(). */
 
 	make_path(path, "does-not-exist-1");
@@ -347,7 +354,7 @@ filesystem_metadata_tests(void)
 
 	fd = open(path, O_CREAT | O_EXCL | O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "touch name1.txt");
-	PG_EXPECT_SYS(close(fd) == 0);
+	PG_REQUIRE_SYS(close(fd) == 0);
 
 	handle = CreateFile(path, GENERIC_WRITE | GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	PG_REQUIRE(handle);
@@ -368,7 +375,7 @@ filesystem_metadata_tests(void)
 	make_path(path, "name1.txt");
 	fd = open(path, O_CREAT | O_EXCL | O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "touch name1.txt");
-	PG_EXPECT_SYS(close(fd) == 0);
+	PG_REQUIRE_SYS(fd < 0 || close(fd) == 0);
 
 	make_path(path2, "name2.txt");
 	PG_EXPECT_SYS(rename(path, path2) == 0, "rename name1.txt -> name2.txt");
@@ -378,14 +385,14 @@ filesystem_metadata_tests(void)
 
 	fd = open(path, O_CREAT | O_EXCL | O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "touch name1.txt");
-	PG_EXPECT_SYS(close(fd) == 0);
+	PG_REQUIRE_SYS(fd < 0 || close(fd) == 0);
 
 	make_path(path2, "name2.txt");
 	PG_EXPECT_SYS(rename(path, path2) == 0, "rename name1.txt -> name2.txt, replacing it");
 
 	fd = open(path, O_CREAT | O_EXCL | O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "touch name1.txt");
-	PG_EXPECT_SYS(close(fd) == 0);
+	PG_REQUIRE_SYS(fd < 0 || close(fd) == 0);
 
 	fd = open(path2, O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "open name2.txt");
@@ -414,12 +421,12 @@ filesystem_metadata_tests(void)
 	make_path(path2, "name2.txt");
 	PG_EXPECT_SYS(rename(path, path2) == 0,
 				  "can rename name1.txt -> name2.txt while name1.txt is open");
-	PG_EXPECT_SYS(close(fd) == 0);
+	PG_REQUIRE_SYS(fd < 0 || close(fd) == 0);
 
 	make_path(path, "name1.txt");
 	fd = open(path, O_CREAT | O_EXCL | O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "touch name1.txt");
-	PG_EXPECT_SYS(close(fd) == 0);
+	PG_REQUIRE_SYS(fd < 0 || close(fd) == 0);
 
 	fd = open(path2, O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "open name2.txt");
@@ -435,9 +442,9 @@ filesystem_metadata_tests(void)
 		PG_EXPECT_SYS(rename(path, path2) == -1,
 					  "Windows non-POSIX: cannot rename name1.txt -> name2.txt while unlinked file is still open");
 		PG_EXPECT_EQ(errno, EACCES);
-		PG_REQUIRE_SYS(unlink(path) == 0);
+		PG_EXPECT_SYS(unlink(path) == 0);
 	}
-	PG_REQUIRE_SYS(close(fd) == 0);
+	PG_REQUIRE_SYS(fd < 0 || close(fd) == 0);
 
 #ifdef WIN32
 
