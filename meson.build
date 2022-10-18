@@ -2005,6 +2005,7 @@ builtins = [
   'constant_p',
   'frame_address',
   'popcount',
+  'prefetch',
   'unreachable',
 ]
 
