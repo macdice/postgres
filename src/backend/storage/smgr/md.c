@@ -439,6 +439,8 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	int			nbytes;
 	MdfdVec    *v;
 
+	AssertPointerAlignment(buffer, 4096);
+
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND
 	Assert(blocknum >= mdnblocks(reln, forknum));
@@ -661,6 +663,8 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	int			nbytes;
 	MdfdVec    *v;
 
+	AssertPointerAlignment(buffer, 4096);
+
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
 										reln->smgr_rlocator.locator.spcOid,
 										reln->smgr_rlocator.locator.dbOid,
@@ -725,6 +729,8 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	off_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
+
+	AssertPointerAlignment(buffer, 4096);
 
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND
@@ -1280,7 +1286,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			 */
 			if (nblocks < ((BlockNumber) RELSEG_SIZE))
 			{
-				char	   *zerobuf = palloc0(BLCKSZ);
+				char	   *zerobuf = palloc_io_aligned(BLCKSZ, MCXT_ALLOC_ZERO);
 
 				mdextend(reln, forknum,
 						 nextsegno * ((BlockNumber) RELSEG_SIZE) - 1,
