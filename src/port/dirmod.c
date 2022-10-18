@@ -39,14 +39,88 @@
 #endif
 #endif
 
-#if defined(WIN32) && !defined(__CYGWIN__)
-#include "port/win32ntdll.h"
+#if defined(WIN32)
+/*
+ * These are defined in ntdkk.h, which is not part of the base Windows SDK.
+ * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_file_disposition_information_ex
+ */
+#define FILE_DISPOSITION_DELETE 0x00000001
+#define FILE_DISPOSITION_POSIX_SEMANTICS 0x00000002
 #endif
 
 #if defined(WIN32) || defined(__CYGWIN__)
 
 /* Externally visable only to allow testing. */
 int pgwin32_dirmod_loops = 100;
+
+#ifdef WIN32
+
+typedef struct FILE_RENAME_INFO_EXT {
+	FILE_RENAME_INFO fri;
+	wchar_t extra_space[MAXPGPATH];
+} FILE_RENAME_INFO_EXT;
+
+static int
+pgwin32_posix_rename(const char *from, const char *to)
+{
+	FILE_RENAME_INFO_EXT rename_info = {{0}};
+	HANDLE handle;
+
+	if (MultiByteToWideChar(CP_ACP, 0, to, -1, rename_info.fri.FileName, MAXPGPATH) == 0)
+	{
+		_dosmaperr(GetLastError());
+		return -1;
+	}
+	rename_info.fri.ReplaceIfExists = true;
+	rename_info.fri.Flags = FILE_RENAME_FLAG_POSIX_SEMANTICS | FILE_RENAME_FLAG_REPLACE_IF_EXISTS;
+	rename_info.fri.FileNameLength = wcslen(rename_info.fri.FileName);
+
+	handle = CreateFile(from,
+						GENERIC_READ | GENERIC_WRITE | DELETE,
+						FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+						NULL,
+						OPEN_EXISTING,
+						FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+						NULL);
+	if (handle == INVALID_HANDLE_VALUE)
+	{
+		_dosmaperr(GetLastError());
+		return -1;
+	}
+
+	if (!SetFileInformationByHandle(handle, FileRenameInfoEx, &rename_info, sizeof(FILE_RENAME_INFO_EXT)))
+	{
+		DWORD error = GetLastError();
+
+		/*
+		 * ReFS currently fails, so we'll try again without POSIX semantics.
+		 * Likewise for SMB, except it helpfully fails with a different more
+		 * general error.
+		 */
+		if (error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_PARAMETER)
+		{
+			/* Try the older FileRenameInfo (no "Ex", no Flags). */
+			rename_info.fri.ReplaceIfExists = true;
+			if (!SetFileInformationByHandle(handle, FileRenameInfo, &rename_info,
+											sizeof(FILE_RENAME_INFO_EXT)))
+			{
+				_dosmaperr(GetLastError());
+				CloseHandle(handle);
+				return -1;
+			}
+		}
+		else
+		{
+			_dosmaperr(error);
+			CloseHandle(handle);
+			return -1;
+		}
+	}
+	CloseHandle(handle);
+	return 0;
+}
+
+#endif
 
 /*
  *	pgrename
@@ -64,7 +138,7 @@ pgrename(const char *from, const char *to)
 	 * and blocking other backends.
 	 */
 #if defined(WIN32) && !defined(__CYGWIN__)
-	while (!MoveFileEx(from, to, MOVEFILE_REPLACE_EXISTING))
+	while (pgwin32_posix_rename(from, to) < 0)
 #else
 	while (rename(from, to) < 0)
 #endif
@@ -98,22 +172,61 @@ pgrename(const char *from, const char *to)
 	return 0;
 }
 
-/*
- * Check if _pglstat64()'s reason for failure was STATUS_DELETE_PENDING.
- * This doesn't apply to Cygwin, which has its own lstat() that would report
- * the case as EACCES.
-*/
-static bool
-lstat_error_was_status_delete_pending(void)
-{
-	if (errno != ENOENT)
-		return false;
 #if defined(WIN32) && !defined(__CYGWIN__)
-	if (pg_RtlGetLastNtStatus() == STATUS_DELETE_PENDING)
-		return true;
-#endif
-	return false;
+
+static int
+pgwin32_posix_unlink(const char *path)
+{
+	BY_HANDLE_FILE_INFORMATION info;
+	HANDLE handle;
+	ULONG flags;
+
+	flags = FILE_DISPOSITION_DELETE | FILE_DISPOSITION_POSIX_SEMANTICS;
+	handle = CreateFile(path,
+						GENERIC_READ | GENERIC_WRITE | DELETE,
+						FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+						NULL,
+						OPEN_EXISTING,
+						FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+						NULL);
+	if (handle == INVALID_HANDLE_VALUE)
+	{
+		_dosmaperr(GetLastError());
+		return -1;
+	}
+	if (!GetFileInformationByHandle(handle, &info))
+	{
+		_dosmaperr(GetLastError());
+		CloseHandle(handle);
+		return -1;
+	}
+	/* Let junction points be unlinked this way, but not directories. */
+	if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+		!(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+	{
+		CloseHandle(handle);
+		errno = EPERM;
+		return -1;
+	}
+	if (!SetFileInformationByHandle(handle, FileDispositionInfoEx, &flags, sizeof(flags)))
+	{
+		_dosmaperr(GetLastError());
+
+		if (errno == EINVAL)
+		{
+			/* SMB filesystems fail like this.  Fall back to non-POSIX variant. */
+			CloseHandle(handle);
+			return unlink(path);
+		}
+
+		CloseHandle(handle);
+		return -1;
+	}
+	CloseHandle(handle);
+	return 0;
 }
+
+#endif
 
 /*
  *	pgunlink
@@ -121,47 +234,7 @@ lstat_error_was_status_delete_pending(void)
 int
 pgunlink(const char *path)
 {
-	bool		is_lnk;
 	int			loops = 0;
-	struct stat st;
-
-	/*
-	 * This function might be called for a regular file or for a junction
-	 * point (which we use to emulate symlinks).  The latter must be unlinked
-	 * with rmdir() on Windows.  Before we worry about any of that, let's see
-	 * if we can unlink directly, since that's expected to be the most common
-	 * case.
-	 */
-	if (unlink(path) == 0)
-		return 0;
-	if (errno != EACCES)
-		return -1;
-
-	/*
-	 * EACCES is reported for many reasons including unlink() of a junction
-	 * point.  Check if that's the case so we can redirect to rmdir().
-	 *
-	 * Note that by checking only once, we can't cope with a path that changes
-	 * from regular file to junction point underneath us while we're retrying
-	 * due to sharing violations, but that seems unlikely.  We could perhaps
-	 * prevent that by holding a file handle ourselves across the lstat() and
-	 * the retry loop, but that seems like over-engineering for now.
-	 *
-	 * In the special case of a STATUS_DELETE_PENDING error (file already
-	 * unlinked, but someone still has it open), we don't want to report ENOENT
-	 * to the caller immediately, because rmdir(parent) would probably fail.
-	 * We want to wait until the file truly goes away so that simple recursive
-	 * directory unlink algorithms work.
-	 */
-	if (lstat(path, &st) < 0)
-	{
-		if (lstat_error_was_status_delete_pending())
-			is_lnk = false;
-		else
-			return -1;
-	}
-	else
-		is_lnk = S_ISLNK(st.st_mode);
 
 	/*
 	 * We need to loop because even though PostgreSQL uses flags that allow
@@ -170,7 +243,11 @@ pgunlink(const char *path)
 	 * someone else to close the file, as the caller might be holding locks
 	 * and blocking other backends.
 	 */
-	while ((is_lnk ? rmdir(path) : unlink(path)) < 0)
+#ifdef WIN32
+	while (pgwin32_posix_unlink(path) < 0)
+#else
+	while (unlink(path) < 0)
+#endif
 	{
 		if (errno != EACCES)
 			return -1;
