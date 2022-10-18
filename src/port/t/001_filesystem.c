@@ -3,7 +3,7 @@
  * Windows.
  *
  * Currently, have_posix_unlink_semantics is expected to be true on all Unix
- * systems and some Windows 10-based operatings using NTFS, and false on other
+ * systems and all Windows 10-based operatings using NTFS, and false on other
  * Windows ReFS and SMB filesystems.
  */
 
@@ -442,10 +442,10 @@ filesystem_metadata_tests(void)
 	 * Linux), though AIX/JFS1 is rumored to succeed.  However, our Windows
 	 * emulation doesn't allow it, because we want to avoid surprises by
 	 * behaving like nearly all Unix systems.  So we check this on Windows
-	 * only, where it fails with non-standard EACCES.
+	 * only, where our wrapper fails with EPERM.
 	 */
 	PG_EXPECT_SYS(unlink(path2) == -1, "Windows: can't unlink() a directory");
-	PG_EXPECT_EQ(errno, EACCES);
+	PG_EXPECT_EQ(errno, EPERM);
 #endif
 
 #ifdef WIN32
@@ -539,22 +539,23 @@ filesystem_metadata_tests(void)
 	fd = open(path2, O_RDWR | PG_BINARY, 0777);
 	PG_EXPECT_SYS(fd >= 0, "open name2.txt");
 	make_path(path2, "name2.txt");
-#ifdef WIN32
 
-	/*
-	 * Windows can't rename over an open non-unlinked file, even with
-	 * have_posix_unlink_semantics.
-	 */
-	pgwin32_dirmod_loops = 2;	/* minimize looping to fail fast in testing */
-	PG_EXPECT_SYS(rename(path, path2) == -1,
-				  "Windows: can't rename name1.txt -> name2.txt while name2.txt is open");
-	PG_EXPECT_EQ(errno, EACCES);
-	PG_EXPECT_SYS(unlink(path) == 0, "unlink name1.txt");
-#else
-	PG_EXPECT_SYS(rename(path, path2) == 0,
-				  "POSIX: can rename name1.txt -> name2.txt while name2.txt is open");
+	if (!have_posix_unlink_semantics)
+	{
+#ifdef WIN32
+		pgwin32_dirmod_loops = 2;	/* minimize looping to fail fast in testing */
 #endif
-	PG_EXPECT_SYS(close(fd) == 0);
+		PG_EXPECT_SYS(rename(path, path2) == -1,
+					  "Windows non-POSIX: can't rename name1.txt -> name2.txt while name2.txt is open");
+		PG_EXPECT_EQ(errno, EACCES);
+		PG_EXPECT_SYS(unlink(path) == 0, "unlink name1.txt");
+	}
+	else
+	{
+		PG_EXPECT_SYS(rename(path, path2) == 0,
+					  "POSIX: can rename name1.txt -> name2.txt while name2.txt is open");
+	}
+	PG_REQUIRE_SYS(fd < 0 || close(fd) == 0);
 
 	make_path(path, "name1.txt");
 	fd = open(path, O_CREAT | O_EXCL | O_RDWR | PG_BINARY, 0777);
