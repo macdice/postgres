@@ -39,15 +39,6 @@
 #endif
 #endif
 
-#if defined(WIN32)
-/*
- * These are defined in ntdkk.h, which is not part of the base Windows SDK.
- * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_file_disposition_information_ex
- */
-#define FILE_DISPOSITION_DELETE 0x00000001
-#define FILE_DISPOSITION_POSIX_SEMANTICS 0x00000002
-#endif
-
 #if defined(WIN32) || defined(__CYGWIN__)
 
 /* Externally visable only to allow testing. */
@@ -55,8 +46,47 @@ int pgwin32_dirmod_loops = 100;
 
 #ifdef WIN32
 
+/*
+ * XXX Because mingw doesn't yet define struct FILE_RENAME_INFO with the Flags
+ * member, we'll define a layout-compatible struct ourselves for now.  See:
+ *
+ * https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info
+ */
+typedef struct XXX_FILE_RENAME_INFO
+{
+	union
+	{
+		BOOLEAN ReplaceIfExists;
+		DWORD	Flags;
+	} DUMMYUNIONNAME;
+	BOOLEAN ReplaceIfExists;
+	HANDLE  RootDirectory;
+	DWORD   FileNameLength;
+	WCHAR   FileName[1];
+} XXX_FILE_RENAME_INFO;
+
+/*
+ * XXX Because mingw seems to believe we need a higher _WIN32_WINNT that the
+ * Windows SDK requires for these macros, define them ourselves if necessary.
+ */
+#ifndef FILE_RENAME_FLAG_REPLACE_IF_EXISTS
+#define FILE_RENAME_FLAG_REPLACE_IF_EXISTS 0x00000001
+#endif
+#ifndef FILE_RENAME_FLAG_POSIX_SEMANTICS
+#define FILE_RENAME_FLAG_POSIX_SEMANTICS 0x00000002
+#endif
+#ifndef FILE_DISPOSITION_DELETE
+#define FILE_DISPOSITION_DELETE 0x00000001
+#endif
+#ifndef FILE_DISPOSITION_POSIX_SEMANTICS
+#define FILE_DISPOSITION_POSIX_SEMANTICS 0x00000002
+#endif
+
+/*
+ * A container for FILE_RENAME_INFO that adds trailing space for FileName.
+ */
 typedef struct FILE_RENAME_INFO_EXT {
-	FILE_RENAME_INFO fri;
+	XXX_FILE_RENAME_INFO fri;
 	wchar_t extra_space[MAXPGPATH];
 } FILE_RENAME_INFO_EXT;
 
