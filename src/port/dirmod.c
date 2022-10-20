@@ -96,7 +96,7 @@ typedef struct FILE_RENAME_INFO_EXT {
 static int
 pgwin32_posix_rename(const char *from, const char *to)
 {
-	FILE_RENAME_INFO_EXT rename_info = {.Flags = 0};
+	FILE_RENAME_INFO_EXT rename_info = {{.Flags = 0}};
 	HANDLE handle;
 
 	if (MultiByteToWideChar(CP_ACP, 0, to, -1, rename_info.fri.FileName, MAXPGPATH) == 0)
