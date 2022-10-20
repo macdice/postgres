@@ -56,10 +56,9 @@ typedef struct XXX_FILE_RENAME_INFO
 {
 	union
 	{
-		BOOLEAN ReplaceIfExists;
+		BOOLEAN	ReplaceIfExists;
 		DWORD	Flags;
 	} DUMMYUNIONNAME;
-	BOOLEAN ReplaceIfExists;
 	HANDLE  RootDirectory;
 	DWORD   FileNameLength;
 	WCHAR   FileName[1];
@@ -67,7 +66,8 @@ typedef struct XXX_FILE_RENAME_INFO
 
 /*
  * XXX Because mingw seems to believe we need a higher _WIN32_WINNT that the
- * Windows SDK requires for these macros, define them ourselves if necessary.
+ * Windows SDK requires for some of these macros, define them ourselves if
+ * necessary.
  */
 #ifndef FILE_RENAME_FLAG_REPLACE_IF_EXISTS
 #define FILE_RENAME_FLAG_REPLACE_IF_EXISTS 0x00000001
@@ -81,6 +81,9 @@ typedef struct XXX_FILE_RENAME_INFO
 #ifndef FILE_DISPOSITION_POSIX_SEMANTICS
 #define FILE_DISPOSITION_POSIX_SEMANTICS 0x00000002
 #endif
+/* Can't use macro tricks for FILE_INFO_BY_HANDLE_CLASS enumator names. */
+#define XXX_FileDispositionInfoEx 0x15
+#define XXX_FileRenameInfoEx 0x16
 
 /*
  * A container for FILE_RENAME_INFO that adds trailing space for FileName.
@@ -101,7 +104,6 @@ pgwin32_posix_rename(const char *from, const char *to)
 		_dosmaperr(GetLastError());
 		return -1;
 	}
-	rename_info.fri.ReplaceIfExists = true;
 	rename_info.fri.Flags = FILE_RENAME_FLAG_POSIX_SEMANTICS | FILE_RENAME_FLAG_REPLACE_IF_EXISTS;
 	rename_info.fri.FileNameLength = wcslen(rename_info.fri.FileName);
 
@@ -118,7 +120,10 @@ pgwin32_posix_rename(const char *from, const char *to)
 		return -1;
 	}
 
-	if (!SetFileInformationByHandle(handle, FileRenameInfoEx, &rename_info, sizeof(FILE_RENAME_INFO_EXT)))
+	if (!SetFileInformationByHandle(handle,
+									XXX_FileRenameInfoEx,
+									&rename_info,
+									sizeof(FILE_RENAME_INFO_EXT)))
 	{
 		DWORD error = GetLastError();
 
@@ -238,13 +243,19 @@ pgwin32_posix_unlink(const char *path)
 		errno = EPERM;
 		return -1;
 	}
-	if (!SetFileInformationByHandle(handle, FileDispositionInfoEx, &flags, sizeof(flags)))
+	if (!SetFileInformationByHandle(handle,
+									XXX_FileDispositionInfoEx,
+									&flags,
+									sizeof(flags)))
 	{
 		_dosmaperr(GetLastError());
 
 		if (errno == EINVAL)
 		{
-			/* SMB filesystems fail like this.  Fall back to non-POSIX variant. */
+			/*
+			 * SMB filesystems fail like this.  Fall back to (presumably)
+			 * non-POSIX variant via C library.
+			 */
 			CloseHandle(handle);
 			return unlink(path);
 		}
