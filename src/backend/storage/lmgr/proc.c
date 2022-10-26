@@ -1803,18 +1803,6 @@ ProcWaitForSignal(uint32 wait_event_info)
 }
 
 /*
- * ProcSendSignal - set the latch of a backend identified by pgprocno
- */
-void
-ProcSendSignal(int pgprocno)
-{
-	if (pgprocno < 0 || pgprocno >= ProcGlobal->allProcCount)
-		elog(ERROR, "pgprocno out of range");
-
-	SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
-}
-
-/*
  * BecomeLockGroupLeader - designate process as lock group leader
  *
  * Once this function has returned, other processes can join the lock group
