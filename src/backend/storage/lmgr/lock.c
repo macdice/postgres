@@ -374,14 +374,14 @@ static PROCLOCK *SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
 static void GrantLockLocal(LOCALLOCK *locallock, ResourceOwner owner);
 static void BeginStrongLockAcquire(LOCALLOCK *locallock, uint32 fasthashcode);
 static void FinishStrongLockAcquire(void);
-static void WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner);
+static void WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner, LatchGroup *wakeups);
 static void ReleaseLockIfHeld(LOCALLOCK *locallock, bool sessionLock);
 static void LockReassignOwner(LOCALLOCK *locallock, ResourceOwner parent);
 static bool UnGrantLock(LOCK *lock, LOCKMODE lockmode,
 						PROCLOCK *proclock, LockMethod lockMethodTable);
 static void CleanUpLock(LOCK *lock, PROCLOCK *proclock,
 						LockMethod lockMethodTable, uint32 hashcode,
-						bool wakeupNeeded);
+						bool wakeupNeeded, LatchGroup *wakeups);
 static void LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
 								 LOCKTAG *locktag, LOCKMODE lockmode,
 								 bool decrement_strong_lock_count);
@@ -787,6 +787,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	LWLock	   *partitionLock;
 	bool		found_conflict;
 	bool		log_lock = false;
+	LatchGroup	wakeups = {0};
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
@@ -1098,7 +1099,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 										 locktag->locktag_type,
 										 lockmode);
 
-		WaitOnLock(locallock, owner);
+		WaitOnLock(locallock, owner, &wakeups);
 
 		TRACE_POSTGRESQL_LOCK_WAIT_DONE(locktag->locktag_field1,
 										locktag->locktag_field2,
@@ -1137,6 +1138,8 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	FinishStrongLockAcquire();
 
 	LWLockRelease(partitionLock);
+
+	SetLatches(&wakeups);
 
 	/*
 	 * Emit a WAL record if acquisition of this lock needs to be replayed in a
@@ -1629,7 +1632,7 @@ UnGrantLock(LOCK *lock, LOCKMODE lockmode,
 static void
 CleanUpLock(LOCK *lock, PROCLOCK *proclock,
 			LockMethod lockMethodTable, uint32 hashcode,
-			bool wakeupNeeded)
+			bool wakeupNeeded, LatchGroup *wakeups)
 {
 	/*
 	 * If this was my last hold on this lock, delete my entry in the proclock
@@ -1669,7 +1672,7 @@ CleanUpLock(LOCK *lock, PROCLOCK *proclock,
 	else if (wakeupNeeded)
 	{
 		/* There are waiters on this lock, so wake them up. */
-		ProcLockWakeup(lockMethodTable, lock);
+		ProcLockWakeup(lockMethodTable, lock, wakeups);
 	}
 }
 
@@ -1806,7 +1809,7 @@ MarkLockClear(LOCALLOCK *locallock)
  * The appropriate partition lock must be held at entry.
  */
 static void
-WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
+WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner, LatchGroup *wakeups)
 {
 	LOCKMETHODID lockmethodid = LOCALLOCK_LOCKMETHOD(*locallock);
 	LockMethod	lockMethodTable = LockMethods[lockmethodid];
@@ -1839,7 +1842,7 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
 	 */
 	PG_TRY();
 	{
-		if (ProcSleep(locallock, lockMethodTable) != PROC_WAIT_STATUS_OK)
+		if (ProcSleep(locallock, lockMethodTable, wakeups) != PROC_WAIT_STATUS_OK)
 		{
 			/*
 			 * We failed as a result of a deadlock, see CheckDeadLock(). Quit
@@ -1890,7 +1893,7 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
  * NB: this does not clean up any locallock object that may exist for the lock.
  */
 void
-RemoveFromWaitQueue(PGPROC *proc, uint32 hashcode)
+RemoveFromWaitQueue(PGPROC *proc, uint32 hashcode, LatchGroup *wakeups)
 {
 	LOCK	   *waitLock = proc->waitLock;
 	PROCLOCK   *proclock = proc->waitProcLock;
@@ -1931,7 +1934,7 @@ RemoveFromWaitQueue(PGPROC *proc, uint32 hashcode)
 	 */
 	CleanUpLock(waitLock, proclock,
 				LockMethods[lockmethodid], hashcode,
-				true);
+				true, wakeups);
 }
 
 /*
@@ -1956,6 +1959,7 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 	PROCLOCK   *proclock;
 	LWLock	   *partitionLock;
 	bool		wakeupNeeded;
+	LatchGroup	wakeups = {0};
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
@@ -2134,9 +2138,11 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 
 	CleanUpLock(lock, proclock,
 				lockMethodTable, locallock->hashcode,
-				wakeupNeeded);
+				wakeupNeeded, &wakeups);
 
 	LWLockRelease(partitionLock);
+
+	SetLatches(&wakeups);
 
 	RemoveLocalLock(locallock);
 	return true;
@@ -2161,6 +2167,7 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 	LOCK	   *lock;
 	int			partition;
 	bool		have_fast_path_lwlock = false;
+	LatchGroup	wakeups = {0};
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
@@ -2399,10 +2406,12 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 			CleanUpLock(lock, proclock,
 						lockMethodTable,
 						LockTagHashCode(&lock->tag),
-						wakeupNeeded);
+						wakeupNeeded, &wakeups);
 		}						/* loop over PROCLOCKs within this partition */
 
 		LWLockRelease(partitionLock);
+
+		SetLatches(&wakeups);
 	}							/* loop over partitions */
 
 #ifdef LOCK_DEBUG
@@ -3095,6 +3104,7 @@ LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
 	uint32		proclock_hashcode;
 	LWLock	   *partitionLock;
 	bool		wakeupNeeded;
+	LatchGroup	wakeups = {0};
 
 	hashcode = LockTagHashCode(locktag);
 	partitionLock = LockHashPartitionLock(hashcode);
@@ -3148,9 +3158,11 @@ LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
 
 	CleanUpLock(lock, proclock,
 				lockMethodTable, hashcode,
-				wakeupNeeded);
+				wakeupNeeded, &wakeups);
 
 	LWLockRelease(partitionLock);
+
+	SetLatches(&wakeups);
 
 	/*
 	 * Decrement strong lock count.  This logic is needed only for 2PC.

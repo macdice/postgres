@@ -699,6 +699,7 @@ LockErrorCleanup(void)
 {
 	LWLock	   *partitionLock;
 	DisableTimeoutParams timeouts[2];
+	LatchGroup	wakeups = {0};
 
 	HOLD_INTERRUPTS();
 
@@ -732,7 +733,7 @@ LockErrorCleanup(void)
 	if (!dlist_node_is_detached(&MyProc->links))
 	{
 		/* We could not have been granted the lock yet */
-		RemoveFromWaitQueue(MyProc, lockAwaited->hashcode);
+		RemoveFromWaitQueue(MyProc, lockAwaited->hashcode, &wakeups);
 	}
 	else
 	{
@@ -749,6 +750,7 @@ LockErrorCleanup(void)
 	lockAwaited = NULL;
 
 	LWLockRelease(partitionLock);
+	SetLatches(&wakeups);
 
 	RESUME_INTERRUPTS();
 }
@@ -1001,7 +1003,7 @@ AuxiliaryPidGetProc(int pid)
  * NOTES: The process queue is now a priority queue for locking.
  */
 ProcWaitStatus
-ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
+ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups)
 {
 	LOCKMODE	lockmode = locallock->tag.mode;
 	LOCK	   *lock = locallock->lock;
@@ -1137,7 +1139,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 */
 	if (early_deadlock)
 	{
-		RemoveFromWaitQueue(MyProc, hashcode);
+		RemoveFromWaitQueue(MyProc, hashcode, wakeups);
 		return PROC_WAIT_STATUS_ERROR;
 	}
 
@@ -1153,6 +1155,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 * LockErrorCleanup will clean up if cancel/die happens.
 	 */
 	LWLockRelease(partitionLock);
+	SetLatches(wakeups);
 
 	/*
 	 * Also, now that we will successfully clean up after an ereport, it's
@@ -1594,7 +1597,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 
 
 /*
- * ProcWakeup -- wake up a process by setting its latch.
+ * ProcWakeup -- prepare to wake up a process by setting its latch.
  *
  *	 Also remove the process from the wait queue and set its links invalid.
  *
@@ -1606,7 +1609,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
  * Hence, in practice the waitStatus parameter must be PROC_WAIT_STATUS_OK.
  */
 void
-ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
+ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus, LatchGroup *wakeups)
 {
 	if (dlist_node_is_detached(&proc->links))
 		return;
@@ -1622,8 +1625,8 @@ ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
 	proc->waitStatus = waitStatus;
 	pg_atomic_write_u64(&MyProc->waitStart, 0);
 
-	/* And awaken it */
-	SetLatch(&proc->procLatch);
+	/* Schedule it to be awoken */
+	AddLatch(wakeups, &proc->procLatch);
 }
 
 /*
@@ -1634,7 +1637,7 @@ ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
  * The appropriate lock partition lock must be held by caller.
  */
 void
-ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock)
+ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock, LatchGroup *wakeups)
 {
 	dclist_head *waitQueue = &lock->waitProcs;
 	LOCKMASK	aheadRequests = 0;
@@ -1659,7 +1662,7 @@ ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock)
 			/* OK to waken */
 			GrantLock(lock, proc->waitProcLock, lockmode);
 			/* removes proc from the lock's waiting process queue */
-			ProcWakeup(proc, PROC_WAIT_STATUS_OK);
+			ProcWakeup(proc, PROC_WAIT_STATUS_OK, wakeups);
 		}
 		else
 		{
@@ -1685,6 +1688,7 @@ static void
 CheckDeadLock(void)
 {
 	int			i;
+	LatchGroup	wakeups = {0};
 
 	/*
 	 * Acquire exclusive lock on the entire shared lock data structures. Must
@@ -1719,7 +1723,7 @@ CheckDeadLock(void)
 #endif
 
 	/* Run the deadlock check, and set deadlock_state for use by ProcSleep */
-	deadlock_state = DeadLockCheck(MyProc);
+	deadlock_state = DeadLockCheck(MyProc, &wakeups);
 
 	if (deadlock_state == DS_HARD_DEADLOCK)
 	{
@@ -1736,7 +1740,8 @@ CheckDeadLock(void)
 		 * return from the signal handler.
 		 */
 		Assert(MyProc->waitLock != NULL);
-		RemoveFromWaitQueue(MyProc, LockTagHashCode(&(MyProc->waitLock->tag)));
+		RemoveFromWaitQueue(MyProc, LockTagHashCode(&(MyProc->waitLock->tag)),
+							&wakeups);
 
 		/*
 		 * We're done here.  Transaction abort caused by the error that
@@ -1760,6 +1765,8 @@ CheckDeadLock(void)
 check_done:
 	for (i = NUM_LOCK_PARTITIONS; --i >= 0;)
 		LWLockRelease(LockHashPartitionLockByIndex(i));
+
+	SetLatches(&wakeups);
 }
 
 /*
