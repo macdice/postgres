@@ -787,6 +787,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	LWLock	   *partitionLock;
 	bool		found_conflict;
 	bool		log_lock = false;
+	bool		partitionLocked = false;
 	LatchGroup	wakeups = {0};
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
@@ -995,6 +996,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	partitionLock = LockHashPartitionLock(hashcode);
 
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+	partitionLocked = true;
 
 	/*
 	 * Find or create lock and proclock entries with this tag
@@ -1099,7 +1101,10 @@ LockAcquireExtended(const LOCKTAG *locktag,
 										 locktag->locktag_type,
 										 lockmode);
 
+		Assert(LWLockHeldByMeInMode(partitionLock, LW_EXCLUSIVE));
 		WaitOnLock(locallock, owner, &wakeups);
+		Assert(!LWLockHeldByMeInMode(partitionLock, LW_EXCLUSIVE));
+		partitionLocked = false;
 
 		TRACE_POSTGRESQL_LOCK_WAIT_DONE(locktag->locktag_field1,
 										locktag->locktag_field2,
@@ -1124,7 +1129,6 @@ LockAcquireExtended(const LOCKTAG *locktag,
 			PROCLOCK_PRINT("LockAcquire: INCONSISTENT", proclock);
 			LOCK_PRINT("LockAcquire: INCONSISTENT", lock, lockmode);
 			/* Should we retry ? */
-			LWLockRelease(partitionLock);
 			elog(ERROR, "LockAcquire failed");
 		}
 		PROCLOCK_PRINT("LockAcquire: granted", proclock);
@@ -1137,9 +1141,11 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	 */
 	FinishStrongLockAcquire();
 
-	LWLockRelease(partitionLock);
-
-	SetLatches(&wakeups);
+	if (partitionLocked)
+	{
+		LWLockRelease(partitionLock);
+		SetLatches(&wakeups);
+	}
 
 	/*
 	 * Emit a WAL record if acquisition of this lock needs to be replayed in a
@@ -1806,7 +1812,8 @@ MarkLockClear(LOCALLOCK *locallock)
  * Caller must have set MyProc->heldLocks to reflect locks already held
  * on the lockable object by this process.
  *
- * The appropriate partition lock must be held at entry.
+ * The appropriate partition lock must be held at entry.  It is not held on
+ * exit.
  */
 static void
 WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner, LatchGroup *wakeups)
@@ -1851,7 +1858,6 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner, LatchGroup *wakeups)
 			awaitedLock = NULL;
 			LOCK_PRINT("WaitOnLock: aborting on lock",
 					   locallock->lock, locallock->tag.mode);
-			LWLockRelease(LockHashPartitionLock(locallock->hashcode));
 
 			/*
 			 * Now that we aren't holding the partition lock, we can give an

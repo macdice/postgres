@@ -992,7 +992,7 @@ AuxiliaryPidGetProc(int pid)
  * Caller must have set MyProc->heldLocks to reflect locks already held
  * on the lockable object by this process (under all XIDs).
  *
- * The lock table's partition lock must be held at entry, and will be held
+ * The lock table's partition lock must be held at entry, and will be released
  * at exit.
  *
  * Result: PROC_WAIT_STATUS_OK if we acquired the lock, PROC_WAIT_STATUS_ERROR if not (deadlock).
@@ -1019,6 +1019,12 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups)
 	bool		logged_recovery_conflict = false;
 	ProcWaitStatus myWaitStatus;
 	PGPROC	   *leader = MyProc->lockGroupLeader;
+
+	/*
+	 * Every way out of this function will release the partition lock and send
+	 * buffered latch wakeups.
+	 */
+	Assert(LWLockHeldByMeInMode(partitionLock, LW_EXCLUSIVE));
 
 	/*
 	 * If group locking is in use, locks held by members of my locking group
@@ -1104,6 +1110,8 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups)
 					/* Skip the wait and just grant myself the lock. */
 					GrantLock(lock, proclock, lockmode);
 					GrantAwaitedLock();
+					LWLockRelease(partitionLock);
+					SetLatches(wakeups);
 					return PROC_WAIT_STATUS_OK;
 				}
 
@@ -1140,6 +1148,8 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups)
 	if (early_deadlock)
 	{
 		RemoveFromWaitQueue(MyProc, hashcode, wakeups);
+		LWLockRelease(partitionLock);
+		SetLatches(wakeups);
 		return PROC_WAIT_STATUS_ERROR;
 	}
 
@@ -1469,6 +1479,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups)
 			}
 
 			LWLockRelease(partitionLock);
+			SetLatches(wakeups);
 
 			if (deadlock_state == DS_SOFT_DEADLOCK)
 				ereport(LOG,
@@ -1569,13 +1580,6 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups)
 		LogRecoveryConflict(PROCSIG_RECOVERY_CONFLICT_LOCK,
 							standbyWaitStart, GetCurrentTimestamp(),
 							NULL, false);
-
-	/*
-	 * Re-acquire the lock table's partition lock.  We have to do this to hold
-	 * off cancel/die interrupts before we can mess with lockAwaited (else we
-	 * might have a missed or duplicated locallock update).
-	 */
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 
 	/*
 	 * We no longer want LockErrorCleanup to do anything.
