@@ -137,7 +137,7 @@ InitPostmasterChild(void)
 	InitializeLatchSupport();
 	MyLatch = &LocalLatchData;
 	InitLatch(MyLatch);
-	InitializeLatchWaitSet();
+	InitializeBackendWaitSet();
 
 	/*
 	 * If possible, make this process a group leader, so that the postmaster
@@ -191,7 +191,7 @@ InitStandaloneProcess(const char *argv0)
 	InitializeLatchSupport();
 	MyLatch = &LocalLatchData;
 	InitLatch(MyLatch);
-	InitializeLatchWaitSet();
+	InitializeBackendWaitSet();
 
 	/*
 	 * For consistency with InitPostmasterChild, initialize signal mask here.
@@ -220,8 +220,8 @@ SwitchToSharedLatch(void)
 
 	MyLatch = &MyProc->procLatch;
 
-	if (FeBeWaitSet)
-		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET,
+	if (BackendWaitSet)
+		ModifyWaitEvent(BackendWaitSet, BackendWaitSetLatchPos, WL_LATCH_SET,
 						MyLatch);
 
 	/*
@@ -240,8 +240,8 @@ SwitchBackToLocalLatch(void)
 
 	MyLatch = &LocalLatchData;
 
-	if (FeBeWaitSet)
-		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET,
+	if (BackendWaitSet)
+		ModifyWaitEvent(BackendWaitSet, BackendWaitSetLatchPos, WL_LATCH_SET,
 						MyLatch);
 
 	SetLatch(MyLatch);

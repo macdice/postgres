@@ -179,9 +179,10 @@ retry:
 
 		Assert(waitfor);
 
-		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, waitfor, NULL);
+		ModifyWaitEvent(BackendWaitSet, BackendWaitSetLatchPos, WL_LATCH_SET, MyLatch);
+		ModifyWaitEvent(BackendWaitSet, BackendWaitSetSocketPos, waitfor, NULL);
 
-		WaitEventSetWait(FeBeWaitSet, -1 /* no timeout */ , &event, 1,
+		WaitEventSetWait(BackendWaitSet, -1 /* no timeout */ , &event, 1,
 						 WAIT_EVENT_CLIENT_READ);
 
 		/*
@@ -291,9 +292,10 @@ retry:
 
 		Assert(waitfor);
 
-		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, waitfor, NULL);
+		ModifyWaitEvent(BackendWaitSet, BackendWaitSetLatchPos, WL_LATCH_SET, MyLatch);
+		ModifyWaitEvent(BackendWaitSet, BackendWaitSetSocketPos, waitfor, NULL);
 
-		WaitEventSetWait(FeBeWaitSet, -1 /* no timeout */ , &event, 1,
+		WaitEventSetWait(BackendWaitSet, -1 /* no timeout */ , &event, 1,
 						 WAIT_EVENT_CLIENT_WRITE);
 
 		/* See comments in secure_read. */

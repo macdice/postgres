@@ -161,8 +161,6 @@ static const PQcommMethods PqCommSocketMethods = {
 
 const PQcommMethods *PqCommMethods = &PqCommSocketMethods;
 
-WaitEventSet *FeBeWaitSet;
-
 
 /* --------------------------------
  *		pq_init - initialize libpq at backend startup
@@ -172,7 +170,6 @@ void
 pq_init(void)
 {
 	int			socket_pos PG_USED_FOR_ASSERTS_ONLY;
-	int			latch_pos PG_USED_FOR_ASSERTS_ONLY;
 
 	/* initialize state variables */
 	PqSendBufferSize = PQ_SEND_BUFFER_SIZE;
@@ -200,20 +197,14 @@ pq_init(void)
 				(errmsg("could not set socket to nonblocking mode: %m")));
 #endif
 
-	FeBeWaitSet = CreateWaitEventSet(TopMemoryContext, FeBeWaitSetNEvents);
-	socket_pos = AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE,
+	socket_pos = AddWaitEventToSet(BackendWaitSet, WL_SOCKET_WRITEABLE,
 								   MyProcPort->sock, NULL, NULL);
-	latch_pos = AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
-								  MyLatch, NULL);
-	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
-					  NULL, NULL);
 
 	/*
 	 * The event positions match the order we added them, but let's sanity
 	 * check them to be sure.
 	 */
-	Assert(socket_pos == FeBeWaitSetSocketPos);
-	Assert(latch_pos == FeBeWaitSetLatchPos);
+	Assert(socket_pos == BackendWaitSetSocketPos);
 }
 
 /* --------------------------------
@@ -2022,17 +2013,17 @@ show_tcp_user_timeout(void)
 bool
 pq_check_connection(void)
 {
-	WaitEvent	events[FeBeWaitSetNEvents];
+	WaitEvent	events[BackendWaitSetSocketPos + 1];
 	int			rc;
 
 	/*
 	 * It's OK to modify the socket event filter without restoring, because
-	 * all FeBeWaitSet socket wait sites do the same.
+	 * all BackendWaitSet socket wait sites do the same.
 	 */
-	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, WL_SOCKET_CLOSED, NULL);
+	ModifyWaitEvent(BackendWaitSet, BackendWaitSetSocketPos, WL_SOCKET_CLOSED, NULL);
 
 retry:
-	rc = WaitEventSetWait(FeBeWaitSet, 0, events, lengthof(events), 0);
+	rc = WaitEventSetWait(BackendWaitSet, 0, events, lengthof(events), 0);
 	for (int i = 0; i < rc; ++i)
 	{
 		if (events[i].events & WL_SOCKET_CLOSED)

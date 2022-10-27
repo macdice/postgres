@@ -146,6 +146,7 @@ typedef struct LatchGroup
 #define WL_SOCKET_CONNECTED  WL_SOCKET_WRITEABLE
 #endif
 #define WL_SOCKET_CLOSED 	 (1 << 7)
+#define WL_SOCKET_IGNORE 	 (1 << 8)	/* temporarily ignore a socket */
 #define WL_SOCKET_MASK		(WL_SOCKET_READABLE | \
 							 WL_SOCKET_WRITEABLE | \
 							 WL_SOCKET_CONNECTED | \
@@ -164,6 +165,12 @@ typedef struct WaitEvent
 
 /* forward declaration to avoid exposing latch.c implementation details */
 typedef struct WaitEventSet WaitEventSet;
+
+/* extern for pgcomm.c to access */
+extern PGDLLIMPORT WaitEventSet *BackendWaitSet;
+#define BackendWaitSetLatchPos 0
+#define BackendWaitSetSocketPos 2
+
 
 /*
  * prototypes for functions in latch.c
@@ -192,7 +199,7 @@ extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
 					  uint32 wait_event_info);
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
 							  pgsocket sock, long timeout, uint32 wait_event_info);
-extern void InitializeLatchWaitSet(void);
+extern void InitializeBackendWaitSet(void);
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool WaitEventSetCanReportClosed(void);
 

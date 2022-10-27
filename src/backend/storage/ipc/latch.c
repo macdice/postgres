@@ -151,11 +151,14 @@ struct WaitEventSet
 #endif
 };
 
-/* A common WaitEventSet used to implement WatchLatch() */
-static WaitEventSet *LatchWaitSet;
+/* A common WaitEventSet used to implement WatchLatch() and Fe/Be comms */
+WaitEventSet *BackendWaitSet;
 
-/* The position of the latch in LatchWaitSet. */
-#define LatchWaitSetLatchPos 0
+/* The position of the latch in BackendWaitSet. */
+#define BackendWaitSetLatchPos 0
+
+/* In backends that have a FeBe socket, it is here (see pqcomm.c). */
+#define BackendWaitSetSocketPos 2
 
 #ifndef WIN32
 /* Are we currently in WaitLatch? The signal handler would like to know. */
@@ -302,21 +305,23 @@ InitializeLatchSupport(void)
 }
 
 void
-InitializeLatchWaitSet(void)
+InitializeBackendWaitSet(void)
 {
 	int			latch_pos PG_USED_FOR_ASSERTS_ONLY;
 
-	Assert(LatchWaitSet == NULL);
+	Assert(BackendWaitSet == NULL);
 
-	/* Set up the WaitEventSet used by WaitLatch(). */
-	LatchWaitSet = CreateWaitEventSet(TopMemoryContext, 2);
-	latch_pos = AddWaitEventToSet(LatchWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
+	/* Set up the WaitEventSet used by WaitLatch() and libpq.c. */
+	BackendWaitSet = CreateWaitEventSet(TopMemoryContext, 3);
+	latch_pos = AddWaitEventToSet(BackendWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
 								  MyLatch, NULL);
+	Assert(latch_pos == BackendWaitSetLatchPos);
+
 	if (IsUnderPostmaster)
-		AddWaitEventToSet(LatchWaitSet, WL_EXIT_ON_PM_DEATH,
+		AddWaitEventToSet(BackendWaitSet, WL_EXIT_ON_PM_DEATH,
 						  PGINVALID_SOCKET, NULL, NULL);
 
-	Assert(latch_pos == LatchWaitSetLatchPos);
+	/* libpq.c may also add a socket if connected to the frontend */
 }
 
 void
@@ -326,10 +331,10 @@ ShutdownLatchSupport(void)
 	pqsignal(SIGURG, SIG_IGN);
 #endif
 
-	if (LatchWaitSet)
+	if (BackendWaitSet)
 	{
-		FreeWaitEventSet(LatchWaitSet);
-		LatchWaitSet = NULL;
+		FreeWaitEventSet(BackendWaitSet);
+		BackendWaitSet = NULL;
 	}
 
 #if defined(WAIT_USE_SELF_PIPE)
@@ -477,6 +482,7 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 		  uint32 wait_event_info)
 {
 	WaitEvent	event;
+	int			result = 0;
 
 	/* Postmaster-managed callers must handle postmaster death somehow. */
 	Assert(!IsUnderPostmaster ||
@@ -490,17 +496,32 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	 */
 	if (!(wakeEvents & WL_LATCH_SET))
 		latch = NULL;
-	ModifyWaitEvent(LatchWaitSet, LatchWaitSetLatchPos, WL_LATCH_SET, latch);
-	LatchWaitSet->exit_on_postmaster_death =
-		((wakeEvents & WL_EXIT_ON_PM_DEATH) != 0);
+	ModifyWaitEvent(BackendWaitSet, BackendWaitSetLatchPos, WL_LATCH_SET, latch);
 
-	if (WaitEventSetWait(LatchWaitSet,
-						 (wakeEvents & WL_TIMEOUT) ? timeout : -1,
-						 &event, 1,
-						 wait_event_info) == 0)
-		return WL_TIMEOUT;
-	else
-		return event.events;
+	do
+	{
+		if (WaitEventSetWait(BackendWaitSet,
+							 (wakeEvents & WL_TIMEOUT) ? timeout : -1,
+							 &event, 1,
+							 wait_event_info) == 0)
+			result = WL_TIMEOUT;
+		else if (event.events & WL_SOCKET_MASK)
+		{
+			/*
+			 * Lazily shut off socket readiness events if they occur while
+			 * we're just waiting for a latch or timeout.
+			 */
+			ModifyWaitEvent(BackendWaitSet, event.pos, WL_SOCKET_IGNORE, NULL);
+		}
+		else
+			result = event.events;
+	} while (result == 0);
+
+	if (result == WL_POSTMASTER_DEATH &&
+		(wakeEvents & WL_EXIT_ON_PM_DEATH))
+		proc_exit(1);
+
+	return result;
 }
 
 /*
@@ -1144,6 +1165,7 @@ WaitEventAdjustEpoll(WaitEventSet *set, WaitEvent *event, int action)
 		Assert(event->fd != PGINVALID_SOCKET);
 		Assert(event->events & (WL_SOCKET_READABLE |
 								WL_SOCKET_WRITEABLE |
+								WL_SOCKET_IGNORE |
 								WL_SOCKET_CLOSED));
 
 		if (event->events & WL_SOCKET_READABLE)
@@ -1192,6 +1214,7 @@ WaitEventAdjustPoll(WaitEventSet *set, WaitEvent *event)
 	{
 		Assert(event->events & (WL_SOCKET_READABLE |
 								WL_SOCKET_WRITEABLE |
+								WL_SOCKET_IGNORE |
 								WL_SOCKET_CLOSED));
 		pollfd->events = 0;
 		if (event->events & WL_SOCKET_READABLE)
@@ -1276,6 +1299,7 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 		   event->events == WL_POSTMASTER_DEATH ||
 		   (event->events & (WL_SOCKET_READABLE |
 							 WL_SOCKET_WRITEABLE |
+							 WL_SOCKET_IGNORE |
 							 WL_SOCKET_CLOSED)));
 
 	if (event->events == WL_POSTMASTER_DEATH)
