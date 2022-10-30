@@ -138,6 +138,8 @@ int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
+bool		io_wal_direct = false;
+bool		io_wal_init_direct = false;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -4477,6 +4479,21 @@ show_in_hot_standby(void)
 	return RecoveryInProgress() ? "on" : "off";
 }
 
+/*
+ * GUC check for direct I/O support.
+ */
+bool
+check_io_wal_direct(bool *newval, void **extra, GucSource source)
+{
+#if PG_O_DIRECT == 0
+	if (*newval)
+	{
+		GUC_check_errdetail("io_wal_direct and io_wal_init_direct are not supported on this platform.");
+		return false;
+	}
+#endif
+	return true;
+}
 
 /*
  * Read the control file, set respective GUCs.
@@ -8060,46 +8077,26 @@ xlog_redo(XLogReaderState *record)
 }
 
 /*
- * Return the (possible) sync flag used for opening a file, depending on the
- * value of the GUC wal_sync_method.
+ * Return the extra open flags used for opening a file, depending on the
+ * value of the GUCs wal_sync_method, fsync and io_wal_direct.
  */
 static int
 get_sync_bit(int method)
 {
 	int			o_direct_flag = 0;
 
-	/* make O_DIRECT setting only depend on GUC */
-	if (io_wal_direct)
-		o_direct_flag |= PG_O_DIRECT;
-
-#if 0
-	/* If fsync is disabled, never open in sync mode */
-	if (!enableFsync)
-		return 0;
-#endif
-
-#if 0
 	/*
-	 * Optimize writes by bypassing kernel cache with O_DIRECT when using
-	 * O_SYNC and O_DSYNC.  But only if archiving and streaming are disabled,
-	 * otherwise the archive command or walsender process will read the WAL
-	 * soon after writing it, which is guaranteed to cause a physical read if
-	 * we bypassed the kernel cache. We also skip the
-	 * posix_fadvise(POSIX_FADV_DONTNEED) call in XLogFileClose() for the same
-	 * reason.
-	 */
-	if (!XLogIsNeeded())
-		o_direct_flag = PG_O_DIRECT;
-#endif
-
-	/*
-	 * Never use O_DIRECT in walreceiver process for similar reasons; the WAL
+	 * Use O_DIRECT if requested, except in walreceiver process.  The WAL
 	 * written by walreceiver is normally read by the startup process soon
-	 * after it's written. Also, walreceiver performs unaligned writes, which
+	 * after it's written.  Also, walreceiver performs unaligned writes, which
 	 * don't work with O_DIRECT, so it is required for correctness too.
 	 */
-	if (AmWalReceiverProcess())
-		return 0;
+	if (io_wal_direct && AmWalReceiverProcess())
+		o_direct_flag |= PG_O_DIRECT;
+
+	/* If fsync is disabled, never open in sync mode */
+	if (!enableFsync)
+		return o_direct_flag;
 
 	switch (method)
 	{
@@ -8113,7 +8110,7 @@ get_sync_bit(int method)
 		case SYNC_METHOD_FSYNC_WRITETHROUGH:
 		case SYNC_METHOD_FDATASYNC:
 			return o_direct_flag;
-#ifdef OPEN_SYNC
+#ifdef O_SYNC
 		case SYNC_METHOD_OPEN:
 			return O_SYNC | o_direct_flag;
 #endif

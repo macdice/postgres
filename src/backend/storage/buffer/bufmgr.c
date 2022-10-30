@@ -159,17 +159,6 @@ int			checkpoint_flush_after = 0;
 int			bgwriter_flush_after = 0;
 int			backend_flush_after = 0;
 
-
-/*
- * GUC variables related to the AIO subsystem.
- *
- * XXX: It's not that clear where these best belong? Particularly the WAL ones
- * probably should move.
- */
-bool		io_data_direct = 0;
-bool		io_wal_direct = 0;
-bool		io_wal_init_direct = 0;
-
 /* local state for StartBufferIO and related functions */
 static BufferDesc *InProgressBuf = NULL;
 static bool IsForInput;

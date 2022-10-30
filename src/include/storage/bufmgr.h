@@ -76,10 +76,6 @@ extern PGDLLIMPORT int checkpoint_flush_after;
 extern PGDLLIMPORT int backend_flush_after;
 extern PGDLLIMPORT int bgwriter_flush_after;
 
-extern bool io_data_direct;
-extern bool io_wal_direct;
-extern bool io_wal_init_direct;
-
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
 
