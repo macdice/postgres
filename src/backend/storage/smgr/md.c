@@ -439,7 +439,7 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	int			nbytes;
 	MdfdVec    *v;
 
-	AssertPointerAlignment(buffer, 4096);
+	AssertPointerAlignment(buffer, PG_IO_ALIGN_SIZE);
 
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND
@@ -663,7 +663,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	int			nbytes;
 	MdfdVec    *v;
 
-	AssertPointerAlignment(buffer, 4096);
+	AssertPointerAlignment(buffer, PG_IO_ALIGN_SIZE);
 
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
 										reln->smgr_rlocator.locator.spcOid,
@@ -730,7 +730,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	int			nbytes;
 	MdfdVec    *v;
 
-	AssertPointerAlignment(buffer, 4096);
+	AssertPointerAlignment(buffer, PG_IO_ALIGN_SIZE);
 
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND

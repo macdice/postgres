@@ -1544,7 +1544,7 @@ MemoryContextAllocAligned(MemoryContext context,
 	void	   *aligned;
 
 	/* wouldn't make much sense to waste that much space */
-	AssertArg(alignto < (128 * 1024 * 1024));
+	Assert(alignto < (128 * 1024 * 1024));
 
 	if (alignto < MAXIMUM_ALIGNOF)
 		return palloc_extended(size, flags);
