@@ -228,6 +228,13 @@
 #define PG_CACHE_LINE_SIZE		128
 
 /*
+ * Assumed alignment requirement for direct I/O.  The real requirement may be
+ * based on sectors or filesystem pages.  The default is the typical modern
+ * sector size, which is enough for known filesystem.
+ */
+#define PG_IO_ALIGN_SIZE		4096
+
+/*
  *------------------------------------------------------------------------
  * The following symbols are for enabling debugging code, not for
  * controlling user-visible features or resource limits.

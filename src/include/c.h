@@ -1072,19 +1072,17 @@ extern void ExceptionalCondition(const char *conditionName,
  * Use this, not "char buf[BLCKSZ]", to declare a field or local variable
  * holding a page buffer, if that page might be accessed as a page and not
  * just a string of bytes.  Otherwise the variable might be under-aligned,
- * causing problems on alignment-picky hardware.  (In some places, we use
- * this to declare buffers even though we only pass them to read() and
- * write(), because copying to/from aligned buffers is usually faster than
- * using unaligned buffers.)  We include both "double" and "int64" in the
- * union to ensure that the compiler knows the value must be MAXALIGN'ed
- * (cf. configure's computation of MAXIMUM_ALIGNOF).
+ * causing problems on alignment-picky hardware.  In some places, we use
+ * this to declare buffers even though we only pass them to I/O functions,
+ * which have sector or page alignment requirements if the file was opened
+ * with PG_O_DIRECT.  We include both "double" and "int64" in the union to
+ * ensure that the compiler knows the value must be MAXALIGN'ed (cf.
+ * configure's computation of MAXIMUM_ALIGNOF).
  */
 typedef union PGAlignedBlock
 {
 #ifdef pg_attribute_aligned
-	pg_attribute_aligned(4096)
-#else
-	__declspec(align(4096))
+	pg_attribute_aligned(PG_IO_ALIGN_SIZE)
 #endif
 	char		data[BLCKSZ];
 	double		force_align_d;
@@ -1095,9 +1093,7 @@ typedef union PGAlignedBlock
 typedef union PGAlignedXLogBlock
 {
 #ifdef pg_attribute_aligned
-	pg_attribute_aligned(4096)
-#else
-	__declspec(align(4096))
+	pg_attribute_aligned(PG_IO_ALIGN_SIZE)
 #endif
 	char		data[XLOG_BLCKSZ];
 	double		force_align_d;
