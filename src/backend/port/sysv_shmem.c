@@ -576,8 +576,9 @@ GetHugePageSize(Size *hugepagesize, int *mmap_flags)
 bool
 check_huge_page_size(int *newval, void **extra, GucSource source)
 {
-#if !(defined(MAP_HUGE_MASK) && defined(MAP_HUGE_SHIFT))
-	/* Recent enough Linux only, for now.  See GetHugePageSize(). */
+#if !(defined(MAP_HUGE_MASK) && defined(MAP_HUGE_SHIFT)) && \
+	!defined(SHM_LARGEPAGE_ALLOC_DEFAULT)
+	/* Recent enough Linux and FreeBSD only, for now. */
 	if (*newval != 0)
 	{
 		GUC_check_errdetail("huge_page_size must be 0 on this platform.");
@@ -601,12 +602,9 @@ CreateAnonymousSegment(Size *size)
 	void	   *ptr = MAP_FAILED;
 	int			mmap_errno = 0;
 
-#ifndef MAP_HUGETLB
-	/* PGSharedMemoryCreate should have dealt with this case */
-	Assert(huge_pages != HUGE_PAGES_ON);
-#else
 	if (huge_pages == HUGE_PAGES_ON || huge_pages == HUGE_PAGES_TRY)
 	{
+#ifdef MAP_HUGETLB
 		/*
 		 * Round up the request size to a suitable large value.
 		 */
@@ -624,8 +622,52 @@ CreateAnonymousSegment(Size *size)
 		if (huge_pages == HUGE_PAGES_TRY && ptr == MAP_FAILED)
 			elog(DEBUG1, "mmap(%zu) with MAP_HUGETLB failed, huge pages disabled: %m",
 				 allocsize);
-	}
 #endif
+#ifdef SHM_LARGEPAGE_ALLOC_DEFAULT
+		int			nsizes;
+		size_t	   *page_sizes;
+		size_t		page_size;
+		int			page_size_index = -1;
+
+		/*
+		 * Find the matching page size index, or if huge_page_size wasn't set,
+		 * then skip the smallest size and take the next one after that.
+		 */
+		nsizes = getpagesizes(NULL, 0);
+		page_sizes = palloc(nsizes * sizeof(*page_sizes));
+		getpagesizes(page_sizes, nsizes);
+		for (int i = 0; i < nsizes; ++i)
+		{
+			if (huge_page_size * 1024 == page_sizes[i] ||
+				(huge_page_size == 0 && i > 0))
+			{
+				page_size = page_sizes[i];
+				page_size_index = i;
+				if (allocsize % page_size != 0)
+					allocsize += page_size - (allocsize % page_size);
+				break;
+			}
+		}
+		pfree(page_sizes);
+		if (index >= 0)
+		{
+			int			fd;
+
+			fd = shm_create_largepage(SHM_ANON, O_RDWR, page_size_index,
+									  SHM_LARGEPAGE_ALLOC_DEFAULT, 0);
+			if (fd >= 0)
+			{
+				if (ftruncate(fd, allocsize) == 0)
+				{
+					ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
+							   MAP_SHARED, fd, 0);
+					mmap_errno = errno;
+				}
+				close(fd);
+			}
+		}
+#endif
+	}
 
 	if (ptr == MAP_FAILED && huge_pages != HUGE_PAGES_ON)
 	{
@@ -709,7 +751,7 @@ PGSharedMemoryCreate(Size size,
 						DataDir)));
 
 	/* Complain if hugepages demanded but we can't possibly support them */
-#if !defined(MAP_HUGETLB)
+#if !defined(MAP_HUGETLB) && !defined(SHM_LARGEPAGE_ALLOC_DEFAULT)
 	if (huge_pages == HUGE_PAGES_ON)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),

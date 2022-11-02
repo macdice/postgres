@@ -1678,9 +1678,9 @@ include_dir 'conf.d'
        </para>
 
        <para>
-        At present, this setting is supported only on Linux and Windows. The
+        At present, this setting is supported only on Linux, FreeBSD and Windows. The
         setting is ignored on other systems when set to
-        <literal>try</literal>.  On Linux, it is only supported when
+        <literal>try</literal>.  On Linux and FreeBSD, it is only supported when
         <varname>shared_memory_type</varname> is set to <literal>mmap</literal>
         (the default).
        </para>
@@ -1742,7 +1742,7 @@ include_dir 'conf.d'
         about usage and support, see <xref linkend="linux-huge-pages"/>.
        </para>
        <para>
-        Non-default settings are currently supported only on Linux.
+        Non-default settings are currently supported only on Linux and FreeBSD.
        </para>
       </listitem>
      </varlistentry>
