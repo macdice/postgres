@@ -18,6 +18,11 @@
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
+#ifndef FRONTEND
+#include "port/atomics.h"
+#endif
+
+struct SMgrRelationHeader;
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -40,6 +45,9 @@ typedef struct SMgrRelationData
 {
 	/* rlocator is the hashtable lookup key, so it must be first! */
 	RelFileLocatorBackend smgr_rlocator;	/* relation physical identifier */
+
+	/* pointer to header object in shared memory */
+	struct SMgrRelationHeader *smgr_header;
 
 	/* pointer to owning pointer, or NULL if none */
 	struct SMgrRelationData **smgr_owner;
@@ -73,6 +81,23 @@ typedef struct SMgrRelationData
 } SMgrRelationData;
 
 typedef SMgrRelationData *SMgrRelation;
+
+#ifndef FRONTEND
+
+/*
+ * Header object shared by all the backends that currently have an SMgrRelation
+ * object open.
+ */
+typedef struct SMgrRelationHeader
+{
+	RelFileLocatorBackend rlocator;
+
+	BlockNumber			nblocks;
+
+	pg_atomic_uint32	refcnt;
+} SMgrRelationHeader;
+
+#endif
 
 #define SmgrIsTemp(smgr) \
 	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)

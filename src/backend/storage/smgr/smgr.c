@@ -98,6 +98,46 @@ static dlist_head unowned_relns;
 /* local function prototypes */
 static void smgrshutdown(int code, Datum arg);
 
+/* Size of the initial shared memory region for the SMgrHeader hash table. */
+#define INITIAL_HEADER_SPACE (256 * 1024)
+
+typedef SMgrControl
+{
+	dsa_handle		allocator_handle;
+	dshash_handle	headers_handle;
+	char			raw_allocator_space[];
+} SMgrControl;
+
+static SMgrControl *shared_control;
+static dsa_area *shared_allocator;
+static dshash_table *shared_headers;
+
+size_t
+smgrsharedsize(void)
+{
+	size_t		size;
+
+	size = INITIAL_HEADER_SPACE;
+	Assert(dsa_minimum_size() < size);
+	size = add_size(size, sizeof(SMgrControl));
+
+	return MAXALIGN(size);
+}
+
+void
+smgrsharedinit(void)
+{
+	bool 		found;
+
+	if (!IsUnderPostmaser)
+	{
+		dsa_area	   *allocator;
+
+		allocator = dsa_create_in_place(&control->initial_allocator_space);
+		dsa_pin(allocator);
+		headers_handle = dshash_get_hash_table_handle(headers);
+	}
+}
 
 /*
  *	smgrinit(), smgrshutdown() -- Initialize or shut down storage
