@@ -20,12 +20,15 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "common/file_utils.h"
+
 #ifndef FRONTEND
 #define pg_log_warning(...) elog(WARNING, __VA_ARGS__)
+#define LOG_LEVEL WARNING
 #else
 #include "common/logging.h"
+#define LOG_LEVEL PG_LOG_WARNING
 #endif
-
 
 /*
  *	rmtree
@@ -41,82 +44,59 @@
 bool
 rmtree(const char *path, bool rmtopdir)
 {
-	bool		result = true;
 	char		pathbuf[MAXPGPATH];
-	char	  **filenames;
-	char	  **filename;
-	struct stat statbuf;
+	DIR		   *dir;
+	struct dirent *de;
+	bool		result = true;
 
-	/*
-	 * we copy all the names out of the directory before we start modifying
-	 * it.
-	 */
-	filenames = pgfnames(path);
-
-	if (filenames == NULL)
-		return false;
-
-	/* now we have the names we can start removing things */
-	for (filename = filenames; *filename; filename++)
+	dir = opendir(path);
+	if (dir == NULL)
 	{
-		snprintf(pathbuf, MAXPGPATH, "%s/%s", path, *filename);
+		pg_log_warning("could not open directory \"%s\": %m", path);
+		return false;
+	}
 
-		/*
-		 * It's ok if the file is not there anymore; we were just about to
-		 * delete it anyway.
-		 *
-		 * This is not an academic possibility. One scenario where this
-		 * happens is when bgwriter has a pending unlink request for a file in
-		 * a database that's being dropped. In dropdb(), we call
-		 * ForgetDatabaseSyncRequests() to flush out any such pending unlink
-		 * requests, but because that's asynchronous, it's not guaranteed that
-		 * the bgwriter receives the message in time.
-		 */
-		if (lstat(pathbuf, &statbuf) != 0)
-		{
-			if (errno != ENOENT)
-			{
-				pg_log_warning("could not stat file or directory \"%s\": %m",
-							   pathbuf);
-				result = false;
-			}
+	while (errno = 0, (de = readdir(dir)))
+	{
+		if (strcmp(de->d_name, ".") == 0 ||
+			strcmp(de->d_name, "..") == 0)
 			continue;
-		}
-
-		if (S_ISDIR(statbuf.st_mode))
+		snprintf(pathbuf, sizeof(pathbuf), "%s/%s", path, de->d_name);
+		switch (get_dirent_type(pathbuf, de, false, LOG_LEVEL))
 		{
-			/* call ourselves recursively for a directory */
-			if (!rmtree(pathbuf, true))
-			{
-				/* we already reported the error */
-				result = false;
-			}
-		}
-		else
-		{
-			if (unlink(pathbuf) != 0)
-			{
-				if (errno != ENOENT)
+			case PGFILETYPE_ERROR:
+				/* already logged, press on */
+				break;
+			case PGFILETYPE_DIR:
+				if (!rmtree(pathbuf, true))
+					result = false;
+				break;
+			default:
+				if (unlink(pathbuf) != 0 && errno != ENOENT)
 				{
-					pg_log_warning("could not remove file or directory \"%s\": %m",
-								   pathbuf);
+					pg_log_warning("could not unlink file \"%s\": %m", pathbuf);
 					result = false;
 				}
-			}
+				break;
 		}
 	}
+
+	if (errno != 0)
+	{
+		pg_log_warning("could not read directory \"%s\": %m", path);
+		result = false;
+	}
+
+	closedir(dir);
 
 	if (rmtopdir)
 	{
 		if (rmdir(path) != 0)
 		{
-			pg_log_warning("could not remove file or directory \"%s\": %m",
-						   path);
+			pg_log_warning("could not remove directory \"%s\": %m", path);
 			result = false;
 		}
 	}
-
-	pgfnames_cleanup(filenames);
 
 	return result;
 }
