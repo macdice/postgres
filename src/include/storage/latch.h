@@ -135,10 +135,16 @@ typedef struct Latch
 #define WL_SOCKET_CONNECTED  WL_SOCKET_WRITEABLE
 #endif
 #define WL_SOCKET_CLOSED 	 (1 << 7)
+#ifdef WIN32
+#define WL_SOCKET_ACCEPT	 (1 << 8)
+#else
+#define WL_SOCKET_ACCEPT	 WL_SOCKET_READABLE
+#endif
 #define WL_SOCKET_MASK		(WL_SOCKET_READABLE | \
 							 WL_SOCKET_WRITEABLE | \
 							 WL_SOCKET_CONNECTED | \
-							 WL_SOCKET_CLOSED)
+							 WL_SOCKET_CLOSED | \
+							 WL_SOCKET_ACCEPT)
 
 typedef struct WaitEvent
 {

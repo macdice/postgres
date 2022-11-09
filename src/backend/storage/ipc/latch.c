@@ -283,6 +283,17 @@ InitializeLatchSupport(void)
 #ifdef WAIT_USE_SIGNALFD
 	sigset_t	signalfd_mask;
 
+	if (IsUnderPostmaster)
+	{
+		if (signal_fd != -1)
+		{
+			/* Release postmaster's signal FD; ignore any error */
+			(void) close(signal_fd);
+			signal_fd = -1;
+			ReleaseExternalFD();
+		}
+	}
+
 	/* Block SIGURG, because we'll receive it through a signalfd. */
 	sigaddset(&UnBlockSig, SIGURG);
 
@@ -1312,6 +1323,8 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 			flags |= FD_WRITE;
 		if (event->events & WL_SOCKET_CONNECTED)
 			flags |= FD_CONNECT;
+		if (event->events & WL_SOCKET_ACCEPT)
+			flags |= FD_ACCEPT;
 
 		if (*handle == WSA_INVALID_EVENT)
 		{
@@ -2066,6 +2079,12 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		{
 			/* connected */
 			occurred_events->events |= WL_SOCKET_CONNECTED;
+		}
+		if ((cur_event->events & WL_SOCKET_ACCEPT) &&
+			(resEvents.lNetworkEvents & FD_ACCEPT))
+		{
+			/* incoming connection ready to accept */
+			occurred_events->events |= WL_SOCKET_ACCEPT;
 		}
 		if (resEvents.lNetworkEvents & FD_CLOSE)
 		{

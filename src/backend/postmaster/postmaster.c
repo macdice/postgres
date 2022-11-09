@@ -70,7 +70,6 @@
 #include <time.h>
 #include <sys/wait.h>
 #include <ctype.h>
-#include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -362,6 +361,12 @@ static volatile sig_atomic_t WalReceiverRequested = false;
 static volatile bool StartWorkerNeeded = true;
 static volatile bool HaveCrashedWorker = false;
 
+/* set when signals arrive */
+static volatile sig_atomic_t pending_action_request;
+static volatile sig_atomic_t pending_child_exit;
+static volatile sig_atomic_t pending_reload_request;
+static volatile sig_atomic_t pending_shutdown_request;
+
 #ifdef USE_SSL
 /* Set when and if SSL has been initialized properly */
 static bool LoadedSSL = false;
@@ -380,10 +385,14 @@ static void getInstallationPaths(const char *argv0);
 static void checkControlFile(void);
 static Port *ConnCreate(int serverFd);
 static void ConnFree(Port *port);
-static void SIGHUP_handler(SIGNAL_ARGS);
-static void pmdie(SIGNAL_ARGS);
-static void reaper(SIGNAL_ARGS);
-static void sigusr1_handler(SIGNAL_ARGS);
+static void handle_action_request_signal(SIGNAL_ARGS);
+static void handle_child_exit_signal(SIGNAL_ARGS);
+static void handle_reload_request_signal(SIGNAL_ARGS);
+static void handle_shutdown_request_signal(SIGNAL_ARGS);
+static void process_action_request(void);
+static void process_child_exit(void);
+static void process_reload_request(void);
+static void process_shutdown_request(void);
 static void process_startup_packet_die(SIGNAL_ARGS);
 static void dummy_handler(SIGNAL_ARGS);
 static void StartupPacketTimeoutHandler(void);
@@ -401,7 +410,6 @@ static int	BackendStartup(Port *port);
 static int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void processCancelRequest(Port *port, void *pkt);
-static int	initMasks(fd_set *rmask);
 static void report_fork_failure_to_client(Port *port, int errnum);
 static CAC_state canAcceptConnections(int backend_type);
 static bool RandomCancelKey(int32 *cancel_key);
@@ -609,26 +617,6 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Set up signal handlers for the postmaster process.
 	 *
-	 * In the postmaster, we use pqsignal_pm() rather than pqsignal() (which
-	 * is used by all child processes and client processes).  That has a
-	 * couple of special behaviors:
-	 *
-	 * 1. We tell sigaction() to block all signals for the duration of the
-	 * signal handler.  This is faster than our old approach of
-	 * blocking/unblocking explicitly in the signal handler, and it should also
-	 * prevent excessive stack consumption if signals arrive quickly.
-	 *
-	 * 2. We do not set the SA_RESTART flag.  This is because signals will be
-	 * blocked at all times except when ServerLoop is waiting for something to
-	 * happen, and during that window, we want signals to exit the select(2)
-	 * wait so that ServerLoop can respond if anything interesting happened.
-	 * On some platforms, signals marked SA_RESTART would not cause the
-	 * select() wait to end.
-	 *
-	 * Child processes will generally want SA_RESTART, so pqsignal() sets that
-	 * flag.  We expect children to set up their own handlers before
-	 * unblocking signals.
-	 *
 	 * CAUTION: when changing this list, check for side-effects on the signal
 	 * handling setup of child processes.  See tcop/postgres.c,
 	 * bootstrap/bootstrap.c, postmaster/bgwriter.c, postmaster/walwriter.c,
@@ -638,26 +626,21 @@ PostmasterMain(int argc, char *argv[])
 	pqinitmask();
 	PG_SETMASK(&BlockSig);
 
-	pqsignal_pm(SIGHUP, SIGHUP_handler);	/* reread config file and have
-											 * children do same */
-	pqsignal_pm(SIGINT, pmdie); /* send SIGTERM and shut down */
-	pqsignal_pm(SIGQUIT, pmdie);	/* send SIGQUIT and die */
-	pqsignal_pm(SIGTERM, pmdie);	/* wait for children and shut down */
-	pqsignal_pm(SIGALRM, SIG_IGN);	/* ignored */
-	pqsignal_pm(SIGPIPE, SIG_IGN);	/* ignored */
-	pqsignal_pm(SIGUSR1, sigusr1_handler);	/* message from child process */
-	pqsignal_pm(SIGUSR2, dummy_handler);	/* unused, reserve for children */
-	pqsignal_pm(SIGCHLD, reaper);	/* handle child termination */
+	pqsignal(SIGHUP, handle_reload_request_signal);
+	pqsignal(SIGINT, handle_shutdown_request_signal);
+	pqsignal(SIGQUIT, handle_shutdown_request_signal);
+	pqsignal(SIGTERM, handle_shutdown_request_signal);
+	pqsignal(SIGALRM, SIG_IGN);	/* ignored */
+	pqsignal(SIGPIPE, SIG_IGN);	/* ignored */
+	pqsignal(SIGUSR1, handle_action_request_signal);
+	pqsignal(SIGUSR2, dummy_handler);	/* unused, reserve for children */
+	pqsignal(SIGCHLD, handle_child_exit_signal);
 
-#ifdef SIGURG
+	/* This may configure SIGURG, depending on platform. */
+	InitializeLatchSupport();
+	InitLocalLatch();
 
-	/*
-	 * Ignore SIGURG for now.  Child processes may change this (see
-	 * InitializeLatchSupport), but they will not receive any such signals
-	 * until they wait on a latch.
-	 */
-	pqsignal_pm(SIGURG, SIG_IGN);	/* ignored */
-#endif
+	PG_SETMASK(&UnBlockSig);
 
 	/*
 	 * No other place in Postgres should touch SIGTTIN/SIGTTOU handling.  We
@@ -667,15 +650,15 @@ PostmasterMain(int argc, char *argv[])
 	 * child processes should just allow the inherited settings to stand.
 	 */
 #ifdef SIGTTIN
-	pqsignal_pm(SIGTTIN, SIG_IGN);	/* ignored */
+	pqsignal(SIGTTIN, SIG_IGN);	/* ignored */
 #endif
 #ifdef SIGTTOU
-	pqsignal_pm(SIGTTOU, SIG_IGN);	/* ignored */
+	pqsignal(SIGTTOU, SIG_IGN);	/* ignored */
 #endif
 
 	/* ignore SIGXFSZ, so that ulimit violations work like disk full */
 #ifdef SIGXFSZ
-	pqsignal_pm(SIGXFSZ, SIG_IGN);	/* ignored */
+	pqsignal(SIGXFSZ, SIG_IGN);	/* ignored */
 #endif
 
 	/*
@@ -1706,100 +1689,92 @@ DetermineSleepTime(struct timeval *timeout)
 static int
 ServerLoop(void)
 {
-	fd_set		readmask;
-	int			nSockets;
 	time_t		last_lockfile_recheck_time,
 				last_touch_time;
+	WaitEventSet *wes;
+	WaitEvent	events[MAXLISTEN];
+	int			nevents;
+
+	/* Set up a WaitEventSet for our latch and listening sockets. */
+	wes = CreateWaitEventSet(CurrentMemoryContext, 1 + MAXLISTEN);
+	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+	for (int i = 0; i < MAXLISTEN; i++)
+	{
+		int			fd = ListenSocket[i];
+
+		if (fd == PGINVALID_SOCKET)
+			break;
+		AddWaitEventToSet(wes, WL_SOCKET_ACCEPT, fd, NULL, NULL);
+	}
 
 	last_lockfile_recheck_time = last_touch_time = time(NULL);
 
-	nSockets = initMasks(&readmask);
-
 	for (;;)
 	{
-		fd_set		rmask;
-		int			selres;
 		time_t		now;
 
 		/*
 		 * Wait for a connection request to arrive.
 		 *
-		 * We block all signals except while sleeping. That makes it safe for
-		 * signal handlers, which again block all signals while executing, to
-		 * do nontrivial work.
-		 *
 		 * If we are in PM_WAIT_DEAD_END state, then we don't want to accept
-		 * any new connections, so we don't call select(), and just sleep.
+		 * any new connections, so we just sleep.
 		 */
-		memcpy((char *) &rmask, (char *) &readmask, sizeof(fd_set));
-
 		if (pmState == PM_WAIT_DEAD_END)
 		{
-			PG_SETMASK(&UnBlockSig);
-
 			pg_usleep(100000L); /* 100 msec seems reasonable */
-			selres = 0;
-
-			PG_SETMASK(&BlockSig);
+			nevents = 0;
 		}
 		else
 		{
-			/* must set timeout each time; some OSes change it! */
 			struct timeval timeout;
 
-			/* Needs to run with blocked signals! */
 			DetermineSleepTime(&timeout);
 
-			PG_SETMASK(&UnBlockSig);
-
-			selres = select(nSockets, &rmask, NULL, NULL, &timeout);
-
-			PG_SETMASK(&BlockSig);
-		}
-
-		/* Now check the select() result */
-		if (selres < 0)
-		{
-			if (errno != EINTR && errno != EWOULDBLOCK)
-			{
-				ereport(LOG,
-						(errcode_for_socket_access(),
-						 errmsg("select() failed in postmaster: %m")));
-				return STATUS_ERROR;
-			}
+			nevents = WaitEventSetWait(wes,
+									   timeout.tv_sec * 1000 + timeout.tv_usec / 1000,
+									   events,
+									   lengthof(events),
+									   0 /* postmaster posts no wait_events */);
 		}
 
 		/*
-		 * New connection pending on any of our sockets? If so, fork a child
-		 * process to deal with it.
+		 * Latch set by signal handler, or new connection pending on any of our
+		 * sockets? If the latter, fork a child process to deal with it.
 		 */
-		if (selres > 0)
+		for (int i = 0; i < nevents; i++)
 		{
-			int			i;
-
-			for (i = 0; i < MAXLISTEN; i++)
+			if (events[i].events & WL_LATCH_SET)
 			{
-				if (ListenSocket[i] == PGINVALID_SOCKET)
-					break;
-				if (FD_ISSET(ListenSocket[i], &rmask))
+				ResetLatch(MyLatch);
+			}
+			else if (events[i].events & WL_SOCKET_ACCEPT)
+			{
+				Port	   *port;
+
+				port = ConnCreate(events[i].fd);
+				if (port)
 				{
-					Port	   *port;
+					BackendStartup(port);
 
-					port = ConnCreate(ListenSocket[i]);
-					if (port)
-					{
-						BackendStartup(port);
-
-						/*
-						 * We no longer need the open socket or port structure
-						 * in this process
-						 */
-						StreamClose(port->sock);
-						ConnFree(port);
-					}
+					/*
+					 * We no longer need the open socket or port structure
+					 * in this process
+					 */
+					StreamClose(port->sock);
+					ConnFree(port);
 				}
 			}
 		}
+
+		/* Process work scheduled by signal handlers. */
+		if (pending_action_request)
+			process_action_request();
+		if (pending_child_exit)
+			process_child_exit();
+		if (pending_reload_request)
+			process_reload_request();
+		if (pending_shutdown_request)
+			process_shutdown_request();
 
 		/* If we have lost the log collector, try to start a new one */
 		if (SysLoggerPID == 0 && Logging_collector)
@@ -1938,34 +1913,6 @@ ServerLoop(void)
 		}
 	}
 }
-
-/*
- * Initialise the masks for select() for the ports we are listening on.
- * Return the number of sockets to listen on.
- */
-static int
-initMasks(fd_set *rmask)
-{
-	int			maxsock = -1;
-	int			i;
-
-	FD_ZERO(rmask);
-
-	for (i = 0; i < MAXLISTEN; i++)
-	{
-		int			fd = ListenSocket[i];
-
-		if (fd == PGINVALID_SOCKET)
-			break;
-		FD_SET(fd, rmask);
-
-		if (fd > maxsock)
-			maxsock = fd;
-	}
-
-	return maxsock + 1;
-}
-
 
 /*
  * Read a client's startup packet and do something according to it.
@@ -2707,14 +2654,42 @@ InitProcessGlobals(void)
 #endif
 }
 
-
 /*
- * SIGHUP -- reread config files, and tell children to do same
+ * Child processes use SIGUSR1 to for pmsignals.  pg_ctl uses SIGUSR1 to ask
+ * postmaster to check for logrotate and promote files.
  */
 static void
-SIGHUP_handler(SIGNAL_ARGS)
+handle_action_request_signal(SIGNAL_ARGS)
 {
-	int			save_errno = errno;
+	int save_errno = errno;
+
+	pending_action_request = true;
+	SetLatch(MyLatch);
+
+	errno = save_errno;
+}
+
+/*
+ * pg_ctl uses SIGHUP to request a reload of the configuration files.
+ */
+static void
+handle_reload_request_signal(SIGNAL_ARGS)
+{
+	int save_errno = errno;
+
+	pending_reload_request = true;
+	SetLatch(MyLatch);
+
+	errno = save_errno;
+}
+
+/*
+ * Re-read config files, and tell children to do same.
+ */
+static void
+process_reload_request(void)
+{
+	pending_reload_request = false;
 
 	if (Shutdown <= SmartShutdown)
 	{
@@ -2771,27 +2746,47 @@ SIGHUP_handler(SIGNAL_ARGS)
 		write_nondefault_variables(PGC_SIGHUP);
 #endif
 	}
-
-	errno = save_errno;
 }
 
-
 /*
- * pmdie -- signal handler for processing various postmaster signals.
+ * pg_ctl uses SIGTERM, SIGINT and SIGQUIT to request different types of
+ * shutdown.
  */
 static void
-pmdie(SIGNAL_ARGS)
+handle_shutdown_request_signal(SIGNAL_ARGS)
 {
-	int			save_errno = errno;
-
-	ereport(DEBUG2,
-			(errmsg_internal("postmaster received signal %d",
-							 postgres_signal_arg)));
+	int save_errno = errno;
 
 	switch (postgres_signal_arg)
 	{
 		case SIGTERM:
+			pending_shutdown_request = SmartShutdown;
+			break;
+		case SIGINT:
+			pending_shutdown_request = FastShutdown;
+			break;
+		case SIGQUIT:
+			pending_shutdown_request = ImmediateShutdown;
+			break;
+	}
+	SetLatch(MyLatch);
 
+	errno = save_errno;
+}
+
+/*
+ * Process shutdown request.
+ */
+static void
+process_shutdown_request(void)
+{
+	int		mode = pending_shutdown_request;
+
+	pending_shutdown_request = NoShutdown;
+
+	switch (mode)
+	{
+		case SmartShutdown:
 			/*
 			 * Smart Shutdown:
 			 *
@@ -2830,8 +2825,7 @@ pmdie(SIGNAL_ARGS)
 			PostmasterStateMachine();
 			break;
 
-		case SIGINT:
-
+		case FastShutdown:
 			/*
 			 * Fast Shutdown:
 			 *
@@ -2871,8 +2865,7 @@ pmdie(SIGNAL_ARGS)
 			PostmasterStateMachine();
 			break;
 
-		case SIGQUIT:
-
+		case ImmediateShutdown:
 			/*
 			 * Immediate Shutdown:
 			 *
@@ -2908,19 +2901,29 @@ pmdie(SIGNAL_ARGS)
 			PostmasterStateMachine();
 			break;
 	}
+}
+
+static void
+handle_child_exit_signal(SIGNAL_ARGS)
+{
+	int			save_errno = errno;
+
+	pending_child_exit = true;
+	SetLatch(MyLatch);
 
 	errno = save_errno;
 }
 
 /*
- * Reaper -- signal handler to cleanup after a child process dies.
+ * Cleanup after a child process dies.
  */
 static void
-reaper(SIGNAL_ARGS)
+process_child_exit(void)
 {
-	int			save_errno = errno;
 	int			pid;			/* process id of dead child process */
 	int			exitstatus;		/* its exit status */
+
+	pending_child_exit = false;
 
 	ereport(DEBUG4,
 			(errmsg_internal("reaping dead processes")));
@@ -3213,8 +3216,6 @@ reaper(SIGNAL_ARGS)
 	 * or actions to make.
 	 */
 	PostmasterStateMachine();
-
-	errno = save_errno;
 }
 
 /*
@@ -3642,8 +3643,9 @@ LogChildExit(int lev, const char *procname, int pid, int exitstatus)
 /*
  * Advance the postmaster's state machine and take actions as appropriate
  *
- * This is common code for pmdie(), reaper() and sigusr1_handler(), which
- * receive the signals that might mean we need to change state.
+ * This is common code for process_shutdown_request(), process_child_exit() and
+ * process_action_request(), which process the signals that might mean we need
+ * to change state.
  */
 static void
 PostmasterStateMachine(void)
@@ -4094,6 +4096,7 @@ BackendStartup(Port *port)
 	/* Hasn't asked to be notified about any bgworkers yet */
 	bn->bgworker_notify = false;
 
+	PG_SETMASK(&BlockSig);
 #ifdef EXEC_BACKEND
 	pid = backend_forkexec(port);
 #else							/* !EXEC_BACKEND */
@@ -4137,6 +4140,7 @@ BackendStartup(Port *port)
 		ereport(LOG,
 				(errmsg("could not fork new process for connection: %m")));
 		report_fork_failure_to_client(port, save_errno);
+		PG_SETMASK(&UnBlockSig);
 		return STATUS_ERROR;
 	}
 
@@ -4158,6 +4162,7 @@ BackendStartup(Port *port)
 		ShmemBackendArrayAdd(bn);
 #endif
 
+	PG_SETMASK(&UnBlockSig);
 	return STATUS_OK;
 }
 
@@ -5013,12 +5018,13 @@ ExitPostmaster(int status)
 }
 
 /*
- * sigusr1_handler - handle signal conditions from child processes
+ * Handle pmsignal conditions representing requests from backends,
+ * and check for promote and logrotate requests from pg_ctl.
  */
 static void
-sigusr1_handler(SIGNAL_ARGS)
+process_action_request(void)
 {
-	int			save_errno = errno;
+	pending_action_request = false;
 
 	/*
 	 * RECOVERY_STARTED and BEGIN_HOT_STANDBY signals are ignored in
@@ -5159,8 +5165,6 @@ sigusr1_handler(SIGNAL_ARGS)
 		 */
 		signal_child(StartupPID, SIGUSR2);
 	}
-
-	errno = save_errno;
 }
 
 /*
