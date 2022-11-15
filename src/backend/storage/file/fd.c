@@ -491,22 +491,15 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 							 SYNC_FILE_RANGE_WRITE);
 		if (rc != 0)
 		{
-			int			elevel;
-
 			/*
 			 * For systems that don't have an implementation of
 			 * sync_file_range() such as Windows WSL, generate only one
 			 * warning and then suppress all further attempts by this process.
 			 */
 			if (errno == ENOSYS)
-			{
-				elevel = WARNING;
 				not_implemented_by_kernel = true;
-			}
-			else
-				elevel = data_sync_elevel(WARNING);
 
-			ereport(elevel,
+			ereport(data_sync_elevel(WARNING),
 					(errcode_for_file_access(),
 					 errmsg("could not flush dirty data: %m")));
 		}
@@ -3716,7 +3709,8 @@ MakePGDirectory(const char *directoryName)
 }
 
 /*
- * Return the passed-in error level, or PANIC if data_sync_retry is off.
+ * Return the passed-in error level, or PANIC if data_sync_retry is off and
+ * errno is EIO.
  *
  * Failure to fsync any data file is cause for immediate panic, unless
  * data_sync_retry is enabled.  Data may have been written to the operating
@@ -3735,5 +3729,5 @@ MakePGDirectory(const char *directoryName)
 int
 data_sync_elevel(int elevel)
 {
-	return data_sync_retry ? elevel : PANIC;
+	return errno == EIO && !data_sync_retry ? PANIC : elevel;
 }
