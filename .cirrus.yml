@@ -296,6 +296,10 @@ task:
   setup_additional_packages_script: |
     #apt-get update
     #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
+    # this is debian 11 (bullseye) but we can install ICU 63 from debian 10 (buster)
+    curl -O http://ftp.debian.org/debian/pool/main/i/icu/libicu63_63.1-6+deb10u3_amd64.deb
+    dpkg -i libicu63_63.1-6+deb10u3_amd64.deb
+
 
   matrix:
     - name: Linux - Debian Bullseye - Autoconf
