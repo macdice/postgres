@@ -411,6 +411,13 @@ AlterCollation(AlterCollationStmt *stmt)
 
 		tup = heap_modify_tuple(tup, RelationGetDescr(rel),
 								values, nulls, replaces);
+
+		/*
+		 * Start using the new version immediately in this transaction.
+		 * XXX invalidate again on abort
+		 * XXX ask other backends to invalidate on commit?
+		 */
+		invalidate_cached_collations();
 	}
 	else
 		ereport(NOTICE,

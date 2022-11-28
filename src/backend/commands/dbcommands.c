@@ -2396,6 +2396,13 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 								  values, nulls, replaces);
 		CatalogTupleUpdate(rel, &tuple->t_self, tuple);
 		heap_freetuple(tuple);
+
+		/*
+		 * Start using the new version immediately in this transaction.
+		 * XXX invalidate again on abort
+		 * XXX ask other backends to invalidate on commit?
+		 */
+		invalidate_cached_collations();
 	}
 	else
 		ereport(NOTICE,

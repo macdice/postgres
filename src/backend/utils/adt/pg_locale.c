@@ -152,6 +152,7 @@ static char *IsoLocaleName(const char *);
 static void icu_set_collation_attributes(pg_icu_library *lib,
 										 UCollator *collator,
 										 const char *loc);
+static pg_icu_library *get_default_icu_library(void);
 #endif
 
 /*
@@ -1237,11 +1238,6 @@ check_strxfrm_bug(void)
  * (that is, saying it's not C when it is).  For example, char2wchar()
  * could fail if the locale is C, so str_tolower() shouldn't call it
  * in that case.
- *
- * Note that we currently lack any way to flush the cache.  Since we don't
- * support ALTER COLLATION, this is OK.  The worst case is that someone
- * drops a collation, and a useless cache entry hangs around in existing
- * backends.
  */
 
 static collation_cache_entry *
@@ -1319,6 +1315,62 @@ lookup_collation_cache(Oid collation, bool set_flags)
 	return cache_entry;
 }
 
+/*
+ * Currently we only have a need to close ICU collations.  This causes us to
+ * reopen them after REFRESH VERSION, which may cause a different library to be
+ * selected.
+ */
+void
+invalidate_cached_collations(void)
+{
+	HASH_SEQ_STATUS status;
+	collation_cache_entry *entry;
+
+#ifdef USE_ICU
+	/* For the database default locale, we have to re-open eagerly. */
+	if (default_locale.provider == COLLPROVIDER_ICU)
+	{
+		pg_icu_library *lib;
+		UCollator *collator;
+		UErrorCode status;
+
+		/*
+		 * Make sure we can actually open the new collator before we change
+		 * anything.
+		 */
+		lib = get_default_icu_library();
+		status = U_ZERO_ERROR;
+		collator = lib->open(default_locale.info.icu.locale, &status);
+		if (!collator)
+		{
+			ereport(ERROR,
+					(errmsg("could not open collator for locale \"%s\": %s",
+							default_locale.info.icu.locale,
+							lib->errorName(status))));
+		}
+
+		default_locale.info.icu.lib = lib;
+		default_locale.info.icu.ucol = collator;
+	}
+#endif
+
+	/* For COLLATION objects, just close.  We'll re-open on demand. */
+	if (!collation_cache)
+		return;
+	hash_seq_init(&status, collation_cache);
+	while ((entry = hash_seq_search(&status)))
+	{
+#ifdef USE_ICU
+		if (entry->locale &&
+			entry->locale->provider == COLLPROVIDER_ICU)
+		{
+			pfree(entry->locale->info.icu.locale);
+			entry->locale->info.icu.lib->close(entry->locale->info.icu.ucol);
+			hash_search(collation_cache, entry, HASH_REMOVE, NULL);
+		}
+#endif
+	}
+}
 
 /*
  * Detect whether collation's LC_COLLATE property is C
