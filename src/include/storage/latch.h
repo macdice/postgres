@@ -112,6 +112,7 @@ typedef struct Latch
 	sig_atomic_t is_set;
 	sig_atomic_t maybe_sleeping;
 	bool		is_shared;
+	bool		is_robust;
 	int			owner_pid;
 #ifdef WIN32
 	HANDLE		event;
@@ -166,6 +167,11 @@ typedef struct WaitEventSet WaitEventSet;
 extern void InitializeLatchSupport(void);
 extern void InitLatch(Latch *latch);
 extern void InitSharedLatch(Latch *latch);
+extern void InitRobustLatch(Latch *latch);
+#ifdef EXEC_BACKEND
+extern uintptr_t GetRobustLatchCookie(Latch *latch);
+extern void InitRobustLatchFromCookie(Latch *latch, uintptr_t cookie);
+#endif
 extern void OwnLatch(Latch *latch);
 extern void DisownLatch(Latch *latch);
 extern void SetLatch(Latch *latch);

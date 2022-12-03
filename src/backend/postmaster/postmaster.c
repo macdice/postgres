@@ -117,6 +117,7 @@
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/latch.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -364,6 +365,8 @@ static volatile bool HaveCrashedWorker = false;
 /* set when signals arrive */
 static volatile sig_atomic_t pending_action_request;
 static volatile sig_atomic_t pending_child_exit;
+static volatile sig_atomic_t pending_logrotate_check_request;
+static volatile sig_atomic_t pending_promote_check_request;
 static volatile sig_atomic_t pending_reload_request;
 static volatile sig_atomic_t pending_shutdown_request;
 
@@ -510,6 +513,7 @@ typedef struct
 	TimestampTz PgStartTime;
 	TimestampTz PgReloadTime;
 	pg_time_t	first_syslogger_file_time;
+	uintptr_t	postmaster_latch_cookie;
 	bool		redirection_done;
 	bool		IsBinaryUpgrade;
 	bool		query_id_enabled;
@@ -638,7 +642,8 @@ PostmasterMain(int argc, char *argv[])
 
 	/* This may configure SIGURG, depending on platform. */
 	InitializeLatchSupport();
-	InitLocalLatch();
+	MyLatch = GetPostmasterLatch();
+	InitRobustLatch(MyLatch);
 
 	PG_SETMASK(&UnBlockSig);
 
@@ -1745,6 +1750,7 @@ ServerLoop(void)
 		{
 			if (events[i].events & WL_LATCH_SET)
 			{
+				pending_action_request = true;
 				ResetLatch(MyLatch);
 			}
 			else if (events[i].events & WL_SOCKET_ACCEPT)
@@ -2655,15 +2661,21 @@ InitProcessGlobals(void)
 }
 
 /*
- * Child processes use SIGUSR1 to for pmsignals.  pg_ctl uses SIGUSR1 to ask
- * postmaster to check for logrotate and promote files.
+ * pg_ctl uses SIGUSR1 to ask postmaster to check for logrotate and promote
+ * files.
  */
 static void
 handle_action_request_signal(SIGNAL_ARGS)
 {
 	int save_errno = errno;
 
-	pending_action_request = true;
+	/*
+	 * Poll for the logrotate and promote signal files next time through
+	 * process_action_request() (if other required conditions are true), and
+	 * set the latch to schedule that.
+	 */
+	pending_logrotate_check_request = true;
+	pending_promote_check_request = true;
 	SetLatch(MyLatch);
 
 	errno = save_errno;
@@ -5094,8 +5106,9 @@ process_action_request(void)
 		maybe_start_bgworkers();
 
 	/* Tell syslogger to rotate logfile if requested */
-	if (SysLoggerPID != 0)
+	if (SysLoggerPID != 0 && pending_logrotate_check_request)
 	{
+		pending_logrotate_check_request = false;
 		if (CheckLogrotateSignal())
 		{
 			signal_child(SysLoggerPID, SIGUSR1);
@@ -5155,7 +5168,8 @@ process_action_request(void)
 	if (StartupPID != 0 &&
 		(pmState == PM_STARTUP || pmState == PM_RECOVERY ||
 		 pmState == PM_HOT_STANDBY) &&
-		CheckPromoteSignal())
+		pending_promote_check_request &&
+		(pending_promote_check_request = false, CheckPromoteSignal()))
 	{
 		/*
 		 * Tell startup process to finish recovery.
@@ -6043,6 +6057,8 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->PgReloadTime = PgReloadTime;
 	param->first_syslogger_file_time = first_syslogger_file_time;
 
+	param->postmaster_latch_cookie = GetRobustLatchCookie(GetPostmasterLatch());
+
 	param->redirection_done = redirection_done;
 	param->IsBinaryUpgrade = IsBinaryUpgrade;
 	param->query_id_enabled = query_id_enabled;
@@ -6275,6 +6291,8 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	PgStartTime = param->PgStartTime;
 	PgReloadTime = param->PgReloadTime;
 	first_syslogger_file_time = param->first_syslogger_file_time;
+
+	InitRobustLatchFromCookie(GetPostmasterLatch(), param->postmaster_latch_cookie);
 
 	redirection_done = param->redirection_done;
 	IsBinaryUpgrade = param->IsBinaryUpgrade;

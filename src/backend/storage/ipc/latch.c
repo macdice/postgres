@@ -196,6 +196,7 @@ static void WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event);
 
 static inline int WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 										WaitEvent *occurred_events, int nevents);
+static void WakeLatch(Latch *latch);
 
 /*
  * Initialize the process-local latch infrastructure.
@@ -421,6 +422,61 @@ InitSharedLatch(Latch *latch)
 }
 
 /*
+ * Initialize a 'robust' latch.  Lives in non-shared memory, but other
+ * processes that have their own copy can use it to wake the process that
+ * created it.  Copies can be inherited by forking, or explicitly transferred
+ * by export/import for the benefit of EXEC_BACKEND builds.
+ */
+void
+InitRobustLatch(Latch *latch)
+{
+	/*
+	 * We re-use the shared code, because we want the Windows event handle to
+	 * be inheritible.
+	 */
+	InitSharedLatch(latch);
+	latch->is_shared = false;
+	latch->is_robust = true;
+	latch->owner_pid = MyProcPid;
+}
+
+#ifdef EXEC_BACKEND
+
+/*
+ * Export a robust latch as a cookie that can be used to initialize a working
+ * copy in another process.
+ */
+uintptr_t
+GetRobustLatchCookie(Latch *latch)
+{
+	Assert(latch->is_robust);
+#ifdef WIN32
+	StaticAssertStmt(sizeof(uintptr_t) >= sizeof(latch->event), "cookie too small");
+	return (uintptr_t) latch->event;
+#else
+	StaticAssertStmt(sizeof(uintptr_t) >= sizeof(latch->owner_pid), "cookie too small");
+	return (uintptr_t) latch->owner_pid;
+#endif
+}
+
+/*
+ * Initialize a robust latch given a cookie.  This creates a copy that can be
+ * used to wake the original robust latch.
+ */
+void
+InitRobustLatchFromCookie(Latch *latch, uintptr_t cookie)
+{
+	InitRobustLatch(latch);
+#ifdef WIN32
+	latch->event = (HANDLE) cookie;
+#else
+	latch->owner_pid = (pid_t) cookie;
+#endif
+}
+
+#endif
+
+/*
  * Associate a shared latch with the current process, allowing it to
  * wait on the latch.
  *
@@ -601,11 +657,15 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 void
 SetLatch(Latch *latch)
 {
-#ifndef WIN32
-	pid_t		owner_pid;
-#else
-	HANDLE		handle;
-#endif
+	if (latch->is_robust)
+	{
+		/*
+		 * Robust latches don't consult any shared state, they just invoke the
+		 * kernel wake primitive directly.
+		 */
+		WakeLatch(latch);
+		return;
+	}
 
 	/*
 	 * The memory barrier has to be placed here to ensure that any flag
@@ -623,6 +683,22 @@ SetLatch(Latch *latch)
 	pg_memory_barrier();
 	if (!latch->maybe_sleeping)
 		return;
+
+	WakeLatch(latch);
+}
+
+/*
+ * Invoke the kernel primitive to wake another process.
+ */
+static void
+WakeLatch(Latch *latch)
+{
+#ifndef WIN32
+	pid_t		owner_pid;
+#else
+	HANDLE		handle;
+#endif
+
 
 #ifndef WIN32
 
@@ -1545,7 +1621,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			/* Drain the signalfd. */
 			drain();
 
-			if (set->latch && set->latch->is_set)
+			if (set->latch && (set->latch->is_set || set->latch->is_robust))
 			{
 				occurred_events->fd = PGINVALID_SOCKET;
 				occurred_events->events = WL_LATCH_SET;
@@ -1703,7 +1779,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		if (cur_event->events == WL_LATCH_SET &&
 			cur_kqueue_event->filter == EVFILT_SIGNAL)
 		{
-			if (set->latch && set->latch->is_set)
+			if (set->latch && (set->latch->is_set || set->latch->is_robust))
 			{
 				occurred_events->fd = PGINVALID_SOCKET;
 				occurred_events->events = WL_LATCH_SET;
@@ -1828,7 +1904,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			/* There's data in the self-pipe, clear it. */
 			drain();
 
-			if (set->latch && set->latch->is_set)
+			if (set->latch && (set->latch->is_set || set->latch->is_robust))
 			{
 				occurred_events->fd = PGINVALID_SOCKET;
 				occurred_events->events = WL_LATCH_SET;
@@ -2010,7 +2086,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		if (!ResetEvent(set->handles[cur_event->pos + 1]))
 			elog(ERROR, "ResetEvent failed: error code %lu", GetLastError());
 
-		if (set->latch && set->latch->is_set)
+		if (set->latch && (set->latch->is_set || set->latch->is_robust))
 		{
 			occurred_events->fd = PGINVALID_SOCKET;
 			occurred_events->events = WL_LATCH_SET;
