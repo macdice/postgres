@@ -5225,13 +5225,44 @@ StartupPacketTimeoutHandler(void)
 }
 
 
+#define CANCEL_KEY_BUFFER_SIZE 1024
+static int32 *cancel_key_buffer;
+static size_t cancel_key_buffer_used;
+
 /*
  * Generate a random cancel key.
  */
 static bool
 RandomCancelKey(int32 *cancel_key)
 {
-	return pg_strong_random(cancel_key, sizeof(int32));
+	if (!cancel_key_buffer)
+	{
+		cancel_key_buffer = palloc(CANCEL_KEY_BUFFER_SIZE * sizeof(int32));
+		cancel_key_buffer_used = CANCEL_KEY_BUFFER_SIZE;
+	}
+	if (cancel_key_buffer_used == CANCEL_KEY_BUFFER_SIZE)
+	{
+		if (!pg_strong_random(cancel_key, CANCEL_KEY_BUFFER_SIZE * sizeof(int32)))
+			return false;
+		cancel_key_buffer_used = 0;
+	}
+	*cancel_key = cancel_key_buffer[cancel_key_buffer_used++];
+	return true;
+}
+
+/*
+ * Make sure child processes don't see buffered cancel keys that will be used
+ * for other sessions.
+ */
+static void
+RandomCancelKeyPostFork(void)
+{
+	if (cancel_key_buffer)
+	{
+		explicit_bzero(cancel_key_buffer, CANCEL_KEY_BUFFER_SIZE * sizeof(int32));
+		pfree(cancel_key_buffer);
+		cancel_key_buffer = NULL;
+	}
 }
 
 /*
@@ -5315,6 +5346,7 @@ StartChildProcess(AuxProcType type)
 
 	if (pid == 0)				/* child */
 	{
+		RandomCancelKeyPostFork();
 		InitPostmasterChild();
 
 		/* Close the postmaster's sockets */
