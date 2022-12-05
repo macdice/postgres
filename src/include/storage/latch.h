@@ -152,6 +152,9 @@ typedef struct WaitEvent
 	uint32		events;			/* triggered events */
 	pgsocket	fd;				/* socket fd associated with event */
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
+	union {
+		int		listen_queue;	/* for WL_ACCEPT */
+	} u;
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
 #endif

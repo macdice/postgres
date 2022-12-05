@@ -1749,19 +1749,35 @@ ServerLoop(void)
 			}
 			else if (events[i].events & WL_SOCKET_ACCEPT)
 			{
-				Port	   *port;
+				int accept_batch;
 
-				port = ConnCreate(events[i].fd);
-				if (port)
+				/*
+				 * Cap the number of incoming connections we process at once so
+				 * that we don't starve other kinds of events.  The cap is 1 if
+				 * any other kinds of events occurred (for example, shutdown
+				 * requests), but otherwise 16.
+				 */
+				if (nevents > 1)
+					accept_batch = 1;
+				else
+					accept_batch = Min(16, events[i].u.listen_queue);
+
+				for (int j = 0; j < accept_batch; ++j)
 				{
-					BackendStartup(port);
+					Port	   *port;
 
-					/*
-					 * We no longer need the open socket or port structure
-					 * in this process
-					 */
-					StreamClose(port->sock);
-					ConnFree(port);
+					port = ConnCreate(events[i].fd);
+					if (port)
+					{
+						BackendStartup(port);
+
+						/*
+						 * We no longer need the open socket or port structure
+						 * in this process
+						 */
+						StreamClose(port->sock);
+						ConnFree(port);
+					}
 				}
 			}
 		}

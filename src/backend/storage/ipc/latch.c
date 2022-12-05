@@ -1535,6 +1535,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		/* epoll's data pointer is set to the associated WaitEvent */
 		cur_event = (WaitEvent *) cur_epoll_event->data.ptr;
 
+		memset(occurred_events, 0, sizeof(*occurred_events));
 		occurred_events->pos = cur_event->pos;
 		occurred_events->user_data = cur_event->user_data;
 		occurred_events->events = 0;
@@ -1588,6 +1589,13 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			{
 				/* data available in socket, or EOF */
 				occurred_events->events |= WL_SOCKET_READABLE;
+
+				/*
+				 * If this is a server socket, we want to report the size of
+				 * the listen queue, but epoll_wait() can't tell us.  It must
+				 * be at least 1.
+				 */
+				occurred_events->u.listen_queue = 1;
 			}
 
 			if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
@@ -1696,6 +1704,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		/* kevent's udata points to the associated WaitEvent */
 		cur_event = AccessWaitEvent(cur_kqueue_event);
 
+		memset(occurred_events, 0, sizeof(*occurred_events));
 		occurred_events->pos = cur_event->pos;
 		occurred_events->user_data = cur_event->user_data;
 		occurred_events->events = 0;
@@ -1740,6 +1749,12 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			{
 				/* readable, or EOF */
 				occurred_events->events |= WL_SOCKET_READABLE;
+
+				/*
+				 * If this is a server socket set to listen, then we can report
+				 * the number of connections waiting to be accepted.
+				 */
+				occurred_events->u.listen_queue = cur_kqueue_event->data;
 			}
 
 			if ((cur_event->events & WL_SOCKET_CLOSED) &&
@@ -1818,6 +1833,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		if (cur_pollfd->revents == 0)
 			continue;
 
+		memset(occurred_events, 0, sizeof(*occurred_events));
 		occurred_events->pos = cur_event->pos;
 		occurred_events->user_data = cur_event->user_data;
 		occurred_events->events = 0;
@@ -1873,6 +1889,13 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			{
 				/* data available in socket, or EOF */
 				occurred_events->events |= WL_SOCKET_READABLE;
+
+				/*
+				 * If this is a server socket, we want to report the size of
+				 * the listen queue, but poll() can't tell us.  It must be at
+				 * least 1.
+				 */
+				occurred_events->u.listen_queue = 1;
 			}
 
 			if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
@@ -1997,6 +2020,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	 */
 	cur_event = (WaitEvent *) &set->events[rc - WAIT_OBJECT_0 - 1];
 
+	memset(occurred_events, 0, sizeof(*occurred_events));
 	occurred_events->pos = cur_event->pos;
 	occurred_events->user_data = cur_event->user_data;
 	occurred_events->events = 0;
@@ -2085,6 +2109,12 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		{
 			/* incoming connection ready to accept */
 			occurred_events->events |= WL_SOCKET_ACCEPT;
+
+			/*
+			 * We want to report the size of the listen queue, but
+			 * WSANETWORKEVENTS can't tell us.  It must be at least 1.
+			 */
+			occurred_events->u.listen_queue = 1;
 		}
 		if (resEvents.lNetworkEvents & FD_CLOSE)
 		{
