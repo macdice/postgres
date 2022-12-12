@@ -4476,7 +4476,7 @@ struct config_string ConfigureNamesString[] =
 			GUC_NOT_IN_SAMPLE
 		},
 		&io_direct_string,
-		"",
+		"data,wal,wal_init",
 		check_io_direct, assign_io_direct, show_io_direct
 	},
 
