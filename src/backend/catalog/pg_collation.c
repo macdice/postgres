@@ -32,6 +32,31 @@
 #include "utils/syscache.h"
 
 
+#if 0
+/*
+ * CollationProviderCreate
+ *
+ * Add a new tuple to pg_collation_provider.
+ */
+Oid
+CollationProviderCreate(const char *collproname,
+						char collprotype,
+						const char *collprodata)
+{
+	Relation	rel;
+	TupleDesc	tupDesc;
+	HeapTuple	tup;
+	Datum		values[Natts_pg_collation];
+	bool		nulls[Natts_pg_collation];
+	NameData	name_name;
+	Oid			oid;
+	ObjectAddress myself,
+				referenced;
+
+	
+}
+#endif
+
 /*
  * CollationCreate
  *
