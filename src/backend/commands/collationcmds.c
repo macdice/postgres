@@ -49,6 +49,43 @@ typedef struct
 
 
 /*
+ * CREATE COLLATION PROVIDER
+ */
+ObjectAddress
+DefineCollationProvider(ParseState *pstate, List *names, List *parameters)
+{
+	char	   *collproName;
+	ListCell   *pl;
+	DefElem	   *typeEl = NULL;
+	DefElem	   *icuVersionEl = NULL;
+
+	foreach(pl, parameters)
+	{
+		DefElem    *defel = lfirst_node(DefElem, pl);
+		DefElem   **defelp;
+
+		if (strcmp(defel->defname, "type") == 0)
+			defelp = &typeEl;
+		else if (strcmp(defel->defname, "icu_version") == 0)
+			defelp = &icuVersionEl;
+		else
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("collation provider attribute \"%s\" not recognized",
+							defel->defname),
+					 parser_errposition(pstate, defel->location)));
+			break;
+		}
+		if (*defelp != NULL)
+			errorConflictingDefElem(defel, pstate);
+		*defelp = defel;
+	}
+
+	/* XXX hackity hack */
+}
+
+/*
  * CREATE COLLATION
  */
 ObjectAddress
