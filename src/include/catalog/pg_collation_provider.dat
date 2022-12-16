@@ -1,0 +1,20 @@
+#----------------------------------------------------------------------
+#
+# pg_collation_provider.dat
+#    Initial contents of the pg_collation_provider system catalog.
+#
+# Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+# Portions Copyright (c) 1994, Regents of the University of California
+#
+# src/include/catalog/pg_collation_provider.dat
+#
+#----------------------------------------------------------------------
+
+[
+
+{ oid => '8900', oid_symbol => 'COLLATION_PROVIDER_LIBC_OID',
+  collproname => 'libc', collprotype => 'c' },
+{ oid => '8901', oid_symbol => 'COLLATION_PROVIDER_ICU_OID',
+  collproname => 'icu', collprotype => 'i' },
+
+]
