@@ -748,7 +748,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSWORD
 	PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
-	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
+	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PROVIDER PUBLICATION
 
 	QUOTE
 
@@ -6233,6 +6233,16 @@ DefineStmt:
 					n->args = NIL;
 					n->defnames = $5;
 					n->definition = $6;
+					$$ = (Node *) n;
+				}
+			| CREATE COLLATION PROVIDER any_name definition
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+
+					n->kind = OBJECT_COLLATION;
+					n->args = NIL;
+					n->defnames = $4;
+					n->definition = $5;
 					$$ = (Node *) n;
 				}
 			| CREATE COLLATION any_name definition
