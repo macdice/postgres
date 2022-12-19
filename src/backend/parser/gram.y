@@ -6239,10 +6239,21 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 
-					n->kind = OBJECT_COLLATION;
+					n->kind = OBJECT_COLLATION_PROVIDER;
 					n->args = NIL;
 					n->defnames = $4;
 					n->definition = $5;
+					$$ = (Node *) n;
+				}
+			| CREATE COLLATION PROVIDER IF_P NOT EXISTS any_name definition
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+
+					n->kind = OBJECT_COLLATION_PROVIDER;
+					n->args = NIL;
+					n->defnames = $7;
+					n->definition = $8;
+					n->if_not_exists = true;
 					$$ = (Node *) n;
 				}
 			| CREATE COLLATION any_name definition

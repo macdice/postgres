@@ -50,24 +50,36 @@ typedef struct
 
 /*
  * CREATE COLLATION PROVIDER
+ *
+ * CREATE COLLATION PROVIDER icu68 (type = 'icu', library = '');
+ * CREATE COLLATION PROVIDER icu68 (type = 'icu', library = '68');
+ * CREATE COLLATION PROVIDER icu68_2 (type = 'icu', library = '68.2');
+ * CREATE COLLATION PROVIDER icu68 (type = 'icu', library = 'libicuuc.so.68;libicui18n.so.68');
+ * CREATE COLLATION PROVIDER icu68 (type = 'icu', library = '/opt/lib/libicuuc.so.68;/opt/lib/libicui18n.so.68');
  */
 ObjectAddress
-DefineCollationProvider(ParseState *pstate, List *names, List *parameters)
+DefineCollationProvider(ParseState *pstate, List *names, List *parameters, bool if_not_exists)
 {
 	char	   *collproName;
 	ListCell   *pl;
-	DefElem	   *typeEl = NULL;
-	DefElem	   *icuVersionEl = NULL;
+	DefElem	   *icuLibsEl = NULL;
+	ObjectAddress address;
+
+	/* Can't live in a namespace, because those are not shared. */
+	if (list_length(names) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("collation provider name must not be qualified with a namespace")));
+	collproName = strVal(linitial(names));
+elog(LOG, "XXX [%s]", collproName);
 
 	foreach(pl, parameters)
 	{
 		DefElem    *defel = lfirst_node(DefElem, pl);
 		DefElem   **defelp;
 
-		if (strcmp(defel->defname, "type") == 0)
-			defelp = &typeEl;
-		else if (strcmp(defel->defname, "icu_version") == 0)
-			defelp = &icuVersionEl;
+		if (strcmp(defel->defname, "icu") == 0)
+			defelp = &icuLibsEl;
 		else
 		{
 			ereport(ERROR,
@@ -82,7 +94,32 @@ DefineCollationProvider(ParseState *pstate, List *names, List *parameters)
 		*defelp = defel;
 	}
 
-	/* XXX hackity hack */
+	/* For now only ICU-based providers can be created. */
+	if (icuLibsEl == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("parameter \"icu\" must be specified")));
+
+	newoid = CollationProviderCreate(collproName,
+									 COLLPROVIDERTYPE_ICU,
+									 collproLibsEl,
+									 if_not_exists,
+									 false);	/* not quiet */
+
+	if (!OidIsValid(newoid))
+		return InvalidObjectAddress;
+
+	/*
+	 * Check that the locales can be loaded.  NB: pg_newlocale_from_collation
+	 * is only supposed to be called on non-C-equivalent locales.
+	 */
+	CommandCounterIncrement();
+	if (!lc_collate_is_c(newoid) || !lc_ctype_is_c(newoid))
+		(void) pg_newlocale_from_collation(newoid);
+
+	ObjectAddressSet(address, CollationRelationId, newoid);
+
+	return address;
 }
 
 /*

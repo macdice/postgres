@@ -1451,6 +1451,13 @@ ProcessUtilitySlow(ParseState *pstate,
 													  stmt->definition,
 													  stmt->if_not_exists);
 							break;
+						case OBJECT_COLLATION_PROVIDER:
+							Assert(stmt->args == NIL);
+							address = DefineCollationProvider(pstate,
+															  stmt->defnames,
+															  stmt->definition,
+															  stmt->if_not_exists);
+							break;
 						default:
 							elog(ERROR, "unrecognized define stmt type: %d",
 								 (int) stmt->kind);

@@ -2690,6 +2690,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_COLLATION:
 						msg = gettext_noop("permission denied for collation %s");
 						break;
+					case OBJECT_COLLATION_PROVIDER:
+						msg = gettext_noop("permission denied for collation provider %s");
+						break;
 					case OBJECT_COLUMN:
 						msg = gettext_noop("permission denied for column %s");
 						break;
@@ -2824,6 +2827,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 						break;
 					case OBJECT_COLLATION:
 						msg = gettext_noop("must be owner of collation %s");
+						break;
+					case OBJECT_COLLATION_PROVIDER:
+						msg = gettext_noop("must be owner of collation provider %s");
 						break;
 					case OBJECT_CONVERSION:
 						msg = gettext_noop("must be owner of conversion %s");
