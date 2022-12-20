@@ -88,5 +88,22 @@ CollationProviderCreate(const char *collproname,
 							collproname)));
 	}
 
+	/* XXX this lock is too strong */
+	rel = table_open(CollationProviderRelationId, ShareRowExclusiveLock);
+	tupDesc = RelationGetDescr(rel);
+
+	memset(nulls, 0, sizeof(nulls));
+	namestrcpy(&name_name, collproname);
+	oid = GetNewOidWithIndex(rel, CollationProviderIndexId,
+							 Anum_pg_collation_provider_oid);
+	values[Anum_pg_collation_provider_oid - 1] = ObjectIdGetDatum(oid);
+	values[Anum_pg_collation_provider_collproname - 1] = NameGetDatum(&name_name);
+	values[Anum_pg_collation_provider_collprotype - 1] = CharGetDatum(collprotype);
+	values[Anum_pg_collation_provider_collprodata - 1] = CStringGetTextDatum(collprodata);
+	tup = heap_form_tuple(tupDesc, values, nulls);
+	CatalogTupleInsert(rel, tup);
+	heap_freetuple(tup);
+	table_close(rel, NoLock);
+	
 	return InvalidOid;
 }
