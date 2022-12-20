@@ -22,6 +22,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_collation_provider.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
 #include "commands/alter.h"
@@ -63,6 +64,7 @@ DefineCollationProvider(ParseState *pstate, List *names, List *parameters, bool 
 	char	   *collproName;
 	ListCell   *pl;
 	DefElem	   *icuLibsEl = NULL;
+	Oid			newoid;
 	ObjectAddress address;
 
 	/* Can't live in a namespace, because those are not shared. */
@@ -100,24 +102,18 @@ elog(LOG, "XXX [%s]", collproName);
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 				 errmsg("parameter \"icu\" must be specified")));
 
-	newoid = CollationProviderCreate(collproName,
-									 COLLPROVIDERTYPE_ICU,
-									 collproLibsEl,
-									 if_not_exists,
-									 false);	/* not quiet */
+	newoid =  CollationProviderCreate(collproName,
+									  COLLPROVIDERTYPE_ICU,
+									  defGetString(icuLibsEl),
+									  if_not_exists,
+									  false);	/* not quiet */
 
 	if (!OidIsValid(newoid))
 		return InvalidObjectAddress;
 
-	/*
-	 * Check that the locales can be loaded.  NB: pg_newlocale_from_collation
-	 * is only supposed to be called on non-C-equivalent locales.
-	 */
 	CommandCounterIncrement();
-	if (!lc_collate_is_c(newoid) || !lc_ctype_is_c(newoid))
-		(void) pg_newlocale_from_collation(newoid);
 
-	ObjectAddressSet(address, CollationRelationId, newoid);
+	ObjectAddressSet(address, CollationProviderRelationId, newoid);
 
 	return address;
 }

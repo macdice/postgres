@@ -29,6 +29,7 @@ OBJS = \
 	pg_cast.o \
 	pg_class.o \
 	pg_collation.o \
+	pg_collation_provider.o \
 	pg_constraint.o \
 	pg_conversion.o \
 	pg_db_role_setting.o \

@@ -16,6 +16,7 @@ backend_sources += files(
   'pg_cast.c',
   'pg_class.c',
   'pg_collation.c',
+  'pg_collation_provider.c',
   'pg_constraint.c',
   'pg_conversion.c',
   'pg_db_role_setting.c',

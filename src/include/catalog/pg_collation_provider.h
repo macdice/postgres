@@ -47,6 +47,7 @@ typedef FormData_pg_collation_provider *Form_pg_collation_provider;
 
 DECLARE_TOAST_WITH_MACRO(pg_collation_provider, 8886, 8887, PgCollationProviderToastTable, PgCollationProviderToastIndex);
 
+DECLARE_UNIQUE_INDEX(pg_collation_provider_name_index, 8788, CollationProviderNameIndexId, on pg_collation_provider using btree(collproname name_ops));
 DECLARE_UNIQUE_INDEX_PKEY(pg_collation_provider_index, 8889, CollationProviderIndexId, on pg_collation_provider using btree(oid oid_ops));
 
 #ifdef EXPOSE_TO_CLIENT_CODE
@@ -56,4 +57,10 @@ DECLARE_UNIQUE_INDEX_PKEY(pg_collation_provider_index, 8889, CollationProviderIn
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 
-#endif							/* PG_COLLATION_PROVIDkER_H */
+extern Oid	CollationProviderCreate(const char *collproname,
+									char collprotype,
+									const char *data,
+									bool if_not_exists,
+									bool quiet);
+
+#endif							/* PG_COLLATION_PROVIDER_H */
