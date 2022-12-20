@@ -44,7 +44,6 @@ CollationProviderCreate(const char *collproname,
 						bool if_not_exists,
 						bool quiet)
 {
-#if 0
 	Relation	rel;
 	TupleDesc	tupDesc;
 	HeapTuple	tup;
@@ -54,7 +53,6 @@ CollationProviderCreate(const char *collproname,
 	Oid			oid;
 	ObjectAddress myself,
 				referenced;
-#endif
 
 	
 	Assert(collproname);
@@ -67,5 +65,28 @@ CollationProviderCreate(const char *collproname,
 	 * nice error message.  The unique index provides a backstop against race
 	 * conditions.
 	 */
+	oid = GetSysCacheOid1(COLLPRONAME,
+						  Anum_pg_collation_provider_oid,
+						  PointerGetDatum(collproname));
+	if (OidIsValid(oid))
+	{
+		if (quiet)
+			return InvalidOid;
+		else if (if_not_exists)
+		{
+			/* OK to skip */
+			ereport(NOTICE,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("collation provider \"%s\" already exists, skipping",
+							collproname)));
+			return InvalidOid;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("collation provider \"%s\" already exists",
+							collproname)));
+	}
+
 	return InvalidOid;
 }

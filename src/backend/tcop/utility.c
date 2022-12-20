@@ -2576,6 +2576,9 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_COLLATION:
 					tag = CMDTAG_DROP_COLLATION;
 					break;
+				case OBJECT_COLLATION_PROVIDER:
+					tag = CMDTAG_DROP_COLLATION_PROVIDER;
+					break;
 				case OBJECT_CONVERSION:
 					tag = CMDTAG_DROP_CONVERSION;
 					break;
@@ -2776,6 +2779,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_COLLATION:
 					tag = CMDTAG_CREATE_COLLATION;
+					break;
+				case OBJECT_COLLATION_PROVIDER:
+					tag = CMDTAG_CREATE_COLLATION_PROVIDER;
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = CMDTAG_CREATE_ACCESS_METHOD;
