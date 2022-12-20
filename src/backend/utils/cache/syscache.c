@@ -30,6 +30,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_collation_provider.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -251,7 +252,7 @@ static const struct cachedesc cacheinfo[] = {
 	[COLLPRONAME] = {
 		CollationProviderRelationId,
 		CollationProvidernameIndexId,
-		KEY(Anum_pg_opclass_opcname),
+		KEY(Anum_pg_collation_provider_collproname),
 		4
 	},
 	[CONDEFAULT] = {
