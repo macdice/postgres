@@ -6852,6 +6852,7 @@ object_type_name:
 
 drop_type_name:
 			ACCESS METHOD							{ $$ = OBJECT_ACCESS_METHOD; }
+			| COLLATION PROVIDER					{ $$ = OBJECT_COLLATION_PROVIDER; }
 			| EVENT TRIGGER							{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION								{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER				{ $$ = OBJECT_FDW; }
