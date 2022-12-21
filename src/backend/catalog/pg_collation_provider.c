@@ -88,7 +88,7 @@ CollationProviderCreate(const char *collproname,
 							collproname)));
 	}
 
-	/* XXX this lock is too strong */
+	/* XXX is this lock too strong? */
 	rel = table_open(CollationProviderRelationId, ShareRowExclusiveLock);
 	tupDesc = RelationGetDescr(rel);
 
@@ -104,6 +104,6 @@ CollationProviderCreate(const char *collproname,
 	CatalogTupleInsert(rel, tup);
 	heap_freetuple(tup);
 	table_close(rel, NoLock);
-	
+
 	return InvalidOid;
 }
