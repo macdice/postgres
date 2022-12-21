@@ -1042,6 +1042,7 @@ get_object_address(ObjectType objtype, Node *object,
 			case OBJECT_ACCESS_METHOD:
 			case OBJECT_PUBLICATION:
 			case OBJECT_SUBSCRIPTION:
+			case OBJECT_COLLATION_PROVIDER:
 				address = get_object_address_unqualified(objtype,
 														 castNode(String, object), missing_ok);
 				break;
@@ -2340,6 +2341,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_SCHEMA:
 		case OBJECT_SUBSCRIPTION:
 		case OBJECT_TABLESPACE:
+		case OBJECT_COLLATION_PROVIDER:
 			if (list_length(name) != 1)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -2573,6 +2575,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_ACCESS_METHOD:
 		case OBJECT_PARAMETER_ACL:
+		case OBJECT_COLLATION_PROVIDER:
 			/* We treat these object types as being owned by superusers */
 			if (!superuser_arg(roleid))
 				ereport(ERROR,

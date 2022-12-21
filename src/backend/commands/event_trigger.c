@@ -936,6 +936,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 {
 	switch (obtype)
 	{
+		case OBJECT_COLLATION_PROVIDER:
 		case OBJECT_DATABASE:
 		case OBJECT_TABLESPACE:
 		case OBJECT_ROLE:
@@ -2057,6 +2058,7 @@ stringify_grant_objtype(ObjectType objtype)
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
 		case OBJECT_COLLATION:
+		case OBJECT_COLLATION_PROVIDER:
 		case OBJECT_CONVERSION:
 		case OBJECT_DEFAULT:
 		case OBJECT_DEFACL:
@@ -2140,6 +2142,7 @@ stringify_adefprivs_objtype(ObjectType objtype)
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
 		case OBJECT_COLLATION:
+		case OBJECT_COLLATION_PROVIDER:
 		case OBJECT_CONVERSION:
 		case OBJECT_DEFAULT:
 		case OBJECT_DEFACL:
