@@ -6822,6 +6822,7 @@ DropStmt:	DROP object_type_any_name IF_P EXISTS any_name_list opt_drop_behavior
 /* object types taking any_name/any_name_list */
 object_type_any_name:
 			TABLE									{ $$ = OBJECT_TABLE; }
+			| COLLATION PROVIDER					{ $$ = OBJECT_COLLATION_PROVIDER; }
 			| SEQUENCE								{ $$ = OBJECT_SEQUENCE; }
 			| VIEW									{ $$ = OBJECT_VIEW; }
 			| MATERIALIZED VIEW						{ $$ = OBJECT_MATVIEW; }
@@ -6852,7 +6853,6 @@ object_type_name:
 
 drop_type_name:
 			ACCESS METHOD							{ $$ = OBJECT_ACCESS_METHOD; }
-			| COLLATION PROVIDER					{ $$ = OBJECT_COLLATION_PROVIDER; }
 			| EVENT TRIGGER							{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION								{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER				{ $$ = OBJECT_FDW; }
