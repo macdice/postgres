@@ -697,7 +697,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
-	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
+	CLUSTER COALESCE COLLATE COLLATION COLLATION_PROVIDER COLUMN COLUMNS COMMENT COMMENTS COMMIT
 	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
 	CONNECTION CONSTRAINT CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY
 	COST CREATE CROSS CSV CUBE CURRENT_P
@@ -748,7 +748,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSWORD
 	PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
-	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PROVIDER PUBLICATION
+	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
 	QUOTE
 
@@ -6235,24 +6235,24 @@ DefineStmt:
 					n->definition = $6;
 					$$ = (Node *) n;
 				}
-			| CREATE COLLATION PROVIDER any_name definition
+			| CREATE COLLATION_PROVIDER any_name definition
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 
 					n->kind = OBJECT_COLLATION_PROVIDER;
 					n->args = NIL;
-					n->defnames = $4;
-					n->definition = $5;
+					n->defnames = $3;
+					n->definition = $4;
 					$$ = (Node *) n;
 				}
-			| CREATE COLLATION PROVIDER IF_P NOT EXISTS any_name definition
+			| CREATE COLLATION_PROVIDER IF_P NOT EXISTS any_name definition
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 
 					n->kind = OBJECT_COLLATION_PROVIDER;
 					n->args = NIL;
-					n->defnames = $7;
-					n->definition = $8;
+					n->defnames = $6;
+					n->definition = $7;
 					n->if_not_exists = true;
 					$$ = (Node *) n;
 				}
@@ -6822,7 +6822,6 @@ DropStmt:	DROP object_type_any_name IF_P EXISTS any_name_list opt_drop_behavior
 /* object types taking any_name/any_name_list */
 object_type_any_name:
 			TABLE									{ $$ = OBJECT_TABLE; }
-			| COLLATION PROVIDER					{ $$ = OBJECT_COLLATION_PROVIDER; }
 			| SEQUENCE								{ $$ = OBJECT_SEQUENCE; }
 			| VIEW									{ $$ = OBJECT_VIEW; }
 			| MATERIALIZED VIEW						{ $$ = OBJECT_MATVIEW; }
@@ -6845,6 +6844,7 @@ object_type_any_name:
 
 object_type_name:
 			drop_type_name							{ $$ = $1; }
+			| COLLATION_PROVIDER					{ $$ = OBJECT_COLLATION_PROVIDER; }
 			| DATABASE								{ $$ = OBJECT_DATABASE; }
 			| ROLE									{ $$ = OBJECT_ROLE; }
 			| SUBSCRIPTION							{ $$ = OBJECT_SUBSCRIPTION; }
@@ -17153,7 +17153,6 @@ unreserved_keyword:
 			| PASSING
 			| PASSWORD
 			| PLANS
-			| PROVIDER
 			| POLICY
 			| PRECEDING
 			| PREPARE
@@ -17533,6 +17532,7 @@ bare_label_keyword:
 			| COALESCE
 			| COLLATE
 			| COLLATION
+			| COLLATION_PROVIDER
 			| COLUMN
 			| COLUMNS
 			| COMMENT
@@ -17764,7 +17764,6 @@ bare_label_keyword:
 			| PROCEDURE
 			| PROCEDURES
 			| PROGRAM
-			| PROVIDER
 			| PUBLICATION
 			| QUOTE
 			| RANGE
