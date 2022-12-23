@@ -1294,6 +1294,11 @@ get_object_address_unqualified(ObjectType objtype,
 			address.objectId = get_am_oid(name, missing_ok);
 			address.objectSubId = 0;
 			break;
+		case OBJECT_COLLATION_PROVIDER:
+			address.classId = CollationProviderRelationId;
+			address.objectId = get_collation_provider_oid(name, missing_ok);
+			address.objectSubId = 0;
+			break;
 		case OBJECT_DATABASE:
 			address.classId = DatabaseRelationId;
 			address.objectId = get_database_oid(name, missing_ok);

@@ -6844,7 +6844,6 @@ object_type_any_name:
 
 object_type_name:
 			drop_type_name							{ $$ = $1; }
-			| COLLATION_PROVIDER					{ $$ = OBJECT_COLLATION_PROVIDER; }
 			| DATABASE								{ $$ = OBJECT_DATABASE; }
 			| ROLE									{ $$ = OBJECT_ROLE; }
 			| SUBSCRIPTION							{ $$ = OBJECT_SUBSCRIPTION; }
@@ -6853,6 +6852,7 @@ object_type_name:
 
 drop_type_name:
 			ACCESS METHOD							{ $$ = OBJECT_ACCESS_METHOD; }
+			| COLLATION_PROVIDER					{ $$ = OBJECT_COLLATION_PROVIDER; }
 			| EVENT TRIGGER							{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION								{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER				{ $$ = OBJECT_FDW; }

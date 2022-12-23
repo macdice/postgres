@@ -933,6 +933,11 @@ static const SchemaQuery Query_for_list_of_collations = {
 	.result = "c.collname",
 };
 
+static const SchemaQuery Query_for_list_of_collation_providers = {
+	.catname = "pg_catalog.pg_collation_provider c",
+	.result = "c.collproname",
+};
+
 static const SchemaQuery Query_for_partition_of_table = {
 	.catname = "pg_catalog.pg_class c1, pg_catalog.pg_class c2, pg_catalog.pg_inherits i",
 	.selcondition = "c1.oid=i.inhparent and i.inhrelid=c2.oid and c2.relispartition",
@@ -1223,6 +1228,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"CAST", NULL, NULL, NULL}, /* Casts have complex structures for names, so
 								 * skip it */
 	{"COLLATION", NULL, NULL, &Query_for_list_of_collations},
+	{"COLLATION_PROVIDER", NULL, NULL, &Query_for_list_of_collation_providers},
 
 	/*
 	 * CREATE CONSTRAINT TRIGGER is not supported here because it is designed
@@ -2894,6 +2900,10 @@ psql_completion(const char *text, int start, int end)
 		else if (TailMatches("DETERMINISTIC", "="))
 			COMPLETE_WITH("true", "false");
 	}
+
+	/* CREATE COLLATION_PROVIDER */
+	else if (Matches("CREATE", "COLLATION_PROVIDER", MatchAny))
+		COMPLETE_WITH("(icu =");
 
 	/* CREATE DATABASE */
 	else if (Matches("CREATE", "DATABASE", MatchAny))
