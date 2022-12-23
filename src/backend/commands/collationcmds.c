@@ -1081,3 +1081,16 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 
 	PG_RETURN_INT32(ncreated);
 }
+
+Oid
+get_collation_provider_id(const char *name)
+{
+	tuple = SearchSysCache1(COLLPRONAME, name);
+	if (!HeapTupleIsvalid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("collation provider \"%s\" does not exists",
+						name)));
+	
+	ReleaseSysCache(tuple);
+}
