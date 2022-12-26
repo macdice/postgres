@@ -81,8 +81,9 @@ extern PGDLLIMPORT int syslogPipe[2];
 extern PGDLLIMPORT HANDLE syslogPipe[2];
 #endif
 
+struct Postmaster;
 
-extern int	SysLogger_Start(void);
+extern int	SysLogger_Start(struct Postmaster *pm);
 
 extern void write_syslogger_file(const char *buffer, int count, int destination);
 

@@ -134,7 +134,7 @@ static volatile sig_atomic_t rotation_requested = false;
 #ifdef EXEC_BACKEND
 static int	syslogger_fdget(FILE *file);
 static FILE *syslogger_fdopen(int fd);
-static pid_t syslogger_forkexec(void);
+static pid_t syslogger_forkexec(Postmaster *pm);
 static void syslogger_parseArgs(int argc, char *argv[]);
 #endif
 NON_EXEC_STATIC void SysLoggerMain(int argc, char *argv[]) pg_attribute_noreturn();
@@ -564,7 +564,7 @@ SysLoggerMain(int argc, char *argv[])
  * Postmaster subroutine to start a syslogger subprocess.
  */
 int
-SysLogger_Start(void)
+SysLogger_Start(Postmaster *pm)
 {
 	pid_t		sysloggerPid;
 	char	   *filename;
@@ -667,7 +667,7 @@ SysLogger_Start(void)
 	}
 
 #ifdef EXEC_BACKEND
-	switch ((sysloggerPid = syslogger_forkexec()))
+	switch ((sysloggerPid = syslogger_forkexec(pm)))
 #else
 	switch ((sysloggerPid = fork_process()))
 #endif
@@ -683,7 +683,7 @@ SysLogger_Start(void)
 			InitPostmasterChild();
 
 			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(true);
+			ClosePostmasterPorts(pm, true);
 
 			/* Drop our connection to postmaster's shared memory, as well */
 			dsm_detach_all();
@@ -838,7 +838,7 @@ syslogger_fdopen(int fd)
  * Format up the arglist for, then fork and exec, a syslogger process
  */
 static pid_t
-syslogger_forkexec(void)
+syslogger_forkexec(Postmaster *pm)
 {
 	char	   *av[10];
 	int			ac = 0;
@@ -864,7 +864,7 @@ syslogger_forkexec(void)
 	av[ac] = NULL;
 	Assert(ac < lengthof(av));
 
-	return postmaster_forkexec(ac, av);
+	return postmaster_forkexec(pm, ac, av);
 }
 
 /*

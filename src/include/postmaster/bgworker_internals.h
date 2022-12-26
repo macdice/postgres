@@ -44,9 +44,11 @@ typedef struct RegisteredBgWorker
 
 extern PGDLLIMPORT slist_head BackgroundWorkerList;
 
+struct Postmaster;
+
 extern Size BackgroundWorkerShmemSize(void);
 extern void BackgroundWorkerShmemInit(void);
-extern void BackgroundWorkerStateChange(bool allow_new_workers);
+extern void BackgroundWorkerStateChange(struct Postmaster *pm, bool allow_new_workers);
 extern void ForgetBackgroundWorker(slist_mutable_iter *cur);
 extern void ReportBackgroundWorkerPID(RegisteredBgWorker *);
 extern void ReportBackgroundWorkerExit(slist_mutable_iter *cur);

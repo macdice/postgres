@@ -49,16 +49,19 @@ extern PGDLLIMPORT int postmaster_alive_fds[2];
 
 extern PGDLLIMPORT const char *progname;
 
+struct Postmaster;
+typedef struct Postmaster Postmaster;
+
 extern void PostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
-extern void ClosePostmasterPorts(bool am_syslogger);
+extern void ClosePostmasterPorts(Postmaster *pm, bool am_syslogger);
 extern void InitProcessGlobals(void);
 
 extern int	MaxLivePostmasterChildren(void);
 
-extern bool PostmasterMarkPIDForWorkerNotify(int);
+extern bool PostmasterMarkPIDForWorkerNotify(Postmaster *pm, int);
 
 #ifdef EXEC_BACKEND
-extern pid_t postmaster_forkexec(int argc, char *argv[]);
+extern pid_t postmaster_forkexec(Postmaster *pm, int argc, char *argv[]);
 extern void SubPostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
 
 extern Size ShmemBackendArraySize(void);

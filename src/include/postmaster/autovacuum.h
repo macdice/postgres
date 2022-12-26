@@ -55,10 +55,12 @@ extern bool IsAutoVacuumWorkerProcess(void);
 #define IsAnyAutoVacuumProcess() \
 	(IsAutoVacuumLauncherProcess() || IsAutoVacuumWorkerProcess())
 
+struct Postmaster;
+
 /* Functions to start autovacuum process, called from postmaster */
 extern void autovac_init(void);
-extern int	StartAutoVacLauncher(void);
-extern int	StartAutoVacWorker(void);
+extern int	StartAutoVacLauncher(struct Postmaster *pm);
+extern int	StartAutoVacWorker(struct Postmaster *pm);
 
 /* called from postmaster when a worker could not be forked */
 extern void AutoVacWorkerFailed(void);

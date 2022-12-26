@@ -242,7 +242,7 @@ FindRegisteredWorkerBySlotNumber(int slotno)
  * take out the postmaster.
  */
 void
-BackgroundWorkerStateChange(bool allow_new_workers)
+BackgroundWorkerStateChange(Postmaster *pm, bool allow_new_workers)
 {
 	int			slotno;
 
@@ -390,7 +390,7 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 		 * high debug level.
 		 */
 		rw->rw_worker.bgw_notify_pid = slot->worker.bgw_notify_pid;
-		if (!PostmasterMarkPIDForWorkerNotify(rw->rw_worker.bgw_notify_pid))
+		if (!PostmasterMarkPIDForWorkerNotify(pm, rw->rw_worker.bgw_notify_pid))
 		{
 			elog(DEBUG1, "worker notification PID %d is not valid",
 				 (int) rw->rw_worker.bgw_notify_pid);

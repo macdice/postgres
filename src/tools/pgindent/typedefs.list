@@ -2086,6 +2086,7 @@ PortalStrategy
 PostParseColumnRefHook
 PostgresPollingStatusType
 PostingItem
+Postmaster
 PostponedQual
 PreParseColumnRefHook
 PredClass

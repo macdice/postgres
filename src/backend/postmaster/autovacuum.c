@@ -304,8 +304,8 @@ static WorkerInfo MyWorkerInfo = NULL;
 int			AutovacuumLauncherPid = 0;
 
 #ifdef EXEC_BACKEND
-static pid_t avlauncher_forkexec(void);
-static pid_t avworker_forkexec(void);
+static pid_t avlauncher_forkexec(Postmaster *pm);
+static pid_t avworker_forkexec(Postmaster *pm);
 #endif
 NON_EXEC_STATIC void AutoVacWorkerMain(int argc, char *argv[]) pg_attribute_noreturn();
 NON_EXEC_STATIC void AutoVacLauncherMain(int argc, char *argv[]) pg_attribute_noreturn();
@@ -360,7 +360,7 @@ static void avl_sigusr2_handler(SIGNAL_ARGS);
  * Format up the arglist, then fork and exec.
  */
 static pid_t
-avlauncher_forkexec(void)
+avlauncher_forkexec(Postmaster *pm)
 {
 	char	   *av[10];
 	int			ac = 0;
@@ -372,7 +372,7 @@ avlauncher_forkexec(void)
 
 	Assert(ac < lengthof(av));
 
-	return postmaster_forkexec(ac, av);
+	return postmaster_forkexec(pm, ac, av);
 }
 
 /*
@@ -390,12 +390,12 @@ AutovacuumLauncherIAm(void)
  * postmaster.
  */
 int
-StartAutoVacLauncher(void)
+StartAutoVacLauncher(Postmaster *pm)
 {
 	pid_t		AutoVacPID;
 
 #ifdef EXEC_BACKEND
-	switch ((AutoVacPID = avlauncher_forkexec()))
+	switch ((AutoVacPID = avlauncher_forkexec(pm)))
 #else
 	switch ((AutoVacPID = fork_process()))
 #endif
@@ -411,7 +411,7 @@ StartAutoVacLauncher(void)
 			InitPostmasterChild();
 
 			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
+			ClosePostmasterPorts(pm, false);
 
 			AutoVacLauncherMain(0, NULL);
 			break;
@@ -1437,7 +1437,7 @@ avl_sigusr2_handler(SIGNAL_ARGS)
  * Format up the arglist, then fork and exec.
  */
 static pid_t
-avworker_forkexec(void)
+avworker_forkexec(Postmaster *pm)
 {
 	char	   *av[10];
 	int			ac = 0;
@@ -1449,7 +1449,7 @@ avworker_forkexec(void)
 
 	Assert(ac < lengthof(av));
 
-	return postmaster_forkexec(ac, av);
+	return postmaster_forkexec(pm, ac, av);
 }
 
 /*
@@ -1468,12 +1468,12 @@ AutovacuumWorkerIAm(void)
  * This code is heavily based on pgarch.c, q.v.
  */
 int
-StartAutoVacWorker(void)
+StartAutoVacWorker(struct Postmaster *pm)
 {
 	pid_t		worker_pid;
 
 #ifdef EXEC_BACKEND
-	switch ((worker_pid = avworker_forkexec()))
+	switch ((worker_pid = avworker_forkexec(pm)))
 #else
 	switch ((worker_pid = fork_process()))
 #endif
@@ -1489,7 +1489,7 @@ StartAutoVacWorker(void)
 			InitPostmasterChild();
 
 			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
+			ClosePostmasterPorts(pm, false);
 
 			AutoVacWorkerMain(0, NULL);
 			break;
