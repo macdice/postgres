@@ -26,3 +26,15 @@ Either way, this test initializes, starts, and stops a test Postgres
 cluster.
 
 See src/test/perl/README for more info about running these tests.
+
+Requirements
+============
+
+The RADIUS test is skipped unless "radius" is listed in PG_TEXT_EXTRA, because
+it requires a FreeRADIUS installation and opens extra ports.  FreeRADIUS can be
+installed with:
+
+Debian: apt-get install freeradius
+Homebrew: brew install freeradius-server
+FreeBSD: pkg install freeradius3
+MacPorts: port install freeradius

@@ -285,6 +285,17 @@ make check-world PG_TEST_EXTRA='kerberos ldap ssl load_balance libpq_encryption'
     </varlistentry>
 
     <varlistentry>
+     <term><literal>radius</literal></term>
+     <listitem>
+      <para>
+       Runs the test <filename>src/test/authentication/t/007_radius.pl</filename>.
+       This requires a <productname>FreeRADIUS</productname> installation and
+       opens UDP listen sockets.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><literal>ssl</literal></term>
      <listitem>
       <para>
