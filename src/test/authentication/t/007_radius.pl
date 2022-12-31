@@ -55,6 +55,7 @@ else
 }
 
 my $radius_port     = PostgreSQL::Test::Cluster::get_free_port();
+my $not_radius_port = PostgreSQL::Test::Cluster::get_free_port();
 
 note "setting up radiusd";
 
@@ -154,8 +155,9 @@ sub test_access
 note "enable RADIUS auth";
 
 unlink($node->data_dir . '/pg_hba.conf');
+my $timeout = $PostgreSQL::Test::Utils::timeout_default * 1000;
 $node->append_conf('pg_hba.conf',
-	qq{local all all radius radiusservers="127.0.0.1" radiussecrets="secret" radiusports="$radius_port"}
+	qq{local all all radius radiusservers="127.0.0.1" radiussecrets="secret" radiusports="$radius_port" radiustimeout="$timeout"}
 );
 $node->restart;
 
@@ -178,5 +180,17 @@ test_access(
 	log_like => [
 		qr/connection authenticated: identity="test2" method=radius/
 	],);
+
+# Set the timeout very short and point to a non-existent radius server
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all radius radiusservers="127.0.0.1" radiussecrets="secret" radiusports="$not_radius_port" radiustimeout="2"}
+);
+$node->restart;
+
+test_access(
+	$node, 'test2', 2,
+	'authentication fails with timeout',
+	log_like => [qr/timeout waiting for RADIUS response/]);
 
 done_testing();
