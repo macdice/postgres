@@ -2471,17 +2471,17 @@ rfree(regex_t *re)
 /*
  * rcancelrequested - check for external request to cancel regex operation
  *
- * Return nonzero to fail the operation with error code REG_CANCEL,
- * zero to keep going
- *
- * The current implementation is Postgres-specific.  If we ever get around
- * to splitting the regex code out as a standalone library, there will need
- * to be some API to let applications define a callback function for this.
+ * The current implementation always returns 0, if CHECK_FOR_INTERRUPTS()
+ * doesn't exit non-locally via ereport().  Memory allocated while compiling is
+ * expected to be cleaned up by virtue of being allocated using palloc in a
+ * suitable memory context.
  */
 static int
 rcancelrequested(void)
 {
-	return InterruptPending && (QueryCancelPending || ProcDiePending);
+	CHECK_FOR_INTERRUPTS();
+
+	return 0;
 }
 
 /*
