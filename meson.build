@@ -216,6 +216,7 @@ elif host_system == 'cygwin'
   mod_link_args_fmt = ['@0@']
   mod_link_with_name = 'lib@0@.exe.a'
   mod_link_with_dir = 'libdir'
+  sema_kind = 'unnamed_posix'
 
 elif host_system == 'darwin'
   dlsuffix = '.dylib'
