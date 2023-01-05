@@ -668,7 +668,7 @@ task:
 
   setup_additional_packages_script: |
     choco install -y --no-progress cygwin
-    C:\tools\cygwin\cygwinsetup.exe -q -P cygrunsrv,make,gcc-core,ccache,binutils,libtool,pkg-config,flex,bison,zlib-devel,libxml2-devel,libxslt-devel,libssl-devel,openldap-devel,libreadline-devel,perl,meson,ninja
+    C:\tools\cygwin\cygwinsetup.exe -q -P cygrunsrv,make,gcc-core,ccache,binutils,libtool,pkg-config,flex,bison,zlib-devel,libxml2-devel,libxslt-devel,libssl-devel,openldap-devel,libreadline-devel,perl,meson,ninja,perl-IPC-Run
     REM perl-IPC-Run,
     REM libkrb5-devel,krb5-server
     C:\tools\cygwin\bin\bash.exe --login -c "cygserver-config -y"
