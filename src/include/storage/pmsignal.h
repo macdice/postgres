@@ -24,6 +24,8 @@
 #include "sys/procctl.h"
 #endif
 
+#include "storage/latch.h"
+
 /*
  * Reasons for signaling the postmaster.  We can cope with simultaneous
  * signals for different reasons.  If the same reason is signaled multiple
@@ -74,6 +76,7 @@ extern void MarkPostmasterChildInactive(void);
 extern void MarkPostmasterChildWalSender(void);
 extern bool PostmasterIsAliveInternal(void);
 extern void PostmasterDeathSignalInit(void);
+extern Latch *GetPostmasterLatch(void);
 
 
 /*

@@ -117,6 +117,7 @@
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/latch.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -362,8 +363,9 @@ static volatile bool StartWorkerNeeded = true;
 static volatile bool HaveCrashedWorker = false;
 
 /* set when signals arrive */
-static volatile sig_atomic_t pending_pm_pmsignal;
 static volatile sig_atomic_t pending_pm_child_exit;
+static volatile sig_atomic_t pending_pm_logrotate_check_request;
+static volatile sig_atomic_t pending_pm_promote_check_request;
 static volatile sig_atomic_t pending_pm_reload_request;
 static volatile sig_atomic_t pending_pm_shutdown_request;
 static volatile sig_atomic_t pending_pm_fast_shutdown_request;
@@ -390,7 +392,7 @@ static void getInstallationPaths(const char *argv0);
 static void checkControlFile(void);
 static Port *ConnCreate(int serverFd);
 static void ConnFree(Port *port);
-static void handle_pm_pmsignal_signal(SIGNAL_ARGS);
+static void handle_pm_ctl_signal(SIGNAL_ARGS);
 static void handle_pm_child_exit_signal(SIGNAL_ARGS);
 static void handle_pm_reload_request_signal(SIGNAL_ARGS);
 static void handle_pm_shutdown_request_signal(SIGNAL_ARGS);
@@ -515,6 +517,7 @@ typedef struct
 	TimestampTz PgStartTime;
 	TimestampTz PgReloadTime;
 	pg_time_t	first_syslogger_file_time;
+	uintptr_t	postmaster_latch_cookie;
 	bool		redirection_done;
 	bool		IsBinaryUpgrade;
 	bool		query_id_enabled;
@@ -637,13 +640,14 @@ PostmasterMain(int argc, char *argv[])
 	pqsignal(SIGTERM, handle_pm_shutdown_request_signal);
 	pqsignal(SIGALRM, SIG_IGN); /* ignored */
 	pqsignal(SIGPIPE, SIG_IGN); /* ignored */
-	pqsignal(SIGUSR1, handle_pm_pmsignal_signal);
+	pqsignal(SIGUSR1, handle_pm_ctl_signal);
 	pqsignal(SIGUSR2, dummy_handler);	/* unused, reserve for children */
 	pqsignal(SIGCHLD, handle_pm_child_exit_signal);
 
 	/* This may configure SIGURG, depending on platform. */
 	InitializeLatchSupport();
-	InitProcessLocalLatch();
+	MyLatch = GetPostmasterLatch();
+	InitRobustLatch(MyLatch);
 
 	/*
 	 * No other place in Postgres should touch SIGTTIN/SIGTTOU handling.  We
@@ -1749,8 +1753,9 @@ ServerLoop(void)
 					process_pm_child_exit();
 				if (pending_pm_reload_request)
 					process_pm_reload_request();
-				if (pending_pm_pmsignal)
-					process_pm_pmsignal();
+
+				/* Process pmsignal requests requested via robust latch. */
+				process_pm_pmsignal();
 			}
 			else if (events[i].events & WL_SOCKET_ACCEPT)
 			{
@@ -2657,15 +2662,21 @@ InitProcessGlobals(void)
 }
 
 /*
- * Child processes use SIGUSR1 to notify us of 'pmsignals'.  pg_ctl uses
- * SIGUSR1 to ask postmaster to check for logrotate and promote files.
+ * pg_ctl uses SIGUSR1 to ask postmaster to check for logrotate and promote
+ * files.
  */
 static void
-handle_pm_pmsignal_signal(SIGNAL_ARGS)
+handle_pm_ctl_signal(SIGNAL_ARGS)
 {
 	int			save_errno = errno;
 
-	pending_pm_pmsignal = true;
+	/*
+	 * Poll for the logrotate and promote signal files next time through
+	 * process_pm_pmsignal_request() (if other required conditions are true),
+	 * and set the latch to request that.
+	 */
+	pending_pm_logrotate_check_request = true;
+	pending_pm_promote_check_request = true;
 	SetLatch(MyLatch);
 
 	errno = save_errno;
@@ -5060,11 +5071,6 @@ ExitPostmaster(int status)
 static void
 process_pm_pmsignal(void)
 {
-	pending_pm_pmsignal = false;
-
-	ereport(DEBUG2,
-			(errmsg_internal("postmaster received pmsignal signal")));
-
 	/*
 	 * RECOVERY_STARTED and BEGIN_HOT_STANDBY signals are ignored in
 	 * unexpected states. If the startup process quickly starts up, completes
@@ -5133,8 +5139,9 @@ process_pm_pmsignal(void)
 		maybe_start_bgworkers();
 
 	/* Tell syslogger to rotate logfile if requested */
-	if (SysLoggerPID != 0)
+	if (SysLoggerPID != 0 && pending_pm_logrotate_check_request)
 	{
+		pending_pm_logrotate_check_request = false;
 		if (CheckLogrotateSignal())
 		{
 			signal_child(SysLoggerPID, SIGUSR1);
@@ -5194,7 +5201,8 @@ process_pm_pmsignal(void)
 	if (StartupPID != 0 &&
 		(pmState == PM_STARTUP || pmState == PM_RECOVERY ||
 		 pmState == PM_HOT_STANDBY) &&
-		CheckPromoteSignal())
+		pending_pm_promote_check_request &&
+		(pending_pm_promote_check_request = false, CheckPromoteSignal()))
 	{
 		/*
 		 * Tell startup process to finish recovery.
@@ -6082,6 +6090,8 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->PgReloadTime = PgReloadTime;
 	param->first_syslogger_file_time = first_syslogger_file_time;
 
+	param->postmaster_latch_cookie = ExportRobustLatch(GetPostmasterLatch());
+
 	param->redirection_done = redirection_done;
 	param->IsBinaryUpgrade = IsBinaryUpgrade;
 	param->query_id_enabled = query_id_enabled;
@@ -6314,6 +6324,8 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	PgStartTime = param->PgStartTime;
 	PgReloadTime = param->PgReloadTime;
 	first_syslogger_file_time = param->first_syslogger_file_time;
+
+	ImportRobustLatch(GetPostmasterLatch(), param->postmaster_latch_cookie);
 
 	redirection_done = param->redirection_done;
 	IsBinaryUpgrade = param->IsBinaryUpgrade;

@@ -91,6 +91,8 @@ static int	num_child_inuse;	/* # of entries in PMChildInUse[] */
 static int	next_child_inuse;	/* next slot to try to assign */
 static bool *PMChildInUse;		/* true if i'th flag slot is assigned */
 
+static Latch postmaster_latch;
+
 /*
  * Signal handler to be notified if postmaster dies.
  */
@@ -171,6 +173,8 @@ PMSignalShmemInit(void)
 									   num_child_inuse * sizeof(bool));
 		}
 		next_child_inuse = 0;
+
+		InitRobustLatch(&postmaster_latch);
 	}
 }
 
@@ -185,14 +189,14 @@ SendPostmasterSignal(PMSignalReason reason)
 		return;
 	/* Atomically set the proper flag */
 	PMSignalState->PMSignalFlags[reason] = true;
-	/* Send signal to postmaster */
-	kill(PostmasterPid, SIGUSR1);
+	/* Set the postmaster's robust latch */
+	SetLatch(&postmaster_latch);
 }
 
 /*
  * CheckPostmasterSignal - check to see if a particular reason has been
  * signaled, and clear the signal flag.  Should be called by postmaster
- * after receiving SIGUSR1.
+ * after its latch is set.
  */
 bool
 CheckPostmasterSignal(PMSignalReason reason)
@@ -459,4 +463,10 @@ PostmasterDeathSignalInit(void)
 	 */
 	postmaster_possibly_dead = true;
 #endif							/* USE_POSTMASTER_DEATH_SIGNAL */
+}
+
+Latch *
+GetPostmasterLatch(void)
+{
+	return &postmaster_latch;
 }
