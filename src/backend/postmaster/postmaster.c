@@ -1733,8 +1733,9 @@ ServerLoop(void)
 								   0 /* postmaster posts no wait_events */ );
 
 		/*
-		 * Latch set by signal handler, or new connection pending on any of
-		 * our sockets? If the latter, fork a child process to deal with it.
+		 * Check for WL_LATCH_SET first.  This gives higher priority to
+		 * shutdowns, and also to reloads that might have been sent before
+		 * connecting but arrive here in a different order.
 		 */
 		for (int i = 0; i < nevents; i++)
 		{
@@ -1752,7 +1753,15 @@ ServerLoop(void)
 				if (pending_pm_pmsignal)
 					process_pm_pmsignal();
 			}
-			else if (events[i].events & WL_SOCKET_ACCEPT)
+		}
+
+		/*
+		 * New connection pending on any of our sockets?  If so, fork a child
+		 * process to deal with it.
+		 */
+		for (int i = 0; i < nevents; i++)
+		{
+			if (events[i].events & WL_SOCKET_ACCEPT)
 			{
 				Port	   *port;
 
