@@ -1503,6 +1503,25 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	return returned_events;
 }
 
+/*
+ * Insert a WL_LATCH_SET event before any others that might have been reported
+ * already.
+ */
+static void
+insert_latch_set_event(WaitEvent *occurred_events, int returned_events)
+{
+	WaitEvent	   *first_event;
+
+	if (returned_events > 0)
+		elog(LOG, "SHIFTING EVENTS UP!");
+
+	first_event = occurred_events - returned_events;
+	memmove(first_event + 1, first_event,
+			sizeof(*first_event) * returned_events);
+
+	first_event->fd = PGINVALID_SOCKET;
+	first_event->events = WL_LATCH_SET;
+}
 
 #if defined(WAIT_USE_EPOLL)
 
@@ -1571,12 +1590,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			drain();
 
 			if (set->latch && set->latch->is_set)
-			{
-				occurred_events->fd = PGINVALID_SOCKET;
-				occurred_events->events = WL_LATCH_SET;
-				occurred_events++;
-				returned_events++;
-			}
+				insert_latch_set_event(occurred_events++, returned_events++);
 		}
 		else if (cur_event->events == WL_POSTMASTER_DEATH &&
 				 cur_epoll_event->events & (EPOLLIN | EPOLLERR | EPOLLHUP))
@@ -1730,12 +1744,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			cur_kqueue_event->filter == EVFILT_SIGNAL)
 		{
 			if (set->latch && set->latch->is_set)
-			{
-				occurred_events->fd = PGINVALID_SOCKET;
-				occurred_events->events = WL_LATCH_SET;
-				occurred_events++;
-				returned_events++;
-			}
+				insert_latch_set_event(occurred_events++, returned_events++);
 		}
 		else if (cur_event->events == WL_POSTMASTER_DEATH &&
 				 cur_kqueue_event->filter == EVFILT_PROC &&
@@ -1855,12 +1864,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			drain();
 
 			if (set->latch && set->latch->is_set)
-			{
-				occurred_events->fd = PGINVALID_SOCKET;
-				occurred_events->events = WL_LATCH_SET;
-				occurred_events++;
-				returned_events++;
-			}
+				insert_latch_set_event(occurred_events++, returned_events++);
 		}
 		else if (cur_event->events == WL_POSTMASTER_DEATH &&
 				 (cur_pollfd->revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)))
@@ -2038,10 +2042,15 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 
 		if (set->latch && set->latch->is_set)
 		{
-			occurred_events->fd = PGINVALID_SOCKET;
-			occurred_events->events = WL_LATCH_SET;
-			occurred_events++;
-			returned_events++;
+			/*
+			 * Use the same coding as the Unix variants for uniformity, but in
+			 * fact it shouldn't be possible to have pre-existing events.
+			 * WaitForMultipleObjects() only returns one event at a time,
+			 * searching from the lowest index, and we return as soon as we
+			 * have one reportable event.  Therefore event priority is
+			 * determined by the order of AddWaitEventToSet() calls.
+			 */
+			insert_latch_set_event(occurred_events++, returned_events++);
 		}
 	}
 	else if (cur_event->events == WL_POSTMASTER_DEATH)
