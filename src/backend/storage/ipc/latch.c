@@ -2030,8 +2030,8 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	/*
 	 * Special fast path if the kernel (which only reports one event at a time)
 	 * told us the latch event was set.  See also below where we also poll the
-	 * latch along with everything else, in case where the kernel told us about
-	 * a socket event that happened to have a lower position.
+	 * latch along with everything else, in case the kernel told us about a
+	 * socket event that happened to have a lower position.
 	 */
 	if (cur_event->events == WL_LATCH_SET)
 	{
@@ -2054,6 +2054,10 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		 cur_event++)
 	{
 		HANDLE		handle = set->handles[cur_event->pos + 1];
+
+		occurred_events->pos = cur_event->pos;
+		occurred_events->user_data = cur_event->user_data;
+		occurred_events->events = 0;
 
 		if (cur_event->events == WL_LATCH_SET)
 		{
