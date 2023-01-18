@@ -2055,12 +2055,11 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	{
 		HANDLE		handle = set->handles[cur_event->pos + 1];
 
-		/* Is the event set? */
-		if (WaitForSingleObject(handle, 0) != WAIT_OBJECT_0)
-			continue;
-
 		if (cur_event->events == WL_LATCH_SET)
 		{
+			if (WaitForSingleObject(handle, 0) != WAIT_OBJECT_0)
+				continue;
+
 			/*
 			 * We cannot use set->latch->event to reset the fired event if we
 			 * aren't waiting on this latch now.
@@ -2073,6 +2072,9 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		}
 		else if (cur_event->events == WL_POSTMASTER_DEATH)
 		{
+			if (WaitForSingleObject(handle, 0) != WAIT_OBJECT_0)
+				continue;
+
 			/*
 			 * Postmaster apparently died.  Since the consequences of falsely
 			 * returning WL_POSTMASTER_DEATH could be pretty unpleasant, we
