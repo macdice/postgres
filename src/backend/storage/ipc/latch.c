@@ -2048,7 +2048,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	 * while WaitForMultipleObjects() only reports the lowest set event in the
 	 * handle array.
 	 */
-	for (cur_event = set->events + 1;
+	for (cur_event = set->events;
 		 cur_event < (set->events + set->nevents) &&
 		 returned_events < nevents;
 		 cur_event++)
