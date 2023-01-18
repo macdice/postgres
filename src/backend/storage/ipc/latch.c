@@ -2027,110 +2027,134 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	 */
 	cur_event = (WaitEvent *) &set->events[rc - WAIT_OBJECT_0 - 1];
 
-	occurred_events->pos = cur_event->pos;
-	occurred_events->user_data = cur_event->user_data;
-	occurred_events->events = 0;
-
+	/*
+	 * Special fast path if the kernel (which only reports one event at a time)
+	 * told us the latch event was set.  See also below where we also poll the
+	 * latch along with everything else, in case the kernel told us about a
+	 * socket event that happened to have a lower position.
+	 */
 	if (cur_event->events == WL_LATCH_SET)
 	{
-		/*
-		 * We cannot use set->latch->event to reset the fired event if we
-		 * aren't waiting on this latch now.
-		 */
 		if (!ResetEvent(set->handles[cur_event->pos + 1]))
 			elog(ERROR, "ResetEvent failed: error code %lu", GetLastError());
-
 		if (set->latch && set->latch->is_set)
-		{
-			/*
-			 * Use the same coding as the Unix variants for uniformity, but in
-			 * fact it shouldn't be possible to have pre-existing events.
-			 * WaitForMultipleObjects() only returns one event at a time,
-			 * searching from the lowest index, and we return as soon as we
-			 * have one reportable event.  Therefore event priority is
-			 * determined by the order of AddWaitEventToSet() calls.
-			 */
 			insert_latch_set_event(occurred_events++, returned_events++);
-		}
+		return 1;
 	}
-	else if (cur_event->events == WL_POSTMASTER_DEATH)
+
+	/*
+	 * Scan all events.  This is important because we want clients to have the
+	 * ability to service multiple sockets and detect postmaster death fairly,
+	 * while WaitForMultipleObjects() only reports the lowest set event in the
+	 * handle array.
+	 */
+	for (cur_event = set->events;
+		 cur_event < (set->events + set->nevents) &&
+		 returned_events < nevents;
+		 cur_event++)
 	{
-		/*
-		 * Postmaster apparently died.  Since the consequences of falsely
-		 * returning WL_POSTMASTER_DEATH could be pretty unpleasant, we take
-		 * the trouble to positively verify this with PostmasterIsAlive(),
-		 * even though there is no known reason to think that the event could
-		 * be falsely set on Windows.
-		 */
-		if (!PostmasterIsAliveInternal())
-		{
-			if (set->exit_on_postmaster_death)
-				proc_exit(1);
-			occurred_events->fd = PGINVALID_SOCKET;
-			occurred_events->events = WL_POSTMASTER_DEATH;
-			occurred_events++;
-			returned_events++;
-		}
-	}
-	else if (cur_event->events & WL_SOCKET_MASK)
-	{
-		WSANETWORKEVENTS resEvents;
 		HANDLE		handle = set->handles[cur_event->pos + 1];
 
-		Assert(cur_event->fd);
+		occurred_events->pos = cur_event->pos;
+		occurred_events->user_data = cur_event->user_data;
+		occurred_events->events = 0;
 
-		occurred_events->fd = cur_event->fd;
-
-		ZeroMemory(&resEvents, sizeof(resEvents));
-		if (WSAEnumNetworkEvents(cur_event->fd, handle, &resEvents) != 0)
-			elog(ERROR, "failed to enumerate network events: error code %d",
-				 WSAGetLastError());
-		if ((cur_event->events & WL_SOCKET_READABLE) &&
-			(resEvents.lNetworkEvents & FD_READ))
+		if (cur_event->events == WL_LATCH_SET)
 		{
-			/* data available in socket */
-			occurred_events->events |= WL_SOCKET_READABLE;
+			if (WaitForSingleObject(handle, 0) != WAIT_OBJECT_0)
+				continue;
 
-			/*------
-			 * WaitForMultipleObjects doesn't guarantee that a read event will
-			 * be returned if the latch is set at the same time.  Even if it
-			 * did, the caller might drop that event expecting it to reoccur
-			 * on next call.  So, we must force the event to be reset if this
-			 * WaitEventSet is used again in order to avoid an indefinite
-			 * hang.  Refer https://msdn.microsoft.com/en-us/library/windows/desktop/ms741576(v=vs.85).aspx
-			 * for the behavior of socket events.
-			 *------
+			/*
+			 * We cannot use set->latch->event to reset the fired event if we
+			 * aren't waiting on this latch now.
 			 */
-			cur_event->reset = true;
-		}
-		if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
-			(resEvents.lNetworkEvents & FD_WRITE))
-		{
-			/* writeable */
-			occurred_events->events |= WL_SOCKET_WRITEABLE;
-		}
-		if ((cur_event->events & WL_SOCKET_CONNECTED) &&
-			(resEvents.lNetworkEvents & FD_CONNECT))
-		{
-			/* connected */
-			occurred_events->events |= WL_SOCKET_CONNECTED;
-		}
-		if ((cur_event->events & WL_SOCKET_ACCEPT) &&
-			(resEvents.lNetworkEvents & FD_ACCEPT))
-		{
-			/* incoming connection could be accepted */
-			occurred_events->events |= WL_SOCKET_ACCEPT;
-		}
-		if (resEvents.lNetworkEvents & FD_CLOSE)
-		{
-			/* EOF/error, so signal all caller-requested socket flags */
-			occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
-		}
+			if (!ResetEvent(handle))
+				elog(ERROR, "ResetEvent failed: error code %lu", GetLastError());
 
-		if (occurred_events->events != 0)
+			if (set->latch && set->latch->is_set)
+				insert_latch_set_event(occurred_events++, returned_events++);
+		}
+		else if (cur_event->events == WL_POSTMASTER_DEATH)
 		{
-			occurred_events++;
-			returned_events++;
+			if (WaitForSingleObject(handle, 0) != WAIT_OBJECT_0)
+				continue;
+
+			/*
+			 * Postmaster apparently died.  Since the consequences of falsely
+			 * returning WL_POSTMASTER_DEATH could be pretty unpleasant, we
+			 * take the trouble to positively verify this with
+			 * PostmasterIsAlive(), even though there is no known reason to
+			 * think that the event could be falsely set on Windows.
+			 */
+			if (!PostmasterIsAliveInternal())
+			{
+				if (set->exit_on_postmaster_death)
+					proc_exit(1);
+				occurred_events->fd = PGINVALID_SOCKET;
+				occurred_events->events = WL_POSTMASTER_DEATH;
+				occurred_events++;
+				returned_events++;
+			}
+		}
+		else if (cur_event->events & WL_SOCKET_MASK)
+		{
+			WSANETWORKEVENTS resEvents;
+
+			Assert(cur_event->fd);
+
+			ZeroMemory(&resEvents, sizeof(resEvents));
+			if (WSAEnumNetworkEvents(cur_event->fd, handle, &resEvents) != 0)
+				elog(ERROR, "failed to enumerate network events: error code %d",
+					 WSAGetLastError());
+			if ((cur_event->events & WL_SOCKET_READABLE) &&
+				(resEvents.lNetworkEvents & FD_READ))
+			{
+				/* data available in socket */
+				occurred_events->events |= WL_SOCKET_READABLE;
+
+				/*------
+				 * WaitForMultipleObjects doesn't guarantee that a read event
+				 * will be returned if the latch is set at the same time.  Even
+				 * if it did, the caller might drop that event expecting it to
+				 * reoccur on next call.  So, we must force the event to be
+				 * reset if this WaitEventSet is used again in order to avoid
+				 * an indefinite hang.  Refer
+				 * https://msdn.microsoft.com/en-us/library/windows/desktop/ms741576(v=vs.85).aspx
+				 * for the behavior of socket events.
+				 *------
+				 */
+				cur_event->reset = true;
+			}
+			if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
+				(resEvents.lNetworkEvents & FD_WRITE))
+			{
+				/* writeable */
+				occurred_events->events |= WL_SOCKET_WRITEABLE;
+			}
+			if ((cur_event->events & WL_SOCKET_CONNECTED) &&
+				(resEvents.lNetworkEvents & FD_CONNECT))
+			{
+				/* connected */
+				occurred_events->events |= WL_SOCKET_CONNECTED;
+			}
+			if ((cur_event->events & WL_SOCKET_ACCEPT) &&
+				(resEvents.lNetworkEvents & FD_ACCEPT))
+			{
+				/* incoming connection could be accepted */
+				occurred_events->events |= WL_SOCKET_ACCEPT;
+			}
+			if (resEvents.lNetworkEvents & FD_CLOSE)
+			{
+				/* EOF/error, so signal all caller-requested socket flags */
+				occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
+			}
+
+			if (occurred_events->events != 0)
+			{
+				occurred_events->fd = cur_event->fd;
+				occurred_events++;
+				returned_events++;
+			}
 		}
 	}
 
