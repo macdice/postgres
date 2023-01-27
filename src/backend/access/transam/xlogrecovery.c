@@ -2862,7 +2862,7 @@ recoveryApplyDelay(XLogReaderState *record)
 	uint8		xact_info;
 	TimestampTz xtime;
 	TimestampTz delayUntil;
-	long		msecs;
+	int			msecs;
 
 	/* nothing to do if no delay configured */
 	if (recovery_min_apply_delay <= 0)
@@ -2931,7 +2931,7 @@ recoveryApplyDelay(XLogReaderState *record)
 		if (msecs <= 0)
 			break;
 
-		elog(DEBUG2, "recovery apply delay %ld milliseconds", msecs);
+		elog(DEBUG2, "recovery apply delay %d milliseconds", msecs);
 
 		(void) WaitLatch(&XLogRecoveryCtl->recoveryWakeupLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,

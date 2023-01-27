@@ -200,7 +200,7 @@ bbsink_copystream_archive_contents(bbsink *sink, size_t len)
 	if (targetbytes <= state->bytes_done)
 	{
 		TimestampTz now = GetCurrentTimestamp();
-		long		ms;
+		int			ms;
 
 		/*
 		 * OK, we've sent a decent number of bytes, so check the system time

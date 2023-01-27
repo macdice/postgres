@@ -242,7 +242,7 @@ autoprewarm_main(Datum main_arg)
 		else
 		{
 			TimestampTz next_dump_time;
-			long		delay_in_ms;
+			int			delay_in_ms;
 
 			/* Compute the next dump time. */
 			next_dump_time =

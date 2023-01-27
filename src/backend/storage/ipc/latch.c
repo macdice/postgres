@@ -476,9 +476,8 @@ DisownLatch(Latch *latch)
  * function returns immediately.
  *
  * The "timeout" is given in milliseconds. It must be >= 0 if WL_TIMEOUT flag
- * is given.  Although it is declared as "long", we don't actually support
- * timeouts longer than INT_MAX milliseconds.  Note that some extra overhead
- * is incurred when WL_TIMEOUT is given, so avoid using a timeout if possible.
+ * is given.  Note that some extra overhead is incurred when WL_TIMEOUT is
+ * given, so avoid using a timeout if possible.
  *
  * The latch must be owned by the current process, ie. it must be a
  * process-local latch initialized with InitLatch, or a shared latch
@@ -489,7 +488,7 @@ DisownLatch(Latch *latch)
  * we return all of them in one call, but we will return at least one.
  */
 int
-WaitLatch(Latch *latch, int wakeEvents, long timeout,
+WaitLatch(Latch *latch, int wakeEvents, int timeout,
 		  uint32 wait_event_info)
 {
 	WaitEvent	event;
@@ -538,7 +537,7 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
  */
 int
 WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
-				  long timeout, uint32 wait_event_info)
+				  int timeout, uint32 wait_event_info)
 {
 	int			ret = 0;
 	int			rc;
@@ -1380,7 +1379,7 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
  * values associated with the registered event.
  */
 int
-WaitEventSetWait(WaitEventSet *set, long timeout,
+WaitEventSetWait(WaitEventSet *set, int timeout,
 				 WaitEvent *occurred_events, int nevents,
 				 uint32 wait_event_info)
 {
@@ -1398,7 +1397,7 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	if (timeout >= 0)
 	{
 		INSTR_TIME_SET_CURRENT(start_time);
-		Assert(timeout >= 0 && timeout <= INT_MAX);
+		Assert(timeout >= 0);
 		cur_timeout = timeout;
 	}
 	else
@@ -1491,7 +1490,7 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 		{
 			INSTR_TIME_SET_CURRENT(cur_time);
 			INSTR_TIME_SUBTRACT(cur_time, start_time);
-			cur_timeout = timeout - (long) INSTR_TIME_GET_MILLISEC(cur_time);
+			cur_timeout = timeout - (int) INSTR_TIME_GET_MILLISEC(cur_time);
 			if (cur_timeout <= 0)
 				break;
 		}

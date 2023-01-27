@@ -732,7 +732,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 			TimestampDifferenceExceeds(starttime, endtime,
 									   params->log_min_duration))
 		{
-			long		delay_in_ms;
+			int			delay_in_ms;
 			double		read_rate = 0;
 			double		write_rate = 0;
 			StringInfoData buf;

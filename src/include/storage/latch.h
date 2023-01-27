@@ -180,13 +180,13 @@ extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
 							  Latch *latch, void *user_data);
 extern void ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch);
 
-extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
+extern int	WaitEventSetWait(WaitEventSet *set, int timeout,
 							 WaitEvent *occurred_events, int nevents,
 							 uint32 wait_event_info);
-extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
+extern int	WaitLatch(Latch *latch, int wakeEvents, int timeout,
 					  uint32 wait_event_info);
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
-							  pgsocket sock, long timeout, uint32 wait_event_info);
+							  pgsocket sock, int timeout, uint32 wait_event_info);
 extern void InitializeLatchWaitSet(void);
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool WaitEventSetCanReportClosed(void);

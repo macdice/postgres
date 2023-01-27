@@ -6237,7 +6237,7 @@ LogCheckpointStart(int flags, bool restartpoint)
 static void
 LogCheckpointEnd(bool restartpoint)
 {
-	long		write_msecs,
+	int			write_msecs,
 				sync_msecs,
 				total_msecs,
 				longest_msecs,
@@ -6270,13 +6270,13 @@ LogCheckpointEnd(bool restartpoint)
 	 * Timing values returned from CheckpointStats are in microseconds.
 	 * Convert to milliseconds for consistent printing.
 	 */
-	longest_msecs = (long) ((CheckpointStats.ckpt_longest_sync + 999) / 1000);
+	longest_msecs = (CheckpointStats.ckpt_longest_sync + 999) / 1000;
 
 	average_sync_time = 0;
 	if (CheckpointStats.ckpt_sync_rels > 0)
 		average_sync_time = CheckpointStats.ckpt_agg_sync_time /
 			CheckpointStats.ckpt_sync_rels;
-	average_msecs = (long) ((average_sync_time + 999) / 1000);
+	average_msecs = (average_sync_time + 999) / 1000;
 
 	/*
 	 * ControlFileLock is not required to see ControlFile->checkPoint and

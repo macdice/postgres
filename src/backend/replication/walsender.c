@@ -246,7 +246,7 @@ static void ProcessPendingWrites(void);
 static void WalSndKeepalive(bool requestReply, XLogRecPtr writePtr);
 static void WalSndKeepaliveIfNecessary(void);
 static void WalSndCheckTimeOut(void);
-static long WalSndComputeSleeptime(TimestampTz now);
+static int	WalSndComputeSleeptime(TimestampTz now);
 static void WalSndWait(uint32 socket_events, long timeout, uint32 wait_event);
 static void WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
@@ -2368,10 +2368,10 @@ ProcessStandbyHSFeedbackMessage(void)
  * keepalives and to abort the connection if wal_sender_timeout has been
  * reached.
  */
-static long
+static int
 WalSndComputeSleeptime(TimestampTz now)
 {
-	long		sleeptime = 10000;	/* 10 s */
+	int			sleeptime = 10000;	/* 10 s */
 
 	if (wal_sender_timeout > 0 && last_reply_timestamp > 0)
 	{
@@ -2541,7 +2541,7 @@ WalSndLoop(WalSndSendDataCallback send_data)
 			 !streamingDoneSending) ||
 			pq_is_send_pending())
 		{
-			long		sleeptime;
+			int			sleeptime;
 			int			wakeEvents;
 
 			if (!streamingDoneReceiving)

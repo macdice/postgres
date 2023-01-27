@@ -1122,7 +1122,7 @@ ApplyLauncherMain(Datum main_arg)
 			LogicalRepWorker *w;
 			TimestampTz last_start;
 			TimestampTz now;
-			long		elapsed;
+			int			elapsed;
 
 			if (!sub->enabled)
 				continue;

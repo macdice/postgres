@@ -445,7 +445,7 @@ WalReceiverMain(void)
 				pgsocket	wait_fd = PGINVALID_SOCKET;
 				int			rc;
 				TimestampTz nextWakeup;
-				long		nap;
+				int			nap;
 
 				/*
 				 * Exit walreceiver if we're not in recovery. This should not

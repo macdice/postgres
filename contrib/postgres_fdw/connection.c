@@ -1375,7 +1375,7 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime, PGresult **result,
 			{
 				int			wc;
 				TimestampTz now = GetCurrentTimestamp();
-				long		cur_timeout;
+				int			cur_timeout;
 
 				/* If timeout has expired, give up, else get sleep time. */
 				cur_timeout = TimestampDifferenceMilliseconds(now, endtime);

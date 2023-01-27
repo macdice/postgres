@@ -1673,8 +1673,8 @@ DetermineSleepTime(void)
 		int			ms;
 
 		/* result of TimestampDifferenceMilliseconds is in [0, INT_MAX] */
-		ms = (int) TimestampDifferenceMilliseconds(GetCurrentTimestamp(),
-												   next_wakeup);
+		ms = TimestampDifferenceMilliseconds(GetCurrentTimestamp(),
+											 next_wakeup);
 		return Min(60 * 1000, ms);
 	}
 
