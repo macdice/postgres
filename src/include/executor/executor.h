@@ -86,6 +86,13 @@ typedef bool (*ExecutorCheckPerms_hook_type) (List *rangeTable,
 											  bool ereport_on_violation);
 extern PGDLLIMPORT ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook;
 
+/* Hook for plugins to get records that are inserted, updated and deleted */
+typedef void (*ExecutorModifyTable_hook_type) (EState *estate,
+											   TupleTableSlot *old_slot,
+											   TupleTableSlot *new_slot,
+											   ResultRelInfo *relinfo);
+extern PGDLLIMPORT ExecutorModifyTable_hook_type ExecutorModifyTable_hook;
+
 
 /*
  * prototypes from functions in execAmi.c

@@ -282,4 +282,12 @@ extern void RI_PartitionRemove_Check(Trigger *trigger, Relation fk_rel,
 
 extern int	RI_FKey_trigger_type(Oid tgfoid);
 
+/* Hook for global trigger. */
+typedef void (*GlobalARTrigger_hook_type) (EState *estate,
+										   int op,
+										   TupleTableSlot *old_slot,
+										   TupleTableSlot *new_slot,
+										   ResultRelInfo *relinfo);
+extern PGDLLIMPORT GlobalARTrigger_hook_type GlobalARTrigger_hook;
+
 #endif							/* TRIGGER_H */

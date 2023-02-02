@@ -108,6 +108,9 @@ static void AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 static void AfterTriggerEnlargeQueryState(void);
 static bool before_stmt_triggers_fired(Oid relid, CmdType cmdType);
 
+/* Hook that can be used to get a callback for all table modifications. */
+GlobalARTrigger_hook_type GlobalARTrigger_hook = NULL;
+
 
 /*
  * Create a trigger.  Returns the address of the created trigger.
@@ -2550,6 +2553,9 @@ ExecARInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 							  recheckIndexes, NULL,
 							  transition_capture,
 							  false);
+
+	if (GlobalARTrigger_hook)
+		GlobalARTrigger_hook(estate, TRIGGER_EVENT_INSERT, NULL, slot, relinfo);
 }
 
 bool
