@@ -148,16 +148,9 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 		XLogFileName(lastRestartPointFname, 0, 0L, wal_segment_size);
 
 	/*
-	 * Check signals before restore command and reset afterwards.
-	 */
-	PreRestoreCommand();
-
-	/*
 	 * Copy xlog from archival storage to XLOGDIR
 	 */
 	ret = shell_restore(xlogfname, xlogpath, lastRestartPointFname);
-
-	PostRestoreCommand();
 
 	if (ret)
 	{

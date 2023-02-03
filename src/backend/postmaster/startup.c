@@ -56,12 +56,6 @@ static volatile sig_atomic_t shutdown_requested = false;
 static volatile sig_atomic_t promote_signaled = false;
 
 /*
- * Flag set when executing a restore command, to tell SIGTERM signal handler
- * that it's safe to just proc_exit.
- */
-static volatile sig_atomic_t in_restore_command = false;
-
-/*
  * Time at which the most recent startup operation started.
  */
 static TimestampTz startup_progress_phase_start_time;
@@ -120,11 +114,8 @@ StartupProcShutdownHandler(SIGNAL_ARGS)
 {
 	int			save_errno = errno;
 
-	if (in_restore_command)
-		proc_exit(1);
-	else
-		shutdown_requested = true;
-	WakeupRecovery();
+	shutdown_requested = true;
+	SetLatch(MyLatch);
 
 	errno = save_errno;
 }
@@ -271,26 +262,6 @@ StartupProcessMain(void)
 	 * successfully.
 	 */
 	proc_exit(0);
-}
-
-void
-PreRestoreCommand(void)
-{
-	/*
-	 * Set in_restore_command to tell the signal handler that we should exit
-	 * right away on SIGTERM. We know that we're at a safe point to do that.
-	 * Check if we had already received the signal, so that we don't miss a
-	 * shutdown request received just before this.
-	 */
-	in_restore_command = true;
-	if (shutdown_requested)
-		proc_exit(1);
-}
-
-void
-PostRestoreCommand(void)
-{
-	in_restore_command = false;
 }
 
 bool

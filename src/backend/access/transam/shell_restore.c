@@ -21,7 +21,11 @@
 #include "access/xlogarchive.h"
 #include "access/xlogrecovery.h"
 #include "common/percentrepl.h"
+#include "miscadmin.h"
+#include "postmaster/startup.h"
 #include "storage/ipc.h"
+#include "storage/latch.h"
+#include "utils/subprocess.h"
 #include "utils/wait_event.h"
 
 static bool ExecuteRecoveryCommand(const char *command,
@@ -135,6 +139,7 @@ ExecuteRecoveryCommand(const char *command, const char *commandName,
 					   uint32 wait_event_info, int fail_elevel)
 {
 	int			rc;
+	Subprocess	subprocess;
 
 	Assert(command && commandName);
 
@@ -145,9 +150,20 @@ ExecuteRecoveryCommand(const char *command, const char *commandName,
 	 * execute the constructed command
 	 */
 	fflush(NULL);
-	pgstat_report_wait_start(wait_event_info);
-	rc = system(command);
-	pgstat_report_wait_end();
+	if (start_shell_subprocess(&subprocess, command) < 0)
+	{
+		/* Couldn't start subprocess. */
+		rc = -1;
+	}
+	else
+	{
+		/* Wait for subprocess to start, but also handle interrupts. */
+		while (wait_latch_or_subprocess(MyLatch, &subprocess, &rc, wait_event_info))
+		{
+			ResetLatch(MyLatch);
+			HandleStartupProcInterrupts();
+		}
+	}
 
 	if (rc != 0)
 	{

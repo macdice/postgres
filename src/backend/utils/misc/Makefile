@@ -28,6 +28,7 @@ OBJS = \
 	queryenvironment.o \
 	rls.o \
 	sampling.o \
+	subprocess.o \
 	superuser.o \
 	timeout.o \
 	tzparser.o

@@ -13,6 +13,7 @@ backend_sources += files(
   'queryenvironment.c',
   'rls.c',
   'sampling.c',
+  'subprocess.c',
   'superuser.c',
   'timeout.c',
   'tzparser.c',
