@@ -91,6 +91,10 @@
 /* Define to 1 if you have the `CRYPTO_lock' function. */
 #undef HAVE_CRYPTO_LOCK
 
+/* Define to 1 if you have the declaration of `accept4', and to 0 if you
+   don't. */
+#undef HAVE_DECL_ACCEPT4
+
 /* Define to 1 if you have the declaration of `fdatasync', and to 0 if you
    don't. */
 #undef HAVE_DECL_FDATASYNC
