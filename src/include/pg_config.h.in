@@ -123,6 +123,10 @@
    to 0 if you don't. */
 #undef HAVE_DECL_LLVMORCGETSYMBOLADDRESSIN
 
+/* Define to 1 if you have the declaration of `pipe2', and to 0 if you don't.
+   */
+#undef HAVE_DECL_PIPE2
+
 /* Define to 1 if you have the declaration of `posix_fadvise', and to 0 if you
    don't. */
 #undef HAVE_DECL_POSIX_FADVISE

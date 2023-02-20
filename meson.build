@@ -2098,6 +2098,7 @@ decl_checks = [
 # restrictions on macOS
 decl_checks += [
   ['accept4', 'sys/socket.h'],
+  ['pipe2', 'unistd.h'],
   ['preadv', 'sys/uio.h'],
   ['pwritev', 'sys/uio.h'],
 ]
