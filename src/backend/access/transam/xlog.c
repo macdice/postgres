@@ -7032,6 +7032,22 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 static void
 RecoveryRestartPoint(const CheckPoint *checkPoint, XLogReaderState *record)
 {
+	Assert(AmStartupProcess() || !IsUnderPostmaster);
+
+	/*
+	 * Don't record a restartpoint if we are still in crash recovery.  The
+	 * subsystems that the checkpointer would need to create the restartpoint
+	 * are not yet up.
+	 */
+	if (GetRecoveryState() == RECOVERY_STATE_CRASH)
+	{
+		elog(trace_recovery(DEBUG2),
+			 "skipping restart point at %X/%X because crash recovery "
+			 "is still running",
+			 LSN_FORMAT_ARGS(checkPoint->redo));
+		return;
+	}
+
 	/*
 	 * Also refrain from creating a restartpoint if we have seen any
 	 * references to non-existent pages. Restarting recovery from the
