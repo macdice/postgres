@@ -5276,6 +5276,7 @@ StartupXLOG(void)
 	/* REDO */
 	if (InRecovery)
 	{
+elog(LOG, "XXXXXX InArchiveRecovery = %d", InArchiveRecovery);
 		/* Initialize state for RecoveryInProgress() */
 		SpinLockAcquire(&XLogCtl->info_lck);
 		if (InArchiveRecovery)
@@ -5779,6 +5780,8 @@ StartupXLOG(void)
 void
 SwitchIntoArchiveRecovery(XLogRecPtr EndRecPtr, TimeLineID replayTLI)
 {
+elog(LOG, "XXXXX SwitchIntoArchiveRecovery()");
+
 	/* initialize minRecoveryPoint to this record */
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 	ControlFile->state = DB_IN_ARCHIVE_RECOVERY;
@@ -7032,8 +7035,10 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 static void
 RecoveryRestartPoint(const CheckPoint *checkPoint, XLogReaderState *record)
 {
+#if 0
 	Assert(AmStartupProcess() || !IsUnderPostmaster);
 
+elog(LOG, "XXXXX RecoveryRestartPoint %d", GetRecoveryState());
 	/*
 	 * Don't record a restartpoint if we are still in crash recovery.  The
 	 * subsystems that the checkpointer would need to create the restartpoint
@@ -7047,6 +7052,7 @@ RecoveryRestartPoint(const CheckPoint *checkPoint, XLogReaderState *record)
 			 LSN_FORMAT_ARGS(checkPoint->redo));
 		return;
 	}
+#endif
 
 	/*
 	 * Also refrain from creating a restartpoint if we have seen any
@@ -7840,6 +7846,7 @@ xlog_redo(XLogReaderState *record)
 		CheckPoint	checkPoint;
 		TimeLineID	replayTLI;
 
+elog(LOG, "XXXXX XLOG_CHECKPOINT_ONLINE");
 		memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
 		/* In an ONLINE checkpoint, treat the XID counter as a minimum */
 		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
