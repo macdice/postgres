@@ -80,8 +80,8 @@ $node_recover1->append_conf('postgresql.conf', 'log_min_messages = DEBUG2');
 $node_recover1->start;
 
 # We started from an online checkpoint created by the base backup, so we should
-# have seen the checkpoint record, but skipped it because we're still in crash
-# recovery.
+# have seen the checkpoint record, but skipped it because we were still in
+# crash recovery.
 $log = slurp_file($node_recover1->logfile());
 ok($log !~ "potential restart point at", "no potential restart points");
 ok($log =~ "skipping restart point at", "skipped restart point");
