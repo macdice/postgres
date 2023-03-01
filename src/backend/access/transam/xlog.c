@@ -7035,7 +7035,6 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 static void
 RecoveryRestartPoint(const CheckPoint *checkPoint, XLogReaderState *record)
 {
-#if 0
 	Assert(AmStartupProcess() || !IsUnderPostmaster);
 
 elog(LOG, "XXXXX RecoveryRestartPoint %d", GetRecoveryState());
@@ -7052,7 +7051,6 @@ elog(LOG, "XXXXX RecoveryRestartPoint %d", GetRecoveryState());
 			 LSN_FORMAT_ARGS(checkPoint->redo));
 		return;
 	}
-#endif
 
 	/*
 	 * Also refrain from creating a restartpoint if we have seen any
@@ -7069,6 +7067,10 @@ elog(LOG, "XXXXX RecoveryRestartPoint %d", GetRecoveryState());
 			 LSN_FORMAT_ARGS(checkPoint->redo));
 		return;
 	}
+
+	elog(trace_recovery(DEBUG2),
+		 "recording potential restart point at %X/%X",
+		 LSN_FORMAT_ARGS(checkPoint->redo));
 
 	/*
 	 * Copy the checkpoint record to shared memory, so that checkpointer can
