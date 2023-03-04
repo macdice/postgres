@@ -42,6 +42,14 @@
 #include "utils/memutils.h"
 
 /*
+ *  The magnetic disk storage manager assumes that the operating system
+ *  supports "large files".  Historically, this wasn't the case, so there is
+ *  support for "segmented" files that were upgraded from earlier releases.
+ *  A future release may eventually drop support for those.  See
+ *  md_fork_is_segmented() for details.
+ *
+ *  The following paragraphs describe the historical behavior.
+ *
  *	The magnetic disk storage manager keeps track of open file
  *	descriptors in its own descriptor pool.  This is done to make it
  *	easier to support relations that are larger than the operating
@@ -119,6 +127,9 @@ static MemoryContext MdCxt;		/* context for all MdfdVec objects */
 /* don't try to open a segment, if not already open */
 #define EXTENSION_DONT_OPEN			(1 << 5)
 
+#define MD_FORK_SEGMENTED_UNKNOWN	'u'
+#define MD_FORK_SEGMENTED_FALSE		'f'
+#define MD_FORK_SEGMENTED_TRUE		't'
 
 /* local routines */
 static void mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum,
@@ -139,8 +150,11 @@ static MdfdVec *_mdfd_openseg(SMgrRelation reln, ForkNumber forknum,
 							  BlockNumber segno, int oflags);
 static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forknum,
 							 BlockNumber blkno, bool skipFsync, int behavior);
+static pgoff_t getseekpos(SMgrRelation reln, ForkNumber forknum,
+						  BlockNumber blocknum);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
+static bool md_fork_is_segmented(SMgrRelation reln, ForkNumber forknum);
 
 static inline int
 _mdfd_open_flags(void)
@@ -459,7 +473,7 @@ void
 mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 const void *buffer, bool skipFsync)
 {
-	off_t		seekpos;
+	pgoff_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
 
@@ -486,10 +500,7 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 						InvalidBlockNumber)));
 
 	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync, EXTENSION_CREATE);
-
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
-
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	seekpos = getseekpos(reln, forknum, blocknum);
 
 	if ((nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_EXTEND)) != BLCKSZ)
 	{
@@ -511,7 +522,8 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	if (!skipFsync && !SmgrIsTemp(reln))
 		register_dirty_segment(reln, forknum, v);
 
-	Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+	if (md_fork_is_segmented(reln, forknum))
+		Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
 }
 
 /*
@@ -549,19 +561,29 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 
 	while (remblocks > 0)
 	{
-		BlockNumber	segstartblock = curblocknum % ((BlockNumber) RELSEG_SIZE);
-		off_t		seekpos = (off_t) BLCKSZ * segstartblock;
+		BlockNumber	segstartblock;
+		pgoff_t		seekpos;
 		int			numblocks;
 
-		if (segstartblock + remblocks > RELSEG_SIZE)
-			numblocks = RELSEG_SIZE - segstartblock;
+		if (md_fork_is_segmented(reln, forknum))
+		{
+			segstartblock = curblocknum % ((BlockNumber) RELSEG_SIZE);
+			seekpos = (pgoff_t) BLCKSZ * segstartblock;
+			if (segstartblock + remblocks > RELSEG_SIZE)
+				numblocks = RELSEG_SIZE - segstartblock;
+			else
+				numblocks = remblocks;
+			Assert(segstartblock < RELSEG_SIZE);
+			Assert(segstartblock + numblocks <= RELSEG_SIZE);
+		}
 		else
+		{
+			segstartblock = curblocknum;
+			seekpos = (pgoff_t) BLCKSZ * segstartblock;
 			numblocks = remblocks;
+		}
 
 		v = _mdfd_getseg(reln, forknum, curblocknum, skipFsync, EXTENSION_CREATE);
-
-		Assert(segstartblock < RELSEG_SIZE);
-		Assert(segstartblock + numblocks <= RELSEG_SIZE);
 
 		/*
 		 * If available and useful, use posix_fallocate() (via FileAllocate())
@@ -579,7 +601,7 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 			int			ret;
 
 			ret = FileFallocate(v->mdfd_vfd,
-								seekpos, (off_t) BLCKSZ * numblocks,
+								seekpos, (pgoff_t) BLCKSZ * numblocks,
 								WAIT_EVENT_DATA_FILE_EXTEND);
 			if (ret != 0)
 			{
@@ -602,7 +624,7 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 			 * zeroed buffer for the whole length of the extension.
 			 */
 			ret = FileZero(v->mdfd_vfd,
-						   seekpos, (off_t) BLCKSZ * numblocks,
+						   seekpos, (pgoff_t) BLCKSZ * numblocks,
 						   WAIT_EVENT_DATA_FILE_EXTEND);
 			if (ret < 0)
 				ereport(ERROR,
@@ -615,7 +637,8 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		if (!skipFsync && !SmgrIsTemp(reln))
 			register_dirty_segment(reln, forknum, v);
 
-		Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+		if (md_fork_is_segmented(reln, forknum))
+			Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
 
 		remblocks -= numblocks;
 		curblocknum += numblocks;
@@ -644,7 +667,6 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 		return &reln->md_seg_fds[forknum][0];
 
 	path = relpath(reln->smgr_rlocator, forknum);
-
 	fd = PathNameOpenFile(path, _mdfd_open_flags());
 
 	if (fd < 0)
@@ -667,7 +689,8 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 	mdfd->mdfd_vfd = fd;
 	mdfd->mdfd_segno = 0;
 
-	Assert(_mdnblocks(reln, forknum, mdfd) <= ((BlockNumber) RELSEG_SIZE));
+	if (md_fork_is_segmented(reln, forknum))
+		Assert(_mdnblocks(reln, forknum, mdfd) <= ((BlockNumber) RELSEG_SIZE));
 
 	return mdfd;
 }
@@ -680,7 +703,10 @@ mdopen(SMgrRelation reln)
 {
 	/* mark it not open */
 	for (int forknum = 0; forknum <= MAX_FORKNUM; forknum++)
+	{
+		reln->md_segmented[forknum] = MD_FORK_SEGMENTED_UNKNOWN;
 		reln->md_num_open_segs[forknum] = 0;
+	}
 }
 
 /*
@@ -713,7 +739,7 @@ bool
 mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
 #ifdef USE_PREFETCH
-	off_t		seekpos;
+	pgoff_t		seekpos;
 	MdfdVec    *v;
 
 	Assert((io_direct_flags & IO_DIRECT_DATA) == 0);
@@ -723,9 +749,7 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 	if (v == NULL)
 		return false;
 
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
-
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	seekpos = getseekpos(reln, forknum, blocknum);
 
 	(void) FilePrefetch(v->mdfd_vfd, seekpos, BLCKSZ, WAIT_EVENT_DATA_FILE_PREFETCH);
 #endif							/* USE_PREFETCH */
@@ -752,10 +776,8 @@ mdwriteback(SMgrRelation reln, ForkNumber forknum,
 	while (nblocks > 0)
 	{
 		BlockNumber nflush = nblocks;
-		off_t		seekpos;
+		pgoff_t		seekpos;
 		MdfdVec    *v;
-		int			segnum_start,
-					segnum_end;
 
 		v = _mdfd_getseg(reln, forknum, blocknum, true /* not used */ ,
 						 EXTENSION_DONT_OPEN);
@@ -770,20 +792,26 @@ mdwriteback(SMgrRelation reln, ForkNumber forknum,
 		if (!v)
 			return;
 
-		/* compute offset inside the current segment */
-		segnum_start = blocknum / RELSEG_SIZE;
+		if (md_fork_is_segmented(reln, forknum))
+		{
+			int			segnum_start,
+						segnum_end;
 
-		/* compute number of desired writes within the current segment */
-		segnum_end = (blocknum + nblocks - 1) / RELSEG_SIZE;
-		if (segnum_start != segnum_end)
-			nflush = RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE));
+			/* compute offset inside the current segment */
+			segnum_start = blocknum / RELSEG_SIZE;
 
-		Assert(nflush >= 1);
-		Assert(nflush <= nblocks);
+			/* compute number of desired writes within the current segment */
+			segnum_end = (blocknum + nblocks - 1) / RELSEG_SIZE;
+			if (segnum_start != segnum_end)
+				nflush = RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE));
 
-		seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+			Assert(nflush >= 1);
+			Assert(nflush <= nblocks);
+		}
 
-		FileWriteback(v->mdfd_vfd, seekpos, (off_t) BLCKSZ * nflush, WAIT_EVENT_DATA_FILE_FLUSH);
+		seekpos = getseekpos(reln, forknum, blocknum);
+
+		FileWriteback(v->mdfd_vfd, seekpos, (pgoff_t) BLCKSZ * nflush, WAIT_EVENT_DATA_FILE_FLUSH);
 
 		nblocks -= nflush;
 		blocknum += nflush;
@@ -797,7 +825,7 @@ void
 mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	   void *buffer)
 {
-	off_t		seekpos;
+	pgoff_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
 
@@ -814,9 +842,7 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
 					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
 
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
-
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	seekpos = getseekpos(reln, forknum, blocknum);
 
 	nbytes = FileRead(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_READ);
 
@@ -866,7 +892,7 @@ void
 mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		const void *buffer, bool skipFsync)
 {
-	off_t		seekpos;
+	pgoff_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
 
@@ -888,9 +914,7 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
 					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
 
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
-
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	seekpos = getseekpos(reln, forknum, blocknum);
 
 	nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_WRITE);
 
@@ -962,6 +986,13 @@ mdnblocks(SMgrRelation reln, ForkNumber forknum)
 	for (;;)
 	{
 		nblocks = _mdnblocks(reln, forknum, v);
+
+		if (!md_fork_is_segmented(reln, forknum))
+		{
+			Assert(segno == 0);
+			return nblocks;
+		}
+
 		if (nblocks > ((BlockNumber) RELSEG_SIZE))
 			elog(FATAL, "segment too big");
 		if (nblocks < ((BlockNumber) RELSEG_SIZE))
@@ -1013,6 +1044,25 @@ mdtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	if (nblocks == curnblk)
 		return;					/* no work */
 
+	if (!md_fork_is_segmented(reln, forknum))
+	{
+		MdfdVec    *v;
+
+		Assert(reln->md_num_open_segs[forknum] == 1);
+		v = &reln->md_seg_fds[forknum][0];
+
+		if (FileTruncate(v->mdfd_vfd, (pgoff_t) nblocks * BLCKSZ, WAIT_EVENT_DATA_FILE_TRUNCATE) < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not truncate file \"%s\" to %u blocks: %m",
+							FilePathName(v->mdfd_vfd),
+							nblocks)));
+		if (!SmgrIsTemp(reln))
+			register_dirty_segment(reln, forknum, v);
+
+		return;
+	}
+
 	/*
 	 * Truncate segments, starting at the last one. Starting at the end makes
 	 * managing the memory for the fd array easier, should there be errors.
@@ -1058,7 +1108,7 @@ mdtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 			 */
 			BlockNumber lastsegblocks = nblocks - priorblocks;
 
-			if (FileTruncate(v->mdfd_vfd, (off_t) lastsegblocks * BLCKSZ, WAIT_EVENT_DATA_FILE_TRUNCATE) < 0)
+			if (FileTruncate(v->mdfd_vfd, (pgoff_t) lastsegblocks * BLCKSZ, WAIT_EVENT_DATA_FILE_TRUNCATE) < 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not truncate file \"%s\" to %u blocks: %m",
@@ -1396,7 +1446,10 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 		   (EXTENSION_FAIL | EXTENSION_CREATE | EXTENSION_RETURN_NULL |
 			EXTENSION_DONT_OPEN));
 
-	targetseg = blkno / ((BlockNumber) RELSEG_SIZE);
+	if (md_fork_is_segmented(reln, forknum))
+		targetseg = blkno / ((BlockNumber) RELSEG_SIZE);
+	else
+		targetseg = 0;
 
 	/* if an existing and opened segment, we're done */
 	if (targetseg < reln->md_num_open_segs[forknum])
@@ -1433,7 +1486,8 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 
 		Assert(nextsegno == v->mdfd_segno + 1);
 
-		if (nblocks > ((BlockNumber) RELSEG_SIZE))
+		if (md_fork_is_segmented(reln, forknum) &&
+			nblocks > ((BlockNumber) RELSEG_SIZE))
 			elog(FATAL, "segment too big");
 
 		if ((behavior & EXTENSION_CREATE) ||
@@ -1493,6 +1547,9 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 							blkno, nblocks)));
 		}
 
+		if (!md_fork_is_segmented(reln, forknum))
+			break;
+
 		v = _mdfd_openseg(reln, forknum, nextsegno, flags);
 
 		if (v == NULL)
@@ -1511,13 +1568,22 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 	return v;
 }
 
+static pgoff_t
+getseekpos(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+{
+	if (md_fork_is_segmented(reln, forknum))
+		return (pgoff_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	return (pgoff_t) BLCKSZ * blocknum;
+}
+
 /*
  * Get number of blocks present in a single disk file
  */
 static BlockNumber
 _mdnblocks(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 {
-	off_t		len;
+	pgoff_t		len;
 
 	len = FileSize(seg->mdfd_vfd);
 	if (len < 0)
@@ -1617,4 +1683,71 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	 * the ftag from the SYNC_FILTER_REQUEST request, so they're forgotten.
 	 */
 	return ftag->rlocator.dbOid == candidate->rlocator.dbOid;
+}
+
+/*
+ * Is this fork in legacy segmented format, inherited from an easlier release
+ * via pg_upgrade?
+ */
+bool
+md_fork_is_segmented(SMgrRelation reln, ForkNumber forknum)
+{
+	char		path_probe[MAXPGPATH];
+	char	   *path;
+
+	Assert(forknum >= 0 && forknum <= MAX_FORKNUM);
+
+	/* Fast return if we have the answer cached. */
+	if (reln->md_segmented[forknum] == MD_FORK_SEGMENTED_FALSE)
+		return false;
+	if (reln->md_segmented[forknum] == MD_FORK_SEGMENTED_TRUE)
+		return true;
+
+	Assert(reln->md_segmented[forknum] == MD_FORK_SEGMENTED_UNKNOWN);
+
+	/*
+	 * All backends must agree, using only clues from the file system, and the
+	 * answer must not change for as long as this relation exists.  The
+	 * correctness of this strategy depends on the following properties:
+	 *
+	 * 1.  When segmented forks are truncated, their higher numbered segments
+	 *	   are truncated to size zero, but they still exist.  That is, higher
+	 *	   segments won't be unlinked for as long as the relation exists.
+	 *
+	 * 2.  We don't create new segmented relations, so the only way they can
+	 *	   exist is if we inherited them via pg_upgrade from an earlier
+	 *	   release.
+	 *
+	 * 3.  Relations that never had more than one segment and were pg_upgraded
+	 *	   are indistinguishable from newly created (non-segmented) relations.
+	 *
+	 * 4.  If the relfilenode is recycled for a later relation, all backends
+	 *	   will close all segments first before potentially reopening the next
+	 *	   generation, either via the sinval or ProcSignalBarrier cache
+	 *	   invalidation system.
+	 *
+	 * Therefore, it is safe for every backend to determine whether the fork is
+	 * segmented by checking the existence of a ".1" file.
+	 */
+	path = relpath(reln->smgr_rlocator, forknum);
+	snprintf(path_probe, sizeof(path_probe), "%s.1", path);
+	if (access(path_probe, F_OK) == 0)
+	{
+		pfree(path);
+		reln->md_segmented[forknum] = MD_FORK_SEGMENTED_TRUE;
+		return true;
+	}
+	else if (errno == ENOENT)
+	{
+		pfree(path);
+		reln->md_segmented[forknum] = MD_FORK_SEGMENTED_FALSE;
+		return false;
+	}
+	pfree(path);
+
+	ereport(ERROR,
+			(errcode_for_file_access(),
+			 errmsg("could not read access in file \"%s\": %m",
+					path_probe)));
+	pg_unreachable();
 }
