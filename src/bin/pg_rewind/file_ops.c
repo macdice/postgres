@@ -85,7 +85,7 @@ close_target_file(void)
 }
 
 void
-write_target_range(char *buf, off_t begin, size_t size)
+write_target_range(char *buf, pgoff_t begin, size_t size)
 {
 	size_t		writeleft;
 	char	   *p;
@@ -203,7 +203,7 @@ remove_target_file(const char *path, bool missing_ok)
 }
 
 void
-truncate_target_file(const char *path, off_t newsize)
+truncate_target_file(const char *path, pgoff_t newsize)
 {
 	char		dstpath[MAXPGPATH];
 	int			fd;

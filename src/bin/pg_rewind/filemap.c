@@ -296,6 +296,8 @@ process_target_wal_block_change(ForkNumber forknum, RelFileLocator rlocator,
 	BlockNumber blkno_inseg;
 	int			segno;
 
+	/* XXX We need to know if it is segmented! */
+
 	segno = blkno / RELSEG_SIZE;
 	blkno_inseg = blkno % RELSEG_SIZE;
 

@@ -194,7 +194,7 @@ typedef struct RewriteMappingFile
 {
 	TransactionId xid;			/* xid that might need to see the row */
 	int			vfd;			/* fd of mappings file */
-	off_t		off;			/* how far have we written yet */
+	pgoff_t		off;			/* how far have we written yet */
 	dclist_head mappings;		/* list of in-memory mappings */
 	char		path[MAXPGPATH];	/* path, for error messages */
 } RewriteMappingFile;

@@ -45,7 +45,7 @@ typedef struct rewind_source
 	 * queue and execute all requests.
 	 */
 	void		(*queue_fetch_range) (struct rewind_source *, const char *path,
-									  off_t offset, size_t len);
+									  pgoff_t offset, size_t len);
 
 	/*
 	 * Like queue_fetch_range(), but requests replacing the whole local file

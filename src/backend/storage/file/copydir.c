@@ -120,8 +120,8 @@ copy_file(const char *fromfile, const char *tofile)
 	int			srcfd;
 	int			dstfd;
 	int			nbytes;
-	off_t		offset;
-	off_t		flush_offset;
+	pgoff_t		offset;
+	pgoff_t		flush_offset;
 
 	/* Size of copy buffer (read and write requests) */
 #define COPY_BUF_SIZE (8 * BLCKSZ)

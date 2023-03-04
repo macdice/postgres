@@ -32,7 +32,7 @@ static char *local_fetch_file(rewind_source *source, const char *path,
 static void local_queue_fetch_file(rewind_source *source, const char *path,
 								   size_t len);
 static void local_queue_fetch_range(rewind_source *source, const char *path,
-									off_t off, size_t len);
+									pgoff_t off, size_t len);
 static void local_finish_fetch(rewind_source *source);
 static void local_destroy(rewind_source *source);
 
@@ -125,15 +125,15 @@ local_queue_fetch_file(rewind_source *source, const char *path, size_t len)
  * Copy a file from source to target, starting at 'off', for 'len' bytes.
  */
 static void
-local_queue_fetch_range(rewind_source *source, const char *path, off_t off,
+local_queue_fetch_range(rewind_source *source, const char *path, pgoff_t off,
 						size_t len)
 {
 	const char *datadir = ((local_source *) source)->datadir;
 	PGIOAlignedBlock buf;
 	char		srcpath[MAXPGPATH];
 	int			srcfd;
-	off_t		begin = off;
-	off_t		end = off + len;
+	pgoff_t		begin = off;
+	pgoff_t		end = off + len;
 
 	snprintf(srcpath, sizeof(srcpath), "%s/%s", datadir, path);
 

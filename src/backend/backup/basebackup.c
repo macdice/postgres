@@ -95,7 +95,8 @@ static void perform_base_backup(basebackup_options *opt, bbsink *sink);
 static void parse_basebackup_options(List *options, basebackup_options *opt);
 static int	compareWalFileNames(const ListCell *a, const ListCell *b);
 static bool is_checksummed_file(const char *fullpath, const char *filename);
-static int	basebackup_read_file(int fd, char *buf, size_t nbytes, off_t offset,
+static int	basebackup_read_file(int fd, char *buf, size_t nbytes,
+								 pgoff_t offset,
 								 const char *filename, bool partial_read_ok);
 
 /* Was the backup currently in-progress initiated in recovery mode? */
@@ -1488,7 +1489,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 	bool		block_retry = false;
 	uint16		checksum;
 	int			checksum_failures = 0;
-	off_t		cnt;
+	pgoff_t		cnt;
 	int			i;
 	pgoff_t		len = 0;
 	char	   *page;
@@ -1827,7 +1828,7 @@ convert_link_to_directory(const char *pathbuf, struct stat *statbuf)
  * Returns the number of bytes read.
  */
 static int
-basebackup_read_file(int fd, char *buf, size_t nbytes, off_t offset,
+basebackup_read_file(int fd, char *buf, size_t nbytes, pgoff_t offset,
 					 const char *filename, bool partial_read_ok)
 {
 	int			rc;

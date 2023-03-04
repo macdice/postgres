@@ -396,7 +396,7 @@ typedef struct xl_heap_rewrite_mapping
 	TransactionId mapped_xid;	/* xid that might need to see the row */
 	Oid			mapped_db;		/* DbOid or InvalidOid for shared rels */
 	Oid			mapped_rel;		/* Oid of the mapped relation */
-	off_t		offset;			/* How far have we written so far */
+	pgoff_t		offset;			/* How far have we written so far */
 	uint32		num_mappings;	/* Number of in-memory mappings */
 	XLogRecPtr	start_lsn;		/* Insert LSN at begin of rewrite */
 } xl_heap_rewrite_mapping;

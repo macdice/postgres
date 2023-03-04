@@ -566,7 +566,7 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 		{
 			datapagemap_iterator_t *iter;
 			BlockNumber blkno;
-			off_t		offset;
+			pgoff_t		offset;
 
 			iter = datapagemap_iterate(&entry->target_pages_to_overwrite);
 			while (datapagemap_next(iter, &blkno))

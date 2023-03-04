@@ -30,7 +30,7 @@
 typedef struct
 {
 	const char *path;			/* path relative to data directory root */
-	off_t		offset;
+	pgoff_t		offset;
 	size_t		length;
 } fetch_range_request;
 
@@ -65,7 +65,7 @@ static void libpq_traverse_files(rewind_source *source,
 								 process_file_callback_t callback);
 static void libpq_queue_fetch_file(rewind_source *source, const char *path, size_t len);
 static void libpq_queue_fetch_range(rewind_source *source, const char *path,
-									off_t off, size_t len);
+									pgoff_t off, size_t len);
 static void libpq_finish_fetch(rewind_source *source);
 static char *libpq_fetch_file(rewind_source *source, const char *path,
 							  size_t *filesize);
@@ -343,7 +343,7 @@ libpq_queue_fetch_file(rewind_source *source, const char *path, size_t len)
  * Queue up a request to fetch a piece of a file from remote system.
  */
 static void
-libpq_queue_fetch_range(rewind_source *source, const char *path, off_t off,
+libpq_queue_fetch_range(rewind_source *source, const char *path, pgoff_t off,
 						size_t len)
 {
 	libpq_source *src = (libpq_source *) source;
