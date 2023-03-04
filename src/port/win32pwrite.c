@@ -17,7 +17,7 @@
 #include <windows.h>
 
 ssize_t
-pg_pwrite(int fd, const void *buf, size_t size, off_t offset)
+pg_pwrite(int fd, const void *buf, size_t size, pgoff_t offset)
 {
 	OVERLAPPED	overlapped = {0};
 	HANDLE		handle;
@@ -32,6 +32,7 @@ pg_pwrite(int fd, const void *buf, size_t size, off_t offset)
 
 	/* Note that this changes the file position, despite not using it. */
 	overlapped.Offset = offset;
+	overlapped.OffsetHigh = offset >> 32;
 	if (!WriteFile(handle, buf, size, &result, &overlapped))
 	{
 		_dosmaperr(GetLastError());

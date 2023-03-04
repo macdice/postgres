@@ -368,7 +368,7 @@ extern FILE *pgwin32_popen(const char *command, const char *type);
  * When necessary, these routines are provided by files in src/port/.
  */
 
-/* Type to use with fseeko/ftello */
+/* Type to use with lseek/ftruncate/pread/fseeko/ftello */
 #ifndef WIN32					/* WIN32 is handled in port/win32_port.h */
 #define pgoff_t off_t
 #endif

@@ -43,13 +43,13 @@ struct iovec
 #if HAVE_DECL_PREADV
 #define pg_preadv preadv
 #else
-extern ssize_t pg_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset);
+extern ssize_t pg_preadv(int fd, const struct iovec *iov, int iovcnt, pgoff_t offset);
 #endif
 
 #if HAVE_DECL_PWRITEV
 #define pg_pwritev pwritev
 #else
-extern ssize_t pg_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset);
+extern ssize_t pg_pwritev(int fd, const struct iovec *iov, int iovcnt, pgoff_t offset);
 #endif
 
 #endif							/* PG_IOVEC_H */

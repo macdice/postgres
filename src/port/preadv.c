@@ -19,7 +19,7 @@
 #include "port/pg_iovec.h"
 
 ssize_t
-pg_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+pg_preadv(int fd, const struct iovec *iov, int iovcnt, pgoff_t offset)
 {
 	ssize_t		sum = 0;
 	ssize_t		part;

@@ -16538,6 +16538,12 @@ esac
 esac
 
   case " $LIBOBJS " in
+  *" win32ftruncate.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32ftruncate.$ac_objext"
+ ;;
+esac
+
+  case " $LIBOBJS " in
   *" win32getrusage.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS win32getrusage.$ac_objext"
  ;;

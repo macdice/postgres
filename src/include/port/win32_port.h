@@ -76,10 +76,18 @@
 #undef fstat
 #undef stat
 
+/* and likewise for lseek hack */
+#define lseek microsoft_native_lseek
+#include <io.h>
+#undef lseek
+
+/* and also ftruncate, as defined by MinGW headers with 32 bit offset */
+#define ftruncate mingw_native_ftruncate
+#include <unistd.h>
+#undef ftruncate
+
 /* Must be here to avoid conflicting with prototype in windows.h */
 #define mkdir(a,b)	mkdir(a)
-
-#define ftruncate(a,b)	chsize(a,b)
 
 /* Windows doesn't have fsync() as such, use _commit() */
 #define fsync(fd) _commit(fd)
@@ -219,6 +227,7 @@ extern int	_pgfseeko64(FILE *stream, pgoff_t offset, int origin);
 extern pgoff_t _pgftello64(FILE *stream);
 #define fseeko(stream, offset, origin) _pgfseeko64(stream, offset, origin)
 #define ftello(stream) _pgftello64(stream)
+#define lseek(fd, offset, origin) _lseeki64((fd), (offset), (origin))
 #else
 #ifndef fseeko
 #define fseeko(stream, offset, origin) fseeko64(stream, offset, origin)
@@ -226,7 +235,13 @@ extern pgoff_t _pgftello64(FILE *stream);
 #ifndef ftello
 #define ftello(stream) ftello64(stream)
 #endif
+#ifndef lseek
+#define lseek(fd, offset, origin) _lseeki64((fd), (offset), (origin))
 #endif
+#endif
+
+/* 64 bit ftruncate is in win32ftruncate.c */
+extern int ftruncate(int fd, pgoff_t length);
 
 /*
  *	Win32 also doesn't have symlinks, but we can emulate them with
@@ -586,9 +601,9 @@ typedef unsigned short mode_t;
 #endif
 
 /* in port/win32pread.c */
-extern ssize_t pg_pread(int fd, void *buf, size_t nbyte, off_t offset);
+extern ssize_t pg_pread(int fd, void *buf, size_t nbyte, pgoff_t offset);
 
 /* in port/win32pwrite.c */
-extern ssize_t pg_pwrite(int fd, const void *buf, size_t nbyte, off_t offset);
+extern ssize_t pg_pwrite(int fd, const void *buf, size_t nbyte, pgoff_t offset);
 
 #endif							/* PG_WIN32_PORT_H */
