@@ -204,7 +204,7 @@ typedef struct vfd
 	File		nextFree;		/* link to next free VFD, if in freelist */
 	File		lruMoreRecently;	/* doubly linked recency-of-use list */
 	File		lruLessRecently;
-	off_t		fileSize;		/* current size of file (0 if not temporary) */
+	pgoff_t		fileSize;		/* current size of file (0 if not temporary) */
 	char	   *fileName;		/* name of file, or NULL for unused VFD */
 	/* NB: fileName is malloc'd, and must be free'd when closing the VFD */
 	int			fileFlags;		/* open(2) flags for (re)opening the file */
@@ -463,7 +463,7 @@ pg_fdatasync(int fd)
  * offset of 0 with nbytes 0 means that the entire file should be flushed
  */
 void
-pg_flush_data(int fd, off_t offset, off_t nbytes)
+pg_flush_data(int fd, pgoff_t offset, pgoff_t nbytes)
 {
 	/*
 	 * Right now file flushing is primarily used to avoid making later
@@ -636,7 +636,7 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
  * Truncate a file to a given length by name.
  */
 int
-pg_truncate(const char *path, off_t length)
+pg_truncate(const char *path, pgoff_t length)
 {
 #ifdef WIN32
 	int			save_errno;
@@ -1439,7 +1439,7 @@ FileAccess(File file)
  * Called whenever a temporary file is deleted to report its size.
  */
 static void
-ReportTemporaryFileUsage(const char *path, off_t size)
+ReportTemporaryFileUsage(const char *path, pgoff_t size)
 {
 	pgstat_report_tempfile(size);
 
@@ -1989,7 +1989,7 @@ FileClose(File file)
  * to read into.
  */
 int
-FilePrefetch(File file, off_t offset, off_t amount, uint32 wait_event_info)
+FilePrefetch(File file, pgoff_t offset, pgoff_t amount, uint32 wait_event_info)
 {
 #if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_WILLNEED)
 	int			returnCode;
@@ -2017,7 +2017,7 @@ FilePrefetch(File file, off_t offset, off_t amount, uint32 wait_event_info)
 }
 
 void
-FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
+FileWriteback(File file, pgoff_t offset, pgoff_t nbytes, uint32 wait_event_info)
 {
 	int			returnCode;
 
@@ -2043,7 +2043,7 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 }
 
 int
-FileRead(File file, void *buffer, size_t amount, off_t offset,
+FileRead(File file, void *buffer, size_t amount, pgoff_t offset,
 		 uint32 wait_event_info)
 {
 	int			returnCode;
@@ -2099,7 +2099,7 @@ retry:
 }
 
 int
-FileWrite(File file, const void *buffer, size_t amount, off_t offset,
+FileWrite(File file, const void *buffer, size_t amount, pgoff_t offset,
 		  uint32 wait_event_info)
 {
 	int			returnCode;
@@ -2128,7 +2128,7 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 	 */
 	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
 	{
-		off_t		past_write = offset + amount;
+		pgoff_t		past_write = offset + amount;
 
 		if (past_write > vfdP->fileSize)
 		{
@@ -2160,7 +2160,7 @@ retry:
 		 */
 		if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
 		{
-			off_t		past_write = offset + amount;
+			pgoff_t		past_write = offset + amount;
 
 			if (past_write > vfdP->fileSize)
 			{
@@ -2224,7 +2224,7 @@ FileSync(File file, uint32 wait_event_info)
  * appropriate error.
  */
 int
-FileZero(File file, off_t offset, off_t amount, uint32 wait_event_info)
+FileZero(File file, pgoff_t offset, pgoff_t amount, uint32 wait_event_info)
 {
 	int			returnCode;
 	ssize_t		written;
@@ -2269,7 +2269,7 @@ FileZero(File file, off_t offset, off_t amount, uint32 wait_event_info)
  * appropriate error.
  */
 int
-FileFallocate(File file, off_t offset, off_t amount, uint32 wait_event_info)
+FileFallocate(File file, pgoff_t offset, pgoff_t amount, uint32 wait_event_info)
 {
 #ifdef HAVE_POSIX_FALLOCATE
 	int			returnCode;
@@ -2305,7 +2305,7 @@ FileFallocate(File file, off_t offset, off_t amount, uint32 wait_event_info)
 	return FileZero(file, offset, amount, wait_event_info);
 }
 
-off_t
+pgoff_t
 FileSize(File file)
 {
 	Assert(FileIsValid(file));
@@ -2316,14 +2316,14 @@ FileSize(File file)
 	if (FileIsNotOpen(file))
 	{
 		if (FileAccess(file) < 0)
-			return (off_t) -1;
+			return (pgoff_t) -1;
 	}
 
 	return lseek(VfdCache[file].fd, 0, SEEK_END);
 }
 
 int
-FileTruncate(File file, off_t offset, uint32 wait_event_info)
+FileTruncate(File file, pgoff_t offset, uint32 wait_event_info)
 {
 	int			returnCode;
 
