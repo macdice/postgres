@@ -490,6 +490,23 @@ extern void pg_queue_signal(int signum);
 #define kill(pid,sig)	pgkill(pid,sig)
 extern int	pgkill(int pid, int sig);
 
+/* Things that exist in MinGW headers, but need to be added to MSVC */
+#ifdef _MSC_VER
+
+#ifndef _WIN64
+typedef long ssize_t;
+#else
+typedef __int64 ssize_t;
+#endif
+
+typedef unsigned short mode_t;
+
+#define F_OK 0
+#define W_OK 2
+#define R_OK 4
+
+#endif							/* _MSC_VER */
+
 /* In backend/port/win32/socket.c */
 #ifndef FRONTEND
 #define socket(af, type, protocol) pgwin32_socket(af, type, protocol)
@@ -497,7 +514,6 @@ extern int	pgkill(int pid, int sig);
 #define listen(s, backlog) pgwin32_listen(s, backlog)
 #define accept(s, addr, addrlen) pgwin32_accept(s, addr, addrlen)
 #define connect(s, name, namelen) pgwin32_connect(s, name, namelen)
-#define select(n, r, w, e, timeout) pgwin32_select(n, r, w, e, timeout)
 #define recv(s, buf, len, flags) pgwin32_recv(s, buf, len, flags)
 #define send(s, buf, len, flags) pgwin32_send(s, buf, len, flags)
 
@@ -506,12 +522,8 @@ extern int	pgwin32_bind(SOCKET s, struct sockaddr *addr, int addrlen);
 extern int	pgwin32_listen(SOCKET s, int backlog);
 extern SOCKET pgwin32_accept(SOCKET s, struct sockaddr *addr, int *addrlen);
 extern int	pgwin32_connect(SOCKET s, const struct sockaddr *name, int namelen);
-extern int	pgwin32_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
-extern int	pgwin32_recv(SOCKET s, char *buf, int len, int flags);
-extern int	pgwin32_send(SOCKET s, const void *buf, int len, int flags);
-extern int	pgwin32_waitforsinglesocket(SOCKET s, int what, int timeout);
-
-extern PGDLLIMPORT int pgwin32_noblock;
+extern ssize_t pgwin32_recv(SOCKET s, char *buf, size_t len, int flags);
+extern ssize_t pgwin32_send(SOCKET s, const void *buf, size_t len, int flags);
 
 #endif							/* FRONTEND */
 
@@ -548,23 +560,6 @@ extern int	pgwin32_is_admin(void);
 
 /* Windows security token manipulation (in src/common/exec.c) */
 extern BOOL AddUserToTokenDacl(HANDLE hToken);
-
-/* Things that exist in MinGW headers, but need to be added to MSVC */
-#ifdef _MSC_VER
-
-#ifndef _WIN64
-typedef long ssize_t;
-#else
-typedef __int64 ssize_t;
-#endif
-
-typedef unsigned short mode_t;
-
-#define F_OK 0
-#define W_OK 2
-#define R_OK 4
-
-#endif							/* _MSC_VER */
 
 #if defined(__MINGW32__) || defined(__MINGW64__)
 /*

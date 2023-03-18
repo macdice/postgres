@@ -285,13 +285,7 @@ secure_raw_read(Port *port, void *ptr, size_t len)
 	 * Try to read from the socket without blocking. If it succeeds we're
 	 * done, otherwise we'll wait for the socket using the latch mechanism.
 	 */
-#ifdef WIN32
-	pgwin32_noblock = true;
-#endif
 	n = recv(port->sock, ptr, len, 0);
-#ifdef WIN32
-	pgwin32_noblock = false;
-#endif
 
 	return n;
 }
@@ -377,13 +371,7 @@ secure_raw_write(Port *port, const void *ptr, size_t len)
 {
 	ssize_t		n;
 
-#ifdef WIN32
-	pgwin32_noblock = true;
-#endif
 	n = send(port->sock, ptr, len, 0);
-#ifdef WIN32
-	pgwin32_noblock = false;
-#endif
 
 	return n;
 }

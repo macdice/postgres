@@ -291,11 +291,9 @@ pq_init(ClientSocket *client_sock)
 	 * needed. That allows us to provide safely interruptible reads and
 	 * writes.
 	 */
-#ifndef WIN32
 	if (!pg_set_noblock(port->sock))
 		ereport(FATAL,
 				(errmsg("could not set socket to nonblocking mode: %m")));
-#endif
 
 #ifndef WIN32
 
