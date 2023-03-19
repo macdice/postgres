@@ -13,6 +13,8 @@
 
 #include "postgres.h"
 
+#include "common/hashfn.h"
+
 /*
  * Indicate if pgwin32_recv() and pgwin32_send() should operate
  * in non-blocking mode.
@@ -36,6 +38,77 @@ int			pgwin32_noblock = 0;
 #undef select
 #undef recv
 #undef send
+
+/*
+ * An entry in our socket table.
+ */
+typedef struct SocketTableEntry
+{
+	SOCKET		sock;
+	char		status;
+
+	/*
+	 * The reference count for the event handle.  Client code that wants to
+	 * use the event functions must acquire a reference and release it when
+	 * finished.
+	 */
+	int			reference_count;
+
+	/*
+	 * The FD_XXX events that were most recently selected for this socket
+	 * number with WSAEventSelect().
+	 */
+	int			selected_events;
+
+	/*
+	 * The FD_XXX events already reported by Winsock, that we'll continue to
+	 * report as long as they are true.  They are cleared by our send/recv
+	 * wrappers, because those are 're-enabling' functions that will cause
+	 * Winsock to report them again.  The are also cleared by an explicit
+	 * check we perform for the benefit of hypothetical code that might be
+	 * reach Winsock send/recv wrappers without going via our wrappers.
+	 */
+	int			level_triggered_events;
+
+	/*
+	 * Windows kernel event most recently associated with the socket number.
+	 */
+	HANDLE		event_handle;
+} SocketTableEntry;
+
+static inline void *
+malloc0(size_t size)
+{
+	void	   *result;
+
+	result = malloc(size);
+	if (result)
+		memset(result, 0, size);
+
+	return result;
+}
+
+/*
+ * It almost seems feasible to use an array to store our per-socket state,
+ * based on the observation that Windows socket descriptors seem to be small
+ * integers as on Unix, but the manual warns against making that assumption.
+ * So we use a hash table.
+ */
+
+#define SH_PREFIX socket_table
+#define SH_ELEMENT_TYPE SocketTableEntry
+#define SH_RAW_ALLOCATOR malloc0
+#define SH_RAW_FREE free
+#define SH_SCOPE static inline
+#define SH_KEY_TYPE SOCKET
+#define SH_KEY sock
+#define SH_HASH_KEY(tb, key) murmurhash32(key)
+#define SH_EQUAL(tb, a, b) (a) == (b)
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+
+static socket_table_hash * socket_table;
 
 /*
  * Blocking socket functions implemented so they listen on both
@@ -310,6 +383,265 @@ pgwin32_socket(int af, int type, int protocol)
 	return s;
 }
 
+/*
+ * Check if any of FD_READ, FD_WRITE or FD_CLOSE is still true.  Used to
+ * re-check level-triggered events.
+ */
+static int
+pgwin32_socket_poll(SOCKET s, int events)
+{
+	int			revents = 0;
+
+	if (events & (FD_READ | FD_CLOSE))
+	{
+		ssize_t		rc;
+		char		c;
+
+		rc = recv(s, &c, 1, MSG_PEEK);
+		if (rc == 1)
+		{
+			/* At least one byte to read. */
+			if (events & FD_READ)
+				revents |= FD_READ;
+		}
+		else if (rc == 0 || WSAGetLastError() != WSAEWOULDBLOCK)
+		{
+			/* EOF due to graceful shutdown, or error. */
+			if (events & FD_CLOSE)
+				revents |= FD_CLOSE;
+		}
+	}
+
+	if (events & FD_WRITE)
+	{
+		char		c;
+
+		/* If it looks like we could write or get an error, report that. */
+		if (send(s, &c, 0, 0) == 0 || WSAGetLastError() != WSAEWOULDBLOCK)
+			revents |= FD_WRITE;
+	}
+
+	return revents;
+}
+
+/*
+ * Adjust the set of FD_XXX events this socket's event handle should wake up
+ * for.  Returns 0 on success, otherwise -1 and sets errno.
+ */
+int
+pgwin32_socket_select_events(SOCKET s, int selected_events)
+{
+	SocketTableEntry *entry;
+
+	Assert(socket_table);
+	entry = socket_table_lookup(socket_table, s);
+
+	Assert(entry);
+	Assert(entry->reference_count > 0);
+	Assert(entry->event_handle != WSA_INVALID_EVENT);
+
+	/* Do nothing if no change. */
+	if (selected_events == entry->selected_events)
+		return 0;
+
+	/*
+	 * Tell Winsock to link the socket to the event handle, and which events
+	 * we're interested in.
+	 */
+	if (WSAEventSelect(s, entry->event_handle, selected_events) == SOCKET_ERROR)
+	{
+		TranslateSocketError();
+		return -1;
+	}
+
+	entry->selected_events = selected_events;
+
+	/*
+	 * The manual tells us: "Issuing a WSAEventSelect for a socket cancels any
+	 * previous WSAAsyncSelect or WSAEventSelect for the same socket and
+	 * clears the internal network event record."  If that is true, we might
+	 * have wiped an internal flag we're interested in.  Close that race by
+	 * triggering an explicit poll before we sleep, by pretending we have seen
+	 * all of these events.
+	 */
+	if (selected_events & (FD_READ | FD_WRITE))
+		entry->level_triggered_events = selected_events & (FD_READ | FD_WRITE | FD_CLOSE);
+	else
+		entry->level_triggered_events = 0;
+
+	return 0;
+}
+
+/*
+ * Before waiting on the event handle, check if we have pending
+ * level-triggered events that are still true, and if so take measures to
+ * prevent the sleep.
+ */
+void
+pgwin32_socket_prepare_to_wait(SOCKET s)
+{
+	SocketTableEntry *entry;
+
+	Assert(socket_table);
+	entry = socket_table_lookup(socket_table, s);
+
+	Assert(entry);
+	Assert(entry->reference_count > 0);
+	Assert(entry->event_handle != WSA_INVALID_EVENT);
+
+	/*
+	 * If we're not waiting for FD_READ or FD_WRITE, don't try to poll the
+	 * socket.  Server sockets and client sockets that haven't connected yet
+	 * can't be polled by that technique.
+	 */
+	if ((entry->selected_events & (FD_READ | FD_WRITE)) &&
+		entry->level_triggered_events != 0)
+	{
+		/*
+		 * Re-check the level-triggered events we have recorded.  This is
+		 * necessary because someone might access WSASend()/WSARecv() directly
+		 * without going via our wrapper functions, so they might never be
+		 * cleared otherwise.
+		 */
+		entry->level_triggered_events =
+			pgwin32_socket_poll(s,
+								entry->level_triggered_events & entry->selected_events);
+		if (entry->level_triggered_events)
+		{
+			/*
+			 * At least one readiness condition is still true.  Prevent
+			 * sleeping, and let pgwin32_socket_enumerate_events() report
+			 * these level-triggered events.
+			 */
+			WSASetEvent(entry->event_handle);
+		}
+	}
+}
+
+/*
+ * After the Windows event handle has been signaled, this function can be
+ * called to find out which socket events occurred, and atomically reset the
+ * event handle for the next sleep.
+ *
+ * The events returned are also remembered in our level-triggered event mask,
+ * so they'll prevent sleeping and be reported again as long as they remain
+ * true.
+ */
+int
+pgwin32_socket_enumerate_events(SOCKET s)
+{
+	WSANETWORKEVENTS new_events = {0};
+	SocketTableEntry *entry;
+	int			result;
+
+	Assert(socket_table);
+	entry = socket_table_lookup(socket_table, s);
+
+	Assert(entry);
+	Assert(entry->reference_count > 0);
+	Assert(entry->event_handle != WSA_INVALID_EVENT);
+
+	/*
+	 * Atomically consume the internal network event record and reset the
+	 * associated event handle.  This guarantees that we can't miss future
+	 * wakeups.
+	 */
+	if (WSAEnumNetworkEvents(s, entry->event_handle, &new_events) != 0)
+	{
+		TranslateSocketError();
+		return -1;
+	}
+
+	/* Add any events pgwin32_socket_prepare_to_wait() decided to feed us. */
+	result = entry->level_triggered_events | new_events.lNetworkEvents;
+
+	/* Remember certain events for next time around. */
+	if (entry->selected_events & (FD_READ | FD_WRITE))
+		entry->level_triggered_events = result & (FD_READ | FD_WRITE | FD_CLOSE);
+	else
+		entry->level_triggered_events = 0;
+
+	return result;
+}
+
+/*
+ * Acquire a reference-counted Windows event handle for this socket.  This can
+ * be used for waiting for socket events.  Returns NULL and sets errno on
+ * failure.
+ */
+HANDLE
+pgwin32_socket_acquire_event_handle(SOCKET s)
+{
+	SocketTableEntry *entry;
+	bool		found;
+
+	/* First-time initialization. */
+	if (unlikely(socket_table == NULL))
+	{
+		socket_table = socket_table_create(16, NULL);
+		if (socket_table == NULL)
+		{
+			errno = ENOMEM;
+			return NULL;
+		}
+	}
+
+	/* If we already have it, just bump the count. */
+	entry = socket_table_insert(socket_table, s, &found);
+	if (likely(found))
+	{
+		Assert(entry->event_handle != WSA_INVALID_EVENT);
+		entry->reference_count++;
+		return entry->event_handle;
+	}
+
+	/* Did we run out of memory? */
+	if (entry == NULL)
+	{
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	/* Allocate a new event handle. */
+	entry->event_handle = WSACreateEvent();
+	if (entry->event_handle == WSA_INVALID_EVENT)
+	{
+		socket_table_delete_item(socket_table, entry);
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	entry->selected_events = 0;
+	entry->level_triggered_events = 0;
+	entry->reference_count = 1;
+
+	return entry->event_handle;
+}
+
+/*
+ * Release a reference-counted event handle.
+ */
+void
+pgwin32_socket_release_event_handle(SOCKET s)
+{
+	SocketTableEntry *entry;
+
+	Assert(socket_table);
+	entry = socket_table_lookup(socket_table, s);
+
+	Assert(entry);
+	Assert(entry->reference_count > 0);
+	Assert(entry->event_handle != WSA_INVALID_EVENT);
+
+	if (--entry->reference_count == 0)
+	{
+		WSACloseEvent(entry->event_handle);
+		socket_table_delete_item(socket_table, entry);
+
+		/* XXX Free socket_table if it is empty? */
+	}
+}
+
 int
 pgwin32_bind(SOCKET s, struct sockaddr *addr, int addrlen)
 {
@@ -402,6 +734,22 @@ pgwin32_recv(SOCKET s, char *buf, int len, int f)
 		return -1;
 	}
 
+	/*
+	 * WSARecv() is a re-enabling function for Winsock's FD_READ event, so it
+	 * is now safe to clear our level-triggered flag.  This is only an
+	 * optimization for a common case, and not required for correctness.  If
+	 * someone calls WSARecv() directly instead of going through this wrapper,
+	 * pgwin32_socket_prepare_to_wait() will figure that out and clear it
+	 * anyway.
+	 */
+	if (socket_table)
+	{
+		SocketTableEntry *entry = socket_table_lookup(socket_table, s);
+
+		if (entry)
+			entry->level_triggered_events &= ~FD_READ;
+	}
+
 	if (pgwin32_noblock)
 	{
 		/*
@@ -483,6 +831,22 @@ pgwin32_send(SOCKET s, const void *buf, int len, int flags)
 		{
 			TranslateSocketError();
 			return -1;
+		}
+
+		/*
+		 * WSASend() is a re-enabling function for Winsock's FD_WRITE event,
+		 * so it is now safe to clear our level-triggered flag.  This is only
+		 * an optimization for a common case, and not required for
+		 * correctness.  If someone calls WSASend() directly instead of going
+		 * through this wrapper, pgwin32_socket_prepare_to_wait() will figure
+		 * that out and clear it anyway.
+		 */
+		if (socket_table)
+		{
+			SocketTableEntry *entry = socket_table_lookup(socket_table, s);
+
+			if (entry)
+				entry->level_triggered_events &= ~FD_WRITE;
 		}
 
 		if (pgwin32_noblock)

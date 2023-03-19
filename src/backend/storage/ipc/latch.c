@@ -847,20 +847,9 @@ FreeWaitEventSet(WaitEventSet *set)
 		 cur_event < (set->events + set->nevents);
 		 cur_event++)
 	{
-		if (cur_event->events & WL_LATCH_SET)
-		{
-			/* uses the latch's HANDLE */
-		}
-		else if (cur_event->events & WL_POSTMASTER_DEATH)
-		{
-			/* uses PostmasterHandle */
-		}
-		else
-		{
-			/* Clean up the event object we created for the socket */
-			WSAEventSelect(cur_event->fd, NULL, 0);
-			WSACloseEvent(set->handles[cur_event->pos + 1]);
-		}
+		/* Release reference to socket's event handle. */
+		if (cur_event->events & WL_SOCKET_MASK)
+			pgwin32_socket_release_event_handle(cur_event->fd);
 	}
 #endif
 
@@ -955,9 +944,6 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	event->fd = fd;
 	event->events = events;
 	event->user_data = user_data;
-#ifdef WIN32
-	event->reset = false;
-#endif
 
 	if (events == WL_LATCH_SET)
 	{
@@ -976,8 +962,19 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	}
 	else if (events == WL_POSTMASTER_DEATH)
 	{
-#ifndef WIN32
+#if defined(WAIT_USE_WIN32)
+		set->handles[event->pos + 1] = PostmasterHandle;
+		event->fd = PGINVALID_SOCKET;
+#else
 		event->fd = postmaster_alive_fds[POSTMASTER_FD_WATCH];
+#endif
+	}
+	else if (events & WL_SOCKET_MASK)
+	{
+#if defined(WAIT_USE_WIN32)
+		set->handles[event->pos + 1] = pgwin32_socket_acquire_event_handle(fd);
+		if (!set->handles[event->pos + 1])
+			elog(ERROR, "could not acquire socket event handle: %m");
 #endif
 	}
 
@@ -1322,45 +1319,52 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 #endif
 
 #if defined(WAIT_USE_WIN32)
+static int
+ToWinsockEvents(int pg_events)
+{
+	int			winsock_events = 0;
+
+	if (pg_events & WL_SOCKET_READABLE)
+		winsock_events |= FD_CLOSE | FD_READ;
+	if (pg_events & WL_SOCKET_WRITEABLE)
+		winsock_events |= FD_CLOSE | FD_WRITE;
+	if (pg_events & WL_SOCKET_CONNECTED)
+		winsock_events |= FD_CLOSE | FD_CONNECT;
+	if (pg_events & WL_SOCKET_ACCEPT)
+		winsock_events |= FD_CLOSE | FD_ACCEPT;
+
+	return winsock_events;
+}
+
+static int
+FromWinsockEvents(int winsock_events)
+{
+	int			pg_events = 0;
+
+	if (winsock_events & (FD_CLOSE | FD_READ))
+		pg_events |= WL_SOCKET_READABLE;
+	if (winsock_events & (FD_CLOSE | FD_WRITE))
+		pg_events |= WL_SOCKET_WRITEABLE;
+	if (winsock_events & (FD_CLOSE | FD_CONNECT))
+		pg_events |= WL_SOCKET_CONNECTED;
+	if (winsock_events & (FD_CLOSE | FD_ACCEPT))
+		pg_events |= WL_SOCKET_ACCEPT;
+
+	return pg_events;
+}
+
 static void
 WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 {
-	HANDLE	   *handle = &set->handles[event->pos + 1];
-
-	if (event->events == WL_LATCH_SET)
+	if (event->events & WL_LATCH_SET)
 	{
-		Assert(set->latch != NULL);
-		*handle = set->latch->event;
+		set->handles[event->pos + 1] = set->latch->event;
 	}
-	else if (event->events == WL_POSTMASTER_DEATH)
+	else if (event->events & WL_SOCKET_MASK)
 	{
-		*handle = PostmasterHandle;
-	}
-	else
-	{
-		int			flags = FD_CLOSE;	/* always check for errors/EOF */
-
-		if (event->events & WL_SOCKET_READABLE)
-			flags |= FD_READ;
-		if (event->events & WL_SOCKET_WRITEABLE)
-			flags |= FD_WRITE;
-		if (event->events & WL_SOCKET_CONNECTED)
-			flags |= FD_CONNECT;
-		if (event->events & WL_SOCKET_ACCEPT)
-			flags |= FD_ACCEPT;
-
-		if (*handle == WSA_INVALID_EVENT)
-		{
-			*handle = WSACreateEvent();
-			if (*handle == WSA_INVALID_EVENT)
-				elog(ERROR, "failed to create event for socket: error code %d",
-					 WSAGetLastError());
-		}
-		if (WSAEventSelect(event->fd, *handle, flags) != 0)
-			elog(ERROR, "failed to set up event for socket: error code %d",
-				 WSAGetLastError());
-
-		Assert(event->fd != PGINVALID_SOCKET);
+		if (pgwin32_socket_select_events(event->fd,
+										 ToWinsockEvents(event->events)) < 0)
+			elog(ERROR, "failed to set up event for socket: %m");
 	}
 }
 #endif
@@ -1945,48 +1949,16 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	DWORD		rc;
 	WaitEvent  *cur_event;
 
-	/* Reset any wait events that need it */
+	/*
+	 * Allow level-triggered events to be signaled, causing
+	 * WaitForMultipleObjects() to return immediately.
+	 */
 	for (cur_event = set->events;
 		 cur_event < (set->events + set->nevents);
 		 cur_event++)
 	{
-		if (cur_event->reset)
-		{
-			WaitEventAdjustWin32(set, cur_event);
-			cur_event->reset = false;
-		}
-
-		/*
-		 * Windows does not guarantee to log an FD_WRITE network event
-		 * indicating that more data can be sent unless the previous send()
-		 * failed with WSAEWOULDBLOCK.  While our caller might well have made
-		 * such a call, we cannot assume that here.  Therefore, if waiting for
-		 * write-ready, force the issue by doing a dummy send().  If the dummy
-		 * send() succeeds, assume that the socket is in fact write-ready, and
-		 * return immediately.  Also, if it fails with something other than
-		 * WSAEWOULDBLOCK, return a write-ready indication to let our caller
-		 * deal with the error condition.
-		 */
-		if (cur_event->events & WL_SOCKET_WRITEABLE)
-		{
-			char		c;
-			WSABUF		buf;
-			DWORD		sent;
-			int			r;
-
-			buf.buf = &c;
-			buf.len = 0;
-
-			r = WSASend(cur_event->fd, &buf, 1, &sent, 0, NULL, NULL);
-			if (r == 0 || WSAGetLastError() != WSAEWOULDBLOCK)
-			{
-				occurred_events->pos = cur_event->pos;
-				occurred_events->user_data = cur_event->user_data;
-				occurred_events->events = WL_SOCKET_WRITEABLE;
-				occurred_events->fd = cur_event->fd;
-				return 1;
-			}
-		}
+		if (cur_event->events & WL_SOCKET_MASK)
+			pgwin32_socket_prepare_to_wait(cur_event->fd);
 	}
 
 	/*
@@ -2067,64 +2039,20 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		}
 		else if (cur_event->events & WL_SOCKET_MASK)
 		{
-			WSANETWORKEVENTS resEvents;
-			HANDLE		handle = set->handles[cur_event->pos + 1];
+			int			winsock_events;
+			int			pg_events;
 
 			Assert(cur_event->fd);
 
-			occurred_events->fd = cur_event->fd;
+			winsock_events = pgwin32_socket_enumerate_events(cur_event->fd);
+			if (winsock_events < 0)
+				elog(ERROR, "could not enumerate socket events: %m");
 
-			ZeroMemory(&resEvents, sizeof(resEvents));
-			if (WSAEnumNetworkEvents(cur_event->fd, handle, &resEvents) != 0)
-				elog(ERROR, "failed to enumerate network events: error code %d",
-					 WSAGetLastError());
-			if ((cur_event->events & WL_SOCKET_READABLE) &&
-				(resEvents.lNetworkEvents & FD_READ))
+			pg_events = FromWinsockEvents(winsock_events) & cur_event->events;
+			if (pg_events)
 			{
-				/* data available in socket */
-				occurred_events->events |= WL_SOCKET_READABLE;
-
-				/*------
-				 * WaitForMultipleObjects doesn't guarantee that a read event
-				 * will be returned if the latch is set at the same time.  Even
-				 * if it did, the caller might drop that event expecting it to
-				 * reoccur on next call.  So, we must force the event to be
-				 * reset if this WaitEventSet is used again in order to avoid
-				 * an indefinite hang.
-				 *
-				 * Refer
-				 * https://msdn.microsoft.com/en-us/library/windows/desktop/ms741576(v=vs.85).aspx
-				 * for the behavior of socket events.
-				 *------
-				 */
-				cur_event->reset = true;
-			}
-			if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
-				(resEvents.lNetworkEvents & FD_WRITE))
-			{
-				/* writeable */
-				occurred_events->events |= WL_SOCKET_WRITEABLE;
-			}
-			if ((cur_event->events & WL_SOCKET_CONNECTED) &&
-				(resEvents.lNetworkEvents & FD_CONNECT))
-			{
-				/* connected */
-				occurred_events->events |= WL_SOCKET_CONNECTED;
-			}
-			if ((cur_event->events & WL_SOCKET_ACCEPT) &&
-				(resEvents.lNetworkEvents & FD_ACCEPT))
-			{
-				/* incoming connection could be accepted */
-				occurred_events->events |= WL_SOCKET_ACCEPT;
-			}
-			if (resEvents.lNetworkEvents & FD_CLOSE)
-			{
-				/* EOF/error, so signal all caller-requested socket flags */
-				occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
-			}
-
-			if (occurred_events->events != 0)
-			{
+				occurred_events->fd = cur_event->fd;
+				occurred_events->events = pg_events;
 				occurred_events++;
 				returned_events++;
 			}

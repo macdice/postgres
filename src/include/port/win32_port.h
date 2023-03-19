@@ -506,6 +506,12 @@ extern int	pgwin32_recv(SOCKET s, char *buf, int len, int flags);
 extern int	pgwin32_send(SOCKET s, const void *buf, int len, int flags);
 extern int	pgwin32_waitforsinglesocket(SOCKET s, int what, int timeout);
 
+extern HANDLE pgwin32_socket_acquire_event_handle(SOCKET s);
+extern void pgwin32_socket_release_event_handle(SOCKET s);
+extern int	pgwin32_socket_select_events(SOCKET s, int events);
+extern void pgwin32_socket_prepare_to_wait(SOCKET s);
+extern int	pgwin32_socket_enumerate_events(SOCKET s);
+
 extern PGDLLIMPORT int pgwin32_noblock;
 
 #endif							/* FRONTEND */
