@@ -488,6 +488,7 @@ extern int	pgkill(int pid, int sig);
 /* In backend/port/win32/socket.c */
 #ifndef FRONTEND
 #define socket(af, type, protocol) pgwin32_socket(af, type, protocol)
+#define closesocket(s) pgwin32_closesocket(s)
 #define bind(s, addr, addrlen) pgwin32_bind(s, addr, addrlen)
 #define listen(s, backlog) pgwin32_listen(s, backlog)
 #define accept(s, addr, addrlen) pgwin32_accept(s, addr, addrlen)
@@ -497,6 +498,7 @@ extern int	pgkill(int pid, int sig);
 #define send(s, buf, len, flags) pgwin32_send(s, buf, len, flags)
 
 extern SOCKET pgwin32_socket(int af, int type, int protocol);
+extern int	pgwin32_closesocket(SOCKET s);
 extern int	pgwin32_bind(SOCKET s, struct sockaddr *addr, int addrlen);
 extern int	pgwin32_listen(SOCKET s, int backlog);
 extern SOCKET pgwin32_accept(SOCKET s, struct sockaddr *addr, int *addrlen);
@@ -505,6 +507,11 @@ extern int	pgwin32_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *e
 extern int	pgwin32_recv(SOCKET s, char *buf, int len, int flags);
 extern int	pgwin32_send(SOCKET s, const void *buf, int len, int flags);
 extern int	pgwin32_waitforsinglesocket(SOCKET s, int what, int timeout);
+
+extern int	pgwin32_bless_socket(SOCKET s);
+extern bool pgwin32_socket_is_eof(SOCKET s);
+extern void pgwin32_socket_set_eof(SOCKET s);
+extern HANDLE pgwin32_socket_get_event_handle(SOCKET s);
 
 extern PGDLLIMPORT int pgwin32_noblock;
 

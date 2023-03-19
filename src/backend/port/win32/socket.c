@@ -13,6 +13,8 @@
 
 #include "postgres.h"
 
+#include "common/hashfn.h"
+
 /*
  * Indicate if pgwin32_recv() and pgwin32_send() should operate
  * in non-blocking mode.
@@ -29,6 +31,7 @@ int			pgwin32_noblock = 0;
 
 /* Undef the macros defined in win32.h, so we can access system functions */
 #undef socket
+#undef closesocket
 #undef bind
 #undef listen
 #undef accept
@@ -36,6 +39,46 @@ int			pgwin32_noblock = 0;
 #undef select
 #undef recv
 #undef send
+
+/*
+ * An entry in our table of blessed sockets.
+ */
+typedef struct SocketTableEntry
+{
+	SOCKET		sock;
+	char		status;
+	bool		eof;
+	bool		gc;
+	HANDLE		event_handle;
+} SocketTableEntry;
+
+static inline void *
+malloc0(size_t size)
+{
+	void	   *result;
+
+	result = malloc(size);
+	if (result)
+		memset(result, 0, size);
+
+	return result;
+}
+
+#define SH_PREFIX socket_table
+#define SH_ELEMENT_TYPE SocketTableEntry
+#define SH_RAW_ALLOCATOR malloc0
+#define SH_RAW_FREE free
+#define SH_SCOPE static inline
+#define SH_KEY_TYPE SOCKET
+#define SH_KEY sock
+#define SH_HASH_KEY(tb, key) murmurhash32(key)
+#define SH_EQUAL(tb, a, b) (a) == (b)
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+
+static socket_table_hash *socket_table;
+static int new_sockets_since_gc;
 
 /*
  * Blocking socket functions implemented so they listen on both
@@ -305,9 +348,159 @@ pgwin32_socket(int af, int type, int protocol)
 		TranslateSocketError();
 		return INVALID_SOCKET;
 	}
+
 	errno = 0;
 
 	return s;
+}
+
+static bool
+pgwin32_is_socket(SOCKET s)
+{
+	int			type;
+	int			typelen = sizeof(type);
+
+	if (getsockopt(s, SOL_SOCKET, SO_TYPE, (char *) &type, &typelen) == SOCKET_ERROR &&
+		WSAGetLastError() == WSAENOTSOCK)
+		return false;
+
+	return true;
+}
+
+static void
+pgwin32_socket_gc(void)
+{
+	socket_table_iterator i;
+	SocketTableEntry *entry;
+
+	socket_table_start_iterate(socket_table, &i);
+	while ((entry = socket_table_iterate(socket_table, &i)))
+	{
+		if (!pgwin32_is_socket(entry->sock))
+		{
+			WSACloseEvent(entry->event_handle);
+			socket_table_delete_item(socket_table, entry);
+		}
+	}
+}
+
+int
+pgwin32_bless_socket(SOCKET s)
+{
+	SocketTableEntry *entry;
+	bool		found;
+
+	if (unlikely(socket_table == NULL))
+	{
+		socket_table = socket_table_create(16, NULL);
+		if (socket_table == NULL)
+		{
+			errno = ENOMEM;
+			return -1;
+		}
+	}
+
+	entry = socket_table_insert(socket_table, s, &found);
+	if (found)
+		return 0;
+	if (entry == NULL)
+	{
+		errno = ENOMEM;
+		return -1;
+	}
+	entry->event_handle = WSACreateEvent();
+	if (entry->event_handle == INVALID_HANDLE_VALUE)
+	{
+		socket_table_delete_item(socket_table, entry);
+		errno = ENOMEM;
+		return -1;
+	}
+
+	if (++new_sockets_since_gc == 10)
+	{
+		pgwin32_socket_gc();
+		new_sockets_since_gc = 0;
+	}
+
+	return 0;
+}
+
+/*
+ * Check if EOF has been set, and if so, cross-check it to make sure we aren't
+ * looking at a socket number that was recycled.  The socket must have been
+ * blessed, but we'll tolerate it if it's been closed since and the entry has
+ * gone away.
+ */
+bool
+pgwin32_socket_is_eof(s)
+{
+	SocketTableEntry *entry;
+
+	Assert(socket_table);
+	entry = socket_table_lookup(socket_table, s);
+	if (entry && entry->eof)
+	{
+		char		c;
+
+		/*
+		 * The flag may have been set by a previous user of this socket number,
+		 * for sockets that are not closed by pgwin32_closesocket().
+	 	 */
+		if (recv(s, &c, 1, MSG_PEEK) == 0)
+			return true;
+
+		entry->eof = false;
+	}
+	return false;
+}
+
+/*
+ * Remember that FD_CLOSE has been received.  The socket must have been
+ * blessed, and not have been closed since.
+ */
+void
+pgwin32_socket_set_eof(s)
+{
+	SocketTableEntry *entry;
+
+	Assert(socket_table);
+	entry = socket_table_lookup(socket_table, s);
+	Assert(entry);
+
+	entry->eof = true;
+}
+
+/*
+ * Get the WSA event handle associated with this socket.  The socket must have
+ * been blessed
+ */
+HANDLE
+pgwin32_socket_get_event_handle(s)
+{
+	SocketTableEntry *entry;
+
+	Assert(socket_table);
+	entry = socket_table_lookup(socket_table, s);
+	Assert(entry);
+
+	return entry->event_handle;
+}
+
+int
+pgwin32_closesocket(SOCKET s)
+{
+	if (socket_table)
+	{
+		SocketTableEntry *entry;
+		entry = socket_table_lookup(socket_table, s);
+		if (entry)
+		{
+			WSACloseEvent(entry->event_handle);
+			socket_table_delete_item(socket_table, entry);
+		}
+	}
+
+	return closesocket(s);
 }
 
 int

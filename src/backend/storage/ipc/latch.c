@@ -840,28 +840,6 @@ FreeWaitEventSet(WaitEventSet *set)
 #elif defined(WAIT_USE_KQUEUE)
 	close(set->kqueue_fd);
 	ReleaseExternalFD();
-#elif defined(WAIT_USE_WIN32)
-	WaitEvent  *cur_event;
-
-	for (cur_event = set->events;
-		 cur_event < (set->events + set->nevents);
-		 cur_event++)
-	{
-		if (cur_event->events & WL_LATCH_SET)
-		{
-			/* uses the latch's HANDLE */
-		}
-		else if (cur_event->events & WL_POSTMASTER_DEATH)
-		{
-			/* uses PostmasterHandle */
-		}
-		else
-		{
-			/* Clean up the event object we created for the socket */
-			WSAEventSelect(cur_event->fd, NULL, 0);
-			WSACloseEvent(set->handles[cur_event->pos + 1]);
-		}
-	}
 #endif
 
 	pfree(set);
@@ -949,6 +927,15 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	/* waiting for socket readiness without a socket indicates a bug */
 	if (fd == PGINVALID_SOCKET && (events & WL_SOCKET_MASK))
 		elog(ERROR, "cannot wait on socket event without a socket");
+
+#ifdef WIN32
+	/* make sure we have a Windows event handle for this socket */
+	if (fd != PGINVALID_SOCKET)
+	{
+		if (pgwin32_bless_socket(fd) < 0)
+			elog(ERROR, "could not bless socket: %m");
+	}
+#endif
 
 	event = &set->events[set->nevents];
 	event->pos = set->nevents++;
@@ -1349,13 +1336,7 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 		if (event->events & WL_SOCKET_ACCEPT)
 			flags |= FD_ACCEPT;
 
-		if (*handle == WSA_INVALID_EVENT)
-		{
-			*handle = WSACreateEvent();
-			if (*handle == WSA_INVALID_EVENT)
-				elog(ERROR, "failed to create event for socket: error code %d",
-					 WSAGetLastError());
-		}
+		*handle = pgwin32_socket_get_event_handle(event->fd);
 		if (WSAEventSelect(event->fd, *handle, flags) != 0)
 			elog(ERROR, "failed to set up event for socket: error code %d",
 				 WSAGetLastError());
@@ -1957,6 +1938,22 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		}
 
 		/*
+		 * For a socket that shuts down normally, Windows only delivers
+		 * FD_CLOSE once.  We want to continue to signal WL_SOCKET_READABLE no
+		 * matter how many times the caller asks, so we'll make use of the
+		 * special per-socket EOF flag provided by src/backend/port/socket.c.
+		 */
+		if (cur_event->events & WL_SOCKET_READABLE &&
+			pgwin32_socket_is_eof(cur_event->fd))
+		{
+			occurred_events->pos = cur_event->pos;
+			occurred_events->user_data = cur_event->user_data;
+			occurred_events->events = WL_SOCKET_READABLE;
+			occurred_events->fd = cur_event->fd;
+			return 1;
+		}
+
+		/*
 		 * Windows does not guarantee to log an FD_WRITE network event
 		 * indicating that more data can be sent unless the previous send()
 		 * failed with WSAEWOULDBLOCK.  While our caller might well have made
@@ -2121,6 +2118,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			{
 				/* EOF/error, so signal all caller-requested socket flags */
 				occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
+				pgwin32_socket_set_eof(cur_event->fd);
 			}
 
 			if (occurred_events->events != 0)
