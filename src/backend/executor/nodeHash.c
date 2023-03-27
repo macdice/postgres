@@ -261,6 +261,7 @@ MultiExecParallelHash(HashState *node)
 
 		case PHJ_BUILD_HASH_INNER:
 
+elog(LOG, "XXX process %d, phase PHJ_BUILD_HASH_INNER", ParallelWorkerNumber + 1);
 			/*
 			 * It's time to begin hashing, or if we just arrived here then
 			 * hashing is already underway, so join in that effort.  While
@@ -2099,6 +2100,7 @@ ExecParallelPrepHashTableForUnmatched(HashJoinState *hjstate)
 	{
 		/* This process considers the batch to be done. */
 		hashtable->batches[hashtable->curbatch].done = true;
+elog(LOG, "XXX process %d, phase X", ParallelWorkerNumber + 1);
 
 		/* Make sure any temporary files are closed. */
 		sts_end_parallel_scan(hashtable->batches[curbatch].inner_tuples);
@@ -2116,6 +2118,8 @@ ExecParallelPrepHashTableForUnmatched(HashJoinState *hjstate)
 	}
 
 	Assert(BarrierPhase(&batch->batch_barrier) == PHJ_BATCH_SCAN);
+	Assert(BarrierParticipants(&batch->batch_barrier) == 1);
+elog(LOG, "XXX process %d, phase PHJ_BATCH_SCAN, batch=%d", ParallelWorkerNumber + 1, hashtable->curbatch);
 
 	/*
 	 * Has another process decided to give up early and command all processes
@@ -3280,6 +3284,8 @@ ExecHashTableDetachBatch(HashJoinTable hashtable)
 		int			curbatch = hashtable->curbatch;
 		ParallelHashJoinBatch *batch = hashtable->batches[curbatch].shared;
 		bool		attached = true;
+
+elog(LOG, "XXX process %d, phase X", ParallelWorkerNumber + 1);
 
 		/* Make sure any temporary files are closed. */
 		sts_end_parallel_scan(hashtable->batches[curbatch].inner_tuples);

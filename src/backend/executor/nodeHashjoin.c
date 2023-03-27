@@ -345,6 +345,7 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 						   BarrierPhase(build_barrier) == PHJ_BUILD_FREE);
 					if (BarrierPhase(build_barrier) == PHJ_BUILD_HASH_OUTER)
 					{
+elog(LOG, "XXX process %d, phase PHJ_BUILD_HASH_OUTER", ParallelWorkerNumber + 1);
 						/*
 						 * If multi-batch, we need to hash the outer relation
 						 * up front.
@@ -1182,7 +1183,10 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 					/* One backend allocates the hash table. */
 					if (BarrierArriveAndWait(batch_barrier,
 											 WAIT_EVENT_HASH_BATCH_ELECT))
+{
+elog(LOG, "XXX process %d, phase X", ParallelWorkerNumber + 1);
 						ExecParallelHashTableAlloc(hashtable, batchno);
+}
 					/* Fall through. */
 
 				case PHJ_BATCH_ALLOCATE:
@@ -1192,6 +1196,7 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 					/* Fall through. */
 
 				case PHJ_BATCH_LOAD:
+elog(LOG, "XXX process %d, phase PHJ_BATCH_LOAD, batch=%d", ParallelWorkerNumber + 1, batchno);
 					/* Start (or join in) loading tuples. */
 					ExecParallelHashTableSetCurrentBatch(hashtable, batchno);
 					inner_tuples = hashtable->batches[batchno].inner_tuples;
@@ -1213,6 +1218,7 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 
 				case PHJ_BATCH_PROBE:
 
+elog(LOG, "XXX process %d, phase PHJ_BATCH_PROBE, batch=%d", ParallelWorkerNumber + 1, batchno);
 					/*
 					 * This batch is ready to probe.  Return control to
 					 * caller. We stay attached to batch_barrier so that the
@@ -1229,6 +1235,7 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 					return true;
 				case PHJ_BATCH_SCAN:
 
+elog(LOG, "XXX process %d, phase PHJ_BATCH_SCAN, batch=%d", ParallelWorkerNumber + 1, batchno);
 					/*
 					 * Join in with inner scan, if we have not been asked to
 					 * skip it by another process.
