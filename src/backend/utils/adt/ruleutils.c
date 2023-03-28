@@ -1271,7 +1271,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	/*
 	 * Fetch the pg_index tuple by the Oid of the index
 	 */
-	ht_idx = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexrelid));
+	ht_idx = SearchSysCache(INDEXRELID, ObjectIdGetDatum(indexrelid));
 	if (!HeapTupleIsValid(ht_idx))
 	{
 		if (missing_ok)
@@ -1299,7 +1299,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	/*
 	 * Fetch the pg_class tuple of the index relation
 	 */
-	ht_idxrel = SearchSysCache1(RELOID, ObjectIdGetDatum(indexrelid));
+	ht_idxrel = SearchSysCache(RELOID, ObjectIdGetDatum(indexrelid));
 	if (!HeapTupleIsValid(ht_idxrel))
 		elog(ERROR, "cache lookup failed for relation %u", indexrelid);
 	idxrelrec = (Form_pg_class) GETSTRUCT(ht_idxrel);
@@ -1307,7 +1307,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	/*
 	 * Fetch the pg_am tuple of the index' access method
 	 */
-	ht_am = SearchSysCache1(AMOID, ObjectIdGetDatum(idxrelrec->relam));
+	ht_am = SearchSysCache(AMOID, ObjectIdGetDatum(idxrelrec->relam));
 	if (!HeapTupleIsValid(ht_am))
 		elog(ERROR, "cache lookup failed for access method %u",
 			 idxrelrec->relam);
@@ -1642,7 +1642,7 @@ pg_get_statisticsobj_worker(Oid statextid, bool columns_only, bool missing_ok)
 	bool		has_exprs;
 	int			ncolumns;
 
-	statexttup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statextid));
+	statexttup = SearchSysCache(STATEXTOID, ObjectIdGetDatum(statextid));
 
 	if (!HeapTupleIsValid(statexttup))
 	{
@@ -1819,7 +1819,7 @@ pg_get_statisticsobjdef_expressions(PG_FUNCTION_ARGS)
 	char	   *tmp;
 	ArrayBuildState *astate = NULL;
 
-	statexttup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statextid));
+	statexttup = SearchSysCache(STATEXTOID, ObjectIdGetDatum(statextid));
 
 	if (!HeapTupleIsValid(statexttup))
 		PG_RETURN_NULL();
@@ -1921,7 +1921,7 @@ pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 	char	   *str;
 	char	   *sep;
 
-	tuple = SearchSysCache1(PARTRELID, ObjectIdGetDatum(relid));
+	tuple = SearchSysCache(PARTRELID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (missing_ok)
@@ -2366,7 +2366,7 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 
 				indexId = conForm->conindid;
 
-				indtup = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexId));
+				indtup = SearchSysCache(INDEXRELID, ObjectIdGetDatum(indexId));
 				if (!HeapTupleIsValid(indtup))
 					elog(ERROR, "cache lookup failed for index %u", indexId);
 				if (conForm->contype == CONSTRAINT_UNIQUE &&
@@ -2749,7 +2749,7 @@ pg_get_userbyid(PG_FUNCTION_ARGS)
 	/*
 	 * Get the pg_authid entry and print the result
 	 */
-	roletup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+	roletup = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 	if (HeapTupleIsValid(roletup))
 	{
 		role_rec = (Form_pg_authid) GETSTRUCT(roletup);
@@ -2884,7 +2884,7 @@ pg_get_functiondef(PG_FUNCTION_ARGS)
 	initStringInfo(&buf);
 
 	/* Look up the function */
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		PG_RETURN_NULL();
 
@@ -3123,7 +3123,7 @@ pg_get_function_arguments(PG_FUNCTION_ARGS)
 	StringInfoData buf;
 	HeapTuple	proctup;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		PG_RETURN_NULL();
 
@@ -3149,7 +3149,7 @@ pg_get_function_identity_arguments(PG_FUNCTION_ARGS)
 	StringInfoData buf;
 	HeapTuple	proctup;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		PG_RETURN_NULL();
 
@@ -3174,7 +3174,7 @@ pg_get_function_result(PG_FUNCTION_ARGS)
 	StringInfoData buf;
 	HeapTuple	proctup;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		PG_RETURN_NULL();
 
@@ -3283,7 +3283,7 @@ print_function_arguments(StringInfo buf, HeapTuple proctup,
 		HeapTuple	aggtup;
 		Form_pg_aggregate agg;
 
-		aggtup = SearchSysCache1(AGGFNOID, proc->oid);
+		aggtup = SearchSysCache(AGGFNOID, proc->oid);
 		if (!HeapTupleIsValid(aggtup))
 			elog(ERROR, "cache lookup failed for aggregate %u",
 				 proc->oid);
@@ -3443,7 +3443,7 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 	bool		isnull;
 	int			nth_default;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		PG_RETURN_NULL();
 
@@ -3558,7 +3558,7 @@ pg_get_function_sqlbody(PG_FUNCTION_ARGS)
 	initStringInfo(&buf);
 
 	/* Look up the function */
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		PG_RETURN_NULL();
 
@@ -11767,7 +11767,7 @@ get_opclass_name(Oid opclass, Oid actual_datatype,
 	char	   *opcname;
 	char	   *nspname;
 
-	ht_opc = SearchSysCache1(CLAOID, ObjectIdGetDatum(opclass));
+	ht_opc = SearchSysCache(CLAOID, ObjectIdGetDatum(opclass));
 	if (!HeapTupleIsValid(ht_opc))
 		elog(ERROR, "cache lookup failed for opclass %u", opclass);
 	opcrec = (Form_pg_opclass) GETSTRUCT(ht_opc);
@@ -12061,7 +12061,7 @@ generate_relation_name(Oid relid, List *namespaces)
 	char	   *nspname;
 	char	   *result;
 
-	tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tp = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for relation %u", relid);
 	reltup = (Form_pg_class) GETSTRUCT(tp);
@@ -12119,7 +12119,7 @@ generate_qualified_relation_name(Oid relid)
 	char	   *nspname;
 	char	   *result;
 
-	tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tp = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for relation %u", relid);
 	reltup = (Form_pg_class) GETSTRUCT(tp);
@@ -12172,7 +12172,7 @@ generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 	Oid		   *p_true_typeids;
 	bool		force_qualify = false;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		elog(ERROR, "cache lookup failed for function %u", funcid);
 	procform = (Form_pg_proc) GETSTRUCT(proctup);
@@ -12269,7 +12269,7 @@ generate_operator_name(Oid operid, Oid arg1, Oid arg2)
 
 	initStringInfo(&buf);
 
-	opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operid));
+	opertup = SearchSysCache(OPEROID, ObjectIdGetDatum(operid));
 	if (!HeapTupleIsValid(opertup))
 		elog(ERROR, "cache lookup failed for operator %u", operid);
 	operform = (Form_pg_operator) GETSTRUCT(opertup);
@@ -12345,7 +12345,7 @@ generate_operator_clause(StringInfo buf,
 	char	   *oprname;
 	char	   *nspname;
 
-	opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(opoid));
+	opertup = SearchSysCache(OPEROID, ObjectIdGetDatum(opoid));
 	if (!HeapTupleIsValid(opertup))
 		elog(ERROR, "cache lookup failed for operator %u", opoid);
 	operform = (Form_pg_operator) GETSTRUCT(opertup);
@@ -12382,7 +12382,7 @@ add_cast_to(StringInfo buf, Oid typid)
 	char	   *typname;
 	char	   *nspname;
 
-	typetup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	typetup = SearchSysCache(TYPEOID, ObjectIdGetDatum(typid));
 	if (!HeapTupleIsValid(typetup))
 		elog(ERROR, "cache lookup failed for type %u", typid);
 	typform = (Form_pg_type) GETSTRUCT(typetup);
@@ -12414,7 +12414,7 @@ generate_qualified_type_name(Oid typid)
 	char	   *nspname;
 	char	   *result;
 
-	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	tp = SearchSysCache(TYPEOID, ObjectIdGetDatum(typid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for type %u", typid);
 	typtup = (Form_pg_type) GETSTRUCT(tp);
@@ -12447,7 +12447,7 @@ generate_collation_name(Oid collid)
 	char	   *nspname;
 	char	   *result;
 
-	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+	tp = SearchSysCache(COLLOID, ObjectIdGetDatum(collid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 	colltup = (Form_pg_collation) GETSTRUCT(tp);
@@ -12546,7 +12546,7 @@ flatten_reloptions(Oid relid)
 	Datum		reloptions;
 	bool		isnull;
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", relid);
 
