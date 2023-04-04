@@ -284,8 +284,8 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 	/* Concurrent refresh builds new data in temp tablespace, and does diff. */
 	if (concurrent)
 	{
-		tableSpace = GetDefaultTablespace(RELPERSISTENCE_TEMP, false);
-		relpersistence = RELPERSISTENCE_TEMP;
+		tableSpace = GetDefaultTablespace(RELPERSISTENCE_UNLOGGED, false);
+		relpersistence = RELPERSISTENCE_UNLOGGED;
 	}
 	else
 	{
@@ -663,7 +663,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	/* Start building the query for creating the diff table. */
 	resetStringInfo(&querybuf);
 	appendStringInfo(&querybuf,
-					 "CREATE TEMP TABLE %s AS "
+					 "CREATE UNLOGGED TABLE %s AS "
 					 "SELECT mv.ctid AS tid, newdata.*::%s AS newdata "
 					 "FROM %s mv FULL JOIN %s newdata ON (",
 					 diffname, tempname, matviewname, tempname);
@@ -786,8 +786,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 
 	appendStringInfoString(&querybuf,
 						   " AND newdata.* OPERATOR(pg_catalog.*=) mv.*) "
-						   "WHERE newdata.* IS NULL OR mv.* IS NULL "
-						   "ORDER BY tid");
+						   "WHERE newdata.* IS NULL OR mv.* IS NULL");
 
 	/* Create the temporary "diff" table. */
 	if (SPI_exec(querybuf.data, 0) != SPI_OK_UTILITY)
