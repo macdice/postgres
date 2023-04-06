@@ -3813,16 +3813,34 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	double		outer_path_rows = outer_path->rows;
 	double		inner_path_rows = inner_path->rows;
 	double		inner_path_rows_total = inner_path_rows;
+	double		inner_path_total_cost = inner_path->total_cost;
 	int			num_hashclauses = list_length(hashclauses);
 	int			numbuckets;
 	int			numbatches;
 	int			num_skew_mcvs;
 	size_t		space_allowed;	/* unused */
 
+	/*
+	 * If this is a parallel hash build, then the value we have for
+	 * inner_rows_total currently refers only to the rows returned by each
+	 * participant.  For shared hash table size estimation, we need the total
+	 * number, so we need to undo the division.  Furthermore, its costs are
+	 * based on the nominal parallel divisor of its subpath, while the nominal
+	 * parallel divisor of the join path we are costing is inherited from the
+	 * outer path, so we need to scale them.
+	 */
+	if (parallel_hash)
+	{
+		inner_path_rows_total *= get_parallel_divisor(inner_path);
+		inner_path_row = inner_path_rows_total / get_parall_divisor(outer_path);
+		inner_path_total_cost *= get_parallel_divisor(inner_path);
+		inner_path_total_cost /= get_parallel_divisor(outer_path);
+	}
+
 	/* cost of source data */
 	startup_cost += outer_path->startup_cost;
 	run_cost += outer_path->total_cost - outer_path->startup_cost;
-	startup_cost += inner_path->total_cost;
+	startup_cost += inner_path_total_cost;
 
 	/*
 	 * Cost of computing hash function: must do it once per input tuple. We
@@ -3837,15 +3855,6 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	startup_cost += (cpu_operator_cost * num_hashclauses + cpu_tuple_cost)
 		* inner_path_rows;
 	run_cost += cpu_operator_cost * num_hashclauses * outer_path_rows;
-
-	/*
-	 * If this is a parallel hash build, then the value we have for
-	 * inner_rows_total currently refers only to the rows returned by each
-	 * participant.  For shared hash table size estimation, we need the total
-	 * number, so we need to undo the division.
-	 */
-	if (parallel_hash)
-		inner_path_rows_total *= get_parallel_divisor(inner_path);
 
 	/*
 	 * Get hash table size that executor would use for inner relation.
