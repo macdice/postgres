@@ -71,12 +71,10 @@ int			WalWriterDelay = 200;
 int			WalWriterFlushAfter = 128;
 
 /*
- * Number of do-nothing loops before lengthening the delay time, and the
- * multiplier to apply to WalWriterDelay when we do decide to hibernate.
- * (Perhaps these need to be configurable?)
+ * Number of do-nothing loops before waiting to be explicitly woken by another
+ * process.
  */
 #define LOOPS_UNTIL_HIBERNATE		50
-#define HIBERNATE_FACTOR			25
 
 /* Prototypes for private functions */
 static void HandleWalWriterInterrupts(void);
@@ -225,6 +223,7 @@ WalWriterMain(void)
 	for (;;)
 	{
 		long		cur_timeout;
+		int			flags;
 
 		/*
 		 * Advertise whether we might hibernate in this cycle.  We do this
@@ -261,16 +260,20 @@ WalWriterMain(void)
 
 		/*
 		 * Sleep until we are signaled or WalWriterDelay has elapsed.  If we
-		 * haven't done anything useful for quite some time, lengthen the
-		 * sleep time so as to reduce the server's idle power consumption.
+		 * haven't done anything useful for quite some time, hibernate with no
+		 * timeout so as to reduce the server's idle power consumption.
 		 */
 		if (left_till_hibernate > 0)
 			cur_timeout = WalWriterDelay;	/* in ms */
 		else
-			cur_timeout = WalWriterDelay * HIBERNATE_FACTOR;
+			cur_timeout = -1;
+
+		flags = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH;
+		if (cur_timeout >= 0)
+			flags |= WL_TIMEOUT;
 
 		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 flags,
 						 cur_timeout,
 						 WAIT_EVENT_WAL_WRITER_MAIN);
 	}
