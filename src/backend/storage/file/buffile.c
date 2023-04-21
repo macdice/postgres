@@ -80,12 +80,11 @@ struct BufFile
 	FileSet    *fileset;		/* space for fileset based segment files */
 	const char *name;			/* name of fileset based BufFile */
 
-	/*
-	 * resowner is the ResourceOwner to use for underlying temp files.  (We
-	 * don't need to remember the memory context we're using explicitly,
-	 * because after creation we only repalloc our arrays larger.)
-	 */
+	/* resowner is the ResourceOwner to use for underlying temp files */
 	ResourceOwner resowner;
+
+	/* context to use for buffer */
+	MemoryContext context;		/* context to use for buffer */
 
 	/*
 	 * "current pos" is position of start of buffer within the logical file.
@@ -96,12 +95,7 @@ struct BufFile
 	int			pos;			/* next read/write position in buffer */
 	int			nbytes;			/* total # of valid bytes in buffer */
 
-	/*
-	 * XXX Should ideally us PGIOAlignedBlock, but might need a way to avoid
-	 * wasting per-file alignment padding when some users create many
-	 * files.
-	 */
-	PGAlignedBlock buffer;
+	PGIOAlignedBlock *buffer;	/* allocated on first use */
 };
 
 static BufFile *makeBufFileCommon(int nfiles);
@@ -124,10 +118,12 @@ makeBufFileCommon(int nfiles)
 	file->isInterXact = false;
 	file->dirty = false;
 	file->resowner = CurrentResourceOwner;
+	file->context = CurrentMemoryContext;
 	file->curFile = 0;
 	file->curOffset = 0;
 	file->pos = 0;
 	file->nbytes = 0;
+	file->buffer = NULL;
 
 	return file;
 }
@@ -400,7 +396,8 @@ BufFileExportFileSet(BufFile *file)
 	/* It's probably a bug if someone calls this twice. */
 	Assert(!file->readOnly);
 
-	BufFileFlush(file);
+	if (file->buffer)
+		BufFileFlush(file);
 	file->readOnly = true;
 }
 
@@ -415,11 +412,14 @@ BufFileClose(BufFile *file)
 	int			i;
 
 	/* flush any unwritten data */
-	BufFileFlush(file);
+	if (file->buffer)
+		BufFileFlush(file);
 	/* close and delete the underlying file(s) */
 	for (i = 0; i < file->numFiles; i++)
 		FileClose(file->files[i]);
 	/* release the buffer space */
+	if (file->buffer)
+		pfree(file->buffer);
 	pfree(file->files);
 	pfree(file);
 }
@@ -459,7 +459,7 @@ BufFileLoadBuffer(BufFile *file)
 	 * Read whatever we can get, up to a full bufferload.
 	 */
 	file->nbytes = FileRead(thisfile,
-							file->buffer.data,
+							file->buffer->data,
 							sizeof(file->buffer),
 							file->curOffset,
 							WAIT_EVENT_BUFFILE_READ);
@@ -536,7 +536,7 @@ BufFileDumpBuffer(BufFile *file)
 			INSTR_TIME_SET_ZERO(io_start);
 
 		bytestowrite = FileWrite(thisfile,
-								 file->buffer.data + wpos,
+								 file->buffer->data + wpos,
 								 bytestowrite,
 								 file->curOffset,
 								 WAIT_EVENT_BUFFILE_WRITE);
@@ -597,6 +597,67 @@ BufFileReadCommon(BufFile *file, void *ptr, size_t size, bool exact, bool eofOK)
 	size_t		nread = 0;
 	size_t		nthistime;
 
+	/* Fast path for unbuffered large suitably aligned reads. */
+	if (!file->buffer &&
+		(file->curOffset % BLCKSZ) == 0 &&
+		(size % BLCKSZ) == 0)
+	{
+elog(LOG, "fast path read! size = %zu", size);
+		while (size > 0)
+		{
+			instr_time	io_start;
+			instr_time	io_time;
+			ssize_t		rc;
+
+			/* Move to next segment if necessary. */
+			if (file->curOffset >= MAX_PHYSICAL_FILESIZE)
+			{
+				if (file->curFile + 1 >= file->numFiles)
+					return nread;
+
+				file->curFile++;
+				file->curOffset = 0;
+			}
+
+			if (track_io_timing)
+				INSTR_TIME_SET_CURRENT(io_start);
+			else
+				INSTR_TIME_SET_ZERO(io_start);
+
+			/* Read as much as we can from this segment at once. */
+			rc = FileRead(file->files[file->curFile],
+						  ptr,
+						  Min(MAX_PHYSICAL_FILESIZE - file->curOffset, size),
+						  file->curOffset,
+						  WAIT_EVENT_BUFFILE_WRITE);
+			if (rc <= 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read file \"%s\": %m",
+								FilePathName(file->files[file->curFile]))));
+
+			if (track_io_timing)
+			{
+				INSTR_TIME_SET_CURRENT(io_time);
+				INSTR_TIME_ACCUM_DIFF(pgBufferUsage.temp_blk_read_time, io_time, io_start);
+			}
+
+			/* Advance buffer, offset and stats. */
+			nread += rc;
+			ptr = (char *) ptr + rc;
+			size -= rc;
+			file->curOffset += rc;
+			pgBufferUsage.temp_blks_read += rc / BLCKSZ;
+		}
+		return nread;
+	}
+
+	if (!file->buffer)
+		file->buffer = MemoryContextAllocAligned(file->context,
+												 sizeof(*file->buffer),
+												 PG_IO_ALIGN_SIZE,
+												 MCXT_ALLOC_ZERO);
+
 	BufFileFlush(file);
 
 	while (size > 0)
@@ -617,7 +678,7 @@ BufFileReadCommon(BufFile *file, void *ptr, size_t size, bool exact, bool eofOK)
 			nthistime = size;
 		Assert(nthistime > 0);
 
-		memcpy(ptr, file->buffer.data + file->pos, nthistime);
+		memcpy(ptr, file->buffer->data + file->pos, nthistime);
 
 		file->pos += nthistime;
 		ptr = (char *) ptr + nthistime;
@@ -680,6 +741,65 @@ BufFileWrite(BufFile *file, const void *ptr, size_t size)
 
 	Assert(!file->readOnly);
 
+	/* Fast path for unbuffered large suitably aligned writes. */
+	if (!file->buffer &&
+		(file->curOffset % BLCKSZ) == 0 &&
+		(size % BLCKSZ) == 0)
+	{
+elog(LOG, "fast path write! size = %zu", size);
+		while (size > 0)
+		{
+			instr_time	io_start;
+			instr_time	io_time;
+			ssize_t		rc;
+
+			/* Make a new segment if necessary. */
+			if (file->curOffset >= MAX_PHYSICAL_FILESIZE)
+			{
+				while (file->curFile + 1 >= file->numFiles)
+					extendBufFile(file);
+				file->curFile++;
+				file->curOffset = 0;
+			}
+
+			if (track_io_timing)
+				INSTR_TIME_SET_CURRENT(io_start);
+			else
+				INSTR_TIME_SET_ZERO(io_start);
+
+			/* Write as much as we can into this segment at once. */
+			rc = FileWrite(file->files[file->curFile],
+						   ptr,
+						   Min(MAX_PHYSICAL_FILESIZE - file->curOffset, size),
+						   file->curOffset,
+						   WAIT_EVENT_BUFFILE_WRITE);
+			if (rc <= 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not write to file \"%s\": %m",
+								FilePathName(file->files[file->curFile]))));
+
+			if (track_io_timing)
+			{
+				INSTR_TIME_SET_CURRENT(io_time);
+				INSTR_TIME_ACCUM_DIFF(pgBufferUsage.temp_blk_write_time, io_time, io_start);
+			}
+
+			/* Advance buffer, offset and stats. */
+			ptr = (char *) ptr + rc;
+			size -= rc;
+			file->curOffset += rc;
+			pgBufferUsage.temp_blks_written += rc / BLCKSZ;
+		}
+		return;
+	}
+
+	if (!file->buffer)
+		file->buffer = MemoryContextAllocAligned(file->context,
+												 sizeof(*file->buffer),
+												 PG_IO_ALIGN_SIZE,
+												 MCXT_ALLOC_ZERO);
+
 	while (size > 0)
 	{
 		if (file->pos >= BLCKSZ)
@@ -701,7 +821,7 @@ BufFileWrite(BufFile *file, const void *ptr, size_t size)
 			nthistime = size;
 		Assert(nthistime > 0);
 
-		memcpy(file->buffer.data + file->pos, ptr, nthistime);
+		memcpy(file->buffer->data + file->pos, ptr, nthistime);
 
 		file->dirty = true;
 		file->pos += nthistime;
@@ -800,7 +920,8 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 		return 0;
 	}
 	/* Otherwise, must reposition buffer, so flush any dirty data */
-	BufFileFlush(file);
+	if (file->buffer)
+		BufFileFlush(file);
 
 	/*
 	 * At this point and no sooner, check for seek past last segment. The
