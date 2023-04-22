@@ -213,6 +213,19 @@ BufFileCreateTemp(bool interXact)
 }
 
 /*
+ * Provide a buffer of size BLCKSZ for use by this BufFile object.  This is
+ * not required, but allows the caller to allocate I/O-aligned storage for
+ * multiple files efficiently.
+ */
+void
+BufFileSetBuffer(BufFile *file, void *buffer)
+{
+	Assert(!file->buffer);
+
+	file->buffer = buffer;
+}
+
+/*
  * Build the name for a given segment of a given BufFile.
  */
 static void
