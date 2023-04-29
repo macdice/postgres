@@ -1318,6 +1318,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        file.</entry>
      </row>
      <row>
+      <entry><literal>CopyFileRange</literal></entry>
+      <entry>Waiting for range to be copied during a file copy operation.</entry>
+     </row>
+     <row>
       <entry><literal>CopyFileRead</literal></entry>
       <entry>Waiting for a read during a file copy operation.</entry>
      </row>

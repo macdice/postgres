@@ -127,6 +127,14 @@ copy_file(const char *fromfile, const char *tofile)
 #define COPY_BUF_SIZE (8 * BLCKSZ)
 
 	/*
+	 * Size of ranges when using copy_file_range().  We could in theory just
+	 * use the whole file size, but we want to check for interrupts
+	 * periodically while copying.  We don't want to make it too small though,
+	 * to give the operating system the chance to clone large extents.
+	 */
+#define COPY_FILE_RANGE_CHUNK_SIZE (1024 * 1024)
+
+	/*
 	 * Size of data flush requests.  It seems beneficial on most platforms to
 	 * do this every 1MB or so.  But macOS, at least with early releases of
 	 * APFS, is really unfriendly to small mmap/msync requests, so there do it
@@ -138,8 +146,13 @@ copy_file(const char *fromfile, const char *tofile)
 #define FLUSH_DISTANCE (1024 * 1024)
 #endif
 
+#ifdef HAVE_COPY_FILE_RANGE
+	/* Don't allocate the buffer unless we have to fall back to read/write. */
+	buffer = NULL;
+#else
 	/* Use palloc to ensure we get a maxaligned buffer */
 	buffer = palloc(COPY_BUF_SIZE);
+#endif
 
 	/*
 	 * Open the files
@@ -176,27 +189,67 @@ copy_file(const char *fromfile, const char *tofile)
 			flush_offset = offset;
 		}
 
-		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_READ);
-		nbytes = read(srcfd, buffer, COPY_BUF_SIZE);
-		pgstat_report_wait_end();
-		if (nbytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", fromfile)));
+		nbytes = 0;			/* silence compiler */
+
+#ifdef HAVE_COPY_FILE_RANGE
+		if (buffer == NULL)
+		{
+			pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_RANGE);
+			nbytes = copy_file_range(srcfd, NULL, dstfd, NULL,
+									 COPY_FILE_RANGE_CHUNK_SIZE, 0);
+			pgstat_report_wait_end();
+
+			if (nbytes < 0)
+			{
+				if (errno == EXDEV)
+				{
+					/*
+					 * Linux < 5.3 fails like this for cross-filesystem copies.
+					 * Allocate the buffer to fall back to read/write mode.
+					 */
+					buffer = palloc(COPY_BUF_SIZE);
+				}
+				else
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not copy to file \"%s\": %m", tofile)));
+			}
+		}
+#endif
+
+		if (buffer)
+		{
+			pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_READ);
+			nbytes = read(srcfd, buffer, COPY_BUF_SIZE);
+			pgstat_report_wait_end();
+
+			if (nbytes < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read file \"%s\": %m", fromfile)));
+
+			if (nbytes > 0)
+			{
+				errno = 0;
+				pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
+				if ((int) write(dstfd, buffer, nbytes) != nbytes)
+				{
+					/*
+					 * If write didn't set errno, assume problem is no disk
+					 * space.
+					 */
+					if (errno == 0)
+						errno = ENOSPC;
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not write to file \"%s\": %m", tofile)));
+				}
+				pgstat_report_wait_end();
+			}
+		}
+
 		if (nbytes == 0)
 			break;
-		errno = 0;
-		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
-		if ((int) write(dstfd, buffer, nbytes) != nbytes)
-		{
-			/* if write didn't set errno, assume problem is no disk space */
-			if (errno == 0)
-				errno = ENOSPC;
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m", tofile)));
-		}
-		pgstat_report_wait_end();
 	}
 
 	if (offset > flush_offset)
@@ -212,5 +265,6 @@ copy_file(const char *fromfile, const char *tofile)
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", fromfile)));
 
-	pfree(buffer);
+	if (buffer)
+		pfree(buffer);
 }
