@@ -71,7 +71,19 @@ copydir(const char *fromdir, const char *todir, bool recurse)
 				copydir(fromfile, tofile, true);
 		}
 		else if (xlde_type == PGFILETYPE_REG)
+		{
+			const char *s;
+
+			/*
+			 * Skip legacy segment files ending in ".N".  copy_file() will deal
+			 * with those.
+			 */
+			s = strrchr(fromfile, '.');
+			if (s && strspn(s + 1, "0123456789") == strlen(s + 1))
+				continue;
+
 			copy_file(fromfile, tofile);
+		}
 	}
 	FreeDir(xldir);
 
@@ -117,6 +129,7 @@ void
 copy_file(const char *fromfile, const char *tofile)
 {
 	char	   *buffer;
+	int			segno;
 	int			srcfd;
 	int			dstfd;
 	int			nbytes;
@@ -153,6 +166,8 @@ copy_file(const char *fromfile, const char *tofile)
 	/* Use palloc to ensure we get a maxaligned buffer */
 	buffer = palloc(COPY_BUF_SIZE);
 #endif
+
+	segno = 0;
 
 	/*
 	 * Open the files
@@ -248,8 +263,34 @@ copy_file(const char *fromfile, const char *tofile)
 			}
 		}
 
+		/*
+		 * If we ran out of source data on the expected boundary of a legacy
+		 * relation file segment, try opening the next segment.
+		 */
 		if (nbytes == 0)
-			break;
+		{
+			char		nextpath[MAXPGPATH];
+			int			nextfd;
+
+			if (offset % (RELSEG_SIZE * BLCKSZ) != 0)
+				break;
+
+			snprintf(nextpath, sizeof(nextpath), "%s.%d", fromfile, ++segno);
+			nextfd = OpenTransientFile(nextpath, O_RDONLY | PG_BINARY);
+			if (nextfd < 0)
+			{
+				if (errno == ENOENT)
+					break;
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not open file \"%s\": %m", nextpath)));
+			}
+			if (CloseTransientFile(srcfd) != 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not close file \"%s\": %m", fromfile)));
+			srcfd = nextfd;
+		}
 	}
 
 	if (offset > flush_offset)
