@@ -82,10 +82,11 @@ void
 copyFile(const char *src, const char *dst,
 		 const char *schemaName, const char *relName)
 {
-#ifndef WIN32
 	int			src_fd;
 	int			dest_fd;
 	char	   *buffer;
+	pgoff_t		total_bytes = 0;
+	int			segno = 0;
 
 	if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) < 0)
 		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s",
@@ -155,25 +156,38 @@ copyFile(const char *src, const char *dst,
 			}
 		}
 
+		total_bytes += nbytes;
+
 		if (nbytes == 0)
-			break;
+		{
+			char next_path[MAXPGPATH];
+			int next_fd;
+
+			/* If not at a segment boundary size, this must be the end. */
+			if (total_bytes % (RELSEG_SIZE * BLCKSZ) != 0)
+				break;
+
+			/* Is there another segment? */
+			snprintf(next_path, sizeof(next_path), "%s.%d", src, ++segno);
+			next_fd = open(next_path, O_RDONLY | PG_BINARY, 0);
+			if (next_fd < 0)
+			{
+				if (errno == ENOENT)
+					break;
+				pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s",
+						 schemaName, relName, next_path, strerror(errno));
+			}
+
+			/* Yes.  Start copying from that one. */
+			close(src_fd);
+			src_fd = next_fd;
+		}
 	}
 
 	if (buffer)
 		pg_free(buffer);
 	close(src_fd);
 	close(dest_fd);
-
-#else							/* WIN32 */
-
-	if (CopyFile(src, dst, true) == 0)
-	{
-		_dosmaperr(GetLastError());
-		pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s",
-				 schemaName, relName, src, dst, strerror(errno));
-	}
-
-#endif							/* WIN32 */
 }
 
 
