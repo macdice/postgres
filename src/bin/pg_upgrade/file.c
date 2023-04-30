@@ -9,6 +9,7 @@
 
 #include "postgres_fe.h"
 
+#include <limits.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #ifdef HAVE_COPYFILE_H
@@ -98,32 +99,68 @@ copyFile(const char *src, const char *dst,
 	/* copy in fairly large chunks for best efficiency */
 #define COPY_BUF_SIZE (50 * BLCKSZ)
 
+#ifdef HAVE_COPY_FILE_RANGE
+	buffer = NULL;
+#else
 	buffer = (char *) pg_malloc(COPY_BUF_SIZE);
+#endif
 
 	/* perform data copying i.e read src source, write to destination */
 	while (true)
 	{
-		ssize_t		nbytes = read(src_fd, buffer, COPY_BUF_SIZE);
+		ssize_t		nbytes = 0;
 
-		if (nbytes < 0)
-			pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s",
-					 schemaName, relName, src, strerror(errno));
+#ifdef HAVE_COPY_FILE_RANGE
+		if (buffer == NULL)
+		{
+			nbytes = copy_file_range(src_fd, NULL, dest_fd, NULL, SSIZE_MAX, 0);
+			if (nbytes < 0)
+			{
+				if (errno == EXDEV)
+				{
+					/* Linux < 5.3 might fail.  Fall back to read/write. */
+					buffer = (char *) pg_malloc(COPY_BUF_SIZE);
+				}
+				else
+				{
+					pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s",
+
+							 schemaName, relName, src, strerror(errno));
+				}
+			}
+		}
+#endif
+
+		if (buffer)
+		{
+			nbytes = read(src_fd, buffer, COPY_BUF_SIZE);
+
+			if (nbytes < 0)
+				pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s",
+						 schemaName, relName, src, strerror(errno));
+			if (nbytes > 0)
+			{
+				errno = 0;
+				if (write(dest_fd, buffer, nbytes) != nbytes)
+				{
+					/*
+					 * If write didn't set errno, assume problem is no disk
+					 * space.
+					 */
+					if (errno == 0)
+						errno = ENOSPC;
+					pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s",
+							 schemaName, relName, dst, strerror(errno));
+				}
+			}
+		}
 
 		if (nbytes == 0)
 			break;
-
-		errno = 0;
-		if (write(dest_fd, buffer, nbytes) != nbytes)
-		{
-			/* if write didn't set errno, assume problem is no disk space */
-			if (errno == 0)
-				errno = ENOSPC;
-			pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s",
-					 schemaName, relName, dst, strerror(errno));
-		}
 	}
 
-	pg_free(buffer);
+	if (buffer)
+		pg_free(buffer);
 	close(src_fd);
 	close(dest_fd);
 
