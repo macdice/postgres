@@ -1339,6 +1339,17 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 			continue;			/* don't recurse into pg_wal */
 		}
 
+		/*
+		 * Skip relation segment files because sendFile() will find them when
+		 * called for the initial segment.
+		 */
+		if (isDbDir)
+		{
+			const char *s = strrchr(de->d_name, '.');
+			if (s && strspn(s + 1, "0123456789") == strlen(s + 1))
+				continue;
+		}
+
 		/* Allow symbolic links in pg_tblspc only */
 		if (strcmp(path, "./pg_tblspc") == 0 && S_ISLNK(statbuf.st_mode))
 		{
@@ -1476,6 +1487,10 @@ is_checksummed_file(const char *fullpath, const char *filename)
  * If dboid is anything other than InvalidOid then any checksum failures
  * detected will get reported to the cumulative stats system.
  *
+ * If the file is multi-segmented, the segments are concatenated and sent as
+ * one file.  On return, statbuf->st_size contains the complete size of the
+ * single sent file.
+ *
  * Returns true if the file was successfully sent, false if 'missing_ok',
  * and the file did not exist.
  */
@@ -1495,9 +1510,33 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 	char	   *page;
 	PageHeader	phdr;
 	int			segmentno = 0;
-	char	   *segmentpath;
+	int			nsegments = 1;
 	bool		verify_checksum = false;
 	pg_checksum_context checksum_ctx;
+
+	/*
+	 * This function in only called for the head segment of segmented files,
+	 * but we want to concatenate it on the fly into a large file.  If we
+	 * have reached a segment boundary, we'll try to open the next segment.
+	 * We count the segments and sum their sizes into statbuf->st_size.
+	 */
+	while (statbuf->st_size == (pgoff_t) nsegments * RELSEG_SIZE * BLCKSZ)
+	{
+		char nextpath[MAXPGPATH];
+		struct stat nextstat;
+
+		snprintf(nextpath, sizeof(nextpath), "%s.%d", readfilename, nsegments);
+		if (lstat(nextpath, &nextstat) < 0)
+		{
+			if (errno == ENOENT)
+				break;
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m", nextpath)));
+		}
+		++nsegments;								/* count segment */
+		statbuf->st_size += nextstat.st_size;		/* sum size */
+	}
 
 	if (pg_checksum_init(&checksum_ctx, manifest->checksum_type) < 0)
 		elog(ERROR, "could not initialize checksum of file \"%s\"",
@@ -1527,23 +1566,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 		filename = last_dir_separator(readfilename) + 1;
 
 		if (is_checksummed_file(readfilename, filename))
-		{
 			verify_checksum = true;
-
-			/*
-			 * Cut off at the segment boundary (".") to get the segment number
-			 * in order to mix it into the checksum.
-			 */
-			segmentpath = strstr(filename, ".");
-			if (segmentpath != NULL)
-			{
-				segmentno = atoi(segmentpath + 1);
-				if (segmentno == 0)
-					ereport(ERROR,
-							(errmsg("invalid segment number %d in file \"%s\"",
-									segmentno, filename)));
-			}
-		}
 	}
 
 	/*
@@ -1554,7 +1577,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 	 */
 	while (len < statbuf->st_size)
 	{
-		size_t		remaining = statbuf->st_size - len;
+		pgoff_t		remaining = statbuf->st_size - len;
 
 		/* Try to read some more data. */
 		cnt = basebackup_read_file(fd, sink->bbs_buffer,
@@ -1676,10 +1699,37 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 		/*
 		 * If we hit end-of-file, a concurrent truncation must have occurred.
 		 * That's not an error condition, because WAL replay will fix things
-		 * up.
+		 * up.  It might also mean that we need to move to the next input
+		 * segment.
 		 */
 		if (cnt == 0)
+		{
+			/* Are we at the end of a segment?  Try to open the next one. */
+			if (len == ((pgoff_t) segmentno + 1) * RELSEG_SIZE * BLCKSZ)
+			{
+				char		nextpath[MAXPGPATH];
+				int			nextfd;
+
+				/* Try to open the next segment. */
+				nextfd = OpenTransientFile(readfilename, O_RDONLY | PG_BINARY);
+				if (nextfd < 0)
+				{
+					if (errno == ENOENT)
+						break;
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not open file \"%s\": %m", nextpath)));
+				}
+
+				close(fd);
+				fd = nextfd;
+				++segmentno;
+				continue;
+			}
+
+			/* Otherwise we're at the end of input data. */
 			break;
+		}
 
 		/* Archive the data we just read. */
 		bbsink_archive_contents(sink, cnt);
@@ -1695,8 +1745,8 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 	/* If the file was truncated while we were sending it, pad it with zeros */
 	while (len < statbuf->st_size)
 	{
-		size_t		remaining = statbuf->st_size - len;
-		size_t		nbytes = Min(sink->bbs_buffer_length, remaining);
+		pgoff_t		remaining = statbuf->st_size - len;
+		pgoff_t		nbytes = Min(sink->bbs_buffer_length, remaining);
 
 		MemSet(sink->bbs_buffer, 0, nbytes);
 		if (pg_checksum_update(&checksum_ctx,
