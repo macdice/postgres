@@ -81,7 +81,11 @@ void
 copyFile(const char *src, const char *dst,
 		 const char *schemaName, const char *relName)
 {
-#ifndef WIN32
+	int64		src_segment_size = old_cluster.controldata.largesz;
+	int64		dst_segment_size = new_cluster.controldata.largesz;
+	int64		size = 0;
+	int			src_segno = 0;
+	int			dst_segno = 0;
 	int			src_fd;
 	int			dest_fd;
 	char	   *buffer;
@@ -103,7 +107,65 @@ copyFile(const char *src, const char *dst,
 	/* perform data copying i.e read src source, write to destination */
 	while (true)
 	{
-		ssize_t		nbytes = read(src_fd, buffer, COPY_BUF_SIZE);
+		size_t		chunk_size;
+		ssize_t		nbytes;
+		int64		bytes_until_next_src_segment;
+		int64		bytes_until_next_dst_segment;
+
+		/* How much more data could we read from this src segment? */
+		bytes_until_next_src_segment =
+			((src_segno + 1) * src_segment_size * BLCKSZ) - size;
+		if (bytes_until_next_src_segment == 0)
+		{
+			char		next[MAXPGPATH];
+			int			fd;
+
+			/* Is there another src segment? */
+			snprintf(next, sizeof(next), "%s.%d", src, ++src_segno);
+			fd = open(next, O_RDONLY | PG_BINARY, 0);
+			if (fd < 0)
+			{
+				if (errno == ENOENT)
+					break;		/* Nope. */
+				pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s",
+					 schemaName, relName, next, strerror(errno));
+			}
+
+			/* Yes.  Switch to that and go around again. */
+			close(src_fd);
+			src_fd = fd;
+			continue;
+		}
+
+		/* How much more data can we write to this dst segment? */
+		bytes_until_next_dst_segment =
+			((dst_segno + 1) * dst_segment_size * BLCKSZ) - size;
+		if (bytes_until_next_dst_segment == 0)
+		{
+			char		next[MAXPGPATH];
+			int			fd;
+
+			/* Create next dst segment. */
+			snprintf(next, sizeof(next), "%s.%d", dst, ++dst_segno);
+			fd = open(next, O_RDWR | O_CREAT | O_EXCL | PG_BINARY, 0);
+			if (fd < 0)
+			{
+				if (errno == ENOENT)
+					break;		/* Nope.  We reached the end of src data. */
+				pg_fatal("error while copying relation \"%s.%s\": could not create file \"%s\": %s",
+					 schemaName, relName, next, strerror(errno));
+			}
+			close(dest_fd);
+			dest_fd = fd;
+			continue;
+		}
+
+		/* read at most up to the next segment boundary (src or dst) */
+		chunk_size = COPY_BUF_SIZE;
+		chunk_size = Min(chunk_size, bytes_until_next_src_segment);
+		chunk_size = Min(chunk_size, bytes_until_next_dst_segment);
+
+		nbytes = read(src_fd, buffer, chunk_size);
 
 		if (nbytes < 0)
 			pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s",
@@ -121,22 +183,13 @@ copyFile(const char *src, const char *dst,
 			pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s",
 					 schemaName, relName, dst, strerror(errno));
 		}
+
+		size += nbytes;
 	}
 
 	pg_free(buffer);
 	close(src_fd);
 	close(dest_fd);
-
-#else							/* WIN32 */
-
-	if (CopyFile(src, dst, true) == 0)
-	{
-		_dosmaperr(GetLastError());
-		pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s",
-				 schemaName, relName, src, dst, strerror(errno));
-	}
-
-#endif							/* WIN32 */
 }
 
 

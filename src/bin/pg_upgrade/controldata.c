@@ -662,8 +662,10 @@ check_control_data(ControlData *oldctrl,
 	if (oldctrl->blocksz == 0 || oldctrl->blocksz != newctrl->blocksz)
 		pg_fatal("old and new pg_controldata block sizes are invalid or do not match");
 
-	if (oldctrl->largesz == 0 || oldctrl->largesz != newctrl->largesz)
-		pg_fatal("old and new pg_controldata maximum relation segment sizes are invalid or do not match");
+	if (oldctrl->largesz == 0 || newctrl->largesz == 0 ||
+		(oldctrl->largesz != newctrl->largesz &&
+		 user_opts.transfer_mode != TRANSFER_MODE_COPY))
+		pg_fatal("old and new pg_controldata maximum relation segment sizes are invalid or do not match, and not using copy mode");
 
 	if (oldctrl->walsz == 0 || oldctrl->walsz != newctrl->walsz)
 		pg_fatal("old and new pg_controldata WAL block sizes are invalid or do not match");

@@ -185,6 +185,10 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 	 */
 	for (segno = 0;; segno++)
 	{
+		/* Copy mode knows how to find higher numbered segments itself. */
+		if (user_opts.transfer_mode == TRANSFER_MODE_COPY && segno > 0)
+			break;
+
 		if (segno == 0)
 			extent_suffix[0] = '\0';
 		else
