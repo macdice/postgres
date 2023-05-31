@@ -63,4 +63,6 @@ extern Oid	CollationProviderCreate(const char *collproname,
 									bool if_not_exists,
 									bool quiet);
 
+extern Oid	get_collation_provider_oid(const char *collproname, bool missing_ok);
+
 #endif							/* PG_COLLATION_PROVIDER_H */

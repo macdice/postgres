@@ -1083,14 +1083,20 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 }
 
 Oid
-get_collation_provider_id(const char *name)
+get_collation_provider_oid(const char *name, bool missing_ok)
 {
-	tuple = SearchSysCache1(COLLPRONAME, name);
-	if (!HeapTupleIsvalid(tuple))
+	Oid			oid = InvalidOid;
+	HeapTuple	tuple;
+
+	tuple = SearchSysCache1(COLLPRONAME, CStringGetDatum(name));
+	if (HeapTupleIsValid(tuple))
+		oid = ((Form_pg_collation_provider) GETSTRUCT(tuple))->oid;
+	else if (!missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("collation provider \"%s\" does not exists",
 						name)));
-	
 	ReleaseSysCache(tuple);
+
+	return oid;
 }
