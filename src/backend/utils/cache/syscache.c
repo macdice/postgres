@@ -249,6 +249,12 @@ static const struct cachedesc cacheinfo[] = {
 		KEY(Anum_pg_collation_oid),
 		8
 	},
+	[COLLPROOID] = {
+		CollationProviderRelationId,
+		CollationProviderIndexId,
+		KEY(Anum_pg_collation_provider_oid),
+		4
+	},
 	[COLLPRONAME] = {
 		CollationProviderRelationId,
 		CollationProviderNameIndexId,
