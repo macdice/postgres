@@ -193,6 +193,20 @@ static const ObjectPropertyType ObjectProperty[] =
 		true
 	},
 	{
+		"collation provider",
+		CollationProviderRelationId,
+		CollationProviderOidIndexId,
+		-1,
+		-1,
+		Anum_pg_collation_provider_oid,
+		Anum_pg_collation_provider_name,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		OBJECT_COLLATION_PROVIDER,
+		true
+	},
+	{
 		"constraint",
 		ConstraintRelationId,
 		ConstraintOidIndexId,
@@ -2811,7 +2825,7 @@ get_object_property_data(Oid class_id)
 		}
 	}
 
-	ereport(ERROR,
+	ereport(PANIC,
 			(errmsg_internal("unrecognized class ID: %u", class_id)));
 
 	return NULL;				/* keep MSC compiler happy */
