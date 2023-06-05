@@ -34,22 +34,13 @@
 #include "lib/ilist.h"
 
 /*
- * A list of car_mapping objects.
- */
-typedef struct car_list
-{
-	dlist_head	dlist;
-	int			size;
-} car_list;
-
-/*
  * The main management object in shared memory.
  */
 struct car_control
 {
 	int			c;				/* cache size */
 	int			p;				/* target size for T1 */
-	car_list	lists[6];		/* T1, T2, R1, R2, B1, B2 */
+	dclist_head	lists[6];		/* T1, T2, R1, R2, B1, B2 */
 	bool		need_cache_directory_replacement;
 	int			freelist_size;
 	int			freelist[FLEXIBLE_ARRAY_MEMBER];
@@ -66,46 +57,29 @@ typedef enum car_list_id
 	CAR_INVALID
 } car_list_id;
 
-/* Initialize a counted list. */
-static inline void
-car_list_init(car_list *l)
-{
-	dlist_init(&l->dlist);
-	l->size = 0;
-}
-
 /* Push a mapping to the tail of a given list. */
 static inline void
 car_push_tail(car_control *car, car_list_id list, car_mapping *mapping)
 {
-	car_list *l = &car->lists[list];
-
-	dlist_push_tail(&l->dlist, &mapping->node);
+	dclist_push_tail(&car->lists[list], &mapping->node);
 	mapping->list = list;
-	++l->size;
 }
 
 /* Push a mapping to the head of a given list. */
 static inline void
 car_push_head(car_control *car, car_list_id list, car_mapping *mapping)
 {
-	car_list *l = &car->lists[list];
-
-	dlist_push_head(&l->dlist, &mapping->node);
+	dclist_push_head(&car->lists[list], &mapping->node);
 	mapping->list = list;
-	++l->size;
 }
 
 /* Remove a mapping from its current list, making it invalid. */
 static inline void
 car_delete(car_control *car, car_mapping *mapping)
 {
-	car_list *l = &car->lists[mapping->list];
-
 	Assert(mapping->list >= 0 && mapping->list < CAR_INVALID);
-	dlist_delete(&mapping->node);
+	dclist_delete_from(&car->lists[mapping->list], &mapping->node);
 	mapping->list = CAR_INVALID;
-	--l->size;
 }
 
 /* Move a mapping from its current list to the tail of another list. */
@@ -129,7 +103,7 @@ static inline int
 car_size(car_control *car, car_list_id list)
 {
 	Assert(list >= 0 && list < CAR_INVALID);
-	return car->lists[list].size;
+	return dclist_count(&car->lists[list]);
 }
 
 /* Peek at the head element of a list, which must not be empty. */
@@ -137,7 +111,7 @@ static inline car_mapping *
 car_head(car_control *car, car_list_id list)
 {
 	Assert(car_size(car, list) > 0);
-	return dlist_head_element(car_mapping, node, &car->lists[list].dlist);
+	return dclist_head_element(car_mapping, node, &car->lists[list].dlist);
 }
 
 /* Peek at the tail element of a list, which must not be empty. */
@@ -145,7 +119,7 @@ static inline car_mapping *
 car_tail(car_control *car, car_list_id list)
 {
 	Assert(car_size(car, list) > 0);
-	return dlist_tail_element(car_mapping, node, &car->lists[list].dlist);
+	return dclist_tail_element(car_mapping, node, &car->lists[list].dlist);
 }
 
 void
@@ -167,7 +141,7 @@ car_init(car_control *car, int objects)
 	car->c = objects;
 	car->p = 0;
 	for (int i = 0; i < lengthof(car->lists); ++i)
-		car_list_init(&car->lists[i]);
+		dclist_init(&car->lists[i]);
 	car->need_cache_directory_replacement = false;
 	car->freelist_size = objects;
 	for (int i = 0; i < objects; ++i)
