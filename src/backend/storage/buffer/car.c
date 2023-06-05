@@ -20,17 +20,18 @@
  * caller can performing any I/O and then later call car_complete_replace().
  *
  * In order to support concurrent replacement, we introduce two extra lists,
- * R1 and R2, on which cached objects live while they are in transit between
- * Tn and Bn.  Furthermore, in order to support the concept of 'pinned'
- * objects which cannot currently be replaced even if they are selected by
- * CAR, the calling code can reject the selection by calling
- * car_complete_replace(..., false).  In that case, the
+ * F1 and F2, on which cached objects live while they are in transit between
+ * Tn and Bn ("faulting").  Furthermore, in order to support the concept of
+ * 'pinned' objects which cannot currently be replaced even if they are
+ * selected by CAR, the calling code can reject the selection by calling
+ * car_complete_replace(..., false).  In that case, the...
  *
  * [1] https://www.usenix.org/legacy/publications/library/proceedings/fast04/tech/full_papers/bansal/bansal.pdf
  */
 
 #include "postgres.h"
 #include "storage/car.h"
+#include "storage/lwlock.h"
 #include "lib/ilist.h"
 
 /*
@@ -40,7 +41,7 @@ struct car_control
 {
 	int			c;				/* cache size */
 	int			p;				/* target size for T1 */
-	dclist_head	lists[6];		/* T1, T2, R1, R2, B1, B2 */
+	dclist_head	lists[6];		/* T1, T2, F1, F2, B1, B2 */
 	bool		need_cache_directory_replacement;
 	int			freelist_size;
 	int			freelist[FLEXIBLE_ARRAY_MEMBER];
@@ -49,10 +50,10 @@ struct car_control
 typedef enum car_list_id
 {
 	T1,			/* cached objects seen recently */
-	R1,			/* cached objects being faulted out of T1 */
+	F1,			/* cached objects being faulted out of T1 */
 	B1,			/* uncached objects seen recently */
 	T2,			/* cached objects seen frequently */
-	R2,			/* cached objects being faulted out of T2 */
+	F2,			/* cached objects being faulted out of T2 */
 	B2,			/* uncached objects seen frequently */
 	CAR_INVALID
 } car_list_id;
@@ -111,7 +112,7 @@ static inline car_mapping *
 car_head(car_control *car, car_list_id list)
 {
 	Assert(car_size(car, list) > 0);
-	return dclist_head_element(car_mapping, node, &car->lists[list].dlist);
+	return dclist_head_element(car_mapping, node, &car->lists[list]);
 }
 
 /* Peek at the tail element of a list, which must not be empty. */
@@ -119,7 +120,7 @@ static inline car_mapping *
 car_tail(car_control *car, car_list_id list)
 {
 	Assert(car_size(car, list) > 0);
-	return dclist_tail_element(car_mapping, node, &car->lists[list].dlist);
+	return dclist_tail_element(car_mapping, node, &car->lists[list]);
 }
 
 void
@@ -159,8 +160,8 @@ car_forget(car_control *car, car_mapping *mapping)
 	Assert(mapping->list == T1 || mapping->list == T2 ||
 		   mapping->list == B1 || mapping->list == B2);
 
-	/* XXX what if it's in R1,R2? */
-	
+	/* XXX what if it's in F1,F2? */
+
 	/* Remember the cache slot (eg buffer) that is now free. */
 	if (mapping->list == T1 || mapping->list == T2)
 	{
@@ -194,13 +195,13 @@ car_begin_replace(car_control *car)
 
 		/*
 		 * In the paper, line 24 compares the the size of T1 to p (the target
-		 * size for T1), but here we must also consider R1, because otherwise
+		 * size for T1), but here we must also consider F1, because otherwise
 		 * we'd penalize T1 for objects that are already in the process of
 		 * being faulted out.  We also need to consider that there might be
-		 * nothing left in T1 (because everything's in R1), and fall back to
+		 * nothing left in T1 (because everything's in F1), and fall back to
 		 * T2 to be able to make progress.
 		 */
-		if (car_size(car, T1) + car_size(car, R1) > Max(1, car->p) &&
+		if (car_size(car, T1) + car_size(car, F1) > Max(1, car->p) &&
 			car_size(car, T1) > 0)
 		{
 			/* Take the head object from T1... */
@@ -208,8 +209,8 @@ car_begin_replace(car_control *car)
 
 			if (!mapping->reference)
 			{
-				/* ... and move to R1, to initiate replacement. */
-				car_move_to_tail(car, R1, mapping);
+				/* ... and move to F1, to initiate replacement. */
+				car_move_to_tail(car, F1, mapping);
 
 				return mapping;
 			}
@@ -224,7 +225,7 @@ car_begin_replace(car_control *car)
 		{
 			/*
 			 * In the paper, line 32 assumes that T2 must be non-empty, but we
-			 * have to consider that pages might already be in R2 due to
+			 * have to consider that pages might already be in F2 due to
 			 * concurrent faulting activity.  In that case, your cache simply
 			 * isn't large enough, and we have no choice but to fail.
 			 */
@@ -236,8 +237,8 @@ car_begin_replace(car_control *car)
 
 			if (!mapping->reference)
 			{
-				/* ... and move to R2, to initiate replacement. */
-				car_move_to_tail(car, R2, mapping);
+				/* ... and move to F2, to initiate replacement. */
+				car_move_to_tail(car, F2, mapping);
 				
 				return mapping;
 			}
@@ -252,8 +253,6 @@ car_begin_replace(car_control *car)
 }
 
 /*
- * Calls to this routine must be serialized. XXX Say more
- *
  * If the caller has a mapping already but car_access() returned -1, the
  * existing car_mapping object should be passed in.  If the caller is creating
  * a new mapping, then a pointer to a newly initialized car_mapping associated
@@ -285,11 +284,11 @@ car_allocate(car_control *car, car_mapping *mapping, car_mapping **replace)
 {
 	/* Every possible cache index is either in use, being replaced, or free. */
 	Assert(car_size(car, T1) +
-		   car_size(car, R1) +
+		   car_size(car, F1) +
 		   car_size(car, T2) +
-		   car_size(car, R2) +
+		   car_size(car, F2) +
 		   car->freelist_size == car->c);
-	elog(LOG, "car_allocate T1=%d, R1=%d, B1=%d, T2=%d, R2=%d, B2=%d", car_size(car, T1), car_size(car, R1), car_size(car, B1), car_size(car, T2), car_size(car, R2), car_size(car, B2));
+	elog(LOG, "car_allocate T1=%d, F1=%d, B1=%d, T2=%d, F2=%d, B2=%d", car_size(car, T1), car_size(car, F1), car_size(car, B1), car_size(car, T2), car_size(car, F2), car_size(car, B2));
 
 	/*
 	 * In the paper, lines 6-10 perform cache directory replacement
@@ -308,7 +307,7 @@ car_allocate(car_control *car, car_mapping *mapping, car_mapping **replace)
 			mapping->list != B2)
 		{
 			if (car_size(car, T1) +
-				car_size(car, R1) +
+				car_size(car, F1) +
 				car_size(car, B1) == car->c)
 			{
 				/* Forget the LRU object in B1. */
@@ -318,10 +317,10 @@ car_allocate(car_control *car, car_mapping *mapping, car_mapping **replace)
 				return CAR_ALLOCATE_FORGET;
 			}
 			else if (car_size(car, T1) +
-					 car_size(car, R1) +
+					 car_size(car, F1) +
 					 car_size(car, B1) +
 					 car_size(car, T2) +
-					 car_size(car, R2) +
+					 car_size(car, F2) +
 					 car_size(car, B2) == car->c * 2)
 			{
 				/* Forget the LRU object in B2. */
@@ -339,9 +338,9 @@ car_allocate(car_control *car, car_mapping *mapping, car_mapping **replace)
 	 * occupy cache space that can't be reused yet).
 	 */
 	if (car_size(car, T1) +
-		car_size(car, R1) +
+		car_size(car, F1) +
 		car_size(car, T2) +
-		car_size(car, R2) == car->c)
+		car_size(car, F2) == car->c)
 	{
 		car_mapping *victim;
 		
@@ -400,7 +399,7 @@ void
 car_complete_replace(car_control *car, car_mapping *replace, bool accepted)
 {
 	/* This must be a cached object selected by car_begin_replace(). */
-	Assert(replace->list == R1 || replace->list == R2);
+	Assert(replace->list == F1 || replace->list == F2);
 	Assert(replace->index >= 0);
 
 	/* Does the caller refuse to fault this object out? */

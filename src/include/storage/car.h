@@ -59,12 +59,11 @@ typedef enum car_allocate_result
 	CAR_ALLOCATE_FAIL
 } car_allocate_result;
 
-/* The following routines must all be serialized by exernal means. */
 extern size_t car_estimate_size(int objects);
 extern void car_init(car_control *ctl, int objects);
 extern void car_mapping_init(car_mapping *mapping);
 extern void car_forget(car_control *ctl, car_mapping *mapping);
 extern car_allocate_result car_allocate(car_control *ctl, car_mapping *mapping, car_mapping **replace);
-extern void car_complete_replace(car_control *ctl, car_mapping *mapping, bool done);
+extern void car_complete_replace(car_control *ctl, car_mapping *mapping, bool accepted);
 
 #endif
