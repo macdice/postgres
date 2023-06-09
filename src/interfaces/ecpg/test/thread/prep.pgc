@@ -1,9 +1,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "ecpg_config.h"
+#include "port/pg_threads.h"
 
 #include <stdio.h>
-#include <threads.h>
 
 #define THREADS		16
 #define REPEATS		50
@@ -43,7 +43,7 @@ static int fn(void* arg)
 int main ()
 {
 	intptr_t i;
-	thrd_t threads[THREADS];
+	pg_thrd_t threads[THREADS];
 
 	EXEC SQL CONNECT TO REGRESSDB1;
 	EXEC SQL SET AUTOCOMMIT TO ON;
@@ -52,9 +52,9 @@ int main ()
 	EXEC SQL DISCONNECT;
 
 	for (i = 0; i < THREADS; ++i)
-		thrd_create(&threads[i], fn, (void *) i);
+		pg_thrd_create(&threads[i], fn, (void *) i);
 	for (i = 0; i < THREADS; ++i)
-		thrd_join(threads[i], NULL);
+		pg_thrd_join(threads[i], NULL);
 
 	return 0;
 }

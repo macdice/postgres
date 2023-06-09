@@ -1293,7 +1293,6 @@ AC_SEARCH_LIBS(fdatasync, [rt posix4])
 AC_SEARCH_LIBS(shmget, cygipc)
 # *BSD:
 AC_SEARCH_LIBS(backtrace_symbols, execinfo)
-AC_SEARCH_LIBS(thrd_create, stdthreads)
 
 if test "$with_readline" = yes; then
   PGAC_CHECK_READLINE

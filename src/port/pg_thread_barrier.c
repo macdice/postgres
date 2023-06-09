@@ -23,11 +23,11 @@ pg_thread_barrier_init(pg_thread_barrier_t *barrier, int count)
 	barrier->sense = false;
 	barrier->count = count;
 	barrier->arrived = 0;
-	if ((error = cnd_init(&barrier->cond)) != 0)
+	if ((error = pg_cnd_init(&barrier->cond)) != pg_thrd_success)
 		return error;
-	if ((error = mtx_init(&barrier->mutex, mtx_plain)) != 0)
+	if ((error = pg_mtx_init(&barrier->mutex, pg_mtx_plain)) != pg_thrd_success)
 	{
-		cnd_destroy(&barrier->cond);
+		pg_cnd_destroy(&barrier->cond);
 		return error;
 	}
 
@@ -39,7 +39,7 @@ pg_thread_barrier_wait(pg_thread_barrier_t *barrier)
 {
 	bool		initial_sense;
 
-	mtx_lock(&barrier->mutex);
+	pg_mtx_lock(&barrier->mutex);
 
 	/* We have arrived at the barrier. */
 	barrier->arrived++;
@@ -50,8 +50,8 @@ pg_thread_barrier_wait(pg_thread_barrier_t *barrier)
 	{
 		barrier->arrived = 0;
 		barrier->sense = !barrier->sense;
-		mtx_unlock(&barrier->mutex);
-		cnd_broadcast(&barrier->cond);
+		pg_mtx_unlock(&barrier->mutex);
+		pg_cnd_broadcast(&barrier->cond);
 
 		return PG_THREAD_BARRIER_SERIAL_THREAD;
 	}
@@ -60,10 +60,10 @@ pg_thread_barrier_wait(pg_thread_barrier_t *barrier)
 	initial_sense = barrier->sense;
 	do
 	{
-		cnd_wait(&barrier->cond, &barrier->mutex);
+		pg_cnd_wait(&barrier->cond, &barrier->mutex);
 	} while (barrier->sense == initial_sense);
 
-	mtx_unlock(&barrier->mutex);
+	pg_mtx_unlock(&barrier->mutex);
 
 	return 0;
 }
@@ -71,7 +71,7 @@ pg_thread_barrier_wait(pg_thread_barrier_t *barrier)
 int
 pg_thread_barrier_destroy(pg_thread_barrier_t *barrier)
 {
-	cnd_destroy(&barrier->cond);
-	mtx_destroy(&barrier->mutex);
+	pg_cnd_destroy(&barrier->cond);
+	pg_mtx_destroy(&barrier->mutex);
 	return 0;
 }

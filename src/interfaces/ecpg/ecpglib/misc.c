@@ -15,9 +15,8 @@
 #include "pgtypes_interval.h"
 #include "pgtypes_numeric.h"
 #include "pgtypes_timestamp.h"
+#include "port/pg_threads.h"
 #include "sqlca.h"
-
-#include <threads.h>
 
 #ifndef LONG_LONG_MIN
 #ifdef LLONG_MIN
@@ -56,10 +55,10 @@ static struct sqlca_t sqlca_init =
 	}
 };
 
-static tss_t sqlca_key;
-static once_flag ecpg_once = ONCE_FLAG_INIT;
-static mtx_t debug_mutex;
-static mtx_t debug_init_mutex;
+static pg_tss_t sqlca_key;
+static pg_once_flag ecpg_once = PG_ONCE_FLAG_INIT;
+static pg_mtx_t debug_mutex;
+static pg_mtx_t debug_init_mutex;
 static int	simple_debug = 0;
 static FILE *debugstream = NULL;
 
@@ -101,9 +100,9 @@ ecpg_sqlca_key_destructor(void *arg)
 static void
 ecpg_init_once(void)
 {
-	tss_create(&sqlca_key, ecpg_sqlca_key_destructor);
-	mtx_init(&debug_mutex, mtx_plain);
-	mtx_init(&debug_init_mutex, mtx_plain);
+	pg_tss_create(&sqlca_key, ecpg_sqlca_key_destructor);
+	pg_mtx_init(&debug_mutex, pg_mtx_plain);
+	pg_mtx_init(&debug_init_mutex, pg_mtx_plain);
 }
 
 struct sqlca_t *
@@ -111,16 +110,16 @@ ECPGget_sqlca(void)
 {
 	struct sqlca_t *sqlca;
 
-	call_once(&ecpg_once, ecpg_init_once);
+	pg_call_once(&ecpg_once, ecpg_init_once);
 
-	sqlca = tss_get(sqlca_key);
+	sqlca = pg_tss_get(sqlca_key);
 	if (sqlca == NULL)
 	{
 		sqlca = malloc(sizeof(struct sqlca_t));
 		if (sqlca == NULL)
 			return NULL;
 		ecpg_init_sqlca(sqlca);
-		tss_set(sqlca_key, sqlca);
+		pg_tss_set(sqlca_key, sqlca);
 	}
 	return sqlca;
 }
@@ -205,9 +204,9 @@ ECPGtrans(int lineno, const char *connection_name, const char *transaction)
 void
 ECPGdebug(int n, FILE *dbgs)
 {
-	call_once(&ecpg_once, ecpg_init_once);
+	pg_call_once(&ecpg_once, ecpg_init_once);
 
-	mtx_lock(&debug_init_mutex);
+	pg_mtx_lock(&debug_init_mutex);
 
 	if (n > 100)
 	{
@@ -221,7 +220,7 @@ ECPGdebug(int n, FILE *dbgs)
 
 	ecpg_log("ECPGdebug: set to %d\n", simple_debug);
 
-	mtx_unlock(&debug_init_mutex);
+	pg_mtx_unlock(&debug_init_mutex);
 }
 
 void
@@ -253,9 +252,9 @@ ecpg_log(const char *format,...)
 	else
 		snprintf(fmt, bufsize, "[%d]: %s", (int) getpid(), intl_format);
 
-	call_once(&ecpg_once, ecpg_init_once);
+	pg_call_once(&ecpg_once, ecpg_init_once);
 
-	mtx_lock(&debug_mutex);
+	pg_mtx_lock(&debug_mutex);
 
 	va_start(ap, format);
 	vfprintf(debugstream, fmt, ap);
@@ -270,7 +269,7 @@ ecpg_log(const char *format,...)
 
 	fflush(debugstream);
 
-	mtx_unlock(&debug_mutex);
+	pg_mtx_unlock(&debug_mutex);
 
 	free(fmt);
 }

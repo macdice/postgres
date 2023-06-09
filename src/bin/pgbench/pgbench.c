@@ -32,6 +32,7 @@
 #endif
 
 #include "postgres_fe.h"
+#include "port/pg_threads.h"
 
 #include <ctype.h>
 #include <float.h>
@@ -39,7 +40,6 @@
 #include <math.h>
 #include <signal.h>
 #include <time.h>
-#include <threads.h>
 #include <sys/time.h>
 #include <sys/resource.h>		/* for getrlimit */
 
@@ -603,7 +603,7 @@ typedef struct
 typedef struct
 {
 	int			tid;			/* thread id */
-	thrd_t		thread;			/* thread handle */
+	pg_thrd_t	thread;			/* thread handle */
 	CState	   *state;			/* array of CState */
 	int			nstate;			/* length of state[] */
 
@@ -7187,7 +7187,7 @@ main(int argc, char **argv)
 		TState	   *thread = &threads[i];
 
 		thread->create_time = pg_time_now();
-		errno = thrd_create(&thread->thread, threadRun, thread);
+		errno = pg_thrd_create(&thread->thread, threadRun, thread);
 
 		if (errno != 0)
 			pg_fatal("could not create thread: %m");
@@ -7210,7 +7210,7 @@ main(int argc, char **argv)
 		TState	   *thread = &threads[i];
 
 		if (i > 0)
-			thrd_join(thread->thread, NULL);
+			pg_thrd_join(thread->thread, NULL);
 
 		for (int j = 0; j < thread->nstate; j++)
 			if (thread->state[j].state != CSTATE_FINISHED)

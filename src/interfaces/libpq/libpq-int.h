@@ -32,7 +32,6 @@
 #endif
 
 #include <signal.h>
-#include <threads.h>
 
 /* include stuff common to fe and be */
 #include "libpq/pqcomm.h"

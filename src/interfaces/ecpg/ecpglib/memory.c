@@ -7,8 +7,7 @@
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
-
-#include <threads.h>
+#include "port/pg_threads.h"
 
 void
 ecpg_free(void *ptr)
@@ -69,8 +68,8 @@ struct auto_mem
 	struct auto_mem *next;
 };
 
-static tss_t auto_mem_key;
-static once_flag auto_mem_once = ONCE_FLAG_INIT;
+static pg_tss_t auto_mem_key;
+static pg_once_flag auto_mem_once = PG_ONCE_FLAG_INIT;
 
 static void
 auto_mem_destructor(void *arg)
@@ -82,20 +81,20 @@ auto_mem_destructor(void *arg)
 static void
 auto_mem_key_init(void)
 {
-	tss_create(&auto_mem_key, auto_mem_destructor);
+	pg_tss_create(&auto_mem_key, auto_mem_destructor);
 }
 
 static struct auto_mem *
 get_auto_allocs(void)
 {
-	call_once(&auto_mem_once, auto_mem_key_init);
-	return (struct auto_mem *) tss_get(auto_mem_key);
+	pg_call_once(&auto_mem_once, auto_mem_key_init);
+	return (struct auto_mem *) pg_tss_get(auto_mem_key);
 }
 
 static void
 set_auto_allocs(struct auto_mem *am)
 {
-	tss_set(auto_mem_key, am);
+	pg_tss_set(auto_mem_key, am);
 }
 
 char *

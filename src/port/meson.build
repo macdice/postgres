@@ -7,6 +7,7 @@ pgport_sources = [
   'noblock.c',
   'path.c',
   'pg_bitutils.c',
+  'pg_threads.c',
   'pg_thread_barrier.c',
   'pg_strong_random.c',
   'pgcheckdir.c',

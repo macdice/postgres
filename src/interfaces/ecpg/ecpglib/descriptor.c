@@ -11,17 +11,16 @@
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
+#include "port/pg_threads.h"
 #include "sql3types.h"
 #include "sqlca.h"
 #include "sqlda.h"
 
-#include <threads.h>
-
 static void descriptor_free(struct descriptor *desc);
 
 /* We manage descriptors separately for each thread. */
-static tss_t descriptor_key;
-static once_flag descriptor_once = ONCE_FLAG_INIT;
+static pg_tss_t descriptor_key;
+static pg_once_flag descriptor_once = PG_ONCE_FLAG_INIT;
 
 static void descriptor_deallocate_all(struct descriptor *list);
 
@@ -34,20 +33,20 @@ descriptor_destructor(void *arg)
 static void
 descriptor_key_init(void)
 {
-	tss_create(&descriptor_key, descriptor_destructor);
+	pg_tss_create(&descriptor_key, descriptor_destructor);
 }
 
 static struct descriptor *
 get_descriptors(void)
 {
-	call_once(&descriptor_once, descriptor_key_init);
-	return (struct descriptor *) tss_get(descriptor_key);
+	pg_call_once(&descriptor_once, descriptor_key_init);
+	return (struct descriptor *) pg_tss_get(descriptor_key);
 }
 
 static void
 set_descriptors(struct descriptor *value)
 {
-	tss_set(descriptor_key, value);
+	pg_tss_set(descriptor_key, value);
 }
 
 /* old internal convenience function that might go away later */
