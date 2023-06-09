@@ -1293,8 +1293,7 @@ AC_SEARCH_LIBS(fdatasync, [rt posix4])
 AC_SEARCH_LIBS(shmget, cygipc)
 # *BSD:
 AC_SEARCH_LIBS(backtrace_symbols, execinfo)
-
-AC_SEARCH_LIBS(pthread_barrier_wait, pthread)
+AC_SEARCH_LIBS(thrd_create, stdthreads)
 
 if test "$with_readline" = yes; then
   PGAC_CHECK_READLINE
@@ -1843,8 +1842,6 @@ AC_REPLACE_FUNCS(m4_normalize([
 	strlcpy
 	strnlen
 ]))
-
-AC_REPLACE_FUNCS(pthread_barrier_wait)
 
 if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
 	# Cygwin and (apparently, based on test results) Mingw both

@@ -52,11 +52,7 @@
 #include <netinet/tcp.h>
 #endif
 
-#ifdef WIN32
-#include "pthread-win32.h"
-#else
-#include <pthread.h>
-#endif
+#include <threads.h>
 
 #ifdef USE_LDAP
 #ifdef WIN32
@@ -7779,35 +7775,29 @@ pqGetHomeDirectory(char *buf, int bufsize)
  * the field.
  */
 
+static mtx_t singlethread_lock;
+
+static void
+singlethread_lock_init(void)
+{
+	mtx_init(&singlethread_lock, mtx_plain);
+}
+
 static void
 default_threadlock(int acquire)
 {
-#ifndef WIN32
-	static pthread_mutex_t singlethread_lock = PTHREAD_MUTEX_INITIALIZER;
-#else
-	static pthread_mutex_t singlethread_lock = NULL;
-	static long mutex_initlock = 0;
+	static once_flag singlethread_lock_once;
 
-	if (singlethread_lock == NULL)
-	{
-		while (InterlockedExchange(&mutex_initlock, 1) == 1)
-			 /* loop, another thread own the lock */ ;
-		if (singlethread_lock == NULL)
-		{
-			if (pthread_mutex_init(&singlethread_lock, NULL))
-				Assert(false);
-		}
-		InterlockedExchange(&mutex_initlock, 0);
-	}
-#endif
+	call_once(&singlethread_lock_once, singlethread_lock_init);
+
 	if (acquire)
 	{
-		if (pthread_mutex_lock(&singlethread_lock))
+		if (mtx_lock(&singlethread_lock))
 			Assert(false);
 	}
 	else
 	{
-		if (pthread_mutex_unlock(&singlethread_lock))
+		if (mtx_unlock(&singlethread_lock))
 			Assert(false);
 	}
 }

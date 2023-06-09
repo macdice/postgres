@@ -7,6 +7,7 @@ pgport_sources = [
   'noblock.c',
   'path.c',
   'pg_bitutils.c',
+  'pg_thread_barrier.c',
   'pg_strong_random.c',
   'pgcheckdir.c',
   'pgmkdirp.c',
@@ -72,10 +73,6 @@ replace_funcs_neg = [
   ['strlcpy'],
   ['strnlen'],
 ]
-
-if host_system != 'windows'
-  replace_funcs_neg += [['pthread_barrier_wait']]
-endif
 
 # Replacement functionality to be built if corresponding configure symbol
 # is true

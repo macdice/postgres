@@ -274,6 +274,10 @@ elif host_system == 'windows'
   dlsuffix = '.dll'
   library_path_var = ''
 
+  if cc.get_id() == 'msvc'
+    cflags += ['/std:c11']
+  endif
+
   export_file_format = 'win'
   export_file_suffix = 'def'
   if cc.get_id() == 'msvc'
@@ -2384,6 +2388,7 @@ always_replace_getopt_long = host_system in ['windows', 'cygwin'] or not cdata.h
 
 # Required on BSDs
 execinfo_dep = cc.find_library('execinfo', required: false)
+stdthreads_dep = cc.find_library('stdthreads', required: false)
 
 if host_system == 'cygwin'
   cygipc_dep = cc.find_library('cygipc', required: false)
@@ -2425,7 +2430,6 @@ func_checks = [
   ['posix_fallocate'],
   ['ppoll'],
   ['pstat'],
-  ['pthread_barrier_wait', {'dependencies': [thread_dep]}],
   ['pthread_is_threaded_np', {'dependencies': [thread_dep]}],
   ['sem_init', {'dependencies': [rt_dep, thread_dep], 'skip': sema_kind != 'unnamed_posix', 'define': false}],
   ['setproctitle', {'dependencies': [util_dep]}],
@@ -2442,6 +2446,7 @@ func_checks = [
   ['strsignal'],
   ['sync_file_range'],
   ['syncfs'],
+  ['thrd_create', {'dependencies': [stdthreads_dep]}],
   ['uselocale'],
   ['wcstombs_l'],
 ]

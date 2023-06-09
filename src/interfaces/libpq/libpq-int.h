@@ -31,12 +31,8 @@
 #include <sys/time.h>
 #endif
 
-#ifdef WIN32
-#include "pthread-win32.h"
-#else
-#include <pthread.h>
-#endif
 #include <signal.h>
+#include <threads.h>
 
 /* include stuff common to fe and be */
 #include "libpq/pqcomm.h"
