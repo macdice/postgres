@@ -3,15 +3,16 @@
 #define POSTGRES_ECPG_INTERNAL
 #include "postgres_fe.h"
 
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
+#include "port/pg_threads.h"
 
 void
 ecpg_free(void *ptr)
 {
+//fprintf(stderr, "XXX %d:%d ecpg_free %p\n", GetCurrentProcessId(), GetCurrentThreadId(), ptr);
 	free(ptr);
 }
 
@@ -25,6 +26,8 @@ ecpg_alloc(long size, int lineno)
 		ecpg_raise(lineno, ECPG_OUT_OF_MEMORY, ECPG_SQLSTATE_ECPG_OUT_OF_MEMORY, NULL);
 		return NULL;
 	}
+
+//fprintf(stderr, "XXX %d:%d ecpg_alloc %p\n", GetCurrentProcessId(), GetCurrentThreadId(), new);
 
 	return new;
 }
@@ -40,6 +43,7 @@ ecpg_realloc(void *ptr, long size, int lineno)
 		return NULL;
 	}
 
+//fprintf(stderr, "XXX %d:%d ecpg_realloc %p -> %p\n", GetCurrentProcessId(), GetCurrentThreadId(), ptr, new);
 	return new;
 }
 
@@ -67,6 +71,7 @@ ecpg_strdup(const char *string, int lineno, bool *alloc_failed)
 		return NULL;
 	}
 
+//fprintf(stderr, "XXX %d:%d ecpg_strdup %p\n", GetCurrentProcessId(), GetCurrentThreadId(), new);
 	return new;
 }
 
@@ -77,10 +82,10 @@ struct auto_mem
 	struct auto_mem *next;
 };
 
-static pthread_key_t auto_mem_key;
-static pthread_once_t auto_mem_once = PTHREAD_ONCE_INIT;
+static pg_tss_t auto_mem_key;
+static pg_once_flag auto_mem_once = PG_ONCE_FLAG_INIT;
 
-static void
+static void pg_tss_dtor_calling_convention
 auto_mem_destructor(void *arg)
 {
 	(void) arg;					/* keep the compiler quiet */
@@ -90,20 +95,20 @@ auto_mem_destructor(void *arg)
 static void
 auto_mem_key_init(void)
 {
-	pthread_key_create(&auto_mem_key, auto_mem_destructor);
+	pg_tss_create(&auto_mem_key, auto_mem_destructor);
 }
 
 static struct auto_mem *
 get_auto_allocs(void)
 {
-	pthread_once(&auto_mem_once, auto_mem_key_init);
-	return (struct auto_mem *) pthread_getspecific(auto_mem_key);
+	pg_call_once(&auto_mem_once, auto_mem_key_init);
+	return (struct auto_mem *) pg_tss_get(auto_mem_key);
 }
 
 static void
 set_auto_allocs(struct auto_mem *am)
 {
-	pthread_setspecific(auto_mem_key, am);
+	pg_tss_set(auto_mem_key, am);
 }
 
 char *
@@ -130,6 +135,13 @@ ecpg_add_mem(void *ptr, int lineno)
 	if (!am)
 		return false;
 
+#ifdef USE_ASSERTION_CHECKING
+	/* We shouldn't be adding something that was already added. */
+	for (struct auto_mem *p = get_auto_allocs(); p; p = p->next)
+		Assert(p != am->pointer);
+#endif
+//fprintf(stderr, "XXX %d:%d ecpg_add_mem allocated node %p to store ptr %p\n", GetCurrentProcessId(), GetCurrentThreadId(), am, ptr);
+
 	am->pointer = ptr;
 	am->next = get_auto_allocs();
 	set_auto_allocs(am);
@@ -149,7 +161,9 @@ ECPGfree_auto_mem(void)
 			struct auto_mem *act = am;
 
 			am = am->next;
+//fprintf(stderr, "XXX %d:%d ECPGfree_auto_mem will free act->pointer %p (in node %p)\n", GetCurrentProcessId(), GetCurrentThreadId(), act->pointer, act);
 			ecpg_free(act->pointer);
+//fprintf(stderr, "XXX %d:%d ECPGfree_auto_mem will free act %p\n", GetCurrentProcessId(), GetCurrentThreadId(), act);
 			ecpg_free(act);
 		} while (am);
 		set_auto_allocs(NULL);
@@ -168,6 +182,7 @@ ecpg_clear_auto_mem(void)
 		{
 			struct auto_mem *act = am;
 
+//fprintf(stderr, "XXX %d:%d ECPGfree_clear_auto_mem freeing node %p (won't free ptr %p)\n", GetCurrentProcessId(), GetCurrentThreadId(), am, am->pointer);
 			am = am->next;
 			ecpg_free(act);
 		} while (am);

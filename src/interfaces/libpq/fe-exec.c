@@ -4067,6 +4067,7 @@ pqPipelineFlush(PGconn *conn)
 void
 PQfreemem(void *ptr)
 {
+//fprintf(stderr, "XXX %d PQFreemem %p\n", GetCurrentThreadId(), ptr);
 	free(ptr);
 }
 
