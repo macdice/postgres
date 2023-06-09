@@ -32,6 +32,7 @@
 #include "mb/pg_wchar.h"
 #include "pg_config_paths.h"
 #include "port/pg_bswap.h"
+#include "port/pg_threads.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -50,12 +51,6 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#endif
-
-#ifdef WIN32
-#include "pthread-win32.h"
-#else
-#include <pthread.h>
 #endif
 
 #ifdef USE_LDAP
@@ -7749,19 +7744,29 @@ error:
  * the field.
  */
 
+static pg_mtx_t singlethread_lock;
+
+static void
+singlethread_lock_init(void)
+{
+	pg_mtx_init(&singlethread_lock, pg_mtx_plain);
+}
+
 static void
 default_threadlock(int acquire)
 {
-	static pthread_mutex_t singlethread_lock = PTHREAD_MUTEX_INITIALIZER;
+	static pg_once_flag singlethread_lock_once = PG_ONCE_FLAG_INIT;
+
+	pg_call_once(&singlethread_lock_once, singlethread_lock_init);
 
 	if (acquire)
 	{
-		if (pthread_mutex_lock(&singlethread_lock))
+		if (pg_mtx_lock(&singlethread_lock) != pg_thrd_success)
 			Assert(false);
 	}
 	else
 	{
-		if (pthread_mutex_unlock(&singlethread_lock))
+		if (pg_mtx_unlock(&singlethread_lock) != pg_thrd_success)
 			Assert(false);
 	}
 }

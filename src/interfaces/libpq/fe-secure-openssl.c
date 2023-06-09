@@ -30,6 +30,7 @@
 #include "fe-auth.h"
 #include "fe-secure-common.h"
 #include "libpq-int.h"
+#include "port/pg_threads.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -43,12 +44,6 @@
 #endif
 
 #include <sys/stat.h>
-
-#ifdef WIN32
-#include "pthread-win32.h"
-#else
-#include <pthread.h>
-#endif
 
 /*
  * These SSL-related #includes must come after all system-provided headers.
@@ -91,7 +86,8 @@ static bool ssl_lib_initialized = false;
 
 static long crypto_open_connections = 0;
 
-static pthread_mutex_t ssl_config_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pg_mtx_t ssl_config_mutex;
+static pg_once_flag ssl_config_mutex_once = PG_ONCE_FLAG_INIT;
 
 static PQsslKeyPassHook_OpenSSL_type PQsslKeyPassHook = NULL;
 static int	ssl_protocol_version_to_openssl(const char *protocol);
@@ -725,14 +721,14 @@ static unsigned long
 pq_threadidcallback(void)
 {
 	/*
-	 * This is not standards-compliant.  pthread_self() returns pthread_t, and
+	 * This is not standards-compliant.  thrd_currnt() returns thrd_t, and
 	 * shouldn't be cast to unsigned long, but CRYPTO_set_id_callback requires
 	 * it, so we have to do it.
 	 */
-	return (unsigned long) pthread_self();
+	return (unsigned long) thrd_current();
 }
 
-static pthread_mutex_t *pq_lockarray;
+static pg_mtx_t *pq_lockarray;
 
 static void
 pq_lockingcallback(int mode, int n, const char *file, int line)
@@ -744,16 +740,22 @@ pq_lockingcallback(int mode, int n, const char *file, int line)
 	 */
 	if (mode & CRYPTO_LOCK)
 	{
-		if (pthread_mutex_lock(&pq_lockarray[n]))
+		if (pg_mtx_lock(&pq_lockarray[n]) != pg_thrd_success)
 			Assert(false);
 	}
 	else
 	{
-		if (pthread_mutex_unlock(&pq_lockarray[n]))
+		if (pg_mtx_unlock(&pq_lockarray[n]) != pg_thrd_success)
 			Assert(false);
 	}
 }
 #endif							/* HAVE_CRYPTO_LOCK */
+
+static void
+ssl_config_mutex_init(void)
+{
+	pg_mtx_init(&ssl_config_mutex, pg_mtx_plain);
+}
 
 /*
  * Initialize SSL library.
@@ -768,7 +770,9 @@ pq_lockingcallback(int mode, int n, const char *file, int line)
 int
 pgtls_init(PGconn *conn, bool do_ssl, bool do_crypto)
 {
-	if (pthread_mutex_lock(&ssl_config_mutex))
+	pg_call_once(&ssl_config_mutex_once, ssl_config_mutex_init);
+
+	if (pg_mtx_lock(&ssl_config_mutex) != pg_thrd_success)
 		return -1;
 
 #ifdef HAVE_CRYPTO_LOCK
@@ -782,19 +786,19 @@ pgtls_init(PGconn *conn, bool do_ssl, bool do_crypto)
 		{
 			int			i;
 
-			pq_lockarray = malloc(sizeof(pthread_mutex_t) * CRYPTO_num_locks());
+			pq_lockarray = malloc(sizeof(pg_mtx_t) * CRYPTO_num_locks());
 			if (!pq_lockarray)
 			{
-				pthread_mutex_unlock(&ssl_config_mutex);
+				pg_mtx_unlock(&ssl_config_mutex);
 				return -1;
 			}
 			for (i = 0; i < CRYPTO_num_locks(); i++)
 			{
-				if (pthread_mutex_init(&pq_lockarray[i], NULL))
+				if (pg_mtx_init(&pq_lockarray[i], NULL) != pg_thrd_success)
 				{
 					free(pq_lockarray);
 					pq_lockarray = NULL;
-					pthread_mutex_unlock(&ssl_config_mutex);
+					pg_mtx_unlock(&ssl_config_mutex);
 					return -1;
 				}
 			}
@@ -835,7 +839,7 @@ pgtls_init(PGconn *conn, bool do_ssl, bool do_crypto)
 		ssl_lib_initialized = true;
 	}
 
-	pthread_mutex_unlock(&ssl_config_mutex);
+	pg_mtx_unlock(&ssl_config_mutex);
 	return 0;
 }
 
@@ -855,7 +859,7 @@ static void
 destroy_ssl_system(void)
 {
 #if defined(HAVE_CRYPTO_LOCK)
-	if (pthread_mutex_lock(&ssl_config_mutex))
+	if (pg_mtx_lock(&ssl_config_mutex) != pg_thrd_success)
 		return;
 
 	if (pq_init_crypto_lib && crypto_open_connections > 0)
@@ -881,7 +885,7 @@ destroy_ssl_system(void)
 		 */
 	}
 
-	pthread_mutex_unlock(&ssl_config_mutex);
+	pg_mtx_unlock(&ssl_config_mutex);
 #endif
 }
 
