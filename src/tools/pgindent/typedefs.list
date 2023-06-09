@@ -3669,6 +3669,7 @@ pg_category_range
 pg_checksum_context
 pg_checksum_raw_context
 pg_checksum_type
+pg_cnd_t
 pg_compress_algorithm
 pg_compress_specification
 pg_conn_host
@@ -3693,7 +3694,10 @@ pg_local_to_utf_combined
 pg_locale_t
 pg_mb_radix_tree
 pg_md5_ctx
+pg_mtx_t
+pg_mtx_type_t
 pg_on_exit_callback
+pg_once_flag
 pg_prng_state
 pg_re_flags
 pg_saslprep_rc
@@ -3704,8 +3708,13 @@ pg_sha384_ctx
 pg_sha512_ctx
 pg_snapshot
 pg_stack_base_t
+pg_thrd_error_t
+pg_thrd_t
+pg_thrd_thunk
+pg_thrd_barrier_t
 pg_time_t
 pg_time_usec_t
+pg_tss_t
 pg_tz
 pg_tz_cache
 pg_tzenum
