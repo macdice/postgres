@@ -12,6 +12,7 @@ pgport_sources = [
   'pg_popcount_aarch64.c',
   'pg_popcount_avx512.c',
   'pg_strong_random.c',
+  'pg_threads.c',
   'pgcheckdir.c',
   'pgmkdirp.c',
   'pgsleep.c',
@@ -76,10 +77,6 @@ replace_funcs_neg = [
   ['strsep'],
   ['timingsafe_bcmp'],
 ]
-
-if host_system != 'windows'
-  replace_funcs_neg += [['pthread_barrier_wait']]
-endif
 
 # Replacement functionality to be built if corresponding configure symbol
 # is true

@@ -49,6 +49,7 @@ OBJS = \
 	pg_popcount_aarch64.o \
 	pg_popcount_avx512.o \
 	pg_strong_random.o \
+	pg_threads.o \
 	pgcheckdir.o \
 	pgmkdirp.o \
 	pgsleep.o \

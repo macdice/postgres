@@ -5,6 +5,7 @@ ecpg_inc = include_directories('.')
 ecpg_conf_keys = [
   'SIZEOF_LONG',
   'SIZEOF_LONG_LONG',
+  'HAVE_PTHREAD_BARRIER_WAIT',
 ]
 
 ecpg_conf_data = configuration_data()
