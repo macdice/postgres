@@ -16,14 +16,8 @@
 #include <pthread.h>
 #endif
 
-#if !defined(WIN32) && !defined(HAVE_PTHREAD_BARRIER_WAIT)
-
 /* macOS lacks pthread_barrier_t, so we define our own. */
-
-#ifndef PTHREAD_BARRIER_SERIAL_THREAD
-#define PTHREAD_BARRIER_SERIAL_THREAD (-1)
-#endif
-
+#if !defined(WIN32) && !defined(HAVE_PTHREAD_BARRIER_WAIT)
 typedef struct pg_pthread_barrier
 {
 	bool		sense;			/* we only need a one bit phase */
@@ -32,13 +26,12 @@ typedef struct pg_pthread_barrier
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
 } pthread_barrier_t;
-
+#define PTHREAD_BARRIER_SERIAL_THREAD (-1)
 extern int	pthread_barrier_init(pthread_barrier_t *barrier,
 								 const void *attr,
 								 int count);
 extern int	pthread_barrier_wait(pthread_barrier_t *barrier);
 extern int	pthread_barrier_destroy(pthread_barrier_t *barrier);
-
 #endif
 
 #ifdef WIN32
