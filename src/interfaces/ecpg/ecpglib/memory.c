@@ -144,7 +144,7 @@ ECPGfree_auto_mem(void)
 			ecpg_free(act->pointer);
 			ecpg_free(act);
 		} while (am);
-		set_auto_allocs(NULL);
+		//set_auto_allocs(NULL);
 	}
 }
 
