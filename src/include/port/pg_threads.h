@@ -121,8 +121,7 @@ static inline int
 pg_tss_create(pg_tss_t *key, pg_tss_dtor_t destructor)
 {
 #ifdef WIN32
-	//*key = FlsAlloc(destructor);
-	*key = FlsAlloc(NULL);
+	*key = FlsAlloc(destructor);
 	return *key == FLS_OUT_OF_INDEXES ? pg_thrd_error : pg_thrd_success;
 #else
 	return pg_thrd_maperror(pthread_key_create(key, destructor));
