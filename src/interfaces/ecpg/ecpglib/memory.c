@@ -94,6 +94,7 @@ get_auto_allocs(void)
 static void
 set_auto_allocs(struct auto_mem *am)
 {
+	pg_call_once(&auto_mem_once, auto_mem_key_init);
 	pg_tss_set(auto_mem_key, am);
 }
 
