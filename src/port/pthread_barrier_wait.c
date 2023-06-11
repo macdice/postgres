@@ -13,7 +13,7 @@
 
 #include "c.h"
 
-#include "port/pg_pthread.h"
+#include "port/pg_threads.h"
 
 int
 pthread_barrier_init(pthread_barrier_t *barrier, const void *attr, int count)
