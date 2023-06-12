@@ -74,8 +74,16 @@ static pg_once_flag auto_mem_once = PG_ONCE_FLAG_INIT;
 static void
 auto_mem_destructor(void *arg)
 {
-	(void) arg;					/* keep the compiler quiet */
-	ECPGfree_auto_mem();
+	struct auto_mem *am = (struct auto_mem *) arg;
+
+	while (am)
+	{
+		struct auto_mem *act = am;
+
+		am = am->next;
+		ecpg_free(act->pointer);
+		ecpg_free(act);
+	}
 }
 
 static void
@@ -144,7 +152,7 @@ ECPGfree_auto_mem(void)
 			ecpg_free(act->pointer);
 			ecpg_free(act);
 		} while (am);
-		//set_auto_allocs(NULL);
+		set_auto_allocs(NULL);
 	}
 }
 
