@@ -90,7 +90,7 @@ static void
 auto_mem_key_init(void)
 {
 #ifdef WIN32
-fprintf(stderr, "XXXXX auto_mem_key_init!  pid=%u\n", GetCurrentProcessId());
+fprintf(stderr, "XXXXX auto_mem_key_init!  pid=%lu\n", GetCurrentProcessId());
 #endif
 	pg_tss_create(&auto_mem_key, auto_mem_destructor);
 }
