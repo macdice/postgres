@@ -398,8 +398,6 @@ static void CloseServerPorts(int status, Datum arg);
 static void unlink_external_pid_file(int status, Datum arg);
 static void getInstallationPaths(const char *argv0);
 static void checkControlFile(void);
-static Port *ConnCreate(int serverFd);
-static void ConnFree(Port *port);
 static void handle_pm_pmsignal_signal(SIGNAL_ARGS);
 static void handle_pm_child_exit_signal(SIGNAL_ARGS);
 static void handle_pm_reload_request_signal(SIGNAL_ARGS);
@@ -1783,20 +1781,18 @@ ServerLoop(void)
 
 			if (events[i].events & WL_SOCKET_ACCEPT)
 			{
-				Port	   *port;
+				Port	   port;
 
-				port = ConnCreate(events[i].fd);
-				if (port)
-				{
-					BackendStartup(port);
+				memset(&port, 0, sizeof(port));
+				if (StreamConnection(events[i].fd, &port) == STATUS_OK)
+					BackendStartup(&port);
 
-					/*
-					 * We no longer need the open socket or port structure in
-					 * this process
-					 */
-					StreamClose(port->sock);
-					ConnFree(port);
-				}
+				/*
+				 * We no longer need the open socket or port structure in this
+				 * process
+				 */
+				if (port.sock != PGINVALID_SOCKET)
+					StreamClose(port.sock);
 			}
 		}
 
@@ -2484,50 +2480,6 @@ canAcceptConnections(int backend_type)
 
 	return result;
 }
-
-
-/*
- * ConnCreate -- create a local connection data structure
- *
- * Returns NULL on failure, other than out-of-memory which is fatal.
- */
-static Port *
-ConnCreate(int serverFd)
-{
-	Port	   *port;
-
-	if (!(port = (Port *) calloc(1, sizeof(Port))))
-	{
-		ereport(LOG,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory")));
-		ExitPostmaster(1);
-	}
-
-	if (StreamConnection(serverFd, port) != STATUS_OK)
-	{
-		if (port->sock != PGINVALID_SOCKET)
-			StreamClose(port->sock);
-		ConnFree(port);
-		return NULL;
-	}
-
-	return port;
-}
-
-
-/*
- * ConnFree -- free a local connection data structure
- *
- * Caller has already closed the socket if any, so there's not much
- * to do here.
- */
-static void
-ConnFree(Port *port)
-{
-	free(port);
-}
-
 
 /*
  * ClosePostmasterPorts -- close all the postmaster's open sockets
