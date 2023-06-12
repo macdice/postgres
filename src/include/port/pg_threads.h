@@ -34,6 +34,15 @@ extern int	pthread_barrier_wait(pthread_barrier_t *barrier);
 extern int	pthread_barrier_destroy(pthread_barrier_t *barrier);
 #endif
 
+/* Thread local storage class, like C11 thread_local. */
+#ifdef _MSC_VER
+/* MSVC */
+#define pg_thread_local __declspec(thread)
+#else
+/* GCC, Clang, Intel C, XLC, Solaris Studio */
+#define pg_thread_local __thread
+#endif
+
 #ifdef WIN32
 typedef HANDLE pg_thrd_t;
 typedef CRITICAL_SECTION pg_mtx_t;
