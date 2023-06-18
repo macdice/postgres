@@ -426,15 +426,15 @@ typedef enum CAC_state
 	CAC_TOOMANY
 } CAC_state;
 
-static void BackendInitialize(Port *port, CAC_state cac);
-static void BackendRun(Port *port) pg_attribute_noreturn();
+static void BackendInitialize(ClientSocket *client_sock, CAC_state cac);
+static void BackendRun(void) pg_attribute_noreturn();
 static void ExitPostmaster(int status) pg_attribute_noreturn();
 static int	ServerLoop(void);
-static int	BackendStartup(Port *port);
+static int	BackendStartup(ClientSocket *port);
 static int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void processCancelRequest(Port *port, void *pkt);
-static void report_fork_failure_to_client(Port *port, int errnum);
+static void report_fork_failure_to_client(ClientSocket *client_sock, int errnum);
 static CAC_state canAcceptConnections(int backend_type);
 static bool RandomCancelKey(int32 *cancel_key);
 static void signal_child(pid_t pid, int signal);
@@ -483,8 +483,8 @@ typedef struct
 } win32_deadchild_waitinfo;
 #endif							/* WIN32 */
 
-static pid_t backend_forkexec(Port *port, CAC_state cac);
-static pid_t internal_forkexec(int argc, char *argv[], Port *port);
+static pid_t backend_forkexec(ClientSocket *client_sock, CAC_state cac);
+static pid_t internal_forkexec(int argc, char *argv[], ClientSocket *client_sock);
 
 /* Type for a socket that can be inherited to a client process */
 #ifdef WIN32
@@ -503,8 +503,8 @@ typedef int InheritableSocket;
  */
 typedef struct
 {
-	Port		port;
-	InheritableSocket portsocket;
+	ClientSocket client_sock;
+	InheritableSocket serialized_sock;
 	char		DataDir[MAXPGPATH];
 	int32		MyCancelKey;
 	int			MyPMChildSlot;
@@ -552,13 +552,13 @@ typedef struct
 	BackgroundWorker MyBgworkerEntry;
 } BackendParameters;
 
-static void read_backend_variables(char *id, Port *port);
-static void restore_backend_variables(BackendParameters *param, Port *port);
+static void read_backend_variables(char *id, ClientSocket *client_sock);
+static void restore_backend_variables(BackendParameters *param, ClientSocket *client_sock);
 
 #ifndef WIN32
-static bool save_backend_variables(BackendParameters *param, Port *port);
+static bool save_backend_variables(BackendParameters *param, ClientSocket *client_sock);
 #else
-static bool save_backend_variables(BackendParameters *param, Port *port,
+static bool save_backend_variables(BackendParameters *param, ClientSocket *client_sock,
 								   HANDLE childProcess, pid_t childPid);
 #endif
 
@@ -1221,12 +1221,12 @@ PostmasterMain(int argc, char *argv[])
 			char	   *curhost = (char *) lfirst(l);
 
 			if (strcmp(curhost, "*") == 0)
-				status = StreamServerPort(AF_UNSPEC, NULL,
+				status = ListenServerPort(AF_UNSPEC, NULL,
 										  (unsigned short) PostPortNumber,
 										  NULL,
 										  ListenSocket, MAXLISTEN);
 			else
-				status = StreamServerPort(AF_UNSPEC, curhost,
+				status = ListenServerPort(AF_UNSPEC, curhost,
 										  (unsigned short) PostPortNumber,
 										  NULL,
 										  ListenSocket, MAXLISTEN);
@@ -1318,7 +1318,7 @@ PostmasterMain(int argc, char *argv[])
 		{
 			char	   *socketdir = (char *) lfirst(l);
 
-			status = StreamServerPort(AF_UNIX, NULL,
+			status = ListenServerPort(AF_UNIX, NULL,
 									  (unsigned short) PostPortNumber,
 									  socketdir,
 									  ListenSocket, MAXLISTEN);
@@ -1499,7 +1499,7 @@ CloseServerPorts(int status, Datum arg)
 	{
 		if (ListenSocket[i] != PGINVALID_SOCKET)
 		{
-			StreamClose(ListenSocket[i]);
+			closesocket(ListenSocket[i]);
 			ListenSocket[i] = PGINVALID_SOCKET;
 		}
 	}
@@ -1781,18 +1781,20 @@ ServerLoop(void)
 
 			if (events[i].events & WL_SOCKET_ACCEPT)
 			{
-				Port	   port;
+				ClientSocket s;
 
-				memset(&port, 0, sizeof(port));
-				if (StreamConnection(events[i].fd, &port) == STATUS_OK)
-					BackendStartup(&port);
+				if (AcceptClientConnection(events[i].fd, &s) == STATUS_OK)
+					BackendStartup(&s);
 
 				/*
 				 * We no longer need the open socket or port structure in this
 				 * process
 				 */
-				if (port.sock != PGINVALID_SOCKET)
-					StreamClose(port.sock);
+				if (s.sock != PGINVALID_SOCKET)
+				{
+					if (closesocket(s.sock) != 0)
+						elog(LOG, "could not close client socket: %m");
+				}
 			}
 		}
 
@@ -2529,7 +2531,8 @@ ClosePostmasterPorts(bool am_syslogger)
 	{
 		if (ListenSocket[i] != PGINVALID_SOCKET)
 		{
-			StreamClose(ListenSocket[i]);
+			if (closesocket(ListenSocket[i]) != 0)
+				elog(LOG, "could not close listen socket: %m");
 			ListenSocket[i] = PGINVALID_SOCKET;
 		}
 	}
@@ -4034,7 +4037,7 @@ TerminateChildren(int signal)
  * Note: if you change this code, also consider StartAutovacuumWorker.
  */
 static int
-BackendStartup(Port *port)
+BackendStartup(ClientSocket *client_sock)
 {
 	Backend    *bn;				/* for backend cleanup */
 	pid_t		pid;
@@ -4085,7 +4088,7 @@ BackendStartup(Port *port)
 	bn->bgworker_notify = false;
 
 #ifdef EXEC_BACKEND
-	pid = backend_forkexec(port, cac);
+	pid = backend_forkexec(client_sock, cac);
 #else							/* !EXEC_BACKEND */
 	pid = fork_process();
 	if (pid == 0)				/* child */
@@ -4097,10 +4100,10 @@ BackendStartup(Port *port)
 		ClosePostmasterPorts(false);
 
 		/* Perform additional initialization and collect startup packet */
-		BackendInitialize(port, cac);
+		BackendInitialize(client_sock, cac);
 
 		/* And run the backend */
-		BackendRun(port);
+		BackendRun();
 	}
 #endif							/* EXEC_BACKEND */
 
@@ -4115,14 +4118,14 @@ BackendStartup(Port *port)
 		errno = save_errno;
 		ereport(LOG,
 				(errmsg("could not fork new process for connection: %m")));
-		report_fork_failure_to_client(port, save_errno);
+		report_fork_failure_to_client(client_sock, save_errno);
 		return STATUS_ERROR;
 	}
 
 	/* in parent, successful fork */
 	ereport(DEBUG2,
 			(errmsg_internal("forked new backend, pid=%d socket=%d",
-							 (int) pid, (int) port->sock)));
+							 (int) pid, (int) client_sock->sock)));
 
 	/*
 	 * Everything's been successful, it's safe to add this backend to our list
@@ -4149,7 +4152,7 @@ BackendStartup(Port *port)
  * it's not up and running.
  */
 static void
-report_fork_failure_to_client(Port *port, int errnum)
+report_fork_failure_to_client(ClientSocket *client_sock, int errnum)
 {
 	char		buffer[1000];
 	int			rc;
@@ -4160,13 +4163,13 @@ report_fork_failure_to_client(Port *port, int errnum)
 			 strerror(errnum));
 
 	/* Set port to non-blocking.  Don't do send() if this fails */
-	if (!pg_set_noblock(port->sock))
+	if (!pg_set_noblock(client_sock->sock))
 		return;
 
 	/* We'll retry after EINTR, but ignore all other failures */
 	do
 	{
-		rc = send(port->sock, buffer, strlen(buffer) + 1, 0);
+		rc = send(client_sock->sock, buffer, strlen(buffer) + 1, 0);
 	} while (rc < 0 && errno == EINTR);
 }
 
@@ -4184,16 +4187,24 @@ report_fork_failure_to_client(Port *port, int errnum)
  * but have not yet set up most of our local pointers to shmem structures.
  */
 static void
-BackendInitialize(Port *port, CAC_state cac)
+BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 {
 	int			status;
 	int			ret;
+	Port	   *port;
 	char		remote_host[NI_MAXHOST];
 	char		remote_port[NI_MAXSERV];
 	StringInfoData ps_data;
+	MemoryContext oldcontext;
 
-	/* Save port etc. for ps status */
+	/*
+	 * Create Port structure in TopMemoryContext, so that it survives into
+	 * PostgresMain execution.
+	 */
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	port = StreamConnection(client_sock);
 	MyProcPort = port;
+	MemoryContextSwitchTo(oldcontext);
 
 	/* Tell fd.c about the long-lived FD associated with the port */
 	ReserveExternalFD();
@@ -4254,8 +4265,9 @@ BackendInitialize(Port *port, CAC_state cac)
 	 * Save remote_host and remote_port in port structure (after this, they
 	 * will appear in log_line_prefix data for log messages).
 	 */
-	port->remote_host = strdup(remote_host);
-	port->remote_port = strdup(remote_port);
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	port->remote_host = pstrdup(remote_host);
+	port->remote_port = pstrdup(remote_port);
 
 	/* And now we can issue the Log_connections message, if wanted */
 	if (Log_connections)
@@ -4286,7 +4298,8 @@ BackendInitialize(Port *port, CAC_state cac)
 		ret == 0 &&
 		strspn(remote_host, "0123456789.") < strlen(remote_host) &&
 		strspn(remote_host, "0123456789ABCDEFabcdef:") < strlen(remote_host))
-		port->remote_hostname = strdup(remote_host);
+		port->remote_hostname = pstrdup(remote_host);
+	MemoryContextSwitchTo(oldcontext);
 
 	/*
 	 * Ready to begin client interaction.  We will give up and _exit(1) after
@@ -4407,11 +4420,11 @@ BackendInitialize(Port *port, CAC_state cac)
  *		Doesn't return at all.
  */
 static void
-BackendRun(Port *port)
+BackendRun(void)
 {
 	/*
-	 * Create a per-backend PGPROC struct in shared memory. We must do
-	 * this before we can use LWLocks (in AttachSharedMemoryAndSemaphores).
+	 * Create a per-backend PGPROC struct in shared memory. We must do this
+	 * before we can use LWLocks (in AttachSharedMemoryAndSemaphores).
 	 */
 	InitProcess();
 
@@ -4424,7 +4437,7 @@ BackendRun(Port *port)
 	 */
 	MemoryContextSwitchTo(TopMemoryContext);
 
-	PostgresMain(port->database_name, port->user_name);
+	PostgresMain(MyProcPort->database_name, MyProcPort->user_name);
 }
 
 
@@ -4445,11 +4458,11 @@ BackendRun(Port *port)
 pid_t
 postmaster_forkexec(int argc, char *argv[])
 {
-	Port		port;
+	ClientSocket client_sock;
 
-	/* This entry point passes dummy values for the Port variables */
-	memset(&port, 0, sizeof(port));
-	return internal_forkexec(argc, argv, &port);
+	/* This entry point doesn't pass a client socket */
+	memset(&client_sock, 0, sizeof(ClientSocket));
+	return internal_forkexec(argc, argv, &client_sock);
 }
 
 /*
@@ -4462,7 +4475,7 @@ postmaster_forkexec(int argc, char *argv[])
  * returns the pid of the fork/exec'd process, or -1 on failure
  */
 static pid_t
-backend_forkexec(Port *port, CAC_state cac)
+backend_forkexec(ClientSocket *client_sock, CAC_state cac)
 {
 	char	   *av[5];
 	int			ac = 0;
@@ -4478,7 +4491,7 @@ backend_forkexec(Port *port, CAC_state cac)
 	av[ac] = NULL;
 	Assert(ac < lengthof(av));
 
-	return internal_forkexec(ac, av, port);
+	return internal_forkexec(ac, av, client_sock);
 }
 
 #ifndef WIN32
@@ -4490,7 +4503,7 @@ backend_forkexec(Port *port, CAC_state cac)
  * - fork():s, and then exec():s the child process
  */
 static pid_t
-internal_forkexec(int argc, char *argv[], Port *port)
+internal_forkexec(int argc, char *argv[], ClientSocket *client_sock)
 {
 	static unsigned long tmpBackendFileNum = 0;
 	pid_t		pid;
@@ -4498,7 +4511,7 @@ internal_forkexec(int argc, char *argv[], Port *port)
 	BackendParameters param;
 	FILE	   *fp;
 
-	if (!save_backend_variables(&param, port))
+	if (!save_backend_variables(&param, client_sock))
 		return -1;				/* log made by save_backend_variables */
 
 	/* Calculate name for temp file */
@@ -4796,7 +4809,7 @@ retry:
 void
 SubPostmasterMain(int argc, char *argv[])
 {
-	Port		port;
+	ClientSocket client_sock;
 
 	/* In EXEC_BACKEND case we will not have inherited these settings */
 	IsPostmasterEnvironment = true;
@@ -4810,8 +4823,8 @@ SubPostmasterMain(int argc, char *argv[])
 		elog(FATAL, "invalid subpostmaster invocation");
 
 	/* Read in the variables file */
-	memset(&port, 0, sizeof(Port));
-	read_backend_variables(argv[2], &port);
+	memset(&client_sock, 0, sizeof(ClientSocket));
+	read_backend_variables(argv[2], &client_sock);
 
 	/* Close the postmaster's sockets (as soon as we know them) */
 	ClosePostmasterPorts(strcmp(argv[1], "--forklog") == 0);
@@ -4915,13 +4928,13 @@ SubPostmasterMain(int argc, char *argv[])
 		 * PGPROC slots, we have already initialized libpq and are able to
 		 * report the error to the client.
 		 */
-		BackendInitialize(&port, cac);
+		BackendInitialize(&client_sock, cac);
 
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
 		/* And run the backend */
-		BackendRun(&port);		/* does not return */
+		BackendRun();			/* does not return */
 	}
 	if (strcmp(argv[1], "--forkaux") == 0)
 	{
@@ -5995,15 +6008,15 @@ static void read_inheritable_socket(SOCKET *dest, InheritableSocket *src);
 /* Save critical backend variables into the BackendParameters struct */
 #ifndef WIN32
 static bool
-save_backend_variables(BackendParameters *param, Port *port)
+save_backend_variables(BackendParameters *param, ClientSocket *client_sock)
 #else
 static bool
-save_backend_variables(BackendParameters *param, Port *port,
+save_backend_variables(BackendParameters *param, ClientSocket *client_sock,
 					   HANDLE childProcess, pid_t childPid)
 #endif
 {
-	memcpy(&param->port, port, sizeof(Port));
-	if (!write_inheritable_socket(&param->portsocket, port->sock, childPid))
+	memcpy(&param->client_sock, client_sock, sizeof(ClientSocket));
+	if (!write_inheritable_socket(&param->serialized_sock, client_sock->sock, childPid))
 		return false;
 
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
@@ -6165,7 +6178,7 @@ read_inheritable_socket(SOCKET *dest, InheritableSocket *src)
 #endif
 
 static void
-read_backend_variables(char *id, Port *port)
+read_backend_variables(char *id, ClientSocket *client_sock)
 {
 	BackendParameters param;
 
@@ -6232,15 +6245,15 @@ read_backend_variables(char *id, Port *port)
 	}
 #endif
 
-	restore_backend_variables(&param, port);
+	restore_backend_variables(&param, client_sock);
 }
 
 /* Restore critical backend variables from the BackendParameters struct */
 static void
-restore_backend_variables(BackendParameters *param, Port *port)
+restore_backend_variables(BackendParameters *param, ClientSocket *client_sock)
 {
-	memcpy(port, &param->port, sizeof(Port));
-	read_inheritable_socket(&port->sock, &param->portsocket);
+	memcpy(client_sock, &param->client_sock, sizeof(ClientSocket));
+	read_inheritable_socket(&client_sock->sock, &param->serialized_sock);
 
 	SetDataDir(param->DataDir);
 
