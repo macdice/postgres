@@ -717,23 +717,30 @@ bgworker_die(SIGNAL_ARGS)
 }
 
 /*
- * Start a new background worker
- *
- * This is the main entry point for background worker, to be called from
- * postmaster.
+ * This is the main entry point for background worker process.
  */
 void
-StartBackgroundWorker(void)
+BackgroundWorkerMain(char *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
-	BackgroundWorker *worker = MyBgworkerEntry;
+	BackgroundWorker *worker;
 	bgworker_main_type entrypt;
 
+	/* Release postmaster's working memory context */
+	if (PostmasterContext)
+	{
+		MemoryContextDelete(PostmasterContext);
+		PostmasterContext = NULL;
+	}
+
+	Assert(startup_data_len == sizeof(BackgroundWorker));
+	worker = (BackgroundWorker *) startup_data;
 	if (worker == NULL)
 		elog(FATAL, "unable to find bgworker entry");
 
 	IsBackgroundWorker = true;
 
+	MyBgworkerEntry = worker;
 	MyBackendType = B_BG_WORKER;
 	init_ps_display(worker->bgw_name);
 

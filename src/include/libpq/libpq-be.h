@@ -132,10 +132,11 @@ typedef struct ClientConnectionInfo
 typedef struct Port
 {
 	pgsocket	sock;			/* File descriptor */
-	bool		noblock;		/* is the socket in non-blocking mode? */
-	ProtocolVersion proto;		/* FE/BE protocol version */
 	SockAddr	laddr;			/* local addr (postmaster) */
 	SockAddr	raddr;			/* remote addr (client) */
+
+	bool		noblock;		/* is the socket in non-blocking mode? */
+	ProtocolVersion proto;		/* FE/BE protocol version */
 	char	   *remote_host;	/* name (or ip addr) of remote host */
 	char	   *remote_hostname;	/* name (not ip addr) of remote host, if
 									 * available */
@@ -218,11 +219,12 @@ typedef struct Port
  * ClientSocket holds a socket for an accepted connection, along with the
  * information about the endpoints.
  */
-typedef struct ClientSocket {
+struct ClientSocket {
 	pgsocket	sock;			/* File descriptor */
 	SockAddr	laddr;			/* local addr (postmaster) */
 	SockAddr	raddr;			/* remote addr (client) */
-} ClientSocket;
+};
+typedef struct ClientSocket ClientSocket;
 
 #ifdef USE_SSL
 /*
