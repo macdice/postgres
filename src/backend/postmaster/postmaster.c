@@ -4176,15 +4176,6 @@ BackendStartup(Port *port)
 		/* Perform additional initialization and collect startup packet */
 		BackendInitialize(port);
 
-		/*
-		 * Create a per-backend PGPROC struct in shared memory. We must do
-		 * this before we can use LWLocks. In the !EXEC_BACKEND case (here)
-		 * this could be delayed a bit further, but EXEC_BACKEND needs to do
-		 * stuff with LWLocks before PostgresMain(), so we do it here as well
-		 * for symmetry.
-		 */
-		InitProcess();
-
 		/* And run the backend */
 		BackendRun(port);
 	}
@@ -4452,6 +4443,15 @@ BackendInitialize(Port *port)
 static void
 BackendRun(Port *port)
 {
+	/*
+	 * Create a per-backend PGPROC struct in shared memory. We must do
+	 * this before we can use LWLocks (in AttachSharedMemoryAndSemaphores).
+	 */
+	InitProcess();
+
+	/* Attach process to shared data structures */
+	AttachSharedMemoryAndSemaphores();
+
 	/*
 	 * Make sure we aren't in PostmasterContext anymore.  (We can't delete it
 	 * just yet, though, because InitPostgres will need the HBA data.)
@@ -4947,12 +4947,6 @@ SubPostmasterMain(int argc, char *argv[])
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
-
 		/* And run the backend */
 		BackendRun(&port);		/* does not return */
 	}
@@ -4965,12 +4959,6 @@ SubPostmasterMain(int argc, char *argv[])
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitAuxiliaryProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
-
 		auxtype = atoi(argv[3]);
 		AuxiliaryProcessMain(auxtype);	/* does not return */
 	}
@@ -4979,24 +4967,12 @@ SubPostmasterMain(int argc, char *argv[])
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
-
 		AutoVacLauncherMain(argc - 2, argv + 2);	/* does not return */
 	}
 	if (strcmp(argv[1], "--forkavworker") == 0)
 	{
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
-
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
 
 		AutoVacWorkerMain(argc - 2, argv + 2);	/* does not return */
 	}
@@ -5007,12 +4983,6 @@ SubPostmasterMain(int argc, char *argv[])
 
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
-
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
 
 		StartBackgroundWorker();
 	}

@@ -97,12 +97,12 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 	 */
 
 	/*
-	 * Create a PGPROC so we can use LWLocks.  In the EXEC_BACKEND case, this
-	 * was already done by SubPostmasterMain().
+	 * Create a PGPROC so we can use LWLocks.
 	 */
-#ifndef EXEC_BACKEND
 	InitAuxiliaryProcess();
-#endif
+
+	/* Attach process to shared data structures */
+	AttachSharedMemoryAndSemaphores();
 
 	BaseInit();
 
