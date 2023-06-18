@@ -540,6 +540,8 @@ typedef struct
 #endif
 	char		my_exec_path[MAXPGPATH];
 	char		pkglib_path[MAXPGPATH];
+
+	BackgroundWorker MyBgworkerEntry;
 } BackendParameters;
 
 static void read_backend_variables(char *id, Port *port);
@@ -4867,7 +4869,7 @@ SubPostmasterMain(int argc, char *argv[])
 		strcmp(argv[1], "--forkavlauncher") == 0 ||
 		strcmp(argv[1], "--forkavworker") == 0 ||
 		strcmp(argv[1], "--forkaux") == 0 ||
-		strncmp(argv[1], "--forkbgworker=", 15) == 0)
+		strncmp(argv[1], "--forkbgworker", 14) == 0)
 		PGSharedMemoryReAttach();
 	else
 		PGSharedMemoryNoReAttach();
@@ -4998,10 +5000,8 @@ SubPostmasterMain(int argc, char *argv[])
 
 		AutoVacWorkerMain(argc - 2, argv + 2);	/* does not return */
 	}
-	if (strncmp(argv[1], "--forkbgworker=", 15) == 0)
+	if (strncmp(argv[1], "--forkbgworker", 14) == 0)
 	{
-		int			shmem_slot;
-
 		/* do this as early as possible; in particular, before InitProcess() */
 		IsBackgroundWorker = true;
 
@@ -5013,10 +5013,6 @@ SubPostmasterMain(int argc, char *argv[])
 
 		/* Attach process to shared data structures */
 		CreateSharedMemoryAndSemaphores();
-
-		/* Fetch MyBgworkerEntry from shared memory */
-		shmem_slot = atoi(argv[1] + 15);
-		MyBgworkerEntry = BackgroundWorkerEntry(shmem_slot);
 
 		StartBackgroundWorker();
 	}
@@ -5662,13 +5658,14 @@ BackgroundWorkerUnblockSignals(void)
 
 #ifdef EXEC_BACKEND
 static pid_t
-bgworker_forkexec(int shmem_slot)
+bgworker_forkexec(BackgroundWorker *worker)
 {
 	char	   *av[10];
 	int			ac = 0;
 	char		forkav[MAXPGPATH];
+	pid_t		result;
 
-	snprintf(forkav, MAXPGPATH, "--forkbgworker=%d", shmem_slot);
+	snprintf(forkav, MAXPGPATH, "--forkbgworker");
 
 	av[ac++] = "postgres";
 	av[ac++] = forkav;
@@ -5677,7 +5674,11 @@ bgworker_forkexec(int shmem_slot)
 
 	Assert(ac < lengthof(av));
 
-	return postmaster_forkexec(ac, av);
+	MyBgworkerEntry = worker;
+	result = postmaster_forkexec(ac, av);
+	MyBgworkerEntry = NULL;
+
+	return result;
 }
 #endif
 
@@ -5718,7 +5719,7 @@ do_start_bgworker(RegisteredBgWorker *rw)
 							 rw->rw_worker.bgw_name)));
 
 #ifdef EXEC_BACKEND
-	switch ((worker_pid = bgworker_forkexec(rw->rw_shmem_slot)))
+	switch ((worker_pid = bgworker_forkexec(&rw->rw_worker)))
 #else
 	switch ((worker_pid = fork_process()))
 #endif
@@ -6120,6 +6121,11 @@ save_backend_variables(BackendParameters *param, Port *port,
 
 	strlcpy(param->pkglib_path, pkglib_path, MAXPGPATH);
 
+	if (MyBgworkerEntry)
+		memcpy(&param->MyBgworkerEntry, MyBgworkerEntry, sizeof(BackgroundWorker));
+	else
+		memset(&param->MyBgworkerEntry, 0, sizeof(BackgroundWorker));
+
 	return true;
 }
 
@@ -6349,6 +6355,13 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	strlcpy(my_exec_path, param->my_exec_path, MAXPGPATH);
 
 	strlcpy(pkglib_path, param->pkglib_path, MAXPGPATH);
+
+	if (param->MyBgworkerEntry.bgw_name[0] != '\0')
+	{
+		MyBgworkerEntry = (BackgroundWorker *)
+			MemoryContextAlloc(TopMemoryContext, sizeof(BackgroundWorker));
+		memcpy(MyBgworkerEntry, &param->MyBgworkerEntry, sizeof(BackgroundWorker));
+	}
 
 	/*
 	 * We need to restore fd.c's counts of externally-opened FDs; to avoid
