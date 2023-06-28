@@ -503,7 +503,8 @@ static BlockNumber ExtendBufferedRelShared(BufferManagerRelation bmr,
 										   BlockNumber extend_upto,
 										   Buffer *buffers,
 										   uint32 *extended_by);
-static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
+static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
+					  bool skip_if_not_valid);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf);
 static void UnpinBufferNoOwner(BufferDesc *buf);
@@ -673,7 +674,6 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 	BufferDesc *bufHdr;
 	BufferTag	tag;
 	uint32		buf_state;
-	bool		have_private_ref;
 
 	Assert(BufferIsValid(recent_buffer));
 
@@ -701,38 +701,24 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 	else
 	{
 		bufHdr = GetBufferDescriptor(recent_buffer - 1);
-		have_private_ref = GetPrivateRefCount(recent_buffer) > 0;
 
 		/*
-		 * Do we already have this buffer pinned with a private reference?  If
-		 * so, it must be valid and it is safe to check the tag without
-		 * locking.  If not, we have to lock the header first and then check.
+		 * Is it still valid and holding the right tag?  We do an unlocked tag
+		 * comparison first, to make it unlikely that we'll increment the
+		 * usage counter of the wrong buffer, if someone calls us with a very
+		 * out of date recent_buffer.  Then we'll check it again if we get the
+		 * pin.
 		 */
-		if (have_private_ref)
-			buf_state = pg_atomic_read_u32(&bufHdr->state);
-		else
-			buf_state = LockBufHdr(bufHdr);
-
-		if ((buf_state & BM_VALID) && BufferTagsEqual(&tag, &bufHdr->tag))
+		if (BufferTagsEqual(&tag, &bufHdr->tag) &&
+			PinBuffer(bufHdr, NULL, true))
 		{
-			/*
-			 * It's now safe to pin the buffer.  We can't pin first and ask
-			 * questions later, because it might confuse code paths like
-			 * InvalidateBuffer() if we pinned a random non-matching buffer.
-			 */
-			if (have_private_ref)
-				PinBuffer(bufHdr, NULL);	/* bump pin count */
-			else
-				PinBuffer_Locked(bufHdr);	/* pin for first time */
-
-			pgBufferUsage.shared_blks_hit++;
-
-			return true;
+			if (BufferTagsEqual(&tag, &bufHdr->tag))
+			{
+				pgBufferUsage.shared_blks_hit++;
+				return true;
+			}
+			UnpinBuffer(bufHdr);
 		}
-
-		/* If we locked the header above, now unlock. */
-		if (!have_private_ref)
-			UnlockBufHdr(bufHdr, buf_state);
 	}
 
 	return false;
@@ -1624,7 +1610,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		buf = GetBufferDescriptor(existing_buf_id);
 
-		valid = PinBuffer(buf, strategy);
+		valid = PinBuffer(buf, strategy, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
 		LWLockRelease(newPartitionLock);
@@ -1692,7 +1678,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		existing_buf_hdr = GetBufferDescriptor(existing_buf_id);
 
-		valid = PinBuffer(existing_buf_hdr, strategy);
+		valid = PinBuffer(existing_buf_hdr, strategy, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
 		LWLockRelease(newPartitionLock);
@@ -2323,7 +2309,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 			 * Pin the existing buffer before releasing the partition lock,
 			 * preventing it from being evicted.
 			 */
-			valid = PinBuffer(existing_hdr, strategy);
+			valid = PinBuffer(existing_hdr, strategy, false);
 
 			LWLockRelease(partition_lock);
 
@@ -2628,10 +2614,13 @@ ReleaseAndReadBuffer(Buffer buffer,
  * must have been done already.
  *
  * Returns true if buffer is BM_VALID, else false.  This provision allows
- * some callers to avoid an extra spinlock cycle.
+ * some callers to avoid an extra spinlock cycle.  If skip_if_not_valid is
+ * true, then a false return value also indicates that the buffer was
+ * (recently) invalid and has not been pinned.
  */
 static bool
-PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
+PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
+		  bool skip_if_not_valid)
 {
 	Buffer		b = BufferDescriptorGetBuffer(buf);
 	bool		result;
@@ -2654,6 +2643,12 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 		{
 			if (old_buf_state & BM_LOCKED)
 				old_buf_state = WaitBufHdrUnlocked(buf);
+
+			if (unlikely(skip_if_not_valid && !(old_buf_state & BM_VALID)))
+			{
+				ForgetPrivateRefCountEntry(ref);
+				return false;
+			}
 
 			buf_state = old_buf_state;
 
