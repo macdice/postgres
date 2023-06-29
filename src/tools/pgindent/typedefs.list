@@ -187,6 +187,7 @@ BOOL
 BOOLEAN
 BOX
 BTArrayKeyInfo
+BTAMCacheData
 BTBuildState
 BTCycleId
 BTDedupInterval

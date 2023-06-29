@@ -312,6 +312,29 @@ _bt_set_cleanup_info(Relation rel, BlockNumber num_delpages)
 }
 
 /*
+ * Get our private per-relation cache area.
+ */
+static inline BTAMCacheData *
+_bt_getcache(Relation rel)
+{
+	BTAMCacheData *amcache;
+
+	if (unlikely(rel->rd_amcache == NULL))
+	{
+		/* Set up cache on first time through. */
+		amcache = (BTAMCacheData *)
+			MemoryContextAlloc(rel->rd_indexcxt, sizeof(*amcache));
+		amcache->meta_page_is_valid = false;
+		amcache->recent_root_buffer = InvalidBuffer;
+		rel->rd_amcache = amcache;
+	}
+	else
+		amcache = (BTAMCacheData *) rel->rd_amcache;
+
+	return amcache;
+}
+
+/*
  *	_bt_getroot() -- Get the root page of the btree.
  *
  *		Since the root page can move around the btree file, we have to read
@@ -350,17 +373,21 @@ _bt_getroot(Relation rel, Relation heaprel, int access)
 	BlockNumber rootblkno;
 	uint32		rootlevel;
 	BTMetaPageData *metad;
+	BTAMCacheData *amcache;
 
 	Assert(access == BT_READ || heaprel != NULL);
+
+	amcache = _bt_getcache(rel);
 
 	/*
 	 * Try to use previously-cached metapage data to find the root.  This
 	 * normally saves one buffer access per index search, which is a very
 	 * helpful savings in bufmgr traffic and hence contention.
 	 */
-	if (rel->rd_amcache != NULL)
+	if (amcache->meta_page_is_valid)
 	{
-		metad = (BTMetaPageData *) rel->rd_amcache;
+		metad = &amcache->meta_page;
+
 		/* We shouldn't have cached it if any of these fail */
 		Assert(metad->btm_magic == BTREE_MAGIC);
 		Assert(metad->btm_version >= BTREE_MIN_VERSION);
@@ -373,7 +400,25 @@ _bt_getroot(Relation rel, Relation heaprel, int access)
 		Assert(rootblkno != P_NONE);
 		rootlevel = metad->btm_fastlevel;
 
-		rootbuf = _bt_getbuf(rel, rootblkno, BT_READ);
+		/* Try to find the root page in the buffer it was last seen in. */
+		if (BufferIsValid(amcache->recent_root_buffer) &&
+			ReadRecentBuffer(rel->rd_locator, MAIN_FORKNUM, rootblkno,
+							 amcache->recent_root_buffer))
+		{
+			/*
+			 * It's in the same buffer as last time, and we avoided a trip
+			 * through the buffer map.
+			 */
+			rootbuf = amcache->recent_root_buffer;
+			_bt_lockbuf(rel, rootbuf, BT_READ);
+			_bt_checkpage(rel, rootbuf);
+		}
+		else
+		{
+			/* Slow path.  Remember where it is for next time. */
+			rootbuf = _bt_getbuf(rel, rootblkno, BT_READ);
+			amcache->recent_root_buffer = rootbuf;
+		}
 		rootpage = BufferGetPage(rootbuf);
 		rootopaque = BTPageGetOpaque(rootpage);
 
@@ -393,10 +438,8 @@ _bt_getroot(Relation rel, Relation heaprel, int access)
 			return rootbuf;
 		}
 		_bt_relbuf(rel, rootbuf);
-		/* Cache is stale, throw it away */
-		if (rel->rd_amcache)
-			pfree(rel->rd_amcache);
-		rel->rd_amcache = NULL;
+		/* Cache is stale, mark it invalid. */
+		amcache->meta_page_is_valid = false;
 	}
 
 	metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_READ);
@@ -523,9 +566,8 @@ _bt_getroot(Relation rel, Relation heaprel, int access)
 		/*
 		 * Cache the metapage data for next time
 		 */
-		rel->rd_amcache = MemoryContextAlloc(rel->rd_indexcxt,
-											 sizeof(BTMetaPageData));
-		memcpy(rel->rd_amcache, metad, sizeof(BTMetaPageData));
+		amcache->meta_page = *metad;
+		amcache->meta_page_is_valid = true;
 
 		/*
 		 * We are done with the metapage; arrange to release it via first
@@ -588,16 +630,16 @@ _bt_gettrueroot(Relation rel)
 	BlockNumber rootblkno;
 	uint32		rootlevel;
 	BTMetaPageData *metad;
+	BTAMCacheData *amcache;
 
 	/*
 	 * We don't try to use cached metapage data here, since (a) this path is
 	 * not performance-critical, and (b) if we are here it suggests our cache
 	 * is out-of-date anyway.  In light of point (b), it's probably safest to
-	 * actively flush any cached metapage info.
+	 * actively invalidate any cached metapage info.
 	 */
-	if (rel->rd_amcache)
-		pfree(rel->rd_amcache);
-	rel->rd_amcache = NULL;
+	amcache = _bt_getcache(rel);
+	amcache->meta_page_is_valid = false;
 
 	metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_READ);
 	metapg = BufferGetPage(metabuf);
@@ -674,9 +716,12 @@ _bt_gettrueroot(Relation rel)
 int
 _bt_getrootheight(Relation rel)
 {
+	BTAMCacheData *amcache;
 	BTMetaPageData *metad;
 
-	if (rel->rd_amcache == NULL)
+	amcache = _bt_getcache(rel);
+
+	if (!amcache->meta_page_is_valid)
 	{
 		Buffer		metabuf;
 
@@ -697,14 +742,13 @@ _bt_getrootheight(Relation rel)
 		/*
 		 * Cache the metapage data for next time
 		 */
-		rel->rd_amcache = MemoryContextAlloc(rel->rd_indexcxt,
-											 sizeof(BTMetaPageData));
-		memcpy(rel->rd_amcache, metad, sizeof(BTMetaPageData));
+		amcache->meta_page = *metad;
+		amcache->meta_page_is_valid = true;
 		_bt_relbuf(rel, metabuf);
 	}
 
 	/* Get cached page */
-	metad = (BTMetaPageData *) rel->rd_amcache;
+	metad = &amcache->meta_page;
 	/* We shouldn't have cached it if any of these fail */
 	Assert(metad->btm_magic == BTREE_MAGIC);
 	Assert(metad->btm_version >= BTREE_MIN_VERSION);
@@ -738,9 +782,11 @@ _bt_getrootheight(Relation rel)
 void
 _bt_metaversion(Relation rel, bool *heapkeyspace, bool *allequalimage)
 {
+	BTAMCacheData *amcache;
 	BTMetaPageData *metad;
 
-	if (rel->rd_amcache == NULL)
+	amcache = _bt_getcache(rel);
+	if (!amcache->meta_page_is_valid)
 	{
 		Buffer		metabuf;
 
@@ -770,14 +816,13 @@ _bt_metaversion(Relation rel, bool *heapkeyspace, bool *allequalimage)
 		 * from version 2 to version 3, both of which are !heapkeyspace
 		 * versions.
 		 */
-		rel->rd_amcache = MemoryContextAlloc(rel->rd_indexcxt,
-											 sizeof(BTMetaPageData));
-		memcpy(rel->rd_amcache, metad, sizeof(BTMetaPageData));
+		amcache->meta_page = *metad;
+		amcache->meta_page_is_valid = true;
 		_bt_relbuf(rel, metabuf);
 	}
 
 	/* Get cached page */
-	metad = (BTMetaPageData *) rel->rd_amcache;
+	metad = &amcache->meta_page;
 	/* We shouldn't have cached it if any of these fail */
 	Assert(metad->btm_magic == BTREE_MAGIC);
 	Assert(metad->btm_version >= BTREE_MIN_VERSION);

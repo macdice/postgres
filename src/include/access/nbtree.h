@@ -152,6 +152,16 @@ typedef struct BTMetaPageData
 #define BTREE_NOVAC_VERSION	3	/* version with all meta fields set */
 
 /*
+ * Cache space, stored in rel->rd_amcache.
+ */
+typedef struct BTAMCacheData
+{
+	BTMetaPageData meta_page;
+	bool		meta_page_is_valid;
+	Buffer		recent_root_buffer;
+} BTAMCacheData;
+
+/*
  * Maximum size of a btree index entry, including its tuple header.
  *
  * We actually need to be able to fit three items on every page,
