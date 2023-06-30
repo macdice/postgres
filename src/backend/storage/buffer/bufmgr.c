@@ -970,6 +970,87 @@ ExtendBufferedRelTo(ExtendBufferedWhat eb,
 }
 
 /*
+ * Try to find a buffer using our tiny LRU cache, to avoid a trip through the
+ * buffer mapping table.  Only for non-local RBM_NORMAL reads.
+ */
+static Buffer
+ReadBuffer_try_recent(SMgrRelation smgr, ForkNumber forkNum,
+					  BlockNumber blockNum)
+{
+	SMgrBufferLruEntry *buffer_lru = &smgr->recent_buffer_lru[forkNum][0];
+
+	Assert(BlockNumberIsValid(blockNum));
+	for (int i = 0; i < SMGR_BUFFER_LRU_SIZE; ++i)
+	{
+		if (buffer_lru[i].block == blockNum)
+		{
+			SMgrBufferLruEntry found = buffer_lru[i];
+
+			if (ReadRecentBuffer(smgr->smgr_rlocator.locator,
+								 forkNum,
+								 blockNum,
+								 found.buffer))
+			{
+				/* Move to front. */
+				if (i > 0)
+				{
+					memmove(&buffer_lru[1],
+							&buffer_lru[0],
+							sizeof(buffer_lru[0]) * i);
+					buffer_lru[0] = found;
+				}
+				return found.buffer;
+			}
+
+			/* Kill this entry and give up. */
+			if (i < SMGR_BUFFER_LRU_SIZE - 1)
+				memmove(&buffer_lru[i],
+						&buffer_lru[i + 1],
+						SMGR_BUFFER_LRU_SIZE - i);
+			buffer_lru[SMGR_BUFFER_LRU_SIZE - 1].block = InvalidBlockNumber;
+			break;
+		}
+	}
+
+	return InvalidBuffer;
+}
+
+/*
+ * Remember which buffer a block is in, for later lookups by
+ * ReadBuffer_try_recent().
+ */
+static void
+RememberRecentBuffer(SMgrRelation smgr, ForkNumber forkNum,
+					 BlockNumber blockNum, Buffer buffer)
+{
+	SMgrBufferLruEntry *buffer_lru = &smgr->recent_buffer_lru[forkNum][0];
+
+	/* If it's already there, move to front and update. */
+	for (int i = 0; i < SMGR_BUFFER_LRU_SIZE; ++i)
+	{
+		if (buffer_lru[i].block == blockNum)
+		{
+			if (i > 0)
+			{
+				memmove(&buffer_lru[1],
+						&buffer_lru[0],
+						sizeof(buffer_lru[0]) * i);
+				buffer_lru[0].block = blockNum;
+			}
+			buffer_lru[0].buffer = buffer;
+			return;
+		}
+	}
+
+	/* Otherwise insert at front. */
+	memmove(&buffer_lru[1],
+			&buffer_lru[0],
+			sizeof(buffer_lru[0]) * (SMGR_BUFFER_LRU_SIZE - 1));
+	buffer_lru[0].block = blockNum;
+	buffer_lru[0].buffer = buffer;
+}
+
+/*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
  *
  * *hit is set to true if the request was satisfied from shared buffer cache.
@@ -985,6 +1066,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	IOContext	io_context;
 	IOObject	io_object;
 	bool		isLocalBuf = SmgrIsTemp(smgr);
+	Buffer		recent_buffer;
 
 	*hit = false;
 
@@ -1035,6 +1117,20 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				 mode == RBM_ZERO_ON_ERROR)
 			pgBufferUsage.local_blks_read++;
 	}
+	else if (mode == RBM_NORMAL &&
+			 BufferIsValid((recent_buffer = ReadBuffer_try_recent(smgr,
+																  forkNum,
+																  blockNum))))
+	{
+		/*
+		 * Pinned buffer without having to look it up in the shared buffer
+		 * mapping table.
+		 */
+		found = true;
+		bufHdr = GetBufferDescriptor(recent_buffer - 1);
+		io_context = IOCONTEXT_NORMAL;
+		io_object = IOOBJECT_RELATION;
+	}
 	else
 	{
 		/*
@@ -1050,6 +1146,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		else if (mode == RBM_NORMAL || mode == RBM_NORMAL_NO_LOG ||
 				 mode == RBM_ZERO_ON_ERROR)
 			pgBufferUsage.shared_blks_read++;
+
+		RememberRecentBuffer(smgr, forkNum, blockNum,
+							 BufferDescriptorGetBuffer(bufHdr));
 	}
 
 	/* At this point we do NOT hold any locks. */
@@ -1163,6 +1262,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	{
 		/* Set BM_VALID, terminate IO, and wake up any waiters */
 		TerminateBufferIO(bufHdr, false, BM_VALID);
+
+		RememberRecentBuffer(smgr, forkNum, blockNum,
+							 BufferDescriptorGetBuffer(bufHdr));
 	}
 
 	VacuumPageMiss++;
