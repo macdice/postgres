@@ -6003,3 +6003,60 @@ ResOwnerPrintBufferPin(Datum res)
 {
 	return DebugPrintBufferRefcount(DatumGetInt32(res));
 }
+
+/*
+ * Try to evict a shared a buffer.
+ *
+ * This function is intended for testing/development use only.  By the time it
+ * returns, the buffer may again be occupied, perhaps even by the same block.
+ *
+ * Returns true if the buffer was valid and it has now been made invalid.
+ * Returns false if the wasn't valid, or it couldn't be evicted due to a pin,
+ * or if the buffer becomes dirty again while we're trying to write it out.
+ */
+bool
+EvictBuffer(Buffer buf)
+{
+	BufferDesc *desc;
+	uint32		buf_state;
+	bool		result;
+
+	/* Make sure we can pin the buffer if it turned out require writing. */
+	ReservePrivateRefCountEntry();
+
+	Assert(!BufferIsLocal(buf));
+	desc = GetBufferDescriptor(buf - 1);
+
+	/* Lock the header and check if it's valid. */
+	buf_state = LockBufHdr(desc);
+	if ((buf_state & BM_VALID) == 0)
+	{
+		UnlockBufHdr(desc, buf_state);
+		return false;
+	}
+
+	/* Check that it's not pinned by someone else. */
+	if (BUF_STATE_GET_REFCOUNT(buf_state) > 0)
+	{
+		UnlockBufHdr(desc, buf_state);
+		return false;
+	}
+
+	PinBuffer_Locked(desc);		/* releases spinlock */
+
+	/* If it was dirty, try to clean it once. */
+	if (buf_state & BM_DIRTY)
+	{
+		ResourceOwnerEnlarge(CurrentResourceOwner);
+		LWLockAcquire(BufferDescriptorGetContentLock(desc), LW_SHARED);
+		FlushBuffer(desc, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+		LWLockRelease(BufferDescriptorGetContentLock(desc));
+	}
+
+	/* This will return false if it becomes dirty or someone else pins it. */
+	result = InvalidateVictimBuffer(desc);
+
+	UnpinBuffer(desc);
+
+	return result;
+}
