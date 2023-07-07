@@ -16,8 +16,13 @@
 
 #include <curl/curl.h>
 #include <math.h>
+#ifdef HAVE_SYS_EPOLL_H
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
+#endif
+#ifdef HAVE_SYS_EVENT_H
+#include <sys/event.h>
+#endif
 #include <unistd.h>
 
 #include "common/jsonapi.h"
@@ -152,7 +157,9 @@ struct async_ctx
 {
 	OAuthStep	step;		/* where are we in the flow? */
 
+#ifdef HAVE_SYS_EPOLL_H
 	int			timerfd;	/* a timerfd for signaling async timeouts */
+#endif
 	pgsocket	mux;		/* the multiplexer socket containing all descriptors
 							   tracked by cURL, plus the timerfd */
 	CURLM	   *curlm;		/* top-level multi handle for cURL operations */
@@ -255,8 +262,10 @@ pg_fe_free_oauth_async_ctx(PGconn *conn, void *ctx)
 
 	if (actx->mux != PGINVALID_SOCKET)
 		close(actx->mux);
+#ifdef HAVE_SYS_EPOLL_H
 	if (actx->timerfd >= 0)
 		close(actx->timerfd);
+#endif
 
 	free(actx);
 }
@@ -815,12 +824,14 @@ parse_access_token(struct async_ctx *actx, struct token *tok)
  * Sets up the actx->mux, which is the altsock that PQconnectPoll clients will
  * select() on instead of the Postgres socket during OAuth negotiation.
  *
- * This is just an epoll set abstracting multiple other descriptors. A timerfd
- * is always part of the set; it's just disabled when we're not using it.
+ * This is just an epoll set or kqueue abstracting multiple other descriptors.
+ * A timerfd is always part of the set when using epoll; it's just disabled
+ * when we're not using it.
  */
 static bool
 setup_multiplexer(struct async_ctx *actx)
 {
+#ifdef HAVE_SYS_EPOLL_H
 	struct epoll_event ev = {.events = EPOLLIN};
 
 	actx->mux = epoll_create1(EPOLL_CLOEXEC);
@@ -844,16 +855,31 @@ setup_multiplexer(struct async_ctx *actx)
 	}
 
 	return true;
+#endif
+#ifdef HAVE_SYS_EVENT_H
+	actx->mux = kqueue();
+	if (actx->mux < 0)
+	{
+		actx_error(actx, "failed to create kqueue: %m");
+		return false;
+	}
+
+	return true;
+#endif
+
+	actx_error(actx, "here's a nickel kid, get yourself a better computer");
+	return false;
 }
 
 /*
- * Adds and removes sockets from the multiplexer epoll set, as directed by the
+ * Adds and removes sockets from the multiplexer set, as directed by the
  * cURL multi handle.
  */
 static int
 register_socket(CURL *curl, curl_socket_t socket, int what, void *ctx,
 				void *socketp)
 {
+#ifdef HAVE_SYS_EPOLL_H
 	struct async_ctx *actx = ctx;
 	struct epoll_event ev = {0};
 	int			res;
@@ -908,19 +934,93 @@ register_socket(CURL *curl, curl_socket_t socket, int what, void *ctx,
 
 		return -1;
 	}
+#endif
+#ifdef HAVE_SYS_EVENT_H
+	struct async_ctx *actx = ctx;
+	struct kevent ev[2] = {{0}};
+	struct kevent ev_out[2];
+	int			nev = 0;
+	int			res;
+
+	switch (what)
+	{
+		case CURL_POLL_IN:
+			EV_SET(&ev[nev], socket, EVFILT_READ, EV_ADD, 0, 0, 0);
+			nev++;
+			break;
+
+		case CURL_POLL_OUT:
+			EV_SET(&ev[nev], socket, EVFILT_WRITE, EV_ADD, 0, 0, 0);
+			nev++;
+			break;
+
+		case CURL_POLL_INOUT:
+			EV_SET(&ev[nev], socket, EVFILT_READ, EV_ADD, 0, 0, 0);
+			nev++;
+			EV_SET(&ev[nev], socket, EVFILT_WRITE, EV_ADD, 0, 0, 0);
+			nev++;
+			break;
+
+		case CURL_POLL_REMOVE:
+			/*
+			 * We don't know which of these is currently registered, perhaps
+			 * both, so we try to remove both.  This means we need to tolerate
+			 * ENOENT below.
+			 */
+			EV_SET(&ev[nev], socket, EVFILT_READ, EV_DELETE, 0, 0, 0);
+			nev++;
+			EV_SET(&ev[nev], socket, EVFILT_WRITE, EV_DELETE, 0, 0, 0);
+			nev++;
+			break;
+
+		default:
+			actx_error(actx, "unknown cURL socket operation (%d)", what);
+			return -1;
+	}
+
+	res = kevent(actx->mux, ev, nev, ev_out, lengthof(ev_out), NULL);
+	if (res < 0)
+	{
+		actx_error(actx, "could not modify kqueue: %m");
+		return -1;
+	}
+
+	/*
+	 * We can't use the simple errno version of kevent, because we need to skip
+	 * over ENOENT while still allowing a second change to be processed.  So we
+	 * need a longer-form error checking loop.
+	 */
+	for (int i = 0; i < res; ++i)
+	{
+		if (ev_out[i].flags & EV_ERROR && ev_out[i].data != ENOENT)
+		{
+			errno = ev_out[i].data;
+			switch (what)
+			{
+			case CURL_POLL_REMOVE:
+				actx_error(actx, "could not delete from kqueue: %m");
+				break;
+			default:
+				actx_error(actx, "could not add to kqueue: %m");
+			}
+			return -1;
+		}
+	}
+#endif
 
 	return 0;
 }
 
 /*
- * Adds or removes timeouts from the multiplexer epoll set, as directed by the
- * cURL multi handle. Rather than continually adding and removing the timerfd,
- * we keep it in the epoll set at all times and just disarm it when it's not
+ * Adds or removes timeouts from the multiplexer set, as directed by the
+ * cURL multi handle. Rather than continually adding and removing the timer,
+ * we keep it in the set at all times and just disarm it when it's not
  * needed.
  */
 static int
 register_timer(CURLM *curlm, long timeout, void *ctx)
 {
+#if HAVE_SYS_EPOLL_H
 	struct async_ctx *actx = ctx;
 	struct itimerspec spec = {0};
 
@@ -951,6 +1051,19 @@ register_timer(CURLM *curlm, long timeout, void *ctx)
 		actx_error(actx, "setting timerfd to %ld: %m", timeout);
 		return -1;
 	}
+#endif
+#ifdef HAVE_SYS_EVENT_H
+	struct async_ctx *actx = ctx;
+	struct kevent ev;
+
+	EV_SET(&ev, 1, EVFILT_TIMER, timeout < 0 ? EV_DELETE : EV_ADD,
+		   NOTE_MSECONDS, timeout, 0);
+	if (kevent(actx->mux, &ev, 1, NULL, 0, NULL) < 0 && errno != ENOENT)
+	{
+		actx_error(actx, "setting kqueue timer to %ld: %m", timeout);
+		return -1;
+	}
+#endif
 
 	return 0;
 }
@@ -1575,7 +1688,9 @@ pg_fe_run_oauth_flow(PGconn *conn, pgsocket *altsock)
 		}
 
 		actx->mux = PGINVALID_SOCKET;
+#ifdef HAVE_SYS_EPOLL_H
 		actx->timerfd = -1;
+#endif
 
 		state->async_ctx = actx;
 
@@ -1663,7 +1778,12 @@ pg_fe_run_oauth_flow(PGconn *conn, pgsocket *altsock)
 		case OAUTH_STEP_TOKEN_REQUEST:
 		{
 			const struct token_error *err;
+#ifdef HAVE_SYS_EPOLL_H
 			struct itimerspec spec = {0};
+#endif
+#ifdef HAVE_SYS_EVENT_H
+			struct kevent ev = {0};
+#endif
 
 			if (!finish_token_request(actx, &tok))
 				goto error_return;
@@ -1725,6 +1845,7 @@ pg_fe_run_oauth_flow(PGconn *conn, pgsocket *altsock)
 			 * Wait for the required interval before issuing the next request.
 			 */
 			Assert(actx->authz.interval > 0);
+#ifdef HAVE_SYS_EPOLL_H
 			spec.it_value.tv_sec = actx->authz.interval;
 
 			if (timerfd_settime(actx->timerfd, 0 /* no flags */, &spec, NULL) < 0)
@@ -1734,6 +1855,18 @@ pg_fe_run_oauth_flow(PGconn *conn, pgsocket *altsock)
 			}
 
 			*altsock = actx->timerfd;
+#endif
+#ifdef HAVE_SYS_EVENT_H
+			// XXX: I guess this wants to be hidden in a routine
+			EV_SET(&ev, 1, EVFILT_TIMER, EV_ADD, NOTE_MSECONDS,
+				   actx->authz.interval * 1000, 0);
+			if (kevent(actx->mux, &ev, 1, NULL, 0, NULL) < 0)
+			{
+				actx_error(actx, "failed to set kqueue timer: %m");
+				goto error_return;
+			}
+			// XXX: why did we change the altsock in the epoll version?
+#endif
 			actx->step = OAUTH_STEP_WAIT_INTERVAL;
 			break;
 		}
