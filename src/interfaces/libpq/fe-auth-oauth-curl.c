@@ -30,6 +30,13 @@
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
 
+#ifdef HAVE_SYS_EVENT_H
+/* macOS doesn't define the time unit macros, but uses milliseconds by default. */
+#ifndef NOTE_MSECONDS
+#define NOTE_MSECONDS 0
+#endif
+#endif
+
 /*
  * Parsed JSON Representations
  *
