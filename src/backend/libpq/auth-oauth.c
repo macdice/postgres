@@ -565,7 +565,8 @@ run_validator_command(Port *port, const char *token)
 	 * MUST read all data off of the pipe before writing anything).
 	 * TODO: port to Windows using _pipe().
 	 */
-	rc = pipe2(pipefd, O_CLOEXEC);
+	//rc = pipe2(pipefd, O_CLOEXEC);
+	rc = pipe(pipefd);
 	if (rc < 0)
 	{
 		ereport(COMMERROR,
