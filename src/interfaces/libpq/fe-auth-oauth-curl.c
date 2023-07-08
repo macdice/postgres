@@ -946,6 +946,7 @@ register_socket(CURL *curl, curl_socket_t socket, int what, void *ctx,
 	struct async_ctx *actx = ctx;
 	struct kevent ev[2] = {{0}};
 	struct kevent ev_out[2];
+	struct timespec timeout = {0};
 	int			nev = 0;
 	int			res;
 
@@ -985,7 +986,7 @@ register_socket(CURL *curl, curl_socket_t socket, int what, void *ctx,
 			return -1;
 	}
 
-	res = kevent(actx->mux, ev, nev, ev_out, lengthof(ev_out), NULL);
+	res = kevent(actx->mux, ev, nev, ev_out, lengthof(ev_out), &timeout);
 	if (res < 0)
 	{
 		actx_error(actx, "could not modify kqueue: %m");
