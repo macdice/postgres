@@ -2287,7 +2287,7 @@ endif
 # standard is locale.h, but glibc <= 2.25 also had an xlocale.h file that
 # we should not use so we check the standard header first.  MSVC has a
 # replacement defined in src/include/port/win32_port.h.
-if not cc.has_type('locale_t', prefix: '#include <locale.h>') and
+if not cc.has_type('locale_t', prefix: '#include <locale.h>') and \
    cc.has_type('locale_t', prefix: '#include <xlocale.h>')
   cdata.set('LOCALE_T_IN_XLOCALE', 1)
 endif
