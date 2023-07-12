@@ -472,7 +472,7 @@ replorigin_by_oid(RepOriginId roident, bool missing_ok, char **roname)
 	Assert(roident != DoNotReplicateId);
 
 	tuple = SearchSysCache(REPLORIGIDENT,
-							ObjectIdGetDatum((Oid) roident));
+						   ObjectIdGetDatum((Oid) roident));
 
 	if (HeapTupleIsValid(tuple))
 	{

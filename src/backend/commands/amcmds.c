@@ -63,7 +63,7 @@ CreateAccessMethod(CreateAmStmt *stmt)
 
 	/* Check if name is used */
 	amoid = GetSysCacheOid(AMNAME, Anum_pg_am_oid,
-							CStringGetDatum(stmt->amname));
+						   CStringGetDatum(stmt->amname));
 	if (OidIsValid(amoid))
 	{
 		ereport(ERROR,

@@ -804,7 +804,7 @@ ChooseExtendedStatisticName(const char *name1, const char *name2,
 
 		existingstats = GetSysCacheOid(STATEXTNAMENSP, Anum_pg_statistic_ext_oid,
 									   PointerGetDatum(stxname),
-										ObjectIdGetDatum(namespaceid));
+									   ObjectIdGetDatum(namespaceid));
 		if (!OidIsValid(existingstats))
 			break;
 

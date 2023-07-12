@@ -2375,8 +2375,8 @@ get_ts_parser_oid(List *names, bool missing_ok)
 				continue;		/* do not look in temp namespace */
 
 			prsoid = GetSysCacheOid(TSPARSERNAMENSP, Anum_pg_ts_parser_oid,
-									 PointerGetDatum(parser_name),
-									 ObjectIdGetDatum(namespaceId));
+									PointerGetDatum(parser_name),
+									ObjectIdGetDatum(namespaceId));
 			if (OidIsValid(prsoid))
 				break;
 		}

@@ -81,7 +81,7 @@ CollationCreate(const char *collname, Oid collnamespace,
 						 Anum_pg_collation_oid,
 						 PointerGetDatum(collname),
 						 Int32GetDatum(collencoding),
-						  ObjectIdGetDatum(collnamespace));
+						 ObjectIdGetDatum(collnamespace));
 	if (OidIsValid(oid))
 	{
 		if (quiet)

@@ -1979,7 +1979,7 @@ get_object_address_publication_schema(List *object, bool missing_ok)
 		GetSysCacheOid(PUBLICATIONNAMESPACEMAP,
 					   Anum_pg_publication_namespace_oid,
 					   ObjectIdGetDatum(schemaid),
-						ObjectIdGetDatum(pub->oid));
+					   ObjectIdGetDatum(pub->oid));
 	if (!OidIsValid(address.objectId) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
