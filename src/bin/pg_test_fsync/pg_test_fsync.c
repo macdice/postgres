@@ -87,9 +87,6 @@ static DWORD WINAPI process_alarm(LPVOID param);
 #endif
 static void signal_cleanup(SIGNAL_ARGS);
 
-#ifdef HAVE_FSYNC_WRITETHROUGH
-static int	pg_fsync_writethrough(int fd);
-#endif
 static void print_elapse(struct timeval start_t, struct timeval stop_t, int ops);
 
 #define die(msg) pg_fatal("%s: %m", _(msg))
@@ -371,33 +368,6 @@ test_sync(int writes_per_op)
 	close(tmpfile);
 
 /*
- * If fsync_writethrough is available, test as well
- */
-	printf(LABEL_FORMAT, "fsync_writethrough");
-	fflush(stdout);
-
-#ifdef HAVE_FSYNC_WRITETHROUGH
-	if ((tmpfile = open(filename, O_RDWR | PG_BINARY, 0)) == -1)
-		die("could not open output file");
-	START_TIMER;
-	for (ops = 0; alarm_triggered == false; ops++)
-	{
-		for (writes = 0; writes < writes_per_op; writes++)
-			if (pg_pwrite(tmpfile,
-						  buf,
-						  XLOG_BLCKSZ,
-						  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
-				die("write failed");
-		if (pg_fsync_writethrough(tmpfile) != 0)
-			die("fsync failed");
-	}
-	STOP_TIMER;
-	close(tmpfile);
-#else
-	printf(NA_FORMAT, _("n/a"));
-#endif
-
-/*
  * Test open_sync if available
  */
 	printf(LABEL_FORMAT, "open_sync");
@@ -504,8 +474,7 @@ test_file_descriptor_sync(void)
 	/*
 	 * Test whether fsync can sync data written on a different descriptor for
 	 * the same file.  This checks the efficiency of multi-process fsyncs
-	 * against the same file. Possibly this should be done with writethrough
-	 * on platforms which support it.
+	 * against the same file.
 	 */
 	printf(_("\nTest if fsync on non-write file descriptor is honored:\n"));
 	printf(_("(If the times are similar, fsync() can sync data written on a different\n"
@@ -599,20 +568,6 @@ signal_cleanup(SIGNAL_ARGS)
 	puts("");
 	exit(1);
 }
-
-#ifdef HAVE_FSYNC_WRITETHROUGH
-
-static int
-pg_fsync_writethrough(int fd)
-{
-#if defined(F_FULLFSYNC)
-	return (fcntl(fd, F_FULLFSYNC, 0) == -1) ? -1 : 0;
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
-}
-#endif
 
 /*
  * print out the writes per second for tests

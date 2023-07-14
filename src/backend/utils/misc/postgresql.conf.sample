@@ -215,7 +215,7 @@
 					# unrecoverable data corruption)
 #synchronous_commit = on		# synchronization level;
 					# off, local, remote_write, remote_apply, or on
-#wal_sync_method = fdatasync		# fsync, fdatasync, fsync_writethrough,
+#wal_sync_method = fdatasync		# fsync, fdatasync,
 					# open_sync, open_datasync
 #full_page_writes = on			# recover from partial page writes
 #wal_log_hints = off			# also do full page writes of non-critical updates
