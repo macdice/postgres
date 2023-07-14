@@ -2188,7 +2188,6 @@ endforeach
 
 
 decl_checks = [
-  ['F_FULLFSYNC', 'fcntl.h'],
   ['fdatasync', 'unistd.h'],
   ['posix_fadvise', 'fcntl.h'],
   ['strlcat', 'string.h'],

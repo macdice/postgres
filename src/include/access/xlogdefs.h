@@ -65,6 +65,6 @@ typedef uint32 TimeLineID;
 typedef uint16 RepOriginId;
 
 /* Default synchronization method for WAL. */
-#define DEFAULT_WAL_SYNC_METHOD		SYNC_METHOD_FDATASYNC
+#define DEFAULT_WAL_SYNC_METHOD		WAL_SYNC_METHOD_FDATASYNC
 
 #endif							/* XLOG_DEFS_H */
