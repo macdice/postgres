@@ -243,7 +243,8 @@ WAIT_EVENT_WAL_INIT_WRITE	WALInitWrite	"Waiting for a write while initializing a
 WAIT_EVENT_WAL_READ	WALRead	"Waiting for a read from a WAL file."
 WAIT_EVENT_WAL_SYNC	WALSync	"Waiting for a WAL file to reach durable storage. Waiting for data to reach durable storage while assigning a new WAL sync method."
 WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN	WALSyncMethodAssign	"Waiting for data to reach durable storage while assigning a new WAL sync method."
-WAIT_EVENT_WAL_WRITE	WALWrite	"Waiting for a write to a WAL file. Waiting for WAL buffers to be written to disk."
+WAIT_EVENT_WAL_WAIT_INSERT	WALWaitInsert	"Waiting for WAL buffers to be copied into buffers."
+WAIT_EVENT_WAL_WRITE	WALWrite	"Waiting for a write to a WAL file."
 
 
 #
