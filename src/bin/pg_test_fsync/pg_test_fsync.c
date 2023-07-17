@@ -405,6 +405,30 @@ test_sync(int writes_per_op)
 	printf(NA_FORMAT, _("n/a"));
 #endif
 
+#ifdef F_FULLFSYNC
+/*
+ * Test macOS fcntl that fsync=full selects.
+ */
+	printf(LABEL_FORMAT, "fcntl(F_FULLFSYNC)");
+	fflush(stdout);
+
+	if ((tmpfile = open(filename, O_RDWR | PG_BINARY, 0)) == -1)
+		die("could not open output file");
+	START_TIMER;
+	for (ops = 0; alarm_triggered == false; ops++)
+	{
+		for (writes = 0; writes < writes_per_op; writes++)
+			if (pg_pwrite(tmpfile,
+						  buf,
+						  XLOG_BLCKSZ,
+						  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
+				die("write failed");
+		fcntl(tmpfile, F_FULLFSYNC, 0);
+	}
+	STOP_TIMER;
+	close(tmpfile);
+#endif
+
 	if (fs_warning)
 	{
 		printf(_("* This file system and its mount options do not support direct\n"
