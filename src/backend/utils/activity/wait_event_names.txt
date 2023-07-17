@@ -49,6 +49,7 @@ WAIT_EVENT_AUTOVACUUM_MAIN	AutoVacuumMain	"Waiting in main loop of autovacuum la
 WAIT_EVENT_BGWRITER_HIBERNATE	BgWriterHibernate	"Waiting in background writer process, hibernating."
 WAIT_EVENT_BGWRITER_MAIN	BgWriterMain	"Waiting in main loop of background writer process."
 WAIT_EVENT_CHECKPOINTER_MAIN	CheckpointerMain	"Waiting in main loop of checkpointer process."
+WAIT_EVENT_IO_WORKER_MAIN	IoWorkerMain	"Waiting in main loop of IO Worker process."
 WAIT_EVENT_LOGICAL_APPLY_MAIN	LogicalApplyMain	"Waiting in main loop of logical replication apply process."
 WAIT_EVENT_LOGICAL_LAUNCHER_MAIN	LogicalLauncherMain	"Waiting in main loop of logical replication launcher process."
 WAIT_EVENT_LOGICAL_PARALLEL_APPLY_MAIN	LogicalParallelApplyMain	"Waiting in main loop of logical replication parallel apply process."
@@ -170,6 +171,12 @@ WAIT_EVENT_VACUUM_TRUNCATE	VacuumTruncate	"Waiting to acquire an exclusive lock 
 
 Section: ClassName - WaitEventIO
 
+WAIT_EVENT_AIO_BACKPRESSURE	AIOBackpressure	"Describe AIOBackpressure."
+WAIT_EVENT_AIO_IO_COMPLETE_ANY	AIOCompleteAny	"Describe AIOCompleteAny."
+WAIT_EVENT_AIO_IO_COMPLETE_ONE	AIOCompleteOne	"Describe AIOCompleteOne."
+WAIT_EVENT_AIO_IO_COMPLETE_ONE_LOCAL	AIOCompleteOneLocal	"Describe AIOCompleteOneLocal."
+WAIT_EVENT_AIO_REFS	AIORefs	"Describe AIORefs."
+WAIT_EVENT_AIO_SUBMIT	AIOSubmit	"Describe AIOSubmit."
 WAIT_EVENT_BASEBACKUP_READ	BaseBackupRead	"Waiting for base backup to read from a file."
 WAIT_EVENT_BASEBACKUP_SYNC	BaseBackupSync	"Waiting for data written by a base backup to reach durable storage."
 WAIT_EVENT_BASEBACKUP_WRITE	BaseBackupWrite	"Waiting for base backup to write to a file."
