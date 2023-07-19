@@ -15,6 +15,7 @@
 #define SMGR_H
 
 #include "lib/ilist.h"
+#include "port/pg_iovec.h"
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
@@ -96,10 +97,13 @@ extern void smgrzeroextend(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum);
-extern void smgrread(SMgrRelation reln, ForkNumber forknum,
-					 BlockNumber blocknum, void *buffer);
-extern void smgrwrite(SMgrRelation reln, ForkNumber forknum,
-					  BlockNumber blocknum, const void *buffer, bool skipFsync);
+extern void smgrreadv(SMgrRelation reln, ForkNumber forknum,
+					  BlockNumber blocknum,
+					  const struct iovec *iov, int iovcnt);
+extern void smgrwritev(SMgrRelation reln, ForkNumber forknum,
+					   BlockNumber blocknum,
+					   const struct iovec *iov, int iovcnt,
+					   bool skipFsync);
 extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
@@ -109,5 +113,29 @@ extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
+
+static inline void
+smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		 void *buffer)
+{
+	struct iovec iov = {
+		.iov_base = buffer,
+		.iov_len = BLCKSZ
+	};
+
+	smgrreadv(reln, forknum, blocknum, &iov, 1);
+}
+
+static inline void
+smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  const void *buffer, bool skipFsync)
+{
+	struct iovec iov = {
+		.iov_base = (void *) buffer,
+		.iov_len = BLCKSZ
+	};
+
+	smgrwritev(reln, forknum, blocknum, &iov, 1, skipFsync);
+}
 
 #endif							/* SMGR_H */
