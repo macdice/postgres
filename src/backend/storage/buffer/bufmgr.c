@@ -503,78 +503,119 @@ static inline int buffertag_comparator(const BufferTag *ba, const BufferTag *bb)
 static inline int ckpt_buforder_comparator(const CkptSortItem *a, const CkptSortItem *b);
 static int	ts_ckpt_progress_comparator(Datum a, Datum b, void *arg);
 
+static void
+do_prefetch(SMgrRelation smgr_reln,
+			ForkNumber forkNum,
+			BlockNumber blockNum,
+			PrefetchBufferResult *results,
+			int prefetchStart,
+			int prefetchSize)
+{
+	if (smgrprefetch(smgr_reln, forkNum,
+					 blockNum + prefetchStart, prefetchSize))
+	{
+		for (int i = prefetchStart; i < prefetchSize; ++i)
+			results[i].initiated_io = true;
+	}
+}
 
 /*
- * Implementation of PrefetchBuffer() for shared buffers.
+ * Implementation of PrefetchBuffers() for shared buffers.
  */
-PrefetchBufferResult
-PrefetchSharedBuffer(SMgrRelation smgr_reln,
-					 ForkNumber forkNum,
-					 BlockNumber blockNum)
+void
+PrefetchSharedBuffers(SMgrRelation smgr_reln,
+					  ForkNumber forkNum,
+					  BlockNumber blockNum,
+					  PrefetchBufferResult *results,
+					  BlockNumber nblocks)
 {
-	PrefetchBufferResult result = {InvalidBuffer, false};
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
 	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
 	int			buf_id;
+	int			prefetchStart = -1;
+	BlockNumber prefetchSize = 0;
 
 	Assert(BlockNumberIsValid(blockNum));
 
-	/* create a tag so we can lookup the buffer */
-	InitBufferTag(&newTag, &smgr_reln->smgr_rlocator.locator,
-				  forkNum, blockNum);
-
-	/* determine its hash code and partition lock ID */
-	newHash = BufTableHashCode(&newTag);
-	newPartitionLock = BufMappingPartitionLock(newHash);
-
-	/* see if the block is in the buffer pool already */
-	LWLockAcquire(newPartitionLock, LW_SHARED);
-	buf_id = BufTableLookup(&newTag, newHash);
-	LWLockRelease(newPartitionLock);
-
-	/* If not in buffers, initiate prefetch */
-	if (buf_id < 0)
+	for (int i = 0; i < nblocks; ++i)
 	{
-#ifdef USE_PREFETCH
-		/*
-		 * Try to initiate an asynchronous read.  This returns false in
-		 * recovery if the relation file doesn't exist.
-		 */
-		if ((io_direct_flags & IO_DIRECT_DATA) == 0 &&
-			smgrprefetch(smgr_reln, forkNum, blockNum))
+		results[i].recent_buffer = InvalidBuffer;
+		results[i].initiated_io = false;
+
+		/* create a tag so we can lookup the buffer */
+		InitBufferTag(&newTag, &smgr_reln->smgr_rlocator.locator,
+					  forkNum, blockNum + i);
+
+		/* determine its hash code and partition lock ID */
+		newHash = BufTableHashCode(&newTag);
+		newPartitionLock = BufMappingPartitionLock(newHash);
+
+		/* see if the block is in the buffer pool already */
+		LWLockAcquire(newPartitionLock, LW_SHARED);
+		buf_id = BufTableLookup(&newTag, newHash);
+		LWLockRelease(newPartitionLock);
+
+		/* If not in buffers, initiate prefetch */
+		if (buf_id < 0)
 		{
-			result.initiated_io = true;
-		}
+#ifdef USE_PREFETCH
+			/*
+			 * Not in buffer pool.  We'll start a prefetch, but not
+			 * immediately.  We'll try to merge with later blocks, to reduce
+			 * system calls.
+			 */
+			if ((io_direct_flags & IO_DIRECT_DATA) == 0)
+			{
+				if (prefetchStart < 0)
+				{
+					prefetchStart = i;
+					prefetchSize = 1;
+				}
+				else
+					prefetchSize++;
+			}
 #endif							/* USE_PREFETCH */
-	}
-	else
-	{
+		}
+		else
+		{
+			/* Issue deferred prefetch. */
+			if (prefetchStart >= 0)
+			{
+				do_prefetch(smgr_reln, forkNum, blockNum, results,
+							prefetchStart, prefetchSize);
+				prefetchStart = -1;
+			}
+
+			/*
+			 * Report the buffer it was in at that time.  The caller may be
+			 * able to avoid a buffer table lookup, but it's not pinned and it
+			 * must be rechecked!
+			 */
+			results[i].recent_buffer = buf_id + 1;
+		}
+
 		/*
-		 * Report the buffer it was in at that time.  The caller may be able
-		 * to avoid a buffer table lookup, but it's not pinned and it must be
-		 * rechecked!
+		 * If the block *is* in buffers, we do nothing.  This is not really
+		 * ideal: the block might be just about to be evicted, which would be
+		 * stupid since we know we are going to need it soon.  But the only
+		 * easy answer is to bump the usage_count, which does not seem like a
+		 * great solution: when the caller does ultimately touch the block,
+		 * usage_count would get bumped again, resulting in too much
+		 * favoritism for blocks that are involved in a prefetch sequence. A
+		 * real fix would involve some additional per-buffer state, and it's
+		 * not clear that there's enough of a problem to justify that.
 		 */
-		result.recent_buffer = buf_id + 1;
 	}
 
-	/*
-	 * If the block *is* in buffers, we do nothing.  This is not really ideal:
-	 * the block might be just about to be evicted, which would be stupid
-	 * since we know we are going to need it soon.  But the only easy answer
-	 * is to bump the usage_count, which does not seem like a great solution:
-	 * when the caller does ultimately touch the block, usage_count would get
-	 * bumped again, resulting in too much favoritism for blocks that are
-	 * involved in a prefetch sequence. A real fix would involve some
-	 * additional per-buffer state, and it's not clear that there's enough of
-	 * a problem to justify that.
-	 */
-
-	return result;
+	/* Issue final deferred prefetch. */
+	if (prefetchStart >= 0)
+		do_prefetch(smgr_reln, forkNum, blockNum, results,
+					prefetchStart, prefetchSize);
 }
 
 /*
- * PrefetchBuffer -- initiate asynchronous read of a block of a relation
+ * PrefetchBuffers -- initiate asynchronous read of blocks of a relation
  *
  * This is named by analogy to ReadBuffer but doesn't actually allocate a
  * buffer.  Instead it tries to ensure that a future ReadBuffer for the given
@@ -582,7 +623,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
  *
  * There are three possible outcomes:
  *
- * 1.  If the block is already cached, the result includes a valid buffer that
+ * 1.  If a block is already cached, the result includes a valid buffer that
  * could be used by the caller to avoid the need for a later buffer lookup, but
  * it's not pinned, so the caller must recheck it.
  *
@@ -597,8 +638,9 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
  * relation file wasn't found and we are in recovery.  (If the relation file
  * wasn't found and we are not in recovery, an error is raised).
  */
-PrefetchBufferResult
-PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
+void
+PrefetchBuffers(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
+				PrefetchBufferResult *results, BlockNumber nblocks)
 {
 	Assert(RelationIsValid(reln));
 	Assert(BlockNumberIsValid(blockNum));
@@ -612,13 +654,28 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 					 errmsg("cannot access temporary tables of other sessions")));
 
 		/* pass it off to localbuf.c */
-		return PrefetchLocalBuffer(RelationGetSmgr(reln), forkNum, blockNum);
+		PrefetchLocalBuffers(RelationGetSmgr(reln), forkNum, blockNum,
+							 results, nblocks);
 	}
 	else
 	{
 		/* pass it to the shared buffer version */
-		return PrefetchSharedBuffer(RelationGetSmgr(reln), forkNum, blockNum);
+		PrefetchSharedBuffers(RelationGetSmgr(reln), forkNum, blockNum,
+							  results, nblocks);
 	}
+}
+
+/*
+ * Single-buffer version of PrefetchBuffers().
+ */
+PrefetchBufferResult
+PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
+{
+	PrefetchBufferResult result;
+
+	PrefetchBuffers(reln, forkNum, blockNum, &result, 1);
+
+	return result;
 }
 
 /*

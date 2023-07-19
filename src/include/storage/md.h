@@ -31,7 +31,7 @@ extern void mdextend(SMgrRelation reln, ForkNumber forknum,
 extern void mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool mdprefetch(SMgrRelation reln, ForkNumber forknum,
-					   BlockNumber blocknum);
+					   BlockNumber blocknum, BlockNumber nblocks);
 extern void mdreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 					const struct iovec *iov, int iovcnt);
 extern void mdwritev(SMgrRelation reln, ForkNumber forknum,
