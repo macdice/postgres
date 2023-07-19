@@ -32,10 +32,12 @@ extern void mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool mdprefetch(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber blocknum);
-extern void mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-				   void *buffer);
-extern void mdwrite(SMgrRelation reln, ForkNumber forknum,
-					BlockNumber blocknum, const void *buffer, bool skipFsync);
+extern void mdreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					const struct iovec *iov, int iovcnt);
+extern void mdwritev(SMgrRelation reln, ForkNumber forknum,
+					 BlockNumber blocknum,
+					 const struct iovec *iov, int iovcnt,
+					 bool skipFsync);
 extern void mdwriteback(SMgrRelation reln, ForkNumber forknum,
 						BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber mdnblocks(SMgrRelation reln, ForkNumber forknum);
