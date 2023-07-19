@@ -452,7 +452,7 @@ mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum, bool isRedo)
 /*
  * mdextend() -- Add a block to the specified relation.
  *
- * The semantics are nearly the same as mdwrite(): write at the
+ * The semantics are nearly the same as mdwritev(): write at the
  * specified position.  However, this is to be used for the case of
  * extending a relation (i.e., blocknum is at or beyond the current
  * EOF).  Note that we assume writing a block beyond current EOF
@@ -737,136 +737,222 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 }
 
 /*
- * mdread() -- Read the specified block from a relation.
+ * Convert an array of buffer address into an array of iovec objects, and
+ * return the number that were required.  'iov' must have enough space for up
+ * to PG_IOV_MAX elements.
+ */
+static int
+buffers_to_iov(struct iovec *iov, void **buffers, int nblocks)
+{
+	struct iovec *iovp;
+	int			iovcnt;
+
+	Assert(nblocks >= 1);
+	Assert(nblocks <= PG_IOV_MAX);
+
+	/* If this build supports direct I/O, buffers must be I/O aligned. */
+	for (int i = 0; i < nblocks; ++i)
+	{
+		if (PG_O_DIRECT != 0 && PG_IO_ALIGN_SIZE <= BLCKSZ)
+			Assert((uintptr_t) buffers[i] ==
+				   TYPEALIGN(PG_IO_ALIGN_SIZE, buffers[i]));
+	}
+
+	/* Start the first iovec off with the first buffer. */
+	iovp = &iov[0];
+	iovp->iov_base = buffers[0];
+	iovp->iov_len = BLCKSZ;
+	iovcnt = 1;
+
+	/* Merge in the rest. */
+	for (int i = 1; i < nblocks; ++i)
+	{
+		void	   *buffer = buffers[i];
+
+		if (((char *) iovp->iov_base + iovp->iov_len) == buffer)
+		{
+			/* Contiguous with the last iovec. */
+			iovp->iov_len += BLCKSZ;
+		}
+		else
+		{
+			/* Need a new iovec. */
+			iovp++;
+			iovp->iov_base = buffer;
+			iovp->iov_len = BLCKSZ;
+			iovcnt++;
+		}
+	}
+
+	return iovcnt;
+}
+
+/*
+ * mdreadv() -- Read the specified blocks from a relation.
  */
 void
-mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-	   void *buffer)
+mdreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		void **buffers, BlockNumber nblocks)
 {
-	off_t		seekpos;
-	int			nbytes;
-	MdfdVec    *v;
-
-	/* If this build supports direct I/O, the buffer must be I/O aligned. */
-	if (PG_O_DIRECT != 0 && PG_IO_ALIGN_SIZE <= BLCKSZ)
-		Assert((uintptr_t) buffer == TYPEALIGN(PG_IO_ALIGN_SIZE, buffer));
-
-	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
-										reln->smgr_rlocator.locator.spcOid,
-										reln->smgr_rlocator.locator.dbOid,
-										reln->smgr_rlocator.locator.relNumber,
-										reln->smgr_rlocator.backend);
-
-	v = _mdfd_getseg(reln, forknum, blocknum, false,
-					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
-
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
-
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
-
-	nbytes = FileRead(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_READ);
-
-	TRACE_POSTGRESQL_SMGR_MD_READ_DONE(forknum, blocknum,
-									   reln->smgr_rlocator.locator.spcOid,
-									   reln->smgr_rlocator.locator.dbOid,
-									   reln->smgr_rlocator.locator.relNumber,
-									   reln->smgr_rlocator.backend,
-									   nbytes,
-									   BLCKSZ);
-
-	if (nbytes != BLCKSZ)
+	while (nblocks > 0)
 	{
-		if (nbytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read block %u in file \"%s\": %m",
-							blocknum, FilePathName(v->mdfd_vfd))));
+		struct iovec iov[PG_IOV_MAX];
+		int			iovcnt;
+		BlockNumber nblocks_this_segment;
+		off_t		seekpos;
+		int			nbytes;
+		MdfdVec    *v;
 
-		/*
-		 * Short read: we are at or past EOF, or we read a partial block at
-		 * EOF.  Normally this is an error; upper levels should never try to
-		 * read a nonexistent block.  However, if zero_damaged_pages is ON or
-		 * we are InRecovery, we should instead return zeroes without
-		 * complaining.  This allows, for example, the case of trying to
-		 * update a block that was later truncated away.
-		 */
-		if (zero_damaged_pages || InRecovery)
-			MemSet(buffer, 0, BLCKSZ);
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read block %u in file \"%s\": read only %d of %d bytes",
-							blocknum, FilePathName(v->mdfd_vfd),
-							nbytes, BLCKSZ)));
+
+		v = _mdfd_getseg(reln, forknum, blocknum, false,
+						 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+		seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+		Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+		nblocks_this_segment =
+			Min(nblocks,
+				RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE)));
+		nblocks_this_segment = Min(nblocks_this_segment, lengthof(iov));
+
+		iovcnt = buffers_to_iov(iov, buffers, nblocks_this_segment);
+
+		TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
+											reln->smgr_rlocator.locator.spcOid,
+											reln->smgr_rlocator.locator.dbOid,
+											reln->smgr_rlocator.locator.relNumber,
+											reln->smgr_rlocator.backend);
+		nbytes = FileReadV(v->mdfd_vfd, iov, iovcnt, seekpos,
+						   WAIT_EVENT_DATA_FILE_READ);
+		TRACE_POSTGRESQL_SMGR_MD_READ_DONE(forknum, blocknum,
+										   reln->smgr_rlocator.locator.spcOid,
+										   reln->smgr_rlocator.locator.dbOid,
+										   reln->smgr_rlocator.locator.relNumber,
+										   reln->smgr_rlocator.backend,
+										   nbytes,
+										   BLCKSZ);
+
+		if (nbytes != BLCKSZ * nblocks_this_segment)
+		{
+			if (nbytes < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read %u blocks at block %u in file \"%s\": %m",
+								nblocks_this_segment, blocknum,
+								FilePathName(v->mdfd_vfd))));
+
+			/*
+			 * Short read: we are at or past EOF, or we read a partial block
+			 * at EOF.  Normally this is an error; upper levels should never
+			 * try to read a nonexistent block.  However, if
+			 * zero_damaged_pages is ON or we are InRecovery, we should
+			 * instead return zeroes without complaining.  This allows, for
+			 * example, the case of trying to update a block that was later
+			 * truncated away.
+			 */
+			if (zero_damaged_pages || InRecovery)
+			{
+				for (BlockNumber i = nbytes / BLCKSZ;
+					 i < nblocks_this_segment;
+					 ++i)
+					MemSet(buffers[i], 0, BLCKSZ);
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("could not read %u blocks at block %u in file \"%s\": read only %d of %d bytes",
+								nblocks_this_segment, blocknum, FilePathName(v->mdfd_vfd),
+								nbytes, BLCKSZ)));
+		}
+
+		nblocks -= nblocks_this_segment;
+		buffers += nblocks_this_segment;
+		blocknum += nblocks_this_segment;
 	}
 }
 
 /*
- * mdwrite() -- Write the supplied block at the appropriate location.
+ * mdwritev() -- Write the supplied blocks at the appropriate location.
  *
  * This is to be used only for updating already-existing blocks of a
  * relation (ie, those before the current EOF).  To extend a relation,
  * use mdextend().
  */
 void
-mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		const void *buffer, bool skipFsync)
+mdwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		 const void **buffers, BlockNumber nblocks, bool skipFsync)
 {
-	off_t		seekpos;
-	int			nbytes;
-	MdfdVec    *v;
-
-	/* If this build supports direct I/O, the buffer must be I/O aligned. */
-	if (PG_O_DIRECT != 0 && PG_IO_ALIGN_SIZE <= BLCKSZ)
-		Assert((uintptr_t) buffer == TYPEALIGN(PG_IO_ALIGN_SIZE, buffer));
-
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND
 	Assert(blocknum < mdnblocks(reln, forknum));
 #endif
 
-	TRACE_POSTGRESQL_SMGR_MD_WRITE_START(forknum, blocknum,
-										 reln->smgr_rlocator.locator.spcOid,
-										 reln->smgr_rlocator.locator.dbOid,
-										 reln->smgr_rlocator.locator.relNumber,
-										 reln->smgr_rlocator.backend);
-
-	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
-					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
-
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
-
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
-
-	nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_WRITE);
-
-	TRACE_POSTGRESQL_SMGR_MD_WRITE_DONE(forknum, blocknum,
-										reln->smgr_rlocator.locator.spcOid,
-										reln->smgr_rlocator.locator.dbOid,
-										reln->smgr_rlocator.locator.relNumber,
-										reln->smgr_rlocator.backend,
-										nbytes,
-										BLCKSZ);
-
-	if (nbytes != BLCKSZ)
+	while (nblocks > 0)
 	{
-		if (nbytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write block %u in file \"%s\": %m",
-							blocknum, FilePathName(v->mdfd_vfd))));
-		/* short write: complain appropriately */
-		ereport(ERROR,
-				(errcode(ERRCODE_DISK_FULL),
-				 errmsg("could not write block %u in file \"%s\": wrote only %d of %d bytes",
-						blocknum,
-						FilePathName(v->mdfd_vfd),
-						nbytes, BLCKSZ),
-				 errhint("Check free disk space.")));
-	}
+		struct iovec iov[PG_IOV_MAX];
+		int			iovcnt;
+		BlockNumber nblocks_this_segment;
+		off_t		seekpos;
+		int			nbytes;
+		MdfdVec    *v;
 
-	if (!skipFsync && !SmgrIsTemp(reln))
-		register_dirty_segment(reln, forknum, v);
+		v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
+						 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+		seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+		Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+		nblocks_this_segment =
+			Min(nblocks,
+				RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE)));
+		nblocks_this_segment = Min(nblocks_this_segment, lengthof(iov));
+
+		iovcnt = buffers_to_iov(iov, (void **) buffers, nblocks_this_segment);
+
+		TRACE_POSTGRESQL_SMGR_MD_WRITE_START(forknum, blocknum,
+											 reln->smgr_rlocator.locator.spcOid,
+											 reln->smgr_rlocator.locator.dbOid,
+											 reln->smgr_rlocator.locator.relNumber,
+											 reln->smgr_rlocator.backend);
+
+		nbytes = FileWriteV(v->mdfd_vfd, iov, iovcnt, seekpos,
+							WAIT_EVENT_DATA_FILE_WRITE);
+
+		TRACE_POSTGRESQL_SMGR_MD_WRITE_DONE(forknum, blocknum,
+											reln->smgr_rlocator.locator.spcOid,
+											reln->smgr_rlocator.locator.dbOid,
+											reln->smgr_rlocator.locator.relNumber,
+											reln->smgr_rlocator.backend,
+											nbytes,
+											BLCKSZ);
+
+		if (nbytes != BLCKSZ * nblocks_this_segment)
+		{
+			if (nbytes < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not write %u blocks at block %u in file \"%s\": %m",
+								nblocks_this_segment, blocknum,
+								FilePathName(v->mdfd_vfd))));
+			/* short write: complain appropriately */
+			ereport(ERROR,
+					(errcode(ERRCODE_DISK_FULL),
+					 errmsg("could not write %u blocks at block %u in file \"%s\": wrote only %d of %d bytes",
+							nblocks_this_segment, blocknum,
+							FilePathName(v->mdfd_vfd),
+							nbytes, BLCKSZ),
+					 errhint("Check free disk space.")));
+		}
+
+		if (!skipFsync && !SmgrIsTemp(reln))
+			register_dirty_segment(reln, forknum, v);
+
+		nblocks -= nblocks_this_segment;
+		buffers += nblocks_this_segment;
+		blocknum += nblocks_this_segment;
+	}
 }
 
 /*
