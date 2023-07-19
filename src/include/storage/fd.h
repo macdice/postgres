@@ -208,7 +208,7 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 		  uint32 wait_event_info)
 {
 	struct iovec iov = {
-		.iov_base = unconstify(void *, buffer),
+		.iov_base = (void *) buffer,
 		.iov_len = amount
 	};
 
