@@ -58,49 +58,90 @@ static Block GetLocalBufferStorage(void);
 static Buffer GetLocalVictimBuffer(void);
 
 
+static void
+do_prefetch(SMgrRelation smgr_reln,
+			ForkNumber forkNum,
+			BlockNumber blockNum,
+			PrefetchBufferResult *results,
+			int prefetchStart,
+			int prefetchSize)
+{
+	if (smgrprefetch(smgr_reln, forkNum,
+					 blockNum + prefetchStart, prefetchSize))
+	{
+		for (int i = prefetchStart; i < prefetchSize; ++i)
+			results[i].initiated_io = true;
+	}
+}
+
 /*
- * PrefetchLocalBuffer -
- *	  initiate asynchronous read of a block of a relation
+ * PrefetchLocalBuffers -
+ *	  initiate asynchronous read of blocks of a relation
  *
  * Do PrefetchBuffer's work for temporary relations.
  * No-op if prefetching isn't compiled in.
  */
-PrefetchBufferResult
-PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
-					BlockNumber blockNum)
+void
+PrefetchLocalBuffers(SMgrRelation smgr, ForkNumber forkNum,
+					 BlockNumber blockNum,
+					 PrefetchBufferResult *results,
+					 BlockNumber nblocks)
 {
-	PrefetchBufferResult result = {InvalidBuffer, false};
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
-
-	InitBufferTag(&newTag, &smgr->smgr_rlocator.locator, forkNum, blockNum);
+	int			prefetchStart = -1;
+	BlockNumber prefetchSize = 0;
 
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
 		InitLocalBuffers();
 
-	/* See if the desired buffer already exists */
-	hresult = (LocalBufferLookupEnt *)
-		hash_search(LocalBufHash, &newTag, HASH_FIND, NULL);
+	for (int i = 0; i < nblocks; ++i)
+	{
+		results[i].recent_buffer = InvalidBuffer;
+		results[i].initiated_io = false;
 
-	if (hresult)
-	{
-		/* Yes, so nothing to do */
-		result.recent_buffer = -hresult->id - 1;
-	}
-	else
-	{
-#ifdef USE_PREFETCH
-		/* Not in buffers, so initiate prefetch */
-		if ((io_direct_flags & IO_DIRECT_DATA) == 0 &&
-			smgrprefetch(smgr, forkNum, blockNum))
+		InitBufferTag(&newTag, &smgr->smgr_rlocator.locator, forkNum, blockNum);
+
+		/* See if the desired buffer already exists */
+		hresult = (LocalBufferLookupEnt *)
+			hash_search(LocalBufHash, &newTag, HASH_FIND, NULL);
+
+		if (hresult)
 		{
-			result.initiated_io = true;
+			/* Issue deferred prefetch. */
+			if (prefetchStart >= 0)
+			{
+				do_prefetch(smgr, forkNum, blockNum, results,
+							prefetchStart, prefetchSize);
+				prefetchStart = -1;
+			}
+
+			/* Yes, so nothing to do */
+			results[i].recent_buffer = -hresult->id - 1;
 		}
+		else
+		{
+#ifdef USE_PREFETCH
+			/* Not in buffers, so initiate prefetch */
+			if ((io_direct_flags & IO_DIRECT_DATA) == 0)
+			{
+				if (prefetchStart < 0)
+				{
+					prefetchStart = i;
+					prefetchSize = 1;
+				}
+				else
+					prefetchSize++;
+			}
 #endif							/* USE_PREFETCH */
+		}
 	}
 
-	return result;
+	/* Issue final deferred prefetch. */
+	if (prefetchStart >= 0)
+		do_prefetch(smgr, forkNum, blockNum, results,
+					prefetchStart, prefetchSize);
 }
 
 

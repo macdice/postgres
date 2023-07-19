@@ -96,7 +96,7 @@ extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
 extern void smgrzeroextend(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
-						 BlockNumber blocknum);
+						 BlockNumber blocknum, BlockNumber nblocks);
 extern void smgrreadv(SMgrRelation reln, ForkNumber forknum,
 					  BlockNumber blocknum,
 					  const struct iovec *iov, int iovcnt);

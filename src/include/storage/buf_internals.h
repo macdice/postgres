@@ -418,9 +418,11 @@ extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
 /* localbuf.c */
 extern bool PinLocalBuffer(BufferDesc *buf_hdr, bool adjust_usagecount);
 extern void UnpinLocalBuffer(Buffer buffer);
-extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,
-												ForkNumber forkNum,
-												BlockNumber blockNum);
+extern void PrefetchLocalBuffers(SMgrRelation smgr,
+								 ForkNumber forkNum,
+								 BlockNumber blockNum,
+								 PrefetchBufferResult *results,
+								 BlockNumber nblocks);
 extern BufferDesc *LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum,
 									BlockNumber blockNum, bool *foundPtr);
 extern BlockNumber ExtendBufferedRelLocal(ExtendBufferedWhat eb,
