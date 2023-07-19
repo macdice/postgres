@@ -2085,8 +2085,8 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 }
 
 int
-FileRead(File file, void *buffer, size_t amount, off_t offset,
-		 uint32 wait_event_info)
+FileReadV(File file, const struct iovec *iov, int iovcnt, off_t offset,
+		  uint32 wait_event_info)
 {
 	int			returnCode;
 	Vfd		   *vfdP;
@@ -2106,7 +2106,13 @@ FileRead(File file, void *buffer, size_t amount, off_t offset,
 
 retry:
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pread(vfdP->fd, buffer, amount, offset);
+	if (iovcnt == 1)
+		returnCode = pg_pread(vfdP->fd,
+							  iov[0].iov_base,
+							  iov[0].iov_len,
+							  offset);
+	else
+		returnCode = pg_preadv(vfdP->fd, iov, iovcnt, offset);
 	pgstat_report_wait_end();
 
 	if (returnCode < 0)
@@ -2141,9 +2147,10 @@ retry:
 }
 
 int
-FileWrite(File file, const void *buffer, size_t amount, off_t offset,
-		  uint32 wait_event_info)
+FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset,
+		   uint32 wait_event_info)
 {
+	size_t		size;
 	int			returnCode;
 	Vfd		   *vfdP;
 
@@ -2160,6 +2167,11 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 
 	vfdP = &VfdCache[file];
 
+	/* Compute total size so we can detect short writes. */
+	size = 0;
+	for (int i = 0; i < iovcnt; ++i)
+		size += iov[i].iov_len;
+
 	/*
 	 * If enforcing temp_file_limit and it's a temp file, check to see if the
 	 * write would overrun temp_file_limit, and throw error if so.  Note: it's
@@ -2170,7 +2182,7 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 	 */
 	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
 	{
-		off_t		past_write = offset + amount;
+		off_t		past_write = offset + size;
 
 		if (past_write > vfdP->fileSize)
 		{
@@ -2188,11 +2200,17 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 retry:
 	errno = 0;
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pwrite(VfdCache[file].fd, buffer, amount, offset);
+	if (iovcnt == 1)
+		returnCode = pg_pwrite(vfdP->fd,
+							   iov[0].iov_base,
+							   iov[0].iov_len,
+							   offset);
+	else
+		returnCode = pg_pwritev(vfdP->fd, iov, iovcnt, offset);
 	pgstat_report_wait_end();
 
 	/* if write didn't set errno, assume problem is no disk space */
-	if (returnCode != amount && errno == 0)
+	if (returnCode != size && errno == 0)
 		errno = ENOSPC;
 
 	if (returnCode >= 0)
@@ -2202,7 +2220,7 @@ retry:
 		 */
 		if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
 		{
-			off_t		past_write = offset + amount;
+			off_t		past_write = offset + size;
 
 			if (past_write > vfdP->fileSize)
 			{
