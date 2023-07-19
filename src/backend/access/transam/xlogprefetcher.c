@@ -770,7 +770,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			}
 
 			/* Try to initiate prefetching. */
-			result = PrefetchSharedBuffer(reln, block->forknum, block->blkno);
+			PrefetchSharedBuffers(reln, block->forknum, block->blkno,
+								  &result, 1);
 			if (BufferIsValid(result.recent_buffer))
 			{
 				/* Cache hit, nothing to do. */
