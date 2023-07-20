@@ -26,17 +26,25 @@ pg_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 
 	for (int i = 0; i < iovcnt; ++i)
 	{
-		part = pg_pwrite(fd, iov[i].iov_base, iov[i].iov_len, offset);
+		char	   *iov_base = iov[i].iov_base;
+		size_t		iov_len = iov[i].iov_len;
+
+		/* Try to handle contiguous buffers with one system call. */
+		while ((i + 1) < iovcnt &&
+			   iov_base + iov_len == iov[i + 1].iov_base)
+			iov_len += iov[++i].iov_len;
+
+		part = pg_pwrite(fd, iov_base, iov_len, offset);
 		if (part < 0)
 		{
-			if (i == 0)
+			if (sum == 0)
 				return -1;
 			else
 				return sum;
 		}
 		sum += part;
 		offset += part;
-		if (part < iov[i].iov_len)
+		if (part < iov_len)
 			return sum;
 	}
 	return sum;
