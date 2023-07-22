@@ -14,6 +14,8 @@
 #ifndef BUFMGR_H
 #define BUFMGR_H
 
+#include "pgstat.h"
+#include "port/pg_iovec.h"
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufpage.h"
@@ -47,6 +49,8 @@ typedef enum
 	RBM_ZERO_AND_CLEANUP_LOCK,	/* Like RBM_ZERO_AND_LOCK, but locks the page
 								 * in "cleanup" mode */
 	RBM_ZERO_ON_ERROR,			/* Read, but return an all-zeros page on error */
+	RBM_WILL_ZERO,				/* Don't read from disk, caller will call
+								 * ZeroBuffer() */
 	RBM_NORMAL_NO_LOG			/* Don't log page as invalid during WAL
 								 * replay; otherwise same as RBM_NORMAL */
 } ReadBufferMode;
@@ -158,6 +162,24 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 #define BUFFER_LOCK_SHARE		1
 #define BUFFER_LOCK_EXCLUSIVE	2
 
+/*
+ * Number of buffers per transfer, arranged to create 128kB transfers, but not
+ * exceeding this system's limit on iovecs.
+ */
+#define MAX_BUFFERS_PER_TRANSFER Min(PG_IOV_MAX, (128 * 1024) / BLCKSZ)
+
+typedef struct AsyncBufferOp
+{
+	struct SMgrRelationData *smgr;
+	ForkNumber	forkNum;
+	BlockNumber blockNum;
+	int			nblocks;
+	ReadBufferMode mode;
+	IOContext	io_context;
+	IOObject	io_object;
+	Buffer		buffers[MAX_BUFFERS_PER_TRANSFER];
+	bool		hits[MAX_BUFFERS_PER_TRANSFER];
+} AsyncBufferOp;
 
 /*
  * prototypes for functions in bufmgr.c
@@ -177,6 +199,19 @@ extern Buffer ReadBufferWithoutRelcache(RelFileLocator rlocator,
 										ForkNumber forkNum, BlockNumber blockNum,
 										ReadBufferMode mode, BufferAccessStrategy strategy,
 										bool permanent);
+extern Buffer PrepareReadBuffer(BufferManagerRelation bmr,
+								ForkNumber forkNum,
+								BlockNumber blockNum,
+								BufferAccessStrategy strategy,
+								ReadBufferMode mode,
+								bool *found,
+								bool *allocated);
+extern void CompleteReadBuffers(BufferManagerRelation bmr,
+								Buffer *buffers,
+								ForkNumber forknum,
+								BlockNumber blocknum,
+								int nblocks,
+								BufferAccessStrategy strategy);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);
@@ -245,6 +280,7 @@ extern void LockBufferForCleanup(Buffer buffer);
 extern bool ConditionalLockBufferForCleanup(Buffer buffer);
 extern bool IsBufferCleanupOK(Buffer buffer);
 extern bool HoldingBufferPinThatDelaysRecovery(void);
+extern void ZeroBuffer(Buffer buffer, ReadBufferMode mode);
 
 extern void AbortBufferIO(Buffer buffer);
 
