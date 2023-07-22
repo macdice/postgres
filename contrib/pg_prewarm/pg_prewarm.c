@@ -186,14 +186,28 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		/*
 		 * In buffer mode, we actually pull the data into shared_buffers.
 		 */
-		for (block = first_block; block <= last_block; ++block)
+		block = first_block;
+		while (block <= last_block)
 		{
-			Buffer		buf;
+			AsyncBufferOp op;
+			int			nblocks = Min(last_block + 1 - block,
+									  MAX_ASYNC_BUFFERS_PER_OP);
 
 			CHECK_FOR_INTERRUPTS();
-			buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
-			ReleaseBuffer(buf);
-			++blocks_done;
+
+			nblocks = StartReadBuffers(RelationGetSmgr(rel),
+									   rel->rd_rel->relpersistence,
+									   forkNumber,
+									   block,
+									   nblocks,
+									   NULL,
+									   &op);
+			CompleteReadBuffers(&op);
+			for (int i = 0; i < nblocks; ++i)
+				ReleaseBuffer(op.buffers[i]);
+
+			blocks_done += nblocks;
+			block += nblocks;
 		}
 	}
 
