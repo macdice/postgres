@@ -14,6 +14,8 @@
 #ifndef BUFMGR_H
 #define BUFMGR_H
 
+#include "pgstat.h"
+#include "port/pg_iovec.h"
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufpage.h"
@@ -158,6 +160,23 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 #define BUFFER_LOCK_SHARE		1
 #define BUFFER_LOCK_EXCLUSIVE	2
 
+/*
+ * Number of buffers per transfer, arranged to create 128kB transfers, but not
+ * exceeding this system's limit on iovecs.
+ */
+#define MAX_BUFFERS_PER_TRANSFER Min(PG_IOV_MAX, (128 * 1024) / BLCKSZ)
+
+typedef struct AsyncBufferOp
+{
+	struct SMgrRelationData *smgr;
+	ForkNumber	forkNum;
+	BlockNumber blockNum;
+	int			nblocks;
+	IOContext	io_context;
+	IOObject	io_object;
+	Buffer		buffers[MAX_BUFFERS_PER_TRANSFER];
+	bool		hits[MAX_BUFFERS_PER_TRANSFER];
+} AsyncBufferOp;
 
 /*
  * prototypes for functions in bufmgr.c
@@ -177,6 +196,15 @@ extern Buffer ReadBufferWithoutRelcache(RelFileLocator rlocator,
 										ForkNumber forkNum, BlockNumber blockNum,
 										ReadBufferMode mode, BufferAccessStrategy strategy,
 										bool permanent);
+extern void StartReadBuffers(struct SMgrRelationData *smgr_reln,
+							 char relpersistence,
+							 ForkNumber forkNum,
+							 BlockNumber blockNum,
+							 int nblocks,
+							 BufferAccessStrategy strategy,
+							 bool no_prefetch_hint,
+							 AsyncBufferOp *op);
+extern void CompleteReadBuffers(AsyncBufferOp *op);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);

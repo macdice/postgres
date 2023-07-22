@@ -485,7 +485,8 @@ static BufferDesc *BufferAlloc(SMgrRelation smgr,
 							   ForkNumber forkNum,
 							   BlockNumber blockNum,
 							   BufferAccessStrategy strategy,
-							   bool *foundPtr, IOContext io_context);
+							   bool *foundPtr, IOContext io_context,
+							   bool no_start_io);
 static Buffer GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context);
 static void FlushBuffer(BufferDesc *buf, SMgrRelation reln,
 						IOObject io_object, IOContext io_context);
@@ -1058,7 +1059,8 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		io_context = IOContextForStrategy(strategy);
 		io_object = IOOBJECT_RELATION;
 		bufHdr = BufferAlloc(smgr, relpersistence, forkNum, blockNum,
-							 strategy, &found, io_context);
+							 strategy, &found, io_context,
+							 false /* no_start_io */ );
 		if (found)
 			pgBufferUsage.shared_blks_hit++;
 		else if (mode == RBM_NORMAL || mode == RBM_NORMAL_NO_LOG ||
@@ -1194,6 +1196,232 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 }
 
 /*
+ * Prepare to read a range of blocks in RBM_NORMAL mode.  The range begins at
+ * blockNum and extends for nblocks, which must be between 1 and
+ * MAX_BUFFERS_PER_TRANSFER.
+ *
+ * The caller should call CompleteReadBuffers() to complete the operation
+ * before accessing the buffers.
+ *
+ * StartReadBuffers() calls smgrprefetch() for spans of blocks that need to be
+ * read in.  Even though smgrprefetch() is a no-op on some platforms, it is
+ * still benefitial to use this interface instead of a loop over ReadBuffer(),
+ * because I/Os can be combined into a smaller number of system calls.
+ */
+void
+StartReadBuffers(struct SMgrRelationData *smgr,
+				 char relpersistence,
+				 ForkNumber forkNum,
+				 BlockNumber blockNum,
+				 int nblocks_requested,
+				 BufferAccessStrategy strategy,
+				 bool no_prefetch_hint,
+				 AsyncBufferOp *op)
+{
+	bool		isLocalBuf = SmgrIsTemp(smgr);
+	uint32		nblocks = nblocks_requested;
+
+	Assert(blockNum != P_NEW);
+	Assert(nblocks > 0 && nblocks <= MAX_BUFFERS_PER_TRANSFER);
+
+	op->smgr = smgr;
+	op->forkNum = forkNum;
+	op->blockNum = blockNum;
+	op->nblocks = nblocks;
+
+	if (isLocalBuf)
+	{
+		op->io_context = IOCONTEXT_NORMAL;
+		op->io_object = IOOBJECT_TEMP_RELATION;
+	}
+	else
+	{
+		op->io_context = IOContextForStrategy(strategy);
+		op->io_object = IOOBJECT_RELATION;
+	}
+
+	for (int i = 0; i < nblocks; ++i)
+	{
+		BufferDesc *bufHdr;
+		bool		found;
+
+		ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+		if (isLocalBuf)
+		{
+			bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, &found);
+			if (found)
+				pgBufferUsage.local_blks_hit++;
+			else
+				pgBufferUsage.local_blks_read++;
+		}
+		else
+		{
+			/*
+			 * Unlike ReadBuffer_common(), we don't want BufferAlloc to set
+			 * BM_IO_IN_PROGRESS for a miss.  CompleteReadBuffers() will do
+			 * that (unless some other backend beats us to it first).
+			 */
+			bufHdr = BufferAlloc(smgr, relpersistence, forkNum, blockNum + i,
+								 strategy, &found, op->io_context,
+								 true /* no_start_io */ );
+			if (found)
+				pgBufferUsage.shared_blks_hit++;
+			else
+				pgBufferUsage.shared_blks_read++;
+		}
+		op->buffers[i] = BufferDescriptorGetBuffer(bufHdr);
+		op->hits[i] = found;
+	}
+
+	if (!no_prefetch_hint)
+	{
+		/*
+		 * Issue prefetch hints to operating system that CompleteReadBuffers() (or
+		 * any other backend that beats us to it) will soon be reading the blocks
+		 * we couldn't find, as poor man's asynchronous I/O.
+		 */
+		for (int i = 0; i < nblocks; ++i)
+		{
+			if (!op->hits[i])
+			{
+				BlockNumber start = blockNum + i;
+				int			size = 1;
+
+				/* Try to merge with neighboring blocks. */
+				while ((i + 1) < nblocks && !op->hits[i + 1])
+				{
+					size++;
+					i++;
+				}
+
+				smgrprefetch(smgr, forkNum, start, size);
+			}
+		}
+	}
+}
+
+static inline bool
+CompleteReadBuffersCanStartIO(Buffer buffer)
+{
+	if (BufferIsLocal(buffer))
+	{
+		BufferDesc *bufHdr = GetLocalBufferDescriptor(-buffer - 1);
+
+		return (pg_atomic_read_u32(&bufHdr->state) & BM_VALID) == 0;
+	}
+	else
+		return StartBufferIO(GetBufferDescriptor(buffer - 1), true);
+}
+
+/*
+ * Complete an operation started with StartReadBuffers().  After this call,
+ * the pinned buffers corresponding to the range of size 'nblocks' beginning
+ * at 'blockNum' may be accessed as op->buffers[i].  Note that the number of
+ * buffers (ie the size of the range of blocks read) is the number returned by
+ * StartReadBuffers(), which may be lower than the originally requested
+ * number.
+ */
+void
+CompleteReadBuffers(AsyncBufferOp *op)
+{
+	bool		isLocalBuf = SmgrIsTemp(op->smgr);
+
+	for (int i = 0; i < op->nblocks; ++i)
+	{
+		int			io_buffers_len;
+		Buffer		io_buffers[MAX_BUFFERS_PER_TRANSFER];
+		void	   *io_pages[MAX_BUFFERS_PER_TRANSFER];
+		instr_time	io_start;
+		BlockNumber io_first_block;
+
+		/*
+		 * Skip blocks we don't need to read because StartReadBuffers() found
+		 * them in cache already, or because the buffer has already been made
+		 * valid in the meantime.
+		 */
+		if (op->hits[i] || !CompleteReadBuffersCanStartIO(op->buffers[i]))
+			continue;
+
+		/* We found a buffer that we have to read in. */
+		io_buffers[0] = op->buffers[i];
+		io_pages[0] = BufferGetBlock(op->buffers[i]);
+		io_first_block = op->blockNum + i;
+		io_buffers_len = 1;
+
+		/*
+		 * How many neighboring-on-disk blocks can we can scatter-read into
+		 * other buffers at the same time?
+		 */
+		while ((i + 1) < op->nblocks &&
+			   !op->hits[i + 1] &&
+			   CompleteReadBuffersCanStartIO(op->buffers[i + 1]))
+		{
+			io_buffers[io_buffers_len] = op->buffers[++i];
+			io_pages[io_buffers_len++] = BufferGetBlock(op->buffers[i]);
+		}
+
+		io_start = pgstat_prepare_io_time();
+		smgrreadv(op->smgr, op->forkNum, io_first_block,
+				  io_pages, io_buffers_len);
+		pgstat_count_io_op_time(op->io_object, op->io_context,
+								IOOP_READ, io_start, 1);
+
+		/* Verify each block we read, and terminate the I/O. */
+		for (int j = 0; j < io_buffers_len; ++j)
+		{
+			BufferDesc *bufHdr;
+			Block		bufBlock;
+
+			if (isLocalBuf)
+			{
+				bufHdr = GetLocalBufferDescriptor(-io_buffers[j] - 1);
+				bufBlock = LocalBufHdrGetBlock(bufHdr);
+			}
+			else
+			{
+				bufHdr = GetBufferDescriptor(io_buffers[j] - 1);
+				bufBlock = BufHdrGetBlock(bufHdr);
+			}
+
+			/* check for garbage data */
+			if (!PageIsVerifiedExtended((Page) bufBlock, io_first_block + j,
+										PIV_LOG_WARNING | PIV_REPORT_STAT))
+			{
+				if (zero_damaged_pages)
+				{
+					ereport(WARNING,
+							(errcode(ERRCODE_DATA_CORRUPTED),
+							 errmsg("invalid page in block %u of relation %s; zeroing out page",
+									io_first_block + j,
+									relpath(op->smgr->smgr_rlocator, op->forkNum))));
+					MemSet((char *) bufBlock, 0, BLCKSZ);
+				}
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_DATA_CORRUPTED),
+							 errmsg("invalid page in block %u of relation %s",
+									io_first_block + j,
+									relpath(op->smgr->smgr_rlocator, op->forkNum))));
+			}
+
+			/* Terminate I/O and set BM_VALID. */
+			if (isLocalBuf)
+			{
+				uint32		buf_state = pg_atomic_read_u32(&bufHdr->state);
+
+				buf_state |= BM_VALID;
+				pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+			}
+			else
+			{
+				/* Set BM_VALID, terminate IO, and wake up any waiters */
+				TerminateBufferIO(bufHdr, false, BM_VALID);
+			}
+		}
+	}
+}
+
+/*
  * BufferAlloc -- subroutine for ReadBuffer.  Handles lookup of a shared
  *		buffer.  If no buffer exists already, selects a replacement
  *		victim and evicts the old page, but does NOT read in new page.
@@ -1220,7 +1448,8 @@ static BufferDesc *
 BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			BlockNumber blockNum,
 			BufferAccessStrategy strategy,
-			bool *foundPtr, IOContext io_context)
+			bool *foundPtr, IOContext io_context,
+			bool no_start_io)
 {
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
@@ -1263,12 +1492,13 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		{
 			/*
 			 * We can only get here if (a) someone else is still reading in
-			 * the page, or (b) a previous read attempt failed.  We have to
-			 * wait for any active read attempt to finish, and then set up our
-			 * own read attempt if the page is still not BM_VALID.
+			 * the page, (b) a previous read attempt failed, or (c) someone
+			 * called StartReadBuffers() but not yet CompleteReadBuffers(). We
+			 * have to wait for any active read attempt to finish, and then
+			 * set up our own read attempt if the page is still not BM_VALID.
 			 * StartBufferIO does it all.
 			 */
-			if (StartBufferIO(buf, true))
+			if (no_start_io || StartBufferIO(buf, true))
 			{
 				/*
 				 * If we get here, previous attempts to read the buffer must
@@ -1341,12 +1571,13 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		{
 			/*
 			 * We can only get here if (a) someone else is still reading in
-			 * the page, or (b) a previous read attempt failed.  We have to
-			 * wait for any active read attempt to finish, and then set up our
-			 * own read attempt if the page is still not BM_VALID.
+			 * the page, (b) a previous read attempt failed, or (c) someone
+			 * called StartReadBuffers() but not yet CompleteReadBuffers(). We
+			 * have to wait for any active read attempt to finish, and then
+			 * set up our own read attempt if the page is still not BM_VALID.
 			 * StartBufferIO does it all.
 			 */
-			if (StartBufferIO(existing_buf_hdr, true))
+			if (no_start_io || StartBufferIO(existing_buf_hdr, true))
 			{
 				/*
 				 * If we get here, previous attempts to read the buffer must
@@ -1388,9 +1619,11 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * Buffer contents are currently invalid.  Try to obtain the right to
 	 * start I/O.  If StartBufferIO returns false, then someone else managed
 	 * to read it before we did, so there's nothing left for BufferAlloc() to
-	 * do.
+	 * do.  If no_start_io is true, StartReadBuffers() is calling and the I/O
+	 * will be started by a later called to CompleteReadBuffers() (or another
+	 * backend trying to read the buffer).
 	 */
-	if (StartBufferIO(victim_buf_hdr, true))
+	if (no_start_io || StartBufferIO(victim_buf_hdr, true))
 		*foundPtr = false;
 	else
 		*foundPtr = true;
