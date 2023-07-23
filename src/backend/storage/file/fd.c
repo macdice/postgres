@@ -2084,12 +2084,71 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	pgstat_report_wait_end();
 }
 
+/*
+ * Sum the total size of an iovec array.
+ */
+static inline size_t
+sum_iovec_size(const struct iovec *iov, int iovcnt)
+{
+	size_t		sum = 0;
+
+	while (iovcnt > 0)
+	{
+		sum += iov->iov_len;
+		iov++;
+		iovcnt--;
+	}
+
+	return sum;
+}
+
+/*
+ * To continue a vector I/O after a short transfer, we need a way to remove
+ * the whole or partial iovecs that have already been transferred.  We assume
+ * that partial transfers with direct I/O will happen on suitable alignment
+ * boundaries, so that we don't have to make further adjustments for that.
+ */
+static int
+adjust_iovec_for_partial_transfer(struct iovec *dst,
+								  const struct iovec *src,
+								  int iovcnt,
+								  size_t transferred)
+{
+	Assert(iovcnt > 0);
+
+	/* Skip wholly transferred iovecs. */
+	while (src->iov_len <= transferred)
+	{
+		transferred -= src->iov_len;
+		src++;
+		iovcnt--;
+	}
+
+	/* Shouldn't be called with 'transferred' >= total size. */
+	Assert(iovcnt > 0);
+
+	/* Careful to 'move' because we can be adjusting in-place. */
+	if (dst != src)
+		memmove(dst, src, sizeof(*src) * iovcnt);
+
+	/* Adjust the leading iovec for partial transfer. */
+	Assert(dst->iov_len > transferred);
+	dst->iov_base = (char *) dst->iov_base + transferred;
+	dst->iov_len -= transferred;
+
+	return iovcnt;
+}
+
 int
 FileReadV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 		  uint32 wait_event_info)
 {
 	int			returnCode;
 	Vfd		   *vfdP;
+	struct iovec iov_temp[PG_IOV_MAX];
+	const struct iovec *iovp = iov;
+	size_t		remaining = sum_iovec_size(iov, iovcnt);
+	size_t		transferred = 0;
 
 	Assert(FileIsValid(file));
 
@@ -2108,11 +2167,11 @@ retry:
 	pgstat_report_wait_start(wait_event_info);
 	if (iovcnt == 1)
 		returnCode = pg_pread(vfdP->fd,
-							  iov[0].iov_base,
-							  iov[0].iov_len,
+							  iovp->iov_base,
+							  iovp->iov_len,
 							  offset);
 	else
-		returnCode = pg_preadv(vfdP->fd, iov, iovcnt, offset);
+		returnCode = pg_preadv(vfdP->fd, iovp, iovcnt, offset);
 	pgstat_report_wait_end();
 
 	if (returnCode < 0)
@@ -2142,6 +2201,33 @@ retry:
 		if (errno == EINTR)
 			goto retry;
 	}
+	if (returnCode == 0)
+	{
+		/* EOF detected (distinct from short read -> retry). */
+		return transferred;
+	}
+	if (returnCode > 0)
+	{
+		transferred += returnCode;
+		remaining -= returnCode;
+		if (remaining > 0)
+		{
+			/*
+			 * We didn't read the whole amount.  Maybe we're at the end of the
+			 * file, in which case we'll detect that by reading 0 next time
+			 * around, or maybe it's an arbitrary short read, and we'll try to
+			 * continue at the next byte.
+			 */
+			offset += returnCode;
+			iovcnt = adjust_iovec_for_partial_transfer(iov_temp,
+													   iovp,
+													   iovcnt,
+													   returnCode);
+			iovp = iov_temp;
+			goto retry;
+		}
+		return transferred;
+	}
 
 	return returnCode;
 }
@@ -2150,9 +2236,12 @@ int
 FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 		   uint32 wait_event_info)
 {
-	size_t		size;
 	int			returnCode;
 	Vfd		   *vfdP;
+	struct iovec iov_temp[PG_IOV_MAX];
+	const struct iovec *iovp = iov;
+	size_t		remaining = sum_iovec_size(iov, iovcnt);
+	size_t		transferred = 0;
 
 	Assert(FileIsValid(file));
 
@@ -2167,11 +2256,6 @@ FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 
 	vfdP = &VfdCache[file];
 
-	/* Compute total size so we can detect short writes. */
-	size = 0;
-	for (int i = 0; i < iovcnt; ++i)
-		size += iov[i].iov_len;
-
 	/*
 	 * If enforcing temp_file_limit and it's a temp file, check to see if the
 	 * write would overrun temp_file_limit, and throw error if so.  Note: it's
@@ -2182,7 +2266,7 @@ FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 	 */
 	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
 	{
-		off_t		past_write = offset + size;
+		off_t		past_write = offset + remaining;
 
 		if (past_write > vfdP->fileSize)
 		{
@@ -2202,16 +2286,19 @@ retry:
 	pgstat_report_wait_start(wait_event_info);
 	if (iovcnt == 1)
 		returnCode = pg_pwrite(vfdP->fd,
-							   iov[0].iov_base,
-							   iov[0].iov_len,
+							   iovp->iov_base,
+							   iovp->iov_len,
 							   offset);
 	else
-		returnCode = pg_pwritev(vfdP->fd, iov, iovcnt, offset);
+		returnCode = pg_pwritev(vfdP->fd, iovp, iovcnt, offset);
 	pgstat_report_wait_end();
 
 	/* if write didn't set errno, assume problem is no disk space */
-	if (returnCode != size && errno == 0)
+	if (returnCode == 0 && errno == 0)
+	{
+		returnCode = -1;
 		errno = ENOSPC;
+	}
 
 	if (returnCode >= 0)
 	{
@@ -2220,7 +2307,7 @@ retry:
 		 */
 		if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
 		{
-			off_t		past_write = offset + size;
+			off_t		past_write = offset + remaining;
 
 			if (past_write > vfdP->fileSize)
 			{
@@ -2251,6 +2338,28 @@ retry:
 		/* OK to retry if interrupted */
 		if (errno == EINTR)
 			goto retry;
+	}
+	if (returnCode > 0)
+	{
+		transferred += returnCode;
+		remaining -= returnCode;
+		if (remaining > 0)
+		{
+			/*
+			 * We didn't write the whole amount.  Maybe we're out of space, in
+			 * which case we'll detect that by getting 0 or ENOSPC next time
+			 * around, or maybe it's an arbitrary short write, and we'll try
+			 * to continue at the next byte.
+			 */
+			offset += returnCode;
+			iovcnt = adjust_iovec_for_partial_transfer(iov_temp,
+													   iovp,
+													   iovcnt,
+													   returnCode);
+			iovp = iov_temp;
+			goto retry;
+		}
+		return transferred;
 	}
 
 	return returnCode;
