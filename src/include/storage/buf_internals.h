@@ -161,6 +161,16 @@ BufferTagsEqual(const BufferTag *tag1, const BufferTag *tag2)
 }
 
 static inline bool
+BufferTagsConsecutive(const BufferTag *tag1, const BufferTag *tag2)
+{
+	return (tag1->spcOid == tag2->spcOid) &&
+		(tag1->dbOid == tag2->dbOid) &&
+		(tag1->relNumber == tag2->relNumber) &&
+		(tag1->forkNum == tag2->forkNum) &&
+		(tag1->blockNum + 1 == tag2->blockNum);
+}
+
+static inline bool
 BufTagMatchesRelFileLocator(const BufferTag *tag,
 							const RelFileLocator *rlocator)
 {
