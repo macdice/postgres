@@ -496,7 +496,8 @@ static BufferDesc *BufferAlloc(SMgrRelation smgr,
 							   bool no_start_io);
 static Buffer GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context);
 static int	FlushBuffers(BufferDesc **bufs, int nbuffers, SMgrRelation reln,
-						 IOObject io_object, IOContext io_context);
+						 IOObject io_object, IOContext io_context,
+						 int *written);
 static void FlushBuffer(BufferDesc *buf, SMgrRelation reln,
 						IOObject io_object, IOContext io_context);
 static void FindAndDropRelationBuffers(RelFileLocator rlocator,
@@ -2713,6 +2714,66 @@ UnpinBuffer(BufferDesc *buf)
 #include <lib/sort_template.h>
 
 /*
+ * Flush a range of already pinned buffers that hold consecutive blocks of a
+ * relation fork.  They are not pinned on return.  Returns the number that
+ * were written out (if this is less than nbuffers, it is because another
+ * backend already wrote some out).
+ */
+static int
+SyncConsecutiveBuffers(BufferDesc **bufs, int nbuffers)
+{
+	int			total_written = 0;
+
+	while (nbuffers > 0)
+	{
+		int			nlocked;
+
+		/* Lock first buffer. */
+		LWLockAcquire(BufferDescriptorGetContentLock(bufs[0]), LW_SHARED);
+		nlocked = 1;
+
+		/* Lock as many more as we can without waiting, to avoid deadlocks. */
+		while (nlocked < nbuffers &&
+			   LWLockConditionalAcquire(BufferDescriptorGetContentLock(bufs[nlocked]),
+										LW_SHARED))
+			nlocked++;
+
+		while (nlocked > 0)
+		{
+			int			flushed;
+			int			written;
+
+			/*
+			 * Flush as many as we can with a single write, which may be fewer
+			 * than requested if buffers in this range turn out to have been
+			 * flushed already, creating gaps between flushable block ranges.
+			 */
+			flushed = FlushBuffers(bufs, nlocked, NULL, IOOBJECT_RELATION,
+								   IOCONTEXT_NORMAL, &written);
+			total_written += written;
+
+			/* Unlock in reverse order (currently more efficient). */
+			for (int i = flushed - 1; i >= 0; --i)
+				LWLockRelease(BufferDescriptorGetContentLock(bufs[i]));
+
+			/* Queue writeback control. */
+			for (int i = 0; i < flushed; ++i)
+				ScheduleBufferTagForWriteback(wb_context);
+
+			/* Unpin. */
+			for (int i = 0; i < flushed; ++i)
+				UnpinBuffer(bufs[i]);
+
+			bufs += flushed;
+			nlocked -= flushed;
+			nbuffers -= flushed;
+		}
+	}
+
+	return total_written;
+}
+
+/*
  * BufferSync -- Write out all dirty buffers in the pool.
  *
  * This is called at checkpoint time to write out all dirty shared buffers.
@@ -2737,9 +2798,8 @@ BufferSync(int flags)
 	int			i;
 	int			mask = BM_DIRTY;
 	WritebackContext wb_context;
-
-	/* Make sure we can handle the pin inside SyncOneBuffer */
-	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+	BufferDesc *buffers[MAX_ASYNC_BUFFERS_PER_OP];
+	int			num_buffers = 0;
 
 	/*
 	 * Unless this is a shutdown checkpoint or we have been explicitly told,
@@ -2936,11 +2996,39 @@ BufferSync(int flags)
 		 */
 		if (pg_atomic_read_u32(&bufHdr->state) & BM_CHECKPOINT_NEEDED)
 		{
-			if (SyncOneBuffer(buf_id, false, &wb_context) & BUF_WRITTEN)
+			ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+			ReservePrivateRefCountEntry();
+
+			buf_state = LockBufHdr(bufHdr);
+			if (!(buf_state & BM_VALID) || !(buf_state & BM_DIRTY))
 			{
-				TRACE_POSTGRESQL_BUFFER_SYNC_WRITTEN(buf_id);
-				PendingCheckpointerStats.buf_written_checkpoints++;
-				num_written++;
+				/* It's clean, so nothing to do */
+				UnlockBufHdr(bufHdr, buf_state);
+			}
+			else
+			{
+				PinBuffer_Locked(bufHdr);
+
+				/*
+				 * Check if we need to sync the buffers we've collected so
+				 * far, because we've collected enough already or because our
+				 * newly pinned buffer is not consecutive with the last one.
+				 */
+				if (num_buffers == lengthof(buffers) ||
+					(num_buffers > 0 &&
+					 !BufferTagsConsecutive(&buffers[num_buffers - 1]->tag,
+											&bufHdr->tag)))
+				{
+					int			written;
+
+					written = SyncConsecutiveBuffers(buffers, num_buffers);
+					num_buffers = 0;
+					num_written += written;
+					PendingCheckpointerStats.buf_written_checkpoints += written;
+				}
+
+				/* Collect this pinned buffer. */
+				buffers[num_buffers++] = bufHdr;
 			}
 		}
 
@@ -2966,10 +3054,17 @@ BufferSync(int flags)
 		/*
 		 * Sleep to throttle our I/O rate.
 		 *
+		 * XXX Should we do this only after SyncConsecutiveBuffers(), so we
+		 * don't sleep while holding pins?
+		 *
 		 * (This will check for barrier events even if it doesn't sleep.)
 		 */
 		CheckpointWriteDelay(flags, (double) num_processed / num_to_scan);
 	}
+
+	/* Clean up whatever is left. */
+	if (num_buffers > 0)
+		SyncConsecutiveBuffers(buffers, num_buffers);
 
 	/*
 	 * Issue all pending flushes. Only checkpointer calls BufferSync(), so
@@ -3349,6 +3444,7 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	 * buffer is clean by the time we've locked it.)
 	 */
 	PinBuffer_Locked(bufHdr);
+
 	LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
 
 	FlushBuffer(bufHdr, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
@@ -3599,7 +3695,8 @@ BufferGetTag(Buffer buffer, RelFileLocator *rlocator, ForkNumber *forknum,
  */
 static int
 FlushBuffers(BufferDesc **bufs, int nbuffers, SMgrRelation reln,
-			 IOObject io_object, IOContext io_context)
+			 IOObject io_object, IOContext io_context,
+			 int *written)
 {
 	XLogRecPtr	max_recptr;
 	struct shared_buffer_write_error_info errinfo;
@@ -3800,6 +3897,9 @@ FlushBuffers(BufferDesc **bufs, int nbuffers, SMgrRelation reln,
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
 
+	if (written)
+		*written = nbuffers - first_start_io_index;
+
 	return nbuffers;
 }
 
@@ -3813,7 +3913,7 @@ static void
 FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 			IOContext io_context)
 {
-	FlushBuffers(&buf, 1, reln, io_object, io_context);
+	FlushBuffers(&buf, 1, reln, io_object, io_context, NULL);
 }
 
 /*
