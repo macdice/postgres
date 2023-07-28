@@ -497,7 +497,7 @@ static BufferDesc *BufferAlloc(SMgrRelation smgr,
 static Buffer GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context);
 static int	FlushBuffers(BufferDesc **bufs, int nbuffers, SMgrRelation reln,
 						 IOObject io_object, IOContext io_context,
-						 int *written);
+						 int *first_written_index, int *written);
 static void FlushBuffer(BufferDesc *buf, SMgrRelation reln,
 						IOObject io_object, IOContext io_context);
 static void FindAndDropRelationBuffers(RelFileLocator rlocator,
@@ -1933,7 +1933,7 @@ again:
 		LWLockRelease(content_lock);
 
 		ScheduleBufferTagForWriteback(&BackendWritebackContext, io_context,
-									  &buf_hdr->tag);
+									  &buf_hdr->tag, 1);
 	}
 
 
@@ -2720,7 +2720,8 @@ UnpinBuffer(BufferDesc *buf)
  * backend already wrote some out).
  */
 static int
-SyncConsecutiveBuffers(BufferDesc **bufs, int nbuffers)
+SyncConsecutiveBuffers(BufferDesc **bufs, int nbuffers,
+					   WritebackContext *wb_context)
 {
 	int			total_written = 0;
 
@@ -2742,6 +2743,7 @@ SyncConsecutiveBuffers(BufferDesc **bufs, int nbuffers)
 		{
 			int			flushed;
 			int			written;
+			int			first_written_index;
 
 			/*
 			 * Flush as many as we can with a single write, which may be fewer
@@ -2749,7 +2751,8 @@ SyncConsecutiveBuffers(BufferDesc **bufs, int nbuffers)
 			 * flushed already, creating gaps between flushable block ranges.
 			 */
 			flushed = FlushBuffers(bufs, nlocked, NULL, IOOBJECT_RELATION,
-								   IOCONTEXT_NORMAL, &written);
+								   IOCONTEXT_NORMAL,
+								   &first_written_index, &written);
 			total_written += written;
 
 			/* Unlock in reverse order (currently more efficient). */
@@ -2757,8 +2760,11 @@ SyncConsecutiveBuffers(BufferDesc **bufs, int nbuffers)
 				LWLockRelease(BufferDescriptorGetContentLock(bufs[i]));
 
 			/* Queue writeback control. */
-			for (int i = 0; i < flushed; ++i)
-				ScheduleBufferTagForWriteback(wb_context);
+			if (written > 0)
+				ScheduleBufferTagForWriteback(wb_context,
+											  IOCONTEXT_NORMAL,
+											  &bufs[first_written_index]->tag,
+											  written);
 
 			/* Unpin. */
 			for (int i = 0; i < flushed; ++i)
@@ -3021,7 +3027,9 @@ BufferSync(int flags)
 				{
 					int			written;
 
-					written = SyncConsecutiveBuffers(buffers, num_buffers);
+					written = SyncConsecutiveBuffers(buffers,
+													 num_buffers,
+													 &wb_context);
 					num_buffers = 0;
 					num_written += written;
 					PendingCheckpointerStats.buf_written_checkpoints += written;
@@ -3064,7 +3072,9 @@ BufferSync(int flags)
 
 	/* Clean up whatever is left. */
 	if (num_buffers > 0)
-		SyncConsecutiveBuffers(buffers, num_buffers);
+		num_written += SyncConsecutiveBuffers(buffers,
+											  num_buffers,
+											  &wb_context);
 
 	/*
 	 * Issue all pending flushes. Only checkpointer calls BufferSync(), so
@@ -3459,7 +3469,7 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	 * SyncOneBuffer() is only called by checkpointer and bgwriter, so
 	 * IOContext will always be IOCONTEXT_NORMAL.
 	 */
-	ScheduleBufferTagForWriteback(wb_context, IOCONTEXT_NORMAL, &tag);
+	ScheduleBufferTagForWriteback(wb_context, IOCONTEXT_NORMAL, &tag, 1);
 
 	return result | BUF_WRITTEN;
 }
@@ -3696,7 +3706,7 @@ BufferGetTag(Buffer buffer, RelFileLocator *rlocator, ForkNumber *forknum,
 static int
 FlushBuffers(BufferDesc **bufs, int nbuffers, SMgrRelation reln,
 			 IOObject io_object, IOContext io_context,
-			 int *written)
+			 int *first_written_index, int *written)
 {
 	XLogRecPtr	max_recptr;
 	struct shared_buffer_write_error_info errinfo;
@@ -3897,6 +3907,9 @@ FlushBuffers(BufferDesc **bufs, int nbuffers, SMgrRelation reln,
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
 
+	/* Report the range of buffers that we actually wrote, if any. */
+	if (first_written_index)
+		*first_written_index = first_start_io_index;
 	if (written)
 		*written = nbuffers - first_start_io_index;
 
@@ -3913,7 +3926,7 @@ static void
 FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 			IOContext io_context)
 {
-	FlushBuffers(&buf, 1, reln, io_object, io_context, NULL);
+	FlushBuffers(&buf, 1, reln, io_object, io_context, NULL, NULL);
 }
 
 /*
@@ -5894,11 +5907,11 @@ WritebackContextInit(WritebackContext *context, int *max_pending)
 }
 
 /*
- * Add buffer to list of pending writeback requests.
+ * Add buffer tag range to list of pending writeback requests.
  */
 void
 ScheduleBufferTagForWriteback(WritebackContext *wb_context, IOContext io_context,
-							  BufferTag *tag)
+							  BufferTag *tag, int nblocks)
 {
 	PendingWriteback *pending;
 
@@ -5916,6 +5929,7 @@ ScheduleBufferTagForWriteback(WritebackContext *wb_context, IOContext io_context
 		pending = &wb_context->pending_writebacks[wb_context->nr_pending++];
 
 		pending->tag = *tag;
+		pending->nblocks = nblocks;
 	}
 
 	/*
@@ -5972,10 +5986,11 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 		int			ahead;
 		BufferTag	tag;
 		RelFileLocator currlocator;
-		Size		nblocks = 1;
+		Size		nblocks;
 
 		cur = &wb_context->pending_writebacks[i];
 		tag = cur->tag;
+		nblocks = cur->nblocks;
 		currlocator = BufTagGetRelFileLocator(&tag);
 
 		/*
@@ -5984,6 +5999,8 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 		 */
 		for (ahead = 0; i + ahead + 1 < wb_context->nr_pending; ahead++)
 		{
+			BlockNumber		this_end;
+			BlockNumber		next_end;
 
 			next = &wb_context->pending_writebacks[i + ahead + 1];
 
@@ -5993,15 +6010,15 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 				BufTagGetForkNum(&cur->tag) != BufTagGetForkNum(&next->tag))
 				break;
 
-			/* ok, block queued twice, skip */
-			if (cur->tag.blockNum == next->tag.blockNum)
-				continue;
-
-			/* only merge consecutive writes */
-			if (cur->tag.blockNum + 1 != next->tag.blockNum)
+			/* only merge consecutive or overlapping writes */
+			if (next->tag.blockNum > tag.blockNum + nblocks)
 				break;
 
-			nblocks++;
+			/* find the nblocks value that covers the end of both */
+			this_end = tag.blockNum + nblocks;
+			next_end = next->tag.blockNum + next->nblocks;
+			nblocks = Max(this_end, next_end) - tag.blockNum;
+
 			cur = next;
 		}
 
