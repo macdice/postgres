@@ -270,6 +270,8 @@ extern void ZeroBuffer(Buffer buffer, ReadBufferMode mode);
 
 extern bool BgBufferSync(struct WritebackContext *wb_context);
 
+extern void LimitAdditionalPins(uint32 *additional_pins);
+
 /* in buf_init.c */
 extern void InitBufferPool(void);
 extern Size BufferShmemSize(void);
