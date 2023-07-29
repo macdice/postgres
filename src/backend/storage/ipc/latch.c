@@ -307,6 +307,12 @@ InitializeLatchSupport(void)
 	if (signal_fd < 0)
 		elog(FATAL, "signalfd() failed");
 	ReserveExternalFD();
+
+	/*
+	 * Setting this to its default disposition (ignored) appears to be
+	 * redundant, but seems to fix a problem with signalfd() on WSL1 kernels.
+	 */
+	pqsignal(SIGURG, SIG_DFL);
 #endif
 
 #ifdef WAIT_USE_KQUEUE
