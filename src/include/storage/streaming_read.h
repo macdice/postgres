@@ -26,6 +26,12 @@ typedef PgStreamingReadNextStatus(*PgStreamingReadBufferDetermineNextCB) (
 																		  BufferTag *tag,
 																		  ReadBufferMode *mode);
 
+/*
+ * We should be able to fit 6 recently used RelFileLocators in a cache
+ * line for fast linear search.
+ */
+#define PG_STREAMING_READ_SMGR_CACHE_SIZE (64 / sizeof(RelFileLocator))
+
 typedef struct PgStreamingRead
 {
 	int			max_ios_in_progress;
@@ -47,6 +53,12 @@ typedef struct PgStreamingRead
 	BufferTag	range_tag;
 	int			range_nblocks;
 	BufferTag	sequential_tag;
+
+	/* Cache of recently accessed SMgrRelations. */
+	RelFileLocator cache_locator[PG_STREAMING_READ_SMGR_CACHE_SIZE];
+	SMgrRelation  cache_smgr[PG_STREAMING_READ_SMGR_CACHE_SIZE];
+	int			cache_second_chance;
+	int			cache_hand;
 
 	AsyncBufferOp ops[FLEXIBLE_ARRAY_MEMBER];
 }			PgStreamingRead;
@@ -91,15 +103,72 @@ pg_streaming_read_buffer_alloc(uint32 iodepth,
 	return sr;
 }
 
+static inline SMgrRelation
+pg_streaming_read_buffer_get_smgr(PgStreamingRead *sr, const BufferTag *tag)
+{
+	RelFileLocator locator = {
+		.spcOid = tag->spcOid,
+		.dbOid = tag->dbOid,
+		.relNumber = tag->relNumber
+	};
+	SMgrRelation smgr;
+	int slot = -1;
+
+	/*
+	 * Is it in our recently-used SMgrRelation cached?  This is intended to be
+	 * a search of about a cache line of data that might have a fast SIMD
+	 * implementation.
+	 */
+	for (int i = 0; i < lengthof(sr->cache_locator); ++i)
+	{
+		if (RelFileLocatorEquals(sr->cache_locator[i], locator))
+		{
+			slot = i;
+			break;
+		}
+	}
+
+	/* If we found it, make it less likely to be evicted, and return it. */
+	if (likely(slot >= 0 && sr->cache_smgr[slot]))
+	{
+		sr->cache_second_chance |= 1 << slot;
+		return sr->cache_smgr[slot];
+	}
+
+	/*
+	 * Find a slot that hasn't recently had its second_chance flag set,
+	 * clearing them as we go (cf. Multics CLOCK).
+	 */
+	for (;;)
+	{
+		slot = sr->cache_hand++ % lengthof(sr->cache_locator);
+		if ((sr->cache_second_chance & (1 << slot)) == 0)
+			break;
+		sr->cache_second_chance &= ~(1 << slot);
+	}
+
+	/* Evict current inhabitant of slot, if there is one. */
+	if (sr->cache_smgr[slot])
+	{
+		smgrclearowner(&sr->cache_smgr[slot], sr->cache_smgr[slot]);
+		sr->cache_smgr[slot] = NULL;
+	}
+
+	/*
+	 * Open and remember the new entry.  It doesn't get a second chance yet,
+	 * it'll have to earn it by being accessed again.
+	 */
+	smgr = smgropen(locator, InvalidBackendId);
+	sr->cache_smgr[slot] = smgr;
+	sr->cache_locator[slot] = locator;
+
+	return smgr;
+}
+
 static inline void
 pg_streaming_read_buffer_start_range(PgStreamingRead * sr)
 {
 	bool no_prefetch_hint;
-	RelFileLocator rlocator = {
-		.spcOid = sr->range_tag.spcOid,
-		.dbOid = sr->range_tag.dbOid,
-		.relNumber = sr->range_tag.relNumber
-	};
 
 	/*
 	 * Issuing prefetch hints for strictly sequential access seems to perform
@@ -109,7 +178,7 @@ pg_streaming_read_buffer_start_range(PgStreamingRead * sr)
 	no_prefetch_hint =
 		(io_direct_flags & IO_DIRECT_DATA) ||
 		BufferTagsEqual(&sr->range_tag, &sr->sequential_tag);
-	StartReadBuffers(smgropen(rlocator, InvalidBackendId),
+	StartReadBuffers(pg_streaming_read_buffer_get_smgr(sr, &sr->range_tag),
 					 'p',	/* XXX */
 					 sr->range_tag.forkNum,
 					 sr->range_tag.blockNum,
@@ -257,6 +326,17 @@ pg_streaming_read_free(PgStreamingRead * sr)
 			break;
 		ReleaseBuffer(buffer);
 	}
+
+	/* Clear our cache of SMgrObjects. */
+
+	/*
+	 * XXX This is only going to work if the PgStreamingRead has some kidn of
+	 * automatic cleanup!  These would be dangling pointers on non-local exit
+	 * of unregistered PgStreamingRead.
+	 */
+	for (int i = 0; i < lengthof(sr->cache_smgr); ++i)
+		if (sr->cache_smgr[i])
+			smgrclearowner(&sr->cache_smgr[i], sr->cache_smgr[i]);
 
 	pfree(sr);
 }
