@@ -250,15 +250,7 @@ elif host_system == 'linux'
   cppflags += '-D_GNU_SOURCE'
 
 elif host_system == 'netbsd'
-  # We must resolve all dynamic linking in the core server at program start.
-  # Otherwise the postmaster can self-deadlock due to signals interrupting
-  # resolution of calls, since NetBSD's linker takes a lock while doing that
-  # and some postmaster signal handlers do things that will also acquire that
-  # lock.  As long as we need "-z now", might as well specify "-z relro" too.
-  # While there's not a hard reason to adopt these settings for our other
-  # executables, there's also little reason not to, so just add them to
-  # LDFLAGS.
-  ldflags += ['-Wl,-z,now', '-Wl,-z,relro']
+  # you're ok
 
 elif host_system == 'openbsd'
   # you're ok
