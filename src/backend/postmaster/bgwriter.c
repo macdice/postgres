@@ -202,7 +202,7 @@ BackgroundWriterMain(void)
 		 * where holding deleted files open causes various strange errors.
 		 * It's not clear we need it elsewhere, but shouldn't hurt.
 		 */
-		smgrcloseall();
+		smgrdestroyall();
 
 		/* Report wait end here, when there is no further possibility of wait */
 		pgstat_report_wait_end();

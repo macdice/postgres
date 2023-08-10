@@ -316,7 +316,7 @@ CheckpointerMain(void)
 		 * where holding deleted files open causes various strange errors.
 		 * It's not clear we need it elsewhere, but shouldn't hurt.
 		 */
-		smgrcloseall();
+		smgrdestroyall();
 	}
 
 	/* We can now handle ereport(ERROR) */
@@ -461,7 +461,7 @@ CheckpointerMain(void)
 			 * After any checkpoint, close all smgr files.  This is so we
 			 * won't hang onto smgr references to deleted files indefinitely.
 			 */
-			smgrcloseall();
+			smgrdestroyall();
 
 			/*
 			 * Indicate checkpoint completion to any waiting backends.
