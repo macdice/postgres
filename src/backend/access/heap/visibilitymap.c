@@ -635,7 +635,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 							  RBM_ZERO_ON_ERROR);
 
 	/*
-	 * Send a shared-inval message to force other backends to close any smgr
+	 * Send a shared-inval message to force other backends to release any smgr
 	 * references they may have for this rel, which we are about to change.
 	 * This is a useful optimization because it means that backends don't have
 	 * to keep checking for creation or extension of the file, which happens

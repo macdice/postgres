@@ -623,7 +623,7 @@ heapam_relation_set_new_filelocator(Relation rel,
 		smgrimmedsync(srel, INIT_FORKNUM);
 	}
 
-	smgrclose(srel);
+	smgrrelease(srel);
 }
 
 static void
@@ -682,9 +682,9 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 	}
 
 
-	/* drop old relation, and close new one */
+	/* drop old relation, and release new one */
 	RelationDropStorage(rel);
-	smgrclose(dstrel);
+	smgrrelease(dstrel);
 }
 
 static void

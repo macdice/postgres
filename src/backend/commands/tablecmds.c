@@ -14825,9 +14825,9 @@ index_copy_data(Relation rel, RelFileLocator newrlocator)
 		}
 	}
 
-	/* drop old relation, and close new one */
+	/* drop old relation, and release new one */
 	RelationDropStorage(rel);
-	smgrclose(dstrel);
+	smgrrelease(dstrel);
 }
 
 /*

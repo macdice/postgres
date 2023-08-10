@@ -360,7 +360,7 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 		log_smgrcreate(&rel->rd_locator, INIT_FORKNUM);
 		fill_seq_fork_with_data(rel, tuple, INIT_FORKNUM);
 		FlushRelationBuffers(rel);
-		smgrclose(srel);
+		smgrrelease(srel);
 	}
 }
 

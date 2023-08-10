@@ -286,7 +286,9 @@ smgrclose(SMgrRelation reln)
 /*
  * smgrrelease() -- Release all resources used by this object.
  *
- * The object remains valid.
+ * The object remains valid, but is moved to the unknown list where it will
+ * be closed by AtEOXact_SMgr().  It may be re-owned if it is accessed by
+ * a relation before then.
  */
 void
 smgrrelease(SMgrRelation reln)
@@ -296,6 +298,13 @@ smgrrelease(SMgrRelation reln)
 		smgrsw[reln->smgr_which].smgr_close(reln, forknum);
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
 		reln->smgr_targblock = InvalidBlockNumber;
+
+		if (reln->smgr_owner)
+		{
+			*reln->smgr_owner = NULL;
+			reln->smgr_owner = NULL;
+			dlist_push_tail(&unowned_relns, &reln->node);
+		}
 	}
 }
 
@@ -340,15 +349,15 @@ smgrcloseall(void)
 }
 
 /*
- * smgrcloserellocator() -- Close SMgrRelation object for given RelFileLocator,
+ * smgrreleaserellocator() -- Close SMgrRelation object for given RelFileLocator,
  *							if one exists.
  *
- * This has the same effects as smgrclose(smgropen(rlocator)), but it avoids
+ * This has the same effects as smgrrelease(smgropen(rlocator)), but it avoids
  * uselessly creating a hashtable entry only to drop it again when no
  * such entry exists already.
  */
 void
-smgrcloserellocator(RelFileLocatorBackend rlocator)
+smgrreleaserellocator(RelFileLocatorBackend rlocator)
 {
 	SMgrRelation reln;
 
@@ -360,7 +369,7 @@ smgrcloserellocator(RelFileLocatorBackend rlocator)
 									  &rlocator,
 									  HASH_FIND, NULL);
 	if (reln != NULL)
-		smgrclose(reln);
+		smgrrelease(reln);
 }
 
 /*
@@ -664,7 +673,7 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 	DropRelationBuffers(reln, forknum, nforks, nblocks);
 
 	/*
-	 * Send a shared-inval message to force other backends to close any smgr
+	 * Send a shared-inval message to force other backends to release any smgr
 	 * references they may have for this rel.  This is useful because they
 	 * might have open file pointers to segments that got removed, and/or
 	 * smgr_targblock variables pointing past the new rel end.  (The inval

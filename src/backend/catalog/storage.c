@@ -226,7 +226,7 @@ RelationDropStorage(Relation rel)
 	 * for now I'll keep the logic simple.
 	 */
 
-	RelationCloseSmgr(rel);
+	RelationReleaseSmgr(rel);
 }
 
 /*

@@ -4392,10 +4392,10 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	rlocator.backend = InvalidBackendId;
 
 	rlocator.locator = src_rlocator;
-	smgrcloserellocator(rlocator);
+	smgrreleaserellocator(rlocator);
 
 	rlocator.locator = dst_rlocator;
-	smgrcloserellocator(rlocator);
+	smgrreleaserellocator(rlocator);
 }
 
 /* ---------------------------------------------------------------------

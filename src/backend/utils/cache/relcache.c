@@ -2226,8 +2226,8 @@ RelationReloadIndexInfo(Relation relation)
 		   !relation->rd_isvalid &&
 		   relation->rd_droppedSubid == InvalidSubTransactionId);
 
-	/* Ensure it's closed at smgr level */
-	RelationCloseSmgr(relation);
+	/* Ensure it's released at smgr level */
+	RelationReleaseSmgr(relation);
 
 	/* Must free any AM cached data upon relcache flush */
 	if (relation->rd_amcache)
@@ -2409,7 +2409,7 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 	 * weren't closed already.  (This was probably done by caller, but let's
 	 * just be real sure.)
 	 */
-	RelationCloseSmgr(relation);
+	RelationReleaseSmgr(relation);
 
 	/* break mutual link with stats entry */
 	pgstat_unlink_relation(relation);
@@ -2512,7 +2512,7 @@ RelationClearRelation(Relation relation, bool rebuild)
 	 * that the low-level file access state is updated after, say, a vacuum
 	 * truncation.
 	 */
-	RelationCloseSmgr(relation);
+	RelationReleaseSmgr(relation);
 
 	/* Free AM cached data, if any */
 	if (relation->rd_amcache)
@@ -2953,8 +2953,9 @@ RelationCacheInvalidate(bool debug_discard)
 	{
 		relation = idhentry->reldesc;
 
-		/* Must close all smgr references to avoid leaving dangling ptrs */
-		RelationCloseSmgr(relation);
+		/* Disconnect smgr references to avoid leaving dangling ptrs */
+		if (relation->rd_smgr)
+			smgrclearowner(&relation->rd_smgr, relation->rd_smgr);
 
 		/*
 		 * Ignore new relations; no other backend will manipulate them before
@@ -3007,11 +3008,11 @@ RelationCacheInvalidate(bool debug_discard)
 	}
 
 	/*
-	 * Now zap any remaining smgr cache entries.  This must happen before we
+	 * Now release remaining smgr cache entries.  This must happen before we
 	 * start to rebuild entries, since that may involve catalog fetches which
 	 * will re-open catalog files.
 	 */
-	smgrcloseall();
+	smgrreleaseall();
 
 	/* Phase 2: rebuild the items found to need rebuild in phase 1 */
 	foreach(l, rebuildFirstList)
@@ -3034,13 +3035,13 @@ RelationCacheInvalidate(bool debug_discard)
 }
 
 /*
- * RelationCloseSmgrByOid - close a relcache entry's smgr link
+ * RelationReleaseSmgrByOid - close a relcache entry's smgr link
  *
  * Needed in some cases where we are changing a relation's physical mapping.
  * The link will be automatically reopened on next use.
  */
 void
-RelationCloseSmgrByOid(Oid relationId)
+RelationReleaseSmgrByOid(Oid relationId)
 {
 	Relation	relation;
 
@@ -3049,7 +3050,7 @@ RelationCloseSmgrByOid(Oid relationId)
 	if (!PointerIsValid(relation))
 		return;					/* not in cache, nothing to do */
 
-	RelationCloseSmgr(relation);
+	RelationReleaseSmgr(relation);
 }
 
 static void
@@ -3816,7 +3817,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 		SMgrRelation srel;
 
 		srel = RelationCreateStorage(newrlocator, persistence, true);
-		smgrclose(srel);
+		smgrrelease(srel);
 	}
 	else
 	{

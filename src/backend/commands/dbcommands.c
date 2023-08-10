@@ -278,7 +278,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 
 	smgr = smgropen(rlocator, InvalidBackendId);
 	nblocks = smgrnblocks(smgr, MAIN_FORKNUM);
-	smgrclose(smgr);
+	smgrrelease(smgr);
 
 	/* Use a buffer access strategy since this is a bulk read operation. */
 	bstrategy = GetAccessStrategy(BAS_BULKREAD);

@@ -1439,8 +1439,8 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	 * itself, the smgr close on pg_class must happen after all accesses in
 	 * this function.
 	 */
-	RelationCloseSmgrByOid(r1);
-	RelationCloseSmgrByOid(r2);
+	RelationReleaseSmgrByOid(r1);
+	RelationReleaseSmgrByOid(r2);
 }
 
 /*
