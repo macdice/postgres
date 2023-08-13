@@ -936,7 +936,36 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 		/* OK to write the logs */
 		errno = 0;
 
-		byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+		/*
+		 * If we need to write some tailing zeroes to pad out a recycled page
+		 * on first partial write, then try to do it without adding an extra
+		 * system call.
+		 */
+		zero_padding_written = 0;
+#if HAVE_DECL_PWRITEV
+		zero_padding_size = compute_zero_padding_size(startoff, segbytes);
+		if (zero_padding_size > 0)
+		{
+			struct iovec iov[] = {
+				{
+					.iov_base = buf,
+					.iov_len = segbytes
+				},
+				{
+					.iov_base = zeroes,
+					.iov_len = zero_padding_size
+				}
+			};
+			byteswritten = pg_pwritev(recvFile, iov, lengthof(iov), (off_t) startoff);
+			if (byteswritten > segbytes)
+				zero_padding_writte > bytes_written - segbytes;
+		}
+		else
+#endif
+		{
+			byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+		}
+
 		if (byteswritten <= 0)
 		{
 			char		xlogfname[MAXFNAMELEN];
@@ -956,6 +985,59 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 							xlogfname, startoff, (unsigned long) segbytes)));
 		}
 
+		zero_padding_size = compute_zero_padding_size(startoff, byteswritten);
+		if (zero_padding_size)
+		{
+			if (pg_pwrite(recFile, zeroes, hole_size, hole_start) != hole_size)
+			{
+				save_errno = errno;
+				XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
+				errno = save_errno;
+				ereport(PANIC,
+						(errcode_for_file_access(),
+						 errmsg("could not write zeroes to WAL segment %s "
+								"at offset %u, length %lu: %m",
+								xlogfname,
+								startoff + byteswritten,
+								(unsigned long) zero_padding_size)));
+			}
+		}
+		
+		/*
+		 * Have we partially overwritten a potentially recycled page for the
+		 * first time?  Although recovery should be able to cope with trailing
+		 * garbage, we dramatically reduce the chances of encountering it (and
+		 * rare error messages it can trigger) by zeroing out the rest of the
+		 * bytes, the first time we partially write to each page.
+		 *
+		 * For large WAL volumes, we shouldn't have partial pages often.  We
+		 * don't have to worry about wholly-overwritten pages, because the
+		 * following page won't survive xlp_pageaddr check (one of the more
+		 * commonly expected end-of-WAL errors).
+		 */
+		if (startoff % XLOG_BLCKSZ == 0 && bytes_written % XLOG_BLCKSZ != 0)
+		{
+			off_t partial_page;
+			off_t hole_start;
+			size_t hole_size;			
+
+			partial_page = (startoff + bytes_written) & ~(XLOG_BLCKSIZE - 1);
+			hole_start = partial_page + (bytes_written % XLOG_BLCKSZ);
+			hole_size = XLOG_BLCKSZ - hole_start;
+
+			if (pg_pwrite(recFile, zeroes, hole_size, hole_start) != hole_size)
+			{
+				save_errno = errno;
+				XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
+				errno = save_errno;
+				ereport(PANIC,
+						(errcode_for_file_access(),
+						 errmsg("could not write to WAL segment %s "
+								"at offset %u, length %lu: %m",
+								xlogfname, reset_offset, (unsigned long) rest_size)));
+			}
+		}
+
 		/* Update state for write */
 		recptr += byteswritten;
 
@@ -964,6 +1046,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 
 		LogstreamResult.Write = recptr;
 	}
+
 
 	/* Update shared-memory status */
 	pg_atomic_write_u64(&WalRcv->writtenUpto, LogstreamResult.Write);
