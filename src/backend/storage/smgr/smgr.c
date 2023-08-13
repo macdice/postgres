@@ -295,6 +295,7 @@ smgrrelease(SMgrRelation reln)
 	{
 		smgrsw[reln->smgr_which].smgr_close(reln, forknum);
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+		reln->smgr_targblock = InvalidBlockNumber;
 	}
 }
 
