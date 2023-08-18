@@ -226,9 +226,11 @@ static const int MultiXactStatusLock[MaxMultiXactStatus + 1] =
  * ----------------------------------------------------------------
  */
 
-static BlockNumber
-heap_pgsr_next_single(PgStreamingRead *pgsr, uintptr_t pgsr_private,
-					  Relation *rel, ForkNumber *fork, ReadBufferMode *mode)
+static bool
+heap_pgsr_next_single(PgStreamingRead *pgsr,
+					  uintptr_t pgsr_private, void *per_io_data,
+					  BufferManagerRelation *bmr, ForkNumber *fork,
+					  BlockNumber *block, ReadBufferMode *mode)
 {
 	HeapScanDesc scan = (HeapScanDesc) pgsr_private;
 	BlockNumber blockno;
@@ -250,51 +252,60 @@ heap_pgsr_next_single(PgStreamingRead *pgsr, uintptr_t pgsr_private,
 
 		/* we're done if we're back at where we started */
 		if (blockno == scan->rs_startblock)
-			return InvalidBlockNumber;
+			return false;
 
 		/* check if the limit imposed by heap_setscanlimits() is met */
 		if (scan->rs_numblocks != InvalidBlockNumber)
 		{
 			if (--scan->rs_numblocks == 0)
-				return InvalidBlockNumber;
+				return false;
 		}
 	}
 
-	*rel = scan->rs_base.rs_rd;
+	*bmr = BMR_REL(scan->rs_base.rs_rd);
 	*fork = MAIN_FORKNUM;
+	*block = blockno;
 	*mode = RBM_NORMAL;
 
-	return blockno;
+	return true;
 }
 
-static BlockNumber
-heap_pgsr_next_parallel(PgStreamingRead *pgsr, uintptr_t pgsr_private,
-						Relation *rel, ForkNumber *fork, ReadBufferMode *mode)
+static bool
+heap_pgsr_next_parallel(PgStreamingRead *pgsr,
+						uintptr_t pgsr_private, void *per_io_data,
+						BufferManagerRelation *bmr, ForkNumber *fork,
+						BlockNumber *block, ReadBufferMode *mode)
 {
 	HeapScanDesc scan = (HeapScanDesc) pgsr_private;
 	ParallelBlockTableScanDesc pbscan =
 		(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
 	ParallelBlockTableScanWorker pbscanwork =
 		scan->rs_parallelworkerdata;
+	BlockNumber blockno;
 
 	Assert(scan->rs_base.rs_parallel);
 	Assert(scan->rs_nblocks > 0);
 
-	*rel = scan->rs_base.rs_rd;
+	/* Note that other processes might have already finished the scan */
+	blockno = table_block_parallelscan_nextpage(scan->rs_base.rs_rd,
+												pbscanwork, pbscan);
+	if (blockno == InvalidBlockNumber)
+		return false;
+
+	*bmr = BMR_REL(scan->rs_base.rs_rd);
 	*fork = MAIN_FORKNUM;
+	*block = blockno;
 	*mode = RBM_NORMAL;
 
-	/* Note that other processes might have already finished the scan */
-	return table_block_parallelscan_nextpage(scan->rs_base.rs_rd,
-											 pbscanwork, pbscan);
+	return true;
 }
 
 static PgStreamingRead *
 heap_pgsr_single_alloc(HeapScanDesc scan)
 {
-	int iodepth = Max(Min(128, NBuffers / 128), 1);
+	int iodepth = MAX_BUFFERS_PER_TRANSFER;
 
-	return pg_streaming_read_buffer_alloc(iodepth, (uintptr_t) scan,
+	return pg_streaming_read_buffer_alloc(iodepth, 0, (uintptr_t) scan,
 										  scan->rs_strategy,
 										  heap_pgsr_next_single);
 }
@@ -302,9 +313,9 @@ heap_pgsr_single_alloc(HeapScanDesc scan)
 static PgStreamingRead *
 heap_pgsr_parallel_alloc(HeapScanDesc scan)
 {
-	int iodepth = Max(Min(128, NBuffers / 128), 1);
+	int iodepth = MAX_BUFFERS_PER_TRANSFER;
 
-	return pg_streaming_read_buffer_alloc(iodepth, (uintptr_t) scan,
+	return pg_streaming_read_buffer_alloc(iodepth, 0, (uintptr_t) scan,
 										  scan->rs_strategy,
 										  heap_pgsr_next_parallel);
 }
@@ -625,7 +636,7 @@ heapgettup_initial_block(HeapScanDesc scan, ScanDirection dir, Buffer *pgsr_buf)
 		/* FIXME: Integrate more neatly */
 		if (scan->pgsr)
 		{
-			*pgsr_buf = pg_streaming_read_get_next(scan->pgsr);
+			*pgsr_buf = pg_streaming_read_buffer_get_next(scan->pgsr, NULL);
 			if (*pgsr_buf == InvalidBuffer)
 				return InvalidBlockNumber;
 			return BufferGetBlockNumber(*pgsr_buf);
@@ -789,9 +800,10 @@ heapgettup_advance_block(HeapScanDesc scan, BlockNumber block, ScanDirection dir
 					block = InvalidBlockNumber;
 			}
 #endif
-			*pgsr_buf = pg_streaming_read_get_next(scan->pgsr);
+			*pgsr_buf = pg_streaming_read_buffer_get_next(scan->pgsr, NULL);
 			if (*pgsr_buf == InvalidBuffer)
 				return InvalidBlockNumber;
+
 			Assert(scan->rs_base.rs_parallel ||
 				   block == BufferGetBlockNumber(*pgsr_buf));
 			return BufferGetBlockNumber(*pgsr_buf);
