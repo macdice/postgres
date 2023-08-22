@@ -20,6 +20,7 @@
 #include "access/skey.h"
 #include "access/table.h"		/* for backward compatibility */
 #include "access/tableam.h"
+#include "nodes/execnodes.h"
 #include "nodes/lockoptions.h"
 #include "nodes/primnodes.h"
 #include "storage/bufpage.h"
@@ -76,9 +77,15 @@ typedef struct HeapScanDescData
 	struct PgStreamingRead *pgsr;
 
 	/* these fields only used in page-at-a-time mode and for bitmap scans */
+
+	/*
+	 * MFIXME: not sure if vmbuffer is being released in the right place.
+	 */
+	Buffer		vmbuffer;		/* current VM buffer for BHS */
 	int			rs_cindex;		/* current tuple's index in vistuples */
 	int			rs_ntuples;		/* number of visible tuples on page */
 	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
+	int			empty_tuples;
 }			HeapScanDescData;
 typedef struct HeapScanDescData *HeapScanDesc;
 
