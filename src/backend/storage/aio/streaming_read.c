@@ -74,6 +74,9 @@ pg_streaming_read_buffer_alloc(int max_ios,
 
 	Assert(max_ios > 0);
 
+	/* XXX fixme */
+	LimitAdditionalPins((uint32 *) &max_ios);
+
 	/*
 	 * We allow twice as many buffers to be pinned as I/Os.  This allows us to
 	 * look further ahead for blocks that need to be read in.

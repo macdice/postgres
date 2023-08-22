@@ -271,6 +271,7 @@ extern void AbortBufferIO(Buffer buffer);
 extern bool BgBufferSync(struct WritebackContext *wb_context);
 
 extern void TestForOldSnapshot_impl(Snapshot snapshot, Relation relation);
+extern void LimitAdditionalPins(uint32 *additional_pins);
 
 /* in buf_init.c */
 extern void InitBufferPool(void);
