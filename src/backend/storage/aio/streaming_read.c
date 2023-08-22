@@ -139,7 +139,8 @@ pg_streaming_read_submit(PgStreamingRead *pgsr)
 	{
 		/*
 		 * Purely sequential advice is known to hurt performance on some
-		 * systems, so only issue it if this looks random.
+		 * systems, so only issue it if this looks random, compared to the
+		 * last cluster that was submitted.
 		 */
 		if (head_cluster->bmr.smgr != pgsr->seq_bmr.smgr ||
 			head_cluster->bmr.rel != pgsr->seq_bmr.rel ||
