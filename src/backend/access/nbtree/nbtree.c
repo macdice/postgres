@@ -891,14 +891,16 @@ btvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	return stats;
 }
 
-static BlockNumber
+static bool
 btvacuumscan_pgsr_next(PgStreamingRead *pgsr, uintptr_t pgsr_private,
-					   Relation *rel, ForkNumber *fork, ReadBufferMode *mode)
+					   void *io_private,
+					   BufferManagerRelation *bmr, ForkNumber *fork,
+					   BlockNumber *block, ReadBufferMode *mode)
 {
 	BTVacState *vstate = (BTVacState *) pgsr_private;
 
 	if (vstate->nextblock == vstate->num_pages)
-		return InvalidBlockNumber;
+		return false;
 
 	/*
 	 * We can't use _bt_getbuf() here because it always applies
@@ -906,11 +908,12 @@ btvacuumscan_pgsr_next(PgStreamingRead *pgsr, uintptr_t pgsr_private,
 	 * recycle all-zero pages, not fail.  Also, we want to use a nondefault
 	 * buffer access strategy. Also want to use AIO.
 	 */
-	*rel = vstate->info->index;
+	*bmr = BMR_REL(vstate->info->index);
 	*fork = MAIN_FORKNUM;
+	*block = vstate->nextblock++;
 	*mode = RBM_NORMAL;
 
-	return vstate->nextblock++;
+	return true;
 }
 
 /*
@@ -1026,14 +1029,14 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		vstate.nextblock = scanblkno;
 		vstate.num_pages = num_pages;
 
-		pgsr = pg_streaming_read_buffer_alloc(512, (uintptr_t) &vstate,
+		pgsr = pg_streaming_read_buffer_alloc(512, 0, (uintptr_t) &vstate,
 											  vstate.info->strategy,
 											  btvacuumscan_pgsr_next);
 
 		/* Iterate over pages, then loop back to recheck length */
 		for (; scanblkno < num_pages; scanblkno++)
 		{
-			Buffer		buf = pg_streaming_read_get_next(pgsr);
+			Buffer		buf = pg_streaming_read_buffer_get_next(pgsr, NULL);
 
 			Assert(BufferIsValid(buf));
 			Assert(BufferGetBlockNumber(buf) == scanblkno);
@@ -1048,7 +1051,7 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			vacuum_delay_point();
 		}
 
-		if (pg_streaming_read_get_next(pgsr) != 0)
+		if (pg_streaming_read_buffer_get_next(pgsr, NULL) != 0)
 			elog(ERROR, "aio and plain pos out of sync");
 
 		pg_streaming_read_free(pgsr);
