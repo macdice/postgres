@@ -226,15 +226,16 @@ static const int MultiXactStatusLock[MaxMultiXactStatus + 1] =
  * ----------------------------------------------------------------
  */
 
-static BlockNumber
+static bool
 bitmapheap_pgsr_next_single(PgStreamingRead *pgsr,
-		uintptr_t pgsr_private, void *io_private, Relation *rel, ForkNumber *fork,
+		uintptr_t pgsr_private, void *io_private,
+		BufferManagerRelation *bmr, ForkNumber *fork, BlockNumber *block,
 		ReadBufferMode *mode)
 {
 	TBMIterateResult *tbmres;
 	HeapScanDesc hdesc = (HeapScanDesc ) pgsr_private;
 
-	*rel = hdesc->rs_base.rs_rd;
+	*bmr = BMR_REL(hdesc->rs_base.rs_rd);
 	*fork = MAIN_FORKNUM;
 	*mode = RBM_NORMAL;
 
@@ -248,7 +249,7 @@ bitmapheap_pgsr_next_single(PgStreamingRead *pgsr,
 			tbm_iterate(hdesc->rs_base.tbmiterator, tbmres);
 
  		if (!BlockNumberIsValid(tbmres->blockno))
- 			return tbmres->blockno;
+			return false;
 
  		/*
  		 * Ignore any claimed entries past what we think is the end of the
@@ -274,7 +275,8 @@ bitmapheap_pgsr_next_single(PgStreamingRead *pgsr,
  			continue;
  		}
 
- 		return tbmres->blockno;
+		*block = tbmres->blockno;
+		return true;
  	}
 }
 
