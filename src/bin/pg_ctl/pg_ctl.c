@@ -20,10 +20,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
 #include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "common/logging.h"
 #include "common/string.h"
 #include "getopt_long.h"
@@ -145,6 +145,7 @@ static PTOKEN_PRIVILEGES GetPrivilegesToDelete(HANDLE hToken);
 #endif
 
 static pid_t get_pgpid(bool is_status_request);
+static char **readfile_fd(int fd, int *numlines);
 static char **readfile(const char *path, int *numlines);
 static void free_readfile(char **optlines);
 static pid_t start_postmaster(void);
@@ -301,6 +302,22 @@ get_pgpid(bool is_status_request)
 	return (pid_t) pid;
 }
 
+static char **
+readfile(const char *path, int *numlines)
+{
+	char	  **result;
+	int			fd;
+
+	*numlines = 0;
+
+	fd = open(path, O_RDONLY | PG_BINARY, 0);
+	if (fd < 0)
+		return NULL;
+	result = readfile_fd(fd, numlines);
+	close(fd);
+
+	return result;
+}
 
 /*
  * get the lines from a text file - return NULL if file can't be opened
@@ -311,9 +328,8 @@ get_pgpid(bool is_status_request)
  * also an additional NULL pointer after the last real line.
  */
 static char **
-readfile(const char *path, int *numlines)
+readfile_fd(int fd, int *numlines)
 {
-	int			fd;
 	int			nlines;
 	char	  **result;
 	char	   *buffer;
@@ -333,14 +349,8 @@ readfile(const char *path, int *numlines)
 	 * snapshot, but in practice, for a small file, it's close enough for the
 	 * current use.
 	 */
-	fd = open(path, O_RDONLY | PG_BINARY, 0);
-	if (fd < 0)
-		return NULL;
 	if (fstat(fd, &statbuf) < 0)
-	{
-		close(fd);
 		return NULL;
-	}
 	if (statbuf.st_size == 0)
 	{
 		/* empty file */
@@ -351,8 +361,7 @@ readfile(const char *path, int *numlines)
 	}
 	buffer = pg_malloc(statbuf.st_size + 1);
 
-	len = read(fd, buffer, statbuf.st_size + 1);
-	close(fd);
+	len = pg_pread(fd, buffer, statbuf.st_size + 1, 0);
 	if (len != statbuf.st_size)
 	{
 		/* oops, the file size changed between fstat and read */
@@ -573,8 +582,6 @@ start_postmaster(void)
 #endif							/* WIN32 */
 }
 
-
-
 /*
  * Wait for the postmaster to become ready.
  *
@@ -592,18 +599,36 @@ start_postmaster(void)
 static WaitPMResult
 wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 {
+	pg_wait_file_t wait_file = PG_WAIT_FILE_INVALID;
+	int			fd = -1;
 	int			i;
 
 	for (i = 0; i < wait_seconds * WAITS_PER_SEC; i++)
 	{
-		char	  **optlines;
+		char	  **optlines = NULL;
 		int			numlines;
+
+		/* Try to open the postmaster.pid file if we haven't already. */
+		if (fd < 0)
+		{
+			fd = open(pid_file, O_RDONLY | PG_BINARY, 0);
+
+			if (fd >= 0)
+			{
+				/*
+				 * Also begin waiting for write events on that file, if we have
+				 * support on this platform.
+				 */
+				wait_file = pg_begin_wait_file(fd, pid_file);
+			}
+		}
 
 		/*
 		 * Try to read the postmaster.pid file.  If it's not valid, or if the
 		 * status line isn't there yet, just keep waiting.
 		 */
-		if ((optlines = readfile(pid_file, &numlines)) != NULL &&
+		if (fd >= 0 &&
+			(optlines = readfile_fd(fd, &numlines)) != NULL &&
 			numlines >= LOCK_FILE_LINE_PM_STATUS)
 		{
 			/* File is complete enough for us, parse it */
@@ -639,6 +664,9 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 				{
 					/* postmaster is done starting up */
 					free_readfile(optlines);
+					if (fd >= 0)
+						close(fd);
+					pg_end_wait_file(wait_file);
 					return POSTMASTER_READY;
 				}
 			}
@@ -663,11 +691,21 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 			int			exitstatus;
 
 			if (waitpid(pm_pid, &exitstatus, WNOHANG) == pm_pid)
+			{
+				if (fd >= 0)
+					close(fd);
+				pg_end_wait_file(wait_file);
 				return POSTMASTER_FAILED;
+			}
 		}
 #else
 		if (WaitForSingleObject(postmasterProcess, 0) == WAIT_OBJECT_0)
+		{
+			if (fd >= 0)
+				close(fd);
+			pg_end_wait_file(wait_file);
 			return POSTMASTER_FAILED;
+		}
 #endif
 
 		/* Startup still in process; wait, printing a dot once per second */
@@ -692,10 +730,24 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 				print_msg(".");
 		}
 
-		pg_usleep(USEC_PER_SEC / WAITS_PER_SEC);
+		/*
+		 * If we've already managed to open the file, we can wait for the
+		 * postmaster to write to it.
+		 *
+		 * XXX Perhaps we should be renaming the pid file into place (cf
+		 * atomicity problems elsewhere), and then we could just watch the
+		 * parent dir, and not need the doesn't-exist-yet special case.
+		 */
+		if (wait_file != PG_WAIT_FILE_INVALID)
+			pg_wait_file(wait_file, 1000 / WAITS_PER_SEC);
+		else
+			pg_usleep(USEC_PER_SEC / WAITS_PER_SEC);
 	}
 
 	/* out of patience; report that postmaster is still starting up */
+	if (fd >= 0)
+		close(fd);
+	pg_end_wait_file(wait_file);
 	return POSTMASTER_STILL_STARTING;
 }
 
