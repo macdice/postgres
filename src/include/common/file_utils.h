@@ -26,6 +26,14 @@ typedef enum PGFileType
 
 struct iovec;					/* avoid including port/pg_iovec.h here */
 
+#if defined(WIN32)
+typedef HANDLE pg_wait_file_t;
+#define PG_WAIT_FILE_INVALID INVALID_HANDLE_VALUE
+#else
+typedef int pg_wait_file_t;
+#define PG_WAIT_FILE_INVALID -1
+#endif
+
 #ifdef FRONTEND
 extern int	fsync_fname(const char *fname, bool isdir);
 extern void fsync_pgdata(const char *pg_data, int serverVersion);
@@ -45,5 +53,10 @@ extern ssize_t pg_pwritev_with_retry(int fd,
 									 off_t offset);
 
 extern ssize_t pg_pwrite_zeros(int fd, size_t size, off_t offset);
+
+extern pg_wait_file_t pg_begin_wait_file(int fd, const char *path);
+extern bool pg_wait_file(pg_wait_file_t wait_file, int timeout_ms);
+extern void pg_end_wait_file(pg_wait_file_t wailt_file);
+
 
 #endif							/* FILE_UTILS_H */

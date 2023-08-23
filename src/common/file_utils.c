@@ -24,6 +24,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef HAVE_SYS_INOTIFY_H
+#include <poll.h>
+#include <sys/inotify.h>
+#endif
+
+#ifdef HAVE_SYS_EVENT_H
+#include <sys/event.h>
+#endif
+
 #include "common/file_utils.h"
 #ifdef FRONTEND
 #include "common/logging.h"
@@ -579,4 +588,148 @@ pg_pwrite_zeros(int fd, size_t size, off_t offset)
 	Assert(total_written == size);
 
 	return total_written;
+}
+
+pg_wait_file_t
+pg_begin_wait_file(int fd, const char *path)
+{
+#if defined(HAVE_SYS_INOTIFY_H)
+	int ifd;
+
+	ifd = inotify_init();
+	if (ifd < 0)
+		return PG_WAIT_FILE_INVALID;
+
+	/* Wait for the file to be written to and closed. */
+	if (inotify_add_watch(ifd, path, IN_CLOSE_WRITE) < 0)
+	{
+		close(ifd);
+		return PG_WAIT_FILE_INVALID;
+	}
+
+	return ifd;
+#elif defined(HAVE_SYS_EVENT_H)
+	struct kevent kev;
+	int kq;
+
+	/* Set up a kqueue that can tell us about writes to that file. */
+	kq = kqueue();
+	EV_SET(&kev, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+		   NOTE_WRITE, 0, NULL);
+	if (kevent(kq, &kev, 1, NULL, 0, NULL) < 0)
+	{
+		close(kq);
+		return PG_WAIT_FILE_INVALID;
+	}
+
+	return kq;
+#elif defined(WIN32)
+	wchar_t wpath[MAXPGPATH];
+	DWORD path_size;
+	HANDLE file_change_handle;
+	HANDLE file_handle;
+
+	file_handle = (HANDLE) _get_osfhandle(fd);
+	if (file_handle == INVALID_HANDLE_VALUE)
+		return PG_WAIT_FILE_INVALID;
+
+	/*
+	 * We'll set up an event that fires for writes to files in the parent
+	 * directory.
+	 */
+
+	/* Get the absolute final path. */
+	path_size = GetFinalPathNameByHandleW(file_handle,
+										  wpath,
+										  lengthof(wpath),
+										  VOLUME_NAME_NT);
+	if (path_size == 0 || path_size >= lengthof(path))
+		return PG_WAIT_FILE_INVALID;
+	path[path_size] = 0;
+
+	/*
+	 * Truncate the file name to get the parent directory.
+	 * XXX Should use PathRemoveFileSpecW()?
+	 */
+	while (path_size > 1)
+	{
+		if (wpath[path_size - 1] == '\\')
+		{
+			wpath[path_size - 1] = 0;
+			break;
+		}
+		path_size--;
+	}
+
+	/* Start watching this directory for writes. */
+	file_change_handle =
+		FindFirstChangeNotificationW(wpath,
+									 FALSE,
+									 FILE_NOTIFY_CHANGE_LAST_WRITE);
+
+	return file_change_handle;
+#else
+	/* No suitable API on this platform.  Nothing to open. */
+	return 0;
+#endif
+}
+
+/*
+ * Wait for another process to write to a file, or a timeout.
+ * Return false for timeout, and true for a write.
+ */
+bool
+pg_wait_file(pg_wait_file_t wait_file, int timeout_ms)
+{
+#if defined(HAVE_LINUX_INOTIFY_H)
+	struct pollfd p = {
+		.fd = wait_file,
+		.events = POLLIN
+	};
+
+	if (poll(&p, 1, timeout_ms) != 0)
+	{
+		char buffer[512];
+		read(p, &buffer, sizeof(buffer));
+		return true;
+	}
+
+	return false;
+#elif defined(HAVE_SYS_EVENT_H)
+	struct timespec timeout;
+	struct kevent kev;
+
+	timeout.tv_sec = timeout_ms / 1000;
+	timeout.tv_nsec = (timeout_ms % 1000) * 1000;
+
+	return kevent(wait_file, NULL, 0, &kev, 1, &timeout) != 0;
+#elif defined(WIN32)
+	if (WaitForSingleObject(wait_file, timeout_ms) == WAIT_OBJECT_0)
+	{
+		FindNextChangeNotification(wait_file);
+		return true;
+	}
+	return false;
+#else
+	/* Just sleep until we time out. */
+	pg_usleep(timeout_ms * 1000);
+	return false;
+#endif
+}
+
+void
+pg_end_wait_file(pg_wait_file_t wait_file)
+{
+	if (wait_file == PG_WAIT_FILE_INVALID)
+		return;
+
+#if defined(HAVE_LINUX_INOTIFY_H)
+	close(wait_file);
+#elif defined(HAVE_SYS_EVENT_H)
+	close(wait_file);
+#elif defined(WIN32)
+	FindCloseChangeNotification(wait_file);
+#else
+	/* Nothing to close. */
+#endif
 }
