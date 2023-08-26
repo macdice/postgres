@@ -3,8 +3,7 @@
 set -e
 set -x
 
-# The default filesystem on freebsd gcp images is very slow to run tests on,
-# due to its 32KB block size
+# Set up a ZFS partition that is tuned to minimize I/O.
 #
 # XXX: It'd probably better to fix this in the image, using something like
 # https://people.freebsd.org/~lidl/blog/re-root.html
@@ -18,11 +17,14 @@ swapoff -a || true
 gpart delete -i 3 da0
 gpart add -t freebsd-ufs -l data8k -a 4096 da0
 gpart show da0
-newfs -U -b 8192 /dev/da0p3
+zpool create tank /dev/da0p3
+zfs create tank/work
+zfs set atime=off tank/work
+zfs set compression=off tank/work
+zfs set recordsize=8192 tank/work
 
 # Migrate working directory
 du -hs $CIRRUS_WORKING_DIR
 mv $CIRRUS_WORKING_DIR $CIRRUS_WORKING_DIR.orig
-mkdir $CIRRUS_WORKING_DIR
-mount -o noatime /dev/da0p3 $CIRRUS_WORKING_DIR
+ln -s /tank/work $CIRRUS_WORKING_DIR
 cp -r $CIRRUS_WORKING_DIR.orig/* $CIRRUS_WORKING_DIR/
