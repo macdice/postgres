@@ -18,6 +18,7 @@ $node = PostgreSQL::Test::Cluster->new('test');
 $node->init;
 $node->append_conf('postgresql.conf', 'autovacuum=off');
 $node->start;
+$node->enable_auto_background_psql(1);
 $node->safe_psql('postgres', q(CREATE EXTENSION amcheck));
 
 #

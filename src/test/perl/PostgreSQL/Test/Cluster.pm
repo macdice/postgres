@@ -986,6 +986,8 @@ sub stop
 
 	local %ENV = $self->_get_env();
 
+	$self->_close_auto_background_psqls;
+
 	$mode = 'fast' unless defined $mode;
 	return 1 unless defined $self->{_pid};
 
@@ -1025,6 +1027,8 @@ sub reload
 
 	local %ENV = $self->_get_env();
 
+	$self->_close_auto_background_psqls;
+
 	print "### Reloading node \"$name\"\n";
 	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata,
 		'reload');
@@ -1048,6 +1052,8 @@ sub restart
 	my $name = $self->name;
 
 	local %ENV = $self->_get_env(PGAPPNAME => undef);
+
+	$self->_close_auto_background_psqls;
 
 	print "### Restarting node \"$name\"\n";
 
@@ -1349,7 +1355,9 @@ sub new
 		_logfile_base =>
 		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}",
 		_logfile =>
-		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log"
+		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log",
+		_auto_background_psqls => {},
+		_use_auto_background_psqls => 0
 	};
 
 	if ($params{install_path})
@@ -1506,6 +1514,39 @@ sub _get_env
 		}
 	}
 	return (%inst_env);
+}
+
+# Private routine to close and forget any psql processes we may be
+# holding onto.
+sub _close_auto_background_psqls
+{
+	my ($self) = @_;
+	foreach my $dbname (keys %{$self->{_auto_background_psqls}})
+	{
+		my $psql = $self->{_auto_background_psqls}{$dbname};
+		delete $self->{_auto_background_psqls}{$dbname};
+		$psql->quit;
+	}
+}
+
+=pod
+
+=item enable_auto_background_psql()
+
+Enable or disable the automatic reuse of long-lived psql sessions.
+
+=cut
+
+sub enable_auto_background_psql
+{
+	my $self = shift;
+	my $value = shift;
+
+	$self->{_use_auto_background_psqls} = $value;
+	if (!$value)
+	{
+		$self->_close_auto_background_psqls;
+	}
 }
 
 # Private routine to get an installation path qualified command.
@@ -1744,13 +1785,32 @@ sub safe_psql
 
 	my ($stdout, $stderr);
 
-	my $ret = $self->psql(
-		$dbname, $sql,
-		%params,
-		stdout => \$stdout,
-		stderr => \$stderr,
-		on_error_die => 1,
-		on_error_stop => 1);
+
+	# If there are no special parameters, and re-use of sessions
+	# hasn't been disabled, create or re-use a long-lived psql
+	# process.
+	if (!%params && $self->{_use_auto_background_psqls})
+	{
+		if (!exists($self->{_auto_background_psqls}{$dbname}))
+		{
+			$self->{_auto_background_psqls}{$dbname} =
+			  $self->background_psql($dbname);
+		}
+		my $psql = $self->{_auto_background_psqls}{$dbname};
+		$stdout = $psql->query($sql);
+		chomp($stdout);
+		$stderr = $psql->{stderr};
+	}
+	else
+	{
+		my $ret = $self->psql(
+			$dbname, $sql,
+			%params,
+			stdout        => \$stdout,
+			stderr        => \$stderr,
+			on_error_die  => 1,
+			on_error_stop => 1);
+	}
 
 	# psql can emit stderr from NOTICEs etc
 	if ($stderr ne "")
