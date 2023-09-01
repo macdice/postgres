@@ -284,7 +284,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				 * macros in the bki file.
 				 */
 				ebootp = palloc0(sizeof(extra_bootstrap_params));
-				// Keep a copy so strtok side effects don't affect optarg.
+				/* Keep a copy so strtok side effects don't affect optarg. */
 				ebootp->param_str = pstrdup(optarg);
 				for (char *token = strtok(ebootp->param_str, ","); token; token = strtok(NULL, ","))
 				{

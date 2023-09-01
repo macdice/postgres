@@ -3303,6 +3303,7 @@ eval_const_expressions_context
 exec_thread_arg
 execution_state
 explain_get_index_name_hook_type
+extra_bootstrap_params
 f_smgr
 fd_set
 fe_scram_state

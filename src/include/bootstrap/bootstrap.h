@@ -73,6 +73,6 @@ typedef struct
 	char	   *locale_provider;
 } extra_bootstrap_params;
 
-extern extra_bootstrap_params * ebootp;
-extern bool bootp_null(extra_bootstrap_params * e, char *s);
+extern extra_bootstrap_params *ebootp;
+extern bool bootp_null(extra_bootstrap_params *e, char *s);
 #endif							/* BOOTSTRAP_H */
