@@ -1929,17 +1929,6 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 	/*
 	 * Unfortunately, it seems that abbreviation for non-C collations is
 	 * broken on many common platforms; see pg_strxfrm_enabled().
-	 *
-	 * Even apart from the risk of broken locales, it's possible that there
-	 * are platforms where the use of abbreviated keys should be disabled at
-	 * compile time.  Having only 4 byte datums could make worst-case
-	 * performance drastically more likely, for example.  Moreover, macOS's
-	 * strxfrm() implementation is known to not effectively concentrate a
-	 * significant amount of entropy from the original string in earlier
-	 * transformed blobs.  It's possible that other supported platforms are
-	 * similarly encumbered.  So, if we ever get past disabling this
-	 * categorically, we may still want or need to disable it for particular
-	 * platforms.
 	 */
 	if (!collate_c && !pg_strxfrm_enabled(locale))
 		abbreviate = false;
@@ -2317,45 +2306,18 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 		sss->buf1[len] = '\0';
 		sss->last_len1 = len;
 
-		if (pg_strxfrm_prefix_enabled(sss->locale))
+		Assert(pg_strxfrm_prefix_enabled(sss->locale));
+
+		if (sss->buflen2 < max_prefix_bytes)
 		{
-			if (sss->buflen2 < max_prefix_bytes)
-			{
-				sss->buflen2 = Max(max_prefix_bytes,
-								   Min(sss->buflen2 * 2, MaxAllocSize));
-				sss->buf2 = repalloc(sss->buf2, sss->buflen2);
-			}
-
-			bsize = pg_strxfrm_prefix(sss->buf2, sss->buf1,
-									  max_prefix_bytes, sss->locale);
-			sss->last_len2 = bsize;
+			sss->buflen2 = Max(max_prefix_bytes,
+							   Min(sss->buflen2 * 2, MaxAllocSize));
+			sss->buf2 = repalloc(sss->buf2, sss->buflen2);
 		}
-		else
-		{
-			/*
-			 * Loop: Call pg_strxfrm(), possibly enlarge buffer, and try
-			 * again.  The pg_strxfrm() function leaves the result buffer
-			 * content undefined if the result did not fit, so we need to
-			 * retry until everything fits, even though we only need the first
-			 * few bytes in the end.
-			 */
-			for (;;)
-			{
-				bsize = pg_strxfrm(sss->buf2, sss->buf1, sss->buflen2,
-								   sss->locale);
 
-				sss->last_len2 = bsize;
-				if (bsize < sss->buflen2)
-					break;
-
-				/*
-				 * Grow buffer and retry.
-				 */
-				sss->buflen2 = Max(bsize + 1,
-								   Min(sss->buflen2 * 2, MaxAllocSize));
-				sss->buf2 = repalloc(sss->buf2, sss->buflen2);
-			}
-		}
+		bsize = pg_strxfrm_prefix(sss->buf2, sss->buf1,
+								  max_prefix_bytes, sss->locale);
+		sss->last_len2 = bsize;
 
 		/*
 		 * Every Datum byte is always compared.  This is safe because the

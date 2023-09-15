@@ -2076,54 +2076,6 @@ pg_strncoll(const char *arg1, size_t len1, const char *arg2, size_t len2,
 	return result;
 }
 
-
-static size_t
-pg_strxfrm_libc(char *dest, const char *src, size_t destsize,
-				pg_locale_t locale)
-{
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
-
-#ifdef TRUST_STRXFRM
-	if (locale)
-		return strxfrm_l(dest, src, destsize, locale->info.lt);
-	else
-		return strxfrm(dest, src, destsize);
-#else
-	/* shouldn't happen */
-	PGLOCALE_SUPPORT_ERROR(locale->provider);
-	return 0;					/* keep compiler quiet */
-#endif
-}
-
-static size_t
-pg_strnxfrm_libc(char *dest, const char *src, size_t srclen, size_t destsize,
-				 pg_locale_t locale)
-{
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
-	size_t		bufsize = srclen + 1;
-	size_t		result;
-
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
-
-	if (bufsize > TEXTBUFLEN)
-		buf = palloc(bufsize);
-
-	/* nul-terminate arguments */
-	memcpy(buf, src, srclen);
-	buf[srclen] = '\0';
-
-	result = pg_strxfrm_libc(dest, buf, destsize, locale);
-
-	if (buf != sbuf)
-		pfree(buf);
-
-	/* if dest is defined, it should be nul-terminated */
-	Assert(result >= destsize || dest[result] == '\0');
-
-	return result;
-}
-
 #ifdef USE_ICU
 
 /* 'srclen' of -1 means the strings are NUL-terminated */
@@ -2264,12 +2216,9 @@ pg_strnxfrm_prefix_icu(char *dest, const char *src, int32_t srclen,
  * pg_strnxfrm(); otherwise false.
  *
  * Unfortunately, it seems that strxfrm() for non-C collations is broken on
- * many common platforms; testing of multiple versions of glibc reveals that,
- * for many locales, strcoll() and strxfrm() do not return consistent
- * results. While no other libc other than Cygwin has so far been shown to
- * have a problem, we take the conservative course of action for right now and
- * disable this categorically.  (Users who are certain this isn't a problem on
- * their system can define TRUST_STRXFRM.)
+ * many common platforms; testing of multiple versions of libc reveals that,
+ * for many locales, strcoll() and strxfrm() either do not return consistent
+ * results, or return very low entropy results.
  *
  * No similar problem is known for the ICU provider.
  */
@@ -2277,11 +2226,7 @@ bool
 pg_strxfrm_enabled(pg_locale_t locale)
 {
 	if (!locale || locale->provider == COLLPROVIDER_LIBC)
-#ifdef TRUST_STRXFRM
-		return true;
-#else
 		return false;
-#endif
 	else if (locale->provider == COLLPROVIDER_ICU)
 		return true;
 	else
@@ -2310,15 +2255,15 @@ pg_strxfrm(char *dest, const char *src, size_t destsize, pg_locale_t locale)
 {
 	size_t		result = 0;		/* keep compiler quiet */
 
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
-		result = pg_strxfrm_libc(dest, src, destsize, locale);
 #ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
+	if (locale->provider == COLLPROVIDER_ICU)
 		result = pg_strnxfrm_icu(dest, src, -1, destsize, locale);
-#endif
 	else
+#endif
+	{
 		/* shouldn't happen */
 		PGLOCALE_SUPPORT_ERROR(locale->provider);
+	}
 
 	return result;
 }
@@ -2347,15 +2292,15 @@ pg_strnxfrm(char *dest, size_t destsize, const char *src, size_t srclen,
 {
 	size_t		result = 0;		/* keep compiler quiet */
 
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
-		result = pg_strnxfrm_libc(dest, src, srclen, destsize, locale);
 #ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
+	if (locale->provider == COLLPROVIDER_ICU)
 		result = pg_strnxfrm_icu(dest, src, srclen, destsize, locale);
-#endif
 	else
+#endif
+	{
 		/* shouldn't happen */
 		PGLOCALE_SUPPORT_ERROR(locale->provider);
+	}
 
 	return result;
 }
