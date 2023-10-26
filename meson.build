@@ -205,6 +205,8 @@ if host_system == 'cygwin'
   mod_link_with_dir = 'libdir'
 
 elif host_system == 'darwin'
+  sema_kind = 'futex'
+
   dlsuffix = '.dylib'
   library_path_var = 'DYLD_LIBRARY_PATH'
 
