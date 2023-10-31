@@ -42,6 +42,7 @@
  *		declarations reside
  *	  - SH_RAW_ALLOCATOR - if defined, memory contexts are not used; instead,
  *	    use this to allocate bytes. The allocator must zero the returned space.
+ *	  - SH_RAW_FREE - free operation corresponding to SH_RAW_ALLOCATOR
  *	  - SH_USE_NONDEFAULT_ALLOCATOR - if defined no element allocator functions
  *		are defined, so you can supply your own
  *	  The following parameters are only relevant when SH_DEFINE is defined:
@@ -410,7 +411,11 @@ SH_ALLOCATE(SH_TYPE * type, Size size)
 static inline void
 SH_FREE(SH_TYPE * type, void *pointer)
 {
+#ifdef SH_RAW_FREE
+	SH_RAW_FREE(pointer);
+#else
 	pfree(pointer);
+#endif
 }
 
 #endif
@@ -458,7 +463,11 @@ SH_SCOPE void
 SH_DESTROY(SH_TYPE * tb)
 {
 	SH_FREE(tb, tb->data);
+#ifdef SH_RAW_FREE
+	SH_RAW_FREE(tb);
+#else
 	pfree(tb);
+#endif
 }
 
 /* reset the contents of a previously created hash table */
