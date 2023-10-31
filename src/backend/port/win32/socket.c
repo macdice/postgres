@@ -47,8 +47,7 @@ typedef struct SocketTableEntry
 {
 	SOCKET		sock;
 	char		status;
-	bool		eof;
-	bool		gc;
+	bool		fd_close;
 	HANDLE		event_handle;
 } SocketTableEntry;
 
@@ -426,40 +425,40 @@ pgwin32_bless_socket(SOCKET s)
 }
 
 /*
- * Check if EOF has been set, and if so, cross-check it to make sure we aren't
- * looking at a socket number that was recycled.  The socket must have been
- * blessed, but we'll tolerate it if it's been closed since and the entry has
- * gone away.
+ * Check if FD_CLOSE has been received, and if so also check if the socket
+ * really is closed to make sure we aren't looking at a socket number that was
+ * recycled.  The socket must have been blessed.
  */
 bool
-pgwin32_socket_is_eof(s)
+pgwin32_socket_check_fd_close(s)
 {
 	SocketTableEntry *entry;
 
 	Assert(socket_table);
+
+	/*
+	 * XXX Would it ever make sense to call this when the socket has been
+	 * closed and the entry is gone?
+	 */
 	entry = socket_table_lookup(socket_table, s);
-	if (entry && entry->eof)
+	if (entry && entry->fd_close)
 	{
 		char		c;
 
-		/*
-		 * The flag may have been set by a previous user of this socket number,
-		 * for sockets that are not closed by pgwin32_closesocket().
-	 	 */
 		if (recv(s, &c, 1, MSG_PEEK) == 0)
 			return true;
 
-		entry->eof = false;
+		entry->fd_close = false;
 	}
 	return false;
 }
 
 /*
- * Remember that FD_CLOSE has been received.  The socket must have been
- * blessed, and not have been closed since.
+ * Remember that an FD_CLOSE event has been received for the given socket.  The
+ * socket must have been blessed, and must not have been closed.
  */
 void
-pgwin32_socket_set_eof(s)
+pgwin32_socket_set_fd_close(s)
 {
 	SocketTableEntry *entry;
 
@@ -467,7 +466,7 @@ pgwin32_socket_set_eof(s)
 	entry = socket_table_lookup(socket_table, s);
 	Assert(entry);
 
-	entry->eof = true;
+	entry->fd_close = true;
 }
 
 /*

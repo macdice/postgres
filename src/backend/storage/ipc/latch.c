@@ -1940,11 +1940,12 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		/*
 		 * For a socket that shuts down normally, Windows only delivers
 		 * FD_CLOSE once.  We want to continue to signal WL_SOCKET_READABLE no
-		 * matter how many times the caller asks, so we'll make use of the
-		 * special per-socket EOF flag provided by src/backend/port/socket.c.
+		 * matter how many times the caller asks and even in another
+		 * WaitEventSet, so we'll make use of the special per-socket tracking
+		 * provided by src/backend/port/socket.c.
 		 */
 		if (cur_event->events & WL_SOCKET_READABLE &&
-			pgwin32_socket_is_eof(cur_event->fd))
+			pgwin32_socket_check_fd_close(cur_event->fd))
 		{
 			occurred_events->pos = cur_event->pos;
 			occurred_events->user_data = cur_event->user_data;
@@ -2118,7 +2119,8 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			{
 				/* EOF/error, so signal all caller-requested socket flags */
 				occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
-				pgwin32_socket_set_eof(cur_event->fd);
+				/* Remember that we've received FD_CLOSE. */
+				pgwin32_socket_set_fd_close(cur_event->fd);
 			}
 
 			if (occurred_events->events != 0)
