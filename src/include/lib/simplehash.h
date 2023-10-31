@@ -205,7 +205,7 @@ SH_SCOPE void SH_DESTROY(SH_TYPE * tb);
 SH_SCOPE void SH_RESET(SH_TYPE * tb);
 
 /* void <prefix>_grow(<prefix>_hash *tb, uint64 newsize) */
-SH_SCOPE void SH_GROW(SH_TYPE * tb, uint64 newsize);
+SH_SCOPE bool SH_GROW(SH_TYPE * tb, uint64 newsize);
 
 /* <element> *<prefix>_insert(<prefix>_hash *tb, <key> key, bool *found) */
 SH_SCOPE	SH_ELEMENT_TYPE *SH_INSERT(SH_TYPE * tb, SH_KEY_TYPE key, bool *found);
@@ -442,6 +442,8 @@ SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 
 #ifdef SH_RAW_ALLOCATOR
 	tb = (SH_TYPE *) SH_RAW_ALLOCATOR(sizeof(SH_TYPE));
+	if (!tb)
+		return NULL;
 #else
 	tb = (SH_TYPE *) MemoryContextAllocZero(ctx, sizeof(SH_TYPE));
 	tb->ctx = ctx;
@@ -454,6 +456,17 @@ SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 	SH_COMPUTE_PARAMETERS(tb, size);
 
 	tb->data = (SH_ELEMENT_TYPE *) SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * tb->size);
+#ifdef SH_RAW_ALLOCATOR
+	if (!tb->data)
+	{
+#ifdef SH_RAW_FREE
+		SH_RAW_FREE(tb);
+#else
+		pfree(tb);
+#endif
+		return NULL;
+	}
+#endif
 
 	return tb;
 }
@@ -485,7 +498,7 @@ SH_RESET(SH_TYPE * tb)
  * necessary. But resizing to the exact input size can be advantageous
  * performance-wise, when known at some point.
  */
-SH_SCOPE void
+SH_SCOPE bool
 SH_GROW(SH_TYPE * tb, uint64 newsize)
 {
 	uint64		oldsize = tb->size;
@@ -502,9 +515,13 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 	/* compute parameters for new table */
 	SH_COMPUTE_PARAMETERS(tb, newsize);
 
-	tb->data = (SH_ELEMENT_TYPE *) SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * tb->size);
+	newdata = (SH_ELEMENT_TYPE *) SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * tb->size);
+#ifdef SH_RAW_ALLOCATOR
+	if (!newdata)
+		return false;
+#endif
 
-	newdata = tb->data;
+	tb->data = newdata;
 
 	/*
 	 * Copy entries from the old data to newdata. We theoretically could use
@@ -589,6 +606,8 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 	}
 
 	SH_FREE(tb, olddata);
+
+	return true;
 }
 
 /*
@@ -623,7 +642,11 @@ restart:
 		 * When optimizing, it can be very useful to print these out.
 		 */
 		/* SH_STAT(tb); */
-		SH_GROW(tb, tb->size * 2);
+		if (!SH_GROW(tb, tb->size * 2))
+		{
+			*found = false;
+			return NULL;
+		}
 		/* SH_STAT(tb); */
 	}
 
