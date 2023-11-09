@@ -238,120 +238,51 @@ pgwin32_poll_signals(void)
 	return 0;
 }
 
-static int
-isDataGram(SOCKET s)
-{
-	int			type;
-	int			typelen = sizeof(type);
-
-	if (getsockopt(s, SOL_SOCKET, SO_TYPE, (char *) &type, &typelen))
-		return 1;
-
-	return (type == SOCK_DGRAM) ? 1 : 0;
-}
-
 int
 pgwin32_waitforsinglesocket(SOCKET s, int what, int timeout)
 {
-	static HANDLE waitevent = INVALID_HANDLE_VALUE;
-	static SOCKET current_socket = INVALID_SOCKET;
-	static int	isUDP = 0;
 	HANDLE		events[2];
 	int			r;
 
-	/* Create an event object just once and use it on all future calls */
-	if (waitevent == INVALID_HANDLE_VALUE)
+	events[0] = pgwin32_signal_event;
+	events[1] = pgwin32_socket_acquire_event_handle(s);
+
+	if (events[1] == NULL)
 	{
-		waitevent = CreateEvent(NULL, TRUE, FALSE, NULL);
-
-		if (waitevent == INVALID_HANDLE_VALUE)
-			ereport(ERROR,
-					(errmsg_internal("could not create socket waiting event: error code %lu", GetLastError())));
-	}
-	else if (!ResetEvent(waitevent))
-		ereport(ERROR,
-				(errmsg_internal("could not reset socket waiting event: error code %lu", GetLastError())));
-
-	/*
-	 * Track whether socket is UDP or not.  (NB: most likely, this is both
-	 * useless and wrong; there is no reason to think that the behavior of
-	 * WSAEventSelect is different for TCP and UDP.)
-	 */
-	if (current_socket != s)
-		isUDP = isDataGram(s);
-	current_socket = s;
-
-	/*
-	 * Attach event to socket.  NOTE: we must detach it again before
-	 * returning, since other bits of code may try to attach other events to
-	 * the socket.
-	 */
-	if (WSAEventSelect(s, waitevent, what) != 0)
-	{
-		TranslateSocketError();
+		/* errno is set */
 		return 0;
 	}
 
-	events[0] = pgwin32_signal_event;
-	events[1] = waitevent;
-
-	/*
-	 * Just a workaround of unknown locking problem with writing in UDP socket
-	 * under high load: Client's pgsql backend sleeps infinitely in
-	 * WaitForMultipleObjectsEx, pgstat process sleeps in pgwin32_select().
-	 * So, we will wait with small timeout(0.1 sec) and if socket is still
-	 * blocked, try WSASend (see comments in pgwin32_select) and wait again.
-	 */
-	if ((what & FD_WRITE) && isUDP)
+	if (pgwin32_socket_select_events(s, what) < 0)
 	{
-		for (;;)
-		{
-			r = WaitForMultipleObjectsEx(2, events, FALSE, 100, TRUE);
-
-			if (r == WAIT_TIMEOUT)
-			{
-				char		c;
-				WSABUF		buf;
-				DWORD		sent;
-
-				buf.buf = &c;
-				buf.len = 0;
-
-				r = WSASend(s, &buf, 1, &sent, 0, NULL, NULL);
-				if (r == 0)		/* Completed - means things are fine! */
-				{
-					WSAEventSelect(s, NULL, 0);
-					return 1;
-				}
-				else if (WSAGetLastError() != WSAEWOULDBLOCK)
-				{
-					TranslateSocketError();
-					WSAEventSelect(s, NULL, 0);
-					return 0;
-				}
-			}
-			else
-				break;
-		}
+		pgwin32_socket_release_event_handle(s);
+		return 0;
 	}
-	else
-		r = WaitForMultipleObjectsEx(2, events, FALSE, timeout, TRUE);
 
-	WSAEventSelect(s, NULL, 0);
+	pgwin32_socket_prepare_to_wait(s);
+
+	r = WaitForMultipleObjectsEx(2, events, FALSE, timeout, TRUE);
 
 	if (r == WAIT_OBJECT_0 || r == WAIT_IO_COMPLETION)
 	{
+		pgwin32_socket_release_event_handle(s);
 		pgwin32_dispatch_queued_signals();
 		errno = EINTR;
 		return 0;
 	}
 	if (r == WAIT_OBJECT_0 + 1)
+	{
+		pgwin32_socket_enumerate_events(s);
+		pgwin32_socket_release_event_handle(s);
 		return 1;
+	}
 	if (r == WAIT_TIMEOUT)
 	{
+		pgwin32_socket_release_event_handle(s);
 		errno = EWOULDBLOCK;
 		return 0;
 	}
+	pgwin32_socket_release_event_handle(s);
 	ereport(ERROR,
 			(errmsg_internal("unrecognized return value from WaitForMultipleObjects: %d (error code %lu)", r, GetLastError())));
 	return 0;
