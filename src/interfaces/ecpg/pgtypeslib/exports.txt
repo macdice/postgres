@@ -46,3 +46,9 @@ PGTYPEStimestamp_sub            43
 PGTYPEStimestamp_sub_interval   44
 PGTYPEStimestamp_to_asc         45
 PGTYPESchar_free                46
+PGTYPESinit                     47
+PGTYPESsprintf                  48
+PGTYPESsnprintf                 49
+PGTYPESstrtod                   50
+PGTYPESbegin_clocale            51
+PGTYPESend_clocale              52

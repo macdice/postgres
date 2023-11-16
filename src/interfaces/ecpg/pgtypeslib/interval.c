@@ -13,6 +13,7 @@
 #include "common/string.h"
 #include "dt.h"
 #include "pgtypes_error.h"
+#include "pgtypes_format.h"
 #include "pgtypes_interval.h"
 #include "pgtypeslib_extern.h"
 
@@ -60,7 +61,7 @@ ParseISO8601Number(const char *str, char **endptr, int *ipart, double *fpart)
 	if (!(isdigit((unsigned char) *str) || *str == '-' || *str == '.'))
 		return DTERR_BAD_FORMAT;
 	errno = 0;
-	val = strtod(str, endptr);
+	val = PGTYPESstrtod(str, endptr);
 	/* did we not see anything that looks like a double? */
 	if (*endptr == str || errno != 0)
 		return DTERR_BAD_FORMAT;
@@ -455,7 +456,7 @@ DecodeInterval(char **field, int *ftype, int nf,	/* int range, */
 				else if (*cp == '.')
 				{
 					errno = 0;
-					fval = strtod(cp, &cp);
+					fval = PGTYPESstrtod(cp, &cp);
 					if (*cp != '\0' || errno != 0)
 						return DTERR_BAD_FORMAT;
 

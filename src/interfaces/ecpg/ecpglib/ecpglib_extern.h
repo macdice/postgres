@@ -59,10 +59,6 @@ struct ECPGtype_information_cache
 	enum ARRAY_TYPE isarray;
 };
 
-#ifdef HAVE_USELOCALE
-extern locale_t ecpg_clocale;	/* LC_NUMERIC=C */
-#endif
-
 /* structure to store one statement */
 struct statement
 {
@@ -76,14 +72,7 @@ struct statement
 	bool		questionmarks;
 	struct variable *inlist;
 	struct variable *outlist;
-#ifdef HAVE_USELOCALE
 	locale_t	oldlocale;
-#else
-	char	   *oldlocale;
-#ifdef HAVE__CONFIGTHREADLOCALE
-	int			oldthreadlocale;
-#endif
-#endif
 	int			nparams;
 	char	  **paramvalues;
 	int		   *paramlengths;

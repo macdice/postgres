@@ -3,7 +3,141 @@
 #include "postgres_fe.h"
 
 #include "pgtypes.h"
+#include "pgtypes_format.h"
 #include "pgtypeslib_extern.h"
+
+/*
+ * Use wcstombs_l's header as a clue about where to find the other extra _l
+ * functions.
+ */
+#if defined(LOCALE_T_IN_XLOCALE) || defined(WCSTOMBS_L_IN_XLOCALE)
+#include <xlocale.h>
+#else
+#include <locale.h>
+#endif
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static locale_t	PGTYPESclocale = (locale_t) 0;
+
+int
+PGTYPESinit(void)
+{
+	/* Already called? */
+	if (PGTYPESclocale != (locale_t) 0)
+		return 0;
+
+#ifdef WIN32
+	PGTYPESclocale = _create_locale(LC_ALL, "C");
+#else
+	PGTYPESclocale = newlocale(LC_ALL_MASK, "C", (locale_t) 0);
+#endif
+	if (PGTYPESclocale == (locale_t) 0)
+		return -1;
+	return -0;
+}
+
+/*
+ * If any of these _l() functions are missing, we need to mess with the
+ * thread-local locale.
+ */
+#if !defined(HAVE_STRTOD_L) || !defined(HAVE_VSPRINTF_L) || !defined(HAVE_VSNPRINTF_L)
+#if defined(WIN32)
+/* Windows has all of these in slightly scrambled form. */
+#else
+/* At least one of these functions is missing.  We'll do the save/restore. */
+#define PGTYPES_MUST_SAVE_RESTORE_THREAD_LOCALE
+#endif
+#endif
+
+/*
+ * Before running code that might do conversions, call this to change the
+ * thread's current locale on platforms that need it.  This is done as a
+ * separate function rather than inside individual conversion wrappers for
+ * some batching effect, avoiding repeated save/restore.
+ *
+ * PGTYPESinit() must have been called, or this will have no effect.
+ */
+int
+PGTYPESbegin_clocale(locale_t *old_locale)
+{
+#ifdef PGTYPES_MUST_SAVE_RESTORE_THREAD_LOCALE
+	/*
+	 * On this platform, at least one of the functions below expects us to
+	 * have changed the thread's locale.  The caller provides space for us to
+	 * store the current locale, so we can change it back later.
+	 */
+	*old_locale = uselocale(PGTYPESclocale);
+	return (*old_locale == (locale_t) 0) ? -1 : 0;
+#else
+	/*
+	 * Dummy value.  We have _l() variants of the functions we need, and we
+	 * might not even have uselocale() on this platform.
+	 */
+	*old_locale = (locale_t) 0;
+	return 0;
+#endif
+}
+
+/*
+ * Restore the current thread's locale.  Call with the value returned by
+ * PGTYPESbegin_clocale().  Does nothing on platforms with all the required
+ * _l() functions.
+ */
+void
+PGTYPESend_clocale(locale_t old_locale)
+{
+#ifdef PGTYPES_MUST_SAVE_RESTORE_THREAD_LOCALE
+	/* Put it back. */
+	uselocale(old_locale);
+#endif
+}
+
+double
+PGTYPESstrtod(const char *str, char **endptr)
+{
+#if defined(WIN32)
+	return _strtod_l(str, endptr, PGTYPESclocale);
+#elif defined(HAVE_STRTOD_L)
+	return strtod_l(str, endptr, PGTYPESclocale);
+#else
+	return strtod(str, endptr);
+#endif
+}
+
+int
+PGTYPESsprintf(char *str, const char *format, ...)
+{
+	va_list args;
+
+	va_start(args, format);
+
+#if defined(WIN32)
+	return _vsprintf_l(str, format, PGTYPESclocale, args);
+#elif defined(HAVE_VSPRINTF_L)
+	return vsprintf_l(str, PGTYPESclocale, format, args);
+#else
+	return vsprintf(str, format, args);
+#endif
+}
+
+int
+PGTYPESsnprintf(char *str, size_t size, const char *format, ...)
+{
+	va_list args;
+
+	va_start(args, format);
+
+#if defined(WIN32)
+	return _vsnprintf_l(str, size, format, PGTYPESclocale, args);
+#elif defined(HAVE_VSPRINTF_L)
+	return vsnprintf_l(str, size, PGTYPESclocale, format, args);
+#else
+	return vsnprintf(str, size, format, args);
+#endif
+}
 
 /* Return value is zero-filled. */
 char *
@@ -81,8 +215,8 @@ pgtypes_fmt_replace(union un_fmt_comb replace_val, int replace_type, char **outp
 				switch (replace_type)
 				{
 					case PGTYPES_TYPE_DOUBLE_NF:
-						i = snprintf(t, PGTYPES_FMT_NUM_MAX_DIGITS,
-									 "%0.0g", replace_val.double_val);
+						i = PGTYPESsnprintf(t, PGTYPES_FMT_NUM_MAX_DIGITS,
+											"%0.0g", replace_val.double_val);
 						break;
 					case PGTYPES_TYPE_INT64:
 						i = snprintf(t, PGTYPES_FMT_NUM_MAX_DIGITS,
