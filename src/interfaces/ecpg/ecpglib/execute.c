@@ -24,6 +24,7 @@
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
 #include "pgtypes_date.h"
+#include "pgtypes_format.h"
 #include "pgtypes_interval.h"
 #include "pgtypes_numeric.h"
 #include "pgtypes_timestamp.h"
@@ -101,9 +102,6 @@ free_statement(struct statement *stmt)
 	free_variable(stmt->outlist);
 	ecpg_free(stmt->command);
 	ecpg_free(stmt->name);
-#ifndef HAVE_USELOCALE
-	ecpg_free(stmt->oldlocale);
-#endif
 	ecpg_free(stmt);
 }
 
@@ -465,7 +463,7 @@ sprintf_double_value(char *ptr, double value, const char *delim)
 			sprintf(ptr, "%s%s", "Infinity", delim);
 	}
 	else
-		sprintf(ptr, "%.15g%s", value, delim);
+		pgtypes_sprintf(ptr, "%.15g%s", value, delim);
 }
 
 static void
@@ -481,7 +479,7 @@ sprintf_float_value(char *ptr, float value, const char *delim)
 			sprintf(ptr, "%s%s", "Infinity", delim);
 	}
 	else
-		sprintf(ptr, "%.15g%s", value, delim);
+		pgtypes_sprintf(ptr, "%.15g%s", value, delim);
 }
 
 static char *
@@ -1975,37 +1973,13 @@ ecpg_do_prologue(int lineno, const int compat, const int force_indicator,
 
 	/*
 	 * Make sure we do NOT honor the locale for numeric input/output since the
-	 * database wants the standard decimal point.  If available, use
-	 * uselocale() for this because it's thread-safe.  Windows doesn't have
-	 * that, but it usually does have _configthreadlocale().  In some versions
-	 * of MinGW, _configthreadlocale() exists but always returns -1 --- so
-	 * treat that situation as if the function doesn't exist.
+	 * database wants the standard decimal point.
 	 */
-#ifdef HAVE_USELOCALE
-
-	/*
-	 * Since ecpg_init() succeeded, we have a connection.  Any successful
-	 * connection initializes ecpg_clocale.
-	 */
-	Assert(ecpg_clocale);
-	stmt->oldlocale = uselocale(ecpg_clocale);
-	if (stmt->oldlocale == (locale_t) 0)
+	if (pgtypes_begin_clocale(&stmt->oldlocale) < 0)
 	{
 		ecpg_do_epilogue(stmt);
 		return false;
 	}
-#else
-#ifdef HAVE__CONFIGTHREADLOCALE
-	stmt->oldthreadlocale = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
-#endif
-	stmt->oldlocale = ecpg_strdup(setlocale(LC_NUMERIC, NULL), lineno);
-	if (stmt->oldlocale == NULL)
-	{
-		ecpg_do_epilogue(stmt);
-		return false;
-	}
-	setlocale(LC_NUMERIC, "C");
-#endif
 
 	/*
 	 * If statement type is ECPGst_prepnormal we are supposed to prepare the
@@ -2213,23 +2187,7 @@ ecpg_do_epilogue(struct statement *stmt)
 	if (stmt == NULL)
 		return;
 
-#ifdef HAVE_USELOCALE
-	if (stmt->oldlocale != (locale_t) 0)
-		uselocale(stmt->oldlocale);
-#else
-	if (stmt->oldlocale)
-		setlocale(LC_NUMERIC, stmt->oldlocale);
-#ifdef HAVE__CONFIGTHREADLOCALE
-
-	/*
-	 * This is a bit trickier than it looks: if we failed partway through
-	 * statement initialization, oldthreadlocale could still be 0.  But that's
-	 * okay because a call with 0 is defined to be a no-op.
-	 */
-	if (stmt->oldthreadlocale != -1)
-		(void) _configthreadlocale(stmt->oldthreadlocale);
-#endif
-#endif
+	pgtypes_end_clocale(stmt->oldlocale);
 
 	free_statement(stmt);
 }

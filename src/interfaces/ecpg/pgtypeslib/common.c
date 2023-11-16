@@ -3,7 +3,31 @@
 #include "postgres_fe.h"
 
 #include "pgtypes.h"
+#include "pgtypes_format.h"
 #include "pgtypeslib_extern.h"
+
+locale_t	PGTYPESclocale;
+
+int
+PGTYPESinit(void)
+{
+	/* Already called? */
+	if (PGTYPESclocale != (locale_t) 0)
+		return 0;
+
+#ifdef WIN32
+	PGTYPESclocale = _create_locale(LC_ALL, "C");
+#else
+	PGTYPESclocale = newlocale(LC_ALL_MASK, "C", (locale_t) 0);
+#endif
+	if (PGTYPESclocale == (locale_t) 0)
+		return -1;
+	return -0;
+}
+
+
+
+
 
 /* Return value is zero-filled. */
 char *
@@ -81,8 +105,8 @@ pgtypes_fmt_replace(union un_fmt_comb replace_val, int replace_type, char **outp
 				switch (replace_type)
 				{
 					case PGTYPES_TYPE_DOUBLE_NF:
-						i = snprintf(t, PGTYPES_FMT_NUM_MAX_DIGITS,
-									 "%0.0g", replace_val.double_val);
+						i = pgtypes_snprintf(t, PGTYPES_FMT_NUM_MAX_DIGITS,
+											 "%0.0g", replace_val.double_val);
 						break;
 					case PGTYPES_TYPE_INT64:
 						i = snprintf(t, PGTYPES_FMT_NUM_MAX_DIGITS,

@@ -429,6 +429,9 @@
 /* Define to 1 if you have the `strsignal' function. */
 #undef HAVE_STRSIGNAL
 
+/* Define to 1 if you have the `strtod_l' function. */
+#undef HAVE_STRTOD_L
+
 /* Define to 1 if the system has the type `struct option'. */
 #undef HAVE_STRUCT_OPTION
 
@@ -495,9 +498,6 @@
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
 
-/* Define to 1 if you have the `uselocale' function. */
-#undef HAVE_USELOCALE
-
 /* Define to 1 if you have BSD UUID support. */
 #undef HAVE_UUID_BSD
 
@@ -515,6 +515,12 @@
 
 /* Define to 1 if your compiler knows the visibility("hidden") attribute. */
 #undef HAVE_VISIBILITY_ATTRIBUTE
+
+/* Define to 1 if you have the `vsnprintf_l' function. */
+#undef HAVE_VSNPRINTF_L
+
+/* Define to 1 if you have the `vsprintf_l' function. */
+#undef HAVE_VSPRINTF_L
 
 /* Define to 1 if you have the `wcstombs_l' function. */
 #undef HAVE_WCSTOMBS_L
@@ -560,9 +566,6 @@
 
 /* Define to 1 if your compiler understands __builtin_unreachable. */
 #undef HAVE__BUILTIN_UNREACHABLE
-
-/* Define to 1 if you have the `_configthreadlocale' function. */
-#undef HAVE__CONFIGTHREADLOCALE
 
 /* Define to 1 if you have __cpuid. */
 #undef HAVE__CPUID

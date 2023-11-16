@@ -10,6 +10,7 @@
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
 #include "pgtypes_date.h"
+#include "pgtypes_format.h"
 #include "pgtypes_interval.h"
 #include "pgtypes_numeric.h"
 #include "pgtypes_timestamp.h"
@@ -466,7 +467,7 @@ ecpg_get_data(const PGresult *results, int act_tuple, int act_field, int lineno,
 						pval++;
 
 					if (!check_special_value(pval, &dres, &scan_length))
-						dres = strtod(pval, &scan_length);
+						dres = pgtypes_strtod(pval, &scan_length);
 
 					if (isarray && *scan_length == '"')
 						scan_length++;

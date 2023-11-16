@@ -1782,9 +1782,11 @@ AC_CHECK_FUNCS(m4_normalize([
 	setproctitle_fast
 	strchrnul
 	strsignal
+	strtod_l
 	syncfs
 	sync_file_range
-	uselocale
+	vsnprintf_l
+	vsprintf_l
 	wcstombs_l
 ]))
 
@@ -1868,7 +1870,6 @@ fi
 
 # Win32 (really MinGW) support
 if test "$PORTNAME" = "win32"; then
-  AC_CHECK_FUNCS(_configthreadlocale)
   AC_LIBOBJ(dirmod)
   AC_LIBOBJ(kill)
   AC_LIBOBJ(open)

@@ -7,6 +7,7 @@
 #include <limits.h>
 
 #include "pgtypes_error.h"
+#include "pgtypes_format.h"
 #include "pgtypes_numeric.h"
 #include "pgtypeslib_extern.h"
 
@@ -1414,7 +1415,7 @@ PGTYPESnumeric_from_double(double d, numeric *dst)
 	numeric    *tmp;
 	int			i;
 
-	if (sprintf(buffer, "%.*g", DBL_DIG, d) <= 0)
+	if (pgtypes_sprintf(buffer, "%.*g", DBL_DIG, d) <= 0)
 		return -1;
 
 	if ((tmp = PGTYPESnumeric_from_asc(buffer, NULL)) == NULL)
