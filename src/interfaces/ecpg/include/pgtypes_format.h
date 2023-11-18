@@ -24,7 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-extern locale_t PGTYPESclocale;
+extern PGDLLIMPORT locale_t PGTYPESclocale;
 
 /*
  * If any of these functions are missing, we need to mess with the
