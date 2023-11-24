@@ -62,8 +62,8 @@ copy_file(const char *src, const char *dst,
 		void		(*strategy_implementation) (const char *, const char *) = NULL;
 
 #ifdef WIN32
-		strategy_name = "CopyFile";
-		strategy_implementation = copy_file_copyfile;
+		//strategy_name = "CopyFile";
+		//strategy_implementation = copy_file_copyfile;
 #endif
 
 		if (strategy_name != NULL)
