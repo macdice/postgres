@@ -831,6 +831,9 @@ SerialInit(void)
 		serialControl->headPage = -1;
 		serialControl->headXid = InvalidTransactionId;
 		serialControl->tailXid = InvalidTransactionId;
+
+		/* Also delete any files on disk. */
+		SlruScanDirectory(SerialSlruCtl, SlruScanDirCbDeleteAll, NULL);
 	}
 }
 
