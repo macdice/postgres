@@ -705,7 +705,7 @@ AssignTransactionId(TransactionState s)
 	 * be told about it too.
 	 */
 	if (!isSubXact)
-		RegisterPredicateLockingXid(XidFromFullTransactionId(s->fullTransactionId));
+		RegisterPredicateLockingXid(s->fullTransactionId);
 
 	/*
 	 * Acquire lock on the transaction XID.  (We assume this cannot block.) We

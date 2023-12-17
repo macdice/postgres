@@ -1224,7 +1224,7 @@ InitPredicateLocks(void)
 		dlist_init(&PredXact->OldCommittedSxact->predicateLocks);
 		dlist_node_init(&PredXact->OldCommittedSxact->finishedLink);
 		dlist_init(&PredXact->OldCommittedSxact->possibleUnsafeConflicts);
-		PredXact->OldCommittedSxact->topXid = InvalidTransactionId;
+		PredXact->OldCommittedSxact->topXid = InvalidFullTransactionId;
 		PredXact->OldCommittedSxact->finishedBefore = InvalidTransactionId;
 		PredXact->OldCommittedSxact->xmin = InvalidTransactionId;
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
@@ -1482,7 +1482,7 @@ SummarizeOldestCommittedSxact(void)
 	dlist_delete_thoroughly(&sxact->finishedLink);
 
 	/* Add to SLRU summary information. */
-	if (TransactionIdIsValid(sxact->topXid) && !SxactIsReadOnly(sxact))
+	if (FullTransactionIdIsValid(sxact->topXid) && !SxactIsReadOnly(sxact))
 		SerialAdd(sxact->topXid, SxactHasConflictOut(sxact)
 				  ? sxact->SeqNo.earliestOutConflictCommit : InvalidSerCommitSeqNo);
 
@@ -1907,7 +1907,7 @@ CreateLocalPredicateLockHash(void)
  * Also store it for easy reference in MySerializableXact.
  */
 void
-RegisterPredicateLockingXid(TransactionId xid)
+RegisterPredicateLockingXid(FullTransactionId xid)
 {
 	SERIALIZABLEXIDTAG sxidtag;
 	SERIALIZABLEXID *sxid;
@@ -1921,12 +1921,12 @@ RegisterPredicateLockingXid(TransactionId xid)
 		return;
 
 	/* We should have a valid XID and be at the top level. */
-	Assert(TransactionIdIsValid(xid));
+	Assert(FullTransactionIdIsValid(xid));
 
 	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
 	/* This should only be done once per transaction. */
-	Assert(MySerializableXact->topXid == InvalidTransactionId);
+	Assert(MySerializableXact->topXid == InvalidFullTransactionId);
 
 	MySerializableXact->topXid = xid;
 
@@ -4830,7 +4830,7 @@ PostPrepare_PredicateLocks(TransactionId xid)
  *		commits or aborts.
  */
 void
-PredicateLockTwoPhaseFinish(TransactionId xid, bool isCommit)
+PredicateLockTwoPhaseFinish(FullTransactionId xid, bool isCommit)
 {
 	SERIALIZABLEXID *sxid;
 	SERIALIZABLEXIDTAG sxidtag;

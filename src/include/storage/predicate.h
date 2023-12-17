@@ -54,7 +54,7 @@ extern Snapshot GetSerializableTransactionSnapshot(Snapshot snapshot);
 extern void SetSerializableTransactionSnapshot(Snapshot snapshot,
 											   VirtualTransactionId *sourcevxid,
 											   int sourcepid);
-extern void RegisterPredicateLockingXid(TransactionId xid);
+extern void RegisterPredicateLockingXid(FullTransactionId xid);
 extern void PredicateLockRelation(Relation relation, Snapshot snapshot);
 extern void PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot);
 extern void PredicateLockTID(Relation relation, ItemPointer tid, Snapshot snapshot,

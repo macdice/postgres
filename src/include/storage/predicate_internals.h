@@ -107,8 +107,8 @@ typedef struct SERIALIZABLEXACT
 	 */
 	dlist_head	possibleUnsafeConflicts;
 
-	TransactionId topXid;		/* top level xid for the transaction, if one
-								 * exists; else invalid */
+	FullTransactionId topXid;		/* top level xid for the transaction, if one
+									 * exists; else invalid */
 	TransactionId finishedBefore;	/* invalid means still running; else the
 									 * struct expires when no serializable
 									 * xids are before this. */
@@ -221,7 +221,7 @@ typedef struct RWConflictPoolHeaderData *RWConflictPoolHeader;
  */
 typedef struct SERIALIZABLEXIDTAG
 {
-	TransactionId xid;
+	FullTransactionId xid;
 } SERIALIZABLEXIDTAG;
 
 /*
