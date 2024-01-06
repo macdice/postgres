@@ -3062,7 +3062,20 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 					 errmsg("could not open file \"%s\": %m", path)));
 	}
 	else
+	{
+		/*
+		 * The file is there, but it is possible that InstallXLogFileSegment()
+		 * has recently renamed it and not yet made the new name durable.  We
+		 * don't want to be able to flush data into a file whose name might
+		 * not survive power loss, since it would become unreachable in
+		 * recovery.  Since InstallXlogFileSegment() holds ControlFileLock,
+		 * acquiring it here is enough to wait for any durable_rename() call
+		 * that might have started before we opened the file.
+		 */
+		LWLockAcquire(ControlFileLock, LW_SHARED);
+		LWLockRelease(ControlFileLock);
 		return fd;
+	}
 
 	/*
 	 * Initialize an empty (all zeroes) segment.  NOTE: it is possible that
