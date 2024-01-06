@@ -470,6 +470,8 @@ typedef struct XLogCtlData
 
 	XLogSegNo	lastRemovedSegNo;	/* latest removed/recycled XLOG segment */
 
+	pg_atomic_uint64 last_known_installed_segno;
+
 	/* Fake LSN counter, for unlogged relations. Protected by ulsn_lck. */
 	XLogRecPtr	unloggedLSN;
 	slock_t		ulsn_lck;
@@ -3071,9 +3073,17 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 		 * recovery.  Since InstallXlogFileSegment() holds ControlFileLock,
 		 * acquiring it here is enough to wait for any durable_rename() call
 		 * that might have started before we opened the file.
+		 *
+		 * We can skip that if we can already see that the WAL space we need
+		 * is fully synchronized.  We may see a slightly out of date value
+		 * since we haven't acquired the lock yet, but that's OK, it just
+		 * means we might take the lock when we don't need to.
 		 */
-		LWLockAcquire(ControlFileLock, LW_SHARED);
-		LWLockRelease(ControlFileLock);
+		if (pg_atomic_read_u64(&XLogCtl->last_known_installed_segno) < logsegno)
+		{
+			LWLockAcquire(ControlFileLock, LW_SHARED);
+			LWLockRelease(ControlFileLock);
+		}
 		return fd;
 	}
 
@@ -3445,6 +3455,8 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 		/* durable_rename already emitted log message */
 		return false;
 	}
+
+	pg_atomic_write_u64(&XLogCtl->last_known_installed_segno, *segno);
 
 	LWLockRelease(ControlFileLock);
 
@@ -4827,6 +4839,8 @@ XLOGShmemInit(void)
 	SpinLockInit(&XLogCtl->Insert.insertpos_lck);
 	SpinLockInit(&XLogCtl->info_lck);
 	SpinLockInit(&XLogCtl->ulsn_lck);
+
+	pg_atomic_init_u64(&XLogCtl->last_known_installed_segno, 0);
 }
 
 /*
