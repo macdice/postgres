@@ -30,10 +30,10 @@
 #include "nodes/bitmapset.h"
 #include "nodes/pg_list.h"
 
-extern List *mbms_add_member(List *a, int listidx, int bitidx);
-extern List *mbms_add_members(List *a, const List *b);
-extern List *mbms_int_members(List *a, const List *b);
+extern pg_nodiscard List *mbms_add_member(List *a, int listidx, int bitidx);
+extern pg_nodiscard List *mbms_add_members(List *a, const List *b);
+extern pg_nodiscard List *mbms_int_members(List *a, const List *b);
 extern bool mbms_is_member(int listidx, int bitidx, const List *a);
-extern Bitmapset *mbms_overlap_sets(const List *a, const List *b);
+extern pg_nodiscard Bitmapset *mbms_overlap_sets(const List *a, const List *b);
 
 #endif							/* MULTIBITMAPSET_H */
