@@ -87,6 +87,9 @@ static Bitmapset *HeapDetermineColumnsInfo(Relation relation,
 static bool heap_acquire_tuplock(Relation relation, ItemPointer tid,
 								 LockTupleMode mode, LockWaitPolicy wait_policy,
 								 bool *have_tuple_lock);
+static inline BlockNumber heapgettup_advance_block(HeapScanDesc scan,
+												   BlockNumber block, ScanDirection dir);
+static inline BlockNumber heapgettup_initial_block(HeapScanDesc scan, ScanDirection dir);
 static void compute_new_xmax_infomask(TransactionId xmax, uint16 old_infomask,
 									  uint16 old_infomask2, TransactionId add_to_xmax,
 									  LockTupleMode mode, bool is_update,
@@ -463,14 +466,12 @@ heapbuildvis(TableScanDesc sscan)
 /*
  * heapfetchbuf - subroutine for heapgettup()
  *
- * This routine reads the specified block of the relation into a buffer and
- * returns with that pinned buffer saved in the scan descriptor.
+ * This routine reads the next block of the relation into a buffer and returns
+ * with that pinned buffer saved in the scan descriptor.
  */
 static inline void
-heapfetchbuf(HeapScanDesc scan, BlockNumber block)
+heapfetchbuf(HeapScanDesc scan, ScanDirection dir)
 {
-	Assert(block < scan->rs_nblocks);
-
 	/* release previous scan buffer, if any */
 	if (BufferIsValid(scan->rs_cbuf))
 	{
@@ -485,10 +486,19 @@ heapfetchbuf(HeapScanDesc scan, BlockNumber block)
 	 */
 	CHECK_FOR_INTERRUPTS();
 
-	/* read page using selected strategy */
-	scan->rs_cbuf = ReadBufferExtended(scan->rs_base.rs_rd, MAIN_FORKNUM, block,
-									   RBM_NORMAL, scan->rs_strategy);
-	scan->rs_cblock = block;
+	if (!scan->rs_inited)
+	{
+		scan->rs_cblock = heapgettup_initial_block(scan, dir);
+		Assert(scan->rs_cblock != InvalidBlockNumber || !BufferIsValid(scan->rs_cbuf));
+		scan->rs_inited = true;
+	}
+	else
+		scan->rs_cblock = heapgettup_advance_block(scan, scan->rs_cblock, dir);
+
+	/* read block if valid */
+	if (BlockNumberIsValid(scan->rs_cblock))
+		scan->rs_cbuf = ReadBufferExtended(scan->rs_base.rs_rd, MAIN_FORKNUM,
+										   scan->rs_cblock, RBM_NORMAL, scan->rs_strategy);
 }
 
 /*
@@ -498,7 +508,7 @@ heapfetchbuf(HeapScanDesc scan, BlockNumber block)
  * occur with empty tables and in parallel scans when parallel workers get all
  * of the pages before we can get a chance to get our first page.
  */
-static BlockNumber
+BlockNumber
 heapgettup_initial_block(HeapScanDesc scan, ScanDirection dir)
 {
 	Assert(!scan->rs_inited);
@@ -638,7 +648,7 @@ heapgettup_continue_page(HeapScanDesc scan, ScanDirection dir, int *linesleft,
  * This also adjusts rs_numblocks when a limit has been imposed by
  * heap_setscanlimits().
  */
-static inline BlockNumber
+BlockNumber
 heapgettup_advance_block(HeapScanDesc scan, BlockNumber block, ScanDirection dir)
 {
 	if (ScanDirectionIsForward(dir))
@@ -736,23 +746,13 @@ heapgettup(HeapScanDesc scan,
 		   ScanKey key)
 {
 	HeapTuple	tuple = &(scan->rs_ctup);
-	BlockNumber block;
 	Page		page;
 	OffsetNumber lineoff;
 	int			linesleft;
 
-	if (unlikely(!scan->rs_inited))
-	{
-		block = heapgettup_initial_block(scan, dir);
-		/* ensure rs_cbuf is invalid when we get InvalidBlockNumber */
-		Assert(block != InvalidBlockNumber || !BufferIsValid(scan->rs_cbuf));
-		scan->rs_inited = true;
-	}
-	else
+	if (scan->rs_inited)
 	{
 		/* continue from previously returned page/tuple */
-		block = scan->rs_cblock;
-
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 		page = heapgettup_continue_page(scan, dir, &linesleft, &lineoff);
 		goto continue_page;
@@ -762,9 +762,12 @@ heapgettup(HeapScanDesc scan,
 	 * advance the scan until we find a qualifying tuple or run out of stuff
 	 * to scan
 	 */
-	while (block != InvalidBlockNumber)
+	while (true)
 	{
-		heapfetchbuf(scan, block);
+		heapfetchbuf(scan, dir);
+		if (!BufferIsValid(scan->rs_cbuf))
+			break;
+		Assert(BufferGetBlockNumber(scan->rs_cbuf) == scan->rs_cblock);
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 		page = heapgettup_start_page(scan, dir, &linesleft, &lineoff);
 continue_page:
@@ -786,7 +789,7 @@ continue_page:
 
 			tuple->t_data = (HeapTupleHeader) PageGetItem(page, lpp);
 			tuple->t_len = ItemIdGetLength(lpp);
-			ItemPointerSet(&(tuple->t_self), block, lineoff);
+			ItemPointerSet(&(tuple->t_self), scan->rs_cblock, lineoff);
 
 			visible = HeapTupleSatisfiesVisibility(tuple,
 												   scan->rs_base.rs_snapshot,
@@ -816,9 +819,6 @@ continue_page:
 		 * it's time to move to the next.
 		 */
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
-
-		/* get the BlockNumber to scan next */
-		block = heapgettup_advance_block(scan, block, dir);
 	}
 
 	/* end of scan */
@@ -851,22 +851,13 @@ heapgettup_pagemode(HeapScanDesc scan,
 					ScanKey key)
 {
 	HeapTuple	tuple = &(scan->rs_ctup);
-	BlockNumber block;
 	Page		page;
 	int			lineindex;
 	int			linesleft;
 
-	if (unlikely(!scan->rs_inited))
-	{
-		block = heapgettup_initial_block(scan, dir);
-		/* ensure rs_cbuf is invalid when we get InvalidBlockNumber */
-		Assert(block != InvalidBlockNumber || !BufferIsValid(scan->rs_cbuf));
-		scan->rs_inited = true;
-	}
-	else
+	if (scan->rs_inited)
 	{
 		/* continue from previously returned page/tuple */
-		block = scan->rs_cblock;	/* current page */
 		page = BufferGetPage(scan->rs_cbuf);
 
 		lineindex = scan->rs_cindex + dir;
@@ -883,9 +874,12 @@ heapgettup_pagemode(HeapScanDesc scan,
 	 * advance the scan until we find a qualifying tuple or run out of stuff
 	 * to scan
 	 */
-	while (block != InvalidBlockNumber)
+	while (true)
 	{
-		heapfetchbuf(scan, block);
+		heapfetchbuf(scan, dir);
+		if (!BufferIsValid(scan->rs_cbuf))
+			break;
+		Assert(BufferGetBlockNumber(scan->rs_cbuf) == scan->rs_cblock);
 		heapbuildvis((TableScanDesc) scan);
 		page = BufferGetPage(scan->rs_cbuf);
 		linesleft = scan->rs_ntuples;
@@ -905,7 +899,7 @@ continue_page:
 
 			tuple->t_data = (HeapTupleHeader) PageGetItem(page, lpp);
 			tuple->t_len = ItemIdGetLength(lpp);
-			ItemPointerSet(&(tuple->t_self), block, lineoff);
+			ItemPointerSet(&(tuple->t_self), scan->rs_cblock, lineoff);
 
 			/* skip any tuples that don't match the scan key */
 			if (key != NULL &&
@@ -916,9 +910,6 @@ continue_page:
 			scan->rs_cindex = lineindex;
 			return;
 		}
-
-		/* get the BlockNumber to scan next */
-		block = heapgettup_advance_block(scan, block, dir);
 	}
 
 	/* end of scan */
