@@ -2097,6 +2097,8 @@ PgStat_TableCounts
 PgStat_TableStatus
 PgStat_TableXactStatus
 PgStat_WalStats
+PgStreamingRead
+PgStreamingReadRange
 PgXmlErrorContext
 PgXmlStrictness
 Pg_finfo_record
@@ -2267,6 +2269,7 @@ ReInitializeDSMForeignScan_function
 ReScanForeignScan_function
 ReadBufPtrType
 ReadBufferMode
+ReadBuffersOperation
 ReadBytePtrType
 ReadExtraTocPtrType
 ReadFunc
