@@ -72,6 +72,18 @@ typedef struct HeapScanDescData
 	 */
 	ParallelBlockTableScanWorkerData *rs_parallelworkerdata;
 
+	/*
+	 * Fields used for streaming reads by sequential scans and TID range
+	 * scans. The streaming read object is allocated at the beginning of the
+	 * scan and reset on rescan or when the scan direction changes. The scan
+	 * direction is saved each time a new page is requested. If the scan
+	 * direction changes from one page to the next, the streaming read object
+	 * releases all previously pinned buffers and resets the prefetch block.
+	 */
+	ScanDirection rs_dir;
+	struct PgStreamingRead *rs_pgsr;
+	BlockNumber rs_prefetch_block;
+
 	/* these fields only used in page-at-a-time mode and for bitmap scans */
 	int			rs_cindex;		/* current tuple's index in vistuples */
 	int			rs_ntuples;		/* number of visible tuples on page */
