@@ -610,3 +610,21 @@ pg_streaming_read_free(PgStreamingRead *pgsr)
 
 	pfree(pgsr);
 }
+
+
+/*
+ * Reset a streaming read object by releasing all of the buffers. Note that
+ * max_ios is not recalculated, so any changes to maintenance_io_concurrency and
+ * effective_io_concurrency will have no effect.
+ */
+void
+pg_streaming_read_reset(PgStreamingRead *pgsr)
+{
+	Buffer		buffer;
+
+	/* Stop looking ahead, and unpin anything that wasn't consumed. */
+	pgsr->finished = true;
+	while ((buffer = pg_streaming_read_buffer_get_next(pgsr, NULL)) != InvalidBuffer)
+		ReleaseBuffer(buffer);
+	pgsr->finished = false;
+}
