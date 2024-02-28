@@ -242,7 +242,7 @@ get_per_buffer_data(PgStreamingRead *pgsr, PgStreamingReadRange *range, int n)
  * remaining portion of the range.
  */
 static PgStreamingReadRange *
-pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
+pg_streaming_read_start_head_range(PgStreamingRead *pgsr, bool no_advice)
 {
 	PgStreamingReadRange *head_range;
 	PgStreamingReadRange *new_head_range;
@@ -260,7 +260,7 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 	 * If advice hasn't been suppressed, and this system supports it, this
 	 * isn't a strictly sequential pattern, then we'll issue advice.
 	 */
-	if (pgsr->advice_enabled && head_range->blocknum != pgsr->seq_blocknum)
+	if (pgsr->advice_enabled && !no_advice && head_range->blocknum != pgsr->seq_blocknum)
 		flags = READ_BUFFERS_ISSUE_ADVICE;
 	else
 		flags = 0;
@@ -419,7 +419,7 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 		if (range->nblocks == lengthof(range->buffers))
 		{
 			/* Start as much of it as we can. */
-			range = pg_streaming_read_start_head_range(pgsr);
+			range = pg_streaming_read_start_head_range(pgsr, false);
 
 			/* If we're now at the I/O limit, stop here. */
 			if (pgsr->ios_in_progress == pgsr->max_ios)
@@ -459,7 +459,7 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 			range->blocknum + range->nblocks != blocknum)
 		{
 			/* Yes.  Start it, so we can begin building a new one. */
-			range = pg_streaming_read_start_head_range(pgsr);
+			range = pg_streaming_read_start_head_range(pgsr, false);
 
 			/*
 			 * It's possible that it was only partially started, and we have a
@@ -467,7 +467,7 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 			 * it all out of the way, or we hit the I/O limit.
 			 */
 			while (range->nblocks > 0 && pgsr->ios_in_progress < pgsr->max_ios)
-				range = pg_streaming_read_start_head_range(pgsr);
+				range = pg_streaming_read_start_head_range(pgsr, false);
 
 			/*
 			 * We have to 'unget' the block returned by the callback if we
@@ -507,7 +507,7 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 	/* Start as much as we can. */
 	while (range->nblocks > 0)
 	{
-		range = pg_streaming_read_start_head_range(pgsr);
+		range = pg_streaming_read_start_head_range(pgsr, false);
 		if (pgsr->ios_in_progress == pgsr->max_ios)
 			break;
 	}
@@ -576,12 +576,13 @@ pg_streaming_read_buffer_get_next(PgStreamingRead *pgsr, void **per_buffer_data)
 		pgsr->next_tail_buffer = 0;
 
 		/*
-		 * If tail crashed into head, and head is not empty, then it is time
-		 * to start that range.
+		 * If tail crashed into head, and head is not empty, then it is time to
+		 * start that range.  Suppress advice, because that'd be a pointless
+		 * system call as we're about to perform that read.
 		 */
 		if (pgsr->tail == pgsr->head &&
 			pgsr->ranges[pgsr->head].nblocks > 0)
-			pg_streaming_read_start_head_range(pgsr);
+			pg_streaming_read_start_head_range(pgsr, true);
 	}
 
 	Assert(pgsr->pinned_buffers == 0);
