@@ -226,8 +226,9 @@ static const int MultiXactStatusLock[MaxMultiXactStatus + 1] =
  * ----------------------------------------------------------------
  */
 
-static BlockNumber
+static int
 bitmapheap_pgsr_next_single(PgStreamingRead *pgsr, void *pgsr_private,
+							int max_block_number, BlockNumber *block_numbers,
 							void *per_buffer_data)
 {
 	TBMIterateResult *tbmres;
@@ -243,7 +244,10 @@ bitmapheap_pgsr_next_single(PgStreamingRead *pgsr, void *pgsr_private,
 			tbm_iterate(hdesc->rs_base.tbmiterator, tbmres);
 
 		if (!BlockNumberIsValid(tbmres->blockno))
-			return InvalidBlockNumber;
+		{
+			block_numbers[0] = InvalidBlockNumber;
+			return 1;
+		}
 
 		/*
 		 * Ignore any claimed entries past what we think is the end of the
@@ -269,49 +273,65 @@ bitmapheap_pgsr_next_single(PgStreamingRead *pgsr, void *pgsr_private,
 			continue;
 		}
 
-		return tbmres->blockno;
+		block_numbers[0] = tbmres->blockno;
+		return 1;
 	}
 }
 
-static BlockNumber
+static int
 heap_pgsr_next_single(PgStreamingRead *pgsr, void *pgsr_private,
+					  int max_block_numbers, BlockNumber *block_numbers,
 					  void *per_buffer_data)
 {
 	HeapScanDesc scan = (HeapScanDesc) pgsr_private;
 	BlockNumber blockno;
+	int			i;
 
 	Assert(!scan->rs_base.rs_parallel);
 	Assert(scan->rs_nblocks > 0);
 
-	if (scan->rs_prefetch_block == InvalidBlockNumber)
+	i = 0;
+	while (i < max_block_numbers)
 	{
-		scan->rs_prefetch_block = blockno = scan->rs_startblock;
-	}
-	else
-	{
-		blockno = ++scan->rs_prefetch_block;
-
-		/* wrap back to the start of the heap */
-		if (blockno >= scan->rs_nblocks)
-			scan->rs_prefetch_block = blockno = 0;
-
-		/* we're done if we're back at where we started */
-		if (blockno == scan->rs_startblock)
-			return InvalidBlockNumber;
-
-		/* check if the limit imposed by heap_setscanlimits() is met */
-		if (scan->rs_numblocks != InvalidBlockNumber)
+		if (scan->rs_prefetch_block == InvalidBlockNumber)
 		{
-			if (--scan->rs_numblocks == 0)
-				return InvalidBlockNumber;
+			scan->rs_prefetch_block = blockno = scan->rs_startblock;
 		}
+		else
+		{
+			blockno = ++scan->rs_prefetch_block;
+
+			/* wrap back to the start of the heap */
+			if (blockno >= scan->rs_nblocks)
+				scan->rs_prefetch_block = blockno = 0;
+
+			/* we're done if we're back at where we started */
+			if (blockno == scan->rs_startblock)
+			{
+				block_numbers[i++] = InvalidBlockNumber;
+				break;
+			}
+
+			/* check if the limit imposed by heap_setscanlimits() is met */
+			if (scan->rs_numblocks != InvalidBlockNumber)
+			{
+				if (--scan->rs_numblocks == 0)
+				{
+					block_numbers[i++] = InvalidBlockNumber;
+					break;
+				}
+			}
+		}
+
+		block_numbers[i++] = blockno;
 	}
 
-	return blockno;
+	return i;
 }
 
-static BlockNumber
+static int
 heap_pgsr_next_parallel(PgStreamingRead *pgsr, void *pgsr_private,
+						int max_buffer_numbers, BlockNumber *block_numbers,
 						void *per_buffer_data)
 {
 	HeapScanDesc scan = (HeapScanDesc) pgsr_private;
@@ -320,15 +340,23 @@ heap_pgsr_next_parallel(PgStreamingRead *pgsr, void *pgsr_private,
 	ParallelBlockTableScanWorker pbscanwork =
 		scan->rs_parallelworkerdata;
 	BlockNumber blockno;
+	int			i;
 
 	Assert(scan->rs_base.rs_parallel);
 	Assert(scan->rs_nblocks > 0);
 
-	/* Note that other processes might have already finished the scan */
-	blockno = table_block_parallelscan_nextpage(scan->rs_base.rs_rd,
-												pbscanwork, pbscan);
+	i = 0;
+	while (i < max_buffer_numbers)
+	{
+		/* Note that other processes might have already finished the scan */
+		blockno = table_block_parallelscan_nextpage(scan->rs_base.rs_rd,
+													pbscanwork, pbscan);
+		block_numbers[i++] = blockno;
+		if (blockno == InvalidBlockNumber)
+			break;
+	}
 
-	return blockno;
+	return i;
 }
 
 static PgStreamingRead *

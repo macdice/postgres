@@ -879,14 +879,18 @@ btvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	return stats;
 }
 
-static BlockNumber
+static int
 btvacuumscan_pgsr_next(PgStreamingRead *pgsr, void *pgsr_private,
+					   int max_block_numbers, BlockNumber *block_numbers,
 					   void *per_buffer_data)
 {
 	BTVacState *vstate = (BTVacState *) pgsr_private;
 
 	if (vstate->nextblock == vstate->num_pages)
-		return InvalidBlockNumber;
+	{
+		block_numbers[0] = InvalidBlockNumber;
+		return 1;
+	}
 
 	/*
 	 * We can't use _bt_getbuf() here because it always applies
@@ -894,7 +898,8 @@ btvacuumscan_pgsr_next(PgStreamingRead *pgsr, void *pgsr_private,
 	 * recycle all-zero pages, not fail.  Also, we want to use a nondefault
 	 * buffer access strategy. Also want to use AIO.
 	 */
-	return vstate->nextblock++;
+	block_numbers[0] = vstate->nextblock++;
+	return 1;
 }
 
 /*
