@@ -45,17 +45,35 @@ struct pg_prewarm_streaming_read_private
 	int64		last_block;
 };
 
-static BlockNumber
+static int
 pg_prewarm_streaming_read_next(PgStreamingRead *pgsr,
 							   void *pgsr_private,
+							   int max_block_numbers,
+							   BlockNumber *block_numbers,
 							   void *per_buffer_data)
 {
 	struct pg_prewarm_streaming_read_private *p = pgsr_private;
+	int		i;
 
-	if (p->blocknum <= p->last_block)
-		return p->blocknum++;
+	/*
+	 * It's only strictly necessary to return at least one block number, but
+	 * it's marginally more efficient to return as many as requested.
+	 */
+	i = 0;
+	while (i < max_block_numbers)
+	{
+		if (p->blocknum <= p->last_block)
+		{
+			block_numbers[i++] = p->blocknum++;
+		}
+		else
+		{
+			block_numbers[i++] = InvalidBlockNumber;
+			break;
+		}
+	}
 
-	return InvalidBlockNumber;
+	return i;
 }
 
 /*
