@@ -229,27 +229,35 @@ static const int MultiXactStatusLock[MaxMultiXactStatus + 1] =
  * ----------------------------------------------------------------
  */
 
-static BlockNumber
+static int
 heap_pgsr_next_single(PgStreamingRead *pgsr, void *pgsr_private,
+					  int max_block_numbers, BlockNumber *block_numbers,
 					  void *per_buffer_data)
 {
 	HeapScanDesc scan = (HeapScanDesc) pgsr_private;
+	int			i;
 
-	/*
-	 * Hard-code ScanDirection to ForwardScanDirection since only forward
-	 * scans support streaming reads.
-	 */
-	if (!scan->rs_inited)
+	i = 0;
+	do
 	{
-		scan->rs_prefetch_block = heapgettup_initial_block(scan, scan->rs_dir);
-		scan->rs_inited = true;
-	}
-	else
-		scan->rs_prefetch_block = heapgettup_advance_block(scan,
-														   scan->rs_prefetch_block,
-														   scan->rs_dir);
+		/*
+		 * Hard-code ScanDirection to ForwardScanDirection since only forward
+		 * scans support streaming reads.
+		 */
+		if (!scan->rs_inited)
+		{
+			scan->rs_prefetch_block = heapgettup_initial_block(scan, scan->rs_dir);
+			scan->rs_inited = true;
+		}
+		else
+			scan->rs_prefetch_block = heapgettup_advance_block(scan,
+															   scan->rs_prefetch_block,
+															   scan->rs_dir);
+		block_numbers[i++] = scan->rs_prefetch_block;
+	} while (i < max_block_numbers &&
+			 scan->rs_prefetch_block != InvalidBlockNumber);
 
-	return scan->rs_prefetch_block;
+	return i;
 }
 
 /* ----------------
