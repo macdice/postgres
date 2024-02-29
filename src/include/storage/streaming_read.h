@@ -32,10 +32,16 @@
 struct PgStreamingRead;
 typedef struct PgStreamingRead PgStreamingRead;
 
-/* Callback that returns the next block number to read. */
-typedef BlockNumber (*PgStreamingReadBufferCB) (PgStreamingRead *pgsr,
-												void *pgsr_private,
-												void *per_buffer_private);
+/*
+ * Callback that indicates the next block numbers to read.  Implementations
+ * should write at least one block number, and up to max_block_numbers,
+ * into the array pointed to by block_numbers, and return the number.
+ */
+typedef int (*PgStreamingReadBufferCB) (PgStreamingRead *pgsr,
+										void *pgsr_private,
+										int max_block_numbers,
+										BlockNumber *block_numbers,
+										void *per_buffer_data);
 
 extern PgStreamingRead *pg_streaming_read_buffer_alloc(int flags,
 													   void *pgsr_private,
