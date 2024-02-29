@@ -39,9 +39,10 @@ struct PgStreamingRead
 	BufferManagerRelation bmr;
 	ForkNumber	forknum;
 
-	/* Sometimes we need to buffer one block for flow control. */
-	BlockNumber unget_blocknum;
-	void	   *unget_per_buffer_data;
+	/* Buffered block numbers the callback has requested. */
+	BlockNumber	block_numbers[128];
+	int			block_numbers_index;
+	int			block_numbers_count;
 
 	/* Next expected block, for detecting sequential access. */
 	BlockNumber seq_blocknum;
@@ -123,8 +124,6 @@ pg_streaming_read_buffer_alloc_internal(int flags,
 	pgsr->pgsr_private = pgsr_private;
 	pgsr->strategy = strategy;
 	pgsr->size = size;
-
-	pgsr->unget_blocknum = InvalidBlockNumber;
 
 #ifdef USE_PREFETCH
 
@@ -334,51 +333,63 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 }
 
 /*
- * Ask the callback which block it would like us to read next, with a small
- * buffer in front to allow pg_streaming_unget_block() to work.
+ * Which block do we need to consider next?  We get these from a small buffer,
+ * and ask the callback for a new batch when it runs out.
  */
 static BlockNumber
-pg_streaming_get_block(PgStreamingRead *pgsr, void *per_buffer_data)
+pg_streaming_get_block(PgStreamingRead *pgsr)
 {
-	BlockNumber result;
+	PgStreamingReadRange *range;
+	int		max_batch;
+	int		per_buffer_data_index;
 
-	if (unlikely(pgsr->unget_blocknum != InvalidBlockNumber))
-	{
-		/*
-		 * If we had to unget a block, now it is time to return that one
-		 * again.
-		 */
-		result = pgsr->unget_blocknum;
-		pgsr->unget_blocknum = InvalidBlockNumber;
+	/* If we have some queued up already, take the next one. */
+	if (likely(pgsr->block_numbers_index < pgsr->block_numbers_count))
+		return pgsr->block_numbers[pgsr->block_numbers_index++];
 
-		/*
-		 * The same per_buffer_data element must have been used, and still
-		 * contains whatever data the callback wrote into it.  So we just
-		 * sanity-check that we were called with the value that
-		 * pg_streaming_unget_block() pushed back.
-		 */
-		Assert(per_buffer_data == pgsr->unget_per_buffer_data);
-	}
-	else
-	{
-		/* Use the installed callback directly. */
-		result = pgsr->callback(pgsr, pgsr->pgsr_private, per_buffer_data);
-	}
+	/*
+	 * Several things impose caps on the maximum batch size that we can ask
+	 * for at once, starting with the amount of space in the array.
+	 */
+	max_batch = lengthof(pgsr->block_numbers);
 
-	return result;
+	/* If we're still ramping up, don't exceed that limit. */
+	max_batch = Min(max_batch, pgsr->ramp_up_pin_limit);
+
+	/*
+	 * We want to give the callback a contiguous range of per-buffer-data
+	 * slots, so we have to limit the batch size to the remaining space before
+	 * that wraps around.
+	 */
+	range = &pgsr->ranges[pgsr->head];
+	per_buffer_data_index = get_per_buffer_data_index(pgsr, range,
+													  range->nblocks);
+	max_batch = Min(max_batch, pgsr->max_pinned_buffers - per_buffer_data_index);
+
+	/* Get as many block numbers and per-buffer-data object as we can. */
+	pgsr->block_numbers_count = pgsr->callback(pgsr,
+											   pgsr->pgsr_private,
+											   max_batch,
+											   pgsr->block_numbers,
+											   (char *) pgsr->per_buffer_data +
+											   pgsr->per_buffer_data_size *
+											   per_buffer_data_index);
+
+	/* Return the first one. */
+	Assert(pgsr->block_numbers_count > 0);
+	pgsr->block_numbers_index = 1;
+	return pgsr->block_numbers[0];
 }
 
 /*
  * In order to deal with short reads in StartReadBuffers(), we sometimes need
- * to defer handling of a block until later.  This *must* be called with the
- * last value returned by pg_streaming_get_block().
+ * to defer handling of a block until later.
  */
 static void
-pg_streaming_unget_block(PgStreamingRead *pgsr, BlockNumber blocknum, void *per_buffer_data)
+pg_streaming_unget_block(PgStreamingRead *pgsr)
 {
-	Assert(pgsr->unget_blocknum == InvalidBlockNumber);
-	pgsr->unget_blocknum = blocknum;
-	pgsr->unget_per_buffer_data = per_buffer_data;
+	Assert(pgsr->block_numbers_index > 0);
+	pgsr->block_numbers_index--;
 }
 
 static void
@@ -412,7 +423,6 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 	do
 	{
 		BlockNumber blocknum;
-		void	   *per_buffer_data;
 
 		/* Do we have a full-sized range? */
 		range = &pgsr->ranges[pgsr->head];
@@ -439,11 +449,8 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 			Assert(range->nblocks < lengthof(range->buffers));
 		}
 
-		/* Find per-buffer data slot for the next block. */
-		per_buffer_data = get_per_buffer_data(pgsr, range, range->nblocks);
-
 		/* Find out which block the callback wants to read next. */
-		blocknum = pg_streaming_get_block(pgsr, per_buffer_data);
+		blocknum = pg_streaming_get_block(pgsr);
 		if (blocknum == InvalidBlockNumber)
 		{
 			/* End of stream. */
@@ -475,7 +482,7 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 			 */
 			if (pgsr->ios_in_progress == pgsr->max_ios)
 			{
-				pg_streaming_unget_block(pgsr, blocknum, per_buffer_data);
+				pg_streaming_unget_block(pgsr);
 				return;
 			}
 		}
