@@ -14,11 +14,12 @@
  * immediately even if the signal arrives before poll() begins.
  *
  * The epoll() implementation overcomes the race with a different technique: it
- * keeps SIGURG blocked and consumes from a signalfd() descriptor instead.  We
- * don't need to register a signal handler or create our own self-pipe.  We
- * assume that any system that has Linux epoll() also has Linux signalfd().
+ * keeps LATCH_SIGNAL blocked and consumes from a signalfd() descriptor
+ * instead.  We don't need to register a signal handler or create our own
+ * self-pipe.  We assume that any system that has Linux epoll() also has Linux
+ * signalfd().
  *
- * The kqueue() implementation waits for SIGURG with EVFILT_SIGNAL.
+ * The kqueue() implementation waits for LATCH_SIGNAL with EVFILT_SIGNAL.
  *
  * The Windows implementation uses Windows events that are inherited by all
  * postmaster child processes. There's no need for the self-pipe trick there.
@@ -99,6 +100,20 @@
 #endif
 #endif
 
+/* The signal we use for latch wakeup on Unix systems. */
+#ifndef WAIT_USE_WIN32
+/*
+ * Find a free signal number to use as another user-defined signal.  We choose
+ * the signal associated with the rarely-used signal-based socket-readiness
+ * interface, which is free because we never open sockets with O_ASYNC.
+ */
+#ifdef SIGIO
+#define LATCH_SIGNAL SIGIO
+#else
+#define LATCH_SIGNAL SIGPOLL
+#endif
+#endif
+
 /* typedef in latch.h */
 struct WaitEventSet
 {
@@ -164,7 +179,7 @@ static volatile sig_atomic_t waiting = false;
 #endif
 
 #ifdef WAIT_USE_SIGNALFD
-/* On Linux, we'll receive SIGURG via a signalfd file descriptor. */
+/* On Linux, we'll receive LATCH_SIGNAL via a signalfd file descriptor. */
 static int	signal_fd = -1;
 #endif
 
@@ -303,7 +318,7 @@ InitializeLatchSupport(void)
 	ReserveExternalFD();
 	ReserveExternalFD();
 
-	pqsignal(SIGURG, latch_sigurg_handler);
+	pqsignal(LATCH_SIGNAL, latch_sigurg_handler);
 #endif
 
 #ifdef WAIT_USE_SIGNALFD
@@ -325,12 +340,12 @@ InitializeLatchSupport(void)
 		}
 	}
 
-	/* Block SIGURG, because we'll receive it through a signalfd. */
-	sigaddset(&UnBlockSig, SIGURG);
+	/* Block LATCH_SIGNAL, because we'll receive it through a signalfd. */
+	sigaddset(&UnBlockSig, LATCH_SIGNAL);
 
-	/* Set up the signalfd to receive SIGURG notifications. */
+	/* Set up the signalfd to receive LATCH_SIGNAL notifications. */
 	sigemptyset(&signalfd_mask);
-	sigaddset(&signalfd_mask, SIGURG);
+	sigaddset(&signalfd_mask, LATCH_SIGNAL);
 	signal_fd = signalfd(-1, &signalfd_mask, SFD_NONBLOCK | SFD_CLOEXEC);
 	if (signal_fd < 0)
 		elog(FATAL, "signalfd() failed");
@@ -338,8 +353,8 @@ InitializeLatchSupport(void)
 #endif
 
 #ifdef WAIT_USE_KQUEUE
-	/* Ignore SIGURG, because we'll receive it via kqueue. */
-	pqsignal(SIGURG, SIG_IGN);
+	/* Ignore LATCH_SIGNAL, because we'll receive it via kqueue. */
+	pqsignal(LATCH_SIGNAL, SIG_IGN);
 #endif
 }
 
@@ -365,7 +380,7 @@ void
 ShutdownLatchSupport(void)
 {
 #if defined(WAIT_USE_POLL)
-	pqsignal(SIGURG, SIG_IGN);
+	pqsignal(LATCH_SIGNAL, SIG_IGN);
 #endif
 
 	if (LatchWaitSet)
@@ -659,9 +674,9 @@ SetLatch(Latch *latch)
 
 	/*
 	 * See if anyone's waiting for the latch. It can be the current process if
-	 * we're in a signal handler. We use the self-pipe or SIGURG to ourselves
-	 * to wake up WaitEventSetWaitBlock() without races in that case. If it's
-	 * another process, send a signal.
+	 * we're in a signal handler. We use the self-pipe or LATCH_SIGNAL to
+	 * ourselves to wake up WaitEventSetWaitBlock() without races in that case.
+	 * If it's another process, send a signal.
 	 *
 	 * Fetch owner_pid only once, in case the latch is concurrently getting
 	 * owned or disowned. XXX: This assumes that pid_t is atomic, which isn't
@@ -689,11 +704,11 @@ SetLatch(Latch *latch)
 			sendSelfPipeByte();
 #else
 		if (waiting)
-			kill(MyProcPid, SIGURG);
+			kill(MyProcPid, LATCH_SIGNAL);
 #endif
 	}
 	else
-		kill(owner_pid, SIGURG);
+		kill(owner_pid, LATCH_SIGNAL);
 
 #else
 
@@ -1249,7 +1264,7 @@ static inline void
 WaitEventAdjustKqueueAddLatch(struct kevent *k_ev, WaitEvent *event)
 {
 	/* For now latch can only be added, not removed. */
-	k_ev->ident = SIGURG;
+	k_ev->ident = LATCH_SIGNAL;
 	k_ev->filter = EVFILT_SIGNAL;
 	k_ev->flags = EV_ADD;
 	k_ev->fflags = 0;
@@ -2236,7 +2251,7 @@ GetNumRegisteredWaitEvents(WaitEventSet *set)
 #if defined(WAIT_USE_SELF_PIPE)
 
 /*
- * SetLatch uses SIGURG to wake up the process waiting on the latch.
+ * SetLatch uses LATCH_SIGNAL to wake up the process waiting on the latch.
  *
  * Wake up WaitLatch, if we're waiting.
  */
