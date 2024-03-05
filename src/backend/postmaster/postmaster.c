@@ -3748,12 +3748,14 @@ PostmasterStateMachine(void)
 			WalSummarizerPID == 0 &&
 			BgWriterPID == 0 &&
 			(CheckpointerPID == 0 ||
-			 (!FatalError && Shutdown < ImmediateShutdown)) &&
+			 (!FatalError && Shutdown < ImmediateShutdown) ||
+			 (FatalError && CheckpointerPID != 0)) &&
 			WalWriterPID == 0 &&
 			AutoVacPID == 0 &&
 			SlotSyncWorkerPID == 0)
 		{
-			if (Shutdown >= ImmediateShutdown || FatalError)
+			if (CheckpointerPID == 0 &&
+				(Shutdown >= ImmediateShutdown || FatalError))
 			{
 				/*
 				 * Start waiting for dead_end children to die.  This state
@@ -3767,7 +3769,7 @@ PostmasterStateMachine(void)
 				 * FatalError state.
 				 */
 			}
-			else
+			else if (Shutdown > NoShutdown && Shutdown < ImmediateShutdown)
 			{
 				/*
 				 * If we get here, we are proceeding with normal shutdown. All
@@ -3804,6 +3806,16 @@ PostmasterStateMachine(void)
 					if (PgArchPID != 0)
 						signal_child(PgArchPID, SIGQUIT);
 				}
+			}
+			else
+			{
+				/*
+				 * Either it's an immediate shutdown or a child crashed, and
+				 * we're still waiting for all the children to quit.  The
+				 * checkpointer was already told to quit.
+				 */
+				Assert(Shutdown == ImmediateShutdown ||
+					   (Shutdown == NoShutdown && FatalError));
 			}
 		}
 	}
