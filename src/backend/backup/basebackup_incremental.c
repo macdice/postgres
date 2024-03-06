@@ -28,6 +28,7 @@
 #include "common/int.h"
 #include "datatype/timestamp.h"
 #include "postmaster/walsummarizer.h"
+#include "storage/smgr.h"
 #include "utils/timestamp.h"
 
 #define	BLOCKS_PER_READ			512
@@ -712,7 +713,7 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 					BlockNumber *relative_block_numbers,
 					unsigned *truncation_block_length)
 {
-	BlockNumber absolute_block_numbers[RELSEG_SIZE];
+	BlockNumber *absolute_block_numbers;
 	BlockNumber limit_block;
 	BlockNumber start_blkno;
 	BlockNumber stop_blkno;
@@ -839,8 +840,10 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 				errcode(ERRCODE_INTERNAL_ERROR),
 				errmsg_internal("overflow computing block number bounds for segment %u with size %zu",
 								segno, size));
+	absolute_block_numbers = palloc(sizeof(BlockNumber) * RELSEG_SIZE);
 	nblocks = BlockRefTableEntryGetBlocks(brtentry, start_blkno, stop_blkno,
-										  absolute_block_numbers, RELSEG_SIZE);
+										  absolute_block_numbers,
+										  RELSEG_SIZE);
 	Assert(nblocks <= RELSEG_SIZE);
 
 	/*
@@ -856,7 +859,10 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	 * nothing good about sending an incremental file in that case.
 	 */
 	if (nblocks * BLCKSZ > size * 0.9)
+	{
+		pfree(absolute_block_numbers);
 		return BACK_UP_FILE_FULLY;
+	}
 
 	/*
 	 * Looks like we can send an incremental file, so sort the absolute the
@@ -872,6 +878,7 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 		  compare_block_numbers);
 	for (i = 0; i < nblocks; ++i)
 		relative_block_numbers[i] = absolute_block_numbers[i] - start_blkno;
+	pfree(absolute_block_numbers);
 	*num_blocks_required = nblocks;
 
 	/*
