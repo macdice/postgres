@@ -28,8 +28,7 @@ struct PgStreamingRead
 	int			pinned_buffers;
 	int			pinned_buffers_trigger;
 	int			next_tail_buffer;
-	int			ramp_up_pin_limit;
-	int			ramp_up_pin_stall;
+	int			distance;
 	bool		finished;
 	bool		advice_enabled;
 	void	   *pgsr_private;
@@ -139,14 +138,14 @@ pg_streaming_read_buffer_alloc_internal(int flags,
 #endif
 
 	/*
-	 * We start off building small ranges, but double that quickly, for the
-	 * benefit of users that don't know how far ahead they'll read.  This can
-	 * be disabled by users that already know they'll read all the way.
+	 * Skip the initial ramp-up phase if the caller says we're going to be
+	 * reading the whole relation.  This way we start out doing full-sized
+	 * reads.
 	 */
 	if (flags & PGSR_FLAG_FULL)
-		pgsr->ramp_up_pin_limit = INT_MAX;
+		pgsr->distance = Min(MAX_BUFFERS_PER_TRANSFER, pgsr->max_pinned_buffers);
 	else
-		pgsr->ramp_up_pin_limit = 1;
+		pgsr->distance = 1;
 
 	/*
 	 * We want to avoid creating ranges that are smaller than they could be
@@ -278,12 +277,37 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 						 flags,
 						 &head_range->operation);
 
-	/* Did that start an I/O? */
-	if (head_range->need_wait && (flags & READ_BUFFERS_ISSUE_ADVICE))
+	if (head_range->need_wait)
 	{
-		head_range->advice_issued = true;
-		pgsr->ios_in_progress++;
-		Assert(pgsr->ios_in_progress <= pgsr->max_ios);
+		/*
+		 * I/O necessary.  Look-ahead distance increases rapidly until it hits
+		 * the pin limit.
+		 */
+		if (pgsr->distance < pgsr->max_pinned_buffers)
+		{
+			int		distance;
+
+			distance = pgsr->distance * 2;
+			distance = Min(distance, pgsr->max_pinned_buffers);
+			pgsr->distance = distance;
+		}
+
+		/* Count an I/O in progress until we've "waited". */
+		if (flags & READ_BUFFERS_ISSUE_ADVICE)
+		{
+			head_range->advice_issued = true;
+			pgsr->ios_in_progress++;
+			Assert(pgsr->ios_in_progress <= pgsr->max_ios);
+		}
+	}
+	else
+	{
+		/*
+		 * No I/O necessary. Look-ahead distance decays slowly, but stays high
+		 * enough to form a full sized I/O.
+		 */
+		if (pgsr->distance > MAX_BUFFERS_PER_TRANSFER)
+			pgsr->distance--;
 	}
 
 	/*
@@ -387,16 +411,6 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 	PgStreamingReadRange *range;
 
 	/*
-	 * If we're still ramping up, we may have to stall to wait for buffers to
-	 * be consumed first before we do any more prefetching.
-	 */
-	if (pgsr->ramp_up_pin_stall > 0)
-	{
-		Assert(pgsr->pinned_buffers > 0);
-		return;
-	}
-
-	/*
 	 * If we're finished or can't start more I/O, then don't look ahead.
 	 */
 	if (pgsr->finished || pgsr->ios_in_progress == pgsr->max_ios)
@@ -490,19 +504,7 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 		Assert(range->blocknum + range->nblocks == blocknum);
 		range->nblocks++;
 
-	} while (pgsr->pinned_buffers + range->nblocks < pgsr->max_pinned_buffers &&
-			 pgsr->pinned_buffers + range->nblocks < pgsr->ramp_up_pin_limit);
-
-	/* If we've hit the ramp-up limit, insert a stall. */
-	if (pgsr->pinned_buffers + range->nblocks >= pgsr->ramp_up_pin_limit)
-	{
-		/* Can't get here if an earlier stall hasn't finished. */
-		Assert(pgsr->ramp_up_pin_stall == 0);
-		/* Don't do any more prefetching until these buffers are consumed. */
-		pgsr->ramp_up_pin_stall = pgsr->ramp_up_pin_limit;
-		/* Double it.  It will soon be out of the way. */
-		pgsr->ramp_up_pin_limit *= 2;
-	}
+	} while (pgsr->pinned_buffers + range->nblocks < pgsr->distance);
 
 	/* Start as much as we can. */
 	while (range->nblocks > 0)
@@ -560,9 +562,6 @@ pg_streaming_read_buffer_get_next(PgStreamingRead *pgsr, void **per_buffer_data)
 			/* We are giving away ownership of this pinned buffer. */
 			Assert(pgsr->pinned_buffers > 0);
 			pgsr->pinned_buffers--;
-
-			if (pgsr->ramp_up_pin_stall > 0)
-				pgsr->ramp_up_pin_stall--;
 
 			if (per_buffer_data)
 				*per_buffer_data = get_per_buffer_data(pgsr, tail_range, buffer_index);
