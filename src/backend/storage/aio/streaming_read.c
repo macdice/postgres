@@ -1,7 +1,10 @@
 #include "postgres.h"
 
+#include "catalog/pg_tablespace.h"
+#include "miscadmin.h"
 #include "storage/streaming_read.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 /*
  * Element type for PgStreamingRead's circular array of block ranges.
@@ -56,17 +59,36 @@ struct PgStreamingRead
 	PgStreamingReadRange ranges[FLEXIBLE_ARRAY_MEMBER];
 };
 
-static PgStreamingRead *
-pg_streaming_read_buffer_alloc_internal(int flags,
-										void *pgsr_private,
-										size_t per_buffer_data_size,
-										BufferAccessStrategy strategy)
+/*
+ * Create a new streaming read object that can be used to perform the
+ * equivalent of a series of ReadBuffer() calls for one fork of one relation.
+ * Internally, it generates larger vectored reads where possible by looking
+ * ahead.
+ */
+PgStreamingRead *
+pg_streaming_read_buffer_alloc(int flags,
+							   void *pgsr_private,
+							   size_t per_buffer_data_size,
+							   BufferAccessStrategy strategy,
+							   BufferManagerRelation bmr,
+							   ForkNumber forknum,
+							   PgStreamingReadBufferCB next_block_cb)
 {
 	PgStreamingRead *pgsr;
 	int			size;
 	int			max_ios;
 	uint32		max_pinned_buffers;
+	Oid			tablespace_id;
 
+	/*
+	 * Make sure our bmr's smgr and persistent are populated.  The caller
+	 * asserts that the storage manager will remain valid.
+	 */
+	if (!bmr.smgr)
+	{
+		bmr.smgr = RelationGetSmgr(bmr.rel);
+		bmr.relpersistence = bmr.rel->rd_rel->relpersistence;
+	}
 
 	/*
 	 * Decide how many assumed I/Os we will allow to run concurrently.  That
@@ -74,10 +96,20 @@ pg_streaming_read_buffer_alloc_internal(int flags,
 	 * number also affects how far we look ahead for opportunities to start
 	 * more I/Os.
 	 */
-	if (flags & PGSR_FLAG_MAINTENANCE)
-		max_ios = maintenance_io_concurrency;
-	else
+	tablespace_id = bmr.smgr->smgr_rlocator.locator.spcOid;
+	if (!OidIsValid(MyDatabaseId) ||
+		IsCatalogRelationOid(bmr.smgr->smgr_rlocator.locator.relNumber))
+	{
+		/*
+		 * Avoid circularity while trying to look up tablespace settings or
+		 * before spccache.c is ready.
+		 */
 		max_ios = effective_io_concurrency;
+	}
+	else if (flags & PGSR_FLAG_MAINTENANCE)
+		max_ios = get_tablespace_maintenance_io_concurrency(tablespace_id);
+	else
+		max_ios = get_tablespace_io_concurrency(tablespace_id);
 
 	/*
 	 * The desired level of I/O concurrency controls how far ahead we are
@@ -123,6 +155,10 @@ pg_streaming_read_buffer_alloc_internal(int flags,
 	pgsr->strategy = strategy;
 	pgsr->size = size;
 
+	pgsr->callback = next_block_cb;
+	pgsr->bmr = bmr;
+	pgsr->forknum = forknum;
+
 	pgsr->unget_blocknum = InvalidBlockNumber;
 
 #ifdef USE_PREFETCH
@@ -162,34 +198,6 @@ pg_streaming_read_buffer_alloc_internal(int flags,
 		pgsr->per_buffer_data = palloc(per_buffer_data_size * max_pinned_buffers);
 
 	return pgsr;
-}
-
-/*
- * Create a new streaming read object that can be used to perform the
- * equivalent of a series of ReadBuffer() calls for one fork of one relation.
- * Internally, it generates larger vectored reads where possible by looking
- * ahead.
- */
-PgStreamingRead *
-pg_streaming_read_buffer_alloc(int flags,
-							   void *pgsr_private,
-							   size_t per_buffer_data_size,
-							   BufferAccessStrategy strategy,
-							   BufferManagerRelation bmr,
-							   ForkNumber forknum,
-							   PgStreamingReadBufferCB next_block_cb)
-{
-	PgStreamingRead *result;
-
-	result = pg_streaming_read_buffer_alloc_internal(flags,
-													 pgsr_private,
-													 per_buffer_data_size,
-													 strategy);
-	result->callback = next_block_cb;
-	result->bmr = bmr;
-	result->forknum = forknum;
-
-	return result;
 }
 
 /*
