@@ -120,12 +120,6 @@ pg_streaming_read_buffer_alloc(int flags,
 	max_pinned_buffers = Max(max_ios * 4, MAX_BUFFERS_PER_TRANSFER);
 
 	/*
-	 * The *_io_concurrency GUCs might be set to 0, but we want to allow at
-	 * least one, to keep our gating logic simple.
-	 */
-	max_ios = Max(max_ios, 1);
-
-	/*
 	 * Don't allow this backend to pin too many buffers.  For now we'll apply
 	 * the limit for the shared buffer pool and the local buffer pool, without
 	 * worrying which it is.
@@ -257,7 +251,8 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 	int			flags;
 
 	/* Caller should make sure we never exceed max_ios. */
-	Assert(pgsr->ios_in_progress < pgsr->max_ios);
+	Assert((pgsr->ios_in_progress < pgsr->max_ios) ||
+		   (pgsr->ios_in_progress == 0 && pgsr->max_ios == 0));
 
 	/* Should only call if the head range has some blocks to read. */
 	head_range = &pgsr->ranges[pgsr->head];
@@ -267,11 +262,12 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 	 * If advice hasn't been suppressed, and this system supports it, this
 	 * isn't a strictly sequential pattern, then we'll issue advice.
 	 */
-	if (pgsr->advice_enabled && head_range->blocknum != pgsr->seq_blocknum)
+	if (pgsr->advice_enabled &&
+		pgsr->max_ios > 0 &&
+		head_range->blocknum != pgsr->seq_blocknum)
 		flags = READ_BUFFERS_ISSUE_ADVICE;
 	else
 		flags = 0;
-
 
 	/* Start reading as many blocks as we can from the head range. */
 	nblocks_pinned = head_range->nblocks;
@@ -418,10 +414,15 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 {
 	PgStreamingReadRange *range;
 
+	/* If we're finished, don't look ahead. */
+	if (pgsr->finished)
+		return;
+
 	/*
-	 * If we're finished or can't start more I/O, then don't look ahead.
+	 * We we've already started the maximum allowed number of I/Os, don't look
+	 * ahead.  (The special case for max_ios == 0 is handle higher up.)
 	 */
-	if (pgsr->finished || pgsr->ios_in_progress == pgsr->max_ios)
+	if (pgsr->max_ios > 0 && pgsr->ios_in_progress == pgsr->max_ios)
 		return;
 
 	/*
@@ -526,7 +527,11 @@ pg_streaming_read_look_ahead(PgStreamingRead *pgsr)
 Buffer
 pg_streaming_read_buffer_get_next(PgStreamingRead *pgsr, void **per_buffer_data)
 {
-	pg_streaming_read_look_ahead(pgsr);
+	/*
+	 * The setting max_ios == 0 requires special t...
+	 */
+	if (pgsr->max_ios > 0 || pgsr->pinned_buffers == 0)
+		pg_streaming_read_look_ahead(pgsr);
 
 	/* See if we have one buffer to return. */
 	while (pgsr->tail != pgsr->head)
