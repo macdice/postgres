@@ -268,6 +268,9 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 	else
 		flags = 0;
 
+	/* We shouldn't be trying to pin more buffers that we're allowed to. */
+	Assert(pgsr->pinned_buffers + head_range->nblocks <= pgsr->max_pinned_buffers);
+
 	/* Start reading as many blocks as we can from the head range. */
 	nblocks_pinned = head_range->nblocks;
 	head_range->need_wait =
@@ -318,11 +321,12 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 			else
 			{
 				/*
-				 * Look-ahead distance ramps up rapdily, but not more that the
+				 * Look-ahead distance ramps up rapidly, but not more that the
 				 * full I/O size.
 				 */
 				distance = pgsr->distance * 2;
 				distance = Min(distance, MAX_BUFFERS_PER_TRANSFER);
+				distance = Min(distance, pgsr->max_pinned_buffers);
 				pgsr->distance = distance;
 			}
 		}
