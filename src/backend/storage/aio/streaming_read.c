@@ -98,6 +98,7 @@ pg_streaming_read_buffer_alloc(int flags,
 	 */
 	tablespace_id = bmr.smgr->smgr_rlocator.locator.spcOid;
 	if (!OidIsValid(MyDatabaseId) ||
+		(bmr.rel && IsCatalogRelation(bmr.rel)) ||
 		IsCatalogRelationOid(bmr.smgr->smgr_rlocator.locator.relNumber))
 	{
 		/*
@@ -114,7 +115,7 @@ pg_streaming_read_buffer_alloc(int flags,
 	/*
 	 * The desired level of I/O concurrency controls how far ahead we are
 	 * willing to look ahead.  We also clamp it to at least
-	 * MAX_BUFFER_PER_TRANFER so that we can have a chance to build up a full
+	 * MAX_BUFFER_PER_TRANSFER so that we can have a chance to build up a full
 	 * sized read, even when max_ios is zero.
 	 */
 	max_pinned_buffers = Max(max_ios * 4, MAX_BUFFERS_PER_TRANSFER);
