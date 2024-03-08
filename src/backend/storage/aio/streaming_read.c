@@ -284,30 +284,67 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 
 	if (head_range->need_wait)
 	{
+		int		distance;
+
 		/*
 		 * I/O necessary.  Look-ahead distance increases rapidly until it hits
 		 * the pin limit.
 		 */
 		if (pgsr->distance < pgsr->max_pinned_buffers)
 		{
-			int		distance;
 
 			distance = pgsr->distance * 2;
 			distance = Min(distance, pgsr->max_pinned_buffers);
 			pgsr->distance = distance;
 		}
 
-		/* Count an I/O in progress until we've "waited". */
 		if (flags & READ_BUFFERS_ISSUE_ADVICE)
 		{
+
+			/*
+			 * Since we've issued advice, we count an I/O in progress until we
+			 * call WaitReadBuffers().
+			 */
 			head_range->advice_issued = true;
 			pgsr->ios_in_progress++;
 			Assert(pgsr->ios_in_progress <= pgsr->max_ios);
+
+			/*
+			 * Look-ahead distance ramps up rapidly, so we can search for more
+			 * I/Os to start.
+			 */
+			distance = pgsr->distance * 2;
+			distance = Min(distance, pgsr->max_pinned_buffers);
+			pgsr->distance = distance;
+		}
+		else
+		{
+			/*
+			 * There is no point in increasing look-ahead distance if we've
+			 * already reached the full I/O size, since we're not issuing
+			 * advice.  Extra distance would only pin more buffers for no
+			 * benefit.
+			 */
+			if (pgsr->distance > MAX_BUFFERS_PER_TRANSFER)
+			{
+				/* Look-ahead distance gradually decays. */
+				pgsr->distance--;
+			}
+			else
+			{
+				/*
+				 * Look-ahead distance ramps up rapdily, but not more that the
+				 * full I/O size.
+				 */
+				distance = pgsr->distance * 2;
+				distance = Min(distance, MAX_BUFFERS_PER_TRANSFER);
+				pgsr->distance = distance;
+			}
 		}
 	}
 	else
 	{
-		/* No I/O necessary. Look-ahead distance decays slowly. */
+		/* No I/O necessary. Look-ahead distance gradually decays. */
 		if (pgsr->distance > 1)
 			pgsr->distance--;
 	}
