@@ -206,7 +206,7 @@ get_per_buffer_data_index(PgStreamingRead *pgsr, PgStreamingReadRange *range, in
 	 * expensive % operator.
 	 */
 	result = range->per_buffer_data_index + n;
-	if (result >= pgsr->max_pinned_buffers)
+	while (result >= pgsr->max_pinned_buffers)
 		result -= pgsr->max_pinned_buffers;
 	Assert(result == (range->per_buffer_data_index + n) % pgsr->max_pinned_buffers);
 
