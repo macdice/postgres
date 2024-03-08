@@ -307,11 +307,8 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 	}
 	else
 	{
-		/*
-		 * No I/O necessary. Look-ahead distance decays slowly, but stays high
-		 * enough to form a full sized I/O.
-		 */
-		if (pgsr->distance > MAX_BUFFERS_PER_TRANSFER)
+		/* No I/O necessary. Look-ahead distance decays slowly. */
+		if (pgsr->distance > 1)
 			pgsr->distance--;
 	}
 
