@@ -120,13 +120,11 @@ pg_streaming_read_buffer_alloc(int flags,
 	 */
 	max_pinned_buffers = Max(max_ios * 4, MAX_BUFFERS_PER_TRANSFER);
 
-	/*
-	 * Don't allow this backend to pin too many buffers.  For now we'll apply
-	 * the limit for the shared buffer pool and the local buffer pool, without
-	 * worrying which it is.
-	 */
-	LimitAdditionalPins(&max_pinned_buffers);
-	LimitAdditionalLocalPins(&max_pinned_buffers);
+	/* Don't allow this backend to pin more than its share of buffers. */
+	if (SmgrIsTemp(bmr.smgr))
+		LimitAdditionalLocalPins(&max_pinned_buffers);
+	else
+		LimitAdditionalPins(&max_pinned_buffers);
 	Assert(max_pinned_buffers > 0);
 
 	/*
@@ -286,21 +284,8 @@ pg_streaming_read_start_head_range(PgStreamingRead *pgsr)
 	{
 		int		distance;
 
-		/*
-		 * I/O necessary.  Look-ahead distance increases rapidly until it hits
-		 * the pin limit.
-		 */
-		if (pgsr->distance < pgsr->max_pinned_buffers)
-		{
-
-			distance = pgsr->distance * 2;
-			distance = Min(distance, pgsr->max_pinned_buffers);
-			pgsr->distance = distance;
-		}
-
 		if (flags & READ_BUFFERS_ISSUE_ADVICE)
 		{
-
 			/*
 			 * Since we've issued advice, we count an I/O in progress until we
 			 * call WaitReadBuffers().
