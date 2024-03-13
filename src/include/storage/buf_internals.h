@@ -301,6 +301,7 @@ typedef struct PendingWriteback
 {
 	/* could store different types of pending flushes here */
 	BufferTag	tag;
+	int			nblocks;
 } PendingWriteback;
 
 /* struct forward declared in bufmgr.h */
@@ -427,7 +428,8 @@ ResourceOwnerForgetBufferIO(ResourceOwner owner, Buffer buffer)
 extern void WritebackContextInit(WritebackContext *context, int *max_pending);
 extern void IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context);
 extern void ScheduleBufferTagForWriteback(WritebackContext *wb_context,
-										  IOContext io_context, BufferTag *tag);
+										  IOContext io_context, BufferTag *tag,
+										  int nblocks);
 
 /* freelist.c */
 extern IOContext IOContextForStrategy(BufferAccessStrategy strategy);
