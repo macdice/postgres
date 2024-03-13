@@ -772,3 +772,26 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_r
 
 	return true;
 }
+
+/*
+ * StrategyPeek -- which buffers will be returned by future calls to
+ * GetBufferFromRing()?  The 'current' buffer, ie most recently returned by
+ * GetBufferFromRing() will be in position 0.
+ */
+int
+StrategyPeek(BufferAccessStrategy strategy, Buffer *buffers, int nbuffers)
+{
+	int			cursor = strategy->current;
+	int			n = 0;
+
+	while (strategy->buffers[cursor] != InvalidBuffer && n < nbuffers)
+	{
+		buffers[n++] = strategy->buffers[cursor++];
+		if (cursor == strategy->nbuffers)
+			cursor = 0;
+		if (cursor == strategy->current)
+			break;
+	}
+
+	return n;
+}

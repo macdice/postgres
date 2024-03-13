@@ -1976,6 +1976,11 @@ again:
 		if (strategy != NULL)
 		{
 			XLogRecPtr	lsn;
+			Buffer		buffers[MAX_IO_COMBINE_LIMIT];
+			int			nbuffers;
+			BufferDesc *hdrs[MAX_IO_COMBINE_LIMIT];
+			int			nlocked;
+			int			nflushed;
 
 			/* Read the LSN while holding buffer header lock */
 			buf_state = LockBufHdr(buf_hdr);
@@ -1989,14 +1994,87 @@ again:
 				UnpinBuffer(buf_hdr);
 				goto again;
 			}
+
+			/*
+			 * See if any future buffers could be written out at the same
+			 * time.  They must be valid, dirty, unpinned, low usage count and
+			 * consecutive, and we must be able to acquire the content lock
+			 * without waiting to avoid deadlocks.
+			 */
+			nbuffers = StrategyPeek(strategy, buffers, io_combine_limit);
+			Assert(nbuffers >= 1);
+			Assert(buffers[0] == buf);
+			hdrs[0] = buf_hdr;
+			nlocked = 1;
+			while (nlocked < nbuffers)
+			{
+				BufferDesc *hdr;
+				uint32		state;
+
+				ReservePrivateRefCountEntry();
+				ResourceOwnerEnlarge(CurrentResourceOwner);
+				hdr = GetBufferDescriptor(buffers[nlocked] - 1);
+				state = LockBufHdr(hdr);
+				if ((state & (BM_DIRTY | BM_VALID)) == (BM_DIRTY | BM_VALID) &&
+					BUF_STATE_GET_REFCOUNT(state) == 0 &&
+					BUF_STATE_GET_USAGECOUNT(state) <= 1)
+				{
+					PinBuffer_Locked(hdr);
+					if (BufferTagsConsecutive(&hdrs[nlocked - 1]->tag,
+											  &hdr->tag) &&
+						LWLockConditionalAcquire(BufferDescriptorGetContentLock(hdr),
+												 LW_SHARED))
+					{
+						/* Yes, we can extend the range by one. */
+						hdrs[nlocked++] = hdr;
+					}
+					else
+					{
+						UnpinBuffer(hdr);
+						break;
+					}
+				}
+				else
+				{
+					UnlockBufHdr(hdr, state);
+					break;
+				}
+			}
+
+			/*
+			 * Flush as many of these as we can.  This may stop partway
+			 * through, if it can't get an I/O lock, but it always flushes at
+			 * least one.  Since we're only trying to be helpful by doing more
+			 * than one, no need to loop for the rest.
+			 */
+			nflushed = FlushBuffers(hdrs, nlocked, NULL,
+									IOOBJECT_RELATION, io_context,
+									NULL, NULL);
+			Assert(nflushed >= 1);
+
+			/* Unlock in reverse order because it goes faster. */
+			for (int i = nlocked - 1; i >= 0; --i)
+				LWLockRelease(BufferDescriptorGetContentLock(hdrs[i]));
+
+			ScheduleBufferTagForWriteback(&BackendWritebackContext, io_context,
+										  &buf_hdr->tag, nflushed);
+
+			/* Unpin all but the first. */
+			for (int i = 1; i < nlocked; ++i)
+				UnpinBuffer(hdrs[i]);
 		}
+		else
+		{
+			/*
+			 * Do single block I/O.  There is no reason to expect buffers that
+			 * don't come from a ring to be consecutive.
+			 */
+			FlushBuffer(buf_hdr, NULL, IOOBJECT_RELATION, io_context);
+			LWLockRelease(content_lock);
 
-		/* OK, do the I/O */
-		FlushBuffer(buf_hdr, NULL, IOOBJECT_RELATION, io_context);
-		LWLockRelease(content_lock);
-
-		ScheduleBufferTagForWriteback(&BackendWritebackContext, io_context,
-									  &buf_hdr->tag, 1);
+			ScheduleBufferTagForWriteback(&BackendWritebackContext, io_context,
+										  &buf_hdr->tag, 1);
+		}
 	}
 
 
