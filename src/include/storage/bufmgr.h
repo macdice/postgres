@@ -185,6 +185,9 @@ extern PGDLLIMPORT int NLocBuffer;
 extern PGDLLIMPORT Block *LocalBufferBlockPointers;
 extern PGDLLIMPORT int32 *LocalRefCount;
 
+/* in freelist.c */
+extern PGDLLIMPORT int max_bulk_scan_buffers_kb;
+
 /* upper limit for effective_io_concurrency */
 #define MAX_IO_CONCURRENCY 1000
 
@@ -265,6 +268,10 @@ extern BlockNumber BufferGetBlockNumber(Buffer buffer);
 extern BlockNumber RelationGetNumberOfBlocksInFork(Relation relation,
 												   ForkNumber forkNum);
 extern void FlushOneBuffer(Buffer buffer);
+extern int	FlushPinnedBuffers(Buffer *buffers,
+							   int nblocks,
+							   struct WritebackContext *wb_context,
+							   bool *stalled);
 extern void FlushRelationBuffers(Relation rel);
 extern void FlushRelationsAllBuffers(struct SMgrRelationData **smgrs, int nrels);
 extern void CreateAndCopyRelationData(RelFileLocator src_rlocator,
