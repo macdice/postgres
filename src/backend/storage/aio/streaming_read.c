@@ -243,14 +243,11 @@ streaming_read_start_pending_read(StreamingRead *stream)
 	/* We say how many blocks we want to read, but may be smaller on return. */
 	nblocks = stream->pending_read_nblocks;
 	need_wait =
-		StartReadBuffers(stream->bmr,
+		StartReadBuffers(&stream->ios[stream->next_io_index],
 						 &stream->buffers[stream->next_buffer_index],
-						 stream->forknum,
 						 stream->pending_read_blocknum,
 						 &nblocks,
-						 stream->strategy,
-						 flags,
-						 &stream->ios[stream->next_io_index]);
+						 flags);
 	stream->pinned_buffers += nblocks;
 
 	/* Remember whether we need to wait before returning this buffer. */
@@ -526,6 +523,18 @@ streaming_read_buffer_begin(int flags,
 	/* Space for the IOs that we might run. */
 	stream->buffer_io_indexes = palloc(max_pinned_buffers * sizeof(stream->buffer_io_indexes[0]));
 	stream->ios = palloc(max_ios * sizeof(ReadBuffersOperation));
+
+	/*
+	 * Since we always currently always access the same relation, we can
+	 * initialize parts of the ReadBuffersOperation objects and treat them as
+	 * static, to avoid wasting CPU cycles writing to them for each read.
+	 */
+	for (int i = 0; i < max_ios; ++i)
+	{
+		stream->ios[i].bmr = bmr;
+		stream->ios[i].forknum = forknum;
+		stream->ios[i].strategy = strategy;
+	}
 
 	return stream;
 }

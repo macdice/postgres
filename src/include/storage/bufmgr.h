@@ -175,7 +175,7 @@ extern bool ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum,
 							 BlockNumber blockNum, Buffer recent_buffer);
 extern Buffer ReadBuffer(Relation reln, BlockNumber blockNum);
 extern Buffer ReadBufferExtended(Relation reln, ForkNumber forkNum,
-								 BlockNumber blockNum, ReadBufferMode mode,
+ 								 BlockNumber blockNum, ReadBufferMode mode,
 								 BufferAccessStrategy strategy);
 extern Buffer ReadBufferWithoutRelcache(RelFileLocator rlocator,
 										ForkNumber forkNum, BlockNumber blockNum,
@@ -185,36 +185,28 @@ extern Buffer ReadBufferWithoutRelcache(RelFileLocator rlocator,
 #define READ_BUFFERS_ZERO_ON_ERROR 0x01
 #define READ_BUFFERS_ISSUE_ADVICE 0x02
 
-/*
- * Private state used by StartReadBuffers() and WaitReadBuffers().  Declared
- * in public header only to allow inclusion in other structs, but contents
- * should not be accessed.
- */
 struct ReadBuffersOperation
 {
-	/* Parameters passed in to StartReadBuffers(). */
+	/* The following members should be set by the caller. */
 	BufferManagerRelation bmr;
-	Buffer	   *buffers;
 	ForkNumber	forknum;
-	BlockNumber blocknum;
-	int16		nblocks;
 	BufferAccessStrategy strategy;
-	int			flags;
 
-	/* Range of buffers, if we need to perform a read. */
+	/* The following should not be accessed directly. */
+	Buffer	   *buffers;
+	BlockNumber blocknum;
+	int			flags;
+	int16		nblocks;
 	int16		io_buffers_len;
 };
 
 typedef struct ReadBuffersOperation ReadBuffersOperation;
 
-extern bool StartReadBuffers(BufferManagerRelation bmr,
+extern bool StartReadBuffers(ReadBuffersOperation *operation,
 							 Buffer *buffers,
-							 ForkNumber forknum,
 							 BlockNumber blocknum,
 							 int *nblocks,
-							 BufferAccessStrategy strategy,
-							 int flags,
-							 ReadBuffersOperation *operation);
+							 int flags);
 extern void WaitReadBuffers(ReadBuffersOperation *operation);
 
 extern void ReleaseBuffer(Buffer buffer);

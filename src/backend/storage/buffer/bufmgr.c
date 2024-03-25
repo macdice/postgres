@@ -1047,7 +1047,7 @@ ZeroBuffer(Buffer buffer, ReadBufferMode mode)
 /*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
  */
-static Buffer
+static inline Buffer
 ReadBuffer_common(BufferManagerRelation bmr, ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
 				  BufferAccessStrategy strategy)
@@ -1082,14 +1082,14 @@ ReadBuffer_common(BufferManagerRelation bmr, ForkNumber forkNum,
 		flags = READ_BUFFERS_ZERO_ON_ERROR;
 	else
 		flags = 0;
-	if (StartReadBuffers(bmr,
+	operation.bmr = bmr;
+	operation.forknum = forkNum;
+	operation.strategy = strategy;
+	if (StartReadBuffers(&operation,
 						 &buffer,
-						 forkNum,
 						 blockNum,
 						 &nblocks,
-						 strategy,
-						 flags,
-						 &operation))
+						 flags))
 		WaitReadBuffers(&operation);
 	Assert(nblocks == 1);		/* single block can't be short */
 
@@ -1120,7 +1120,7 @@ PinBufferForBlock(BufferManagerRelation bmr,
 
 	Assert(bmr.smgr);
 
-	isLocalBuf = SmgrIsTemp(bmr.smgr);
+	isLocalBuf = bmr.relpersistence == RELPERSISTENCE_TEMP;
 	if (isLocalBuf)
 	{
 		io_context = IOCONTEXT_NORMAL;
@@ -1197,14 +1197,11 @@ PinBufferForBlock(BufferManagerRelation bmr,
  * could be initiated here.
  */
 bool
-StartReadBuffers(BufferManagerRelation bmr,
+StartReadBuffers(ReadBuffersOperation *operation,
 				 Buffer *buffers,
-				 ForkNumber forkNum,
 				 BlockNumber blockNum,
 				 int *nblocks,
-				 BufferAccessStrategy strategy,
-				 int flags,
-				 ReadBuffersOperation *operation)
+				 int flags)
 {
 	int			actual_nblocks = *nblocks;
 	int			io_buffers_len = 0;
@@ -1212,20 +1209,20 @@ StartReadBuffers(BufferManagerRelation bmr,
 	Assert(*nblocks > 0);
 	Assert(*nblocks <= MAX_BUFFER_IO_SIZE);
 
-	if (bmr.rel)
+	if (!operation->bmr.smgr)
 	{
-		bmr.smgr = RelationGetSmgr(bmr.rel);
-		bmr.relpersistence = bmr.rel->rd_rel->relpersistence;
+		operation->bmr.smgr = RelationGetSmgr(operation->bmr.rel);
+		operation->bmr.relpersistence = operation->bmr.rel->rd_rel->relpersistence;
 	}
 
 	for (int i = 0; i < actual_nblocks; ++i)
 	{
 		bool		found;
 
-		buffers[i] = PinBufferForBlock(bmr,
-									   forkNum,
+		buffers[i] = PinBufferForBlock(operation->bmr,
+									   operation->forknum,
 									   blockNum + i,
-									   strategy,
+									   operation->strategy,
 									   &found);
 
 		if (found)
@@ -1236,7 +1233,7 @@ StartReadBuffers(BufferManagerRelation bmr,
 			 * range.  We don't want to create more than one readable range,
 			 * so we stop here.
 			 */
-			actual_nblocks = operation->nblocks = *nblocks = i + 1;
+			actual_nblocks = i + 1;
 			break;
 		}
 		else
@@ -1245,18 +1242,16 @@ StartReadBuffers(BufferManagerRelation bmr,
 			io_buffers_len++;
 		}
 	}
+	*nblocks = actual_nblocks;
 
 	if (io_buffers_len > 0)
 	{
-		/* Populate extra information needed for I/O. */
-		operation->io_buffers_len = io_buffers_len;
-		operation->blocknum = blockNum;
+		/* Populate information needed for I/O. */
 		operation->buffers = buffers;
-		operation->nblocks = actual_nblocks;
-		operation->bmr = bmr;
-		operation->forknum = forkNum;
-		operation->strategy = strategy;
+		operation->blocknum = blockNum;
 		operation->flags = flags;
+		operation->nblocks = actual_nblocks;
+		operation->io_buffers_len = io_buffers_len;
 
 		if (flags & READ_BUFFERS_ISSUE_ADVICE)
 		{
@@ -1272,7 +1267,10 @@ StartReadBuffers(BufferManagerRelation bmr,
 			 * true asynchronous version we might choose to process only one
 			 * real I/O at a time in that case.
 			 */
-			smgrprefetch(bmr.smgr, forkNum, blockNum, operation->io_buffers_len);
+			smgrprefetch(operation->bmr.smgr,
+						 operation->forknum,
+						 blockNum,
+						 operation->io_buffers_len);
 		}
 
 		/* Indicate that WaitReadBuffers() should be called. */
@@ -1300,7 +1298,6 @@ WaitReadBuffersCanStartIO(Buffer buffer, bool nowait)
 void
 WaitReadBuffers(ReadBuffersOperation *operation)
 {
-	BufferManagerRelation bmr;
 	Buffer	   *buffers;
 	int			nblocks;
 	BlockNumber blocknum;
@@ -1325,9 +1322,8 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 	buffers = &operation->buffers[0];
 	blocknum = operation->blocknum;
 	forknum = operation->forknum;
-	bmr = operation->bmr;
 
-	isLocalBuf = SmgrIsTemp(bmr.smgr);
+	isLocalBuf = operation->bmr.relpersistence == RELPERSISTENCE_TEMP;
 	if (isLocalBuf)
 	{
 		io_context = IOCONTEXT_NORMAL;
@@ -1406,7 +1402,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 		}
 
 		io_start = pgstat_prepare_io_time(track_io_timing);
-		smgrreadv(bmr.smgr, forknum, io_first_block, io_pages, io_buffers_len);
+		smgrreadv(operation->bmr.smgr, forknum, io_first_block, io_pages, io_buffers_len);
 		pgstat_count_io_op_time(io_object, io_context, IOOP_READ, io_start,
 								io_buffers_len);
 
@@ -1437,7 +1433,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s; zeroing out page",
 									io_first_block + j,
-									relpath(bmr.smgr->smgr_rlocator, forknum))));
+									relpath(operation->bmr.smgr->smgr_rlocator, forknum))));
 					memset(bufBlock, 0, BLCKSZ);
 				}
 				else
@@ -1445,7 +1441,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s",
 									io_first_block + j,
-									relpath(bmr.smgr->smgr_rlocator, forknum))));
+									relpath(operation->bmr.smgr->smgr_rlocator, forknum))));
 			}
 
 			/* Terminate I/O and set BM_VALID. */
