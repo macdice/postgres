@@ -249,3 +249,17 @@ get_tablespace_io_combine_limit(Oid spcid)
 	else
 		return spc->opts->io_combine_limit;
 }
+
+/*
+ * get_tablespace_io_readahead_window
+ */
+int
+get_tablespace_io_readahead_window(Oid spcid)
+{
+	TableSpaceCacheEntry *spc = get_tablespace(spcid);
+
+	if (!spc->opts || spc->opts->effective_io_readahead_window < 0)
+		return effective_io_readahead_window;
+	else
+		return spc->opts->effective_io_readahead_window;
+}

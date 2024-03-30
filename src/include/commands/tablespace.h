@@ -44,6 +44,7 @@ typedef struct TableSpaceOpts
 	int			effective_io_concurrency;
 	int			maintenance_io_concurrency;
 	int			io_combine_limit;
+	int			effective_io_readahead_window;
 } TableSpaceOpts;
 
 extern Oid	CreateTableSpace(CreateTableSpaceStmt *stmt);

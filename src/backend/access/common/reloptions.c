@@ -383,6 +383,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"effective_io_readahead_window",
+			"Size of the window used by the OS to detect sequential buffered access.",
+			RELOPT_KIND_TABLESPACE,
+			ShareUpdateExclusiveLock
+		},
+		-1, 1, PG_INT16_MAX,
+	},
+	{
+		{
 			"parallel_workers",
 			"Number of parallel processes that can be used per executor node for this relation.",
 			RELOPT_KIND_HEAP,
@@ -2102,6 +2111,7 @@ tablespace_reloptions(Datum reloptions, bool validate)
 		{"effective_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, effective_io_concurrency)},
 		{"maintenance_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, maintenance_io_concurrency)},
 		{"io_combine_limit", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, io_combine_limit)},
+		{"effective_io_readahead_window", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, effective_io_readahead_window)},
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

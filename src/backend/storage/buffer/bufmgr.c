@@ -164,6 +164,13 @@ int			maintenance_io_concurrency = DEFAULT_MAINTENANCE_IO_CONCURRENCY;
 int			io_combine_limit = DEFAULT_IO_COMBINE_LIMIT;
 
 /*
+ * In order to detect sequential access in the same way as the OS would, we
+ * need to know the size of the window it uses.  Overridden by the tablespace
+ * setting of the same name.
+ */
+int			effective_io_readahead_window = DEFAULT_EFFECTIVE_IO_READAHEAD_WINDOW;
+
+/*
  * GUC variables about triggering kernel writeback for buffers written; OS
  * dependent defaults are set via the GUC mechanism.
  */

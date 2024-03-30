@@ -2722,6 +2722,28 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
+      <varlistentry id="guc-effective-io-readahead-window" xreflabel="effective_io_readahead_window">
+       <term><varname>effective_io_readahead_window</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>effective_io_readahead_window</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Sets the size of the window that <productname>PostgreSQL</productname>
+         expects the OS to use to detect sequential reads.  This is used to
+         make decisions about when to issue hints to the kernel on future
+         random reads.  Does not apply when direct I/O is used.
+        </para>
+        <para>
+         The default is 128kB on Linux, and 0 otherwise.  This value can
+         be overridden for tables in a particular tablespace by setting the
+         tablespace parameter of the same name (see
+         <xref linkend="sql-altertablespace"/>).
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="guc-max-worker-processes" xreflabel="max_worker_processes">
        <term><varname>max_worker_processes</varname> (<type>integer</type>)
        <indexterm>

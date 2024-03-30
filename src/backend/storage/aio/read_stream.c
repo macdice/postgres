@@ -115,6 +115,7 @@ struct ReadStream
 	int16		pinned_buffers;
 	int16		distance;
 	int16		io_combine_limit;
+	int16		effective_io_readahead_window;
 	bool		advice_enabled;
 
 	/*
@@ -256,11 +257,15 @@ read_stream_start_pending_read(ReadStream *stream, bool suppress_advice)
 
 	/*
 	 * If advice hasn't been suppressed, this system supports it, and this
-	 * isn't a strictly sequential pattern, then we'll issue advice.
+	 * isn't sequential according to the effective_io_readahead_window
+	 * setting, (which should ideally tell us how the OS detects sequential
+	 * buffered access), then we'll issue advice.
 	 */
 	if (!suppress_advice &&
 		stream->advice_enabled &&
-		stream->pending_read_blocknum != stream->seq_blocknum)
+		!(stream->pending_read_blocknum >= stream->seq_blocknum &&
+		  stream->pending_read_blocknum <= (stream->seq_blocknum +
+											stream->effective_io_readahead_window)))
 		flags = READ_BUFFERS_ISSUE_ADVICE;
 	else
 		flags = 0;
@@ -422,6 +427,7 @@ read_stream_begin_relation(int flags,
 	int16		max_ios;
 	int16		my_io_combine_limit;
 	uint32		max_pinned_buffers;
+	int16		my_effective_io_readahead_window;
 	Oid			tablespace_id;
 	SMgrRelation smgr;
 
@@ -445,6 +451,7 @@ read_stream_begin_relation(int flags,
 		 */
 		max_ios = effective_io_concurrency;
 		my_io_combine_limit = io_combine_limit;
+		my_effective_io_readahead_window = effective_io_readahead_window;
 	}
 	else
 	{
@@ -453,6 +460,8 @@ read_stream_begin_relation(int flags,
 		else
 			max_ios = get_tablespace_io_concurrency(tablespace_id);
 		my_io_combine_limit = get_tablespace_io_combine_limit(tablespace_id);
+		my_effective_io_readahead_window =
+			get_tablespace_io_readahead_window(tablespace_id);
 	}
 	max_ios = Min(max_ios, PG_INT16_MAX);
 
@@ -531,6 +540,7 @@ read_stream_begin_relation(int flags,
 	stream->per_buffer_data_size = per_buffer_data_size;
 	stream->max_pinned_buffers = max_pinned_buffers;
 	stream->queue_size = queue_size;
+	stream->effective_io_readahead_window = my_effective_io_readahead_window;
 	stream->callback = callback;
 	stream->callback_private_data = callback_private_data;
 

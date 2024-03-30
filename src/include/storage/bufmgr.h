@@ -168,6 +168,13 @@ extern PGDLLIMPORT int maintenance_io_concurrency;
 #define DEFAULT_IO_COMBINE_LIMIT Min(MAX_IO_COMBINE_LIMIT, (128 * 1024) / BLCKSZ)
 extern PGDLLIMPORT int io_combine_limit;
 
+#ifdef __linux__
+#define DEFAULT_EFFECTIVE_IO_READAHEAD_WINDOW ((128 * 1024) / BLCKSZ)
+#else
+#define DEFAULT_EFFECTIVE_IO_READAHEAD_WINDOW 0
+#endif
+extern PGDLLIMPORT int effective_io_readahead_window;
+
 extern PGDLLIMPORT int checkpoint_flush_after;
 extern PGDLLIMPORT int backend_flush_after;
 extern PGDLLIMPORT int bgwriter_flush_after;

@@ -3144,6 +3144,20 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"effective_io_readahead_window",
+			PGC_USERSET,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Size of the window the OS uses to detect sequential buffered file access."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&effective_io_readahead_window,
+		DEFAULT_EFFECTIVE_IO_READAHEAD_WINDOW,
+		0, PG_INT16_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"backend_flush_after", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,

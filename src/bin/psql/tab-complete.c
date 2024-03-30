@@ -2634,7 +2634,7 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("ALTER", "TABLESPACE", MatchAny, "SET|RESET", "("))
 		COMPLETE_WITH("seq_page_cost", "random_page_cost",
 					  "effective_io_concurrency", "maintenance_io_concurrency",
-					  "io_combine_limit");
+					  "io_combine_limit", "effective_io_readahead_window");
 
 	/* ALTER TEXT SEARCH */
 	else if (Matches("ALTER", "TEXT", "SEARCH"))
