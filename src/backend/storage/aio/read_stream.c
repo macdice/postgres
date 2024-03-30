@@ -114,6 +114,7 @@ struct ReadStream
 	int16		max_pinned_buffers;
 	int16		pinned_buffers;
 	int16		distance;
+	int16		io_combine_limit;
 	bool		advice_enabled;
 
 	/*
@@ -241,7 +242,7 @@ read_stream_start_pending_read(ReadStream *stream, bool suppress_advice)
 
 	/* This should only be called with a pending read. */
 	Assert(stream->pending_read_nblocks > 0);
-	Assert(stream->pending_read_nblocks <= io_combine_limit);
+	Assert(stream->pending_read_nblocks <= stream->io_combine_limit);
 
 	/* We had better not exceed the pin limit by starting this read. */
 	Assert(stream->pinned_buffers + stream->pending_read_nblocks <=
@@ -329,7 +330,7 @@ read_stream_look_ahead(ReadStream *stream, bool suppress_advice)
 		int16		buffer_index;
 		void	   *per_buffer_data;
 
-		if (stream->pending_read_nblocks == io_combine_limit)
+		if (stream->pending_read_nblocks == stream->io_combine_limit)
 		{
 			read_stream_start_pending_read(stream, suppress_advice);
 			suppress_advice = false;
@@ -389,7 +390,7 @@ read_stream_look_ahead(ReadStream *stream, bool suppress_advice)
 	 * signaled end-of-stream, we start the read immediately.
 	 */
 	if (stream->pending_read_nblocks > 0 &&
-		(stream->pending_read_nblocks == io_combine_limit ||
+		(stream->pending_read_nblocks == stream->io_combine_limit ||
 		 (stream->pending_read_nblocks == stream->distance &&
 		  stream->pinned_buffers == 0) ||
 		 stream->distance == 0) &&
@@ -419,6 +420,7 @@ read_stream_begin_relation(int flags,
 	size_t		size;
 	int16		queue_size;
 	int16		max_ios;
+	int16		my_io_combine_limit;
 	uint32		max_pinned_buffers;
 	Oid			tablespace_id;
 	SMgrRelation smgr;
@@ -437,15 +439,21 @@ read_stream_begin_relation(int flags,
 		IsCatalogRelationOid(smgr->smgr_rlocator.locator.relNumber))
 	{
 		/*
-		 * Avoid circularity while trying to look up tablespace settings or
-		 * before spccache.c is ready.
+		 * Avoid circularity while trying to look up tablespace catalog itself
+		 * or before spccache.c is ready: just use the plain GUC values in
+		 * those cases.
 		 */
 		max_ios = effective_io_concurrency;
+		my_io_combine_limit = io_combine_limit;
 	}
-	else if (flags & READ_STREAM_MAINTENANCE)
-		max_ios = get_tablespace_maintenance_io_concurrency(tablespace_id);
 	else
-		max_ios = get_tablespace_io_concurrency(tablespace_id);
+	{
+		if (flags & READ_STREAM_MAINTENANCE)
+			max_ios = get_tablespace_maintenance_io_concurrency(tablespace_id);
+		else
+			max_ios = get_tablespace_io_concurrency(tablespace_id);
+		my_io_combine_limit = get_tablespace_io_combine_limit(tablespace_id);
+	}
 	max_ios = Min(max_ios, PG_INT16_MAX);
 
 	/*
@@ -456,9 +464,9 @@ read_stream_begin_relation(int flags,
 	 * overflow (even though that's not possible with the current GUC range
 	 * limits), allowing also for the spare entry and the overflow space.
 	 */
-	max_pinned_buffers = Max(max_ios * 4, io_combine_limit);
+	max_pinned_buffers = Max(max_ios * 4, my_io_combine_limit);
 	max_pinned_buffers = Min(max_pinned_buffers,
-							 PG_INT16_MAX - io_combine_limit - 1);
+							 PG_INT16_MAX - my_io_combine_limit - 1);
 
 	/* Don't allow this backend to pin more than its share of buffers. */
 	if (SmgrIsTemp(smgr))
@@ -484,14 +492,14 @@ read_stream_begin_relation(int flags,
 	 * io_combine_limit - 1 elements.
 	 */
 	size = offsetof(ReadStream, buffers);
-	size += sizeof(Buffer) * (queue_size + io_combine_limit - 1);
+	size += sizeof(Buffer) * (queue_size + my_io_combine_limit - 1);
 	size += sizeof(InProgressIO) * Max(1, max_ios);
 	size += per_buffer_data_size * queue_size;
 	size += MAXIMUM_ALIGNOF * 2;
 	stream = (ReadStream *) palloc(size);
 	memset(stream, 0, offsetof(ReadStream, buffers));
 	stream->ios = (InProgressIO *)
-		MAXALIGN(&stream->buffers[queue_size + io_combine_limit - 1]);
+		MAXALIGN(&stream->buffers[queue_size + my_io_combine_limit - 1]);
 	if (per_buffer_data_size > 0)
 		stream->per_buffer_data = (void *)
 			MAXALIGN(&stream->ios[Max(1, max_ios)]);
@@ -519,6 +527,7 @@ read_stream_begin_relation(int flags,
 		max_ios = 1;
 
 	stream->max_ios = max_ios;
+	stream->io_combine_limit = my_io_combine_limit;
 	stream->per_buffer_data_size = per_buffer_data_size;
 	stream->max_pinned_buffers = max_pinned_buffers;
 	stream->queue_size = queue_size;
@@ -531,7 +540,7 @@ read_stream_begin_relation(int flags,
 	 * doing full io_combine_limit sized reads (behavior B).
 	 */
 	if (flags & READ_STREAM_FULL)
-		stream->distance = Min(max_pinned_buffers, io_combine_limit);
+		stream->distance = Min(max_pinned_buffers, my_io_combine_limit);
 	else
 		stream->distance = 1;
 
@@ -712,14 +721,14 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		else
 		{
 			/* No advice; move towards io_combine_limit (behavior B). */
-			if (stream->distance > io_combine_limit)
+			if (stream->distance > stream->io_combine_limit)
 			{
 				stream->distance--;
 			}
 			else
 			{
 				distance = stream->distance * 2;
-				distance = Min(distance, io_combine_limit);
+				distance = Min(distance, stream->io_combine_limit);
 				distance = Min(distance, stream->max_pinned_buffers);
 				stream->distance = distance;
 			}

@@ -374,6 +374,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"io_combine_limit",
+			"Limit on the size of data reads and writes.",
+			RELOPT_KIND_TABLESPACE,
+			ShareUpdateExclusiveLock
+		},
+		-1, 1, MAX_IO_COMBINE_LIMIT
+	},
+	{
+		{
 			"parallel_workers",
 			"Number of parallel processes that can be used per executor node for this relation.",
 			RELOPT_KIND_HEAP,
@@ -2091,7 +2100,8 @@ tablespace_reloptions(Datum reloptions, bool validate)
 		{"random_page_cost", RELOPT_TYPE_REAL, offsetof(TableSpaceOpts, random_page_cost)},
 		{"seq_page_cost", RELOPT_TYPE_REAL, offsetof(TableSpaceOpts, seq_page_cost)},
 		{"effective_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, effective_io_concurrency)},
-		{"maintenance_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, maintenance_io_concurrency)}
+		{"maintenance_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, maintenance_io_concurrency)},
+		{"io_combine_limit", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, io_combine_limit)},
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

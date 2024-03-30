@@ -235,3 +235,17 @@ get_tablespace_maintenance_io_concurrency(Oid spcid)
 	else
 		return spc->opts->maintenance_io_concurrency;
 }
+
+/*
+ * get_tablespace_io_combine_limit
+ */
+int
+get_tablespace_io_combine_limit(Oid spcid)
+{
+	TableSpaceCacheEntry *spc = get_tablespace(spcid);
+
+	if (!spc->opts || spc->opts->io_combine_limit < 0)
+		return io_combine_limit;
+	else
+		return spc->opts->io_combine_limit;
+}
