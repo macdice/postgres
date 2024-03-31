@@ -33,8 +33,11 @@ struct iovec
 
 #endif
 
-/* Define a reasonable maximum that is safe to use on the stack. */
-#define PG_IOV_MAX Min(IOV_MAX, 32)
+/*
+ * Define a reasonable maximum that is safe to use on the stack but also allows
+ * io_combine_limit to reach large sizes.
+ */
+#define PG_IOV_MAX Min(IOV_MAX, 128)
 
 /*
  * Like preadv(), but with a prefix to remind us of a side-effect: on Windows
