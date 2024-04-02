@@ -1049,7 +1049,7 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	{
 		scan->rs_read_stream = read_stream_begin_relation(READ_STREAM_SEQUENTIAL,
 														  scan->rs_strategy,
-														  BMR_REL(scan->rs_base.rs_rd),
+														  scan->rs_base.rs_rd,
 														  MAIN_FORKNUM,
 														  heap_scan_stream_read_next,
 														  scan,
