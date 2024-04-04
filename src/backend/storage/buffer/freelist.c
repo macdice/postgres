@@ -630,6 +630,41 @@ GetAccessStrategyBufferCount(BufferAccessStrategy strategy)
 }
 
 /*
+ * GetAccessStrategyPinLimit -- get cap of number of buffers that can be pinned
+ *
+ * Strategies can specify the maximum number of buffers that a user should pin
+ * at once when performing look-ahead.  Callers should combine this number with
+ * other relevant limits and take the minimum.
+ */
+int
+GetAccessStrategyPinLimit(BufferAccessStrategy strategy)
+{
+	if (strategy == NULL)
+		return NBuffers;
+
+	switch (strategy->btype)
+	{
+		case BAS_BULKREAD:
+
+			/*
+			 * Since BAS_BULKREAD uses StrategyRejectBuffer(), dirty buffers
+			 * shouldn't be a problem and the caller is free to pin up to the
+			 * entire ring at once.
+			 */
+			return strategy->nbuffers;
+
+		default:
+
+			/*
+			 * Tell call not to pin more than half the buffers in the ring.
+			 * This is a trade-off between look ahead distance and deferring
+			 * writeback and associated WAL traffic.
+			 */
+			return strategy->nbuffers / 2;
+	}
+}
+
+/*
  * FreeAccessStrategy -- release a BufferAccessStrategy object
  *
  * A simple pfree would do at the moment, but we would prefer that callers
