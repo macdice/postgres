@@ -617,7 +617,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 										stream->advice_enabled ?
 										READ_BUFFERS_ISSUE_ADVICE : 0)))
 			{
-				/* Fast return. */
+				/* Predict caller will soon access next page's header. */
+				pg_prefetch_mem(BufferGetPage(stream->buffers[oldest_buffer_index]));
 				return buffer;
 			}
 
@@ -747,6 +748,10 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 	/* Prepare for the next call. */
 	read_stream_look_ahead(stream, false);
+
+	/* Predict caller will soon access next page's header. */
+	if (stream->pinned_buffers > 0)
+		pg_prefetch_mem(BufferGetPage(stream->buffers[stream->oldest_buffer_index]));
 
 #ifndef READ_STREAM_DISABLE_FAST_PATH
 	/* See if we can take the fast path for all-cached scans next time. */
