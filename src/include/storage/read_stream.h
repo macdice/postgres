@@ -41,6 +41,13 @@
  */
 #define READ_STREAM_FULL 0x04
 
+/*
+ * We usually stream buffers in the order the callback generates block
+ * numbers, but if the caller can cope with it, there are sometimes
+ * opportunities to reorder blocks to reduce I/O stalls.
+ */
+#define READ_STREAM_OUT_OF_ORDER 0x08
+
 struct ReadStream;
 typedef struct ReadStream ReadStream;
 

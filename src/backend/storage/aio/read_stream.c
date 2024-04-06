@@ -115,6 +115,7 @@ struct ReadStream
 	int16		pinned_buffers;
 	int16		distance;
 	bool		advice_enabled;
+	bool		out_of_order_enabled;
 
 	/*
 	 * Small buffer of block numbers, useful for 'ungetting' to resolve flow
@@ -307,12 +308,38 @@ read_stream_start_pending_read(ReadStream *stream, bool suppress_advice)
 				&stream->buffers[stream->queue_size],
 				sizeof(stream->buffers[0]) * overflow);
 
-	/* Compute location of start of next read, without using % operator. */
-	buffer_index += nblocks;
-	if (buffer_index >= stream->queue_size)
-		buffer_index -= stream->queue_size;
-	Assert(buffer_index >= 0 && buffer_index < stream->queue_size);
-	stream->next_buffer_index = buffer_index;
+	/*
+	 * If this was a hit and there is already I/O in progress, can we
+	 * re-prioritize it so that I/O has longer to complete and the caller can
+	 * consume this buffer immediately?
+	 */
+	if (!need_wait &&
+		nblocks == 1 &&
+		stream->ios_in_progress > 0 &&
+		stream->out_of_order_enabled)
+	{
+		int16		oldest_buffer_index;
+
+		/* Insert before "oldest" buffer. */
+		oldest_buffer_index = stream->oldest_buffer_index - 1;
+		if (oldest_buffer_index < 0)
+			oldest_buffer_index += stream->queue_size;
+		stream->buffers[oldest_buffer_index] = stream->buffers[buffer_index];
+		if (stream->per_buffer_data_size > 0)
+			memcpy(get_per_buffer_data(stream, oldest_buffer_index),
+				   get_per_buffer_data(stream, buffer_index),
+				   stream->per_buffer_data_size);
+		stream->oldest_buffer_index = oldest_buffer_index;
+	}
+	else
+	{
+		/* Compute location of start of next read, without using % operator. */
+		buffer_index += nblocks;
+		if (buffer_index >= stream->queue_size)
+			buffer_index -= stream->queue_size;
+		Assert(buffer_index >= 0 && buffer_index < stream->queue_size);
+		stream->next_buffer_index = buffer_index;
+	}
 
 	/* Adjust the pending read to cover the remaining portion, if any. */
 	stream->pending_read_blocknum += nblocks;
@@ -514,6 +541,9 @@ read_stream_begin_relation(int flags,
 		max_ios > 0)
 		stream->advice_enabled = true;
 #endif
+
+	if (flags & READ_STREAM_OUT_OF_ORDER)
+		stream->out_of_order_enabled = true;
 
 	/*
 	 * For now, max_ios = 0 is interpreted as max_ios = 1 with advice disabled
