@@ -63,6 +63,14 @@
  */
 #define READ_STREAM_USE_BATCHING 0x08
 
+/*
+ * Blocks are usually streamed in FIFO order.  This flag allows reordering,
+ * for consumers that can deal with out-of-order buffers.  Whenever IOs are
+ * running, any already-cached buffers found in the look-ahead window jump
+ * directly to the front of the queue, ready to be consumed immediately.
+ */
+#define READ_STREAM_OUT_OF_ORDER 0x10
+
 struct ReadStream;
 typedef struct ReadStream ReadStream;
 
