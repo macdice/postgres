@@ -710,6 +710,11 @@ llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
 
 	options = LLVMCreatePassBuilderOptions();
 
+	/* In assertion builds, run the LLVM verify pass. */
+#ifdef USE_ASSERT_CHECKING
+	LLVMPassBuilderOptionsSetVerifyEach(options, true);
+#endif
+
 #ifdef LLVM_PASS_DEBUG
 	LLVMPassBuilderOptionsSetDebugLogging(options, 1);
 #endif
