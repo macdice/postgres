@@ -703,10 +703,17 @@ llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
 	LLVMErrorRef err;
 	const char *passes;
 
+	/* In assertion builds, run the LLVM verify pass. */
+#ifdef USE_ASSERT_CHECKING
+#define PASSES_PREFIX "verify,"
+#else
+#define PASSES_PREFIX ""
+#endif
+
 	if (context->base.flags & PGJIT_OPT3)
-		passes = "default<O3>";
+		passes = PASSES_PREFIX "default<O3>";
 	else
-		passes = "default<O0>,mem2reg";
+		passes = PASSES_PREFIX "default<O0>,mem2reg";
 
 	options = LLVMCreatePassBuilderOptions();
 
