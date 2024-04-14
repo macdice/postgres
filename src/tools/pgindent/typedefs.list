@@ -3811,7 +3811,6 @@ set_join_pathlist_hook_type
 set_rel_pathlist_hook_type
 shm_mq
 shm_mq_handle
-shm_mq_iovec
 shm_mq_result
 shm_toc
 shm_toc_entry
