@@ -123,9 +123,6 @@ static FixedParallelState *MyFixedParallelState;
 /* List of active parallel contexts. */
 static dlist_head pcxt_list = DLIST_STATIC_INIT(pcxt_list);
 
-/* Backend-local copy of data from FixedParallelState. */
-static int ParallelLeaderPgprocno;
-
 /*
  * List of internal parallel worker entry points.  We need this for
  * reasons explained in LookupParallelWorkerFunction(), below.
@@ -1321,7 +1318,7 @@ ParallelWorkerMain(Datum main_arg)
 	MyFixedParallelState = fps;
 
 	/* Arrange to interrupt the leader if we exit. */
-	ParallelLeaderPgprocno = fps->parallel_leader_proc_number;
+	ParallelLeaderProcNumber = fps->parallel_leader_proc_number;
 	before_shmem_exit(ParallelWorkerShutdown, PointerGetDatum(seg));
 
 	/*
