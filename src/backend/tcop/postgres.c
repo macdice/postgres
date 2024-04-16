@@ -3061,6 +3061,10 @@ ProcessRecoveryConflictInterrupt(InterruptType reason)
 			/* Intentional fall through to error handling */
 			/* FALLTHROUGH */
 
+		case INTERRUPT_RECOVERY_CONFLICT_LOCK:
+		case INTERRUPT_RECOVERY_CONFLICT_TABLESPACE:
+		case INTERRUPT_RECOVERY_CONFLICT_SNAPSHOT:
+
 			/*
 			 * If we aren't in a transaction any longer then ignore.
 			 */
