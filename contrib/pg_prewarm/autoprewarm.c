@@ -825,7 +825,7 @@ apw_start_leader_worker(void)
 	}
 
 	/* must set notify PID to wait for startup */
-	worker.bgw_notify_pid = MyProcPid;
+	worker.bgw_notify_pgprocno = MyProcNumber;
 
 	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
 		ereport(ERROR,
@@ -861,7 +861,7 @@ apw_start_database_worker(void)
 	strcpy(worker.bgw_type, "autoprewarm worker");
 
 	/* must set notify PID to wait for shutdown */
-	worker.bgw_notify_pid = MyProcPid;
+	worker.bgw_notify_pgprocno = MyProcNumber;
 
 	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
 		ereport(ERROR,
