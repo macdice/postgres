@@ -73,6 +73,10 @@ SendInterrupt(InterruptType reason, int pgprocno)
 {
 	PGPROC *proc;
 
+	Assert(pgprocno != INVALID_PROC_NUMBER);
+	Assert(pgprocno >= 0);
+	Assert(pgprocno < ProcGlobal->allProcCount);
+
 	proc = &ProcGlobal->allProcs[pgprocno];
 	pg_atomic_fetch_or_u32(&proc->pending_interrupts, 1 << reason);
 	SetLatch(&proc->procLatch);

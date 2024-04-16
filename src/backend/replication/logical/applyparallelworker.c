@@ -843,8 +843,9 @@ LogicalParallelApplyLoop(shm_mq_handle *mqh)
 static void
 pa_shutdown(int code, Datum arg)
 {
-	SendInterrupt(MyLogicalRepWorker->leader_pgprocno,
-				  INTERRUPT_PARALLEL_APPLY_MESSAGE);
+	if (MyLogicalRepWorker->leader_pgprocno != INVALID_PROC_NUMBER)
+		SendInterrupt(MyLogicalRepWorker->leader_pgprocno,
+					  INTERRUPT_PARALLEL_APPLY_MESSAGE);
 
 	dsm_detach((dsm_segment *) DatumGetPointer(arg));
 }
