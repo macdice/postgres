@@ -69,7 +69,7 @@ RaiseInterrupt(InterruptType reason)
  * Set an interrupt flag in another backend.
  */
 void
-SendInterrupt(InterruptType reason, int pgprocno)
+SendInterrupt(InterruptType reason, ProcNumber pgprocno)
 {
 	PGPROC *proc;
 

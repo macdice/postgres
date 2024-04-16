@@ -242,7 +242,7 @@ typedef struct QueuePosition
  */
 typedef struct QueueBackendStatus
 {
-	int32		pgprocno;		/* either a pgprocno or INVALID_PGPROCNO */
+	ProcNumber	pgprocno;		/* either a pgprocno or INVALID_PGPROCNO */
 	Oid			dboid;			/* backend's database OID, or InvalidOid */
 	ProcNumber	nextListener;	/* id of next listener, or INVALID_PROC_NUMBER */
 	QueuePosition pos;			/* backend has read queue up to here */
@@ -1571,7 +1571,7 @@ asyncQueueFillWarning(void)
 static void
 SignalBackends(void)
 {
-	int32	   *pgprocnos;
+	ProcNumber *pgprocnos;
 	int			count;
 
 	/*
@@ -1582,7 +1582,7 @@ SignalBackends(void)
 	 * XXX in principle these pallocs could fail, which would be bad. Maybe
 	 * preallocate the arrays?  They're not that large, though.
 	 */
-	pgprocnos = (int32 *) palloc(MaxBackends * sizeof(int32));
+	pgprocnos = (ProcNumber *) palloc(MaxBackends * sizeof(int32));
 	count = 0;
 
 	LWLockAcquire(NotifyQueueLock, LW_EXCLUSIVE);

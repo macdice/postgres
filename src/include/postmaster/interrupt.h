@@ -45,6 +45,7 @@
 #define INTERRUPT_H
 
 #include "port/atomics.h"
+#include "storage/procnumber.h"
 
 #include <signal.h>
 
@@ -184,7 +185,7 @@ ConsumeInterrupt(InterruptType reason)
 }
 
 extern void RaiseInterrupt(InterruptType reason);
-extern void SendInterrupt(InterruptType reason, int pgprocno);
+extern void SendInterrupt(InterruptType reason, ProcNumber pgprocno);
 extern void SwitchToLocalInterrupts(void);
 extern void SwitchToSharedInterrupts(void);
 
