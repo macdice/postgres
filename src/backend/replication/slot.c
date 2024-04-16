@@ -213,6 +213,7 @@ ReplicationSlotsShmemInit(void)
 			LWLockInitialize(&slot->io_in_progress_lock,
 							 LWTRANCHE_REPLICATION_SLOT_IO);
 			ConditionVariableInit(&slot->active_cv);
+			slot->active_pgprocno = INVALID_PROC_NUMBER;
 		}
 	}
 }
