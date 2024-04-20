@@ -141,7 +141,32 @@ char *
 GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 				int procNumber, ForkNumber forkNumber)
 {
-	char	   *path;
+	char		path[MAXPGPATH];
+	char	   *result;
+	size_t		size;
+
+	size = GetRelationPathInPlace(path, dbOid, spcOid, relNumber, procNumber, forkNumber);
+
+	/* String plus NUL terminator. */
+	result = palloc(size + 1);
+	memcpy(result, path, size + 1);
+
+	return result;
+}
+
+/*
+ * GetRelationPathInPlace - construct path to a relation's file
+ *
+ * Result is written to path, which must have space for MAXPGPATH characters.
+ * The size of the string is returned.  If it is >= MAXPGPATH, the path has
+ * been truncated due to lack of space.
+ */
+size_t
+GetRelationPathInPlace(char *path,
+					   Oid dbOid, Oid spcOid, RelFileNumber relNumber,
+					   int procNumber, ForkNumber forkNumber)
+{
+	size_t		size;
 
 	if (spcOid == GLOBALTABLESPACE_OID)
 	{
@@ -149,10 +174,10 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		Assert(dbOid == 0);
 		Assert(procNumber == INVALID_PROC_NUMBER);
 		if (forkNumber != MAIN_FORKNUM)
-			path = psprintf("global/%u_%s",
+			size = snprintf(path, MAXPGPATH, "global/%u_%s",
 							relNumber, forkNames[forkNumber]);
 		else
-			path = psprintf("global/%u", relNumber);
+			size = snprintf(path, MAXPGPATH, "global/%u", relNumber);
 	}
 	else if (spcOid == DEFAULTTABLESPACE_OID)
 	{
@@ -160,21 +185,25 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		if (procNumber == INVALID_PROC_NUMBER)
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("base/%u/%u_%s",
+				size = snprintf(path, MAXPGPATH,
+								"base/%u/%u_%s",
 								dbOid, relNumber,
 								forkNames[forkNumber]);
 			else
-				path = psprintf("base/%u/%u",
+				size = snprintf(path, MAXPGPATH,
+								"base/%u/%u",
 								dbOid, relNumber);
 		}
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("base/%u/t%d_%u_%s",
+				size = snprintf(path, MAXPGPATH,
+								"base/%u/t%d_%u_%s",
 								dbOid, procNumber, relNumber,
 								forkNames[forkNumber]);
 			else
-				path = psprintf("base/%u/t%d_%u",
+				size = snprintf(path, MAXPGPATH,
+								"base/%u/t%d_%u",
 								dbOid, procNumber, relNumber);
 		}
 	}
@@ -184,27 +213,31 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		if (procNumber == INVALID_PROC_NUMBER)
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("pg_tblspc/%u/%s/%u/%u_%s",
+				size = snprintf(path, MAXPGPATH,
+								"pg_tblspc/%u/%s/%u/%u_%s",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
 								dbOid, relNumber,
 								forkNames[forkNumber]);
 			else
-				path = psprintf("pg_tblspc/%u/%s/%u/%u",
+				size = snprintf(path, MAXPGPATH,
+								"pg_tblspc/%u/%s/%u/%u",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
 								dbOid, relNumber);
 		}
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("pg_tblspc/%u/%s/%u/t%d_%u_%s",
+				size = snprintf(path, MAXPGPATH,
+								"pg_tblspc/%u/%s/%u/t%d_%u_%s",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
 								dbOid, procNumber, relNumber,
 								forkNames[forkNumber]);
 			else
-				path = psprintf("pg_tblspc/%u/%s/%u/t%d_%u",
+				size = snprintf(path, MAXPGPATH,
+								"pg_tblspc/%u/%s/%u/t%d_%u",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
 								dbOid, procNumber, relNumber);
 		}
 	}
-	return path;
+	return size;
 }

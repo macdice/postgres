@@ -117,6 +117,12 @@ static MemoryContext MdCxt;		/* context for all MdfdVec objects */
 /* don't try to open a segment, if not already open */
 #define EXTENSION_DONT_OPEN			(1 << 5)
 
+/*
+ * The maximum possible size of the .NNN extension for segments is 1 for the
+ * dot plus log10(2^32) for the digits for RELSEG_SIZE = 1, and it's not worth
+ * working harder to compute the value for more typical RELSEG_SIZE values.
+ */
+#define MAX_EXTENSION_SIZE			(1 + 10)
 
 /* local routines */
 static void mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum,
@@ -131,7 +137,7 @@ static void register_forget_request(RelFileLocatorBackend rlocator, ForkNumber f
 static void _fdvec_resize(SMgrRelation reln,
 						  ForkNumber forknum,
 						  int nseg);
-static char *_mdfd_segpath(SMgrRelation reln, ForkNumber forknum,
+static char *_mdfd_segpath(char *path, SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber segno);
 static MdfdVec *_mdfd_openseg(SMgrRelation reln, ForkNumber forknum,
 							  BlockNumber segno, int oflags);
@@ -408,7 +414,8 @@ mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum, bool isRedo)
 	 */
 	if (ret >= 0 || errno != ENOENT)
 	{
-		char	   *segpath = (char *) palloc(strlen(path) + 12);
+		char	   *segpath = (char *) palloc(strlen(path) +
+											  MAX_EXTENSION_SIZE + 1);
 		BlockNumber segno;
 
 		for (segno = 1;; segno++)
@@ -1492,7 +1499,7 @@ _fdvec_resize(SMgrRelation reln,
 		reln->md_seg_fds[forknum] =
 			MemoryContextAlloc(MdCxt, sizeof(MdfdVec) * nseg);
 	}
-	else
+	else if (nseg > reln->md_num_open_segs[forknum])
 	{
 		/*
 		 * It doesn't seem worthwhile complicating the code to amortize
@@ -1504,31 +1511,50 @@ _fdvec_resize(SMgrRelation reln,
 			repalloc(reln->md_seg_fds[forknum],
 					 sizeof(MdfdVec) * nseg);
 	}
+	else
+	{
+		/*
+		 * We don't reallocate a smaller array, because we want
+		 * smgrpreparetruncate() to be able to promise that smgrtruncate()
+		 * won't call memory allocation functions that would fail in a
+		 * critical section.  This means that a bit of space in the array is
+		 * now wasted, until the next time we add a segment and reallocate.
+		 */
+	}
 
 	reln->md_num_open_segs[forknum] = nseg;
 }
 
 /*
- * Return the filename for the specified segment of the relation. The
- * returned string is palloc'd.
+ * Return the filename for the specified segment of the relation.  The output
+ * buffer must be of size MAXPGPATH.
  */
 static char *
-_mdfd_segpath(SMgrRelation reln, ForkNumber forknum, BlockNumber segno)
+_mdfd_segpath(char *path, SMgrRelation reln, ForkNumber forknum, BlockNumber segno)
 {
-	char	   *path,
-			   *fullpath;
+	size_t		size;
 
-	path = relpath(reln->smgr_rlocator, forknum);
+	size = GetRelationPathInPlace(path,
+								  reln->smgr_rlocator.locator.dbOid,
+								  reln->smgr_rlocator.locator.spcOid,
+								  reln->smgr_rlocator.locator.relNumber,
+								  reln->smgr_rlocator.backend,
+								  forknum);
 
+	/*
+	 * Make sure the whole path, maximum possible segment suffix and NUL
+	 * terminator can fit into MAXPGPATH.
+	 */
+	if (size + MAX_EXTENSION_SIZE >= MAXPGPATH)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("path \"%s\" too long", path)));
+
+	/* Append segment number. */
 	if (segno > 0)
-	{
-		fullpath = psprintf("%s.%u", path, segno);
-		pfree(path);
-	}
-	else
-		fullpath = path;
+		sprintf(path + size, ".%u", segno);
 
-	return fullpath;
+	return path;
 }
 
 /*
@@ -1541,14 +1567,12 @@ _mdfd_openseg(SMgrRelation reln, ForkNumber forknum, BlockNumber segno,
 {
 	MdfdVec    *v;
 	File		fd;
-	char	   *fullpath;
+	char		fullpath[MAXPGPATH];
 
-	fullpath = _mdfd_segpath(reln, forknum, segno);
+	_mdfd_segpath(fullpath, reln, forknum, segno);
 
 	/* open the file */
 	fd = PathNameOpenFile(fullpath, _mdfd_open_flags() | oflags);
-
-	pfree(fullpath);
 
 	if (fd < 0)
 		return NULL;
@@ -1584,6 +1608,7 @@ static MdfdVec *
 _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			 bool skipFsync, int behavior)
 {
+	char		path[MAXPGPATH];
 	MdfdVec    *v;
 	BlockNumber targetseg;
 	BlockNumber nextsegno;
@@ -1686,7 +1711,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not open file \"%s\" (target block %u): previous segment is only %u blocks",
-							_mdfd_segpath(reln, forknum, nextsegno),
+							_mdfd_segpath(path, reln, forknum, nextsegno),
 							blkno, nblocks)));
 		}
 
@@ -1700,7 +1725,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not open file \"%s\" (target block %u): %m",
-							_mdfd_segpath(reln, forknum, nextsegno),
+							_mdfd_segpath(path, reln, forknum, nextsegno),
 							blkno)));
 		}
 	}
@@ -1751,11 +1776,7 @@ mdsyncfiletag(const FileTag *ftag, char *path)
 	}
 	else
 	{
-		char	   *p;
-
-		p = _mdfd_segpath(reln, ftag->forknum, ftag->segno);
-		strlcpy(path, p, MAXPGPATH);
-		pfree(p);
+		_mdfd_segpath(path, reln, ftag->forknum, ftag->segno);
 
 		file = PathNameOpenFile(path, _mdfd_open_flags());
 		if (file < 0)

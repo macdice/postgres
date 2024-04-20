@@ -75,6 +75,9 @@ extern char *GetDatabasePath(Oid dbOid, Oid spcOid);
 
 extern char *GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 							 int procNumber, ForkNumber forkNumber);
+extern size_t GetRelationPathInPlace(char *path,
+									 Oid dbOid, Oid spcOid, RelFileNumber relNumber,
+									 int procNumber, ForkNumber forkNumber);
 
 /*
  * Wrapper macros for GetRelationPath.  Beware of multiple

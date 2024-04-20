@@ -308,6 +308,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	forks[nforks] = MAIN_FORKNUM;
 	blocks[nforks] = nblocks;
 	nforks++;
+	smgrpreparetruncate(reln, MAIN_FORKNUM);
 
 	/* Prepare for truncation of the FSM if it exists */
 	fsm = smgrexists(RelationGetSmgr(rel), FSM_FORKNUM);
@@ -320,6 +321,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 			nforks++;
 			need_fsm_vacuum = true;
 		}
+		smgrpreparetruncate(reln, FSM_FORKNUM);
 	}
 
 	/* Prepare for truncation of the visibility map too if it exists */
@@ -332,6 +334,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 			forks[nforks] = VISIBILITYMAP_FORKNUM;
 			nforks++;
 		}
+		smgrpreparetruncate(reln, VISIBILITYMAP_FORKNUM);
 	}
 
 	RelationPreTruncate(rel);
@@ -368,12 +371,25 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	/*
 	 * We WAL-log the truncation before actually truncating, which means
 	 * trouble if the truncation fails. If we then crash, the WAL replay
-	 * likely isn't going to succeed in the truncation either, and cause a
-	 * PANIC. It's tempting to put a critical section here, but that cure
-	 * would be worse than the disease. It would turn a usually harmless
-	 * failure to truncate, that might spell trouble at WAL replay, into a
-	 * certain PANIC.
+	 * likely isn't going to succeed in the truncation either, so it's
+	 * tempting not to put a critical section here to avoid a double PANIC.
+	 * However, if the file system operation failed after
+	 * DropRelationBuffers() had already thrown away dirty buffers, (1) old
+	 * deleted data might later come back to life, and (2) would-be-truncated
+	 * pages might be modified again, and then a replica that had replayed the
+	 * truncation would PANIC because it has a different idea of the relation
+	 * size.
+	 *
+	 * The critical section also makes WaitIO() non-interruptable in
+	 * DropRelationBuffers(), which would otherwise be another way to reach
+	 * the above problems.
+	 *
+	 * Note that we called smgrpreparetruncate() above, to allow
+	 * smgrtruncate() to be called within a critical section without
+	 * allocating memory.
 	 */
+	START_CRIT_SECTION();
+
 	if (RelationNeedsWAL(rel))
 	{
 		/*
@@ -409,6 +425,8 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 * corresponding files on disk.
 	 */
 	smgrtruncate(RelationGetSmgr(rel), forks, nforks, blocks);
+
+	END_CRIT_SECTION();
 
 	/* We've done all the critical work, so checkpoints are OK now. */
 	MyProc->delayChkptFlags &= ~(DELAY_CHKPT_START | DELAY_CHKPT_COMPLETE);

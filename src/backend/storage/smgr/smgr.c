@@ -690,6 +690,18 @@ smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
+ * smgrpreparetruncate() -- Prepare to truncate a fork of a relation.
+ *
+ * This promises that a later call to smgrtruncate() will not have to allocate
+ * memory from MemoryContexts that don't allow that inside critical sections.
+ */
+void
+smgrpreparetruncate(SMgrRelation reln, ForkNumber forknum)
+{
+	smgrnblocks(reln, forknum);
+}
+
+/*
  * smgrtruncate() -- Truncate the given forks of supplied relation to
  *					 each specified numbers of blocks
  *
