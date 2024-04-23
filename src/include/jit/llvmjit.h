@@ -18,6 +18,7 @@
 #ifdef USE_LLVM
 
 #include <llvm-c/Types.h>
+#include <llvm-c/Transforms/PassBuilder.h>
 
 
 /*
@@ -132,6 +133,11 @@ extern LLVMValueRef slot_compile_deform(struct LLVMJitContext *context, TupleDes
  */
 extern LLVMTypeRef LLVMGetFunctionReturnType(LLVMValueRef r);
 extern LLVMTypeRef LLVMGetFunctionType(LLVMValueRef r);
+
+#if LLVM_VERSION_MAJOR < 17
+extern void LLVMPassBuilderOptionsSetInlinerThreshold(LLVMPassBuilderOptionsRef Options,
+													  int Threshold);
+#endif
 
 #ifdef __cplusplus
 } /* extern "C" */
