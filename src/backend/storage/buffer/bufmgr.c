@@ -1992,7 +1992,7 @@ again:
 		LWLockRelease(content_lock);
 
 		ScheduleBufferTagForWriteback(&BackendWritebackContext, io_context,
-									  &buf_hdr->tag);
+									  &buf_hdr->tag, 1);
 	}
 
 
@@ -3486,7 +3486,7 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	 * SyncOneBuffer() is only called by checkpointer and bgwriter, so
 	 * IOContext will always be IOCONTEXT_NORMAL.
 	 */
-	ScheduleBufferTagForWriteback(wb_context, IOCONTEXT_NORMAL, &tag);
+	ScheduleBufferTagForWriteback(wb_context, IOCONTEXT_NORMAL, &tag, 1);
 
 	return result | BUF_WRITTEN;
 }
@@ -5836,11 +5836,11 @@ WritebackContextInit(WritebackContext *context, int *max_pending)
 }
 
 /*
- * Add buffer to list of pending writeback requests.
+ * Add buffer tag range to list of pending writeback requests.
  */
 void
 ScheduleBufferTagForWriteback(WritebackContext *wb_context, IOContext io_context,
-							  BufferTag *tag)
+							  BufferTag *tag, int nblocks)
 {
 	PendingWriteback *pending;
 
@@ -5858,6 +5858,7 @@ ScheduleBufferTagForWriteback(WritebackContext *wb_context, IOContext io_context
 		pending = &wb_context->pending_writebacks[wb_context->nr_pending++];
 
 		pending->tag = *tag;
+		pending->nblocks = nblocks;
 	}
 
 	/*
@@ -5914,10 +5915,11 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 		int			ahead;
 		BufferTag	tag;
 		RelFileLocator currlocator;
-		Size		nblocks = 1;
+		Size		nblocks;
 
 		cur = &wb_context->pending_writebacks[i];
 		tag = cur->tag;
+		nblocks = cur->nblocks;
 		currlocator = BufTagGetRelFileLocator(&tag);
 
 		/*
@@ -5926,6 +5928,8 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 		 */
 		for (ahead = 0; i + ahead + 1 < wb_context->nr_pending; ahead++)
 		{
+			BlockNumber this_end;
+			BlockNumber next_end;
 
 			next = &wb_context->pending_writebacks[i + ahead + 1];
 
@@ -5935,15 +5939,15 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 				BufTagGetForkNum(&cur->tag) != BufTagGetForkNum(&next->tag))
 				break;
 
-			/* ok, block queued twice, skip */
-			if (cur->tag.blockNum == next->tag.blockNum)
-				continue;
-
-			/* only merge consecutive writes */
-			if (cur->tag.blockNum + 1 != next->tag.blockNum)
+			/* only merge consecutive or overlapping writes */
+			if (next->tag.blockNum > tag.blockNum + nblocks)
 				break;
 
-			nblocks++;
+			/* find the nblocks value that covers the end of both */
+			this_end = tag.blockNum + nblocks;
+			next_end = next->tag.blockNum + next->nblocks;
+			nblocks = Max(this_end, next_end) - tag.blockNum;
+
 			cur = next;
 		}
 
