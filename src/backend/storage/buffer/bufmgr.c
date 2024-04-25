@@ -56,6 +56,7 @@
 #include "storage/proc.h"
 #include "storage/smgr.h"
 #include "storage/standby.h"
+#include "storage/write_stream.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -121,6 +122,9 @@ typedef struct CkptTsStatus
 
 	/* current offset in CkptBufferIds for this tablespace */
 	int			index;
+
+	/* I/O stream for writing out to this tablespace */
+	WriteStream *stream;
 } CkptTsStatus;
 
 /*
@@ -3069,6 +3073,13 @@ BufferSync(int flags)
 			 */
 
 			last_tsid = cur_tsid;
+
+			/*
+			 * Create a separate WriteStream for each tablespace.  If we only
+			 * had one stream, we'd lose some write-combining opportunities at
+			 * arbitrary boundaries when switching between tablespaces.
+			 */
+			s->stream = write_stream_begin(0, &wb_context, -1);
 		}
 		else
 		{
@@ -3139,11 +3150,23 @@ BufferSync(int flags)
 		 */
 		if (pg_atomic_read_u32(&bufHdr->state) & BM_CHECKPOINT_NEEDED)
 		{
-			if (SyncOneBuffer(buf_id, false, &wb_context) & BUF_WRITTEN)
+			ResourceOwnerEnlarge(CurrentResourceOwner);
+			ReservePrivateRefCountEntry();
+
+			buf_state = LockBufHdr(bufHdr);
+			if (!(buf_state & BM_VALID) || !(buf_state & BM_DIRTY))
 			{
-				TRACE_POSTGRESQL_BUFFER_SYNC_WRITTEN(buf_id);
-				PendingCheckpointerStats.buffers_written++;
+				/* It's clean, so nothing to do */
+				UnlockBufHdr(bufHdr, buf_state);
+			}
+			else
+			{
+				PinBuffer_Locked(bufHdr);
+
+				write_stream_write_buffer(ts_stat->stream,
+										  BufferDescriptorGetBuffer(bufHdr));
 				num_written++;
+				PendingCheckpointerStats.buffers_written++;
 			}
 		}
 
@@ -3173,6 +3196,10 @@ BufferSync(int flags)
 		 */
 		CheckpointWriteDelay(flags, (double) num_processed / num_to_scan);
 	}
+
+	/* Finish all I/O streams, waiting for outstanding writes to complete. */
+	for (i = 0; i < num_spaces; i++)
+		write_stream_end(per_ts_stat[i].stream);
 
 	/*
 	 * Issue all pending flushes. Only checkpointer calls BufferSync(), so
