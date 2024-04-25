@@ -3147,6 +3147,9 @@ WriteDataPtrType
 WriteExtraTocPtrType
 WriteFunc
 WriteManifestState
+WriteStream
+WriteStreamWrite
+WriteStreamWriteHandle
 WriteTarState
 WritebackContext
 X509

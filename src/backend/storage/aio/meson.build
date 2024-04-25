@@ -2,4 +2,5 @@
 
 backend_sources += files(
   'read_stream.c',
+  'write_stream.c',
 )
