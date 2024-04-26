@@ -2559,7 +2559,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 							  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN);
 		}
 
-		UnlockReleaseBuffer(buffer);
+		StrategyUnlockReleaseBuffer(bistate ? bistate->strategy : NULL, buffer);
 		ndone += nthispage;
 
 		/*
