@@ -23,6 +23,8 @@
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
+/* GUCs */
+int			max_bulk_scan_buffers_kb = 16 * 1024;
 
 /*
  * The shared freelist control information.
@@ -75,6 +77,13 @@ typedef struct BufferAccessStrategyData
 	BufferAccessStrategyType btype;
 	/* Number of elements in buffers[] array */
 	int			nbuffers;
+	/* Adaptive range of nbuffers array. */
+	int			nbuffers_min;
+	int			nbuffers_max;
+
+	/* Counters used to implement adaptive downsizing. */
+	int			cycle;
+	int			cycle_preserve_ring_size;
 
 	/*
 	 * Index of the "current" slot in the ring, ie, the one most recently
@@ -97,6 +106,10 @@ static BufferDesc *GetBufferFromRing(BufferAccessStrategy strategy,
 									 uint32 *buf_state);
 static void AddBufferToRing(BufferAccessStrategy strategy,
 							BufferDesc *buf);
+static BufferAccessStrategy
+			GetAccessStrategyWithSizeRange(BufferAccessStrategyType btype,
+										   int ring_max_size_kb,
+										   int ring_min_size_kb);
 
 /*
  * ClockSweepTick - Helper routine for StrategyGetBuffer()
@@ -540,7 +553,8 @@ StrategyInitialize(bool init)
 BufferAccessStrategy
 GetAccessStrategy(BufferAccessStrategyType btype)
 {
-	int			ring_size_kb;
+	int			ring_max_size_kb;
+	int			ring_min_size_kb;
 
 	/*
 	 * Select ring size to use.  See buffer/README for rationales.
@@ -555,13 +569,16 @@ GetAccessStrategy(BufferAccessStrategyType btype)
 			return NULL;
 
 		case BAS_BULKREAD:
-			ring_size_kb = 256;
+			ring_max_size_kb = max_bulk_scan_buffers_kb;
+			ring_min_size_kb = 256;
 			break;
 		case BAS_BULKWRITE:
-			ring_size_kb = 16 * 1024;
+			ring_max_size_kb = max_bulk_scan_buffers_kb;
+			ring_min_size_kb = max_bulk_scan_buffers_kb;
 			break;
 		case BAS_VACUUM:
-			ring_size_kb = 2048;
+			ring_max_size_kb = 2048;
+			ring_min_size_kb = 2048;
 			break;
 
 		default:
@@ -570,7 +587,7 @@ GetAccessStrategy(BufferAccessStrategyType btype)
 			return NULL;		/* keep compiler quiet */
 	}
 
-	return GetAccessStrategyWithSize(btype, ring_size_kb);
+	return GetAccessStrategyWithSizeRange(btype, ring_max_size_kb, ring_min_size_kb);
 }
 
 /*
@@ -583,13 +600,26 @@ GetAccessStrategy(BufferAccessStrategyType btype)
 BufferAccessStrategy
 GetAccessStrategyWithSize(BufferAccessStrategyType btype, int ring_size_kb)
 {
+	return GetAccessStrategyWithSizeRange(btype, ring_size_kb, ring_size_kb);
+}
+
+/*
+ * GetAccessStrategyWithSizeRange -- create an adaptively sized BAS.
+ */
+static BufferAccessStrategy
+GetAccessStrategyWithSizeRange(BufferAccessStrategyType btype,
+							   int ring_max_size_kb,
+							   int ring_min_size_kb)
+{
 	int			ring_buffers;
 	BufferAccessStrategy strategy;
 
-	Assert(ring_size_kb >= 0);
+	Assert(ring_max_size_kb >= 0);
+	Assert(ring_min_size_kb >= 0);
+	Assert(ring_max_size_kb >= ring_min_size_kb);
 
-	/* Figure out how many buffers ring_size_kb is */
-	ring_buffers = ring_size_kb / (BLCKSZ / 1024);
+	/* Figure out how many buffers ring_max_size_kb is */
+	ring_buffers = ring_max_size_kb / (BLCKSZ / 1024);
 
 	/* 0 means unlimited, so no BufferAccessStrategy required */
 	if (ring_buffers == 0)
@@ -608,7 +638,9 @@ GetAccessStrategyWithSize(BufferAccessStrategyType btype, int ring_size_kb)
 
 	/* Set fields that don't start out zero */
 	strategy->btype = btype;
-	strategy->nbuffers = ring_buffers;
+	strategy->nbuffers_min = Min(ring_buffers, ring_min_size_kb / (BLCKSZ / 1024));
+	strategy->nbuffers_max = ring_buffers;
+	strategy->nbuffers = strategy->nbuffers_min;
 
 	return strategy;
 }
@@ -618,7 +650,8 @@ GetAccessStrategyWithSize(BufferAccessStrategyType btype, int ring_size_kb)
  *		the ring
  *
  * Returns 0 on NULL input to match behavior of GetAccessStrategyWithSize()
- * returning NULL with 0 size.
+ * returning NULL with 0 size.  Note that the value may change over time, for
+ * strategies with a range.
  */
 int
 GetAccessStrategyBufferCount(BufferAccessStrategy strategy)
@@ -634,11 +667,12 @@ GetAccessStrategyBufferCount(BufferAccessStrategy strategy)
  *
  * When pinning extra buffers to look ahead, users of a ring-based strategy are
  * in danger of pinning too much of the ring at once while performing look-ahead.
- * For some strategies, that means "escaping" from the ring, and in others it
- * means forcing dirty data to disk very frequently with associated WAL
- * flushing.  Since external code has no insight into any of that, allow
- * individual strategy types to expose a clamp that should be applied when
- * deciding on a maximum number of buffers to pin at once.
+ * Unless the ring can grow, hitting dirty buffers while looking ahead could
+ * increase the WAL flush rate.
+ *
+ * Since external code has no insight into any of that, allow individual
+ * strategy types to expose a clamp that should be applied when deciding on a
+ * maximum number of buffers to pin at once.
  *
  * Callers should combine this number with other relevant limits and take the
  * minimum.
@@ -649,26 +683,12 @@ GetAccessStrategyPinLimit(BufferAccessStrategy strategy)
 	if (strategy == NULL)
 		return NBuffers;
 
-	switch (strategy->btype)
-	{
-		case BAS_BULKREAD:
+	/* The ring can grow.  Anything up to the initial size would be OK to pin. */
+	if (strategy->nbuffers < strategy->nbuffers_max)
+		return strategy->nbuffers;
 
-			/*
-			 * Since BAS_BULKREAD uses StrategyRejectBuffer(), dirty buffers
-			 * shouldn't be a problem and the caller is free to pin up to the
-			 * entire ring at once.
-			 */
-			return strategy->nbuffers;
-
-		default:
-
-			/*
-			 * Tell caller not to pin more than half the buffers in the ring.
-			 * This is a trade-off between look ahead distance and deferring
-			 * writeback and associated WAL traffic.
-			 */
-			return strategy->nbuffers / 2;
-	}
+	/* The ring can't grow.  Don't pin more than half of the ring. */
+	return strategy->nbuffers_max / 2;
 }
 
 /*
@@ -683,6 +703,48 @@ FreeAccessStrategy(BufferAccessStrategy strategy)
 	/* don't crash if called on a "default" strategy */
 	if (strategy != NULL)
 		pfree(strategy);
+}
+
+/*
+ * Increase the size of a strategy's ring buffer.
+ */
+static void
+GrowStrategyRing(BufferAccessStrategy strategy)
+{
+	int			new_nbuffers;
+	int			buffers_to_insert;
+	int			buffers_to_move;
+
+	Assert(strategy->nbuffers < strategy->nbuffers_max);
+
+	/*
+	 * Double the size of the ring by inserting empty slots at the current
+	 * position.
+	 */
+	new_nbuffers = Min(strategy->nbuffers * 2,
+					   strategy->nbuffers_max);
+	buffers_to_insert = new_nbuffers - strategy->nbuffers;
+	buffers_to_move = strategy->nbuffers - strategy->current;
+	strategy->nbuffers = new_nbuffers;
+
+	/*
+	 * Slide the rest of the slots up to make space.  This might seem
+	 * expensive, but it's amortized by geometric growth.  If we instead just
+	 * pointed current to new additional space at the end, write-behind
+	 * tracking would finish up out of order with negative consequences for
+	 * performance.
+	 */
+	memmove(&strategy->buffers[strategy->current + buffers_to_insert],
+			&strategy->buffers[strategy->current],
+			buffers_to_move * sizeof(Buffer));
+
+	/* Zero-initialize the inserted slots. */
+	memset(&strategy->buffers[strategy->current],
+		   0,
+		   buffers_to_insert * sizeof(Buffer));
+	memset(&strategy->write_stream_handles[strategy->current],
+		   0,
+		   buffers_to_insert * sizeof(WriteStreamWriteHandle));
 }
 
 /*
@@ -701,7 +763,19 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 
 	/* Advance to next ring slot */
 	if (++strategy->current >= strategy->nbuffers)
+	{
+		if (strategy->nbuffers > strategy->nbuffers_min &&
+			strategy->cycle_preserve_ring_size != strategy->cycle)
+		{
+			/*
+			 * We made it through a whole tour of the ring without having to
+			 * do any write-behind.  Time to down-size gradually.
+			 */
+			strategy->nbuffers--;
+		}
+		strategy->cycle++;
 		strategy->current = 0;
+	}
 
 	/*
 	 * If the slot hasn't been filled yet, tell the caller to allocate a new
@@ -797,8 +871,14 @@ IOContextForStrategy(BufferAccessStrategy strategy)
 bool
 StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_ring)
 {
-	/* We only do this in bulkread mode */
-	if (strategy->btype != BAS_BULKREAD)
+	/*
+	 * Even if we can't reject this due to being at maximum size, remember
+	 * that we were asked to, to prevent the ring from shrinking.
+	 */
+	strategy->cycle_preserve_ring_size = strategy->cycle;
+
+	/* If there's no chance of expanding the ring, give up. */
+	if (strategy->nbuffers == strategy->nbuffers_max)
 		return false;
 
 	/* Don't muck with behavior of normal buffer-replacement strategy */
@@ -807,10 +887,10 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_r
 		return false;
 
 	/*
-	 * Remove the dirty buffer from the ring; necessary to prevent infinite
-	 * loop if all ring members are dirty.
+	 * Increase the ring size, and reject this buffer.  This creates empty
+	 * slots at 'current'.
 	 */
-	strategy->buffers[strategy->current] = InvalidBuffer;
+	GrowStrategyRing(strategy);
 
 	return true;
 }

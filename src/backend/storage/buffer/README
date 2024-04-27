@@ -215,35 +215,26 @@ whole scan.  This also implies that much of the write traffic caused by such
 a statement will be done by the backend itself and not pushed off onto other
 processes.
 
-For sequential scans, a 256KB ring is used. That's small enough to fit in L2
-cache, which makes transferring pages from OS cache to shared buffer cache
-efficient.  Even less would often be enough, but the ring must be big enough
-to accommodate all pages in the scan that are pinned concurrently.  256KB
-should also be enough to leave a small cache trail for other backends to
+For sequential scans, a 256KB ring is used initiallly. That's small enough to
+fit in L2 cache, which makes transferring pages from OS cache to shared buffer
+cache efficient.  Even less would often be enough, but the ring must be big
+enough to accommodate all pages in the scan that are pinned concurrently.
+256KB should also be enough to leave a small cache trail for other backends to
 join in a synchronized seq scan.  If a ring buffer is dirtied and its LSN
 updated, we would normally have to write and flush WAL before we could
-re-use the buffer; in this case we instead discard the buffer from the ring
-and (later) choose a replacement using the normal clock-sweep algorithm.
-Hence this strategy works best for scans that are read-only (or at worst
-update hint bits).  In a scan that modifies every page in the scan, like a
-bulk UPDATE or DELETE, the buffers in the ring will always be dirtied and
-the ring strategy effectively degrades to the normal strategy.
+re-use the buffer; in this case we instead expand the ring to defer that work
+and give the WAL chance to reach the disk.  In a scan that modifies every page
+in the scan, like a bulk UPDATE or DELETE, the buffers in the ring will always
+be dirtied and the ring strategy expands until it matches bulk write behavior
+with a ring up to max_bulk_scan_buffers (defaulting to 16MB), but not more than
+1/8th of shared_buffers.
 
 VACUUM uses a ring like sequential scans, however, the size of this ring is
-controlled by the vacuum_buffer_usage_limit GUC.  Dirty pages are not removed
-from the ring.  Instead, WAL is flushed if needed to allow reuse of the
-buffers.  Before introducing the buffer ring strategy in 8.3, VACUUM's buffers
-were sent to the freelist, which was effectively a buffer ring of 1 buffer,
-resulting in excessive WAL flushing.
+controlled by the vacuum_buffer_usage_limit GUC.
 
-Bulk writes work similarly to VACUUM.  Currently this applies only to
-COPY IN and CREATE TABLE AS SELECT.  (Might it be interesting to make
-seqscan UPDATE and DELETE use the bulkwrite strategy?)  For bulk writes
-we use a ring size of 16MB (but not more than 1/8th of shared_buffers).
-Smaller sizes have been shown to result in the COPY blocking too often
-for WAL flushes.  While it's okay for a background vacuum to be slowed by
-doing its own WAL flushing, we'd prefer that COPY not be subject to that,
-so we let it use up a bit more of the buffer arena.
+Bulk writes use max_bulk_scan_buffers GUC directly, skipping the ramping up
+and down logic.  Currently this applies only to COPY IN and CREATE TABLE AS
+SELECT.
 
 
 Background Writer's Processing

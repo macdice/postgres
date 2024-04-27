@@ -169,6 +169,8 @@
 #vacuum_buffer_usage_limit = 2MB	# size of vacuum and analyze buffer access strategy ring;
 					# 0 to disable vacuum buffer access strategy;
 					# range 128kB to 16GB
+#max_bulk_scan_buffers = 16MB		# size of bulk write operation buffer access strategy ring
+					# range 16MB to 16GB
 
 # - Disk -
 

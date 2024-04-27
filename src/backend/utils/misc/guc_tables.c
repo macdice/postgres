@@ -2280,6 +2280,17 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_bulk_scan_buffers", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the maximum buffer pool size for large data operations."),
+			NULL,
+			GUC_UNIT_KB
+		},
+		&max_bulk_scan_buffers_kb,
+		16 * 1024, 256, 16 * 1024 * 1024,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"shared_memory_size", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the size of the server's main shared memory area (rounded up to the nearest MB)."),
 			NULL,
