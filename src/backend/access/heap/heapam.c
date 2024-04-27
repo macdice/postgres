@@ -588,7 +588,7 @@ heap_fetch_next_buffer(HeapScanDesc scan, ScanDirection dir)
 	/* release previous scan buffer, if any */
 	if (BufferIsValid(scan->rs_cbuf))
 	{
-		ReleaseBuffer(scan->rs_cbuf);
+		StrategyReleaseBuffer(scan->rs_strategy, scan->rs_cbuf);
 		scan->rs_cbuf = InvalidBuffer;
 	}
 
