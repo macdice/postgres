@@ -1016,7 +1016,7 @@ lazy_scan_heap(LVRelState *vacrel)
 		{
 			Size		freespace = PageGetHeapFreeSpace(page);
 
-			UnlockReleaseBuffer(buf);
+			StrategyUnlockReleaseBuffer(vacrel->bstrategy, buf);
 			RecordPageWithFreeSpace(vacrel->rel, blkno, freespace);
 
 			/*
@@ -1034,7 +1034,7 @@ lazy_scan_heap(LVRelState *vacrel)
 			}
 		}
 		else
-			UnlockReleaseBuffer(buf);
+			StrategyUnlockReleaseBuffer(vacrel->bstrategy, buf);
 	}
 
 	vacrel->blkno = InvalidBlockNumber;
@@ -2200,7 +2200,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		page = BufferGetPage(buf);
 		freespace = PageGetHeapFreeSpace(page);
 
-		UnlockReleaseBuffer(buf);
+		StrategyUnlockReleaseBuffer(vacrel->bstrategy, buf);
 		RecordPageWithFreeSpace(vacrel->rel, blkno, freespace);
 		vacuumed_pages++;
 	}
@@ -2686,6 +2686,9 @@ lazy_truncate_heap(LVRelState *vacrel)
 			UnlockRelation(vacrel->rel, AccessExclusiveLock);
 			return;
 		}
+
+		/* Throw away write-behind work, to get rid of held pins. */
+		StrategyReset(vacrel->bstrategy);
 
 		/*
 		 * Okay to truncate.

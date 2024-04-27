@@ -639,8 +639,10 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 				analyze_rel(vrel->oid, vrel->relation, params,
 							vrel->va_cols, in_outer_xact, bstrategy);
 
+
 				if (use_own_xacts)
 				{
+					StrategyWaitAll(bstrategy);
 					PopActiveSnapshot();
 					CommitTransactionCommand();
 				}
@@ -2219,6 +2221,9 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	/* all done with this class, but hold lock until commit */
 	if (rel)
 		relation_close(rel, NoLock);
+
+	/* Make sure the stategy isn't holding any pins. */
+	StrategyWaitAll(bstrategy);
 
 	/*
 	 * Complete the transaction and free all temporary memory used.
