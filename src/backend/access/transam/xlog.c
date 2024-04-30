@@ -2786,13 +2786,17 @@ UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force)
  *
  * NOTE: this differs from XLogWrite mainly in that the WALWriteLock is not
  * already held, and we try to avoid acquiring it if possible.
+ *
+ * Returns true if we had to stall, meaning that we flushed the WAL, or waited
+ * for someone else to flush the WAL.
  */
-void
+bool
 XLogFlush(XLogRecPtr record)
 {
 	XLogRecPtr	WriteRqstPtr;
 	XLogwrtRqst WriteRqst;
 	TimeLineID	insertTLI = XLogCtl->InsertTimeLineID;
+	bool		stalled = false;
 
 	/*
 	 * During REDO, we are reading not writing WAL.  Therefore, instead of
@@ -2804,12 +2808,12 @@ XLogFlush(XLogRecPtr record)
 	if (!XLogInsertAllowed())
 	{
 		UpdateMinRecoveryPoint(record, false);
-		return;
+		return false;
 	}
 
 	/* Quick exit if already known flushed */
 	if (record <= LogwrtResult.Flush)
-		return;
+		return false;
 
 #ifdef WAL_DEBUG
 	if (XLOG_DEBUG)
@@ -2844,6 +2848,20 @@ XLogFlush(XLogRecPtr record)
 		RefreshXLogWriteResult(LogwrtResult);
 		if (record <= LogwrtResult.Flush)
 			break;
+
+		/*
+		 * After this point, it's extremely likely that we have to wait for
+		 * someone else to flush the WAL, or do it ourselves.  This errs on
+		 * the side of reporting true in a narrow window where the above check
+		 * failed and the following checks find no work to do because someone
+		 * else finished flushing right at that moment, meaning that we don't
+		 * actually stall.  That's unlikely, and producing a more accurate
+		 * result would add extra complications for no real benefit.  The
+		 * purpose of the "stalled" return value is for code paths that want
+		 * to know if they are writing dirty data too soon, and this answer is
+		 * accurate enough for that purpose.
+		 */
+		stalled = true;
 
 		/*
 		 * Before actually performing the write, wait for all in-flight
@@ -2914,6 +2932,7 @@ XLogFlush(XLogRecPtr record)
 		XLogWrite(WriteRqst, insertTLI, false);
 
 		LWLockRelease(WALWriteLock);
+
 		/* done */
 		break;
 	}
@@ -2949,6 +2968,8 @@ XLogFlush(XLogRecPtr record)
 			 "xlog flush request %X/%X is not satisfied --- flushed only to %X/%X",
 			 LSN_FORMAT_ARGS(record),
 			 LSN_FORMAT_ARGS(LogwrtResult.Flush));
+
+	return stalled;
 }
 
 /*

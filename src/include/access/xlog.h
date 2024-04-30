@@ -201,7 +201,7 @@ extern XLogRecPtr XLogInsertRecord(struct XLogRecData *rdata,
 								   uint8 flags,
 								   int num_fpi,
 								   bool topxid_included);
-extern void XLogFlush(XLogRecPtr record);
+extern bool XLogFlush(XLogRecPtr record);
 extern bool XLogBackgroundFlush(void);
 extern bool XLogNeedsFlush(XLogRecPtr record);
 extern int	XLogFileInit(XLogSegNo logsegno, TimeLineID logtli);
