@@ -3120,7 +3120,7 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 	 */
 	Assert(state->readonly && state->rootdescend);
 	exists = false;
-	stack = _bt_search(state->rel, NULL, key, &lbuf, BT_READ);
+	stack = _bt_search(state->rel, NULL, key, &lbuf, BT_READ, NULL);
 
 	if (BufferIsValid(lbuf))
 	{

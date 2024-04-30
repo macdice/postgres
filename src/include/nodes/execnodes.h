@@ -172,6 +172,7 @@ typedef struct ExprState
  *		ParallelWorkers		# of workers requested (excludes leader)
  *		Am					Oid of index AM
  *		AmCache				private cache area for index AM
+ *		Strategy			buffer access strategy
  *		Context				memory context holding this IndexInfo
  *
  * ii_Concurrent, ii_BrokenHotChain, and ii_ParallelWorkers are used only
@@ -204,6 +205,7 @@ typedef struct IndexInfo
 	bool		ii_Summarizing;
 	int			ii_ParallelWorkers;
 	Oid			ii_Am;
+	BufferAccessStrategy ii_Strategy;
 	void	   *ii_AmCache;
 	MemoryContext ii_Context;
 } IndexInfo;

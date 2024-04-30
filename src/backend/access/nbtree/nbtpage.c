@@ -47,7 +47,8 @@ static char *_bt_delitems_update(BTVacuumPosting *updatable, int nupdatable,
 								 OffsetNumber *updatedoffsets,
 								 Size *updatedbuflen, bool needswal);
 static bool _bt_mark_page_halfdead(Relation rel, Relation heaprel,
-								   Buffer leafbuf, BTStack stack);
+								   Buffer leafbuf, BTStack stack,
+								   BufferAccessStrategy strategy);
 static bool _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf,
 									 BlockNumber scanblkno,
 									 bool *rightsib_empty,
@@ -56,7 +57,8 @@ static bool _bt_lock_subtree_parent(Relation rel, Relation heaprel,
 									BlockNumber child, BTStack stack,
 									Buffer *subtreeparent, OffsetNumber *poffset,
 									BlockNumber *topparent,
-									BlockNumber *topparentrightsib);
+									BlockNumber *topparentrightsib,
+									BufferAccessStrategy *strategy);
 static void _bt_pendingfsm_add(BTVacState *vstate, BlockNumber target,
 							   FullTransactionId safexid);
 
@@ -1027,6 +1029,19 @@ _bt_relbuf(Relation rel, Buffer buf)
 }
 
 /*
+ *	_bt_reldirtybuf() -- release a locked buffer that is expected to be dirty.
+ *
+ * Lock and pin (refcount) are both dropped.  By releasing dirty buffers to a
+ * strategy, bulk operations can benefit from I/O optimizations.
+ */
+void
+_bt_reldirtybuf(BufferAccessStrategy strategy, Relation rel, Buffer buf)
+{
+	_bt_unlockbuf(rel, buf);
+	StrategyReleaseBuffer(strategy, buf);
+}
+
+/*
  *	_bt_lockbuf() -- lock a pinned buffer.
  *
  * Lock is acquired without acquiring another pin.  This is like a raw
@@ -1967,7 +1982,8 @@ _bt_pagedel(Relation rel, Buffer leafbuf, BTVacState *vstate)
 				/* Set up a BTLessStrategyNumber-like insertion scan key */
 				itup_key->nextkey = false;
 				itup_key->backward = true;
-				stack = _bt_search(rel, NULL, itup_key, &sleafbuf, BT_READ);
+				stack = _bt_search(rel, NULL, itup_key, &sleafbuf, BT_READ,
+								   vstate->info->strategy);
 				/* won't need a second lock or pin on leafbuf */
 				_bt_relbuf(rel, sleafbuf);
 
@@ -1999,7 +2015,7 @@ _bt_pagedel(Relation rel, Buffer leafbuf, BTVacState *vstate)
 			 */
 			Assert(P_ISLEAF(opaque) && !P_IGNORE(opaque));
 			if (!_bt_mark_page_halfdead(rel, vstate->info->heaprel, leafbuf,
-										stack))
+										stack, vstate->info->strategy))
 			{
 				_bt_relbuf(rel, leafbuf);
 				return;
@@ -2086,7 +2102,7 @@ _bt_pagedel(Relation rel, Buffer leafbuf, BTVacState *vstate)
  */
 static bool
 _bt_mark_page_halfdead(Relation rel, Relation heaprel, Buffer leafbuf,
-					   BTStack stack)
+					   BTStack stack, BufferAccessStrategy strategy)
 {
 	BlockNumber leafblkno;
 	BlockNumber leafrightsib;
@@ -2148,7 +2164,8 @@ _bt_mark_page_halfdead(Relation rel, Relation heaprel, Buffer leafbuf,
 	topparentrightsib = leafrightsib;
 	if (!_bt_lock_subtree_parent(rel, heaprel, leafblkno, stack,
 								 &subtreeparent, &poffset,
-								 &topparent, &topparentrightsib))
+								 &topparent, &topparentrightsib,
+								 strategy))
 		return false;
 
 	page = BufferGetPage(subtreeparent);
@@ -2813,7 +2830,8 @@ static bool
 _bt_lock_subtree_parent(Relation rel, Relation heaprel, BlockNumber child,
 						BTStack stack, Buffer *subtreeparent,
 						OffsetNumber *poffset, BlockNumber *topparent,
-						BlockNumber *topparentrightsib)
+						BlockNumber *topparentrightsib,
+						BufferAccessStrategy *strategy)
 {
 	BlockNumber parent,
 				leftsibparent;
@@ -2827,7 +2845,7 @@ _bt_lock_subtree_parent(Relation rel, Relation heaprel, BlockNumber child,
 	 * Locate the pivot tuple whose downlink points to "child".  Write lock
 	 * the parent page itself.
 	 */
-	pbuf = _bt_getstackbuf(rel, heaprel, stack, child);
+	pbuf = _bt_getstackbuf(rel, heaprel, stack, child, strategy);
 	if (pbuf == InvalidBuffer)
 	{
 		/*
@@ -2934,7 +2952,7 @@ _bt_lock_subtree_parent(Relation rel, Relation heaprel, BlockNumber child,
 	/* Recurse to examine child page's grandparent page */
 	return _bt_lock_subtree_parent(rel, heaprel, parent, stack->bts_parent,
 								   subtreeparent, poffset,
-								   topparent, topparentrightsib);
+								   topparent, topparentrightsib, strategy);
 }
 
 /*

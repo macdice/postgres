@@ -766,6 +766,11 @@ CopyFrom(CopyFromState cstate)
 
 	ExecOpenIndices(resultRelInfo, false);
 
+	/* Give each index its own strategy to use for bulk insertion. */
+	for (int i = 0; i < resultRelInfo->ri_NumIndices; ++i)
+		resultRelInfo->ri_IndexRelationInfo[i]->ii_Strategy =
+			GetAccessStrategy(BAS_BULKWRITE);
+
 	/*
 	 * Set up a ModifyTableState so we can let FDW(s) init themselves for
 	 * foreign-table result relation(s).
@@ -1341,6 +1346,10 @@ CopyFrom(CopyFromState cstate)
 	/* Close all the partitioned tables, leaf partitions, and their indices */
 	if (proute)
 		ExecCleanupTupleRouting(mtstate, proute);
+
+	/* Free per-index strategies. */
+	for (int i = 0; i < resultRelInfo->ri_NumIndices; ++i)
+		FreeAccessStrategy(resultRelInfo->ri_IndexRelationInfo[i]->ii_Strategy);
 
 	/* Close the result relations, including any trigger target relations */
 	ExecCloseResultRelations(estate);

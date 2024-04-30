@@ -1214,16 +1214,18 @@ extern void _bt_update_posting(BTVacuumPosting vacposting);
 extern IndexTuple _bt_swap_posting(IndexTuple newitem, IndexTuple oposting,
 								   int postingoff);
 
+struct IndexInfo;
+
 /*
  * prototypes for functions in nbtinsert.c
  */
 extern bool _bt_doinsert(Relation rel, IndexTuple itup,
 						 IndexUniqueCheck checkUnique, bool indexUnchanged,
-						 Relation heapRel);
+						 Relation heapRel, BufferAccessStrategy strategy);
 extern void _bt_finish_split(Relation rel, Relation heaprel, Buffer lbuf,
-							 BTStack stack);
+							 BTStack stack, BufferAccessStrategy strategy);
 extern Buffer _bt_getstackbuf(Relation rel, Relation heaprel, BTStack stack,
-							  BlockNumber child);
+							  BlockNumber child, BufferAccessStrategy strategy);
 
 /*
  * prototypes for functions in nbtsplitloc.c
@@ -1251,6 +1253,7 @@ extern Buffer _bt_allocbuf(Relation rel, Relation heaprel);
 extern Buffer _bt_relandgetbuf(Relation rel, Buffer obuf,
 							   BlockNumber blkno, int access);
 extern void _bt_relbuf(Relation rel, Buffer buf);
+extern void _bt_reldirtybuf(BufferAccessStrategy strategy, Relation rel, Buffer buf);
 extern void _bt_lockbuf(Relation rel, Buffer buf, int access);
 extern void _bt_unlockbuf(Relation rel, Buffer buf);
 extern bool _bt_conditionallockbuf(Relation rel, Buffer buf);
@@ -1271,13 +1274,13 @@ extern void _bt_pendingfsm_finalize(Relation rel, BTVacState *vstate);
  * prototypes for functions in nbtsearch.c
  */
 extern BTStack _bt_search(Relation rel, Relation heaprel, BTScanInsert key,
-						  Buffer *bufP, int access);
+						  Buffer *bufP, int access, BufferAccessStrategy strategy);
 extern Buffer _bt_moveright(Relation rel, Relation heaprel, BTScanInsert key,
 							Buffer buf, bool forupdate, BTStack stack,
-							int access);
+							int access, BufferAccessStrategy strategy);
 extern OffsetNumber _bt_binsrch_insert(Relation rel, BTInsertState insertstate);
 extern int32 _bt_compare(Relation rel, BTScanInsert key, Page page, OffsetNumber offnum);
-extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt_first(IndexScanDesc scan, ScanDirection dir, BufferAccessStrategy strategy);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost);
 

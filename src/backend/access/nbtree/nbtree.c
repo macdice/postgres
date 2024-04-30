@@ -192,7 +192,8 @@ btinsert(Relation rel, Datum *values, bool *isnull,
 	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
 	itup->t_tid = *ht_ctid;
 
-	result = _bt_doinsert(rel, itup, checkUnique, indexUnchanged, heapRel);
+	result = _bt_doinsert(rel, itup, checkUnique, indexUnchanged, heapRel,
+						  indexInfo ? indexInfo->ii_Strategy : NULL);
 
 	pfree(itup);
 
@@ -220,7 +221,7 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 		 * _bt_first() to get the first item in the scan.
 		 */
 		if (!BTScanPosIsValid(so->currPos))
-			res = _bt_first(scan, dir);
+			res = _bt_first(scan, dir, NULL);
 		else
 		{
 			/*
@@ -273,7 +274,7 @@ btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	do
 	{
 		/* Fetch the first page & tuple */
-		if (_bt_first(scan, ForwardScanDirection))
+		if (_bt_first(scan, ForwardScanDirection, NULL))
 		{
 			/* Save tuple ID, and continue scanning */
 			heapTid = &scan->xs_heaptid;

@@ -94,7 +94,7 @@ _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp)
  */
 BTStack
 _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
-		   int access)
+		   int access, BufferAccessStrategy strategy)
 {
 	BTStack		stack_in = NULL;
 	int			page_access = BT_READ;
@@ -134,7 +134,7 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 		 * opportunity to finish splits of internal pages too.
 		 */
 		*bufP = _bt_moveright(rel, heaprel, key, *bufP, (access == BT_WRITE),
-							  stack_in, page_access);
+							  stack_in, page_access, strategy);
 
 		/* if this is a leaf page, we're done */
 		page = BufferGetPage(*bufP);
@@ -194,7 +194,7 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 		 * but before we acquired a write lock.  If it has, we may need to
 		 * move right to its new sibling.  Do that.
 		 */
-		*bufP = _bt_moveright(rel, heaprel, key, *bufP, true, stack_in, BT_WRITE);
+		*bufP = _bt_moveright(rel, heaprel, key, *bufP, true, stack_in, BT_WRITE, strategy);
 	}
 
 	return stack_in;
@@ -238,7 +238,8 @@ _bt_moveright(Relation rel,
 			  Buffer buf,
 			  bool forupdate,
 			  BTStack stack,
-			  int access)
+			  int access,
+			  BufferAccessStrategy strategy)
 {
 	Page		page;
 	BTPageOpaque opaque;
@@ -288,7 +289,7 @@ _bt_moveright(Relation rel,
 			}
 
 			if (P_INCOMPLETE_SPLIT(opaque))
-				_bt_finish_split(rel, heaprel, buf, stack);
+				_bt_finish_split(rel, heaprel, buf, stack, strategy);
 			else
 				_bt_relbuf(rel, buf);
 
@@ -873,7 +874,8 @@ _bt_compare(Relation rel,
  * in locating the scan start position.
  */
 bool
-_bt_first(IndexScanDesc scan, ScanDirection dir)
+_bt_first(IndexScanDesc scan, ScanDirection dir,
+		  BufferAccessStrategy strategy)
 {
 	Relation	rel = scan->indexRelation;
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
@@ -1385,7 +1387,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * position ourselves on the target leaf page.
 	 */
 	Assert(ScanDirectionIsBackward(dir) == inskey.backward);
-	stack = _bt_search(rel, NULL, &inskey, &buf, BT_READ);
+	stack = _bt_search(rel, NULL, &inskey, &buf, BT_READ, strategy);
 
 	/* don't need to keep the stack around... */
 	_bt_freestack(stack);
@@ -1404,7 +1406,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 		if (IsolationIsSerializable())
 		{
 			PredicateLockRelation(rel, scan->xs_snapshot);
-			stack = _bt_search(rel, NULL, &inskey, &buf, BT_READ);
+			stack = _bt_search(rel, NULL, &inskey, &buf, BT_READ, strategy);
 			_bt_freestack(stack);
 		}
 
