@@ -58,7 +58,7 @@ static bool _bt_lock_subtree_parent(Relation rel, Relation heaprel,
 									Buffer *subtreeparent, OffsetNumber *poffset,
 									BlockNumber *topparent,
 									BlockNumber *topparentrightsib,
-									BufferAccessStrategy *strategy);
+									BufferAccessStrategy strategy);
 static void _bt_pendingfsm_add(BTVacState *vstate, BlockNumber target,
 							   FullTransactionId safexid);
 
@@ -2831,7 +2831,7 @@ _bt_lock_subtree_parent(Relation rel, Relation heaprel, BlockNumber child,
 						BTStack stack, Buffer *subtreeparent,
 						OffsetNumber *poffset, BlockNumber *topparent,
 						BlockNumber *topparentrightsib,
-						BufferAccessStrategy *strategy)
+						BufferAccessStrategy strategy)
 {
 	BlockNumber parent,
 				leftsibparent;
