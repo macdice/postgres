@@ -944,17 +944,16 @@ StrategyWriteBehind(BufferAccessStrategy strategy, Buffer pinned_buffer)
 			ForkNumber forknumber;
 			BlockNumber blocknumber;
 
-			BufferGetTag(strategy->buffers[write_behind],
-						 &rlocator,
-						 &forknumber,
-						 &blocknumber);
+			rlocator = BufTagGetRelFileLocator(&desc->tag);
+			forknumber = BufTagGetForkNum(&desc->tag);
+			blocknumber = desc->tag.blockNum;
 			UnlockBufHdr(desc, buf_state);
 			if (!ReadRecentBuffer(rlocator,
 								  forknumber,
 								  blocknumber,
 								  strategy->buffers[write_behind]))
 			{
-				/* Someone evicted it between the two statements above. */
+				/* Someone evicted it between the two statements above! */
 				continue;
 			}
 		}
@@ -1006,7 +1005,7 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 
 	/*
 	 * If StrategyWriteBehind() started writing this buffer out, we now have
-	 * to make sure taht is finished and the buffer is unpinned, or expand the
+	 * to make sure that is finished and the buffer is unpinned, or expand the
 	 * ring, that is, insert new empty slots at current, to avoid stalling.
 	 */
 	if (write_stream_handle_is_valid(strategy->write_stream_handles[strategy->current]))
@@ -1052,8 +1051,8 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 
 	/*
 	 * See if we need to initiate any new write-behind activity.  This may
-	 * look expensive, but it pays off by avoiding the equivalent work done in
-	 * smaller units when we crash into dirty data...
+	 * look expensive, but it is intended to pay off by avoiding the
+	 * equivalent work being done in smaller units when we crash into dirty data.
 	 */
 	StrategyWriteBehind(strategy, InvalidBuffer);
 
