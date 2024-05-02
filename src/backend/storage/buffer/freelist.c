@@ -1046,6 +1046,12 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 		}
 
 		/*
+		 * XXX THE PROBLEM is that the above code might have eaten the nice
+		 * reserved private refcount that GetVictimBuffer() carefully set up.
+		 * So then PinBuffer_Locked() dies.  Doh.
+		 */
+
+		/*
 		 * Make the handle invalid, so that there is a chance of the ring
 		 * doing down in size if the consumer of buffers begins to scan
 		 * buffers without returning them marked dirty.
