@@ -1932,6 +1932,10 @@ again:
 	 */
 	CheckBufferIsPinnedOnce(buf);
 
+	/* Try to make sure we avoid the expensive dirty path below. */
+	if (from_ring)
+		StrategyWriteBehind(strategy);
+
 	/*
 	 * If the buffer was dirty, try to write it out.  There is a race
 	 * condition here, in that someone might dirty it after we released the

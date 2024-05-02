@@ -811,7 +811,7 @@ GrowStrategyRing(BufferAccessStrategy strategy)
  * stream out before they're re-used.
  */
 static void
-StrategyWriteBehind(BufferAccessStrategy strategy, Buffer pinned_buffer)
+StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
 {
 	while (strategy->write_behind != strategy->current)
 	{
@@ -964,6 +964,12 @@ StrategyWriteBehind(BufferAccessStrategy strategy, Buffer pinned_buffer)
 	}
 }
 
+void
+StrategyWriteBehind(BufferAccessStrategy strategy)
+{
+	StrategyWriteBehindImpl(strategy, InvalidBuffer);
+}
+
 /*
  * GetBufferFromRing -- returns a buffer from the ring, or NULL if the
  *		ring is empty / not usable.
@@ -1048,13 +1054,6 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 			   0,
 			   sizeof(WriteStreamWriteHandle));
 	}
-
-	/*
-	 * See if we need to initiate any new write-behind activity.  This may
-	 * look expensive, but it is intended to pay off by avoiding the
-	 * equivalent work being done in smaller units when we crash into dirty data.
-	 */
-	StrategyWriteBehind(strategy, InvalidBuffer);
 
 	/*
 	 * If the buffer is pinned we cannot use it under any circumstances.
@@ -1180,7 +1179,7 @@ StrategyReleaseBuffer(BufferAccessStrategy strategy, Buffer buffer)
 	if (strategy &&
 		strategy->buffers[strategy->write_behind] != buffer)
 	{
-		StrategyWriteBehind(strategy, buffer);
+		StrategyWriteBehindImpl(strategy, buffer);
 		return;
 	}
 
