@@ -807,8 +807,8 @@ GrowStrategyRing(BufferAccessStrategy strategy)
  *
  * In the ideal case, we are called with a pinned buffer that the consumer of
  * buffers has just finished modifying.  Otherwise, we have a fallback
- * strategy that is more conservative, but tries to find dirty buffers to
- * stream out before they're re-used.
+ * strategy that is more conservative, but still tries to find dirty buffers
+ * to stream out to disk before they're re-used.
  */
 static void
 StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
@@ -836,33 +836,40 @@ StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
 
 		/*
 		 * Ideal case: the consumer of buffers is considerate and tells us
-		 * when it has finished modifying a buffer, and gives it back to us
-		 * still pinned in exactly the right order.  We can be agressive about
-		 * write-behind, and skip some header manipulation.  Do we have that
-		 * exact case?
+		 * when it has finished modifying each buffer, and gives it back to us
+		 * still pinned, in exactly the right order.  We can be agressive
+		 * about write-behind, and skip some header manipulation.  Do we have
+		 * that exact case?
 		 */
-		if (pinned_buffer != InvalidBuffer && pinned_buffer == buffer)
+		if (pinned_buffer == buffer)
 		{
+			Assert(pinned_buffer != InvalidBuffer);
+
 			/*
-			 * Peek at unlock buffer header bit without holding lock.  We
-			 * can't use BufferIsDirty() here because we don't hold an
-			 * exclusive content lock.  It's OK to do this directly though,
-			 * because we only want to know if *this* backend called
+			 * Peek at unlock buffer header bit without holding the header
+			 * spinlock.  We can't use BufferIsDirty() here because we don't
+			 * hold an exclusive content lock.  It's OK to do this directly
+			 * though, because we only want to know if *this* backend called
 			 * MarkBufferDirty() recently.  Then we should be able to see that
-			 * flag without lock or memory barriers, and if someone cleared it
-			 * in between then that's OK, we want to skip it here.  This test
+			 * flag without locks or barriers, and if someone cleared it in
+			 * between then that's OK, we want to skip it here.  This test
 			 * makes it OK for generic code paths to call
 			 * StrategyReleaseBuffer() without having to keep track of whether
 			 * they dirtied the buffer.
 			 */
 			desc = GetBufferDescriptor(buffer - 1);
-			if (pg_atomic_read_u32(&desc->state) & BM_DIRTY)
+			buf_state = pg_atomic_read_u32(&desc->state);
+			if (buf_state & BM_DIRTY)
 			{
 				/* Start writing this buffer out. */
 				strategy->write_stream_handles[write_behind] =
 					write_stream_write_buffer(strategy->write_stream, buffer);
 				strategy->write_behind = write_behind;
+
+				/* We have transferred ownership of the pin to the stream. */
+				pinned_buffer = InvalidBuffer;
 			}
+
 			break;
 		}
 
@@ -962,6 +969,14 @@ StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
 		strategy->write_stream_handles[write_behind] =
 			write_stream_write_buffer(strategy->write_stream, buffer);
 	}
+
+	/*
+	 * If we didn't find the buffer that was passed in, it could indicate that
+	 * the caller is releasing buffers out of order, so we fell back to the
+	 * conservative mode of operation.
+	 */
+	if (pinned_buffer != InvalidBuffer)
+		ReleaseBuffer(pinned_buffer);
 }
 
 void
@@ -1173,7 +1188,8 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_r
 /*
  * Return a pinned buffer to a strategy.  Consumers of buffers don't have to
  * call this, but write-behind is more aggressive and efficient if they do
- * this for dirtied buffers.
+ * this for dirtied buffers.  In the case of UNLOGGED relations, it allows
+ * write-behind to be performed while the buffer is still pinned.
  */
 void
 StrategyReleaseBuffer(BufferAccessStrategy strategy, Buffer buffer)
@@ -1181,6 +1197,10 @@ StrategyReleaseBuffer(BufferAccessStrategy strategy, Buffer buffer)
 	/*
 	 * If enabled for this strategy, and this isn't a repeated release of the
 	 * same buffer, then we can try to implement write-behind.
+	 *
+	 * Note that if we are getting repeated calls for the same buffer, the
+	 * usage count will go above 1 and the buffer will soon be booted out of
+	 * the ring for being too hot anyway.
 	 */
 	if (strategy &&
 		strategy->buffers[strategy->write_behind] != buffer)
@@ -1190,11 +1210,9 @@ StrategyReleaseBuffer(BufferAccessStrategy strategy, Buffer buffer)
 	}
 
 	/*
-	 * Write-behind is not possible.  Just release the buffer immediately.
-	 * (If we really are getting repeated calls for the same buffer, the
-	 * caller has a non-ideal access pattern that will get buffers booted out
-	 * of the ring for being too hot anyway, but at least we might stream data
-	 * out more efficiently while also failing at scan resistance...)
+	 * Immediate write-behind is not possible, so release the pin.
+	 * StrategyWriteBehind() might try later, but it will have to re-acquire
+	 * the pin.
 	 */
 	ReleaseBuffer(buffer);
 }
