@@ -1906,6 +1906,13 @@ GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context)
 	bool		from_ring;
 
 	/*
+	 * If the next buffer that a strategy would give us still has write-behind
+	 * in progress, finish that.
+	 */
+	if (strategy)
+		StrategyFinishWriteBehind(strategy);
+
+	/*
 	 * Ensure, while the spinlock's not yet held, that there's a free refcount
 	 * entry, and a resource owner slot for the pin.
 	 */
@@ -2045,10 +2052,10 @@ again:
 
 	/*
 	 * Every time we take a buffer from the ring, we also ask the strategy to
-	 * try to clean buffers some distance behind in the ring.
+	 * start trying to clean buffers in the ring.
 	 */
 	if (from_ring)
-		StrategyWriteBehind(strategy);
+		StrategyStartWriteBehind(strategy);
 
 	/* a final set of sanity checks */
 #ifdef USE_ASSERT_CHECKING

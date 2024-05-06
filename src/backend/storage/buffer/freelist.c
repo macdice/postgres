@@ -805,13 +805,13 @@ GrowStrategyRing(BufferAccessStrategy strategy)
 /*
  * Initiate as write-behind, if we can.
  *
- * In the ideal case, this are called with a pinned buffer that the consumer
- * of buffers has just finished modifying.  Otherwise, a conservative fallback
+ * In the ideal case, this is called with a pinned buffer that the consumer of
+ * buffers has just finished modifying.  Otherwise, a conservative fallback
  * approach tries to find dirty buffers to stream out to disk before they're
- * re-used.
+ * re-used, for less co-operative strategy users.
  */
 static void
-StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
+StrategyStartWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
 {
 	while (strategy->write_behind != strategy->current)
 	{
@@ -876,7 +876,8 @@ StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
 		/*
 		 * Otherwise we have to be a lot more conservative.  We stay a good
 		 * distance behind the 'current' end of the ring, until it looks like
-		 * the consumer of buffers is very likely to be finished with it.
+		 * the consumer of buffers is very likely to be finished modifying it,
+		 * if it is going to.
 		 */
 		distance = strategy->current - write_behind;
 		if (distance < 0)
@@ -979,10 +980,77 @@ StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
 		ReleaseBuffer(pinned_buffer);
 }
 
+/*
+ * Initiate as write-behind, if we can.
+  */
 void
-StrategyWriteBehind(BufferAccessStrategy strategy)
+StrategyStartWriteBehind(BufferAccessStrategy strategy)
 {
-	StrategyWriteBehindImpl(strategy, InvalidBuffer);
+	StrategyStartWriteBehindImpl(strategy, InvalidBuffer);
+}
+
+/*
+ * Before calling StrategyGetBuffer(), make sure that any write-behind for the
+ * next buffer is finished.  Usually it should be, but this makes sure of it.
+ *
+ * The reason this can't be done inside GetBufferFromRing() is that
+ * GetVictimBuffer()'s reserved private pin entry might be used up by this
+ * code, but freelist.c can't reserve another one due to the current division
+ * of labor and linkage.
+ */
+void
+StrategyFinishWriteBehind(BufferAccessStrategy strategy)
+{
+	int next;
+
+	next = strategy->current + 1;
+	if (next == strategy->nbuffers)
+		next = 0;
+
+	/*
+	 * If StrategyStartWriteBehind() started writing this buffer out, we now
+	 * have to make sure that is finished and the buffer is unpinned, or
+	 * expand the ring, that is, insert new empty slots at "current", to avoid
+	 * stalling.
+	 */
+	if (write_stream_handle_is_valid(strategy->write_stream_handles[next]))
+	{
+		/*
+		 * Yes.  Since the consumer of buffers is apparently still generating
+		 * dirty buffers, remember not to shrink the ring in this cycle.
+		 */
+		strategy->cycle_preserve_ring_size = strategy->cycle;
+
+		if (strategy->nbuffers == strategy->nbuffers_max)
+		{
+			/*
+			 * We are at maximum ring size, so if we have to flush the WAL to
+			 * finish the write, then so be it.
+			 */
+			write_stream_wait(strategy->write_stream,
+							  strategy->write_stream_handles[next]);
+		}
+		else
+		{
+			/*
+			 * Try to complete the write without stalling, since we still have
+			 * space to expand the ring instead.  If that happens, 'next' now
+			 * points to an empty slot.
+			 */
+			if (write_stream_wait_no_stall(strategy->write_stream,
+										   strategy->write_stream_handles[next]))
+				GrowStrategyRing(strategy);
+		}
+
+		/*
+		 * Make the handle invalid, so that there is a chance of the ring
+		 * doing down in size if the consumer of buffers begins to scan
+		 * buffers without returning them marked dirty.
+		 */
+		memset(&strategy->write_stream_handles[next],
+			   0,
+			   sizeof(WriteStreamWriteHandle));
+	}
 }
 
 /*
@@ -1023,52 +1091,6 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 	bufnum = strategy->buffers[strategy->current];
 	if (bufnum == InvalidBuffer)
 		return NULL;
-
-	/*
-	 * If StrategyWriteBehind() started writing this buffer out, we now have
-	 * to make sure that is finished and the buffer is unpinned, or expand the
-	 * ring, that is, insert new empty slots at current, to avoid stalling.
-	 */
-	if (write_stream_handle_is_valid(strategy->write_stream_handles[strategy->current]))
-	{
-		/*
-		 * Yes.  Since the consumer of buffers is apparently still generating
-		 * dirty buffers, remember not to shrink the ring in this cycle.
-		 */
-		strategy->cycle_preserve_ring_size = strategy->cycle;
-
-		if (strategy->nbuffers == strategy->nbuffers_max)
-		{
-			/*
-			 * We are at maximum ring size, so if we have to flush the WAL to
-			 * finish the write, then so be it.
-			 */
-			write_stream_wait(strategy->write_stream,
-							  strategy->write_stream_handles[strategy->current]);
-		}
-		else
-		{
-			/*
-			 * Try to complete the write without stalling, since we still have
-			 * space to expand the ring instead.
-			 */
-			if (write_stream_wait_no_stall(strategy->write_stream,
-										   strategy->write_stream_handles[strategy->current]))
-			{
-				GrowStrategyRing(strategy);
-				return NULL;
-			}
-		}
-
-		/*
-		 * Make the handle invalid, so that there is a chance of the ring
-		 * doing down in size if the consumer of buffers begins to scan
-		 * buffers without returning them marked dirty.
-		 */
-		memset(&strategy->write_stream_handles[strategy->current],
-			   0,
-			   sizeof(WriteStreamWriteHandle));
-	}
 
 	/*
 	 * If the buffer is pinned we cannot use it under any circumstances.
@@ -1195,11 +1217,13 @@ StrategyReleaseBuffer(BufferAccessStrategy strategy, Buffer buffer)
 	 * Note that if we are getting repeated calls for the same buffer, the
 	 * usage count will go above 1 and the buffer will soon be booted out of
 	 * the ring for being too hot anyway.
+	 *
+	 * XXX So maybe we shouldn't do that test?
 	 */
 	if (strategy &&
 		strategy->buffers[strategy->write_behind] != buffer)
 	{
-		StrategyWriteBehindImpl(strategy, buffer);
+		StrategyStartWriteBehindImpl(strategy, buffer);
 		return;
 	}
 
