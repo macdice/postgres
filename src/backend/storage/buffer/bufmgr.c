@@ -1932,10 +1932,6 @@ again:
 	 */
 	CheckBufferIsPinnedOnce(buf);
 
-	/* Try to make sure we avoid the expensive dirty path below. */
-	if (from_ring)
-		StrategyWriteBehind(strategy);
-
 	/*
 	 * If the buffer was dirty, try to write it out.  There is a race
 	 * condition here, in that someone might dirty it after we released the
@@ -1981,6 +1977,11 @@ again:
 		 * and write/reuse the buffer or to choose another victim.  We need a
 		 * lock to inspect the page LSN, so this can't be done inside
 		 * StrategyGetBuffer.
+		 *
+		 * Note: It should be unlikely that we encounted a dirty buffer from a
+		 * strategy ring, as StrategyWriteBehind() should clean buffers ahead
+		 * of time.  It is still possible though, because they could be
+		 * dirtied by someone else.
 		 */
 		if (strategy != NULL)
 		{
@@ -2041,6 +2042,13 @@ again:
 		UnpinBuffer(buf_hdr);
 		goto again;
 	}
+
+	/*
+	 * Every time we take a buffer from the ring, we also ask the strategy to
+	 * try to clean buffers some distance behind in the ring.
+	 */
+	if (from_ring)
+		StrategyWriteBehind(strategy);
 
 	/* a final set of sanity checks */
 #ifdef USE_ASSERT_CHECKING

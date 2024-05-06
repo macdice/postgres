@@ -803,12 +803,12 @@ GrowStrategyRing(BufferAccessStrategy strategy)
 }
 
 /*
- * Initiate as much write-behind as we can.
+ * Initiate as write-behind, if we can.
  *
- * In the ideal case, we are called with a pinned buffer that the consumer of
- * buffers has just finished modifying.  Otherwise, we have a fallback
- * strategy that is more conservative, but still tries to find dirty buffers
- * to stream out to disk before they're re-used.
+ * In the ideal case, this are called with a pinned buffer that the consumer
+ * of buffers has just finished modifying.  Otherwise, a conservative fallback
+ * approach tries to find dirty buffers to stream out to disk before they're
+ * re-used.
  */
 static void
 StrategyWriteBehindImpl(BufferAccessStrategy strategy, Buffer pinned_buffer)
@@ -1059,12 +1059,6 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 				return NULL;
 			}
 		}
-
-		/*
-		 * XXX THE PROBLEM is that the above code might have eaten the nice
-		 * reserved private refcount that GetVictimBuffer() carefully set up.
-		 * So then PinBuffer_Locked() dies.  Doh.
-		 */
 
 		/*
 		 * Make the handle invalid, so that there is a chance of the ring
