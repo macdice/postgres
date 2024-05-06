@@ -753,7 +753,7 @@ FreeAccessStrategy(BufferAccessStrategy strategy)
 			 * that we don't generate extra writes.  That way we avoid
 			 * generating I/O when only a small amount of data is touched.
 			 */
-			write_stream_reset(strategy->write_stream);
+			//write_stream_reset(strategy->write_stream);
 			write_stream_end(strategy->write_stream);
 		}
 		pfree(strategy);
