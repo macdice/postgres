@@ -6065,3 +6065,26 @@ EvictUnpinnedBuffer(Buffer buf)
 
 	return result;
 }
+
+void
+assign_shared_buffers_active(int newval, void *extra)
+{
+	if (newval < 16)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("shared_buffers_active must be at least 16")));
+
+	if (newval > NBuffers)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("shared_buffers_active must not exceed shared_buffers")));
+
+	NBuffersActive = newval;
+
+	LWLockAcquire(SharedBuffersActiveLock, LW_EXCLUSIVE);
+	
+	elog(NOTICE, "changing active buffer pool size from %d to %d", NBufferActive, newval);
+	elog(NOTICE, "telling all backends to stop allocating shared buffer IDs >= %d", newval);
+	elog(NOTICE, "waiting for all backends to acknowlege...");
+	elog(NOTICE, "trying to invalid all existing buffer IDs >= %d...", newval);
+}

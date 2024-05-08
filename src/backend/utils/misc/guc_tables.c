@@ -2249,13 +2249,24 @@ struct config_int ConfigureNamesInt[] =
 	 */
 	{
 		{"shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
-			gettext_noop("Sets the number of shared memory buffers used by the server."),
+			gettext_noop("Sets the maximum number of shared memory buffers used by the server."),
 			NULL,
 			GUC_UNIT_BLOCKS
 		},
 		&NBuffers,
 		16384, 16, INT_MAX / 2,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"shared_buffers_active", PGC_SUSET, RESOURCES_MEM,
+			gettext_noop("Sets the number of active shared memory buffers used by the server."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&NBuffersActive,
+		-1, 16, INT_MAX / 2,
+		NULL, assign_shared_buffers_active, NULL
 	},
 
 	{

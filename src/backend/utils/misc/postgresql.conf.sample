@@ -135,8 +135,9 @@
 
 # - Memory -
 
-#shared_buffers = 128MB			# min 128kB
+#max_shared_buffers = -1		# -1 for the same as shared_buffers
 					# (change requires restart)
+#shared_buffers = 128MB			# min 128kB
 #huge_pages = try			# on, off, or try
 					# (change requires restart)
 #huge_page_size = 0			# zero for system default

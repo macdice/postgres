@@ -814,3 +814,14 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_r
 
 	return true;
 }
+
+bool
+StrategySetActiveBuffers(int nbuffers)
+{
+	if (StrategyControl == NULL)
+		return false;
+	if (StrategyControl->activeBuffers == nbuffers)
+		return false;
+	StrategyControl->activeBuffers = nbuffers;
+	return true;
+}

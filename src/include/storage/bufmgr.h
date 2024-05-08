@@ -151,6 +151,7 @@ struct SMgrRelationData;
 
 /* in globals.c ... this duplicates miscadmin.h */
 extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int NBuffersActive;
 
 /* in bufmgr.c */
 extern PGDLLIMPORT bool zero_damaged_pages;
@@ -306,6 +307,8 @@ extern void LimitAdditionalPins(uint32 *additional_pins);
 extern void LimitAdditionalLocalPins(uint32 *additional_pins);
 
 extern bool EvictUnpinnedBuffer(Buffer buf);
+
+extern void assign_shared_buffers_active(int newval, void *extra);
 
 /* in buf_init.c */
 extern void InitBufferPool(void);
