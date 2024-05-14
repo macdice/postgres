@@ -3131,6 +3131,7 @@ WalUsage
 WalWriteMethod
 WalWriteMethodOps
 Walfile
+Win32LocaleTableEntry
 WindowAgg
 WindowAggPath
 WindowAggState

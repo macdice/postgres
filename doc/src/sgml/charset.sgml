@@ -630,8 +630,58 @@ SELECT 'N-45' &lt; 'N-123' COLLATE mycollation5 as result;
     mailing list.
    </para>
   </sect2>
- </sect1>
 
+  <sect2 id="locale-windows">
+   <title>Windows locale names</title>
+   <para>
+    Before adopting locale names based on BCP 47 language tags, Windows
+    used names spelled out in full English words.  The traditional names are
+    still supported by Windows and PostgreSQL, but are not recommended.  They
+    can change unexpectedly in operating system updates, which can cause PostgreSQL to
+    fail.  It may have references to the old name in <literal>postgresql.conf</literal>
+    and the <link
+    linkend="catalog-pg-database"><structname>pg_database</structname></link>
+    catalog.  They also sometimes have non-ASCII characters, which are
+    not allowed in shared catalog tables.
+   </para>
+   <para>
+    To fix a cluster that is negatively affected by a renamed locale, a mapping
+    file can be installed to rename locales on the fly.  Its full path can either
+    be provided in the environment variable <literal>PG_SETLOCALE_MAP</literal>,
+    or in a file named <filename>share/setlocale.map</filename> in the installation
+    directory.
+   </para>
+   <para>
+    Each non-comment line of the file has a pattern and a replacement string
+    separated by an equal sign.  The pattern can contain
+    <literal>?</literal> wildcard characters, and optionally a <literal>*</literal>
+    wildcard to match any sequence.  The replacement name can be any sort of locale
+    name, including a stable BCP 47 locale name.  For example:
+<screen>
+# "Turkish_Turkey.1254" changed to "Turkish_Türkiye.1254" in a Windows update.
+# If either of these names is the database default, convert them to the
+# stable BCP 47 equivalent on the fly.  Use a wildcard to detect both
+# names and avoid encoding problems in the name itself.
+Turkish_T*.1254=tr-TR.1254
+</screen>
+   </para>
+   <para>
+    The mapping file is only intended to address renaming problems.  Mapping a
+    locale name to an incompatible one could cause index corruption, due to
+    differing collation order.
+   </para>
+   <para>
+    Unless a file is installed by the user, PostgreSQL behaves as though the
+    following file were installed, for historical reasons:
+<screen>
+Hong Kong S.A.R.=HKG
+.A.E.=ARE
+Chinese (Traditional)_Maca? S.A.R..950=ZHM
+Chinese_Maca? S.A.R..950=ZHM
+</screen>
+   </para>
+  </sect2>
+ </sect1>
 
  <sect1 id="collation">
   <title>Collation Support</title>
