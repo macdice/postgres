@@ -1000,6 +1000,8 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	event->user_data = user_data;
 #ifdef WIN32
 	event->reset = false;
+	event->peek_eof = true;
+	event->got_eof = false;
 #endif
 
 	if (events == WL_LATCH_SET)
@@ -1990,13 +1992,78 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 
 	/* Reset any wait events that need it */
 	for (cur_event = set->events;
-		 cur_event < (set->events + set->nevents);
+		 cur_event < (set->events + set->nevents) && returned_events < nevents;
 		 cur_event++)
 	{
 		if (cur_event->reset)
 		{
 			WaitEventAdjustWin32(set, cur_event);
 			cur_event->reset = false;
+		}
+
+		if (cur_event->events & WL_SOCKET_READABLE)
+		{
+			/*
+			 * We associate the socket with a new event handle for each
+			 * WaitEventSet.  FD_CLOSE is only generated once if the other end
+			 * closes gracefully.  Therefore we might miss the FD_CLOSE
+			 * notification, if it was delivered to another event after we
+			 * stopped waiting for it.  We can close that race by peeking into
+			 * the socket after setting up this handle to receive
+			 * notifications, and before entering the sleep.
+			 */
+			if (cur_event->peek_eof)
+			{
+				char		c;
+				WSABUF		buf;
+				DWORD		received;
+				DWORD		flags;
+
+				/*
+				 * Don't do this next time, it's only needed once to smooth
+				 * over the transition from one WaitEventSet's event handle to
+				 * another's.
+				 */
+				cur_event->peek_eof = false;
+
+				/*
+				 * Don't worry about error handling, as those will cause a
+				 * wakeup below and be discovered by a later non-peek recv()
+				 * call.
+				 */
+				buf.buf = &c;
+				buf.len = 1;
+				flags = MSG_PEEK;
+				if (WSARecv(cur_event->fd, &buf, 1, &received, &flags, NULL, NULL) == 0)
+				{
+					if (received == 0)
+						cur_event->got_eof = true;
+					occurred_events->pos = cur_event->pos;
+					occurred_events->user_data = cur_event->user_data;
+					occurred_events->events = WL_SOCKET_READABLE;
+					occurred_events->fd = cur_event->fd;
+					cur_event->reset = true;
+					occurred_events++;
+					returned_events++;
+					continue;
+				}
+			}
+
+			/*
+			 * We also need to make it sticky, in case the caller decides to
+			 * wait twice in a row without calling recv() in between.
+			 */
+			if (cur_event->got_eof)
+			{
+				occurred_events->pos = cur_event->pos;
+				occurred_events->user_data = cur_event->user_data;
+				occurred_events->events = WL_SOCKET_READABLE;
+				occurred_events->fd = cur_event->fd;
+				cur_event->reset = true;
+				occurred_events++;
+				returned_events++;
+				continue;
+			}
 		}
 
 		/*
@@ -2027,10 +2094,19 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 				occurred_events->user_data = cur_event->user_data;
 				occurred_events->events = WL_SOCKET_WRITEABLE;
 				occurred_events->fd = cur_event->fd;
-				return 1;
+				occurred_events++;
+				returned_events++;
+				continue;
 			}
 		}
 	}
+
+	/*
+	 * If the above special cases generated any events, return them
+	 * immediately.
+	 */
+	if (returned_events > 0)
+		return returned_events;
 
 	/*
 	 * Sleep.
@@ -2164,6 +2240,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			{
 				/* EOF/error, so signal all caller-requested socket flags */
 				occurred_events->events |= (cur_event->events & WL_SOCKET_MASK);
+				cur_event->got_eof = true;
 			}
 
 			if (occurred_events->events != 0)
