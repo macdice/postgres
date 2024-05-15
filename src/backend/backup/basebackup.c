@@ -34,6 +34,7 @@
 #include "pgstat.h"
 #include "pgtar.h"
 #include "port.h"
+#include "port/pg_bitutils.h"
 #include "postmaster/syslogger.h"
 #include "postmaster/walsummarizer.h"
 #include "replication/walsender.h"
@@ -45,6 +46,7 @@
 #include "storage/reinit.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/relcache.h"
 #include "utils/resowner.h"
@@ -1198,13 +1200,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 	bool		isGlobalDir = false;
 	Oid			dboid = InvalidOid;
 	BlockNumber *relative_block_numbers = NULL;
-
-	/*
-	 * Since this array is relatively large, avoid putting it on the stack.
-	 * But we don't need it at all if this is not an incremental backup.
-	 */
-	if (ib != NULL)
-		relative_block_numbers = palloc(sizeof(BlockNumber) * RELSEG_SIZE);
+	size_t		relative_block_numbers_size = 0;
 
 	/*
 	 * Determine if the current path is a database directory that can contain
@@ -1477,6 +1473,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 			unsigned	truncation_block_length = 0;
 			char		tarfilenamebuf[MAXPGPATH * 2];
 			char	   *tarfilename = pathbuf + basepathlen + 1;
+			size_t		stat_blocks;
 			FileBackupMethod method = BACK_UP_FILE_FULLY;
 
 			if (ib != NULL && isRelationFile)
@@ -1497,6 +1494,48 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 					else
 						relspcoid = DEFAULTTABLESPACE_OID;
 					lookup_path = pstrdup(tarfilename);
+				}
+
+				/* If we have a block number array but it's too small, free. */
+				stat_blocks = statbuf.st_size / BLCKSZ;
+				if (relative_block_numbers &&
+					relative_block_numbers_size < stat_blocks)
+				{
+					pfree(relative_block_numbers);
+					relative_block_numbers = NULL;
+				}
+
+				/*
+				 * Make a new block number buffer if we need one, being
+				 * careful to avoid allocating memory for unexpectedly
+				 * oversized files. Also avoid exceeding the artifical
+				 * allocation size cap MaxAllocSize.
+				 *
+				 * We could use huge allocations to get around that, and if we
+				 * consider changing that, we should remember to clamp instead
+				 * for SIZE_MAX, for the sake of 32 bit systems.
+				 *
+				 * If we decline to allocate an array here,
+				 * GetFileBackupMethod will force a full backup.
+				 */
+				if (!relative_block_numbers &&
+					stat_blocks > 0 &&
+					stat_blocks <= RELSEG_SIZE &&
+					stat_blocks * sizeof(BlockNumber) <= MaxAllocSize)
+				{
+					uint64		size;
+
+					/*
+					 * Round up to next power of two, to amortize reallocation
+					 * overheads.  Clamp so we don't exceed the maximum
+					 * potential useful size, or the allocation limit.
+					 */
+					size = pg_nextpower2_64(stat_blocks);
+					size = Min(RELSEG_SIZE, size);
+					size = Min(MaxAllocSize / sizeof(BlockNumber), size);
+
+					relative_block_numbers = palloc(sizeof(BlockNumber) * size);
+					relative_block_numbers_size = size;
 				}
 
 				method = GetFileBackupMethod(ib, lookup_path, dboid, relspcoid,

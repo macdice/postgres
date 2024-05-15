@@ -736,7 +736,7 @@ GetIncrementalFilePath(Oid dboid, Oid spcoid, RelFileNumber relfilenumber,
  * an incremental file in the backup instead of the entire file. On return,
  * *num_blocks_required will be set to the number of blocks that need to be
  * sent, and the actual block numbers will have been stored in
- * relative_block_numbers, which should be an array of at least RELSEG_SIZE.
+ * relative_block_numbers, which should be an array of at least size / BLCKSZ.
  * In addition, *truncation_block_length will be set to the value that should
  * be included in the incremental file.
  */
@@ -768,10 +768,12 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	Assert(RelFileNumberIsValid(relfilenumber));
 
 	/*
-	 * If the file size is too large or not a multiple of BLCKSZ, then
+	 * If the file size is too large or not a multiple of BLCKSZ, or the
+	 * caller was unable to allocate a suitably sized block number array, then
 	 * something weird is happening, so give up and send the whole file.
 	 */
-	if ((size % BLCKSZ) != 0 || size / BLCKSZ > RELSEG_SIZE)
+	if ((size % BLCKSZ) != 0 || size / BLCKSZ > RELSEG_SIZE ||
+		!relative_block_numbers)
 		return BACK_UP_FILE_FULLY;
 
 	/*
