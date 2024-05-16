@@ -65,7 +65,7 @@ task:
     CPUS: 4
     BUILD_JOBS: 8
     TEST_JOBS: 8
-    IMAGE_FAMILY: pg-ci-bullseye
+    IMAGE_FAMILY: pg-ci-bookworm
     CCACHE_DIR: ${CIRRUS_WORKING_DIR}/ccache_dir
     # no options enabled, should be small
     CCACHE_MAXSIZE: "150M"
@@ -243,7 +243,7 @@ task:
     CPUS: 4
     BUILD_JOBS: 4
     TEST_JOBS: 8 # experimentally derived to be a decent choice
-    IMAGE_FAMILY: pg-ci-bullseye
+    IMAGE_FAMILY: pg-ci-bookworm
 
     CCACHE_DIR: /tmp/ccache_dir
     DEBUGINFOD_URLS: "https://debuginfod.debian.net"
@@ -314,7 +314,7 @@ task:
     #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
 
   matrix:
-    - name: Linux - Debian Bullseye - Autoconf
+    - name: Linux - Debian Bookworm - Autoconf
 
       env:
         SANITIZER_FLAGS: -fsanitize=address
@@ -348,7 +348,7 @@ task:
       on_failure:
         <<: *on_failure_ac
 
-    - name: Linux - Debian Bullseye - Meson
+    - name: Linux - Debian Bookworm - Meson
 
       env:
         CCACHE_MAXSIZE: "400M" # tests two different builds
@@ -364,24 +364,7 @@ task:
             build
         EOF
 
-      # Also build & test in a 32bit build - it's gotten rare to test that
-      # locally.
-      configure_32_script: |
-        su postgres <<-EOF
-          export CC='ccache gcc -m32'
-          meson setup \
-            --buildtype=debug \
-            -Dcassert=true -Dinjection_points=true \
-            ${LINUX_MESON_FEATURES} \
-            -Dllvm=disabled \
-            --pkg-config-path /usr/lib/i386-linux-gnu/pkgconfig/ \
-            -DPERL=perl5.32-i386-linux-gnu \
-            -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
-            build-32
-        EOF
-
       build_script: su postgres -c 'ninja -C build -j${BUILD_JOBS}'
-      build_32_script: su postgres -c 'ninja -C build-32 -j${BUILD_JOBS}'
 
       upload_caches: ccache
 
@@ -392,16 +375,6 @@ task:
         EOF
         # so that we don't upload 64bit logs if 32bit fails
         rm -rf build/
-
-      # There's currently no coverage of icu with LANG=C in the buildfarm. We
-      # can easily provide some here by running one of the sets of tests that
-      # way. Newer versions of python insist on changing the LC_CTYPE away
-      # from C, prevent that with PYTHONCOERCECLOCALE.
-      test_world_32_script: |
-        su postgres <<-EOF
-          ulimit -c unlimited
-          PYTHONCOERCECLOCALE=0 LANG=C meson test $MTEST_ARGS -C build-32 --num-processes ${TEST_JOBS}
-        EOF
 
       on_failure:
         <<: *on_failure_meson
@@ -652,7 +625,7 @@ task:
   env:
     CPUS: 4
     BUILD_JOBS: 4
-    IMAGE_FAMILY: pg-ci-bullseye
+    IMAGE_FAMILY: pg-ci-bookworm
 
     # Use larger ccache cache, as this task compiles with multiple compilers /
     # flag combinations
