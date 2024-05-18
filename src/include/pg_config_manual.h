@@ -140,6 +140,7 @@
 #if defined(WIN32) && !defined(__CYGWIN__)
 #define EXEC_BACKEND
 #endif
+#define EXEC_BACKEND
 
 /*
  * USE_POSIX_FADVISE controls whether Postgres will attempt to use the
