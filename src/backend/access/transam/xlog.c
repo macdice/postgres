@@ -568,6 +568,10 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
  */
 static ControlFileData *ControlFile = NULL;
 
+#ifdef EXEC_BACKEND
+static ControlFileData *ProtoControlFile = NULL;
+#endif
+
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
  * multiple evaluation!
@@ -686,6 +690,7 @@ static bool PerformRecoveryXLogAction(void);
 static void InitControlFile(uint64 sysidentifier);
 static void WriteControlFile(void);
 static void ReadControlFile(void);
+static void ScanControlFile(void);
 static void UpdateControlFile(void);
 static char *str_time(pg_time_t tnow);
 
@@ -4309,9 +4314,7 @@ WriteControlFile(void)
 static void
 ReadControlFile(void)
 {
-	pg_crc32c	crc;
 	int			fd;
-	static char wal_segsz_str[20];
 	int			r;
 
 	/*
@@ -4343,6 +4346,15 @@ ReadControlFile(void)
 	pgstat_report_wait_end();
 
 	close(fd);
+
+	ScanControlFile();
+}
+
+static void
+ScanControlFile(void)
+{
+	static char wal_segsz_str[20];
+	pg_crc32c	crc;
 
 	/*
 	 * Check for expected pg_control format version.  If this is wrong, the
@@ -4815,7 +4827,32 @@ LocalProcessControlFile(bool reset)
 	Assert(reset || ControlFile == NULL);
 	ControlFile = palloc(sizeof(ControlFileData));
 	ReadControlFile();
+
+#ifdef EXEC_BACKEND
+	/* We need to be able to give this to subprocesses. */
+	ProtoControlFile = ControlFile;
+#endif
 }
+
+#ifdef EXEC_BACKEND
+void
+ExportProtoControlFile(ControlFileData *copy)
+{
+	*copy = *ProtoControlFile;
+}
+
+/*
+ * Like LocalProcessControlFile(), but used early in EXEC_BACKEND children's
+ * startup.  This receives the same file that the postmaster first read.
+ */
+void
+ImportProtoControlFile(const ControlFileData *copy)
+{
+	ControlFile = palloc(sizeof(ControlFileData));
+	*ControlFile = *copy;
+	ScanControlFile();
+}
+#endif
 
 /*
  * Get the wal_level from the control file. For a standby, this value should be
@@ -4935,7 +4972,12 @@ XLOGShmemInit(void)
 	if (localControlFile)
 	{
 		memcpy(ControlFile, localControlFile, sizeof(ControlFileData));
+#ifdef EXEC_BACKEND
+		/* We still hold a reference to give to subprocesses. */
+		Assert(ProtoControlFile == localControlFile);
+#else
 		pfree(localControlFile);
+#endif
 	}
 
 	/*
