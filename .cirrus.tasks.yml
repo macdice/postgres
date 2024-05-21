@@ -552,6 +552,7 @@ task:
 
   setup_additional_packages_script: |
     REM choco install -y --no-progress ...
+    choco install -y --no-progress llvm
 
   setup_hosts_file_script: |
     echo 127.0.0.1 pg-loadbalancetest >> c:\Windows\System32\Drivers\etc\hosts
