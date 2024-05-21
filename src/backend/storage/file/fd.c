@@ -790,7 +790,7 @@ durable_rename(const char *oldfile, const char *newfile, int elevel)
 	 * because it's then guaranteed that either source or target file exists
 	 * after a crash.
 	 */
-	if (fsync_fname_ext(oldfile, false, false, elevel) != 0)
+	if (fsync_fname_ext(oldfile, false, false, data_sync_elevel(elevel)) != 0)
 		return -1;
 
 	fd = OpenTransientFile(newfile, PG_BINARY | O_RDWR);
@@ -815,7 +815,7 @@ durable_rename(const char *oldfile, const char *newfile, int elevel)
 			CloseTransientFile(fd);
 			errno = save_errno;
 
-			ereport(elevel,
+			ereport(data_sync_elevel(elevel),
 					(errcode_for_file_access(),
 					 errmsg("could not fsync file \"%s\": %m", newfile)));
 			return -1;
@@ -844,7 +844,7 @@ durable_rename(const char *oldfile, const char *newfile, int elevel)
 	 * To guarantee renaming the file is persistent, fsync the file with its
 	 * new name, and its containing directory.
 	 */
-	if (fsync_fname_ext(newfile, false, false, elevel) != 0)
+	if (fsync_fname_ext(newfile, false, false, data_sync_elevel(elevel)) != 0)
 		return -1;
 
 	if (fsync_parent_path(newfile, elevel) != 0)
@@ -3885,7 +3885,7 @@ fsync_parent_path(const char *fname, int elevel)
 	if (strlen(parentpath) == 0)
 		strlcpy(parentpath, ".", MAXPGPATH);
 
-	if (fsync_fname_ext(parentpath, true, false, elevel) != 0)
+	if (fsync_fname_ext(parentpath, true, false, data_sync_elevel(elevel)) != 0)
 		return -1;
 
 	return 0;
