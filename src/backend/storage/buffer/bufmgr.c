@@ -6116,7 +6116,7 @@ EvictUnpinnedBuffer(Buffer buf)
 	if ((buf_state & BM_VALID) == 0)
 	{
 		UnlockBufHdr(desc, buf_state);
-		return false;
+		return true; /* XXX */
 	}
 
 	/* Check that it's not pinned already. */

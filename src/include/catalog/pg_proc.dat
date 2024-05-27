@@ -12363,4 +12363,13 @@
   proargtypes => 'int2',
   prosrc => 'gist_stratnum_identity' },
 
+{ oid => '9999', descr => 'set number of active shared buffers',
+  proname => 'pg_set_active_shared_buffers',
+  provolatile => 'v',
+  prorettype => 'void',
+  proargtypes => 'int4',
+  prosrc => 'pg_set_active_shared_buffers',
+  proargmodes => '{i}',
+  proargnames => '{buffers}'},
+
 ]

@@ -15,11 +15,17 @@
  */
 #include "postgres.h"
 
+#include "fmgr.h"
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
+#include "storage/procsignal.h"
+
+#ifndef WIN32
+#include "sys/mman.h"
+#endif
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
@@ -46,6 +52,10 @@ typedef struct
 	 * NOTE: lastFreeBuffer is undefined when firstFreeBuffer is -1 (that is,
 	 * when the list is empty)
 	 */
+
+	/* Resizing. */
+	bool		resize_in_progress;
+	uint32		active_buffers;
 
 	/*
 	 * Statistics.  These counters should be wide enough that they can't
@@ -108,6 +118,9 @@ static inline uint32
 ClockSweepTick(void)
 {
 	uint32		victim;
+	uint32		active_buffers;
+
+	active_buffers = StrategyControl->active_buffers;
 
 	/*
 	 * Atomically move hand ahead one buffer - if there's several processes
@@ -117,12 +130,12 @@ ClockSweepTick(void)
 	victim =
 		pg_atomic_fetch_add_u32(&StrategyControl->nextVictimBuffer, 1);
 
-	if (victim >= NBuffers)
+	if (victim >= active_buffers)
 	{
 		uint32		originalVictim = victim;
 
 		/* always wrap what we look up in BufferDescriptors */
-		victim = victim % NBuffers;
+		victim = victim % active_buffers;
 
 		/*
 		 * If we're the one that just caused a wraparound, force
@@ -150,7 +163,7 @@ ClockSweepTick(void)
 				 */
 				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-				wrapped = expected % NBuffers;
+				wrapped = expected % active_buffers;
 
 				success = pg_atomic_compare_exchange_u32(&StrategyControl->nextVictimBuffer,
 														 &expected, wrapped);
@@ -269,6 +282,8 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	{
 		while (true)
 		{
+			Buffer b;
+
 			/* Acquire the spinlock to remove element from the freelist */
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
@@ -278,6 +293,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 				break;
 			}
 
+			b = StrategyControl->firstFreeBuffer;
 			buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
 			Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
 
@@ -290,6 +306,13 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 			 * we check out this buffer.
 			 */
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+
+			/*
+			 * After shrinking the buffer pool, buffers in the inactive range
+			 * may still be on the free list.  Skip them.
+			 */
+			if (b - 1 >= StrategyControl->active_buffers)
+				continue;
 
 			/*
 			 * If the buffer is pinned or has a nonzero usage_count, we cannot
@@ -511,6 +534,10 @@ StrategyInitialize(bool init)
 		StrategyControl->firstFreeBuffer = 0;
 		StrategyControl->lastFreeBuffer = NBuffers - 1;
 
+		/* Assume all buffers are active initially. */
+		StrategyControl->active_buffers = NBuffers;
+		StrategyControl->resize_in_progress = false;
+
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
 
@@ -713,6 +740,13 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 		return NULL;
 
 	/*
+	 * After shrinking the buffer pool, buffers in the inactive range might
+	 * still be in strategy rings.  Reject them.
+	 */
+	if (bufnum - 1 >= StrategyControl->active_buffers)
+		return NULL;
+
+	/*
 	 * If the buffer is pinned we cannot use it under any circumstances.
 	 *
 	 * If usage_count is 0 or 1 then the buffer is fair game (we expect 1,
@@ -813,4 +847,134 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_r
 	strategy->buffers[strategy->current] = InvalidBuffer;
 
 	return true;
+}
+
+extern Datum
+pg_set_active_shared_buffers(PG_FUNCTION_ARGS);
+
+Datum
+pg_set_active_shared_buffers(PG_FUNCTION_ARGS)
+{
+#ifdef WIN32
+	elog(ERROR, "operation not available on this platform");
+	PG_RETURN_VOID();
+#else
+	int old_buffers;
+	int new_buffers = PG_GETARG_INT32(0);
+
+	/* Can't exceed NBuffers. */
+	if (new_buffers < 16 || new_buffers > NBuffers)
+		elog(ERROR, "out of range");
+
+	LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+	if (StrategyControl->resize_in_progress)
+		elog(ERROR, "resize already in progress");
+	old_buffers = StrategyControl->active_buffers;
+	StrategyControl->resize_in_progress = true;
+	LWLockRelease(BufferPoolResizeLock);
+
+	/* Growing? */
+	if (new_buffers >= old_buffers)
+	{
+#ifdef MADV_POPULATE_WRITE
+		/*
+		 * Linux-only way we can populate the expanded memory range up front
+		 * and handle failure gracefully.
+		 */
+		if (madvise(BufferGetPage(old_buffers),
+					(new_buffers - old_buffers) * BLCKSZ,
+					MY_MADV_POPULATE_WRITE) < 0)
+		{
+			int errno_save = errno;
+
+			LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+			StrategyControl->resize_in_progress = false;
+			LWLockRelease(BufferPoolResizeLock);
+
+			errno = errno_save;
+			elog(ERROR, "could not populate memory pages with madvise(): %m");
+		}
+#endif
+
+		LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+		StrategyControl->active_buffers = new_buffers;
+		StrategyControl->resize_in_progress = false;
+		LWLockRelease(BufferPoolResizeLock);
+
+		elog(NOTICE, "active shared buffers grew %d -> %d", old_buffers, new_buffers);
+
+		PG_RETURN_VOID();
+	}
+
+	/*
+	 * Write the new intended value directly into memory without a lock, so
+	 * that backends stop allocating buffers above this size.
+	 */
+	StrategyControl->active_buffers = new_buffers;
+
+	/*
+	 * Wait until every backend stops must definitely see that value when it
+	 * next allocates a buffer.
+	 */
+	elog(NOTICE, "waiting for all backends to acknowledge new active size");
+	PG_TRY();
+	{
+		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_NOOP));
+	}
+	PG_CATCH();
+	{
+		LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+		StrategyControl->active_buffers = old_buffers;
+		StrategyControl->resize_in_progress = false;
+		LWLockRelease(BufferPoolResizeLock);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/* Invalidate buffers in the range we are deactivating. */
+	elog(NOTICE, "evicting buffers %u..%u", new_buffers, old_buffers);
+	for (Buffer b = new_buffers; b < old_buffers; ++b)
+	{
+		if (!EvictUnpinnedBuffer(b))
+		{
+			LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+			StrategyControl->active_buffers = old_buffers;
+			StrategyControl->resize_in_progress = false;
+			LWLockRelease(BufferPoolResizeLock);
+
+			elog(ERROR, "could not remove buffer %u, it is pinned", b);
+		}
+	}
+
+	/* On Linux we want MADV_REMOVE, but it is non-standard. */
+#ifdef MADV_REMOVE
+#define MY_MADV_REMOVE MADV_REMOVE
+#else
+#define MY_MADV_REMOVE MADV_FREE
+#endif
+
+	/* Ask the kernel to free the memory pages. */
+	if (madvise(BufferGetPage(new_buffers),
+				(old_buffers - new_buffers) * BLCKSZ,
+				MY_MADV_REMOVE) < 0)
+	{
+		int errno_save = errno;
+
+		LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+		StrategyControl->active_buffers = old_buffers;
+		StrategyControl->resize_in_progress = false;
+		LWLockRelease(BufferPoolResizeLock);
+
+		errno = errno_save;
+		elog(ERROR, "could not remove memory pages with madvise(): %m");
+	}
+
+	LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+	StrategyControl->resize_in_progress = false;
+	LWLockRelease(BufferPoolResizeLock);
+
+	elog(NOTICE, "active shared buffers shrank %d -> %d", old_buffers, new_buffers);
+
+	PG_RETURN_VOID();
+#endif
 }
