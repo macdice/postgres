@@ -12185,4 +12185,13 @@
   proargnames => '{summarized_tli,summarized_lsn,pending_lsn,summarizer_pid}',
   prosrc => 'pg_get_wal_summarizer_state' },
 
+{ oid => '9999', descr => 'set number of active shared buffers',
+  proname => 'pg_set_active_shared_buffers',
+  provolatile => 'v',
+  prorettype => 'void',
+  proargtypes => 'int4',
+  prosrc => 'pg_set_active_shared_buffers',
+  proargmodes => '{i}',
+  proargnames => '{buffers}'},
+
 ]
