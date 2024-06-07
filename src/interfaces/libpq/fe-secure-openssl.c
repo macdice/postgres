@@ -1976,7 +1976,7 @@ my_BIO_s_socket(void)
 {
 	BIO_METHOD *res;
 
-	if (pthread_mutex_lock(&ssl_config_mutex))
+	if (pg_mtx_lock(&ssl_config_mutex) != pg_thrd_success)
 		return NULL;
 
 	res = my_bio_methods;
@@ -2021,7 +2021,7 @@ my_BIO_s_socket(void)
 	}
 
 	my_bio_methods = res;
-	pthread_mutex_unlock(&ssl_config_mutex);
+	pg_mtx_unlock(&ssl_config_mutex);
 	return res;
 
 err:
@@ -2032,7 +2032,7 @@ err:
 	if (res)
 		free(res);
 #endif
-	pthread_mutex_unlock(&ssl_config_mutex);
+	pg_mtx_unlock(&ssl_config_mutex);
 	return NULL;
 }
 
