@@ -100,6 +100,7 @@ struct ReadStream
 	int16		pinned_buffers;
 	int16		distance;
 	int16		initialized_buffers;
+	int16		resume_distance;
 	int			read_buffers_flags;
 	bool		sync_mode;		/* using io_method=sync */
 	bool		batch_mode;		/* READ_STREAM_USE_BATCHING */
@@ -464,6 +465,7 @@ read_stream_look_ahead(ReadStream *stream)
 		if (blocknum == InvalidBlockNumber)
 		{
 			/* End of stream. */
+			stream->resume_distance = stream->distance;
 			stream->distance = 0;
 			break;
 		}
@@ -711,6 +713,7 @@ read_stream_begin_impl(int flags,
 		stream->distance = Min(max_pinned_buffers, stream->io_combine_limit);
 	else
 		stream->distance = 1;
+	stream->resume_distance = stream->distance;
 
 	/*
 	 * Since we always access the same relation, we can initialize parts of
@@ -862,6 +865,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		else
 		{
 			/* No more blocks, end of stream. */
+			stream->resume_distance = stream->distance;
 			stream->distance = 0;
 			stream->oldest_buffer_index = stream->next_buffer_index;
 			stream->pinned_buffers = 0;
@@ -1032,6 +1036,17 @@ read_stream_next_block(ReadStream *stream, BufferAccessStrategy *strategy)
 {
 	*strategy = stream->ios[0].op.strategy;
 	return read_stream_get_block(stream, NULL);
+}
+
+/*
+ * Resume looking ahead after the block number callback reported end-of-stream.
+ * This is useful for streams of self-referential blocks, after a buffer needed
+ * to be consumed and examined to find more block numbers.
+ */
+void
+read_stream_resume(ReadStream *stream)
+{
+	stream->distance = stream->resume_distance;
 }
 
 /*
