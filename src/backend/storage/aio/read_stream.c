@@ -115,6 +115,7 @@ struct ReadStream
 	int16		max_pinned_buffers;
 	int16		pinned_buffers;
 	int16		distance;
+	int16		reset_distance;
 	bool		advice_enabled;
 
 	/*
@@ -335,6 +336,7 @@ read_stream_look_ahead(ReadStream *stream, bool suppress_advice)
 		if (blocknum == InvalidBlockNumber)
 		{
 			/* End of stream. */
+			stream->reset_distance = stream->distance;
 			stream->distance = 0;
 			break;
 		}
@@ -526,6 +528,7 @@ read_stream_begin_impl(int flags,
 		stream->distance = Min(max_pinned_buffers, io_combine_limit);
 	else
 		stream->distance = 1;
+	stream->reset_distance = stream->distance;
 
 	/*
 	 * Since we always access the same relation, we can initialize parts of
@@ -822,8 +825,11 @@ read_stream_reset(ReadStream *stream)
 	Assert(stream->pinned_buffers == 0);
 	Assert(stream->ios_in_progress == 0);
 
-	/* Start off assuming data is cached. */
-	stream->distance = 1;
+	/*
+	 * If the callback ran out of blocks temporarily, restore the distance from
+	 * before.
+	 */
+	stream->distance = Max(stream->reset_distance, 1);
 }
 
 /*
