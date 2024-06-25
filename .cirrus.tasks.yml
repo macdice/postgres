@@ -422,7 +422,7 @@ task:
     TEST_JOBS: 8
     # If changing the macOS release, you probably also need to change
     # macports_url in src/tools/ci/ci_macports_packages.sh
-    IMAGE: ghcr.io/cirruslabs/macos-sonoma-base:latest
+    IMAGE: ghcr.io/cirruslabs/macos-runner:sonoma
 
     CIRRUS_WORKING_DIR: ${HOME}/pgsql/
     CCACHE_DIR: ${HOME}/ccache
