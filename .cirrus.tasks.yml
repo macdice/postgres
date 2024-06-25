@@ -420,7 +420,9 @@ task:
     # work OK. See
     # https://postgr.es/m/20220927040208.l3shfcidovpzqxfh%40awork3.anarazel.de
     TEST_JOBS: 8
-    IMAGE: ghcr.io/cirruslabs/macos-ventura-base:latest
+    # If changing the macOS release, you probably also need to change
+    # macports_url in src/tools/ci/ci_macports_packages.sh
+    IMAGE: ghcr.io/cirruslabs/macos-sonoma-base:latest
 
     CIRRUS_WORKING_DIR: ${HOME}/pgsql/
     CCACHE_DIR: ${HOME}/ccache
