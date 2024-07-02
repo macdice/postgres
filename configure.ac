@@ -1440,6 +1440,7 @@ AC_CHECK_HEADERS(m4_normalize([
 	getopt.h
 	ifaddrs.h
 	mbarrier.h
+	stdatomic.h
 	sys/epoll.h
 	sys/event.h
 	sys/personality.h

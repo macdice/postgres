@@ -3,9 +3,13 @@
  * atomics.h
  *	  Atomic operations.
  *
- * Hardware and compiler dependent functions for manipulating memory
- * atomically and dealing with cache coherency. Used to implement locking
- * facilities and lockless algorithms/data structures.
+ * If C11 <stdatomic.h> is available, this header just maps pg_XXX names onto
+ * the standard interfaces. Otherwise, for strict C99 environments, hardware-
+ * and compiler-dependent implementation functions are provided.
+ *
+ * These interfaces are for manipulating memory atomically and dealing with
+ * cache coherency. They can be used to implement locking facilities and
+ * lockless algorithms/data structures.
  *
  * To bring up postgres on a platform/compiler at the very least
  * implementations for the following operations should be provided:
@@ -45,6 +49,113 @@
 #define INSIDE_ATOMICS_H
 
 #include <limits.h>
+
+#ifdef HAVE_STDATOMIC_H
+
+/* Map pg_ atomic interfaces directly to standard C11 interfaces. */
+
+#include <stdatomic.h>
+
+/* Prevent compiler re-ordering and control memory ordering. */
+#define pg_memory_barrier_impl() atomic_thread_fence(memory_order_seq_cst)
+#define pg_read_barrier_impl()  atomic_thread_fence(memory_order_acquire)
+#define pg_write_barrier_impl() atomic_thread_fence(memory_order_release)
+
+/* Prevent compiler re-ordering, but don't generate any code. */
+#define pg_compiler_barrier_impl() atomic_signal_fence(memory_order_seq_cst)
+
+/*
+ * We don't map pg_atomic_flag to standard atomic_flag, because that can't
+ * implement pg_atomic_unlocked_test_flag()'s relaxed load.  So we'll just let
+ * generic.h provide an implementation on top of pg_atomic_uint32.
+ */
+
+/*
+ * For pg_atomic_uint32, we require a real lock-free uint32, not one that is
+ * emulated with locks by the compiler or runtime library.
+ */
+#if ATOMIC_INT_LOCK_FREE < 2
+#error atomic_uint is not always lock-free
+#endif
+typedef atomic_uint pg_atomic_uint32;
+#define PG_HAVE_ATOMIC_U32_SUPPORT
+#define pg_atomic_init_u32_impl(x, v) atomic_init((x), (v))
+#define PG_HAVE_ATOMIC_INIT_U32
+#define pg_atomic_read_u32_impl(x) *(x)
+#define PG_HAVE_ATOMIC_READ_U32
+#define pg_atomic_write_u32_impl(x, v) *(x) = (v)
+#define PG_HAVE_ATOMIC_WRITE_U32
+#define pg_atomic_unlocked_write_u32_impl(x, v) *(x) = (v)
+#define PG_HAVE_ATOMIC_UNLOCKED_WRITE_U32
+#define pg_atomic_exchange_u32_impl atomic_exchange
+#define PG_HAVE_ATOMIC_EXCHANGE_U32
+#define pg_atomic_compare_exchange_u32_impl atomic_compare_exchange_strong
+#define PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U32
+#define pg_atomic_fetch_add_u32_impl atomic_fetch_add
+#define PG_HAVE_ATOMIC_FETCH_ADD_U32
+#define pg_atomic_fetch_sub_u32_impl atomic_fetch_sub
+#define PG_HAVE_ATOMIC_FETCH_SUB_U32
+#define pg_atomic_fetch_or_u32_impl atomic_fetch_or
+#define PG_HAVE_ATOMIC_FETCH_OR_U32
+#define pg_atomic_fetch_and_u32_impl atomic_fetch_and
+#define PG_HAVE_ATOMIC_FETCH_AND_U32
+#define pg_atomic_fetch_xor_u32_impl atomic_fetch_xor
+#define PG_HAVE_ATOMIC_FETCH_XOR_U32
+
+/*
+ * Does this system also have a 64 bit atomic type that is lock-free?  All
+ * modern systems should, but if not, we'll supply our own lock-based
+ * emulation in fallback.h instead of relying on libc's lock-based emulation.
+ * That reduces the number of possible combinations of behavior on rare
+ * systems.
+ */
+#if defined(DEBUG_NO_ATOMIC_64)
+/* developer-only macro used to force fallback code to be used */
+#elif SIZEOF_LONG == 8 && ATOMIC_LONG_LOCK_FREE > 1
+typedef atomic_ulong pg_atomic_uint64;
+#define PG_HAVE_ATOMIC_U64_SUPPORT
+#elif ATOMIC_LONG_LONG_LOCK_FREE > 1
+typedef atomic_ulonglong pg_atomic_uint64;
+#define PG_HAVE_ATOMIC_U64_SUPPORT
+#endif
+
+#ifdef PG_HAVE_ATOMIC_U64_SUPPORT
+#define pg_atomic_init_u64_impl(x, v) atomic_init((x), (v))
+#define PG_HAVE_ATOMIC_INIT_U64
+#define pg_atomic_read_u64_impl(x) *(x)
+#define PG_HAVE_ATOMIC_READ_U64
+#define pg_atomic_write_u64_impl(x, v) *(x) = (v)
+#define PG_HAVE_ATOMIC_WRITE_U64
+#define pg_atomic_unlocked_write_u64_impl(x, v) *(x) = (v)
+#define PG_HAVE_ATOMIC_UNLOCKED_WRITE_U64
+#define pg_atomic_exchange_u64_impl atomic_exchange
+#define PG_HAVE_ATOMIC_EXCHANGE_U64
+#define pg_atomic_compare_exchange_u64_impl atomic_compare_exchange_strong
+#define PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U64
+#define pg_atomic_fetch_add_u64_impl atomic_fetch_add
+#define PG_HAVE_ATOMIC_FETCH_ADD_U64
+#define pg_atomic_fetch_sub_u64_impl atomic_fetch_sub
+#define PG_HAVE_ATOMIC_FETCH_SUB_U64
+#define pg_atomic_fetch_or_u64_impl atomic_fetch_or
+#define PG_HAVE_ATOMIC_FETCH_OR_U64
+#define pg_atomic_fetch_and_u64_impl atomic_fetch_and
+#define PG_HAVE_ATOMIC_FETCH_AND_U64
+#define pg_atomic_fetch_xor_u64_impl atomic_fetch_xor
+#define PG_HAVE_ATOMIC_FETCH_XOR_U64
+#endif
+
+/*
+ * XXX TODO: we need to get the pg_spin_delay_impl from arch-specific files,
+ * but we don't want anything else from them.  But really, why is that tangled
+ * up with atomics?
+ */
+
+#else
+
+/*
+ * This system doesn't have <stdatomic.h> yet, so we'll use hand-rolled
+ * implementations using compiler- and architecture-specific knowledge.
+ */
 
 /*
  * First a set of architecture specific files is included.
@@ -105,6 +216,7 @@
 #error "could not find an implementation of pg_memory_barrier_impl"
 #endif
 
+#endif /* !HAVE_STDATOMIC_H */
 
 /*
  * Provide a spinlock-based implementation of the 64 bit variants, if
