@@ -104,9 +104,6 @@ typedef struct
 	void	   *UsedShmemSegAddr;
 	slock_t    *ShmemLock;
 	struct bkend *ShmemBackendArray;
-#ifndef HAVE_SPINLOCKS
-	PGSemaphore *SpinlockSemaArray;
-#endif
 	int			NamedLWLockTrancheRequests;
 	NamedLWLockTranche *NamedLWLockTrancheArray;
 	LWLockPadded *MainLWLockArray;
@@ -722,9 +719,6 @@ save_backend_variables(BackendParameters *param, ClientSocket *client_sock,
 	param->ShmemLock = ShmemLock;
 	param->ShmemBackendArray = ShmemBackendArray;
 
-#ifndef HAVE_SPINLOCKS
-	param->SpinlockSemaArray = SpinlockSemaArray;
-#endif
 	param->NamedLWLockTrancheRequests = NamedLWLockTrancheRequests;
 	param->NamedLWLockTrancheArray = NamedLWLockTrancheArray;
 	param->MainLWLockArray = MainLWLockArray;
@@ -980,9 +974,6 @@ restore_backend_variables(BackendParameters *param)
 	ShmemLock = param->ShmemLock;
 	ShmemBackendArray = param->ShmemBackendArray;
 
-#ifndef HAVE_SPINLOCKS
-	SpinlockSemaArray = param->SpinlockSemaArray;
-#endif
 	NamedLWLockTrancheRequests = param->NamedLWLockTrancheRequests;
 	NamedLWLockTrancheArray = param->NamedLWLockTrancheArray;
 	MainLWLockArray = param->MainLWLockArray;
