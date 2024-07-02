@@ -3861,6 +3861,8 @@ pendingPosition
 pending_label
 pgParameterStatus
 pg_atomic_flag
+pg_atomic_uint8
+pg_atomic_uint16
 pg_atomic_uint32
 pg_atomic_uint64
 pg_be_sasl_mech
