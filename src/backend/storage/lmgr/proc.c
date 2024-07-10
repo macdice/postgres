@@ -1890,6 +1890,19 @@ ProcSendSignal(ProcNumber procNumber)
 }
 
 /*
+ * ProcSetLatch - set the latch of a backend identified by ProcNumber, but
+ * ignore out of range values.
+ */
+void
+ProcSetLatch(ProcNumber procNumber)
+{
+	if (procNumber < 0 || procNumber >= MaxBackends + NUM_AUXILIARY_PROCS)
+		return;
+
+	SetLatch(&ProcGlobal->allProcs[procNumber].procLatch);
+}
+
+/*
  * BecomeLockGroupLeader - designate process as lock group leader
  *
  * Once this function has returned, other processes can join the lock group

@@ -172,7 +172,6 @@ typedef struct bkend
 	int			bkend_type;		/* child process flavor, see above */
 	bool		dead_end;		/* is it going to send an error and quit? */
 	RegisteredBgWorker *rw;		/* bgworker info, if this is a bgworker */
-	bool		bgworker_notify;	/* gets bgworker start/stop notifications */
 	dlist_node	elem;			/* list link in BackendList */
 } Backend;
 
@@ -2618,16 +2617,6 @@ CleanupBackend(Backend *bp,
 	}
 
 	/*
-	 * This backend may have been slated to receive SIGUSR1 when some
-	 * background worker started or stopped.  Cancel those notifications, as
-	 * we don't want to signal PIDs that are not PostgreSQL backends.  This
-	 * gets skipped in the (probably very common) case where the backend has
-	 * never requested any such notifications.
-	 */
-	if (bp->bgworker_notify)
-		BackgroundWorkerStopNotifications(bp->pid);
-
-	/*
 	 * If it was a background worker, also update its RegisteredWorker entry.
 	 */
 	if (bp->bkend_type == BACKEND_TYPE_BGWORKER)
@@ -3408,9 +3397,6 @@ BackendStartup(ClientSocket *client_sock)
 	else
 		bn->child_slot = 0;
 
-	/* Hasn't asked to be notified about any bgworkers yet */
-	bn->bgworker_notify = false;
-
 	pid = postmaster_child_launch(B_BACKEND,
 								  (char *) &startup_data, sizeof(startup_data),
 								  client_sock);
@@ -3778,7 +3764,6 @@ StartAutovacuumWorker(void)
 			/* Autovac workers are not dead_end and need a child slot */
 			bn->dead_end = false;
 			bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
-			bn->bgworker_notify = false;
 			bn->rw = NULL;
 
 			bn->pid = StartChildProcess(B_AUTOVAC_WORKER);
@@ -4010,7 +3995,6 @@ assign_backendlist_entry(void)
 	bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
 	bn->bkend_type = BACKEND_TYPE_BGWORKER;
 	bn->dead_end = false;
-	bn->bgworker_notify = false;
 
 	return bn;
 }
@@ -4077,15 +4061,15 @@ maybe_start_bgworkers(void)
 		{
 			if (rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART)
 			{
-				int			notify_pid;
+				ProcNumber	notify_proc_number;
 
-				notify_pid = rw->rw_worker.bgw_notify_pid;
+				notify_proc_number = GetNotifyProcNumberForRegisteredWorker(rw);
 
 				ForgetBackgroundWorker(rw);
 
 				/* Report worker is gone now. */
-				if (notify_pid != 0)
-					kill(notify_pid, SIGUSR1);
+				if (notify_proc_number != INVALID_PROC_NUMBER)
+					ProcSetLatch(notify_proc_number);
 
 				continue;
 			}
@@ -4138,29 +4122,6 @@ maybe_start_bgworkers(void)
 			}
 		}
 	}
-}
-
-/*
- * When a backend asks to be notified about worker state changes, we
- * set a flag in its backend entry.  The background worker machinery needs
- * to know when such backends exit.
- */
-bool
-PostmasterMarkPIDForWorkerNotify(int pid)
-{
-	dlist_iter	iter;
-	Backend    *bp;
-
-	dlist_foreach(iter, &BackendList)
-	{
-		bp = dlist_container(Backend, elem, iter.cur);
-		if (bp->pid == pid)
-		{
-			bp->bgworker_notify = true;
-			return true;
-		}
-	}
-	return false;
 }
 
 #ifdef WIN32

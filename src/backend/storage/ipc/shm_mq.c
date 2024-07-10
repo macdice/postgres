@@ -277,9 +277,7 @@ shm_mq_get_sender(shm_mq *mq)
  * shared memory segment is detached.
  *
  * If handle != NULL, the queue can be read or written even before the
- * other process has attached.  We'll wait for it to do so if needed.  The
- * handle must be for a background worker initialized with bgw_notify_pid
- * equal to our PID.
+ * other process has attached.  We'll wait for it to do so if needed.
  *
  * shm_mq_detach() should be called when done.  This will free the
  * shm_mq_handle and mark the queue itself as detached, so that our
