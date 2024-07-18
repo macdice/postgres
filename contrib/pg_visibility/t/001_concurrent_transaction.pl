@@ -17,10 +17,10 @@ $node->start;
 
 # Setup another database
 $node->safe_psql("postgres", "CREATE DATABASE other_database;\n");
-my $bsession = $node->background_psql('other_database');
+my $bsession = PostgreSQL::Test::Session->new(node => $node, dbname => 'other_database');
 
 # Run a concurrent transaction
-$bsession->query_safe(
+$bsession->do(
 	qq[
 	BEGIN;
 	SELECT txid_current();
@@ -40,8 +40,8 @@ my $result = $node->safe_psql("postgres",
 ok($result eq "", "pg_check_visible() detects no errors");
 
 # Shutdown
-$bsession->query_safe("COMMIT;");
-$bsession->quit;
+$bsession->do("COMMIT;");
+$bsession->close;
 $node->stop;
 
 done_testing();

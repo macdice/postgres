@@ -30,6 +30,8 @@ $node->append_conf(
 autovacuum = off # run autovacuum only to prevent wraparound
 autovacuum_naptime = 1s
 log_autovacuum_min_duration = 0
+log_connections = on
+log_statement = 'all'
 ]);
 $node->start;
 $node->safe_psql('postgres', 'CREATE EXTENSION xid_wraparound');
@@ -41,16 +43,10 @@ CREATE TABLE wraparoundtest(t text);
 INSERT INTO wraparoundtest VALUES ('start');
 ]);
 
-# Bump the query timeout to avoid false negatives on slow test systems.
-my $psql_timeout_secs = 4 * $PostgreSQL::Test::Utils::timeout_default;
-
 # Start a background session, which holds a transaction open, preventing
 # autovacuum from advancing relfrozenxid and datfrozenxid.
-my $background_psql = $node->background_psql(
-	'postgres',
-	on_error_stop => 0,
-	timeout => $psql_timeout_secs);
-$background_psql->query_safe(
+my $background_psql = PostgreSQL::Test::Session->new(node => $node);
+$background_psql->do(
 	qq[
 	BEGIN;
 	INSERT INTO wraparoundtest VALUES ('oldxact');
@@ -108,8 +104,8 @@ like(
 
 # Finish the old transaction, to allow vacuum freezing to advance
 # relfrozenxid and datfrozenxid again.
-$background_psql->query_safe(qq[COMMIT]);
-$background_psql->quit;
+$background_psql->do(qq[COMMIT;]);
+$background_psql->close;
 
 # VACUUM, to freeze the tables and advance datfrozenxid.
 #

@@ -740,17 +740,13 @@ $primary->safe_psql('postgres',
 	"SELECT pg_create_logical_replication_slot('test_slot', 'test_decoding', false, false, true);"
 );
 
-my $back_q = $primary->background_psql(
-	'postgres',
-	on_error_stop => 0,
-	timeout => $PostgreSQL::Test::Utils::timeout_default);
+my $back_q = PostgreSQL::Test::Session->new(node=>$primary);
 
 # pg_logical_slot_get_changes will be blocked until the standby catches up,
 # hence it needs to be executed in a background session.
 $offset = -s $primary->logfile;
-$back_q->query_until(
-	qr/logical_slot_get_changes/, q(
-   \echo logical_slot_get_changes
+$back_q->do_async(
+	q(
    SELECT pg_logical_slot_get_changes('test_slot', NULL, NULL);
 ));
 
@@ -768,7 +764,8 @@ $primary->reload;
 # Since there are no slots in synchronized_standby_slots, the function
 # pg_logical_slot_get_changes should now return, and the session can be
 # stopped.
-$back_q->quit;
+$back_q->wait_for_completion;
+$back_q->close;
 
 $primary->safe_psql('postgres',
 	"SELECT pg_drop_replication_slot('test_slot');");

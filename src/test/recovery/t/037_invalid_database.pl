@@ -89,20 +89,20 @@ is($node->psql('postgres', 'DROP DATABASE regression_invalid'),
 # interruption happens at the appropriate moment, we lock pg_tablespace. DROP
 # DATABASE scans pg_tablespace once it has reached the "irreversible" part of
 # dropping the database, making it a suitable point to wait.
-my $bgpsql = $node->background_psql('postgres', on_error_stop => 0);
-my $pid = $bgpsql->query('SELECT pg_backend_pid()');
+my $bgpsql = PostgreSQL::Test::Session->new(node=>$node);
+my $pid = $bgpsql->query_oneval('SELECT pg_backend_pid()');
 
 # create the database, prevent drop database via lock held by a 2PC transaction
-ok( $bgpsql->query_safe(
+is (1,  $bgpsql->do(
 		qq(
-  CREATE DATABASE regression_invalid_interrupt;
-  BEGIN;
+  CREATE DATABASE regression_invalid_interrupt;),
+  qq(BEGIN;
   LOCK pg_tablespace;
   PREPARE TRANSACTION 'lock_tblspc';)),
 	"blocked DROP DATABASE completion");
 
 # Try to drop. This will wait due to the still held lock.
-$bgpsql->query_until(qr//, "DROP DATABASE regression_invalid_interrupt;\n");
+$bgpsql->do_async("DROP DATABASE regression_invalid_interrupt;");
 
 # Ensure we're waiting for the lock
 $node->poll_query_until('postgres',
@@ -113,12 +113,9 @@ $node->poll_query_until('postgres',
 ok($node->safe_psql('postgres', "SELECT pg_cancel_backend($pid)"),
 	"canceling DROP DATABASE");
 
+$bgpsql->wait_for_completion;
 # wait for cancellation to be processed
-ok( pump_until(
-		$bgpsql->{run}, $bgpsql->{timeout},
-		\$bgpsql->{stderr}, qr/canceling statement due to user request/),
-	"cancel processed");
-$bgpsql->{stderr} = '';
+pass("cancel processed");
 
 # verify that connection to the database aren't allowed
 is($node->psql('regression_invalid_interrupt', ''),
@@ -126,12 +123,12 @@ is($node->psql('regression_invalid_interrupt', ''),
 
 # To properly drop the database, we need to release the lock previously preventing
 # doing so.
-ok($bgpsql->query_safe(qq(ROLLBACK PREPARED 'lock_tblspc')),
+ok($bgpsql->do(qq(ROLLBACK PREPARED 'lock_tblspc')),
 	"unblock DROP DATABASE");
 
 ok($bgpsql->query(qq(DROP DATABASE regression_invalid_interrupt)),
 	"DROP DATABASE invalid_interrupt");
 
-$bgpsql->quit();
+$bgpsql->close();
 
 done_testing();

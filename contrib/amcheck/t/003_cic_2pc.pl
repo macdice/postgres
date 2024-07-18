@@ -36,28 +36,29 @@ $node->safe_psql('postgres', q(CREATE TABLE tbl(i int)));
 # statements.
 #
 
-my $main_h = $node->background_psql('postgres');
+my $main_h = PostgreSQL::Test::Session->new(node=>$node);
 
-$main_h->query_safe(
+$main_h->do_async(
 	q(
 BEGIN;
 INSERT INTO tbl VALUES(0);
 ));
 
-my $cic_h = $node->background_psql('postgres');
+my $cic_h = PostgreSQL::Test::Session->new(node=>$node);
 
-$cic_h->query_until(
-	qr/start/, q(
-\echo start
+$cic_h->do_async(
+	q(
 CREATE INDEX CONCURRENTLY idx ON tbl(i);
 ));
 
-$main_h->query_safe(
+$main_h->wait_for_completion;
+$main_h->do_async(
 	q(
 PREPARE TRANSACTION 'a';
 ));
 
-$main_h->query_safe(
+$main_h->wait_for_completion;
+$main_h->do_async(
 	q(
 BEGIN;
 INSERT INTO tbl VALUES(0);
@@ -65,7 +66,8 @@ INSERT INTO tbl VALUES(0);
 
 $node->safe_psql('postgres', q(COMMIT PREPARED 'a';));
 
-$main_h->query_safe(
+$main_h->wait_for_completion;
+$main_h->do_async(
 	q(
 PREPARE TRANSACTION 'b';
 BEGIN;
@@ -74,14 +76,14 @@ INSERT INTO tbl VALUES(0);
 
 $node->safe_psql('postgres', q(COMMIT PREPARED 'b';));
 
-$main_h->query_safe(
-	q(
-PREPARE TRANSACTION 'c';
-COMMIT PREPARED 'c';
-));
+$main_h->wait_for_completion;
+$main_h->do(
+	q(PREPARE TRANSACTION 'c';),
+	q(COMMIT PREPARED 'c';));
 
-$main_h->quit;
-$cic_h->quit;
+$main_h->close;
+$cic_h->wait_for_completion;
+$cic_h->close;
 
 $result = $node->psql('postgres', q(SELECT bt_index_check('idx',true)));
 is($result, '0', 'bt_index_check after overlapping 2PC');
@@ -102,16 +104,16 @@ PREPARE TRANSACTION 'persists_forever';
 ));
 $node->restart;
 
-my $reindex_h = $node->background_psql('postgres');
-$reindex_h->query_until(
-	qr/start/, q(
-\echo start
+my $reindex_h = PostgreSQL::Test::Session->new(node => $node);
+$reindex_h->do_async(
+	q(
 DROP INDEX CONCURRENTLY idx;
 CREATE INDEX CONCURRENTLY idx ON tbl(i);
 ));
 
 $node->safe_psql('postgres', "COMMIT PREPARED 'spans_restart'");
-$reindex_h->quit;
+$reindex_h->wait_for_completion;
+$reindex_h->close;
 $result = $node->psql('postgres', q(SELECT bt_index_check('idx',true)));
 is($result, '0', 'bt_index_check after 2PC and restart');
 

@@ -111,6 +111,7 @@ use Socket;
 use Test::More;
 use PostgreSQL::Test::Utils          ();
 use PostgreSQL::Test::BackgroundPsql ();
+use PostgreSQL::Test::Session;
 use Text::ParseWords                 qw(shellwords);
 use Time::HiRes                      qw(usleep);
 use Scalar::Util                     qw(blessed);
@@ -1887,6 +1888,27 @@ sub safe_psql
 
 	my ($stdout, $stderr);
 
+=comment
+
+	my $session = PostgreSQL::Test::Session->new(node=> $self, dbname => $dbname);
+
+	if ($sql =~ /^\s*SELECT/i)
+	{
+		my $res = $session->query($sql);
+		$stdout = $res->{psqlout};
+		$stderr = $res->{error_message} || "";
+	}
+	else
+	{
+		my $res = $session->do($sql);
+		$stdout = "";
+		$stderr = $res != 1 ? "error" : "";
+	}
+
+=cut
+
+	diag "safe_psql call has params" if scalar(keys(%params));
+
 	my $ret = $self->psql(
 		$dbname, $sql,
 		%params,
@@ -2003,6 +2025,9 @@ sub psql
 	my ($self, $dbname, $sql, %params) = @_;
 
 	local %ENV = $self->_get_env();
+
+	# uncomment to get a count of calls to psql
+	# note("counting psql");
 
 	my $stdout = $params{stdout};
 	my $stderr = $params{stderr};
@@ -2513,26 +2538,26 @@ sub poll_query_until
 
 	$expected = 't' unless defined($expected);    # default value
 
-	my $cmd = [
-		$self->installed_command('psql'), '-XAt',
-		'-d', $self->connstr($dbname)
-	];
-	my ($stdout, $stderr);
+	my $session = PostgreSQL::Test::Session->new(node => $self,
+												 dbname => $dbname);
 	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
 	my $attempts = 0;
 
+	my $query_value;
+
 	while ($attempts < $max_attempts)
 	{
-		my $result = IPC::Run::run $cmd, '<', \$query,
-		  '>', \$stdout, '2>', \$stderr;
-
-		chomp($stdout);
-		chomp($stderr);
-
-		if ($stdout eq $expected && $stderr eq '')
+		if ($query =~ /\bselect\b/i)
 		{
-			return 1;
+			$query_value = $session->query_tuples($query);
 		}
+		else
+		{
+			$query_value = $session->do($query);
+			$expected = 1; # COMMAND_OK
+		}
+
+		return 1 if ($query_value  // 'no value returned') eq $expected;
 
 		# Wait 0.1 second before retrying.
 		usleep(100_000);
@@ -2547,9 +2572,42 @@ $query
 expecting this output:
 $expected
 last actual query output:
-$stdout
-with stderr:
-$stderr);
+$query_value
+);
+	return 0;
+}
+
+=pod
+
+=item $node->poll_until_connection($dbname)
+
+Try to connect repeatedly, until it we succeed.
+Times out after $PostgreSQL::Test::Utils::timeout_default seconds.
+Returns 1 if successful, 0 if timed out.
+
+=cut
+
+sub poll_until_connection
+{
+	my ($self, $dbname) = @_;
+
+	local %ENV = $self->_get_env();
+
+	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
+	my $attempts = 0;
+
+	while ($attempts < $max_attempts)
+	{
+		my $session = PostgreSQL::Test::Session->new(node => $self,
+													 dbname => $dbname);
+		return 1 if $session;
+
+		# Wait 0.1 second before retrying.
+		usleep(100_000);
+
+		$attempts++;
+	}
+
 	return 0;
 }
 
@@ -3084,13 +3142,15 @@ sub wait_for_log
 
 	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
 	my $attempts = 0;
-
+	my $length = 0;
 	while ($attempts < $max_attempts)
 	{
 		my $log =
 		  PostgreSQL::Test::Utils::slurp_file($self->logfile, $offset);
 
-		return $offset + length($log) if ($log =~ m/$regexp/);
+		$length = length($log);
+
+		return $offset + $length if ($log =~ m/$regexp/);
 
 		# Wait 0.1 second before retrying.
 		usleep(100_000);
@@ -3098,7 +3158,7 @@ sub wait_for_log
 		$attempts++;
 	}
 
-	croak "timed out waiting for match: $regexp";
+	croak "timed out waiting for match: $regexp, offset = $offset, length = $length";
 }
 
 =pod

@@ -46,17 +46,10 @@ CREATE TABLE autovacuum_disabled(id serial primary key, data text) WITH (autovac
 INSERT INTO autovacuum_disabled(data) SELECT generate_series(1,1000);
 ]);
 
-# Bump the query timeout to avoid false negatives on slow test systems.
-my $psql_timeout_secs = 4 * $PostgreSQL::Test::Utils::timeout_default;
-
 # Start a background session, which holds a transaction open, preventing
 # autovacuum from advancing relfrozenxid and datfrozenxid.
-my $background_psql = $node->background_psql(
-	'postgres',
-	on_error_stop => 0,
-	timeout => $psql_timeout_secs);
-$background_psql->set_query_timer_restart();
-$background_psql->query_safe(
+my $background_psql = PostgreSQL::Test::Session->new(node => $node);
+$background_psql->do(
 	qq[
 	BEGIN;
 	DELETE FROM large WHERE id % 2 = 0;
@@ -89,8 +82,8 @@ my $log_offset = -s $node->logfile;
 
 # Finish the old transaction, to allow vacuum freezing to advance
 # relfrozenxid and datfrozenxid again.
-$background_psql->query_safe(qq[COMMIT]);
-$background_psql->quit;
+$background_psql->do(qq[COMMIT;]);
+$background_psql->close;
 
 # Wait until autovacuum processed all tables and advanced the
 # system-wide oldest-XID.

@@ -62,11 +62,9 @@ $node_standby->safe_psql('postgres',
 # Execute a restart point on the standby, that we will now be waiting on.
 # This needs to be in the background.
 my $logstart = -s $node_standby->logfile;
-my $psql_session =
-  $node_standby->background_psql('postgres', on_error_stop => 0);
-$psql_session->query_until(
-	qr/starting_checkpoint/, q(
-   \echo starting_checkpoint
+my $psql_session = PostgreSQL::Test::Session->new(node=> $node_standby);
+$psql_session->do_async(
+	q(
    CHECKPOINT;
 ));
 
@@ -152,7 +150,7 @@ ok( pump_until(
 $killme->finish;
 
 # Wait till server finishes restarting.
-$node_standby->poll_query_until('postgres', undef, '');
+$node_standby->poll_until_connection('postgres');
 
 # After recovery, the server should be able to start.
 my $stdout;
