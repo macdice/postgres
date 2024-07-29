@@ -1190,12 +1190,41 @@ shared_count_from_pair(uint64 pair)
 	return pair & ~LWLOCK_EXCLUSIVE_GRANTED_MASK;
 }
 
+/*
+ * Return a pointer to the high order half of a futex pair, that holds the
+ * exclusive lock waiter count and one of two copies of the exclusive lock bit.
+ * Share lock acquirers wait on this address to wait for an exclusive lock to
+ * be released, at which point they are all woken up.
+ */
 static void *
 exclusive_futex_from_pair(pg_atomic_uint64 *pair)
 {
 	uint32 *pair_u32 = (void *) pair;
 
+#ifdef WORDS_BIGENDIAN
+	return &pair[0];
+#else
 	return &pair[1];
+#endif
+}
+
+/*
+ * Return a pointer to the low order half of a futex pair, that holds the
+ * shared lock waiter count and one of two copies of the exclusive lock bit.
+ * Exclusive lock acquirers wait on this address to wait for an exclusive lock
+ * and all share locks to be released, at which point one of them is woken up.
+ * (We could just use a single futex, but then we'd always have to wake all.)
+ */
+static void *
+shared_futex_from_pair(pg_atomic_uint64 *pair)
+{
+	uint32 *pair_u32 = (void *) pair;
+
+#ifdef WORDS_BIGENDIAN
+	return &pair[1];
+#else
+	return &pair[0];
+#endif
 }
 
 static bool
@@ -1203,17 +1232,17 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 {
 	uint64		pair;
 
-	if (mode == LW_SHARED)
+	if (likely(mode == LW_SHARED))
 	{
-		/* Attempt to acquire shared lock by simple fetch-and-add. */
+		/* Increment shared waiter count. */
 		pair = pg_atomic_fetch_add_u64(&lock->futex_pair, 1);
 
-		if (!pair_exclusive_granted(pair))
+		if (likely(!pair_exclusive_granted(pair)))
 		{
 			/*
 			 * No exclusive lock is granted.  There may be backends waiting for
-			 * an exclusive lock, but with this policy they'll have to keep
-			 * waiting (readers can starve writers).
+			 * an exclusive lock, but they'll have to keep waiting (readers can
+			 * starve writers with this design).
 			 */
 			return true;
 		}
@@ -1229,7 +1258,7 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 		do
 		{
 			if (pg_futex_wait_u32(exclusive_futex_from_pair(&lock->futex_pair),
-				pair >> 32,
+				exclusive_word_from_pair(pair),
 				NULL) != 0 &&
 				errno != EAGAIN &&
 				errno != EINTR)
@@ -1238,12 +1267,11 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 		} while (pair_exclusive_granted(pair));
 
 		/*
-		 * Now shared locks are implicitly granted, and the exclusive lock
+		 * Now the shared lock is implicitly granted, and the exclusive lock
 		 * can't be explicitly granted again until the shared count reaches
 		 * zero.
 		 */
 	
-		return true;
 	}
 	else
 	{
@@ -1255,8 +1283,7 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 
 			/* Increment exclusive waiter count. */
 			new_pair = pair + LWLOCK_EXCLUSIVE_INC;
-			if (shared_count_from_pair(pair) == 0 &&
-				!pair_exclusive_granted(pair))
+			if (shared_word_from_pair(pair) == 0)
 			{
 				/* No shared lock holders, and no exclusive lock granted. */
 				new_pair |= LWLOCK_EXCLUSIVE_GRANTED;
@@ -1272,6 +1299,13 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 			if (granted)
 				return true;
 
+			/* Give up now if conditional. */
+			if (conditional)
+			{
+				pg_atomic_fetch_sub_u64(&lock->futex_pair, LWLOCK_EXCLUSIVE_INC);
+				return false;
+			}
+
 			/* Wait for that condition to be reached. */
 			do
 			{
@@ -1282,11 +1316,13 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 					errno != EINTR)
 						elog(PANIC, "could not wait for futex: %m");
 				pair = pg_atomic_read_u64(&lock->futex_pair);
-			} while (share_count_from_pair(pair) > 0 || pair_exclusive_is_granted(pair));
+			} while (shared_word_from_pair(pair) != 0);
 
 			return true;
 		}
 	}
+
+	return true;
 }
 
 static void
@@ -1311,19 +1347,14 @@ LWLockFutexRelease(LWLock *lock, LWLockMode mode)
 
 		/*
 		 * After this point, any backends could see that the exclusive lock is
-		 * not granted, and taken an implicit share lock.  That includes new
-		 * backends, and backends that could 
+		 * not granted, and take an implicit share lock.  That includes new
+		 * backends arriving now, and backends that were already waiting
+		 * (futexes are subject to spurious wakeups).
 		 */
 
 		if (exclusive_count_from_pair(pair) == 1)
 		{
-			/*
-			 * Any share lockers that arrived and observed exclusive_count == 0
-			 * after we decremented it already consider the share lock
-			 * implicitly granted.  We should wake any other backends that are
-			 * waiting for exclusive count to reach zero so they can be granted
-			 * a share lock too.
-			 */
+			/* We were the last exclusive locker, so wake shared waiters. */
 			if (shared_count_from_pair(pair) > 0)
 				pg_futex_wake_u32(exclusive_futex_from_pair(&lock->futex_pair), INT_MAX);
 		}
@@ -1355,21 +1386,6 @@ LWLockFutexRelease(LWLock *lock, LWLockMode mode)
 			 * wake up, so it can try to acquire the lock.
 			 */
 			pg_futex_wake_u32(&lock->futex_pair /* shared_count half */, 1);
-		}
-	}
-			
-
-		if (exclusive_count > 1)
-		{
-			/*
-			 * There is at least one backend waiting to obtain an exclusive
-			 * lock.  Prefer to wake it. XXX?!
-			 */
-			pg_futex_wake_u32(&lock->futex_pair, 1);
-		}
-		else if (shared_count > 0)
-		{
-			/* There is at least one backend waiting for 
 		}
 	}
 }
