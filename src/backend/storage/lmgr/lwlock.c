@@ -86,10 +86,15 @@
 #include "storage/spin.h"
 #include "utils/memutils.h"
 
+#ifdef LWLOCK_USE_FUTEX
+#include "port/pg_futex.h"
+#endif
+
 #ifdef LWLOCK_STATS
 #include "utils/hsearch.h"
 #endif
 
+#ifndef LWLOCK_USE_FUTEX
 
 #define LW_FLAG_HAS_WAITERS			((uint32) 1 << 30)
 #define LW_FLAG_RELEASE_OK			((uint32) 1 << 29)
@@ -104,6 +109,8 @@
 
 StaticAssertDecl(LW_VAL_EXCLUSIVE > (uint32) MAX_BACKENDS,
 				 "MAX_BACKENDS too big for lwlock.c");
+
+#endif
 
 /*
  * There are three sorts of LWLock "tranches":
@@ -715,6 +722,7 @@ LWLockInitialize(LWLock *lock, int tranche_id)
 	proclist_init(&lock->waiters);
 #else
 	pg_atomic_init_u64(&lock->futex_pair, 0);
+	pg_atomic_init_u32(&lock->var_update_counter, 0);
 #endif
 }
 
@@ -1238,8 +1246,46 @@ shared_futex_from_pair(pg_atomic_uint64 *pair)
 #endif
 }
 
+/*
+ * Wait until there is no exclusive lock blocking us from trying to acquire a
+ * shared lock.
+ */
+static void
+LWLockFutexWaitForSharedLockable(LWLock *lock, uint64 pair)
+{
+	do
+	{
+		if (pg_futex_wait_u32(exclusive_futex_from_pair(&lock->futex_pair),
+			exclusive_word_from_pair(pair),
+			NULL) != 0 &&
+			errno != EAGAIN &&
+			errno != EINTR)
+				elog(PANIC, "could not wait for futex: %m");
+		pair = pg_atomic_read_u64(&lock->futex_pair);
+	} while (pair_exclusive_granted(pair));
+}
+
+/*
+ * Wait until there is no exclusive lock or shared lock blocking us from
+ * trying to acquire an exclusive lock.
+ */
+static void
+LWLockFutexWaitForExclusiveLockable(LWLock *lock, uint64 pair)
+{
+	do
+	{
+		if (pg_futex_wait_u32(share_futex_from_pair(&lock->futex_pair),
+			pair,
+			NULL) != 0 &&
+			errno != EAGAIN &&
+			errno != EINTR)
+				elog(PANIC, "could not wait for futex: %m");
+		pair = pg_atomic_read_u64(&lock->futex_pair);
+	} while (shared_word_from_pair(pair) != 0);
+}
+
 static bool
-LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
+LWLockFutexAcquire(LWLock *lock, LWLockMode mode, bool conditional)
 {
 	uint64		pair;
 
@@ -1266,23 +1312,13 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 		}
 
 		/* Wait for exclusive lock to be released. */
-		do
-		{
-			if (pg_futex_wait_u32(exclusive_futex_from_pair(&lock->futex_pair),
-				exclusive_word_from_pair(pair),
-				NULL) != 0 &&
-				errno != EAGAIN &&
-				errno != EINTR)
-					elog(PANIC, "could not wait for futex: %m");
-			pair = pg_atomic_read_u64(&lock->futex_pair);
-		} while (pair_exclusive_granted(pair));
+		LWLockFutexWaitForSharedLockable(lock, pair);
 
 		/*
 		 * Now the shared lock is implicitly granted, and the exclusive lock
 		 * can't be explicitly granted again until the shared count reaches
 		 * zero.
 		 */
-	
 	}
 	else
 	{
@@ -1318,16 +1354,7 @@ LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
 			}
 
 			/* Wait for that condition to be reached. */
-			do
-			{
-				if (pg_futex_wait_u32(share_futex_from_pair(&lock->futex_pair),
-					pair,
-					NULL) != 0 &&
-					errno != EAGAIN &&
-					errno != EINTR)
-						elog(PANIC, "could not wait for futex: %m");
-				pair = pg_atomic_read_u64(&lock->futex_pair);
-			} while (shared_word_from_pair(pair) != 0);
+			LWLockFutexWaitForExclusiveLockable(lock, pair);
 
 			return true;
 		}
@@ -1348,7 +1375,7 @@ LWLockFutexRelease(LWLock *lock, LWLockMode mode)
 		 * the old value.
 		 */
 		pair = pg_atomic_fetch_sub(&lock->futex_pair,
-								   LWLOCK_EXCLUSIVE_GRANTED_MASK ||
+								   LWLOCK_EXCLUSIVE_GRANTED ||
 								   LWLOCK_EXCLUSIVE_INT);
 
 		/* It must have been granted (to me). */
@@ -1648,9 +1675,11 @@ LWLockConditionalAcquire(LWLock *lock, LWLockMode mode)
 bool
 LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 {
+#ifndef LWLOCK_USE_FUTEX
 	PGPROC	   *proc = MyProc;
 	bool		mustwait;
 	int			extraWaits = 0;
+#endif
 #ifdef LWLOCK_STATS
 	lwlock_stats *lwstats;
 
@@ -1665,6 +1694,17 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 	if (num_held_lwlocks >= MAX_SIMUL_LWLOCKS)
 		elog(ERROR, "too many LWLocks taken");
 
+#ifdef LWLOCK_USE_FUTEX
+	if (LWLockFutexAcquire(lock, mode))
+		return true;
+
+	if (mode == LW_SHARED)
+		LWLockFutexWaitForSharedLockable(lock,
+										 pg_atomic_read_u64(&lock->futex_pair));
+	else
+		LWLockFutexWaitForExclusiveLockable(lock,
+											pg_atomic_read_u64(&lock->futex_pair));
+#else
 	/*
 	 * Lock out cancel/die interrupts until we exit the code section protected
 	 * by the LWLock.  This ensures that interrupts will not interfere with
@@ -1761,8 +1801,10 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 	}
 
 	return !mustwait;
+#endif
 }
 
+#ifndef LWLOCK_USE_FUTEX
 /*
  * Does the lwlock in its current state need to wait for the variable value to
  * change?
@@ -1815,6 +1857,7 @@ LWLockConflictsWithVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 oldval,
 
 	return mustwait;
 }
+#endif
 
 /*
  * LWLockWaitForVar - Wait until lock is free, or a variable is updated.
@@ -1837,6 +1880,36 @@ bool
 LWLockWaitForVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 oldval,
 				 uint64 *newval)
 {
+#ifdef LWLOCK_USE_FUTEX
+	for (;;)
+	{
+		uint32 var_update_counter;
+		uint64 value;
+		uint64 pair;
+
+		/* If the lock's free, we're done. */
+		pair = pg_atomic_read_u64(&lock->futex_pair);
+		if (!pair_exclusive_is_granted(pair))
+			return true;
+
+		/* If the value doesn't match, we're done. */
+		var_update_counter = shared_count_from_pair(pair);
+		value = pg_atomic_read_u64(valptr);
+		if (value != oldval)
+		{
+			*newval = value;
+			return false;
+		}
+
+		/* Wait for the counter to move or exclusive to be released. */
+		if (pg_futex_wait_u32(shared_futex_from_pair(&lock->futex_pair),
+							  var_update_counter,
+							  NULL) != 0 &&
+			errno != EAGAIN &&
+			errno != EINTR)
+			elog(PANIC, "could not wait for futex: %m");
+	}
+#else
 	PGPROC	   *proc = MyProc;
 	int			extraWaits = 0;
 	bool		result = false;
@@ -1956,6 +2029,7 @@ LWLockWaitForVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 oldval,
 	RESUME_INTERRUPTS();
 
 	return result;
+#endif
 }
 
 
@@ -1972,6 +2046,23 @@ LWLockWaitForVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 oldval,
 void
 LWLockUpdateVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 val)
 {
+#ifdef LWLOCK_USE_FUTEX
+	pg_atomic_exchange_u64(valptr, val);
+
+	/*
+	 * When using the variable change interface, shared locks are not
+	 * supported.  So we can borrow that futex to use as a change counter.
+	 *
+	 * XXX This is not a good API and should probably be replaced with
+	 * something completely different with buckets of waitlists for LSN ranges
+	 * or something.
+	 *
+	 * XXX 31 bits of 'shared count' might overflow.  That'd trample on the
+	 * exclusive granted flag, and risk ABA problems (in theory).
+	 */
+	pg_atomic_fetch_add_u64(&lock->futex_pair, 1);
+	pg_futex_wake_u32(shared_futex_from_pair(&lock->futex_pair));
+#else
 	proclist_head wakeup;
 	proclist_mutable_iter iter;
 
@@ -2024,6 +2115,7 @@ LWLockUpdateVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 val)
 		waiter->lwWaiting = LW_WS_NOT_WAITING;
 		PGSemaphoreUnlock(waiter->sem);
 	}
+#endif
 }
 
 
@@ -2034,8 +2126,10 @@ void
 LWLockRelease(LWLock *lock)
 {
 	LWLockMode	mode;
+#ifndef LWLOCK_USE_FUTEX
 	uint32		oldstate;
 	bool		check_waiters;
+#endif
 	int			i;
 
 	/*

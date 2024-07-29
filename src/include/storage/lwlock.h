@@ -52,6 +52,7 @@ typedef struct LWLock
 #endif
 #else
 	pg_atomic_uint64 futex_pair;
+	pg_atomic_uint32 var_update_counter;
 #endif
 } LWLock;
 
