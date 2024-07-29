@@ -775,6 +775,8 @@ GetLWLockIdentifier(uint32 classId, uint16 eventId)
 	return GetLWTrancheName(eventId);
 }
 
+#ifndef LWLOCK_USE_FUTEX
+
 /*
  * Internal function that tries to atomically acquire the lwlock in the passed
  * in mode.
@@ -1159,11 +1161,20 @@ LWLockDequeueSelf(LWLock *lock)
 	}
 #endif
 }
+#endif
 
-#ifndef LWLOCK_USE_FUTEX
+#ifdef LWLOCK_USE_FUTEX
 
+/*
+ * There is a copy of the exclusive lock granted bit in both halves of the 64
+ * bit value.  This allows us to create two separate wait queues on two
+ * separate futexes, which make it possible to wake single queued up exclusive
+ * lock waiters at a time.
+ */
 #define LWLOCK_EXCLUSIVE_GRANTED_MASK 0x8000000080000000
-#define LWLOCK_EXCLUSIVE_INC          0x0000000100000000
+
+/* Exclusive lock waiters/holders are counted in the upper word. */
+#define LWLOCK_EXCLUSIVE_INC          (1 << 32)
 
 static bool
 pair_exclusive_granted(uint64 pair)
@@ -2046,6 +2057,10 @@ LWLockRelease(LWLock *lock)
 
 	PRINT_LWDEBUG("LWLockRelease", lock, mode);
 
+#ifdef LWLOCK_USE_FUTEX
+	LWLockFutexRelease(lock, mode);
+#else
+
 	/*
 	 * Release my hold on lock, after that it can immediately be acquired by
 	 * others, even if we still have to wakeup other waiters.
@@ -2082,6 +2097,7 @@ LWLockRelease(LWLock *lock)
 		LOG_LWDEBUG("LWLockRelease", lock, "releasing waiters");
 		LWLockWakeup(lock);
 	}
+#endif
 
 	/*
 	 * Now okay to allow cancel/die interrupts.
