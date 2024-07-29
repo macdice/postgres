@@ -33,6 +33,8 @@ typedef enum LWLockWaitState
 								 * signalled */
 }			LWLockWaitState;
 
+#define LWLOCK_USE_FUTEX
+
 /*
  * Code outside of lwlock.c should not manipulate the contents of this
  * structure directly, but we have to declare it here to allow LWLocks to be
@@ -41,11 +43,15 @@ typedef enum LWLockWaitState
 typedef struct LWLock
 {
 	uint16		tranche;		/* tranche ID */
+#ifndef LWLOCK_USE_FUTEX
 	pg_atomic_uint32 state;		/* state of exclusive/nonexclusive lockers */
 	proclist_head waiters;		/* list of waiting PGPROCs */
 #ifdef LOCK_DEBUG
 	pg_atomic_uint32 nwaiters;	/* number of waiters */
 	struct PGPROC *owner;		/* last exclusive owner of the lock */
+#endif
+#else
+	pg_atomic_uint64 futex_pair;
 #endif
 } LWLock;
 

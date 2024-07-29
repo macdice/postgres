@@ -706,12 +706,16 @@ RequestNamedLWLockTranche(const char *tranche_name, int num_lwlocks)
 void
 LWLockInitialize(LWLock *lock, int tranche_id)
 {
+#ifndef LWLOCK_USE_FUTEX
 	pg_atomic_init_u32(&lock->state, LW_FLAG_RELEASE_OK);
 #ifdef LOCK_DEBUG
 	pg_atomic_init_u32(&lock->nwaiters, 0);
 #endif
 	lock->tranche = tranche_id;
 	proclist_init(&lock->waiters);
+#else
+	pg_atomic_init_u64(&lock->futex_pair, 0);
+#endif
 }
 
 /*
@@ -1156,6 +1160,221 @@ LWLockDequeueSelf(LWLock *lock)
 #endif
 }
 
+#ifndef LWLOCK_USE_FUTEX
+
+#define LWLOCK_EXCLUSIVE_GRANTED_MASK 0x8000000080000000
+#define LWLOCK_EXCLUSIVE_INC          0x0000000100000000
+
+static bool
+pair_exclusive_granted(uint64 pair)
+{
+	/*
+	 * There are two bits representing 'exclusive granted' state.  They should
+	 * always both be on or off.
+	 */
+	Assert((pair & LWLOCK_EXCLUSIVE_GRANTED_MASK) == 0 ||
+		   (pair & LWLOCK_EXCLUSIVE_GRANTED_MASK) == LWLOCK_EXCLUSIVE_GRANTED_MASK);
+
+	return (pair & LWLOCK_EXCLUSIVE_GRANTED_MASK) != 0;
+}
+
+static uint32
+exclusive_count_from_pair(uint64 pair)
+{
+	return (pair & ~LWLOCK_EXCLUSIVE_GRANTED_MASK) >> 32;
+}
+
+static uint32
+shared_count_from_pair(uint64 pair)
+{
+	return pair & ~LWLOCK_EXCLUSIVE_GRANTED_MASK;
+}
+
+static void *
+exclusive_futex_from_pair(pg_atomic_uint64 *pair)
+{
+	uint32 *pair_u32 = (void *) pair;
+
+	return &pair[1];
+}
+
+static bool
+LWLockAcquireFutex(LWLock *lock, LWLockMode mode, bool conditional)
+{
+	uint64		pair;
+
+	if (mode == LW_SHARED)
+	{
+		/* Attempt to acquire shared lock by simple fetch-and-add. */
+		pair = pg_atomic_fetch_add_u64(&lock->futex_pair, 1);
+
+		if (!pair_exclusive_granted(pair))
+		{
+			/*
+			 * No exclusive lock is granted.  There may be backends waiting for
+			 * an exclusive lock, but with this policy they'll have to keep
+			 * waiting (readers can starve writers).
+			 */
+			return true;
+		}
+
+		/* Give up now if conditional. */
+		if (conditional)
+		{
+			pg_atomic_fetch_sub_u64(&lock->futex_pair, 1);
+			return false;
+		}
+
+		/* Wait for exclusive lock to be released. */
+		do
+		{
+			if (pg_futex_wait_u32(exclusive_futex_from_pair(&lock->futex_pair),
+				pair >> 32,
+				NULL) != 0 &&
+				errno != EAGAIN &&
+				errno != EINTR)
+					elog(PANIC, "could not wait for futex: %m");
+			pair = pg_atomic_read_u64(&lock->futex_pair);
+		} while (pair_exclusive_granted(pair));
+
+		/*
+		 * Now shared locks are implicitly granted, and the exclusive lock
+		 * can't be explicitly granted again until the shared count reaches
+		 * zero.
+		 */
+	
+		return true;
+	}
+	else
+	{
+		pair = pg_atomic_read_u64(&lock->futex_pair);
+		for (;;)
+		{
+			bool granted = false;
+			uint64 new_pair;
+
+			/* Increment exclusive waiter count. */
+			new_pair = pair + LWLOCK_EXCLUSIVE_INC;
+			if (shared_count_from_pair(pair) == 0 &&
+				!pair_exclusive_granted(pair))
+			{
+				/* No shared lock holders, and no exclusive lock granted. */
+				new_pair |= LWLOCK_EXCLUSIVE_GRANTED;
+				granted = true;
+			}
+
+			/* Try to commit this to memory, or go around again. */
+			if (!pg_atomic_compare_exchange_u32(&lock->futex_pair,
+												&pair,
+												new_pair))
+				continue;
+
+			if (granted)
+				return true;
+
+			/* Wait for that condition to be reached. */
+			do
+			{
+				if (pg_futex_wait_u32(share_futex_from_pair(&lock->futex_pair),
+					pair,
+					NULL) != 0 &&
+					errno != EAGAIN &&
+					errno != EINTR)
+						elog(PANIC, "could not wait for futex: %m");
+				pair = pg_atomic_read_u64(&lock->futex_pair);
+			} while (share_count_from_pair(pair) > 0 || pair_exclusive_is_granted(pair));
+
+			return true;
+		}
+	}
+}
+
+static void
+LWLockFutexRelease(LWLock *lock, LWLockMode mode)
+{
+	uint64		pair;
+
+	if (mode == EXCLUSIVE)
+	{
+		/*
+		 * Clear the granted flag, decrement the exclusive count, and capture
+		 * the old value.
+		 */
+		pair = pg_atomic_fetch_sub(&lock->futex_pair,
+								   LWLOCK_EXCLUSIVE_GRANTED_MASK ||
+								   LWLOCK_EXCLUSIVE_INT);
+
+		/* It must have been granted (to me). */
+		Assert(pair_is_granted(pair));
+		/* It must have had an exclusive count of at least one (me). */
+		Assert(exclusive_count_from_pair(pair) >= 1);
+
+		/*
+		 * After this point, any backends could see that the exclusive lock is
+		 * not granted, and taken an implicit share lock.  That includes new
+		 * backends, and backends that could 
+		 */
+
+		if (exclusive_count_from_pair(pair) == 1)
+		{
+			/*
+			 * Any share lockers that arrived and observed exclusive_count == 0
+			 * after we decremented it already consider the share lock
+			 * implicitly granted.  We should wake any other backends that are
+			 * waiting for exclusive count to reach zero so they can be granted
+			 * a share lock too.
+			 */
+			if (shared_count_from_pair(pair) > 0)
+				pg_futex_wake_u32(exclusive_futex_from_pair(&lock->futex_pair), INT_MAX);
+		}
+		else
+		{
+			/*
+			 * There is at least one other backend waiting for an exclusive
+			 * lock.  Let the kernel pick one to wake up, so it can try to
+			 * acquire the lock.
+			 */
+			if (shared_count_from_pair(pair) == 0)
+				pg_futex_wake_u32(share_futex_from_pair(&lock->futex_pair), 1);
+		}
+	}
+	else
+	{
+		/* Decrement the shared count. */
+		pair = pg_atomic_sub_fetch_u32(&lock->futex_pair, 1);
+
+		/* It can't possibly have had an exclusive lock granted. */
+		Assert(pair_exclusive_is_granted(pair));
+
+		if (exclusive_count_from_pair(pair) > 0 &&
+			shared_count_from_pair(pair) == 0)
+		{
+			/*
+			 * There is at least one backend waiting for an exclusive lock, and
+			 * the shared count has reached zero.  Let the kernel pick one to
+			 * wake up, so it can try to acquire the lock.
+			 */
+			pg_futex_wake_u32(&lock->futex_pair /* shared_count half */, 1);
+		}
+	}
+			
+
+		if (exclusive_count > 1)
+		{
+			/*
+			 * There is at least one backend waiting to obtain an exclusive
+			 * lock.  Prefer to wake it. XXX?!
+			 */
+			pg_futex_wake_u32(&lock->futex_pair, 1);
+		}
+		else if (shared_count > 0)
+		{
+			/* There is at least one backend waiting for 
+		}
+	}
+}
+#endif
+
 /*
  * LWLockAcquire - acquire a lightweight lock in the specified mode
  *
@@ -1167,9 +1386,11 @@ LWLockDequeueSelf(LWLock *lock)
 bool
 LWLockAcquire(LWLock *lock, LWLockMode mode)
 {
+#ifndef LWLOCK_USE_FUTEX
 	PGPROC	   *proc = MyProc;
 	bool		result = true;
 	int			extraWaits = 0;
+#endif
 #ifdef LWLOCK_STATS
 	lwlock_stats *lwstats;
 
@@ -1188,12 +1409,14 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 		lwstats->sh_acquire_count++;
 #endif							/* LWLOCK_STATS */
 
+#ifndef LWLOCK_USE_FUTEX
 	/*
 	 * We can't wait if we haven't got a PGPROC.  This should only occur
 	 * during bootstrap or shared memory initialization.  Put an Assert here
 	 * to catch unsafe coding practices.
 	 */
 	Assert(!(proc == NULL && IsUnderPostmaster));
+#endif
 
 	/* Ensure we will have room to remember the lock */
 	if (num_held_lwlocks >= MAX_SIMUL_LWLOCKS)
@@ -1206,6 +1429,8 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 	 */
 	HOLD_INTERRUPTS();
 
+#ifdef LWLOCK_USE_FUTEX
+#else
 	/*
 	 * Loop here to try to acquire lock after each time we are signaled by
 	 * LWLockRelease.
@@ -1311,6 +1536,7 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 		/* Now loop back and try to acquire lock again. */
 		result = false;
 	}
+#endif
 
 	if (TRACE_POSTGRESQL_LWLOCK_ACQUIRE_ENABLED())
 		TRACE_POSTGRESQL_LWLOCK_ACQUIRE(T_NAME(lock), mode);
