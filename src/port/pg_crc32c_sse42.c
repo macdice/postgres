@@ -32,7 +32,7 @@ pg_comp_crc32c_sse42(pg_crc32c crc, const void *data, size_t len)
 	 * and performance testing didn't show any performance gain from aligning
 	 * the begin address.
 	 */
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(_M_AMD64)
 	while (p + 8 <= pend)
 	{
 		crc = (uint32) _mm_crc32_u64(crc, *((const uint64 *) p));
