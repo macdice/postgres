@@ -51,7 +51,9 @@
 #include <unistd.h>
 
 #include "common/pg_prng.h"
-#include "storage/s_lock.h"
+#include "port/atomics.h"
+#include "port/spin_delay.h"
+#include "storage/spin.h"
 #include "utils/wait_event.h"
 
 #define MIN_SPINS_PER_DELAY 10
@@ -92,7 +94,7 @@ s_lock_stuck(const char *file, int line, const char *func)
 }
 
 /*
- * s_lock(lock) - platform-independent portion of waiting for a spinlock.
+ * s_lock(lock) - out-of-line portion of waiting for a spinlock.
  */
 int
 s_lock(volatile slock_t *lock, const char *file, int line, const char *func)
@@ -101,8 +103,25 @@ s_lock(volatile slock_t *lock, const char *file, int line, const char *func)
 
 	init_spin_delay(&delayStatus, file, line, func);
 
-	while (TAS_SPIN(lock))
+	for (;;)
 	{
+		bool		try_to_set;
+
+#ifdef PG_SPIN_TRY_RELAXED
+
+		/*
+		 * It is known to be more efficient to test the lock with a relaxed
+		 * load first, while spinning, on this platform.
+		 */
+		try_to_set = pg_atomic_unlocked_test_flag(lock);
+#else
+		try_to_set = true;
+#endif
+
+		/* Try to get the lock. */
+		if (try_to_set && pg_atomic_test_set_flag(lock))
+			break;
+
 		perform_spin_delay(&delayStatus);
 	}
 
@@ -111,14 +130,6 @@ s_lock(volatile slock_t *lock, const char *file, int line, const char *func)
 	return delayStatus.delays;
 }
 
-#ifdef USE_DEFAULT_S_UNLOCK
-void
-s_unlock(volatile slock_t *lock)
-{
-	*lock = 0;
-}
-#endif
-
 /*
  * Wait while spinning on a contended spinlock.
  */
@@ -126,7 +137,7 @@ void
 perform_spin_delay(SpinDelayStatus *status)
 {
 	/* CPU-specific delay each time through the loop */
-	SPIN_DELAY();
+	pg_spin_delay();
 
 	/* Block the process every spins_per_delay tries */
 	if (++(status->spins) >= spins_per_delay)
@@ -229,96 +240,3 @@ update_spins_per_delay(int shared_spins_per_delay)
 	 */
 	return (shared_spins_per_delay * 15 + spins_per_delay) / 16;
 }
-
-
-/*****************************************************************************/
-#if defined(S_LOCK_TEST)
-
-/*
- * test program for verifying a port's spinlock support.
- */
-
-struct test_lock_struct
-{
-	char		pad1;
-	slock_t		lock;
-	char		pad2;
-};
-
-volatile struct test_lock_struct test_lock;
-
-int
-main()
-{
-	pg_prng_seed(&pg_global_prng_state, (uint64) time(NULL));
-
-	test_lock.pad1 = test_lock.pad2 = 0x44;
-
-	S_INIT_LOCK(&test_lock.lock);
-
-	if (test_lock.pad1 != 0x44 || test_lock.pad2 != 0x44)
-	{
-		printf("S_LOCK_TEST: failed, declared datatype is wrong size\n");
-		return 1;
-	}
-
-	if (!S_LOCK_FREE(&test_lock.lock))
-	{
-		printf("S_LOCK_TEST: failed, lock not initialized\n");
-		return 1;
-	}
-
-	S_LOCK(&test_lock.lock);
-
-	if (test_lock.pad1 != 0x44 || test_lock.pad2 != 0x44)
-	{
-		printf("S_LOCK_TEST: failed, declared datatype is wrong size\n");
-		return 1;
-	}
-
-	if (S_LOCK_FREE(&test_lock.lock))
-	{
-		printf("S_LOCK_TEST: failed, lock not locked\n");
-		return 1;
-	}
-
-	S_UNLOCK(&test_lock.lock);
-
-	if (test_lock.pad1 != 0x44 || test_lock.pad2 != 0x44)
-	{
-		printf("S_LOCK_TEST: failed, declared datatype is wrong size\n");
-		return 1;
-	}
-
-	if (!S_LOCK_FREE(&test_lock.lock))
-	{
-		printf("S_LOCK_TEST: failed, lock not unlocked\n");
-		return 1;
-	}
-
-	S_LOCK(&test_lock.lock);
-
-	if (test_lock.pad1 != 0x44 || test_lock.pad2 != 0x44)
-	{
-		printf("S_LOCK_TEST: failed, declared datatype is wrong size\n");
-		return 1;
-	}
-
-	if (S_LOCK_FREE(&test_lock.lock))
-	{
-		printf("S_LOCK_TEST: failed, lock not re-locked\n");
-		return 1;
-	}
-
-	printf("S_LOCK_TEST: this will print %d stars and then\n", NUM_DELAYS);
-	printf("             exit with a 'stuck spinlock' message\n");
-	printf("             if S_LOCK() and TAS() are working.\n");
-	fflush(stdout);
-
-	s_lock(&test_lock.lock, __FILE__, __LINE__, __func__);
-
-	printf("S_LOCK_TEST: failed, lock not locked\n");
-	return 1;
-}
-
-#endif							/* S_LOCK_TEST */
