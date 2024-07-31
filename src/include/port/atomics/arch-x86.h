@@ -130,11 +130,41 @@ pg_spin_delay_impl(void)
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
 
+/*
+ * Note: This implementation uses non-zero values to help detect uninitialized
+ * usage on a common platform.  Note that, like the C11 atomic_flag interface
+ * that it is modeled on, pg_atomic_flag never reveals the actual values to
+ * callers and contents of memory are not specified.
+ */
+#define PG_ATOMIC_FLAG_SET 1
+#define PG_ATOMIC_FLAG_CLEAR 2
+
+static inline void
+pg_atomic_check_flag(volatile pg_atomic_flag *ptr)
+{
+#if USE_ASSERT_CHECKING
+	char		value = ptr->value;
+
+	/* Sanity check that flag has been initialized. */
+	Assert(value == PG_ATOMIC_FLAG_SET || value == PG_ATOMIC_FLAG_CLEAR);
+#endif
+}
+
+#define PG_HAVE_ATOMIC_INIT_FLAG
+static inline void
+pg_atomic_init_flag_impl(volatile pg_atomic_flag *ptr)
+{
+	ptr->value = PG_ATOMIC_FLAG_CLEAR;
+	__asm__ __volatile__("" ::: "memory");
+}
+
 #define PG_HAVE_ATOMIC_TEST_SET_FLAG
 static inline bool
 pg_atomic_test_set_flag_impl(volatile pg_atomic_flag *ptr)
 {
-	char		_res = 1;
+	char		_res = PG_ATOMIC_FLAG_SET;
+
+	pg_atomic_check_flag(ptr);
 
 	__asm__ __volatile__(
 		"	lock			\n"
@@ -142,19 +172,31 @@ pg_atomic_test_set_flag_impl(volatile pg_atomic_flag *ptr)
 :		"+q"(_res), "+m"(ptr->value)
 :
 :		"memory");
-	return _res == 0;
+	return _res == PG_ATOMIC_FLAG_CLEAR;
 }
 
 #define PG_HAVE_ATOMIC_CLEAR_FLAG
 static inline void
 pg_atomic_clear_flag_impl(volatile pg_atomic_flag *ptr)
 {
+	pg_atomic_check_flag(ptr);
+
 	/*
 	 * On a TSO architecture like x86 it's sufficient to use a compiler
 	 * barrier to achieve release semantics.
 	 */
 	__asm__ __volatile__("" ::: "memory");
-	ptr->value = 0;
+	ptr->value = PG_ATOMIC_FLAG_CLEAR;
+}
+
+#define PG_HAVE_ATOMIC_UNLOCKED_TEST_FLAG
+static inline bool
+pg_atomic_unlocked_test_flag_impl(volatile pg_atomic_flag *ptr)
+{
+	pg_atomic_check_flag(ptr);
+
+	__asm__ __volatile__("" ::: "memory");
+	return ptr->value == PG_ATOMIC_FLAG_CLEAR;
 }
 
 #define PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U32
