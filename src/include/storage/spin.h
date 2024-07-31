@@ -109,6 +109,12 @@ SpinLockInit(volatile slock_t *lock)
 static inline void
 SpinLockRelease(volatile slock_t *lock)
 {
+	/*
+	 * Use a relaxed load to see that it's currently held.  That's OK because
+	 * we expect the calling thread to be the one that set it.
+	 */
+	Assert(!pg_atomic_unlocked_test_flag(lock));
+
 	pg_atomic_clear_flag(lock);
 }
 
