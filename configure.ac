@@ -95,12 +95,6 @@ AC_MSG_RESULT([$template])
 PORTNAME=$template
 AC_SUBST(PORTNAME)
 
-# Initialize default assumption that we do not need separate assembly code
-# for TAS (test-and-set).  This can be overridden by the template file
-# when it's executed.
-need_tas=no
-tas_file=dummy.s
-
 # Default, works for most platforms, override in template file if needed
 DLSUFFIX=".so"
 
@@ -739,19 +733,6 @@ fi
 AC_PROG_CPP
 AC_SUBST(GCC)
 
-
-#
-# Set up TAS assembly code if needed; the template file has now had its
-# chance to request this.
-#
-AC_CONFIG_LINKS([src/backend/port/tas.s:src/backend/port/tas/${tas_file}])
-
-if test "$need_tas" = yes ; then
-  TAS=tas.o
-else
-  TAS=""
-fi
-AC_SUBST(TAS)
 
 AC_SUBST(DLSUFFIX)dnl
 AC_DEFINE_UNQUOTED([DLSUFFIX], ["$DLSUFFIX"],

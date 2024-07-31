@@ -731,7 +731,6 @@ PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
 PKG_CONFIG
 DLSUFFIX
-TAS
 GCC
 CPP
 CFLAGS_SL
@@ -3020,12 +3019,6 @@ $as_echo "$template" >&6; }
 
 PORTNAME=$template
 
-
-# Initialize default assumption that we do not need separate assembly code
-# for TAS (test-and-set).  This can be overridden by the template file
-# when it's executed.
-need_tas=no
-tas_file=dummy.s
 
 # Default, works for most platforms, override in template file if needed
 DLSUFFIX=".so"
@@ -7768,20 +7761,6 @@ ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
-
-
-#
-# Set up TAS assembly code if needed; the template file has now had its
-# chance to request this.
-#
-ac_config_links="$ac_config_links src/backend/port/tas.s:src/backend/port/tas/${tas_file}"
-
-
-if test "$need_tas" = yes ; then
-  TAS=tas.o
-else
-  TAS=""
-fi
 
 
 
@@ -19924,7 +19903,6 @@ cat >>$CONFIG_STATUS <<\_ACEOF || ac_write_fail=1
 for ac_config_target in $ac_config_targets
 do
   case $ac_config_target in
-    "src/backend/port/tas.s") CONFIG_LINKS="$CONFIG_LINKS src/backend/port/tas.s:src/backend/port/tas/${tas_file}" ;;
     "GNUmakefile") CONFIG_FILES="$CONFIG_FILES GNUmakefile" ;;
     "src/Makefile.global") CONFIG_FILES="$CONFIG_FILES src/Makefile.global" ;;
     "src/backend/port/pg_sema.c") CONFIG_LINKS="$CONFIG_LINKS src/backend/port/pg_sema.c:${SEMA_IMPLEMENTATION}" ;;

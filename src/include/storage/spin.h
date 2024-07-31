@@ -14,9 +14,11 @@
  *		Acquire a spinlock, waiting if necessary.
  *		Time out and abort() if unable to acquire the lock in a
  *		"reasonable" amount of time --- typically ~ 1 minute.
+ *		Acquire (including read barrier) semantics.
  *
  *	void SpinLockRelease(volatile slock_t *lock)
  *		Unlock a previously acquired lock.
+ *		Release (including write barrier) semantics.
  *
  *	bool SpinLockFree(slock_t *lock)
  *		Tests if the lock is free. Returns true if free, false if locked.
@@ -35,11 +37,6 @@
  *	for a CHECK_FOR_INTERRUPTS() to occur while holding a spinlock, and so
  *	it is not necessary to do HOLD/RESUME_INTERRUPTS() in these macros.
  *
- *	These macros are implemented in terms of hardware-dependent macros
- *	supplied by s_lock.h.  There is not currently any extra functionality
- *	added by this header, but there has been in the past and may someday
- *	be again.
- *
  *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -51,15 +48,68 @@
 #ifndef SPIN_H
 #define SPIN_H
 
-#include "storage/s_lock.h"
+#ifdef FRONTEND
+#error "spin.h may not be included from frontend code"
+#endif
 
+#include "port/atomics.h"
 
-#define SpinLockInit(lock)	S_INIT_LOCK(lock)
+/* Support for dynamic adjustment of spins_per_delay */
+#define DEFAULT_SPINS_PER_DELAY  100
 
-#define SpinLockAcquire(lock) S_LOCK(lock)
+typedef pg_atomic_flag slock_t;
 
-#define SpinLockRelease(lock) S_UNLOCK(lock)
+/*
+ * Support for spin delay which is useful in various places where
+ * spinlock-like procedures take place.
+ */
+typedef struct
+{
+	int			spins;
+	int			delays;
+	int			cur_delay;
+	const char *file;
+	int			line;
+	const char *func;
+} SpinDelayStatus;
 
-#define SpinLockFree(lock)	S_LOCK_FREE(lock)
+static inline void
+init_spin_delay(SpinDelayStatus *status,
+				const char *file, int line, const char *func)
+{
+	status->spins = 0;
+	status->delays = 0;
+	status->cur_delay = 0;
+	status->file = file;
+	status->line = line;
+	status->func = func;
+}
+
+#define init_local_spin_delay(status) init_spin_delay(status, __FILE__, __LINE__, __func__)
+extern void perform_spin_delay(SpinDelayStatus *status);
+extern void finish_spin_delay(SpinDelayStatus *status);
+extern void set_spins_per_delay(int shared_spins_per_delay);
+extern int	update_spins_per_delay(int shared_spins_per_delay);
+
+/* Out-of-line part of spinlock acquisition. */
+extern int	s_lock(volatile slock_t *lock,
+				   const char *file, int line,
+				   const char *func);
+
+static inline void
+SpinLockInit(volatile slock_t *lock)
+{
+	pg_atomic_init_flag(lock);
+}
+
+#define SpinLockAcquire(lock)						\
+	(pg_atomic_test_set_flag(lock) ? 0 :			\
+	 s_lock((lock), __FILE__, __LINE__, __func__))
+
+static inline void
+SpinLockRelease(volatile slock_t *lock)
+{
+	pg_atomic_clear_flag(lock);
+}
 
 #endif							/* SPIN_H */
