@@ -32,7 +32,7 @@ pg_comp_crc32c_sse42(pg_crc32c crc, const void *data, size_t len)
 	 * and performance testing didn't show any performance gain from aligning
 	 * the begin address.
 	 */
-#ifdef __x86_64__
+#ifdef PG_ARCH_X86_64
 	while (p + 8 <= pend)
 	{
 		crc = (uint32) _mm_crc32_u64(crc, *((const uint64 *) p));
@@ -56,7 +56,7 @@ pg_comp_crc32c_sse42(pg_crc32c crc, const void *data, size_t len)
 		crc = _mm_crc32_u32(crc, *((const unsigned int *) p));
 		p += 4;
 	}
-#endif							/* __x86_64__ */
+#endif							/* PG_ARCH_X86_64 */
 
 	/* Process any remaining bytes one at a time. */
 	while (p < pend)

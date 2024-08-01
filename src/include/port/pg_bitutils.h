@@ -82,7 +82,7 @@ pg_leftmost_one_pos64(uint64 word)
 #error must have a working 64-bit integer datatype
 #endif							/* HAVE_LONG_INT_64 */
 
-#elif defined(_MSC_VER) && (defined(_M_AMD64) || defined(_M_ARM64))
+#elif defined(_MSC_VER) && (defined(PG_ARCH_ARM_64) || defined(PG_ARCH_X86_64))
 	unsigned long result;
 	bool		non_zero;
 
@@ -155,7 +155,7 @@ pg_rightmost_one_pos64(uint64 word)
 #error must have a working 64-bit integer datatype
 #endif							/* HAVE_LONG_INT_64 */
 
-#elif defined(_MSC_VER) && (defined(_M_AMD64) || defined(_M_ARM64))
+#elif defined(_MSC_VER) && (defined(PG_ARCH_ARM_64) || defined(PG_ARCH_X86_64))
 	unsigned long result;
 	bool		non_zero;
 
@@ -282,7 +282,7 @@ pg_ceil_log2_64(uint64 num)
  * __builtin_popcount* intrinsic functions as they always emit popcnt
  * instructions.
  */
-#if defined(_MSC_VER) && defined(_M_AMD64)
+#if defined(_MSC_VER) && defined(PG_ARCH_X86_64)
 #define HAVE_X86_64_POPCNTQ
 #endif
 

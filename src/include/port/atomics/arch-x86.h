@@ -32,10 +32,10 @@
  */
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
-#if defined(__i386__) || defined(__i386)
+#if defined(PG_ARCH_X86_32)
 #define pg_memory_barrier_impl()		\
 	__asm__ __volatile__ ("lock; addl $0,0(%%esp)" : : : "memory", "cc")
-#elif defined(__x86_64__)
+#elif defined(PG_ARCH_X86_64)
 #define pg_memory_barrier_impl()		\
 	__asm__ __volatile__ ("lock; addl $0,0(%%rsp)" : : : "memory", "cc")
 #endif
@@ -67,14 +67,14 @@ typedef struct pg_atomic_uint32
  * It's too complicated to write inline asm for 64bit types on 32bit and the
  * 486 can't do it anyway.
  */
-#ifdef __x86_64__
+#ifdef PG_ARCH_X86_64
 #define PG_HAVE_ATOMIC_U64_SUPPORT
 typedef struct pg_atomic_uint64
 {
 	/* alignment guaranteed due to being on a 64bit platform */
 	volatile uint64 value;
 } pg_atomic_uint64;
-#endif	/* __x86_64__ */
+#endif	/* PG_ARCH_X86_64 */
 
 #endif /* defined(__GNUC__) || defined(__INTEL_COMPILER) */
 
@@ -109,7 +109,7 @@ pg_spin_delay_impl(void)
 {
 	__asm__ __volatile__(" rep; nop			\n");
 }
-#elif defined(_MSC_VER) && defined(__x86_64__)
+#elif defined(_MSC_VER) && defined(PG_ARCH_X86_64)
 #define PG_HAVE_SPIN_DELAY
 static __forceinline void
 pg_spin_delay_impl(void)
@@ -192,7 +192,7 @@ pg_atomic_fetch_add_u32_impl(volatile pg_atomic_uint32 *ptr, int32 add_)
 	return res;
 }
 
-#ifdef __x86_64__
+#ifdef PG_ARCH_X86_64
 
 #define PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U64
 static inline bool
@@ -231,7 +231,7 @@ pg_atomic_fetch_add_u64_impl(volatile pg_atomic_uint64 *ptr, int64 add_)
 	return res;
 }
 
-#endif /* __x86_64__ */
+#endif /* PG_ARCH_X86_64 */
 
 #endif /* defined(__GNUC__) || defined(__INTEL_COMPILER) */
 
@@ -241,6 +241,6 @@ pg_atomic_fetch_add_u64_impl(volatile pg_atomic_uint64 *ptr, int64 add_)
  */
 #if defined(__i568__) || defined(__i668__) || /* gcc i586+ */  \
 	(defined(_M_IX86) && _M_IX86 >= 500) || /* msvc i586+ */ \
-	defined(__x86_64__) || defined(__x86_64) || defined(_M_X64) /* gcc, sunpro, msvc */
+	defined(PG_ARCH_X86_64)
 #define PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY
 #endif /* 8 byte single-copy atomicity */

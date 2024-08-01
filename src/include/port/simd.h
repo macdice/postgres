@@ -18,7 +18,7 @@
 #ifndef SIMD_H
 #define SIMD_H
 
-#if (defined(__x86_64__) || defined(_M_AMD64))
+#ifdef PG_ARCH_X86_64
 /*
  * SSE2 instructions are part of the spec for the 64-bit x86 ISA. We assume
  * that compilers targeting this architecture understand SSE2 intrinsics.

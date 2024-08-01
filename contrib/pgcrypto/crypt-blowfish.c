@@ -38,10 +38,10 @@
 #include "px-crypt.h"
 #include "px.h"
 
-#ifdef __i386__
+#if defined(PG_ARCH_X86_32)
 #define BF_ASM				0	/* 1 */
 #define BF_SCALE			1
-#elif defined(__x86_64__)
+#elif defined(PG_ARCH_X86_64)
 #define BF_ASM				0
 #define BF_SCALE			1
 #else

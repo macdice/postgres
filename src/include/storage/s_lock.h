@@ -385,7 +385,7 @@ do \
 
 
 /* PowerPC */
-#if defined(__ppc__) || defined(__powerpc__) || defined(__ppc64__) || defined(__powerpc64__)
+#if defined(PG_ARCH_POWER_32) || defined(PG_ARCH_POWER_64)
 #define HAS_TEST_AND_SET
 
 typedef unsigned int slock_t;

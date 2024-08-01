@@ -425,6 +425,39 @@ typedef void (*pg_funcptr_t) (void);
 #define HAVE_PRAGMA_GCC_SYSTEM_HEADER	1
 #endif
 
+/*
+ * Project-standardized name for CPU architectures, to avoid having to repeat
+ * the names that different compilers use.
+ */
+#if defined(__arm__) || defined(__arm)
+#define PG_ARCH_ARM_32
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define PG_ARCH_ARM_64
+#elif defined(__mips__)
+#define PG_ARCH_MIPS_32
+#elif defined(__mips64__)
+#define PG_ARCH_MIPS_64
+#elif defined(__ppc__) || defined(__powerpc__)
+#define PG_ARCH_POWER_32
+#elif defined(__ppc64__) || defined(__powerpc64__)
+#define PG_ARCH_POWER_64
+#elif defined(__riscv__)
+#define PG_ARCH_RISCV_32
+#elif defined(__riscv64__)
+#define PG_ARCH_RISCV_64
+#elif defined(__s390__)
+#define PG_ARCH_S390_32
+#elif defined(__s390x__)
+#define PG_ARCH_S390_64
+#elif defined(__sparc)
+#define PG_ARCH_SPARC_32
+#elif defined(__sparcv9)
+#define PG_ARCH_SPARC_64
+#elif defined(__i386__) || defined (__386) || defined(_M_IX86)
+#define PG_ARCH_X86_32
+#elif defined(__x86_64__) || defined(__x86_64) || defined (__amd64)
+#define PG_ARCH_X86_64
+#endif
 
 /* ----------------------------------------------------------------
  *				Section 2:	bool, true, false
