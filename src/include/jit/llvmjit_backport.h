@@ -15,7 +15,7 @@
  * class llvm::backport::SectionMemoryManager that we use as a workaround.
  * This header controls whether we use it.
  */
-#if defined(__aarch64__) && LLVM_VERSION_MAJOR < 22
+#if defined(PG_ARCH_ARM_64) && LLVM_VERSION_MAJOR < 22
 #define USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
 #endif
 

@@ -193,7 +193,7 @@ spin_delay(void)
 #endif	 /* __i386__ */
 
 
-#ifdef __x86_64__		/* AMD Opteron, Intel EM64T */
+#ifdef PG_ARCH_X86_64		/* AMD Opteron, Intel EM64T */
 #define HAS_TEST_AND_SET
 
 typedef unsigned char slock_t;
@@ -238,7 +238,7 @@ spin_delay(void)
 		" rep; nop			\n");
 }
 
-#endif	 /* __x86_64__ */
+#endif	 /* PG_ARCH_X86_64 */
 
 
 /*
@@ -247,7 +247,7 @@ spin_delay(void)
  * We use the int-width variant of the builtin because it works on more chips
  * than other widths.
  */
-#if defined(__arm__) || defined(__arm) || defined(__aarch64__)
+#if defined(PG_ARCH_ARM)
 #ifdef HAVE_GCC__SYNC_INT32_TAS
 #define HAS_TEST_AND_SET
 
@@ -263,7 +263,7 @@ tas(volatile slock_t *lock)
 
 #define S_UNLOCK(lock) __sync_lock_release(lock)
 
-#if defined(__aarch64__)
+#if defined(PG_ARCH_ARM_64)
 
 /*
  * On ARM64, it's a win to use a non-locking test before the TAS proper.  It
@@ -285,9 +285,9 @@ spin_delay(void)
 		" isb;				\n");
 }
 
-#endif	 /* __aarch64__ */
+#endif	 /* PG_ARCH_ARM_64 */
 #endif	 /* HAVE_GCC__SYNC_INT32_TAS */
-#endif	 /* __arm__ || __arm || __aarch64__ */
+#endif	 /* PG_ARCH_ARM */
 
 
 /* S/390 and S/390x Linux (32- and 64-bit zSeries) */
@@ -391,7 +391,7 @@ do \
 
 
 /* PowerPC */
-#if defined(__ppc__) || defined(__powerpc__) || defined(__ppc64__) || defined(__powerpc64__)
+#if defined(PG_ARCH_PPC)
 #define HAS_TEST_AND_SET
 
 typedef unsigned int slock_t;
@@ -452,7 +452,7 @@ do \
 #endif /* powerpc */
 
 
-#if defined(__mips__)
+#if defined(PG_ARCH_MIPS)
 #define HAS_TEST_AND_SET
 
 typedef unsigned int slock_t;

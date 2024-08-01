@@ -63,11 +63,11 @@
  * compiler barrier.
  *
  */
-#if defined(__arm__) || defined(__arm) || defined(__aarch64__)
+#if defined(PG_ARCH_ARM)
 #include "port/atomics/arch-arm.h"
-#elif defined(__i386__) || defined(__i386) || defined(__x86_64__)
+#elif defined(PG_ARCH_X86)
 #include "port/atomics/arch-x86.h"
-#elif defined(__ppc__) || defined(__powerpc__) || defined(__ppc64__) || defined(__powerpc64__)
+#elif defined(PG_ARCH_PPC)
 #include "port/atomics/arch-ppc.h"
 #endif
 

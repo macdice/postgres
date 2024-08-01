@@ -27,14 +27,14 @@
 #if defined(HAVE_ELF_AUX_INFO) || defined(HAVE_GETAUXVAL)
 #include <sys/auxv.h>
 /* Ancient glibc releases don't include the HWCAPxxx macros in sys/auxv.h */
-#if defined(__linux__) && (defined(__aarch64__) ? !defined(HWCAP_CRC32) : !defined(HWCAP2_CRC32))
+#if defined(__linux__) && (defined(PG_ARCH_ARM_64) ? !defined(HWCAP_CRC32) : !defined(HWCAP2_CRC32))
 #include <asm/hwcap.h>
 #endif
 #endif
 
 #if defined(__NetBSD__)
 #include <sys/sysctl.h>
-#if defined(__aarch64__)
+#if defined(PG_ARCH_ARM_64)
 #include <aarch64/armreg.h>
 #endif
 #endif
@@ -47,7 +47,7 @@ pg_crc32c_armv8_available(void)
 #if defined(HAVE_ELF_AUX_INFO)
 	unsigned long value;
 
-#ifdef __aarch64__
+#ifdef PG_ARCH_ARM_64
 	return elf_aux_info(AT_HWCAP, &value, sizeof(value)) == 0 &&
 		(value & HWCAP_CRC32) != 0;
 #else
@@ -55,7 +55,7 @@ pg_crc32c_armv8_available(void)
 		(value & HWCAP2_CRC32) != 0;
 #endif
 #elif defined(HAVE_GETAUXVAL)
-#ifdef __aarch64__
+#ifdef PG_ARCH_ARM_64
 	return (getauxval(AT_HWCAP) & HWCAP_CRC32) != 0;
 #else
 	return (getauxval(AT_HWCAP2) & HWCAP2_CRC32) != 0;
@@ -74,7 +74,7 @@ pg_crc32c_armv8_available(void)
 
 	size_t		len;
 	uint64		sysctlbuf[SYSCTL_CPU_ID_MAXSIZE];
-#if defined(__aarch64__)
+#if defined(PG_ARCH_ARM_64)
 	/* We assume cpu0 is representative of all the machine's CPUs. */
 	const char *path = "machdep.cpu0.cpu_id";
 	size_t		expected_len = sizeof(struct aarch64_sysctl_cpu_id);
@@ -112,7 +112,7 @@ pg_crc32c_armv8_available(void)
 static bool
 pg_pmull_available(void)
 {
-#if defined(__aarch64__) && defined(HWCAP_PMULL)
+#if defined(PG_ARCH_ARM_64) && defined(HWCAP_PMULL)
 
 #ifdef HAVE_ELF_AUX_INFO
 	unsigned long value;
