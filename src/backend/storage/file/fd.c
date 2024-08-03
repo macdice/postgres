@@ -357,6 +357,12 @@ static int	fsync_parent_path(const char *fname, int elevel);
 /* ResourceOwner callbacks to hold virtual file descriptors */
 static void ResOwnerReleaseFile(Datum res);
 static char *ResOwnerPrintFile(Datum res);
+/* ... and plain file descriptors */
+static void ResOwnerReleaseFd(Datum res);
+static char *ResOwnerPrintFd(Datum res);
+/* ... and socket descriptors */
+static void ResOwnerReleaseSocket(Datum res);
+static char *ResOwnerPrintSocket(Datum res);
 
 static const ResourceOwnerDesc file_resowner_desc =
 {
@@ -377,6 +383,50 @@ static inline void
 ResourceOwnerForgetFile(ResourceOwner owner, File file)
 {
 	ResourceOwnerForget(owner, Int32GetDatum(file), &file_resowner_desc);
+}
+
+static const ResourceOwnerDesc fd_resowner_desc =
+{
+	.name = "fd",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_FILES,
+	.ReleaseResource = ResOwnerReleaseFd,
+	.DebugPrint = ResOwnerPrintFd
+};
+
+void
+ResourceOwnerRememberFd(ResourceOwner owner, int fd)
+{
+	ResourceOwnerRemember(owner, Int32GetDatum(fd), &fd_resowner_desc);
+}
+
+void
+ResourceOwnerForgetFd(ResourceOwner owner, int fd)
+{
+	ResourceOwnerForget(owner, Int32GetDatum(fd), &fd_resowner_desc);
+}
+
+static const ResourceOwnerDesc socket_resowner_desc =
+{
+	.name = "socket",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_FILES,
+	.ReleaseResource = ResOwnerReleaseSocket,
+	.DebugPrint = ResOwnerPrintSocket
+};
+
+void
+ResourceOwnerRememberSocket(ResourceOwner owner, pgsocket fd)
+{
+	/* Windows' SOCKET varies in size 32/64 just like Datum. */
+	Assert(sizeof(Datum) >= sizeof(fd));
+	ResourceOwnerRemember(owner, (Datum) fd, &socket_resowner_desc);
+}
+
+void
+ResourceOwnerForgetSocket(ResourceOwner owner, pgsocket fd)
+{
+	ResourceOwnerForget(owner, (Datum) fd, &socket_resowner_desc);
 }
 
 /*
@@ -4048,4 +4098,34 @@ static char *
 ResOwnerPrintFile(Datum res)
 {
 	return psprintf("File %d", DatumGetInt32(res));
+}
+
+static void
+ResOwnerReleaseFd(Datum res)
+{
+	int			fd = DatumGetInt32(res);
+
+	if (close(fd) < 0)
+		elog(LOG, "resource owner failed to close fd %d: %m", fd);
+}
+
+static char *
+ResOwnerPrintFd(Datum res)
+{
+	return psprintf("fd %d", DatumGetInt32(res));
+}
+
+static void
+ResOwnerReleaseSocket(Datum res)
+{
+	pgsocket	fd = (pgsocket) res;
+
+	if (closesocket(fd) < 0)
+		elog(LOG, "resource owner failed to close socket %lld: %m", (long long) fd);
+}
+
+static char *
+ResOwnerPrintSocket(Datum res)
+{
+	return psprintf("socket %lld", (long long) res);
 }

@@ -44,6 +44,7 @@
 #define FD_H
 
 #include "port/pg_iovec.h"
+#include "utils/resowner.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -157,6 +158,15 @@ extern int	BasicOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMod
 extern bool AcquireExternalFD(void);
 extern void ReserveExternalFD(void);
 extern void ReleaseExternalFD(void);
+
+/*
+ * ResourceOwner-based cleanup for plain kernel FDs, with special variant for
+ * FDs that happen to be sockets.
+ */
+extern void ResourceOwnerRememberFd(ResourceOwner owner, int fd);
+extern void ResourceOwnerForgetFd(ResourceOwner owner, int fd);
+extern void ResourceOwnerRememberSocket(ResourceOwner owner, pgsocket fd);
+extern void ResourceOwnerForgetSocket(ResourceOwner owner, pgsocket fd);
 
 /* Make a directory with default permissions */
 extern int	MakePGDirectory(const char *directoryName);
