@@ -516,6 +516,8 @@ typedef unsigned short mode_t;
 #define connect(s, name, namelen) pgwin32_connect(s, name, namelen)
 #define recv(s, buf, len, flags) pgwin32_recv(s, buf, len, flags)
 #define send(s, buf, len, flags) pgwin32_send(s, buf, len, flags)
+#define sendto(s, msg, len, flags, to, tolen) pgwin32_sendto(s, msg, len, flags, to, tolen)
+#define recvfrom(s, msg, len, flags, from, fromlen) pgwin32_recvfrom(s, msg, len, flags, from, fromlen)
 
 extern SOCKET pgwin32_socket(int af, int type, int protocol);
 extern int	pgwin32_bind(SOCKET s, struct sockaddr *addr, int addrlen);
@@ -524,6 +526,10 @@ extern SOCKET pgwin32_accept(SOCKET s, struct sockaddr *addr, int *addrlen);
 extern int	pgwin32_connect(SOCKET s, const struct sockaddr *name, int namelen);
 extern ssize_t pgwin32_recv(SOCKET s, char *buf, size_t len, int flags);
 extern ssize_t pgwin32_send(SOCKET s, const void *buf, size_t len, int flags);
+extern ssize_t pgwin32_sendto(SOCKET s, const void *msg, size_t len, int flags,
+							  const struct sockaddr *to, socklen_t tolen);
+extern ssize_t pgwin32_recvfrom(SOCKET s, void *msg, size_t len, int flags,
+								struct sockaddr *from, socklen_t *fromlen);
 
 #endif							/* FRONTEND */
 

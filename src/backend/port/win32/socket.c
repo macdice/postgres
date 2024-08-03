@@ -25,7 +25,9 @@
 #undef accept
 #undef connect
 #undef recv
+#undef recvfrom
 #undef send
+#undef sendto
 
 /*
  * Convert the last socket error code into errno
@@ -222,6 +224,50 @@ pgwin32_send(SOCKET s, const void *buf, size_t len, int flags)
 	ssize_t		r;
 
 	r = send(s, buf, Min(INT_MAX, len), flags);
+	if (r == SOCKET_ERROR)
+	{
+		TranslateSocketError();
+		return -1;
+	}
+	return r;
+}
+
+ssize_t
+pgwin32_sendto(SOCKET s, const void *msg, size_t len, int flags,
+			   const struct sockaddr *to, socklen_t tolen)
+{
+	ssize_t		r;
+
+	if (len > INT_MAX)
+	{
+		/* Windows has pre-POSIX int len. */
+		errno = EMSGSIZE;
+		return -1;
+	}
+
+	r = sendto(s, msg, len, flags, to, tolen);
+	if (r == SOCKET_ERROR)
+	{
+		TranslateSocketError();
+		return -1;
+	}
+	return r;
+}
+
+ssize_t
+pgwin32_recvfrom(SOCKET s, void *msg, size_t len, int flags,
+				 struct sockaddr *from, socklen_t *fromlen)
+{
+	ssize_t		r;
+
+	if (len > INT_MAX)
+	{
+		/* Windows has pre-POSIX int len. */
+		errno = EMSGSIZE;
+		return -1;
+	}
+
+	r = recvfrom(s, msg, len, flags, from, fromlen);
 	if (r == SOCKET_ERROR)
 	{
 		TranslateSocketError();
