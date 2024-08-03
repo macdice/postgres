@@ -42,7 +42,6 @@ typedef unsigned int socklen_t;
 
 /* non-blocking */
 extern bool pg_set_noblock(pgsocket sock);
-extern bool pg_set_block(pgsocket sock);
 
 /* Portable path handling for Unix/Win32 (in path.c) */
 
