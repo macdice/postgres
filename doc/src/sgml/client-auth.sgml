@@ -2161,6 +2161,33 @@ host ... ldap ldapbasedn="dc=example,dc=net"
        </listitem>
       </varlistentry>
 
+      <varlistentry>
+       <term><literal>radiusrequirema</literal></term>
+       <listitem>
+        <para>
+         Whether to require a valid
+         <ulink url="https://datatracker.ietf.org/doc/html/rfc2869#section-5.14">RFC 2869</ulink>
+         <literal>Message-Authenticator</literal>
+         attribute in messages received from RADIUS servers, and ignore messages
+         that don't contain it.  The default value
+         is <literal>0</literal>, but it can be set to <literal>1</literal>.
+         This setting does not affect requests sent by
+         <productname>PostgreSQL</productname> to the RADIUS server, which
+         always include a <literal>Message-Authenticator</literal> attribute
+         (but didn't in earlier releases).
+        </para>
+        <para>
+         Two-way <literal>Message-Authenticator</literal> attributes are a
+         mitigation for the security vulnerability known as
+         <ulink url="https://blastradius.fail">Blast-RADIUS</ulink>. It is
+         recommended to always set this to 1, unless you are running an older RADIUS
+         server version that has not been upgraded to include
+         <literal>Message-Authenticator</literal> in all replies. The default will be
+         changed to 1 in a future PostgreSQL version.
+        </para>
+       </listitem>
+      </varlistentry>
+
      </variablelist>
    </para>
 

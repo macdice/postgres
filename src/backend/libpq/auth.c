@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "commands/user.h"
+#include "common/hmac.h"
 #include "common/ip.h"
 #include "common/md5.h"
 #include "libpq/auth.h"
@@ -198,7 +199,7 @@ static int	pg_SSPI_make_upn(char *accountname,
  *----------------------------------------------------------------
  */
 static int	CheckRADIUSAuth(Port *port);
-static int	PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd);
+static int	PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd, bool requirema);
 
 
 /*
@@ -2802,6 +2803,7 @@ typedef struct
 #define RADIUS_PASSWORD			2
 #define RADIUS_SERVICE_TYPE		6
 #define RADIUS_NAS_IDENTIFIER	32
+#define RADIUS_MESSAGE_AUTHENTICATOR 80
 
 /* RADIUS service types */
 #define RADIUS_AUTHENTICATE_ONLY	8
@@ -2809,7 +2811,7 @@ typedef struct
 /* Seconds to wait - XXX: should be in a config variable! */
 #define RADIUS_TIMEOUT 3
 
-static void
+static uint8 *
 radius_add_attribute(radius_packet *packet, uint8 type, const unsigned char *data, int len)
 {
 	radius_attribute *attr;
@@ -2825,7 +2827,7 @@ radius_add_attribute(radius_packet *packet, uint8 type, const unsigned char *dat
 		elog(WARNING,
 			 "adding attribute code %d with length %d to radius packet would create oversize packet, ignoring",
 			 type, len);
-		return;
+		return NULL;
 	}
 
 	attr = (radius_attribute *) ((unsigned char *) packet + packet->length);
@@ -2833,6 +2835,65 @@ radius_add_attribute(radius_packet *packet, uint8 type, const unsigned char *dat
 	attr->length = len + 2;		/* total size includes type and length */
 	memcpy(attr->data, data, len);
 	packet->length += attr->length;
+
+	/*
+	 * Return pointer into message, used to fill in Message-Authenticator
+	 * contents later.
+	 */
+	return attr->data;
+}
+
+/*
+ * Search for an attribute in a received message.  If the attribute is found,
+ * sets *value and *length (not including the header), and returns true.  If
+ * the attribute is not found but the message appears to be well-formed, sets
+ * *value to NULL and returns true.  If the message is found to be mal-formed,
+ * returns false.
+ */
+static bool
+radius_find_attribute(uint8 *packet,
+					  size_t packet_size,
+					  uint8 type,
+					  uint8 **value,
+					  uint8 *length)
+{
+	size_t		index = RADIUS_HEADER_LENGTH;
+
+	while (index < packet_size)
+	{
+		radius_attribute *attr;
+
+		/* Are there enough bytes left for the attribute header? */
+		if (index + offsetof(radius_attribute, data) >= packet_size)
+			return false;
+
+		/* No alignment requirement, members are all uint8. */
+		attr = (radius_attribute *) &packet[index];
+
+		/* Would this attribute overflow the packet? */
+		if (index + attr->length > packet_size)
+			return false;
+
+		/* Is this attribute's length shorter than its own header? */
+		if (attr->length < offsetof(radius_attribute, data))
+			return false;
+
+		/* Is this it? */
+		if (attr->attribute == type)
+		{
+			*value = attr->data;
+			*length = attr->length - offsetof(radius_attribute, data);
+			return true;
+		}
+
+		/* Nope, skip to the next one. */
+		index += attr->length;
+	}
+
+	/* Well-formed, but not found. */
+	*value = NULL;
+	*length = 0;
+	return true;
 }
 
 static int
@@ -2890,7 +2951,8 @@ CheckRADIUSAuth(Port *port)
 												   radiusports ? lfirst(radiusports) : NULL,
 												   identifiers ? lfirst(identifiers) : NULL,
 												   port->user_name,
-												   passwd);
+												   passwd,
+												   port->hba->radiusrequirema);
 
 		/*------
 		 * STATUS_OK = Login OK
@@ -2931,8 +2993,12 @@ CheckRADIUSAuth(Port *port)
 }
 
 static int
-PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd)
+PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd, bool requirema)
 {
+	pg_hmac_ctx *hmac_context;
+	uint8		message_authenticator[MD5_DIGEST_LENGTH];
+	uint8	   *message_authenticator_location;
+	uint8		message_authenticator_size;
 	radius_packet radius_send_pack;
 	radius_packet radius_recv_pack;
 	radius_packet *packet = &radius_send_pack;
@@ -2993,6 +3059,19 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 		return STATUS_ERROR;
 	}
 	packet->id = packet->vector[0];
+
+	/*
+	 * Add Message-Authenticator attribute first, per recommendations for
+	 * Blast-RADIUS mitigation.  Initially it holds zeroes, but we remember
+	 * where it is in the message so that we can fill it in later.
+	 */
+	memset(message_authenticator, 0, lengthof(message_authenticator));
+	message_authenticator_location =
+		radius_add_attribute(packet,
+							 RADIUS_MESSAGE_AUTHENTICATOR,
+							 message_authenticator,
+							 lengthof(message_authenticator));
+
 	radius_add_attribute(packet, RADIUS_SERVICE_TYPE, (const unsigned char *) &service, sizeof(service));
 	radius_add_attribute(packet, RADIUS_USER_NAME, (const unsigned char *) user_name, strlen(user_name));
 	radius_add_attribute(packet, RADIUS_NAS_IDENTIFIER, (const unsigned char *) identifier, strlen(identifier));
@@ -3047,6 +3126,32 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 	/* Length needs to be in network order on the wire */
 	packetlength = packet->length;
 	packet->length = pg_hton16(packet->length);
+
+	/*
+	 * Compute the Message-Authenticator for the whole message.  The
+	 * Message-Authenticator itself is one of the attributes, but it holds
+	 * zeroes at this point.
+	 */
+	hmac_context = pg_hmac_create(PG_MD5);
+	if (hmac_context == NULL ||
+		pg_hmac_init(hmac_context, (uint8 *) secret, strlen(secret)) < 0 ||
+		pg_hmac_update(hmac_context,
+					   (uint8 *) radius_buffer, packetlength) < 0 ||
+		pg_hmac_final(hmac_context,
+					  message_authenticator,
+					  lengthof(message_authenticator)) < 0)
+	{
+		ereport(LOG, (errmsg("could not compute RADIUS Message-Authenticator: %s",
+							 pg_hmac_error(hmac_context))));
+		pg_hmac_free(hmac_context);
+		pg_freeaddrinfo_all(hint.ai_family, serveraddrs);
+		return STATUS_ERROR;
+	}
+	pg_hmac_free(hmac_context);
+
+	/* Overwrite the attribute with the computed signature. */
+	memcpy(message_authenticator_location, message_authenticator,
+		   lengthof(message_authenticator));
 
 	sock = socket(serveraddrs[0].ai_family, SOCK_DGRAM, 0);
 	if (sock == PGINVALID_SOCKET)
@@ -3230,6 +3335,96 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 					(errmsg("RADIUS response from %s has incorrect MD5 signature",
 							server)));
 			continue;
+		}
+
+		/* Search for the Message-Authenticator attribute. */
+		if (!radius_find_attribute((uint8 *) receive_buffer,
+								   packetlength,
+								   RADIUS_MESSAGE_AUTHENTICATOR,
+								   &message_authenticator_location,
+								   &message_authenticator_size))
+		{
+			ereport(LOG,
+					(errmsg("RADIUS response from %s has malformed attributes",
+							server)));
+			continue;
+		}
+		else if (message_authenticator_location == NULL)
+		{
+			/*
+			 * If configured to require a Message-Authenticator, ignore this
+			 * message.
+			 */
+			if (requirema)
+			{
+				ereport(LOG,
+						(errmsg("RADIUS response from %s has no Message-Authenticator",
+								server)));
+				continue;
+			}
+		}
+		else if (message_authenticator_size != lengthof(message_authenticator))
+		{
+			ereport(LOG,
+					(errmsg("RADIUS response from %s has unexpected Message-Authenticator size",
+							server)));
+			continue;
+		}
+		else
+		{
+			uint8		message_authenticator_copy[lengthof(message_authenticator)];
+
+			/*
+			 * Save a copy of the received HMAC, and zero out the one in the
+			 * message so that we have input required to recompute it.
+			 */
+			memcpy(message_authenticator_copy,
+				   message_authenticator_location,
+				   lengthof(message_authenticator));
+			memset(message_authenticator_location,
+				   0,
+				   lengthof(message_authenticator));
+
+			/*
+			 * Compute the expected value.  Note that the HMAC for
+			 * Access-Accept and Access-Reject message uses the authenticator
+			 * from the original Access-Request message, so we have to do a
+			 * bit of splicing.
+			 */
+			hmac_context = pg_hmac_create(PG_MD5);
+			if (hmac_context == NULL ||
+				pg_hmac_init(hmac_context, (uint8 *) secret,
+							 strlen(secret)) < 0 ||
+				pg_hmac_update(hmac_context,
+							   (uint8 *) receive_buffer,
+							   offsetof(radius_packet, vector)) < 0 ||
+				pg_hmac_update(hmac_context,
+							   packet->vector,
+							   RADIUS_VECTOR_LENGTH) < 0 ||
+				pg_hmac_update(hmac_context,
+							   (uint8 *) receive_buffer + RADIUS_HEADER_LENGTH,
+							   packetlength - RADIUS_HEADER_LENGTH) < 0 ||
+				pg_hmac_final(hmac_context,
+							  message_authenticator,
+							  lengthof(message_authenticator)) < 0)
+			{
+				ereport(LOG, (errmsg("could not compute RADIUS Message-Authenticator: %s",
+									 pg_hmac_error(hmac_context))));
+				pg_hmac_free(hmac_context);
+				closesocket(sock);
+				return STATUS_ERROR;
+			}
+			pg_hmac_free(hmac_context);
+
+			/* Verify. */
+			if (memcmp(message_authenticator_copy,
+					   message_authenticator,
+					   lengthof(message_authenticator)) != 0)
+			{
+				ereport(LOG, (errmsg("RADIUS response from %s has invalid Message-Authenticator",
+									 server)));
+				continue;
+			}
 		}
 
 		if (receivepacket->code == RADIUS_ACCESS_ACCEPT)

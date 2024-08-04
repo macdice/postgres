@@ -112,6 +112,11 @@ log {
   file = "$radiusd_dir/radius.log"
 }
 
+# FreeRADIUS < 3.2.5 doesn't understand this, but ignores it.
+security {
+  require_message_authenticator = "yes"
+}
+
 pidfile = "$radiusd_dir/radiusd.pid"
 };
 

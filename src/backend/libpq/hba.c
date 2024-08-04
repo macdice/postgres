@@ -2446,6 +2446,14 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 		hbaline->radiusidentifiers = parsed_identifiers;
 		hbaline->radiusidentifiers_s = pstrdup(val);
 	}
+	else if (strcmp(name, "radiusrequirema") == 0)
+	{
+		REQUIRE_AUTH_OPTION(uaRADIUS, "radiusrequirema", "radius");
+		if (strcmp(val, "1") == 0)
+			hbaline->radiusrequirema = true;
+		else
+			hbaline->radiusrequirema = false;
+	}
 	else
 	{
 		ereport(elevel,
