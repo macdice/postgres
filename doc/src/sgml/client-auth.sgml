@@ -2185,6 +2185,15 @@ host ... ldap ldapbasedn="dc=example,dc=net"
          <literal>Message-Authenticator</literal> in all replies. The default will be
          changed to 1 in a future PostgreSQL version.
         </para>
+        <note>
+         <para>
+          <literal>Message-Authenticator</literal> attributes can only be
+          computed if <productname>PostgreSQL</productname> was built support for
+          <productname>OpenSSL</productname>.  Otherwise, they
+          will be silently omitted from outgoing messages, this setting
+          cannot be turned on, and incoming messages will not be verified.
+         </para>
+        </note>
        </listitem>
       </varlistentry>
 

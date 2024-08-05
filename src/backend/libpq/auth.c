@@ -24,7 +24,6 @@
 #include <unistd.h>
 
 #include "commands/user.h"
-#include "common/hmac.h"
 #include "common/ip.h"
 #include "common/md5.h"
 #include "libpq/auth.h"
@@ -39,6 +38,10 @@
 #include "replication/walsender.h"
 #include "storage/ipc.h"
 #include "utils/memutils.h"
+
+#ifdef USE_OPENSSL
+#include "openssl/hmac.h"
+#endif
 
 /*----------------------------------------------------------------
  * Global authentication functions
@@ -2811,6 +2814,31 @@ typedef struct
 /* Seconds to wait - XXX: should be in a config variable! */
 #define RADIUS_TIMEOUT 3
 
+#ifdef USE_OPENSSL
+/*
+ * Locally redirect PostgreSQL 14's pg_hmac_XXX API directly to OpenSSL
+ * functions, to simplify back-patching of BlastRADIUS mitigation to
+ * PostgreSQL 12 and 13.  If built without OpenSSL, skip HMAC support and
+ * disable Message-Authenticator attributes.
+ */
+#define RADIUS_USE_HMAC
+#define pg_hmac_ctx HMAC_CTX
+#define pg_hmac_create(...) HMAC_CTX_new()
+#define pg_hmac_init(ctx, key, key_len, ...) HMAC_Init_ex(ctx, key, key_len, EVP_md5(), NULL)
+#define pg_hmac_update HMAC_Update
+static inline int
+pg_hmac_final(pg_hmac_ctx *ctx, void *md, size_t len)
+{
+	unsigned int l = len;
+	int			result = HMAC_Final(ctx, md, &l);
+
+	Assert(l == len);
+	return result;
+}
+#define pg_hmac_free(x) if (x) HMAC_CTX_free(x)
+#define pg_hmac_error(x) "HMAC error"
+#endif
+
 static uint8 *
 radius_add_attribute(radius_packet *packet, uint8 type, const unsigned char *data, int len)
 {
@@ -2843,6 +2871,7 @@ radius_add_attribute(radius_packet *packet, uint8 type, const unsigned char *dat
 	return attr->data;
 }
 
+#ifdef RADIUS_USE_HMAC
 /*
  * Search for an attribute in a received message.  If the attribute is found,
  * sets *value and *length (not including the header), and returns true.  If
@@ -2895,6 +2924,7 @@ radius_find_attribute(uint8 *packet,
 	*length = 0;
 	return true;
 }
+#endif
 
 static int
 CheckRADIUSAuth(Port *port)
@@ -2995,10 +3025,12 @@ CheckRADIUSAuth(Port *port)
 static int
 PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd, bool requirema)
 {
+#ifdef RADIUS_USE_HMAC
 	pg_hmac_ctx *hmac_context;
 	uint8		message_authenticator[MD5_DIGEST_LENGTH];
 	uint8	   *message_authenticator_location;
 	uint8		message_authenticator_size;
+#endif
 	radius_packet radius_send_pack;
 	radius_packet radius_recv_pack;
 	radius_packet *packet = &radius_send_pack;
@@ -3060,6 +3092,8 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 	}
 	packet->id = packet->vector[0];
 
+#ifdef RADIUS_USE_HMAC
+
 	/*
 	 * Add Message-Authenticator attribute first, per recommendations for
 	 * Blast-RADIUS mitigation.  Initially it holds zeroes, but we remember
@@ -3071,6 +3105,7 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 							 RADIUS_MESSAGE_AUTHENTICATOR,
 							 message_authenticator,
 							 lengthof(message_authenticator));
+#endif
 
 	radius_add_attribute(packet, RADIUS_SERVICE_TYPE, (const unsigned char *) &service, sizeof(service));
 	radius_add_attribute(packet, RADIUS_USER_NAME, (const unsigned char *) user_name, strlen(user_name));
@@ -3127,6 +3162,8 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 	packetlength = packet->length;
 	packet->length = pg_hton16(packet->length);
 
+#ifdef RADIUS_USE_HMAC
+
 	/*
 	 * Compute the Message-Authenticator for the whole message.  The
 	 * Message-Authenticator itself is one of the attributes, but it holds
@@ -3152,6 +3189,7 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 	/* Overwrite the attribute with the computed signature. */
 	memcpy(message_authenticator_location, message_authenticator,
 		   lengthof(message_authenticator));
+#endif
 
 	sock = socket(serveraddrs[0].ai_family, SOCK_DGRAM, 0);
 	if (sock == PGINVALID_SOCKET)
@@ -3337,6 +3375,7 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 			continue;
 		}
 
+#ifdef RADIUS_USE_HMAC
 		/* Search for the Message-Authenticator attribute. */
 		if (!radius_find_attribute((uint8 *) receive_buffer,
 								   packetlength,
@@ -3426,6 +3465,7 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 				continue;
 			}
 		}
+#endif
 
 		if (receivepacket->code == RADIUS_ACCESS_ACCEPT)
 		{

@@ -2450,7 +2450,17 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 	{
 		REQUIRE_AUTH_OPTION(uaRADIUS, "radiusrequirema", "radius");
 		if (strcmp(val, "1") == 0)
+		{
+#ifdef USE_OPENSSL
 			hbaline->radiusrequirema = true;
+#else
+			ereport(elevel,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("this build does not support radiusrequirema=1"),
+					 errcontext("line %d of configuration file \"%s\"",
+								line_num, file_name)));
+#endif
+		}
 		else
 			hbaline->radiusrequirema = false;
 	}
