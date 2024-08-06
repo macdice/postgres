@@ -187,7 +187,7 @@ command_fails(
 command_fails(
 	[
 		'initdb',
-		'--locale-provider=libc', '--locale="Turkish_Türkiye.1254" --encoding=UTF-8',
+		'--locale-provider=libc', '--locale="Turkish,Türkiye" --encoding=UTF-8',
 		"$tempdir/dataX"
 	],
 	'foobar!');
