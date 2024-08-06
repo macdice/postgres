@@ -336,6 +336,33 @@ do { \
 		output_failed = true, output_errno = errno; \
 } while (0)
 
+static void
+xxx_debug(const char *prefix, const char *s)
+{
+	const unsigned char *us;
+
+	if (s == NULL)
+	{
+		printf("XXX debug: %s  = NULL\n", prefix);
+		return;
+	}
+
+	printf("XXX debug raw: %s  = \"%s\"\n", prefix, s);
+	printf("XXX debug hex: %s  = { ", prefix);
+	for (us = (const unsigned char *) s; *us; us++)
+		printf("%02x ", *us);
+	printf("}\n");
+	printf("XXX debug txt: %s  = { ", prefix);
+	for (us = (const unsigned char *) s; *us; us++)
+	{
+		if (*us >= 0x20 && *us < 0x80)
+			printf("%c  ", *us);
+		else
+			printf("?  ");
+	}
+	printf("}\n");
+}
+
 /*
  * Escape single quotes and backslashes, suitably for insertions into
  * configuration files or SQL E'' strings.
@@ -2369,8 +2396,10 @@ setlocales(void)
 	 * canonicalize locale names, and obtain any missing values from our
 	 * current environment
 	 */
+	xxx_debug("setlocales lc_ctype", lc_ctype);
 	check_locale_name(LC_CTYPE, lc_ctype, &canonname);
 	lc_ctype = canonname;
+	xxx_debug("setlocales cannonname", lc_ctype);
 	check_locale_name(LC_COLLATE, lc_collate, &canonname);
 	lc_collate = canonname;
 	check_locale_name(LC_NUMERIC, lc_numeric, &canonname);
@@ -2597,7 +2626,10 @@ setup_locale_encoding(void)
 		strcmp(lc_ctype, lc_monetary) == 0 &&
 		strcmp(lc_ctype, lc_messages) == 0 &&
 		(!icu_locale || strcmp(lc_ctype, icu_locale) == 0))
+	{
+		xxx_debug("setup_locale_encoding", lc_ctype);
 		printf(_("The database cluster will be initialized with locale \"%s\".\n"), lc_ctype);
+	}
 	else
 	{
 		printf(_("The database cluster will be initialized with this locale configuration:\n"));
@@ -3056,7 +3088,6 @@ initialize_data_directory(void)
 	check_ok();
 }
 
-
 int
 main(int argc, char *argv[])
 {
@@ -3214,6 +3245,7 @@ main(int argc, char *argv[])
 				break;
 			case 1:
 				locale = pg_strdup(optarg);
+				xxx_debug("getopt optarg", locale);
 				break;
 			case 2:
 				lc_collate = pg_strdup(optarg);
