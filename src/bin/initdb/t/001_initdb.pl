@@ -184,6 +184,14 @@ command_fails(
 	],
 	'fails for invalid option combination');
 
+command_fails(
+	[
+		'initdb',
+		'--locale-provider=libc', '--locale="Turkish_Türkiye.1254" --encoding=UTF-8',
+		"$tempdir/dataX"
+	],
+	'foobar!');
+
 command_fails([ 'initdb', '--no-sync', '--set', 'foo=bar', "$tempdir/dataX" ],
 	'fails for invalid --set option');
 
