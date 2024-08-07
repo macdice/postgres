@@ -5598,6 +5598,23 @@ StartBufferIO(BufferDesc *buf, bool forInput, bool nowait)
 	buf_state |= BM_IO_IN_PROGRESS;
 	UnlockBufHdr(buf, buf_state);
 
+	if (buf_state & BM_HINT_IN_PROGRESS)
+	{
+		SpinDelayStatus delayStatus;
+
+		/*
+		 * We can't write data out while hint bits are being set.  Since we
+		 * have set BM_IO_IN_PROGRESS, we only have to wait for the current
+		 * hinting operation to complete; new hint stores can't begin.
+		 */
+		init_local_spin_delay(&delayStatus);
+		do
+		{
+			perform_spin_delay(&delayStatus);
+		} while (pg_atomic_read_u32(&buf->state) & BM_HINT_IN_PROGRESS);
+		finish_spin_delay(&delayStatus);
+	}
+
 	ResourceOwnerRememberBufferIO(CurrentResourceOwner,
 								  BufferDescriptorGetBuffer(buf));
 
@@ -5819,6 +5836,44 @@ WaitBufHdrUnlocked(BufferDesc *buf)
 	finish_spin_delay(&delayStatus);
 
 	return buf_state;
+}
+
+static bool
+BeginHint(BufferDesc *buf)
+{
+	uint32		buf_state;
+
+	buf_state = pg_atomic_fetch_or_u32(&buf->state, BM_HINT_IN_PROGRESS);
+
+	/*
+	 * If someone else is already hinting, skip because we don't have enough
+	 * state space to track them.
+	 */
+	if (buf_state | BM_HINT_IN_PROGRESS)
+		return false;
+
+	/*
+	 * If an I/O is in progress, skip because we don't want to scribble on a
+	 * page as it is being written out to disk.
+	 */
+	if (buf_state | BM_HINT_IN_PROGRESS)
+	{
+		pg_atomic_fetch_and_u32(&buf->state, ~BM_HINT_IN_PROGRESS);
+		return false;
+	}
+
+	return true;
+}
+
+static bool
+EndHint(BufferDesc *buf)
+{
+	uint32		buf_state;
+
+	buf_state = pg_atomic_fetch_and_u32(&buf->state, ~BM_HINT_IN_PROGRESS);
+
+	Assert(buf_state & BM_HINT_IN_PROGRESS);
+	Assert((buf_state & BM_IO_IN_PROGRESS) == 0);
 }
 
 /*
