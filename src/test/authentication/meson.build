@@ -13,6 +13,7 @@ tests += {
       't/005_sspi.pl',
       't/006_login_trigger.pl',
       't/007_radius.pl',
+      't/008_radius_low_level.pl',
     ],
   },
 }
