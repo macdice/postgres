@@ -16,9 +16,11 @@ sub make_random_string
 	return $s;
 }
 
-sub begin_connect
+# Functions for connecting to PostgreSQL with a raw socket.
+
+sub begin_password_auth
 {
-	my ($node, $database, $user) = @_;
+	my ($node, $database, $user, $password) = @_;
 
 	my $sock = IO::Socket->new(
 		Domain => AF_UNIX,
@@ -28,17 +30,26 @@ sub begin_connect
 		Blocking => 1) or die "cannot connect to server";
 
 	my $startup_message = pack("NZ*Z*Z*Z*x",
-							   0x030000,
+							   0x030000, # protocol 3.0
 							   "user", $user,
 							   "database", $database);
-	print "XXX startup message = [$startup_message]\n";
 	$sock->send(pack("Na*",
 					 length($startup_message) + 4,
 					 $startup_message));
 
-	my $message;
-	$sock->recv($message, 8192);
-	print "XXXXXX got $message\n";
+	# XXX should poll() on a nonblocking socket so we can time out
+	my $response;
+	$sock->recv($response, 8192);
+	
+	$response eq pack("aNN", 'R', 8, 3)
+	  or die "expected AuthenticationCleartextPassword (R) message, but got: $response";
+
+	my $password_message = pack("Z*", $password);
+	$sock->send(pack("aNa*",
+					 "p", # PasswordMessage
+					 length($password_message) + 5,
+					 $password_message));
+
 	return $sock;
 }
 
@@ -63,8 +74,6 @@ local all test2 radius radiusservers="127.0.0.1" radiussecrets="$shared_secret" 
 );
 $node->restart;
 
-#print "XXXXXXXXX " . $node->host . "\n";
-#sleep(20);
-my $client_sock = begin_connect($node, 'postgres', 'test2');
+my $client_sock = begin_password_auth($node, 'postgres', 'test2', 'foo');
 #sleep(5);
 done_testing();
