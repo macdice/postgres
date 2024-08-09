@@ -1804,6 +1804,8 @@ AC_CHECK_FUNCS(m4_normalize([
 	pthread_is_threaded_np
 	setproctitle
 	setproctitle_fast
+	snprintf_l
+	strtod_l
 	strsignal
 	syncfs
 	sync_file_range

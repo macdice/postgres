@@ -2907,6 +2907,8 @@ func_checks = [
   ['shm_open', {'dependencies': [rt_dep], 'define': false}],
   ['shm_unlink', {'dependencies': [rt_dep], 'define': false}],
   ['shmget', {'dependencies': [cygipc_dep], 'define': false}],
+  ['snprintf_l'],
+  ['strtod_l'],
   ['socket', {'dependencies': [socket_dep], 'define': false}],
   ['strerror_r', {'dependencies': [thread_dep]}],
   ['strlcat'],
