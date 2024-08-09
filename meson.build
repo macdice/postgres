@@ -2407,6 +2407,7 @@ header_checks = [
   'sys/ucred.h',
   'termios.h',
   'ucred.h',
+  'xlocale.h',
 ]
 
 foreach header : header_checks
@@ -2550,15 +2551,6 @@ else
   cdata.set('STRERROR_R_INT', false)
 endif
 
-# Find the right header file for the locale_t type.  macOS needs xlocale.h;
-# standard is locale.h, but glibc <= 2.25 also had an xlocale.h file that
-# we should not use so we check the standard header first.  MSVC has a
-# replacement defined in src/include/port/win32_port.h.
-if not cc.has_type('locale_t', prefix: '#include <locale.h>') and \
-   cc.has_type('locale_t', prefix: '#include <xlocale.h>')
-  cdata.set('LOCALE_T_IN_XLOCALE', 1)
-endif
-
 # Check if the C compiler understands typeof or a variant.  Define
 # HAVE_TYPEOF if so, and define 'typeof' to the actual key word.
 foreach kw : ['typeof', '__typeof__', 'decltype']
@@ -2582,30 +2574,6 @@ int main(void)
     break
   endif
 endforeach
-
-
-# Try to find a declaration for wcstombs_l().  It might be in stdlib.h
-# (following the POSIX requirement for wcstombs()), or in locale.h, or in
-# xlocale.h.  If it's in the latter, define WCSTOMBS_L_IN_XLOCALE.
-wcstombs_l_test = '''
-#include <stdlib.h>
-#include <locale.h>
-@0@
-
-void main(void)
-{
-#ifndef wcstombs_l
-    (void) wcstombs_l;
-#endif
-}
-'''
-if (not cc.compiles(wcstombs_l_test.format(''),
-      name: 'wcstombs_l') and
-    cc.compiles(wcstombs_l_test.format('#include <xlocale.h>'),
-      name: 'wcstombs_l in xlocale.h'))
-    cdata.set('WCSTOMBS_L_IN_XLOCALE', 1)
-endif
-
 
 # MSVC doesn't cope well with defining restrict to __restrict, the spelling it
 # understands, because it conflicts with __declspec(restrict). Therefore we
@@ -2658,7 +2626,6 @@ endif
 # XXX: Might be worth conditioning some checks on the OS, to avoid doing
 # unnecessary checks over and over, particularly on windows.
 func_checks = [
-  ['_configthreadlocale', {'skip': host_system != 'windows'}],
   ['backtrace_symbols', {'dependencies': [execinfo_dep]}],
   ['clock_gettime', {'dependencies': [rt_dep], 'define': false}],
   ['copyfile'],
@@ -2690,6 +2657,8 @@ func_checks = [
   ['shm_open', {'dependencies': [rt_dep], 'define': false}],
   ['shm_unlink', {'dependencies': [rt_dep], 'define': false}],
   ['shmget', {'dependencies': [cygipc_dep], 'define': false}],
+  ['snprintf_l'],
+  ['strtod_l'],
   ['socket', {'dependencies': [socket_dep], 'define': false}],
   ['strchrnul'],
   ['strerror_r', {'dependencies': [thread_dep]}],

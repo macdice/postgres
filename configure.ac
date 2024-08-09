@@ -1620,8 +1620,6 @@ PGAC_UNION_SEMUN
 AC_CHECK_TYPES(socklen_t, [], [], [#include <sys/socket.h>])
 PGAC_STRUCT_SOCKADDR_SA_LEN
 
-PGAC_TYPE_LOCALE_T
-
 # MSVC doesn't cope well with defining restrict to __restrict, the
 # spelling it understands, because it conflicts with
 # __declspec(restrict). Therefore we define pg_restrict to the
@@ -1720,7 +1718,6 @@ fi
 ##
 
 PGAC_VAR_INT_TIMEZONE
-PGAC_FUNC_WCSTOMBS_L
 
 # Some versions of libedit contain strlcpy(), setproctitle(), and other
 # symbols that that library has no business exposing to the world.  Pending
@@ -1744,6 +1741,8 @@ AC_CHECK_FUNCS(m4_normalize([
 	pthread_is_threaded_np
 	setproctitle
 	setproctitle_fast
+	snprintf_l
+	strtod_l
 	strchrnul
 	strsignal
 	syncfs
@@ -1833,7 +1832,6 @@ fi
 
 # Win32 (really MinGW) support
 if test "$PORTNAME" = "win32"; then
-  AC_CHECK_FUNCS(_configthreadlocale)
   AC_LIBOBJ(dirmod)
   AC_LIBOBJ(kill)
   AC_LIBOBJ(open)

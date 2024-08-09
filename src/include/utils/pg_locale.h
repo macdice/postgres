@@ -12,7 +12,7 @@
 #ifndef _PG_LOCALE_
 #define _PG_LOCALE_
 
-#if defined(LOCALE_T_IN_XLOCALE) || defined(WCSTOMBS_L_IN_XLOCALE)
+#ifdef HAVE_XLOCALE_H
 #include <xlocale.h>
 #endif
 #ifdef USE_ICU

@@ -376,6 +376,9 @@
 /* Define to 1 if you have the `setproctitle_fast' function. */
 #undef HAVE_SETPROCTITLE_FAST
 
+/* Define to 1 if you have the `snprintf_l' function. */
+#undef HAVE_SNPRINTF_L
+
 /* Define to 1 if the system has the type `socklen_t'. */
 #undef HAVE_SOCKLEN_T
 
@@ -420,6 +423,9 @@
 
 /* Define to 1 if you have the `strsignal' function. */
 #undef HAVE_STRSIGNAL
+
+/* Define to 1 if you have the `strtod_l' function. */
+#undef HAVE_STRTOD_L
 
 /* Define to 1 if the system has the type `struct option'. */
 #undef HAVE_STRUCT_OPTION
@@ -556,9 +562,6 @@
 /* Define to 1 if your compiler understands __builtin_unreachable. */
 #undef HAVE__BUILTIN_UNREACHABLE
 
-/* Define to 1 if you have the `_configthreadlocale' function. */
-#undef HAVE__CONFIGTHREADLOCALE
-
 /* Define to 1 if you have __cpuid. */
 #undef HAVE__CPUID
 
@@ -576,9 +579,6 @@
 
 /* Define to the appropriate printf length modifier for 64-bit ints. */
 #undef INT64_MODIFIER
-
-/* Define to 1 if `locale_t' requires <xlocale.h>. */
-#undef LOCALE_T_IN_XLOCALE
 
 /* Define as the maximum alignment requirement of any C data type. */
 #undef MAXIMUM_ALIGNOF
@@ -765,9 +765,6 @@
 
 /* Define to 1 to build with ZSTD support. (--with-zstd) */
 #undef USE_ZSTD
-
-/* Define to 1 if `wcstombs_l' requires <xlocale.h>. */
-#undef WCSTOMBS_L_IN_XLOCALE
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

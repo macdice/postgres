@@ -15,6 +15,11 @@
 
 #include <ctype.h>
 
+#include <locale.h>
+#ifdef HAVE_XLOCALE_H
+#include <xlocale.h>
+#endif
+
 /*
  * Windows has enough specialized port stuff that we push most of it off
  * into another file.
@@ -216,6 +221,43 @@ extern int	pg_vfprintf(FILE *stream, const char *fmt, va_list args) pg_attribute
 extern int	pg_fprintf(FILE *stream, const char *fmt,...) pg_attribute_printf(2, 3);
 extern int	pg_vprintf(const char *fmt, va_list args) pg_attribute_printf(1, 0);
 extern int	pg_printf(const char *fmt,...) pg_attribute_printf(1, 2);
+
+/* Accessor for a thread-safe process-lifetime "C" locale. */
+extern locale_t pg_get_c_locale(void);
+
+/*
+ * A couple of systems offer a pre-defined locale_t value for the "C" locale.
+ * Otherwise fall back to the above function.  Provide a way to check that a
+ * "C" locale has been allocated at a time that convenient for error reporting.
+ */
+#ifdef LC_C_LOCALE
+#define PG_C_LOCALE LC_C_LOCALE
+#define pg_ensure_c_locale() true
+#else
+#define PG_C_LOCALE pg_get_c_locale()
+#define pg_ensure_c_locale() (pg_get_c_locale() != (locale_t) 0)
+#endif
+
+#ifndef HAVE_STRTOD_L
+/*
+ * POSIX doesn't define this function, but we can implement it with thread-safe
+ * save-and-restore.  Not all systems have uselocale(), but the ones that don't
+ * have strtod_l().
+ */
+static inline double
+strtod_l(const char *nptr, char **endptr, locale_t loc)
+{
+#ifdef WIN32
+	return _strtod_l(nptr, endptr, loc);
+#else
+	locale_t	save = uselocale(loc);
+	double		result = strtod(nptr, endptr);
+
+	uselocale(save);
+	return result;
+#endif
+}
+#endif
 
 #ifndef WIN32
 /*

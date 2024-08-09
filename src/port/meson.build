@@ -5,6 +5,7 @@ pgport_sources = [
   'chklocale.c',
   'inet_net_ntop.c',
   'noblock.c',
+  'locale.c',
   'path.c',
   'pg_bitutils.c',
   'pg_strong_random.c',
