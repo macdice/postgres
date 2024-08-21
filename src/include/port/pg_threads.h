@@ -119,11 +119,15 @@ extern int	pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *arg
 extern int	pg_thrd_join(pg_thrd_t thread, int *result);
 extern void pg_thrd_exit(int result);
 
+#ifdef PG_THREADS_WIN32
+extern pg_thrd_t pg_thrd_current_impl(void);
+#endif
+
 static inline pg_thrd_t
 pg_thrd_current(void)
 {
 #ifdef PG_THREADS_WIN32
-	return GetCurrentThread();
+	return pg_thrd_current_impl();
 #else
 	return pthread_self();
 #endif

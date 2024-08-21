@@ -35,7 +35,18 @@ typedef struct pg_thrd_thunk
 {
 	pg_thrd_start_t function;
 	void	   *argument;
+
+#ifdef PG_THREADS_WIN32
+	/* A place for the thread's own handle to be passed to the thread. */
+	pg_mtx_t mutex;
+	pg_cnd_t cond;
+	pg_thrd_t self;
+#endif
 } pg_thrd_thunk;
+
+#ifdef PG_THREADS_WIN32
+static pg_thread_local pg_thrd_self;
+#endif
 
 /*
  * A trampoline function, to handle calling convention and parameter
@@ -53,6 +64,26 @@ pg_thrd_body(void *vthunk)
 	void	   *argument = thunk->argument;
 	pg_thrd_start_t function = thunk->function;
 	int			result;
+
+#ifdef PG_THREADS_WIN32
+	/*
+	 * Windows threads don't have their own handle.  GetCurrentThread() returns
+	 * a pseudo-handle, but we need something that will work in other threads
+	 * too, if they are shared.  Wait for pg_thrd_create() to give it to us,
+	 * and store it in TSS.  Hopefully we don't really need to wait at all.
+	 */
+	pg_mtx_lock(&thunk->mutex);
+	do
+	{
+		if (thunk->self != NULL)
+		{
+			pg_thrd_self = thunk->self;
+			break;
+		}
+		pg_cnd_wait(&thunk->mutex, &thunk->cond);
+	};
+	pg_mtx_unlock(&thunk->mutex);
+#endif
 
 	free(vthunk);
 
@@ -76,10 +107,25 @@ pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument)
 	thunk->function = function;
 	thunk->argument = argument;
 
-#ifdef WIN32
+#ifdef PG_THREADS_WIN32
+	thunk->self = NULL;
+	pg_mtx_init(&thunk->mutex);
+	pg_cnd_init(&thunk->cond);
+
 	*thread = CreateThread(NULL, 0, pg_thrd_body, thunk, 0, 0);
 	if (*thread != NULL)
+	{
+		/*
+		 * Tell the thread what its own handle is.  Hopefully we get this done
+		 * before it starts running, and lock contention is avoided?
+	 	 */
+		pg_mtx_lock(&thunk->mutex);
+		thunk->self = *thread;
+		pg_mtx_unlock(&thunk->mutex);
+		pg_cnd_broadcast(&thunk->cond);
+
 		return pg_thrd_success;
+	}
 #else
 	if (pthread_create(thread, NULL, pg_thrd_body, thunk) == 0)
 		return pg_thrd_success;
@@ -128,6 +174,14 @@ pg_thrd_exit(int result)
 	pthread_exit((void *) (intptr_t) result);
 #endif
 }
+
+#ifdef PG_THREADS_WIN32
+pg_thrd_t
+pg_thrd_current_impl(void)
+{
+	return pg_thrd_self;
+}
+#endif
 
 
 /*-------------------------------------------------------------------------
