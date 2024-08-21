@@ -18,11 +18,6 @@
 #include <string.h>
 
 
-/* XXX TODO: make atomics avialable in frontend so we can use these! */
-#define pg_read_barrier()
-#define pg_write_barrier()
-
-
 /*-------------------------------------------------------------------------
  *
  * Threads.
@@ -319,12 +314,6 @@ pg_tss_install_run_destructors(void)
 #endif
 	pg_write_barrier();
 	pg_tss_run_destructors_installed = true;
-
-	/*
-	 * Make sure that any thread that receives a pg_tss_t and might store a
-	 * value can see that there is now potentially a registered destructor.
-	 */
-	pg_write_barrier();
 }
 
 /*
@@ -334,25 +323,14 @@ void
 pg_tss_ensure_destructors_in_this_thread(void)
 {
 	/*
-	 * Pairs with pg_tss_install_run_destructors(), called by pg_tss_create().
-	 * This makes sure that we know if the tss_id being set could possibly
-	 * have a destructor.  We don't want to pay the cost of checking, but we
-	 * can check with a simple load if *any* tss_id has a destructor.  If so,
-	 * we make sure that pg_tss_destructor_hook has a non-NULL value in *this*
-	 * thread, because both Windows and POSIX will only call a destructor for
-	 * a non-NULL value.
+	 * Our single native destructor will only run in threads that have assigned
+	 * a non-NULL value to it, so do that.
 	 */
-	pg_read_barrier();
-	if (pg_tss_run_destructors_installed)
-	{
 #ifdef PG_THREADS_WIN32
-		if (FlsGetValue(pg_tss_destructor_hook) == NULL)
-			FlsSetValue(pg_tss_destructor_hook, (void *) 1);
+	FlsSetValue(pg_tss_destructor_hook, (void *) 1);
 #else
-		if (pthread_getspecific(pg_tss_destructor_hook) == NULL)
-			pthread_setspecific(pg_tss_destructor_hook, (void *) 1);
+	pthread_setspecific(pg_tss_destructor_hook, (void *) 1);
 #endif
-	}
 }
 #endif
 
