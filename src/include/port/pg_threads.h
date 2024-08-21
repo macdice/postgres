@@ -123,7 +123,7 @@ static inline pg_thrd_t
 pg_thrd_current(void)
 {
 #ifdef PG_THREADS_WIN32
-	return GetCurrentThreadId();
+	return GetCurrentThread();
 #else
 	return pthread_self();
 #endif
