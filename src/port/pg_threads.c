@@ -84,11 +84,10 @@ pg_thrd_body(void *thunk)
 	 */
 	if (start_info->self == NULL)
 	{
-		pg_mtx_lock(&my_thrd_start_info->mutex);
-		while (my_thrd_start_info->self == NULL)
-			pg_cnd_wait(&my_thrd_start_info->mutex,
-						&my_thrd_start_info->cond);
-		pg_mtx_unlock(&my_thrd_start_info->mutex);
+		pg_mtx_lock(&start_info->mutex);
+		while (start_info->self == NULL)
+			pg_cnd_wait(&start_info->cond, &start_info->mutex);
+		pg_mtx_unlock(&start_info->mutex);
 	}
 	my_thrd_handle = start_info->self;
 #endif
@@ -109,26 +108,6 @@ pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument)
 {
 	pg_thrd_start_info *start_info;
 
-#ifdef PG_THREADS_WIN32
-	/*
-	 * Make sure that the thread-exit callback will run, if we haven't set it
-	 * up already.
-	 */
-	if (!pg_thrd_exit_callback_installed)
-	{
-		pg_mtx_lock(pg_thrd_start_lock);
-		if (!pg_thrd_exit_callback_installed)
-		{
-			pg_tss_t throwaway_tss;
-			if (pg_tss_create(&tss, pg_thrd_exit_callback) == pg_thrd_success)
-				pg_thrd_exit_callback_installed;
-		}
-		pg_mtx_unlock(pg_thrd_start_lock);
-		if (!pg_thrd_exit_callback_installed)
-			return pg_thrd_nomem;
-	}
-#endif
-
 	start_info = malloc(sizeof(*start_info));
 	if (start_info == NULL)
 		return pg_thrd_nomem;
@@ -137,7 +116,7 @@ pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument)
 
 #ifdef PG_THREADS_WIN32
 	start_info->self = NULL;
-	pg_mtx_init(&start_info->mutex);
+	pg_mtx_init(&start_info->mutex, pg_mtx_plain);
 	pg_cnd_init(&start_info->cond);
 
 	*thread = CreateThread(NULL, 0, pg_thrd_body, start_info, 0, 0);

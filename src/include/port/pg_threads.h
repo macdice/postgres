@@ -195,11 +195,11 @@ typedef pthread_key_t pg_tss_t;
 
 /*
  * We have to include the pg_tss_dtor_calling_convention, because Windows'
- * FLS API requires __stdcall.  This is a variation from C11.  Avoiding this
- * would seem to require implementating our own destructor registry, so we'll
- * put up with this wart.
+ * FLS API requires __stdcall.  This is a variation from the plain C11 function
+ * type tss_dtor_t.  Avoiding this would seem to require implementating our own
+ * destructor registry, so we'll put up with this wart for now.
  */
-typedef void pg_tss_dtor_calling_convention (*pg_tss_dtor_t) (void *);
+typedef void (pg_tss_dtor_calling_convention *pg_tss_dtor_t) (void *);
 
 #ifdef PG_THREADS_WIN32
 #define PG_TSS_DTOR_ITERATIONS 1

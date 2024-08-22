@@ -580,7 +580,8 @@ task:
 
   check_world_script: |
     vcvarsall x64
-    meson test %MTEST_ARGS% --num-processes %TEST_JOBS%
+    meson test %MTEST_ARGS% --num-processes %TEST_JOBS% --suite setup
+    meson test %MTEST_ARGS% --num-processes %TEST_JOBS% --suite ecpg
 
   on_failure:
     <<: *on_failure_meson

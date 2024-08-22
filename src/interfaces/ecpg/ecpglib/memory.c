@@ -12,6 +12,7 @@
 void
 ecpg_free(void *ptr)
 {
+fprintf(stderr, "XXX %d:%d ecpg_free %p\n", GetCurrentProcessId(), GetCurrentThreadId(), ptr);
 	free(ptr);
 }
 
@@ -25,6 +26,8 @@ ecpg_alloc(long size, int lineno)
 		ecpg_raise(lineno, ECPG_OUT_OF_MEMORY, ECPG_SQLSTATE_ECPG_OUT_OF_MEMORY, NULL);
 		return NULL;
 	}
+
+fprintf(stderr, "XXX %d:%d ecpg_alloc %p\n", GetCurrentProcessId(), GetCurrentThreadId(), new);
 
 	return new;
 }
@@ -40,6 +43,7 @@ ecpg_realloc(void *ptr, long size, int lineno)
 		return NULL;
 	}
 
+fprintf(stderr, "XXX %d:%d ecpg_realloc %p -> %p\n", GetCurrentProcessId(), GetCurrentThreadId(), ptr, new);
 	return new;
 }
 
@@ -58,6 +62,7 @@ ecpg_strdup(const char *string, int lineno)
 		return NULL;
 	}
 
+fprintf(stderr, "XXX %d:%d ecpg_strdup %p\n", GetCurrentProcessId(), GetCurrentThreadId(), new);
 	return new;
 }
 
@@ -71,7 +76,7 @@ struct auto_mem
 static pg_tss_t auto_mem_key;
 static pg_once_flag auto_mem_once = PG_ONCE_FLAG_INIT;
 
-static void
+static void pg_tss_dtor_calling_convention
 auto_mem_destructor(void *arg)
 {
 	(void) arg;					/* keep the compiler quiet */
@@ -121,6 +126,13 @@ ecpg_add_mem(void *ptr, int lineno)
 	if (!am)
 		return false;
 
+#ifdef USE_ASSERTION_CHECKING
+	/* We shouldn't be adding something that was already added. */
+	for (struct auto_mem *p = get_auto_allocs(); p; p = p->next)
+		Assert(p != am->pointer);
+#endif
+fprintf(stderr, "XXX %d:%d ecpg_add_mem allocated node %p to store ptr %p\n", GetCurrentProcessId(), GetCurrentThreadId(), am, ptr);
+
 	am->pointer = ptr;
 	am->next = get_auto_allocs();
 	set_auto_allocs(am);
@@ -140,7 +152,9 @@ ECPGfree_auto_mem(void)
 			struct auto_mem *act = am;
 
 			am = am->next;
+fprintf(stderr, "XXX %d:%d ECPGfree_auto_mem will free act->pointer %p (in node %p)\n", GetCurrentProcessId(), GetCurrentThreadId(), act->pointer, act);
 			ecpg_free(act->pointer);
+fprintf(stderr, "XXX %d:%d ECPGfree_auto_mem will free act %p\n", GetCurrentProcessId(), GetCurrentThreadId(), act);
 			ecpg_free(act);
 		} while (am);
 		set_auto_allocs(NULL);
@@ -159,6 +173,7 @@ ecpg_clear_auto_mem(void)
 		{
 			struct auto_mem *act = am;
 
+fprintf(stderr, "XXX %d:%d ECPGfree_clear_auto_mem freeing node %p (won't free ptr %p)\n", GetCurrentProcessId(), GetCurrentThreadId(), am, am->pointer);
 			am = am->next;
 			ecpg_free(act);
 		} while (am);

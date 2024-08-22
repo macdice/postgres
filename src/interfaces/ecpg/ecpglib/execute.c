@@ -392,6 +392,7 @@ ecpg_store_result(const PGresult *results, int act_field,
 
 		ecpg_log("ecpg_store_result on line %d: allocating memory for %d tuples\n", stmt->lineno, ntuples);
 		var->value = (char *) ecpg_auto_alloc(len, stmt->lineno);
+		fprintf(stderr, "XXX1 auto alloc %p\n", var->value);
 		if (!var->value)
 			return false;
 		*((char **) var->pointer) = var->value;
@@ -403,6 +404,7 @@ ecpg_store_result(const PGresult *results, int act_field,
 		int			len = var->ind_offset * ntuples;
 
 		var->ind_value = (char *) ecpg_auto_alloc(len, stmt->lineno);
+		fprintf(stderr, "XXX2 auto alloc %p\n", var->value);
 		if (!var->ind_value)
 			return false;
 		*((char **) var->ind_pointer) = var->ind_value;

@@ -48,7 +48,10 @@ pgtypes_fmt_replace(union un_fmt_comb replace_val, int replace_type, char **outp
 				*pstr_len -= i;
 				*output += i;
 				if (replace_type == PGTYPES_TYPE_STRING_MALLOCED)
+{
+fprintf(stderr, "XXX %d pgtypes_fmt_replace %p\n", GetCurrentThreadId(), replace_val.str_val);
 					free(replace_val.str_val);
+}
 				return 0;
 			}
 			else
@@ -144,5 +147,6 @@ pgtypes_fmt_replace(union un_fmt_comb replace_val, int replace_type, char **outp
 void
 PGTYPESchar_free(char *ptr)
 {
+fprintf(stderr, "XXX %d PGTYPESchar_free %p\n", GetCurrentThreadId(), ptr);
 	free(ptr);
 }

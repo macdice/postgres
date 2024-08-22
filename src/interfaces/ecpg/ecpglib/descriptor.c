@@ -24,7 +24,7 @@ static pg_once_flag descriptor_once = PG_ONCE_FLAG_INIT;
 
 static void descriptor_deallocate_all(struct descriptor *list);
 
-static void
+static void pg_tss_dtor_calling_convention
 descriptor_destructor(void *arg)
 {
 	descriptor_deallocate_all(arg);
@@ -436,7 +436,7 @@ ECPGget_desc(int lineno, const char *desc_name, int index,...)
 				if (arrsize == 0 && *(void **) var == NULL)
 				{
 					void	   *mem = (void *) ecpg_auto_alloc(offset * ntuples, lineno);
-
+fprintf(stderr, "XXX3 auto alloc %p\n", mem);
 					if (!mem)
 					{
 						va_end(args);
@@ -542,6 +542,7 @@ ECPGget_desc(int lineno, const char *desc_name, int index,...)
 		{
 			void	   *mem = (void *) ecpg_auto_alloc(data_var.ind_offset * ntuples, lineno);
 
+fprintf(stderr, "XXX4 auto alloc %p\n", mem);
 			if (!mem)
 			{
 				va_end(args);
