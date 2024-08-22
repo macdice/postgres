@@ -24,23 +24,10 @@
 #define PG_THREADS_H
 
 #ifdef WIN32
-/*
- * We use the macro PG_THREADS_WIN32 rather than WIN32 directly, because we
- * might want to use the C11 APIs in Visual Studio 2022+ at some point.
- * While using Windows native APIs, need an in-house implementation of TSS
- * destructors, which we also gate separately so that it can be
- * tested/maintained on other OSes too.
- */
 #define PG_THREADS_WIN32
-#define PG_THREADS_NEED_DESTRUCTOR_TABLE
 #endif
 
-/*
- * To test our own destructor mechanism on POSIX systems, for the
- * benefit of developers maintaining it, define this macro.
- */
-/* #define PG_THREADS_NEED_DESTRUCTOR_TABLE */
-
+#include <stdint.h>
 #if defined(PG_THREADS_WIN32)
 #include <windows.h>
 #else
@@ -117,17 +104,16 @@ typedef int (*pg_thrd_start_t) (void *);
 
 extern int	pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument);
 extern int	pg_thrd_join(pg_thrd_t thread, int *result);
-extern void pg_thrd_exit(int result);
 
 #ifdef PG_THREADS_WIN32
-extern pg_thrd_t pg_thrd_current_impl(void);
+extern pg_thrd_t pg_thrd_current_win32(void);
 #endif
 
 static inline pg_thrd_t
 pg_thrd_current(void)
 {
 #ifdef PG_THREADS_WIN32
-	return pg_thrd_current_impl();
+	return pg_thrd_current_win32();
 #else
 	return pthread_self();
 #endif
@@ -140,6 +126,16 @@ pg_thrd_equal(pg_thrd_t lhs, pg_thrd_t rhs)
 	return lhs == rhs;
 #else
 	return pthread_equal(lhs, rhs);
+#endif
+}
+
+static inline void
+pg_thrd_exit(int result)
+{
+#ifdef WIN32
+    ExitThread((DWORD) result);
+#else
+    pthread_exit((void *)(intptr_t) result);
 #endif
 }
 
@@ -191,49 +187,62 @@ pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
 
 #ifdef PG_THREADS_WIN32
 typedef DWORD pg_tss_t;
+#define pg_tss_dtor_calling_convention CALLBACK
 #else
 typedef pthread_key_t pg_tss_t;
+#define pg_tss_dtor_calling_convention
 #endif
 
-typedef void (*pg_tss_dtor_t) (void *);
-
 /*
- * How long before we give up trying to call all the registered
- * destructors, if the destructors themselves are calling pg_tss_set()
- * to befuddle us by storing new non-NULL values?
+ * We have to include the pg_tss_dtor_calling_convention, because Windows'
+ * FLS API requires __stdcall.  This is a variation from C11.  Avoiding this
+ * would seem to require implementating our own destructor registry, so we'll
+ * put up with this wart.
  */
-#ifdef PG_THREADS_NEED_DESTRUCTOR_TABLE
-#define PG_TSS_DTOR_ITERATIONS 8
+typedef void pg_tss_dtor_calling_convention (*pg_tss_dtor_t) (void *);
+
+#ifdef PG_THREADS_WIN32
+#define PG_TSS_DTOR_ITERATIONS 1
 #else
 #define PG_TSS_DTOR_ITERATIONS PTHREAD_DESTRUCTOR_ITERATIONS
 #endif
 
-extern int	pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor);
-extern void pg_tss_dtor_delete(pg_tss_t tss_id);
-#ifdef PG_THREADS_NEED_DESTRUCTOR_TABLE
-extern void pg_tss_ensure_destructors_in_this_thread(void);
-#endif
-
-static inline void *
-pg_tss_get(pg_tss_t key)
+static inline int
+pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 {
 #ifdef PG_THREADS_WIN32
-	return TlsGetValue(key);
+	*tss_id = FlsAlloc(destructor);
+	return *tss_id == FLS_OUT_OF_INDEXES ? pg_thrd_error : pg_thrd_success;
 #else
-	return pthread_getspecific(key);
+	return pg_thrd_maperror(pthread_key_create(tss_id, destructor));
+#endif
+}
+
+static inline void
+pg_tss_delete(pg_tss_t tss_id)
+{
+#ifdef PG_THREADS_WIN32
+	FlsDelete(tss_id);
+#else
+	pthread_key_delete(tss_id);
+#endif
+}
+
+static inline void *
+pg_tss_get(pg_tss_t tss_id)
+{
+#ifdef PG_THREADS_WIN32
+	return FlsGetValue(tss_id);
+#else
+	return pthread_getspecific(tss_id);
 #endif
 }
 
 static inline int
 pg_tss_set(pg_tss_t tss_id, void *value)
 {
-#ifdef PG_THREADS_NEED_DESTRUCTOR_TABLE
-	if (value)
-		pg_tss_ensure_destructors_in_this_thread();
-#endif
-
 #ifdef PG_THREADS_WIN32
-	return pg_thrd_maperror(TlsSetValue(tss_id, value));
+	return pg_thrd_maperror(FlsSetValue(tss_id, value));
 #else
 	return pg_thrd_maperror(pthread_setspecific(tss_id, value));
 #endif
