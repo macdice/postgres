@@ -17,7 +17,7 @@ fprintf(stderr, "XXX %d:%d ecpg_free %p\n", GetCurrentProcessId(), GetCurrentThr
 }
 
 char *
-ecpg_alloc(long size, int lineno)
+xxx_ecpg_alloc(long size, int lineno, int xxline, const char *xxfile)
 {
 	char	   *new = (char *) calloc(1L, size);
 
@@ -27,7 +27,7 @@ ecpg_alloc(long size, int lineno)
 		return NULL;
 	}
 
-fprintf(stderr, "XXX %d:%d ecpg_alloc %p\n", GetCurrentProcessId(), GetCurrentThreadId(), new);
+fprintf(stderr, "XXX %d:%d ecpg_alloc %p (%s:%d)\n", GetCurrentProcessId(), GetCurrentThreadId(), new, xxfile, xxline);
 
 	return new;
 }
@@ -103,12 +103,14 @@ set_auto_allocs(struct auto_mem *am)
 }
 
 char *
-ecpg_auto_alloc(long size, int lineno)
+xxx_ecpg_auto_alloc(long size, int lineno, int xxline, const char *xxfile)
 {
 	void	   *ptr = (void *) ecpg_alloc(size, lineno);
 
 	if (!ptr)
 		return NULL;
+
+fprintf(stderr, "XXX %d:%d ecpg_auto_alloc %p (%s:%d)\n", GetCurrentProcessId(), GetCurrentThreadId(), ptr, xxfile, xxline);
 
 	if (!ecpg_add_mem(ptr, lineno))
 	{

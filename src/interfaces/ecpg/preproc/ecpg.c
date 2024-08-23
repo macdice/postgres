@@ -406,6 +406,7 @@ main(int argc, char *const argv[])
 					if (defptr->cmdvalue != NULL)
 					{
 						/* keep it, resetting the value */
+fprintf(stderr, "XXX %d:%d free(%p) " __FILE__ ":%d", GetCurrentProcessId(), GetCurrentThreadId(), defptr->value, __LINE__);
 						free(defptr->value);
 						defptr->value = mm_strdup(defptr->cmdvalue);
 						prevdefptr = defptr;
@@ -418,6 +419,7 @@ main(int argc, char *const argv[])
 						else
 							defines = nextdefptr;
 						free(defptr->name);
+fprintf(stderr, "XXX %d:%d free(%p) " __FILE__ ":%d", GetCurrentProcessId(), GetCurrentThreadId(), defptr->value, __LINE__);
 						free(defptr->value);
 						free(defptr);
 					}

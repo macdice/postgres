@@ -171,8 +171,10 @@ bool		ecpg_get_data(const PGresult *, int, int, int, enum ECPGttype type,
 
 #define ecpg_pthreads_init()
 struct connection *ecpg_get_connection(const char *connection_name);
-char	   *ecpg_alloc(long size, int lineno);
-char	   *ecpg_auto_alloc(long size, int lineno);
+char	   *xxx_ecpg_alloc(long size, int lineno, int xxline, const char *xxfile);
+#define ecpg_alloc(s, l) xxx_ecpg_alloc((s), (l), __LINE__, __FILE__)
+char	   *xxx_ecpg_auto_alloc(long size, int lineno, int xxline, const char *xxfile);
+#define ecpg_auto_alloc(s, l) xxx_ecpg_auto_alloc((s), (l), __LINE__, __FILE__)
 char	   *ecpg_realloc(void *ptr, long size, int lineno);
 void		ecpg_free(void *ptr);
 bool		ecpg_init(const struct connection *con,
