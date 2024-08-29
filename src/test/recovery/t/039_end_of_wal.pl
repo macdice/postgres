@@ -251,6 +251,8 @@ $WAL_BLOCK_SIZE = get_int_setting($node, 'wal_block_size');
 $TLI = $node->safe_psql('postgres',
 	"SELECT timeline_id FROM pg_control_checkpoint();");
 
+$node->safe_psql('postgres', "SELECT pg_switch_wal();");
+
 my $end_lsn;
 my $prev_lsn;
 
