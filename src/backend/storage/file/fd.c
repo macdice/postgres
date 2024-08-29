@@ -2120,6 +2120,54 @@ retry:
 		else
 			return errno;
 	}
+#elif defined(WIN32)
+	{
+		HANDLE file_handle;
+		HANDLE mapping_handle;
+		void *address;
+
+		returnCode = FileAccess(file);
+		if (returnCode < 0)
+			return returnCode;
+
+		file_handle = _get_osfhandle(VfdCache[file].fd);
+		if (file_handle == INVALID_HANDLE)
+		{
+			errno = EBADF;
+			return -1;
+		}
+
+		mapping_handle = CreateFileMapping(file_handle,
+						   NULL,
+						   PAGE_READONLY,
+						   0,
+						   RELSEG_SIZE * BLCKSZ,
+						   NULL);
+		if (mapping_handle == INVALID_HANDLE)
+		{
+			errno = EINVAL;
+			return -1;
+		}
+
+		address = MapViewOfFile(mapping_handle,
+					FILE_MAP_READ,
+					0,
+					offset,
+					amount);
+		if (address == NULL)
+		{
+			CloseHandle(mapping_handle);
+			errno = EINVAL;
+			return -1;
+		}
+
+		/*
+		 * XXX And now we use PrefetchVirtualMemory().  This will
+		 * require computing an array of memory pages.  Many reports
+		 * are that it doesn't actually work :-(
+		 */
+
+	}
 #else
 	return 0;
 #endif
