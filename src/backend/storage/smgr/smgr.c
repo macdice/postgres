@@ -53,6 +53,7 @@
 
 #include "access/xlogutils.h"
 #include "lib/ilist.h"
+#include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/md.h"
@@ -101,7 +102,7 @@ typedef struct f_smgr
 								   BlockNumber blocknum, BlockNumber nblocks);
 	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
-								  BlockNumber nblocks);
+								  BlockNumber old_blocks, BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_registersync) (SMgrRelation reln, ForkNumber forknum);
 } f_smgr;
@@ -715,14 +716,18 @@ smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum)
  * smgrtruncate() -- Truncate the given forks of supplied relation to
  *					 each specified numbers of blocks
  *
- * The truncation is done immediately, so this can't be rolled back.
- *
  * The caller must hold AccessExclusiveLock on the relation, to ensure that
  * other backends receive the smgr invalidation event that this function sends
- * before they access any forks of the relation again.
+ * before they access any forks of the relation again.  The current size of
+ * the forks should be provided in old_nblocks.  This function should be
+ * called in a critical section as part of a logged operation (if appropriate
+ * for this releation), but smgrnblocks() can't run in a critical section;
+ * caller should also not process interrupts or call other smgr functions
+ * between the size check and this call.
  */
 void
-smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nblocks)
+smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
+			 BlockNumber *old_nblocks, BlockNumber *nblocks)
 {
 	int			i;
 
@@ -750,7 +755,8 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 		/* Make the cached size is invalid if we encounter an error. */
 		reln->smgr_cached_nblocks[forknum[i]] = InvalidBlockNumber;
 
-		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i], nblocks[i]);
+		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i],
+											   old_nblocks[i], nblocks[i]);
 
 		/*
 		 * We might as well update the local smgr_cached_nblocks values. The
