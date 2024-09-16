@@ -2653,6 +2653,8 @@ endif
 # unnecessary checks over and over, particularly on windows.
 func_checks = [
   ['_configthreadlocale', {'skip': host_system != 'windows'}],
+  ['aio_readv'],
+  ['aio_writev'],
   ['backtrace_symbols', {'dependencies': [execinfo_dep]}],
   ['clock_gettime', {'dependencies': [rt_dep], 'define': false}],
   ['copyfile'],

@@ -51,6 +51,12 @@
 /* Define to 1 if you want National Language Support. (--enable-nls) */
 #undef ENABLE_NLS
 
+/* Define to 1 if you have the `aio_readv' function. */
+#undef HAVE_AIO_READV
+
+/* Define to 1 if you have the `aio_writev' function. */
+#undef HAVE_AIO_WRITEV
+
 /* Define to 1 if you have the `append_history' function. */
 #undef HAVE_APPEND_HISTORY
 

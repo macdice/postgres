@@ -100,6 +100,9 @@
 #ifndef LATCH_H
 #define LATCH_H
 
+#ifdef HAVE_AIO_READV
+#include <aio.h>
+#endif
 #include <signal.h>
 
 #include "utils/resowner.h"
@@ -186,6 +189,9 @@ typedef union WaitEventSocketOp
 {
 	WaitEventSocketResult result;	/* result returned to client code */
 	WaitEventSocketSyncOp synchronous;	/* private internal state */
+#if defined(HAVE_AIO_READV) || defined(HAVE_AIO_WRITEV)
+	struct aiocb asynchronous;
+#endif
 } WaitEventSocketOp;
 
 typedef struct WaitEvent

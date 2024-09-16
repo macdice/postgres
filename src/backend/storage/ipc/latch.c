@@ -1897,6 +1897,31 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			occurred_events++;
 			returned_events++;
 		}
+#if defined(HAVE_AIO_READV) && defined(HAVE_AIO_WRITEV)
+		else if (cur_kqueue_event->filter == EVFILT_AIO)
+		{
+			struct aiocb *aiocb = (struct aiocb *) cur_kqueue_event->ident;
+			ssize_t		transferred = aio_return(aiocb);
+			int			error = cur_kqueue_event->data;
+
+			if (aiocb == &cur_event->send_op.asynchronous)
+			{
+				occurred_events->send_op.result.error = error;
+				occurred_events->send_op.result.transferred = transferred;
+				occurred_events->events = WL_SOCKET_SEND;
+				occurred_events++;
+				returned_events++;
+			}
+			else if (aiocb == &cur_event->recv_op.asynchronous)
+			{
+				occurred_events->recv_op.result.error = error;
+				occurred_events->recv_op.result.transferred = transferred;
+				occurred_events->events = WL_SOCKET_RECV;
+				occurred_events++;
+				returned_events++;
+			}
+		}
+#endif
 		else if (cur_event->events & (WL_SOCKET_READABLE |
 									  WL_SOCKET_WRITEABLE |
 									  WL_SOCKET_CLOSED))
@@ -2389,7 +2414,13 @@ WaitEventSetCanReportClosed(void)
 bool
 WaitEventSetCanUseNativeSocketAio(void)
 {
+#if (defined(WAIT_USE_KQUEUE) && \
+	 defined(HAVE_AIO_READV) && \
+	 defined(HAVE_AIO_WRITEV))
+	return true;
+#else
 	return false;
+#endif
 }
 
 /*
@@ -2573,9 +2604,36 @@ WaitEventSetSend(WaitEventSet *set, int pos, const struct iovec *iov, int iovcnt
 	}
 	else
 	{
+#if defined(HAVE_AIO_WRITEV) && defined(WAIT_USE_KQUEUE)
+		/* FreeBSD AIO with kqueue for completion notification. */
+		struct aiocb *aiocb = &set->events[pos].send_op.asynchronous;
+
+		memset(aiocb, 0, sizeof(*aiocb));
+		aiocb->aio_sigevent.sigev_notify = SIGEV_KEVENT;
+		aiocb->aio_sigevent.sigev_notify_kqueue = set->kqueue_fd;
+		aiocb->aio_sigevent.sigev_value.sival_ptr = &set->events[pos];
+		aiocb->aio_fildes = set->events[pos].fd;
+		if (iovcnt == 1)
+		{
+			aiocb->aio_buf = iov[0].iov_base;
+			aiocb->aio_nbytes = iov[0].iov_len;
+			result = aio_write(aiocb);
+		}
+		else
+		{
+			aiocb->aio_iov = unconstify(struct iovec *, iov);
+			aiocb->aio_iovcnt = iovcnt;
+			result = aio_writev(aiocb);
+		}
+		if (result < 0)
+			return -1;
+		errno = EINPROGRESS;
+		return -1;
+#else
 		/* No asynchronous send in this build. */
 		errno = ENOSYS;
 		return -1;
+#endif
 	}
 }
 
@@ -2639,8 +2697,35 @@ WaitEventSetRecv(WaitEventSet *set, int pos, const struct iovec *iov, int iovcnt
 	}
 	else
 	{
+#if defined(HAVE_AIO_READV) && defined(WAIT_USE_KQUEUE)
+		/* FreeBSD AIO with kqueue for completion notification. */
+		struct aiocb *aiocb = &set->events[pos].recv_op.asynchronous;
+
+		memset(aiocb, 0, sizeof(*aiocb));
+		aiocb->aio_sigevent.sigev_notify = SIGEV_KEVENT;
+		aiocb->aio_sigevent.sigev_notify_kqueue = set->kqueue_fd;
+		aiocb->aio_sigevent.sigev_value.sival_ptr = &set->events[pos];
+		aiocb->aio_fildes = set->events[pos].fd;
+		if (iovcnt == 1)
+		{
+			aiocb->aio_buf = iov[0].iov_base;
+			aiocb->aio_nbytes = iov[0].iov_len;
+			result = aio_read(aiocb);
+		}
+		else
+		{
+			aiocb->aio_iov = unconstify(struct iovec *, iov);
+			aiocb->aio_iovcnt = iovcnt;
+			result = aio_readv(aiocb);
+		}
+		if (result < 0)
+			return -1;
+		errno = EINPROGRESS;
+		return -1;
+#else
 		/* No asynchronous recv in this build. */
 		errno = ENOSYS;
 		return -1;
+#endif
 	}
 }
