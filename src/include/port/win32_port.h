@@ -503,6 +503,35 @@ extern void pg_queue_signal(int signum);
 #define kill(pid,sig)	pgkill(pid,sig)
 extern int	pgkill(int pid, int sig);
 
+/* POSIX requires at least 16 as a maximum possible iovcnt. */
+#define IOV_MAX 16
+
+/*
+ * An iovec struct that is compatible with POSIX <sys/uio.h>, used by the
+ * readv()/writev() functions for sockets in src/port/win32/socket.c, and also
+ * the pg_preadv()/pg_pwritev() functions for files, in
+ * src/include/port/pg_iovec.h.  The length member is limited to MAX_UINT32,
+ * but PostgreSQL shouldn't generate socket or file I/O exceeding that size.
+ * Unfortunately it is difficult to assert that in a central place.
+ *
+ * For the benefit of the socket functions, we define a struct that is
+ * layout-compatible with WSABUF so that we can cast pointers.  See the static
+ * assertions in socket.c.
+ */
+struct iovec
+{
+	uint32		iov_len;		/* POSIX has size_t, WSABUF has ULONG */
+	void	   *iov_base;		/* POSIX has void *, WSABUF has char * */
+};
+
+#ifdef _MSC_VER
+#ifndef _WIN64
+typedef long ssize_t;
+#else
+typedef __int64 ssize_t;
+#endif
+#endif
+
 /* In backend/port/win32/socket.c */
 #ifndef FRONTEND
 #define socket(af, type, protocol) pgwin32_socket(af, type, protocol)
@@ -513,6 +542,8 @@ extern int	pgkill(int pid, int sig);
 #define select(n, r, w, e, timeout) pgwin32_select(n, r, w, e, timeout)
 #define recv(s, buf, len, flags) pgwin32_recv(s, buf, len, flags)
 #define send(s, buf, len, flags) pgwin32_send(s, buf, len, flags)
+#define readv(s, iov, iovcnt) pgwin32_readv(s, iov, iovcnt)
+#define writev(s, iov, iovcnt) pgwin32_writev(s, iov, iovcnt)
 
 extern SOCKET pgwin32_socket(int af, int type, int protocol);
 extern int	pgwin32_bind(SOCKET s, struct sockaddr *addr, int addrlen);
@@ -520,8 +551,10 @@ extern int	pgwin32_listen(SOCKET s, int backlog);
 extern SOCKET pgwin32_accept(SOCKET s, struct sockaddr *addr, int *addrlen);
 extern int	pgwin32_connect(SOCKET s, const struct sockaddr *name, int namelen);
 extern int	pgwin32_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
-extern int	pgwin32_recv(SOCKET s, char *buf, int len, int flags);
-extern int	pgwin32_send(SOCKET s, const void *buf, int len, int flags);
+extern ssize_t pgwin32_recv(SOCKET s, char *buf, int len, int flags);
+extern ssize_t pgwin32_send(SOCKET s, const void *buf, int len, int flags);
+extern ssize_t pgwin32_readv(SOCKET s, const struct iovec *iov, int iovcnt);
+extern ssize_t pgwin32_writev(SOCKET s, const struct iovec *iov, int iovcnt);
 extern int	pgwin32_waitforsinglesocket(SOCKET s, int what, int timeout);
 
 extern PGDLLIMPORT int pgwin32_noblock;
@@ -564,12 +597,6 @@ extern BOOL AddUserToTokenDacl(HANDLE hToken);
 
 /* Things that exist in MinGW headers, but need to be added to MSVC */
 #ifdef _MSC_VER
-
-#ifndef _WIN64
-typedef long ssize_t;
-#else
-typedef __int64 ssize_t;
-#endif
 
 typedef unsigned short mode_t;
 

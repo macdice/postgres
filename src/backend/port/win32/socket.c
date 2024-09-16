@@ -27,7 +27,7 @@
  */
 int			pgwin32_noblock = 0;
 
-/* Undef the macros defined in win32.h, so we can access system functions */
+/* Undef the macros defined in win32_port.h, so we can access system functions */
 #undef socket
 #undef bind
 #undef listen
@@ -378,22 +378,34 @@ pgwin32_connect(SOCKET s, const struct sockaddr *addr, int addrlen)
 	return 0;
 }
 
-int
-pgwin32_recv(SOCKET s, char *buf, int len, int f)
+/*
+ * This readv()-like function can only work with sockets.  For files, see
+ * pg_preadv().
+ */
+static ssize_t
+pgwin32_readv_with_flags(SOCKET s,
+						 const struct iovec *iov, int iovcnt,
+						 DWORD flags)
 {
-	WSABUF		wbuf;
+	WSABUF	   *wsabuf = (WSABUF *) iov;
 	int			r;
 	DWORD		b;
-	DWORD		flags = f;
 	int			n;
+
+	/*
+	 * Our POSIX-style struct iovec from win32_port.h is layout-compatible
+	 * with Winsock's equivalent WSABUF.
+	 */
+	StaticAssertStmt(sizeof(*wsabuf) == sizeof(*iov), "ABI");
+	StaticAssertStmt(sizeof(wsabuf->buf) == sizeof(iov->iov_base), "ABI");
+	StaticAssertStmt(sizeof(wsabuf->len) == sizeof(iov->iov_len), "ABI");
+	StaticAssertStmt(offsetof(WSABUF, buf) == offsetof(struct iovec, iov_base), "ABI");
+	StaticAssertStmt(offsetof(WSABUF, len) == offsetof(struct iovec, iov_len), "ABI");
 
 	if (pgwin32_poll_signals())
 		return -1;
 
-	wbuf.len = len;
-	wbuf.buf = buf;
-
-	r = WSARecv(s, &wbuf, 1, &b, &flags, NULL, NULL);
+	r = WSARecv(s, wsabuf, iovcnt, &b, &flags, NULL, NULL);
 	if (r != SOCKET_ERROR)
 		return b;				/* success */
 
@@ -421,7 +433,7 @@ pgwin32_recv(SOCKET s, char *buf, int len, int f)
 										INFINITE) == 0)
 			return -1;			/* errno already set */
 
-		r = WSARecv(s, &wbuf, 1, &b, &flags, NULL, NULL);
+		r = WSARecv(s, wsabuf, iovcnt, &b, &flags, NULL, NULL);
 		if (r != SOCKET_ERROR)
 			return b;			/* success */
 		if (WSAGetLastError() != WSAEWOULDBLOCK)
@@ -445,28 +457,39 @@ pgwin32_recv(SOCKET s, char *buf, int len, int f)
 	return -1;
 }
 
-/*
- * The second argument to send() is defined by SUS to be a "const void *"
- * and so we use the same signature here to keep compilers happy when
- * handling callers.
- *
- * But the buf member of a WSABUF struct is defined as "char *", so we cast
- * the second argument to that here when assigning it, also to keep compilers
- * happy.
- */
-
-int
-pgwin32_send(SOCKET s, const void *buf, int len, int flags)
+ssize_t
+pgwin32_recv(SOCKET s, char *buf, int len, int f)
 {
-	WSABUF		wbuf;
+	struct iovec iov = {
+		.iov_base = buf,
+		.iov_len = len
+	};
+
+	return pgwin32_readv_with_flags(s, &iov, 1, f);
+}
+
+ssize_t
+pgwin32_readv(SOCKET s, const struct iovec *iov, int iovcnt)
+{
+	return pgwin32_readv_with_flags(s, iov, iovcnt, 0);
+}
+
+/*
+ * This writev()-like function can only work with sockets.  For files, see
+ * pg_pwritev().
+ */
+static ssize_t
+pgwin32_writev_with_flags(SOCKET s, const struct iovec *iov, int iovcnt,
+						  DWORD flags)
+{
+	WSABUF	   *wsabuf = (WSABUF *) iov;
 	int			r;
 	DWORD		b;
 
+	/* See assertions about wsabuf cast in pgwin32_readv_with_flags(). */
+
 	if (pgwin32_poll_signals())
 		return -1;
-
-	wbuf.len = len;
-	wbuf.buf = (char *) buf;
 
 	/*
 	 * Readiness of socket to send data to UDP socket may be not true: socket
@@ -474,7 +497,7 @@ pgwin32_send(SOCKET s, const void *buf, int len, int flags)
 	 */
 	for (;;)
 	{
-		r = WSASend(s, &wbuf, 1, &b, flags, NULL, NULL);
+		r = WSASend(s, wsabuf, iovcnt, &b, flags, NULL, NULL);
 		if (r != SOCKET_ERROR && b > 0)
 			/* Write succeeded right away */
 			return b;
@@ -505,6 +528,22 @@ pgwin32_send(SOCKET s, const void *buf, int len, int flags)
 	return -1;
 }
 
+ssize_t
+pgwin32_send(SOCKET s, const void *buf, int len, int flags)
+{
+	struct iovec iov = {
+		.iov_base = unconstify(void *, buf),
+		.iov_len = len
+	};
+
+	return pgwin32_writev_with_flags(s, &iov, 1, flags);
+}
+
+ssize_t
+pgwin32_writev(SOCKET s, const struct iovec *iov, int iovcnt)
+{
+	return pgwin32_readv_with_flags(s, iov, iovcnt, 0);
+}
 
 /*
  * Wait for activity on one or more sockets.
