@@ -128,6 +128,13 @@ struct WaitEventSet
 	 */
 	bool		exit_on_postmaster_death;
 
+	/*
+	 * Whether to use native socket AIO.  If not enabled,
+	 * WaitEventSet{Send,Recv} simulate completion-based I/O using traditional
+	 * readiness-based APIs.
+	 */
+	bool		native_socket_aio;
+
 #if defined(WAIT_USE_EPOLL)
 	int			epoll_fd;
 	/* epoll_wait returns events in a user provided arrays, allocate once */
@@ -748,7 +755,7 @@ ResetLatch(Latch *latch)
  * lifetime.
  */
 WaitEventSet *
-CreateWaitEventSet(ResourceOwner resowner, int nevents)
+CreateWaitEventSetExtended(ResourceOwner resowner, int nevents, int flags)
 {
 	WaitEventSet *set;
 	char	   *data;
@@ -858,7 +865,19 @@ CreateWaitEventSet(ResourceOwner resowner, int nevents)
 	StaticAssertStmt(WSA_INVALID_EVENT == NULL, "");
 #endif
 
+	if (flags & WAIT_EVENT_SET_NATIVE_SOCKET_AIO)
+	{
+		Assert(WaitEventSetCanUseNativeSocketAio());
+		set->native_socket_aio = true;
+	}
+
 	return set;
+}
+
+WaitEventSet *
+CreateWaitEventSet(ResourceOwner resowner, int nevents)
+{
+	return CreateWaitEventSetExtended(resowner, nevents, 0);
 }
 
 /*
@@ -1060,6 +1079,16 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 	old_events = event->events;
 #endif
 
+	if (!set->native_socket_aio)
+	{
+		/* Convert asynchronous completion events to readiness events. */
+		if (events & WL_SOCKET_SEND)
+			events |= WL_SOCKET_WRITEABLE;
+		if (events & WL_SOCKET_RECV)
+			events |= WL_SOCKET_READABLE;
+	}
+	events &= ~(WL_SOCKET_RECV | WL_SOCKET_SEND);
+
 	/*
 	 * If neither the event mask nor the associated latch changes, return
 	 * early. That's an important optimization for some sockets, where
@@ -1114,6 +1143,66 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 #elif defined(WAIT_USE_WIN32)
 	WaitEventAdjustWin32(set, event);
 #endif
+}
+
+/*
+ * Try to complete a socket send operation, when simulating AIO using
+ * nonblocking synchronous mode, and return true if successful.
+ */
+static bool
+WaitEventSetSendComplete(WaitEvent *event, WaitEvent *event_out)
+{
+	ssize_t		result;
+
+	if (event->send_op.synchronous.error != EINPROGRESS)
+		return false;
+
+	if (event->send_op.synchronous.iovcnt == 1)
+		result = send(event->fd,
+					  event->send_op.synchronous.iov[0].iov_base,
+					  event->send_op.synchronous.iov[0].iov_len,
+					  0);
+	else
+		result = writev(event->fd,
+						event->send_op.synchronous.iov,
+						event->send_op.synchronous.iovcnt);
+	if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+		return false;
+
+	event->send_op.synchronous.error = result < 0 ? errno : 0;
+	event_out->send_op.result.error = result < 0 ? errno : 0;
+	event_out->send_op.result.transferred = result;
+	return true;
+}
+
+/*
+ * Try to complete a socket recv operation, when simulating AIO using
+ * nonblocking synchronous calls, and return true if successful.
+ */
+static bool
+WaitEventSetRecvComplete(WaitEvent *event, WaitEvent *event_out)
+{
+	ssize_t		result;
+
+	if (event->recv_op.synchronous.error != EINPROGRESS)
+		return false;
+
+	if (event->recv_op.synchronous.iovcnt == 1)
+		result = recv(event->fd,
+					  event->recv_op.synchronous.iov[0].iov_base,
+					  event->recv_op.synchronous.iov[0].iov_len,
+					  0);
+	else
+		result = readv(event->fd,
+					   event->recv_op.synchronous.iov,
+					   event->recv_op.synchronous.iovcnt);
+	if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+		return false;
+
+	event->recv_op.synchronous.error = result < 0 ? errno : 0;
+	event_out->recv_op.result.error = result < 0 ? errno : 0;
+	event_out->recv_op.result.transferred = result;
+	return true;
 }
 
 #if defined(WAIT_USE_EPOLL)
@@ -1274,11 +1363,6 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 		return;
 
 	Assert(event->events != WL_LATCH_SET || set->latch != NULL);
-	Assert(event->events == WL_LATCH_SET ||
-		   event->events == WL_POSTMASTER_DEATH ||
-		   (event->events & (WL_SOCKET_READABLE |
-							 WL_SOCKET_WRITEABLE |
-							 WL_SOCKET_CLOSED)));
 
 	if (event->events == WL_POSTMASTER_DEATH)
 	{
@@ -1407,6 +1491,7 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 	}
 }
 #endif
+
 
 /*
  * Wait for events added to the set to happen, or until the timeout is
@@ -1655,14 +1740,28 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 				(cur_epoll_event->events & (EPOLLIN | EPOLLERR | EPOLLHUP)))
 			{
 				/* data available in socket, or EOF */
-				occurred_events->events |= WL_SOCKET_READABLE;
+				if (!set->native_socket_aio &&
+					cur_event->recv_op.synchronous.error == EINPROGRESS)
+				{
+					if (WaitEventSetRecvComplete(cur_event, occurred_events))
+						occurred_events->events |= WL_SOCKET_RECV;
+				}
+				else
+					occurred_events->events |= WL_SOCKET_READABLE;
 			}
 
 			if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
 				(cur_epoll_event->events & (EPOLLOUT | EPOLLERR | EPOLLHUP)))
 			{
 				/* writable, or EOF */
-				occurred_events->events |= WL_SOCKET_WRITEABLE;
+				if (!set->native_socket_aio &&
+					cur_event->send_op.synchronous.error == EINPROGRESS)
+				{
+					if (WaitEventSetSendComplete(cur_event, occurred_events))
+						occurred_events->events |= WL_SOCKET_SEND;
+				}
+				else
+					occurred_events->events |= WL_SOCKET_WRITEABLE;
 			}
 
 			if ((cur_event->events & WL_SOCKET_CLOSED) &&
@@ -1808,7 +1907,14 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 				(cur_kqueue_event->filter == EVFILT_READ))
 			{
 				/* readable, or EOF */
-				occurred_events->events |= WL_SOCKET_READABLE;
+				if (!set->native_socket_aio &&
+					cur_event->recv_op.synchronous.error == EINPROGRESS)
+				{
+					if (WaitEventSetRecvComplete(cur_event, occurred_events))
+						occurred_events->events |= WL_SOCKET_RECV;
+				}
+				else
+					occurred_events->events |= WL_SOCKET_READABLE;
 			}
 
 			if ((cur_event->events & WL_SOCKET_CLOSED) &&
@@ -1823,7 +1929,14 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 				(cur_kqueue_event->filter == EVFILT_WRITE))
 			{
 				/* writable, or EOF */
-				occurred_events->events |= WL_SOCKET_WRITEABLE;
+				if (!set->native_socket_aio &&
+					cur_event->send_op.synchronous.error == EINPROGRESS)
+				{
+					if (WaitEventSetSendComplete(cur_event, occurred_events))
+						occurred_events->events |= WL_SOCKET_SEND;
+				}
+				else
+					occurred_events->events |= WL_SOCKET_WRITEABLE;
 			}
 
 			if (occurred_events->events != 0)
@@ -1941,14 +2054,28 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 				(cur_pollfd->revents & (POLLIN | errflags)))
 			{
 				/* data available in socket, or EOF */
-				occurred_events->events |= WL_SOCKET_READABLE;
+				if (!set->native_socket_aio &&
+					cur_event->recv_op.synchronous.error == EINPROGRESS)
+				{
+					if (WaitEventSetRecvComplete(cur_event, occurred_events))
+						occurred_events->events |= WL_SOCKET_RECV;
+				}
+				else
+					occurred_events->events |= WL_SOCKET_READABLE;
 			}
 
 			if ((cur_event->events & WL_SOCKET_WRITEABLE) &&
 				(cur_pollfd->revents & (POLLOUT | errflags)))
 			{
 				/* writeable, or EOF */
-				occurred_events->events |= WL_SOCKET_WRITEABLE;
+				if (!set->native_socket_aio &&
+					cur_event->send_op.synchronous.error == EINPROGRESS)
+				{
+					if (WaitEventSetSendComplete(cur_event, occurred_events))
+						occurred_events->events |= WL_SOCKET_SEND;
+				}
+				else
+					occurred_events->events |= WL_SOCKET_WRITEABLE;
 			}
 
 #ifdef POLLRDHUP
@@ -2256,6 +2383,16 @@ WaitEventSetCanReportClosed(void)
 }
 
 /*
+ * Return whether the current build options support
+ * WAIT_EVENT_SET_NATIVE_SOCKET_AIO.
+ */
+bool
+WaitEventSetCanUseNativeSocketAio(void)
+{
+	return false;
+}
+
+/*
  * Get the number of wait events registered in a given WaitEventSet.
  */
 int
@@ -2380,4 +2517,130 @@ ResOwnerReleaseWaitEventSet(Datum res)
 	Assert(set->owner != NULL);
 	set->owner = NULL;
 	FreeWaitEventSet(set);
+}
+
+/*
+ * Start sending to a socket.  The iovec array and all buffers it points to
+ * must remain valid until the operation completes.
+ *
+ * If the operation can be completed immediately, then the result is returned.
+ * This includes error conditions, which return -1 and set errno to a value
+ * other than EINPROGRESS or EBUSY.
+ *
+ * If a send operation is already in progress, then -1 is returned and errno
+ * is set to EBUSY.  See note for WaitEventSetRecv().
+ *
+ * If the operation can't be completed immediately without waiting for the
+ * network, -1 is returned, and errno is set to EINPROGRESS.  The caller
+ * should wait for a WL_SOCKET_SEND event, and then consult the
+ * send_op.result.transferred and send_op.result.error members of the
+ * WaitEvent.
+ */
+ssize_t
+WaitEventSetSend(WaitEventSet *set, int pos, const struct iovec *iov, int iovcnt)
+{
+	ssize_t		result;
+
+	/* We don't support more than one concurrent send. */
+	if (set->events[pos].send_op.synchronous.error == EINPROGRESS)
+	{
+		errno = EBUSY;
+		return -1;
+	}
+	set->events[pos].send_op.synchronous.error = 0;
+
+	/* Trivial case. */
+	if (iovcnt == 0)
+		return 0;
+
+	if (!set->native_socket_aio)
+	{
+		/* Simulate asynchronous send using nonblocking socket. */
+		if (iovcnt == 1)
+			result = send(set->events[pos].fd, iov[0].iov_base, iov[0].iov_len, 0);
+		else
+			result = writev(set->events[pos].fd, iov, iovcnt);
+		if (result >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+			return result;
+
+		/* We'll try again when we see WL_SOCKET_WRITEABLE. */
+		set->events[pos].send_op.synchronous.iov = iov;
+		set->events[pos].send_op.synchronous.iovcnt = iovcnt;
+		set->events[pos].send_op.synchronous.transferred = -1;
+		set->events[pos].send_op.synchronous.error = EINPROGRESS;
+		errno = EINPROGRESS;
+		return -1;
+	}
+	else
+	{
+		/* No asynchronous send in this build. */
+		errno = ENOSYS;
+		return -1;
+	}
+}
+
+/*
+ * Start receiving from a socket.  The iovec array and all buffers it points
+ * to must remain valid until the operation completes.
+ *
+ * If the operation can be completed immediately, then the result is returned.
+ * This includes error conditions, which return -1 and set errno to a value
+ * other than EINPROGRESS or EBUSY.
+ *
+ * If a receive operation is already in progress, then -1 is returned and
+ * errno is set to EBUSY.  Well-behaved client code shouldn't ever see this
+ * error, as it implies lack of socket state tracking and buffer management,
+ * i.e. trying to start I/O with a buffer that has an operation already in
+ * progress.
+ *
+ * If the operation can't be completed immediately because no data is
+ * available, -1 is returned, and errno is set to EINPROGRESS.  The caller
+ * should wait for a WL_SOCKET_RECV event, and then consult the
+ * recv_op.result.transferred and recv_op.result.error members of the
+ * WaitEvent.
+ */
+ssize_t
+WaitEventSetRecv(WaitEventSet *set, int pos, const struct iovec *iov, int iovcnt)
+{
+	ssize_t		result;
+
+	/* We don't support more than one concurrent recv. */
+	if (set->events[pos].recv_op.synchronous.error == EINPROGRESS)
+	{
+		errno = EBUSY;
+		return -1;
+	}
+	set->events[pos].recv_op.synchronous.error = 0;
+
+	/* Trivial case. */
+	if (iovcnt == 0)
+		return 0;
+
+	if (!set->native_socket_aio)
+	{
+		/* Simulate asynchronous recv using nonblocking socket. */
+		if (iovcnt > 1)
+			result = readv(set->events[pos].fd, iov, iovcnt);
+		else
+			result = recv(set->events[pos].fd, iov[0].iov_base, iov[0].iov_len, 0);
+		if (result >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+		{
+			if (result >= 0)
+				return result;
+		}
+
+		/* We'll try again when we see WL_SOCKET_READABLE. */
+		set->events[pos].recv_op.synchronous.iov = iov;
+		set->events[pos].recv_op.synchronous.iovcnt = iovcnt;
+		set->events[pos].recv_op.synchronous.transferred = -1;
+		set->events[pos].recv_op.synchronous.error = EINPROGRESS;
+		errno = EINPROGRESS;
+		return -1;
+	}
+	else
+	{
+		/* No asynchronous recv in this build. */
+		errno = ENOSYS;
+		return -1;
+	}
 }

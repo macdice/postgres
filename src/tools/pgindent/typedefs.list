@@ -3116,6 +3116,9 @@ WaitEventCustomEntryByName
 WaitEventIO
 WaitEventIPC
 WaitEventSet
+WaitEventSocketOp
+WaitEventSocketResult
+WaitEventSocketSyncOp
 WaitEventTimeout
 WaitLSNProcInfo
 WaitLSNState

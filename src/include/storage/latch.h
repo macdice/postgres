@@ -143,11 +143,50 @@ typedef struct Latch
 /* avoid having to deal with case on platforms not requiring it */
 #define WL_SOCKET_ACCEPT	WL_SOCKET_READABLE
 #endif
+#define WL_SOCKET_RECV		(1 << 9)
+#define WL_SOCKET_SEND		(1 << 10)
 #define WL_SOCKET_MASK		(WL_SOCKET_READABLE | \
 							 WL_SOCKET_WRITEABLE | \
 							 WL_SOCKET_CONNECTED | \
 							 WL_SOCKET_ACCEPT | \
 							 WL_SOCKET_CLOSED)
+
+/* Flag to activate native socket AIO. */
+#define WAIT_EVENT_SET_NATIVE_SOCKET_AIO 1
+
+/*
+ * WaitEvent objects for WL_SOCKET_{RECV,SEND} that are returned by
+ * WaitEventSetWait populate this standardized member, no matter which
+ * underlying implementation of synchronous or asynchronous I/O is used.
+ */
+typedef struct WaitEventSocketResult
+{
+	ssize_t		transferred;	/* bytes transferred, or -1 for error */
+	int			error;			/* error */
+} WaitEventSocketResult;
+
+/*
+ * When using synchronous mode, this member holds the internal details for a
+ * pending I/O, but it not exposed to callers.
+ */
+typedef struct WaitEventSocketSyncOp
+{
+	const struct iovec *iov;
+	int			iovcnt;
+	int			error;
+	ssize_t		transferred;
+} WaitEventSocketSyncOp;
+
+/*
+ * The union of output and implementation socket operations.  Output events
+ * use 'result', and internal events use the appropriate member for the
+ * underlying implementation.
+ */
+typedef union WaitEventSocketOp
+{
+	WaitEventSocketResult result;	/* result returned to client code */
+	WaitEventSocketSyncOp synchronous;	/* private internal state */
+} WaitEventSocketOp;
 
 typedef struct WaitEvent
 {
@@ -155,6 +194,10 @@ typedef struct WaitEvent
 	uint32		events;			/* triggered events */
 	pgsocket	fd;				/* socket fd associated with event */
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
+
+	WaitEventSocketOp send_op;	/* send in progress */
+	WaitEventSocketOp recv_op;	/* recv in progress */
+
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
 #endif
@@ -176,6 +219,8 @@ extern void ResetLatch(Latch *latch);
 extern void ShutdownLatchSupport(void);
 
 extern WaitEventSet *CreateWaitEventSet(ResourceOwner resowner, int nevents);
+extern WaitEventSet *CreateWaitEventSetExtended(ResourceOwner resowner, int nevents,
+												int flags);
 extern void FreeWaitEventSet(WaitEventSet *set);
 extern void FreeWaitEventSetAfterFork(WaitEventSet *set);
 extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
@@ -189,8 +234,13 @@ extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
 					  uint32 wait_event_info);
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
 							  pgsocket sock, long timeout, uint32 wait_event_info);
+extern ssize_t WaitEventSetSend(WaitEventSet *set, int pos,
+								const struct iovec *iov, int iovcnt);
+extern ssize_t WaitEventSetRecv(WaitEventSet *set, int pos,
+								const struct iovec *iov, int iovcnt);
 extern void InitializeLatchWaitSet(void);
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool WaitEventSetCanReportClosed(void);
+extern bool WaitEventSetCanUseNativeSocketAio(void);
 
 #endif							/* LATCH_H */
