@@ -424,7 +424,6 @@ be_tls_open_server(Port *port)
 {
 	int			r;
 	int			err;
-	int			waitfor;
 	unsigned long ecode;
 	bool		give_proto_hint;
 
@@ -501,13 +500,15 @@ aloop:
 				 * point authentication_timeout still employs
 				 * StartupPacketTimeoutHandler() which directly exits.
 				 */
-				if (err == SSL_ERROR_WANT_READ)
-					waitfor = WL_SOCKET_READABLE | WL_EXIT_ON_PM_DEATH;
-				else
-					waitfor = WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH;
-
-				(void) WaitLatchOrSocket(MyLatch, waitfor, port->sock, 0,
-										 WAIT_EVENT_SSL_OPEN_SERVER);
+				if (port_flush(port) != 0)
+				{
+					ereport(COMMERROR,
+							(errcode_for_socket_access(),
+							 errmsg("could not accept SSL connection: %m")));
+					break;
+				}
+				if (port_wait_io(port, -1, WAIT_EVENT_SSL_OPEN_SERVER) == WL_LATCH_SET)
+					ResetLatch(MyLatch);
 				goto aloop;
 			case SSL_ERROR_SYSCALL:
 				if (r < 0 && errno != 0)
@@ -746,7 +747,7 @@ be_tls_close(Port *port)
 }
 
 ssize_t
-be_tls_read(Port *port, void *ptr, size_t len, int *waitfor)
+be_tls_read(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
 	int			err;
@@ -763,12 +764,10 @@ be_tls_read(Port *port, void *ptr, size_t len, int *waitfor)
 			/* a-ok */
 			break;
 		case SSL_ERROR_WANT_READ:
-			*waitfor = WL_SOCKET_READABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			*waitfor = WL_SOCKET_WRITEABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
@@ -805,7 +804,7 @@ be_tls_read(Port *port, void *ptr, size_t len, int *waitfor)
 }
 
 ssize_t
-be_tls_write(Port *port, void *ptr, size_t len, int *waitfor)
+be_tls_write(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
 	int			err;
@@ -822,12 +821,10 @@ be_tls_write(Port *port, void *ptr, size_t len, int *waitfor)
 			/* a-ok */
 			break;
 		case SSL_ERROR_WANT_READ:
-			*waitfor = WL_SOCKET_READABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			*waitfor = WL_SOCKET_WRITEABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
@@ -879,12 +876,8 @@ be_tls_write(Port *port, void *ptr, size_t len, int *waitfor)
 /* ------------------------------------------------------------ */
 
 /*
- * Private substitute BIO: this does the sending and receiving using send() and
- * recv() instead. This is so that we can enable and disable interrupts
- * just while calling recv(). We cannot have interrupts occurring while
- * the bulk of OpenSSL runs, because it uses malloc() and possibly other
- * non-reentrant libc facilities. We also need to call send() and recv()
- * directly so it gets passed through the socket/signals layer on Win32.
+ * Private substitute BIO: this does the sending and receiving using
+ * port_{send,recv}_encrypted() instead.
  *
  * These functions are closely modelled on the standard socket BIO in OpenSSL;
  * see sock_read() and sock_write() in OpenSSL's crypto/bio/bss_sock.c.
@@ -899,13 +892,19 @@ my_sock_read(BIO *h, char *buf, int size)
 
 	if (buf != NULL)
 	{
-		res = secure_raw_read(((Port *) BIO_get_app_data(h)), buf, size);
+		res = port_recv_encrypted(((Port *) BIO_get_app_data(h)), buf, size);
 		BIO_clear_retry_flags(h);
+		elog(LOG, "my_sock_read res = %d: %m", (int) res);
 		if (res <= 0)
 		{
 			/* If we were interrupted, tell caller to retry */
-			if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)
+			Assert(errno != EBUSY);
+			if (errno == EINTR || errno == EINPROGRESS)
 			{
+#if 0
+				if (errno == EINPROGRESS)
+					errno = EWOULDBLOCK;
+#endif
 				BIO_set_retry_read(h);
 			}
 		}
@@ -919,12 +918,13 @@ my_sock_write(BIO *h, const char *buf, int size)
 {
 	int			res = 0;
 
-	res = secure_raw_write(((Port *) BIO_get_app_data(h)), buf, size);
+	res = port_send_encrypted(((Port *) BIO_get_app_data(h)), buf, size);
 	BIO_clear_retry_flags(h);
 	if (res <= 0)
 	{
 		/* If we were interrupted, tell caller to retry */
-		if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)
+		Assert(errno != EBUSY);
+		if (errno == EINTR || errno == EINPROGRESS)
 		{
 			BIO_set_retry_write(h);
 		}

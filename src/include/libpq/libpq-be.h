@@ -18,6 +18,9 @@
 #ifndef LIBPQ_BE_H
 #define LIBPQ_BE_H
 
+#include "libpq/pqbuffer.h"
+#include "port/pg_iovec.h"
+
 #include <sys/time.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
@@ -109,6 +112,30 @@ typedef struct ClientConnectionInfo
 	UserAuth	auth_method;
 } ClientConnectionInfo;
 
+struct WaitEventSet;
+
+/*
+ * State for one direction of data transfer (send or recv).  See the comment
+ * at the top of pqcomm.c for an explanation of the flow of data through these
+ * queues.
+ */
+typedef struct PortIoChannel
+{
+	/* Buffers for an in-progress I/O operation. */
+	struct iovec iov[PG_IOV_MAX];
+	PqBufferQueue io_buffers;
+
+	/* Buffers being exchanged with an encryption library. */
+	PqBufferQueue crypt_buffers;
+
+	/* Buffers containing cleartext data. */
+	PqBufferQueue clear_buffers;
+
+	/* Queued states to be reported to future callers. */
+	int			error;
+	bool		eof;
+}			PortIoChannel;
+
 /*
  * The Port structure holds state information about a client connection in a
  * backend process.  It is available in the global variable MyProcPort.  The
@@ -131,6 +158,8 @@ typedef struct ClientConnectionInfo
 
 typedef struct Port
 {
+	struct WaitEventSet *wes;
+	int			sock_pos;
 	pgsocket	sock;			/* File descriptor */
 	bool		noblock;		/* is the socket in non-blocking mode? */
 	ProtocolVersion proto;		/* FE/BE protocol version */
@@ -181,6 +210,12 @@ typedef struct Port
 	int			keepalives_count;
 	int			tcp_user_timeout;
 
+	/* Network I/O buffer management and channel state. */
+	PqBufferQueue free_buffers;
+	PortIoChannel send;
+	PortIoChannel recv;
+	bool		last_recv_buffer_full;
+
 	/*
 	 * GSSAPI structures.
 	 */
@@ -214,18 +249,6 @@ typedef struct Port
 	X509	   *peer;
 #endif
 
-	/*
-	 * This is a bit of a hack. raw_buf is data that was previously read and
-	 * buffered in a higher layer but then "unread" and needs to be read again
-	 * while establishing an SSL connection via the SSL library layer.
-	 *
-	 * There's no API to "unread", the upper layer just places the data in the
-	 * Port structure in raw_buf and sets raw_buf_remaining to the amount of
-	 * bytes unread and raw_buf_consumed to 0.
-	 */
-	char	   *raw_buf;
-	ssize_t		raw_buf_consumed,
-				raw_buf_remaining;
 } Port;
 
 /*
@@ -238,6 +261,31 @@ typedef struct ClientSocket
 	pgsocket	sock;			/* File descriptor */
 	SockAddr	raddr;			/* remote addr (client) */
 } ClientSocket;
+
+/* GUCs */
+extern PGDLLIMPORT int socket_buffers;
+extern PGDLLIMPORT int socket_buffer_size;
+extern PGDLLIMPORT int socket_combine_limit;
+extern PGDLLIMPORT bool socket_aio;
+
+/*
+ * Interfaces used to send/recv cleartext data, possibly via an encryption
+ * library if configured.
+ */
+extern ssize_t port_send(Port *port, const void *ptr, size_t len, bool wait);
+extern ssize_t port_recv(Port *port, void *ptr, size_t len, bool wait);
+extern int	port_send_all(Port *port, const void *ptr, size_t len);
+extern int	port_recv_all(Port *port, void *ptr, size_t len);
+extern int	port_peek(Port *port);
+extern size_t port_send_pending(Port *port);
+extern size_t port_recv_pending(Port *port);
+extern size_t port_recv_pending_encrypted(Port *port);
+extern int	port_flush(Port *port);
+extern int	port_wait_io(Port *port, int timeout, int wait_event);
+
+/* Interfaces used by encryption libraries to send/recv encrypted data. */
+extern ssize_t port_send_encrypted(Port *port, const void *data, size_t size);
+extern ssize_t port_recv_encrypted(Port *port, void *data, size_t size);
 
 #ifdef USE_SSL
 /*
@@ -292,12 +340,12 @@ extern void be_tls_close(Port *port);
 /*
  * Read data from a secure connection.
  */
-extern ssize_t be_tls_read(Port *port, void *ptr, size_t len, int *waitfor);
+extern ssize_t be_tls_read(Port *port, void *ptr, size_t len);
 
 /*
  * Write data to a secure connection.
  */
-extern ssize_t be_tls_write(Port *port, void *ptr, size_t len, int *waitfor);
+extern ssize_t be_tls_write(Port *port, void *ptr, size_t len);
 
 /*
  * Return information about the SSL connection.

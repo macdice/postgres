@@ -17,6 +17,58 @@
  * the backend's "backend/libpq" is quite separate from "interfaces/libpq".
  * All that remains is similarities of names to trap the unwary...
  *
+ * Network I/O buffer architecture
+ * ===============================
+ *
+ * A user controllable number of separate I/O-aligned buffers holds network
+ * data in various stages of transfer to/from the network, configured by the
+ * GUC "socket_buffers".  They are of configurable size "socket_buffer_size".
+ * When not in use, they sit the queue port->free_buffers.
+ *
+ * The send and receive direction are called "channels".  Each channel has
+ * three queues of buffers currently in use:
+ *
+ * 1. io_buffers: Buffers currently involved in an in-progress socket I/O
+ *	  operation (AIO, or simulated AIO using synchronous readiness APIs).  The
+ *	  buffers in this queue are also pointed to by channel->iov[], in the
+ *	  format needed for scatter/gather kernel interfaces.
+ *
+ * 2. crypt_buffers: If using an encryption library, received buffers move
+ *	  from io_buffers to this queue when an I/O completes, or from this queue
+ *	  to io_buffers when an I/O begins.  If not using an encryption library,
+ *	  this queue is not used.  Exchange between the io_buffers and
+ *	  crypt_buffers queues happens inside the secure_read_encrypted() and
+ *	  secure_write_encrypted() functions, which are called by encryption
+ *	  libraries.
+ *
+ * 3. clear_buffers:
+ *
+ * 3. 1. If not using an encryption library, recv buffers move from io_buffers
+ *		 to clear_buffers when I/O completes, and send buffers move from
+ *		 clear_buffers to io_buffers when I/O begins.
+ *
+ * 3. 2. If using an encyption library, recv data (not buffers) moves from
+ *		 crypto_buffers to clear_buffers on demand by reading through the
+ *		 library, and send data (not buffers) moves from clear_buffers to
+ *		 crypt_buffers by writing through the encryption library.
+ *
+ * 3. 3. XXX In future, if we added KTLS support for kernel software or
+ *		 hardware-accelerated AES, then perhaps the crypt_buffers data-copying
+ *		 pathway (3.2) would only only be needed during session establishment,
+ *		 and after that buffers could move directly between clear_buffers and
+ *		 io_buffers (like 3.1)?
+ *
+ * When the backend sends data, it should try to append directly to the tail
+ * buffer in port->send.clear_buffers, avoiding intermediate construction
+ * buffers as much as possible.  When the backend receives data, it should try
+ * to use pointers directly into the head buffer of port->recv.clear_buffers,
+ * avoiding extra copying as much as possible.
+ *
+ * At the level of the io_buffers queues we use completion-based I/O
+ * interfaces (possibly simulated with synchronous readiness APIs).  At the
+ * level of the crypt_buffers queues we expose a readiness-style interface to
+ * the encryption libraries, because that is what they currently expect.
+ *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -105,28 +157,23 @@
  */
 int			Unix_socket_permissions;
 char	   *Unix_socket_group;
+int			socket_buffers = 32;
+int			socket_buffer_size = 8192;
+int			socket_combine_limit = 16;
+bool		socket_aio = false;
+
+/*
+ * When performing bulk transfers, both the send and receive paths leave a
+ * small number of buffers for the other direction.  We don't expect bulk
+ * transfers in both directions at the same time, so we allow both directions
+ * to use almost all the buffers when needed, while still leaving some for the
+ * other direction.  It should be at least 3, to allow one cleartext buffer,
+ * one encrypted buffer and one I/O in progress.
+  */
+#define SOCK_BUFS_FULL_DUPLEX_RESERVED 3
 
 /* Where the Unix socket files are (list of palloc'd strings) */
 static List *sock_paths = NIL;
-
-/*
- * Buffers for low-level I/O.
- *
- * The receive buffer is fixed size. Send buffer is usually 8k, but can be
- * enlarged by pq_putmessage_noblock() if the message doesn't fit otherwise.
- */
-
-#define PQ_SEND_BUFFER_SIZE 8192
-#define PQ_RECV_BUFFER_SIZE 8192
-
-static char *PqSendBuffer;
-static int	PqSendBufferSize;	/* Size send buffer */
-static size_t PqSendPointer;	/* Next index to store a byte in PqSendBuffer */
-static size_t PqSendStart;		/* Next index to send a byte in PqSendBuffer */
-
-static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE];
-static int	PqRecvPointer;		/* Next index to read a byte from PqRecvBuffer */
-static int	PqRecvLength;		/* End of data available in PqRecvBuffer */
 
 /*
  * Message status
@@ -138,16 +185,9 @@ static bool PqCommReadingMsg;	/* in the middle of reading a message */
 /* Internal functions */
 static void socket_comm_reset(void);
 static void socket_close(int code, Datum arg);
-static void socket_set_nonblocking(bool nonblocking);
 static int	socket_flush(void);
-static int	socket_flush_if_writable(void);
-static bool socket_is_send_pending(void);
 static int	socket_putmessage(char msgtype, const char *s, size_t len);
 static void socket_putmessage_noblock(char msgtype, const char *s, size_t len);
-static inline int internal_putbytes(const char *s, size_t len);
-static inline int internal_flush(void);
-static pg_noinline int internal_flush_buffer(const char *buf, size_t *start,
-											 size_t *end);
 
 static int	Lock_AF_UNIX(const char *unixSocketDir, const char *unixSocketPath);
 static int	Setup_AF_UNIX(const char *sock_path);
@@ -155,8 +195,6 @@ static int	Setup_AF_UNIX(const char *sock_path);
 static const PQcommMethods PqCommSocketMethods = {
 	.comm_reset = socket_comm_reset,
 	.flush = socket_flush,
-	.flush_if_writable = socket_flush_if_writable,
-	.is_send_pending = socket_is_send_pending,
 	.putmessage = socket_putmessage,
 	.putmessage_noblock = socket_putmessage_noblock
 };
@@ -176,6 +214,8 @@ pq_init(ClientSocket *client_sock)
 	Port	   *port;
 	int			socket_pos PG_USED_FOR_ASSERTS_ONLY;
 	int			latch_pos PG_USED_FOR_ASSERTS_ONLY;
+	PqBuffer   *bufs;
+	uint8	   *buffer_space;
 
 	/* allocate the Port struct and copy the ClientSocket contents to it */
 	port = palloc0(sizeof(Port));
@@ -228,20 +268,12 @@ pq_init(ClientSocket *client_sock)
 		 * performance suffers.  The Postgres send buffer can be enlarged if a
 		 * very large message needs to be sent, but we won't attempt to
 		 * enlarge the OS buffer if that happens, so somewhat arbitrarily
-		 * ensure that the OS buffer is at least PQ_SEND_BUFFER_SIZE * 4.
-		 * (That's 32kB with the current default).
+		 * ensure that the OS buffer is at least big enough for our
+		 * socket_combine_limit.
 		 *
-		 * The default OS buffer size used to be 8kB in earlier Windows
-		 * versions, but was raised to 64kB in Windows 2012.  So it shouldn't
-		 * be necessary to change it in later versions anymore.  Changing it
-		 * unnecessarily can even reduce performance, because setting
-		 * SO_SNDBUF in the application disables the "dynamic send buffering"
-		 * feature that was introduced in Windows 7.  So before fiddling with
-		 * SO_SNDBUF, check if the current buffer size is already large enough
-		 * and only increase it if necessary.
-		 *
-		 * See https://support.microsoft.com/kb/823764/EN-US/ and
-		 * https://msdn.microsoft.com/en-us/library/bb736549%28v=vs.85%29.aspx
+		 * We won't make it smaller than the default though, which is 64kB on
+		 * current Windows version unless it has been adjusted through the
+		 * registry.
 		 */
 		optlen = sizeof(oldopt);
 		if (getsockopt(port->sock, SOL_SOCKET, SO_SNDBUF, (char *) &oldopt,
@@ -250,7 +282,7 @@ pq_init(ClientSocket *client_sock)
 			ereport(FATAL,
 					(errmsg("%s(%s) failed: %m", "getsockopt", "SO_SNDBUF")));
 		}
-		newopt = PQ_SEND_BUFFER_SIZE * 4;
+		newopt = socket_buffer_size * socket_combine_limit;
 		if (oldopt < newopt)
 		{
 			if (setsockopt(port->sock, SOL_SOCKET, SO_SNDBUF, (char *) &newopt,
@@ -275,10 +307,33 @@ pq_init(ClientSocket *client_sock)
 		(void) pq_settcpusertimeout(tcp_user_timeout, port);
 	}
 
+	/* Allocate socket buffers, aligned on typical memory pages. */
+	bufq_init(&port->recv.io_buffers);
+	bufq_init(&port->recv.crypt_buffers);
+	bufq_init(&port->recv.clear_buffers);
+	port->recv.eof = false;
+	port->recv.error = 0;
+	bufq_init(&port->send.io_buffers);
+	bufq_init(&port->send.crypt_buffers);
+	bufq_init(&port->send.clear_buffers);
+	bufq_init(&port->free_buffers);
+	port->send.eof = false;
+	port->send.error = 0;
+	buffer_space = MemoryContextAllocAligned(TopMemoryContext,
+											 socket_buffers * socket_buffer_size,
+											 PG_IO_ALIGN_SIZE,
+											 0);
+	bufs = MemoryContextAlloc(TopMemoryContext,
+							  socket_buffers * sizeof(PqBuffer));
+	for (int i = 0; i < socket_buffers; ++i)
+	{
+		PqBuffer   *buf = &bufs[i];
+
+		buf->data = buffer_space + socket_buffer_size * i;
+		dclist_push_tail(&port->free_buffers, &buf->node);
+	}
+
 	/* initialize state variables */
-	PqSendBufferSize = PQ_SEND_BUFFER_SIZE;
-	PqSendBuffer = MemoryContextAlloc(TopMemoryContext, PqSendBufferSize);
-	PqSendPointer = PqSendStart = PqRecvPointer = PqRecvLength = 0;
 	PqCommBusy = false;
 	PqCommReadingMsg = false;
 
@@ -304,13 +359,28 @@ pq_init(ClientSocket *client_sock)
 		elog(FATAL, "fcntl(F_SETFD) failed on socket: %m");
 #endif
 
-	FeBeWaitSet = CreateWaitEventSet(NULL, FeBeWaitSetNEvents);
-	socket_pos = AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE,
-								   port->sock, NULL, NULL);
+	if (socket_aio)
+	{
+		FeBeWaitSet =
+			CreateWaitEventSetExtended(NULL,
+									   FeBeWaitSetNEvents,
+									   WAIT_EVENT_SET_NATIVE_SOCKET_AIO);
+		socket_pos = AddWaitEventToSet(FeBeWaitSet, 0,
+									   port->sock, NULL, NULL);
+	}
+	else
+	{
+		FeBeWaitSet = CreateWaitEventSet(NULL, FeBeWaitSetNEvents);
+		socket_pos = AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE,
+									   port->sock, NULL, NULL);
+	}
 	latch_pos = AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
 								  MyLatch, NULL);
 	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
 					  NULL, NULL);
+
+	port->wes = FeBeWaitSet;
+	port->sock_pos = socket_pos;
 
 	/*
 	 * The event positions match the order we added them, but let's sanity
@@ -871,125 +941,32 @@ RemoveSocketFiles(void)
  */
 
 /* --------------------------------
- *			  socket_set_nonblocking - set socket blocking/non-blocking
- *
- * Sets the socket non-blocking if nonblocking is true, or sets it
- * blocking otherwise.
- * --------------------------------
- */
-static void
-socket_set_nonblocking(bool nonblocking)
-{
-	if (MyProcPort == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_CONNECTION_DOES_NOT_EXIST),
-				 errmsg("there is no client connection")));
-
-	MyProcPort->noblock = nonblocking;
-}
-
-/* --------------------------------
- *		pq_recvbuf - load some bytes into the input buffer
- *
- *		returns 0 if OK, EOF if trouble
- * --------------------------------
- */
-static int
-pq_recvbuf(void)
-{
-	if (PqRecvPointer > 0)
-	{
-		if (PqRecvLength > PqRecvPointer)
-		{
-			/* still some unread data, left-justify it in the buffer */
-			memmove(PqRecvBuffer, PqRecvBuffer + PqRecvPointer,
-					PqRecvLength - PqRecvPointer);
-			PqRecvLength -= PqRecvPointer;
-			PqRecvPointer = 0;
-		}
-		else
-			PqRecvLength = PqRecvPointer = 0;
-	}
-
-	/* Ensure that we're in blocking mode */
-	socket_set_nonblocking(false);
-
-	/* Can fill buffer from PqRecvLength and upwards */
-	for (;;)
-	{
-		int			r;
-
-		errno = 0;
-
-		r = secure_read(MyProcPort, PqRecvBuffer + PqRecvLength,
-						PQ_RECV_BUFFER_SIZE - PqRecvLength);
-
-		if (r < 0)
-		{
-			if (errno == EINTR)
-				continue;		/* Ok if interrupted */
-
-			/*
-			 * Careful: an ereport() that tries to write to the client would
-			 * cause recursion to here, leading to stack overflow and core
-			 * dump!  This message must go *only* to the postmaster log.
-			 *
-			 * If errno is zero, assume it's EOF and let the caller complain.
-			 */
-			if (errno != 0)
-				ereport(COMMERROR,
-						(errcode_for_socket_access(),
-						 errmsg("could not receive data from client: %m")));
-			return EOF;
-		}
-		if (r == 0)
-		{
-			/*
-			 * EOF detected.  We used to write a log message here, but it's
-			 * better to expect the ultimate caller to do that.
-			 */
-			return EOF;
-		}
-		/* r contains number of bytes read, so just incr length */
-		PqRecvLength += r;
-		return 0;
-	}
-}
-
-/* --------------------------------
  *		pq_getbyte	- get a single byte from connection, or return EOF
  * --------------------------------
  */
 int
 pq_getbyte(void)
 {
+	ssize_t		r;
+	char		byte;
+
 	Assert(PqCommReadingMsg);
 
-	while (PqRecvPointer >= PqRecvLength)
-	{
-		if (pq_recvbuf())		/* If nothing in buffer, then recv some */
-			return EOF;			/* Failed to recv data */
-	}
-	return (unsigned char) PqRecvBuffer[PqRecvPointer++];
+	r = port_recv(MyProcPort, &byte, 1, true);
+
+	return r < 1 ? EOF : byte;
 }
 
 /* --------------------------------
  *		pq_peekbyte		- peek at next byte from connection
  *
- *	 Same as pq_getbyte() except we don't advance the pointer.
+ *	 Same as pq_getbyte() except we don't consume the byte.
  * --------------------------------
  */
 int
 pq_peekbyte(void)
 {
-	Assert(PqCommReadingMsg);
-
-	while (PqRecvPointer >= PqRecvLength)
-	{
-		if (pq_recvbuf())		/* If nothing in buffer, then recv some */
-			return EOF;			/* Failed to recv data */
-	}
-	return (unsigned char) PqRecvBuffer[PqRecvPointer];
+	return port_peek(MyProcPort);
 }
 
 /* --------------------------------
@@ -1007,27 +984,21 @@ pq_getbyte_if_available(unsigned char *c)
 
 	Assert(PqCommReadingMsg);
 
-	if (PqRecvPointer < PqRecvLength)
-	{
-		*c = PqRecvBuffer[PqRecvPointer++];
-		return 1;
-	}
-
-	/* Put the socket into non-blocking mode */
-	socket_set_nonblocking(true);
-
-	errno = 0;
-
-	r = secure_read(MyProcPort, c, 1);
+	r = port_recv(MyProcPort, c, 1, false);
 	if (r < 0)
 	{
 		/*
 		 * Ok if no data available without blocking or interrupted (though
-		 * EINTR really shouldn't happen with a non-blocking socket). Report
-		 * other errors.
+		 * EINTR really shouldn't happen). Report other errors.
 		 */
-		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+		if (errno == EINPROGRESS)
+		{
 			r = 0;
+		}
+		else if (errno == EINTR)
+		{
+			r = 0;
+		}
 		else
 		{
 			/*
@@ -1062,26 +1033,9 @@ pq_getbyte_if_available(unsigned char *c)
 int
 pq_getbytes(char *s, size_t len)
 {
-	size_t		amount;
-
 	Assert(PqCommReadingMsg);
 
-	while (len > 0)
-	{
-		while (PqRecvPointer >= PqRecvLength)
-		{
-			if (pq_recvbuf())	/* If nothing in buffer, then recv some */
-				return EOF;		/* Failed to recv data */
-		}
-		amount = PqRecvLength - PqRecvPointer;
-		if (amount > len)
-			amount = len;
-		memcpy(s, PqRecvBuffer + PqRecvPointer, amount);
-		PqRecvPointer += amount;
-		s += amount;
-		len -= amount;
-	}
-	return 0;
+	return port_recv_all(MyProcPort, s, len) < 0 ? EOF : 0;
 }
 
 /* --------------------------------
@@ -1096,21 +1050,16 @@ pq_getbytes(char *s, size_t len)
 static int
 pq_discardbytes(size_t len)
 {
+	char		buf[1024];
 	size_t		amount;
 
 	Assert(PqCommReadingMsg);
 
 	while (len > 0)
 	{
-		while (PqRecvPointer >= PqRecvLength)
-		{
-			if (pq_recvbuf())	/* If nothing in buffer, then recv some */
-				return EOF;		/* Failed to recv data */
-		}
-		amount = PqRecvLength - PqRecvPointer;
-		if (amount > len)
-			amount = len;
-		PqRecvPointer += amount;
+		amount = Min(lengthof(buf), len);
+		if (pq_getbytes(buf, amount) == EOF)
+			return EOF;
 		len -= amount;
 	}
 	return 0;
@@ -1126,8 +1075,7 @@ pq_discardbytes(size_t len)
 ssize_t
 pq_buffer_remaining_data(void)
 {
-	Assert(PqRecvLength >= PqRecvPointer);
-	return (PqRecvLength - PqRecvPointer);
+	return port_recv_pending(MyProcPort);
 }
 
 
@@ -1272,49 +1220,6 @@ pq_getmessage(StringInfo s, int maxlen)
 	return 0;
 }
 
-
-static inline int
-internal_putbytes(const char *s, size_t len)
-{
-	while (len > 0)
-	{
-		/* If buffer is full, then flush it out */
-		if (PqSendPointer >= PqSendBufferSize)
-		{
-			socket_set_nonblocking(false);
-			if (internal_flush())
-				return EOF;
-		}
-
-		/*
-		 * If the buffer is empty and data length is larger than the buffer
-		 * size, send it without buffering.  Otherwise, copy as much data as
-		 * possible into the buffer.
-		 */
-		if (len >= PqSendBufferSize && PqSendStart == PqSendPointer)
-		{
-			size_t		start = 0;
-
-			socket_set_nonblocking(false);
-			if (internal_flush_buffer(s, &start, &len))
-				return EOF;
-		}
-		else
-		{
-			size_t		amount = PqSendBufferSize - PqSendPointer;
-
-			if (amount > len)
-				amount = len;
-			memcpy(PqSendBuffer + PqSendPointer, s, amount);
-			PqSendPointer += amount;
-			s += amount;
-			len -= amount;
-		}
-	}
-
-	return 0;
-}
-
 /* --------------------------------
  *		socket_flush		- flush pending output
  *
@@ -1324,141 +1229,7 @@ internal_putbytes(const char *s, size_t len)
 static int
 socket_flush(void)
 {
-	int			res;
-
-	/* No-op if reentrant call */
-	if (PqCommBusy)
-		return 0;
-	PqCommBusy = true;
-	socket_set_nonblocking(false);
-	res = internal_flush();
-	PqCommBusy = false;
-	return res;
-}
-
-/* --------------------------------
- *		internal_flush - flush pending output
- *
- * Returns 0 if OK (meaning everything was sent, or operation would block
- * and the socket is in non-blocking mode), or EOF if trouble.
- * --------------------------------
- */
-static inline int
-internal_flush(void)
-{
-	return internal_flush_buffer(PqSendBuffer, &PqSendStart, &PqSendPointer);
-}
-
-/* --------------------------------
- *		internal_flush_buffer - flush the given buffer content
- *
- * Returns 0 if OK (meaning everything was sent, or operation would block
- * and the socket is in non-blocking mode), or EOF if trouble.
- * --------------------------------
- */
-static pg_noinline int
-internal_flush_buffer(const char *buf, size_t *start, size_t *end)
-{
-	static int	last_reported_send_errno = 0;
-
-	const char *bufptr = buf + *start;
-	const char *bufend = buf + *end;
-
-	while (bufptr < bufend)
-	{
-		int			r;
-
-		r = secure_write(MyProcPort, (char *) bufptr, bufend - bufptr);
-
-		if (r <= 0)
-		{
-			if (errno == EINTR)
-				continue;		/* Ok if we were interrupted */
-
-			/*
-			 * Ok if no data writable without blocking, and the socket is in
-			 * non-blocking mode.
-			 */
-			if (errno == EAGAIN ||
-				errno == EWOULDBLOCK)
-			{
-				return 0;
-			}
-
-			/*
-			 * Careful: an ereport() that tries to write to the client would
-			 * cause recursion to here, leading to stack overflow and core
-			 * dump!  This message must go *only* to the postmaster log.
-			 *
-			 * If a client disconnects while we're in the midst of output, we
-			 * might write quite a bit of data before we get to a safe query
-			 * abort point.  So, suppress duplicate log messages.
-			 */
-			if (errno != last_reported_send_errno)
-			{
-				last_reported_send_errno = errno;
-				ereport(COMMERROR,
-						(errcode_for_socket_access(),
-						 errmsg("could not send data to client: %m")));
-			}
-
-			/*
-			 * We drop the buffered data anyway so that processing can
-			 * continue, even though we'll probably quit soon. We also set a
-			 * flag that'll cause the next CHECK_FOR_INTERRUPTS to terminate
-			 * the connection.
-			 */
-			*start = *end = 0;
-			ClientConnectionLost = 1;
-			InterruptPending = 1;
-			return EOF;
-		}
-
-		last_reported_send_errno = 0;	/* reset after any successful send */
-		bufptr += r;
-		*start += r;
-	}
-
-	*start = *end = 0;
-	return 0;
-}
-
-/* --------------------------------
- *		pq_flush_if_writable - flush pending output if writable without blocking
- *
- * Returns 0 if OK, or EOF if trouble.
- * --------------------------------
- */
-static int
-socket_flush_if_writable(void)
-{
-	int			res;
-
-	/* Quick exit if nothing to do */
-	if (PqSendPointer == PqSendStart)
-		return 0;
-
-	/* No-op if reentrant call */
-	if (PqCommBusy)
-		return 0;
-
-	/* Temporarily put the socket into non-blocking mode */
-	socket_set_nonblocking(true);
-
-	PqCommBusy = true;
-	res = internal_flush();
-	PqCommBusy = false;
-	return res;
-}
-
-/* --------------------------------
- *	socket_is_send_pending	- is there any pending data in the output buffer?
- * --------------------------------
- */
-static bool
-socket_is_send_pending(void)
-{
-	return (PqSendStart < PqSendPointer);
+	return port_flush(MyProcPort) == 0 ? 0 : EOF;
 }
 
 /* --------------------------------
@@ -1488,6 +1259,7 @@ socket_is_send_pending(void)
 static int
 socket_putmessage(char msgtype, const char *s, size_t len)
 {
+	Port	   *port = MyProcPort;
 	uint32		n32;
 
 	Assert(msgtype != 0);
@@ -1495,14 +1267,14 @@ socket_putmessage(char msgtype, const char *s, size_t len)
 	if (PqCommBusy)
 		return 0;
 	PqCommBusy = true;
-	if (internal_putbytes(&msgtype, 1))
+	if (port_send_all(port, &msgtype, 1) == EOF)
 		goto fail;
 
 	n32 = pg_hton32((uint32) (len + 4));
-	if (internal_putbytes((char *) &n32, 4))
+	if (port_send_all(port, (char *) &n32, 4) == EOF)
 		goto fail;
 
-	if (internal_putbytes(s, len))
+	if (port_send_all(port, s, len) == EOF)
 		goto fail;
 	PqCommBusy = false;
 	return 0;
@@ -1516,27 +1288,13 @@ fail:
  *		pq_putmessage_noblock	- like pq_putmessage, but never blocks
  *
  *		If the output buffer is too small to hold the message, the buffer
- *		is enlarged.
+ *		is enlarged. XXX?
  */
 static void
 socket_putmessage_noblock(char msgtype, const char *s, size_t len)
 {
-	int			res PG_USED_FOR_ASSERTS_ONLY;
-	int			required;
-
-	/*
-	 * Ensure we have enough space in the output buffer for the message header
-	 * as well as the message itself.
-	 */
-	required = PqSendPointer + 1 + 4 + len;
-	if (required > PqSendBufferSize)
-	{
-		PqSendBuffer = repalloc(PqSendBuffer, required);
-		PqSendBufferSize = required;
-	}
-	res = pq_putmessage(msgtype, s, len);
-	Assert(res == 0);			/* should not fail when the message fits in
-								 * buffer */
+	/* XXX add more buffers? */
+	socket_putmessage(msgtype, s, len);
 }
 
 /* --------------------------------
@@ -1558,15 +1316,17 @@ socket_putmessage_noblock(char msgtype, const char *s, size_t len)
 int
 pq_putmessage_v2(char msgtype, const char *s, size_t len)
 {
+	Port	   *port = MyProcPort;
+
 	Assert(msgtype != 0);
 
 	if (PqCommBusy)
 		return 0;
 	PqCommBusy = true;
-	if (internal_putbytes(&msgtype, 1))
+	if (port_send_all(port, &msgtype, 1))
 		goto fail;
 
-	if (internal_putbytes(s, len))
+	if (port_send_all(port, s, len))
 		goto fail;
 	PqCommBusy = false;
 	return 0;

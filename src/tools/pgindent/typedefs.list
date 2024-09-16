@@ -2197,9 +2197,12 @@ Portal
 PortalHashEnt
 PortalStatus
 PortalStrategy
+PortIoChannel
 PostParseColumnRefHook
 PostgresPollingStatusType
 PostingItem
+PqBuffer
+PqBufferQueue
 PreParseColumnRefHook
 PredClass
 PredIterInfo
