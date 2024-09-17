@@ -127,6 +127,7 @@ typedef struct PortIoChannel
 
 	/* Buffers being exchanged with an encryption library. */
 	PqBufferQueue crypt_buffers;
+	PqBufferQueue crypt_buffers_reserved;
 
 	/* Buffers containing cleartext data. */
 	PqBufferQueue clear_buffers;
@@ -278,6 +279,7 @@ extern int	port_send_all(Port *port, const void *ptr, size_t len);
 extern int	port_recv_all(Port *port, void *ptr, size_t len);
 extern int	port_peek(Port *port);
 extern size_t port_send_pending(Port *port);
+extern size_t port_send_reserved_ecrypted(Port *port);
 extern size_t port_recv_pending(Port *port);
 extern size_t port_recv_pending_encrypted(Port *port);
 extern int	port_flush(Port *port);

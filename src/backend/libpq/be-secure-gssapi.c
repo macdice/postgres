@@ -34,13 +34,6 @@
  * immediately following.  Decryption yields the same data stream
  * that would appear when not using encryption.
  *
- * Encrypted data typically ends up being larger than the same data
- * unencrypted, so we use fixed-size buffers for handling the
- * encryption/decryption which are larger than PQComm's buffer will
- * typically be to minimize the times where we have to make multiple
- * packets (and therefore multiple recv/send calls for a single
- * read/write call to us).
- *
  * NOTE: The client and server have to agree on the max packet size,
  * because we have to pass an entire packet to GSSAPI at a time and we
  * don't want the other side to send arbitrarily huge packets as we
@@ -52,6 +45,7 @@
 #define PQ_GSS_SEND_BUFFER_SIZE 16384
 #define PQ_GSS_RECV_BUFFER_SIZE 16384
 
+#if 0
 /*
  * Since we manage at most one GSS-encrypted connection per backend,
  * we can just keep all this state in static variables.  The char *
@@ -74,7 +68,7 @@ static int	PqGSSResultNext;	/* Next index to read a byte from
 
 static uint32 PqGSSMaxPktSize;	/* Maximum size we can encrypt and fit the
 								 * results into our output buffer */
-
+#endif
 
 /*
  * Attempt to write len bytes of data from ptr to a GSSAPI-encrypted connection.
@@ -103,6 +97,20 @@ be_gssapi_write(Port *port, void *ptr, size_t len)
 	size_t		bytes_encrypted;
 	gss_ctx_id_t gctx = port->gss->ctx;
 
+	/*
+	 * Check what size we could write without waiting, and then ask GSS how
+	 * much input data that will fit.
+	 
+	 * For now we use the simple gss_wrap() function, which allocates its own
+	 * output buffer and requires us to copy it into our buffer.  We check
+	 * what the largest message we could send within the 
+	 *
+	 * XXX In libraries that have implemented RFC 5587 gss_wrap_iov(), we
+	 * could probably work directly in-place in our buffers.
+	 *
+	 * Find out how big this message would be, if encrypted.
+	 */
+	
 	/*
 	 * When we get a retryable failure, we must not tell the caller we have
 	 * successfully transmitted everything, else it won't retry.  For

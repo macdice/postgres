@@ -310,11 +310,13 @@ pq_init(ClientSocket *client_sock)
 	/* Allocate socket buffers, aligned on typical memory pages. */
 	bufq_init(&port->recv.io_buffers);
 	bufq_init(&port->recv.crypt_buffers);
+	bufq_init(&port->recv.crypt_buffers_reserved);
 	bufq_init(&port->recv.clear_buffers);
 	port->recv.eof = false;
 	port->recv.error = 0;
 	bufq_init(&port->send.io_buffers);
 	bufq_init(&port->send.crypt_buffers);
+	bufq_init(&port->send.crypt_buffers_reserved);
 	bufq_init(&port->send.clear_buffers);
 	bufq_init(&port->free_buffers);
 	port->send.eof = false;
