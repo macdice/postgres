@@ -94,6 +94,12 @@ port_put_free_buffer(Port *port, PqBuffer *buf)
 	bufq_push_tail(&port->free_buffers, buf);
 }
 
+int
+port_free_buffer_count(Port *port)
+{
+	return bufq_size(&port->free_buffers);
+}
+
 /* ------------------------------------------------------------ */
 /*			 Procedures common to all secure sessions			*/
 /* ------------------------------------------------------------ */
@@ -954,21 +960,22 @@ port_recv_all(Port *port, void *data, size_t size)
 }
 
 /*
- * Send all buffered data to the network, encrypting if required.x
+ * Send all buffered data to the network, encrypting if required.  If
+ * wait_event is 0, does not wait for completion of network send.
  */
 int
-port_flush(Port *port)
+port_flush(Port *port, int wait_event)
 {
 	for (;;)
 	{
-		if (!bufq_empty(&port->send.io_buffers))
+		if (!bufq_empty(&port->send.io_buffers) && wait_event != 0)
 		{
 			/* Wait for in-progress send to complete. */
 			/*
 			 * XXX re-order, it would be better to run encryption code while
 			 * waiting!
 			 */
-			if (port_wait_io(port, -1, WAIT_EVENT_CLIENT_WRITE) == WL_LATCH_SET)
+			if (port_wait_io(port, -1, wait_event) == WL_LATCH_SET)
 			{
 				ResetLatch(MyLatch);
 				ProcessClientWriteInterrupt(true);

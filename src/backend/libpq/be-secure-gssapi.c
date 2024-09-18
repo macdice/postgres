@@ -39,36 +39,10 @@
  * don't want the other side to send arbitrarily huge packets as we
  * would have to allocate memory for them to then pass them to GSSAPI.
  *
- * Therefore, these two #define's are effectively part of the protocol
- * spec and can't ever be changed.
+ * Therefore, this #define is effectively part of the protocol spec and can't
+ * ever be changed.
  */
-#define PQ_GSS_SEND_BUFFER_SIZE 16384
-#define PQ_GSS_RECV_BUFFER_SIZE 16384
-
-#if 0
-/*
- * Since we manage at most one GSS-encrypted connection per backend,
- * we can just keep all this state in static variables.  The char *
- * variables point to buffers that are allocated once and re-used.
- */
-static char *PqGSSSendBuffer;	/* Encrypted data waiting to be sent */
-static int	PqGSSSendLength;	/* End of data available in PqGSSSendBuffer */
-static int	PqGSSSendNext;		/* Next index to send a byte from
-								 * PqGSSSendBuffer */
-static int	PqGSSSendConsumed;	/* Number of source bytes encrypted but not
-								 * yet reported as sent */
-
-static char *PqGSSRecvBuffer;	/* Received, encrypted data */
-static int	PqGSSRecvLength;	/* End of data available in PqGSSRecvBuffer */
-
-static char *PqGSSResultBuffer; /* Decryption of data in gss_RecvBuffer */
-static int	PqGSSResultLength;	/* End of data available in PqGSSResultBuffer */
-static int	PqGSSResultNext;	/* Next index to read a byte from
-								 * PqGSSResultBuffer */
-
-static uint32 PqGSSMaxPktSize;	/* Maximum size we can encrypt and fit the
-								 * results into our output buffer */
-#endif
+#define PQ_GSS_MAX_MESSAGE 16384
 
 /*
  * Attempt to write len bytes of data from ptr to a GSSAPI-encrypted connection.
@@ -87,115 +61,71 @@ static uint32 PqGSSMaxPktSize;	/* Maximum size we can encrypt and fit the
  * failure if necessary, and then return an errno indicating connection loss.
  */
 ssize_t
-be_gssapi_write(Port *port, void *ptr, size_t len)
+be_gssapi_write(Port *port, void *data, size_t size)
 {
 	OM_uint32	major,
 				minor;
 	gss_buffer_desc input,
 				output;
-	size_t		bytes_to_encrypt;
-	size_t		bytes_encrypted;
+	ssize_t		transferred;
 	gss_ctx_id_t gctx = port->gss->ctx;
 
 	/*
-	 * Check what size we could write without waiting, and then ask GSS how
-	 * much input data that will fit.
-	 
-	 * For now we use the simple gss_wrap() function, which allocates its own
-	 * output buffer and requires us to copy it into our buffer.  We check
-	 * what the largest message we could send within the 
-	 *
-	 * XXX In libraries that have implemented RFC 5587 gss_wrap_iov(), we
-	 * could probably work directly in-place in our buffers.
-	 *
-	 * Find out how big this message would be, if encrypted.
+	 * Loop through encrypting data and sending it out until it's all done, we
+	 * run out of buffer space, or port_write_encrypted() complains (which
+	 * would likely mean that an I/O is in progress, or there was some kind of
+	 * actual error).
 	 */
-	
-	/*
-	 * When we get a retryable failure, we must not tell the caller we have
-	 * successfully transmitted everything, else it won't retry.  For
-	 * simplicity, we claim we haven't transmitted anything until we have
-	 * successfully transmitted all "len" bytes.  Between calls, the amount of
-	 * the current input data that's already been encrypted and placed into
-	 * PqGSSSendBuffer (and perhaps transmitted) is remembered in
-	 * PqGSSSendConsumed.  On a retry, the caller *must* be sending that data
-	 * again, so if it offers a len less than that, something is wrong.
-	 *
-	 * Note: it may seem attractive to report partial write completion once
-	 * we've successfully sent any encrypted packets.  However, that can cause
-	 * problems for callers; notably, pqPutMsgEnd's heuristic to send only
-	 * full 8K blocks interacts badly with such a hack.  We won't save much,
-	 * typically, by letting callers discard data early, so don't risk it.
-	 */
-	if (len < PqGSSSendConsumed)
-	{
-		elog(COMMERROR, "GSSAPI caller failed to retransmit all data needing to be retried");
-		errno = ECONNRESET;
-		return -1;
-	}
-
-	/* Discount whatever source data we already encrypted. */
-	bytes_to_encrypt = len - PqGSSSendConsumed;
-	bytes_encrypted = PqGSSSendConsumed;
-
-	/*
-	 * Loop through encrypting data and sending it out until it's all done or
-	 * secure_raw_write() complains (which would likely mean that the socket
-	 * is non-blocking and the requested send() would block, or there was some
-	 * kind of actual error).
-	 */
-	while (bytes_to_encrypt || PqGSSSendLength)
+	transferred = 0;
+	while (len > 0)
 	{
 		int			conf_state = 0;
 		uint32		netlen;
+		size_t		out_size_limit;
+		uint32		in_size_limit;
 
 		/*
-		 * Check if we have data in the encrypted output buffer that needs to
-		 * be sent (possibly left over from a previous call), and if so, try
-		 * to send it.  If we aren't able to, return that fact back up to the
-		 * caller.
+		 * We don't want to encrypt data and then find that we don't have
+		 * space to store it and have wasted that CPU time, so we check how
+		 * many buffers are free before we start.  We also impose the
+		 * traditional cap of PQ_GSS_SEND_BUFFER_SIZE, since we're using APIs
+		 * that allocate and free temporary memory and we're also requiring
+		 * the other end to do the same.
+		 *
+		 * XXX In implementations that have RFC 5587 gss_wrap_iov(), we could
+		 * avoid that allocation and copying and work directly in our own
+		 * buffers.
 		 */
-		if (PqGSSSendLength)
+		out_size_limit = port_free_buffer_count(port) * socket_buffer_size;
+		out_size_limit = Min(out_size_limit, PQ_GSS_MAX_MESSAGE - sizeof(netlen));
+		if (out_size_limit == 0)
 		{
-			ssize_t		ret;
-			ssize_t		amount = PqGSSSendLength - PqGSSSendNext;
-
-			ret = secure_raw_write(port, PqGSSSendBuffer + PqGSSSendNext, amount);
-			if (ret <= 0)
-				return ret;
-
-			/*
-			 * Check if this was a partial write, and if so, move forward that
-			 * far in our buffer and try again.
-			 */
-			if (ret < amount)
-			{
-				PqGSSSendNext += ret;
-				continue;
-			}
-
-			/* We've successfully sent whatever data was in the buffer. */
-			PqGSSSendLength = PqGSSSendNext = 0;
+			/* No free buffers.  Try to flush without waiting. */
+			if (port_flush(port, 0) == 0) /* XXX cycle! */
+				errno = EWOULDBLOCK;
+			return transferred > 0 ? transferred : -1;
 		}
 
 		/*
-		 * Check if there are any bytes left to encrypt.  If not, we're done.
+		 * Ask GSSAPI what input size limit that implies, accounting for
+		 * framing overheads.
 		 */
-		if (!bytes_to_encrypt)
-			break;
+		major = gss_wrap_size_limit(&minor, gctx, 1, GSS_C_QOP_DEFAULT,
+									out_size_limit, &in_size_limit);
+		if (major != GSS_S_COMPLETE)
+		{
+			pg_GSS_error(_("GSSAPI wrap size limit error"), major, minor);
+			errno = ECONNRESET;
+			return -1;
+		}
+		if (in_size_limit == 0)
+		{
+			errno = EWOULDBLOCK;
+			return transferred > 0 ? transferred : -1;
+		}
 
-		/*
-		 * Check how much we are being asked to send, if it's too much, then
-		 * we will have to loop and possibly be called multiple times to get
-		 * through all the data.
-		 */
-		if (bytes_to_encrypt > PqGSSMaxPktSize)
-			input.length = PqGSSMaxPktSize;
-		else
-			input.length = bytes_to_encrypt;
-
-		input.value = (char *) ptr + bytes_encrypted;
-
+		input.length = Min(size, in_size_limit);
+		input.value = data;
 		output.value = NULL;
 		output.length = 0;
 
@@ -218,16 +148,16 @@ be_gssapi_write(Port *port, void *ptr, size_t len)
 			errno = ECONNRESET;
 			return -1;
 		}
-		if (output.length > PQ_GSS_SEND_BUFFER_SIZE - sizeof(uint32))
+		if (output.length > out_size_limit)
 		{
 			ereport(COMMERROR,
 					(errmsg("server tried to send oversize GSSAPI packet (%zu > %zu)",
-							(size_t) output.length,
-							PQ_GSS_SEND_BUFFER_SIZE - sizeof(uint32))));
+							(size_t) output.length, out_size_limit)));
 			errno = ECONNRESET;
 			return -1;
 		}
 
+		if (
 		bytes_encrypted += input.length;
 		bytes_to_encrypt -= input.length;
 		PqGSSSendConsumed += input.length;
