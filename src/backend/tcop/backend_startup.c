@@ -597,8 +597,7 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 						(errmsg("SSLRequest rejected")));
 		}
 
-		while (port_send_all(port, &SSLok, 1) != 0 ||
-			   port_flush(port) != 0)
+		while (port_send_all(port, &SSLok, 1, WAIT_EVENT_CLIENT_WRITE) != 0)
 		{
 			if (errno == EINTR)
 				continue;		/* if interrupted, just retry */

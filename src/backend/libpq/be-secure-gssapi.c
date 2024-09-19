@@ -24,7 +24,6 @@
 #include "utils/injection_point.h"
 #include "utils/memutils.h"
 
-
 /*
  * Handle the encryption/decryption of data using GSSAPI.
  *
@@ -40,395 +39,243 @@
  * would have to allocate memory for them to then pass them to GSSAPI.
  *
  * Therefore, this #define is effectively part of the protocol spec and can't
- * ever be changed.
+ * ever be changed.  It doesn't limit the size of our network I/Os buffers
+ * though, as we try to fit messages into a single buffer as long as it
+ * is at least this size.
  */
 #define PQ_GSS_MAX_MESSAGE 16384
 
 /*
- * Attempt to write len bytes of data from ptr to a GSSAPI-encrypted connection.
- *
- * The connection must be already set up for GSSAPI encryption (i.e., GSSAPI
- * transport negotiation is complete).
- *
- * On success, returns the number of data bytes consumed (possibly less than
- * len).  On failure, returns -1 with errno set appropriately.  For retryable
- * errors, caller should call again (passing the same or more data) once the
- * socket is ready.
- *
- * Dealing with fatal errors here is a bit tricky: we can't invoke elog(FATAL)
- * since it would try to write to the client, probably resulting in infinite
- * recursion.  Instead, use elog(COMMERROR) to log extra info about the
- * failure if necessary, and then return an errno indicating connection loss.
+ * When a buffer holds encrypted data, the first word of each message is the
+ * size.  When it holds cleartext, it is part of the unused space so we steal
+ * it to hold the size of the cleartext message.
  */
-ssize_t
-be_gssapi_write(Port *port, void *data, size_t size)
+static uint32 *
+be_gssapi_buffer_segment_end(PqBuffer *buf, int segment)
 {
-	OM_uint32	major,
-				minor;
-	gss_buffer_desc input,
-				output;
-	ssize_t		transferred;
-	gss_ctx_id_t gctx = port->gss->ctx;
-
-	/*
-	 * Loop through encrypting data and sending it out until it's all done, we
-	 * run out of buffer space, or port_write_encrypted() complains (which
-	 * would likely mean that an I/O is in progress, or there was some kind of
-	 * actual error).
-	 */
-	transferred = 0;
-	while (len > 0)
-	{
-		int			conf_state = 0;
-		uint32		netlen;
-		size_t		out_size_limit;
-		uint32		in_size_limit;
-
-		/*
-		 * We don't want to encrypt data and then find that we don't have
-		 * space to store it and have wasted that CPU time, so we check how
-		 * many buffers are free before we start.  We also impose the
-		 * traditional cap of PQ_GSS_SEND_BUFFER_SIZE, since we're using APIs
-		 * that allocate and free temporary memory and we're also requiring
-		 * the other end to do the same.
-		 *
-		 * XXX In implementations that have RFC 5587 gss_wrap_iov(), we could
-		 * avoid that allocation and copying and work directly in our own
-		 * buffers.
-		 */
-		out_size_limit = port_free_buffer_count(port) * socket_buffer_size;
-		out_size_limit = Min(out_size_limit, PQ_GSS_MAX_MESSAGE - sizeof(netlen));
-		if (out_size_limit == 0)
-		{
-			/* No free buffers.  Try to flush without waiting. */
-			if (port_flush(port, 0) == 0) /* XXX cycle! */
-				errno = EWOULDBLOCK;
-			return transferred > 0 ? transferred : -1;
-		}
-
-		/*
-		 * Ask GSSAPI what input size limit that implies, accounting for
-		 * framing overheads.
-		 */
-		major = gss_wrap_size_limit(&minor, gctx, 1, GSS_C_QOP_DEFAULT,
-									out_size_limit, &in_size_limit);
-		if (major != GSS_S_COMPLETE)
-		{
-			pg_GSS_error(_("GSSAPI wrap size limit error"), major, minor);
-			errno = ECONNRESET;
-			return -1;
-		}
-		if (in_size_limit == 0)
-		{
-			errno = EWOULDBLOCK;
-			return transferred > 0 ? transferred : -1;
-		}
-
-		input.length = Min(size, in_size_limit);
-		input.value = data;
-		output.value = NULL;
-		output.length = 0;
-
-		/*
-		 * Create the next encrypted packet.  Any failure here is considered a
-		 * hard failure, so we return -1 even if some data has been sent.
-		 */
-		major = gss_wrap(&minor, gctx, 1, GSS_C_QOP_DEFAULT,
-						 &input, &conf_state, &output);
-		if (major != GSS_S_COMPLETE)
-		{
-			pg_GSS_error(_("GSSAPI wrap error"), major, minor);
-			errno = ECONNRESET;
-			return -1;
-		}
-		if (conf_state == 0)
-		{
-			ereport(COMMERROR,
-					(errmsg("outgoing GSSAPI message would not use confidentiality")));
-			errno = ECONNRESET;
-			return -1;
-		}
-		if (output.length > out_size_limit)
-		{
-			ereport(COMMERROR,
-					(errmsg("server tried to send oversize GSSAPI packet (%zu > %zu)",
-							(size_t) output.length, out_size_limit)));
-			errno = ECONNRESET;
-			return -1;
-		}
-
-		if (
-		bytes_encrypted += input.length;
-		bytes_to_encrypt -= input.length;
-		PqGSSSendConsumed += input.length;
-
-		/* 4 network-order bytes of length, then payload */
-		netlen = pg_hton32(output.length);
-		memcpy(PqGSSSendBuffer + PqGSSSendLength, &netlen, sizeof(uint32));
-		PqGSSSendLength += sizeof(uint32);
-
-		memcpy(PqGSSSendBuffer + PqGSSSendLength, output.value, output.length);
-		PqGSSSendLength += output.length;
-
-		/* Release buffer storage allocated by GSSAPI */
-		gss_release_buffer(&minor, &output);
-	}
-
-	/* If we get here, our counters should all match up. */
-	Assert(len == PqGSSSendConsumed);
-	Assert(len == bytes_encrypted);
-
-	/* We're reporting all the data as sent, so reset PqGSSSendConsumed. */
-	PqGSSSendConsumed = 0;
-
-	return bytes_encrypted;
+	return (uint32 *)(buf->data + segment * PQ_GSS_MAX_MESSAGE);
 }
 
 /*
- * Read up to len bytes of data into ptr from a GSSAPI-encrypted connection.
- *
- * The connection must be already set up for GSSAPI encryption (i.e., GSSAPI
- * transport negotiation is complete).
- *
- * Returns the number of data bytes read, or on failure, returns -1
- * with errno set appropriately.  For retryable errors, caller should call
- * again once the socket is ready.
- *
- * We treat fatal errors the same as in be_gssapi_write(), even though the
- * argument about infinite recursion doesn't apply here.
+ * Initialize an empty cleartext buffer with multiple segments, so that it can
+ * be filled up with multiple cleartext messages leaving space in between for
+ * encryption framing.
  */
-ssize_t
-be_gssapi_read(Port *port, void *ptr, size_t len)
+void
+be_gssapi_buffer_init(Port *port, PqBuffer *buf)
+{	
+	buf->nsegments = socket_buffer_size / PQ_GSS_MAX_MESSAGE;
+	buf->segment = 0;
+	for (int i = 0; i < buf->nsegments; ++i)
+		*be_gssapi_buffer_segment_end(buf, i) = 0;
+}
+
+/*  
+ * Set begin, end, max_end to the values for a given segment.  This is used to
+ * select between multiple cleartext message bodies decrypted from a single
+ * large network buffer, while hiding the space in between that is used for
+ * encryption framing.
+ */
+be_gssapi_buffer_select_segment(Port *port, PqBuffer *buf, int segment)
 {
-	OM_uint32	major,
-				minor;
-	gss_buffer_desc input,
-				output;
-	ssize_t		ret;
-	size_t		bytes_returned = 0;
-	gss_ctx_id_t gctx = port->gss->ctx;
+	Assert(segment < buf->nsegments);
 
-	/*
-	 * The plan here is to read one incoming encrypted packet into
-	 * PqGSSRecvBuffer, decrypt it into PqGSSResultBuffer, and then dole out
-	 * data from there to the caller.  When we exhaust the current input
-	 * packet, read another.
-	 */
-	while (bytes_returned < len)
+	buf->begin =
+		PQ_GSS_MAX_MESSAGE * segment + sizeof(uint32) + port->gss->header_size;
+	buf->end = *be_gssapi_buffer_segment_end(buf, segment);
+	buf->max_end = PQ_GSS_MAX_MESSAGE - port->gss->trailer_size;
+	buf->segment = segment;
+}
+
+/*
+ * Encrypt a clear-text buffer in place.  On entry, the ranges [begin, end)
+ * for all segments contain a cleartext data.  On successful exit, there is
+ * only one segment containing an encrypted message [begin, end) ready for the wire.
+ */
+int
+be_gssapi_encrypt_buffer(PqBuffer *buf)
+{
+	gss_iov_buffer_desc iov[4];
+	uint32 size;
+
+	for (int i = 0; i < buf->nsegments; ++i)
 	{
-		int			conf_state = 0;
-
-		/* Check if we have data in our buffer that we can return immediately */
-		if (PqGSSResultNext < PqGSSResultLength)
-		{
-			size_t		bytes_in_buffer = PqGSSResultLength - PqGSSResultNext;
-			size_t		bytes_to_copy = Min(bytes_in_buffer, len - bytes_returned);
-
-			/*
-			 * Copy the data from our result buffer into the caller's buffer,
-			 * at the point where we last left off filling their buffer.
-			 */
-			memcpy((char *) ptr + bytes_returned, PqGSSResultBuffer + PqGSSResultNext, bytes_to_copy);
-			PqGSSResultNext += bytes_to_copy;
-			bytes_returned += bytes_to_copy;
-
-			/*
-			 * At this point, we've either filled the caller's buffer or
-			 * emptied our result buffer.  Either way, return to caller.  In
-			 * the second case, we could try to read another encrypted packet,
-			 * but the odds are good that there isn't one available.  (If this
-			 * isn't true, we chose too small a max packet size.)  In any
-			 * case, there's no harm letting the caller process the data we've
-			 * already returned.
-			 */
+		uint32 start_of_message;
+		
+		/* An empty segment means were finished. */
+		be_gssapi_buffer_select_segment(buf, i);
+		if (buf->end == buf_begin)
 			break;
-		}
+		
+		/* GSS header will go after the size, which we will store below.. */
+		start_of_message = i * PQ_GSS_MAX_MESSAGE;
+		iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER;
+		iov[0].buffer.value = buf->data + start_of_message + sizeof(size);
 
-		/* Result buffer is empty, so reset buffer pointers */
-		PqGSSResultLength = PqGSSResultNext = 0;
+		/* The data to be encrypted is at 'begin', which we will adjust below. */
+		iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
+		iov[1].buffer.value = buf->data + buf->begin;
+		iov[1].buffer.length = buf->end - buf->begin;
 
-		/*
-		 * Because we chose above to return immediately as soon as we emit
-		 * some data, bytes_returned must be zero at this point.  Therefore
-		 * the failure exits below can just return -1 without worrying about
-		 * whether we already emitted some data.
-		 */
-		Assert(bytes_returned == 0);
+		/* Some amount of padding and a trailer will follow, and we ask where. */
+	iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING;
+	iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER;
 
-		/*
-		 * At this point, our result buffer is empty with more bytes being
-		 * requested to be read.  We are now ready to load the next packet and
-		 * decrypt it (entirely) into our result buffer.
-		 */
-
-		/* Collect the length if we haven't already */
-		if (PqGSSRecvLength < sizeof(uint32))
-		{
-			ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength,
-								  sizeof(uint32) - PqGSSRecvLength);
-
-			/* If ret <= 0, secure_raw_read already set the correct errno */
-			if (ret <= 0)
-				return ret;
-
-			PqGSSRecvLength += ret;
-
-			/* If we still haven't got the length, return to the caller */
-			if (PqGSSRecvLength < sizeof(uint32))
-			{
-				errno = EWOULDBLOCK;
-				return -1;
-			}
-		}
-
-		/* Decode the packet length and check for overlength packet */
-		input.length = pg_ntoh32(*(uint32 *) PqGSSRecvBuffer);
-
-		if (input.length > PQ_GSS_RECV_BUFFER_SIZE - sizeof(uint32))
-		{
-			ereport(COMMERROR,
-					(errmsg("oversize GSSAPI packet sent by the client (%zu > %zu)",
-							(size_t) input.length,
-							PQ_GSS_RECV_BUFFER_SIZE - sizeof(uint32))));
-			errno = ECONNRESET;
-			return -1;
-		}
-
-		/*
-		 * Read as much of the packet as we are able to on this call into
-		 * wherever we left off from the last time we were called.
-		 */
-		ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength,
-							  input.length - (PqGSSRecvLength - sizeof(uint32)));
-		/* If ret <= 0, secure_raw_read already set the correct errno */
-		if (ret <= 0)
-			return ret;
-
-		PqGSSRecvLength += ret;
-
-		/* If we don't yet have the whole packet, return to the caller */
-		if (PqGSSRecvLength - sizeof(uint32) < input.length)
-		{
-			errno = EWOULDBLOCK;
-			return -1;
-		}
-
-		/*
-		 * We now have the full packet and we can perform the decryption and
-		 * refill our result buffer, then loop back up to pass data back to
-		 * the caller.
-		 */
-		output.value = NULL;
-		output.length = 0;
-		input.value = PqGSSRecvBuffer + sizeof(uint32);
-
-		major = gss_unwrap(&minor, gctx, &input, &output, &conf_state, NULL);
-		if (major != GSS_S_COMPLETE)
-		{
-			pg_GSS_error(_("GSSAPI unwrap error"), major, minor);
-			errno = ECONNRESET;
-			return -1;
-		}
-		if (conf_state == 0)
-		{
-			ereport(COMMERROR,
-					(errmsg("incoming GSSAPI message did not use confidentiality")));
-			errno = ECONNRESET;
-			return -1;
-		}
-
-		memcpy(PqGSSResultBuffer, output.value, output.length);
-		PqGSSResultLength = output.length;
-
-		/* Our receive buffer is now empty, reset it */
-		PqGSSRecvLength = 0;
-
-		/* Release buffer storage allocated by GSSAPI */
-		gss_release_buffer(&minor, &output);
+	/* Query padding and trailing locations and sizes. */
+	major = gss_wrap_iov_length(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
+								NULL, iov, lengthof(iov));
+	if (GSS_ERROR(major))
+	{
+		pg_GSS_error(_("gss_wrap_iov_length error"), major, minor);
+		errno = ECONNRESET;
+		return -1;
 	}
 
-	return bytes_returned;
+	/* Cross-check the header size against secure_open_gssapi(). */
+	if (iov[0].buffer.length + sizeof(uint32) != port->send_clear_min_begin)
+	{
+		ereport(COMERROR,
+				(errmsg("GSS header size changed")));
+		errno = ECONNRESET;
+		return -1;		
+	}
+
+	/* How big will the outgoing message be? */
+	size = sizeof(uint32) +
+		iov[0].buffer.length +
+		iov[1].buffer.length +
+		iov[2].buffer.length +
+		iov[3].buffer.length;
+
+	if (size > Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size))
+	{
+		ereport(COMERROR,
+				(errmsg("GSS message oversized")));
+		errno = ECONNRESET;
+		return -1;		
+	}
+	
+	/* GSS padding and trailer will follow the message. */
+	iov[2].buffer = iov[1].buffer.value + iov[1].buffer.length;
+	iov[3].buffer = iov[2].buffer.value + iov[2].buffer.length;
+
+	/*
+	 * Encrypt the message.  Cleartext is replaced with ciphertext, and
+	 * header, padding and trailer are populated.
+	 */
+	major = gss_wrap_iov(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
+						 NULL, iov, lengthof(iov));
+	if (GSS_ERROR(major))
+	{
+		pg_GSS_error(_("gss_wrap_iov error"), major, minor);
+		errno = ECONNRESET;
+		return -1;
+	}
+
+	/* Store initial size and adjust range to include framing. */
+	*(uint32 *) buf->data = pg_hton32(size);
+	buf->begin = 0;
+	buf->end = size;
+
+	return 0;
 }
 
 /*
- * Read the specified number of bytes off the wire, waiting using
- * WaitLatchOrSocket if we would block.
+ * Decrypt a buffer in place.  On entry, the range [begin, end) contains an
+ * encrypt message and possibly some trailing data.  On successful exit,
+ * [begin, end) contains the cleartext message of one message, and any
+ * trailing data is copied to the given overflow buffer.
  *
- * Results are read into PqGSSRecvBuffer.
+ * The overflow buffer is not expected to be initalized, and is initialized by
+ * this function.  If overflow->end is zero on return, then there is no
+ * overflow data.  This is expected to be common when receiving a stream of
+ * full-sized messages.
  *
- * Will always return either -1, to indicate a permanent error, or len.
+ * If an incomplete message is received, then this fails with EWOULDBLOCK and
+ * the caller is responsible for appending more data when it arrives.
  */
-static ssize_t
-read_or_wait(Port *port, ssize_t len)
+int
+be_gssapi_decrypt_buffer(PqBuffer *buf, PqBuffer *overflow)
 {
-	ssize_t		ret;
+	gss_iov_buffer_desc iov[2];
+	uint32 size;
 
-	/*
-	 * Keep going until we either read in everything we were asked to, or we
-	 * error out.
-	 */
-	while (PqGSSRecvLength < len)
+	/* We expect a left-justified message in the buffer. */
+	if (buf->begin != 0 || buf->end < sizeof(size))
 	{
-		ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength, len - PqGSSRecvLength);
-
-		/*
-		 * If we got back an error and it wasn't just
-		 * EWOULDBLOCK/EAGAIN/EINTR, then give up.
-		 */
-		if (ret < 0 &&
-			!(errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR))
-			return -1;
-
-		/*
-		 * Ok, we got back either a positive value, zero, or a negative result
-		 * indicating we should retry.
-		 *
-		 * If it was zero or negative, then we wait on the socket to be
-		 * readable again.
-		 */
-		if (ret <= 0)
-		{
-			WaitLatchOrSocket(MyLatch,
-							  WL_SOCKET_READABLE | WL_EXIT_ON_PM_DEATH,
-							  port->sock, 0, WAIT_EVENT_GSS_OPEN_SERVER);
-
-			/*
-			 * If we got back zero bytes, and then waited on the socket to be
-			 * readable and got back zero bytes on a second read, then this is
-			 * EOF and the client hung up on us.
-			 *
-			 * If we did get data here, then we can just fall through and
-			 * handle it just as if we got data the first time.
-			 *
-			 * Otherwise loop back to the top and try again.
-			 */
-			if (ret == 0)
-			{
-				ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength, len - PqGSSRecvLength);
-				if (ret == 0)
-					return -1;
-			}
-			if (ret < 0)
-				continue;
-		}
-
-		PqGSSRecvLength += ret;
+		ereport(COMERROR,
+				(errmsg("GSS packet not correctly aligned")));
+		errno = ECONNRESET;
+		return -1;				
 	}
 
-	return len;
+	/* Decode and sanity-check the size. */
+	if (buf->end < sizeof(size))
+	{
+		/* Incomplete message. */
+		errno = EWOULDBLOCK;
+		return -1;
+	}
+	size = pg_ntoh32(*(uint32 *) buf->data);
+	if (size > PQ_GSS_MAX_MESSAGE)
+	{
+		ereport(COMERROR,
+				(errmsg("GSS packet has unsupported size %u", size)));
+		errno = ECONNRESET;
+		return -1;				
+	}
+	if (buf->end < size)
+	{
+		/* Incomplete message. */
+		errno = EWOULDBLOCK;
+		return -1;
+	}
+
+	/*
+	 * Report the range of data that follows this message, for the caller to
+	 * deal with.
+	 */
+	*trailing_offset = size;
+	*trailing_size = buf->end - size;
+
+	/*
+	 * Decrypt the GSS message that begins after size.  Ciphertext is replaced
+	 * with cleartext, and its location is report to us in iov[1].
+	 */
+	iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
+	iov[1].buffer.value = buf->data + sizeof(size);
+	iov[1].buffer.length = size - sizeof(size);
+	major = gss_unwrap_iov(&minor, port->gss->ctx, NULL, NULL,
+						   iov, lengthof(iov));
+	if (GSS_ERROR(major))
+	{
+		pg_GSS_error(_("gss_unwrap_iov error"), major, minor);
+		errno = ECONNRESET;
+		return -1;
+	}
+
+	/* Adjust [begin, end) to point to the cleartext. */
+	Assert(iov[1].buffer.value >= buf->data);
+	Assert(iov[1].buffer.value < buf->data + buf->end);
+	Assert(iov[1].buffer.length < buf->end - buf->begin);
+	buf->begin = iov[1].buffer.value - buf->data;
+	buf->end = buf->begin + iov[1].buffer.length;
+
+	return 0;
 }
 
 /*
  * Start up a GSSAPI-encrypted connection.  This performs GSSAPI
  * authentication; after this function completes, it is safe to call
- * be_gssapi_read and be_gssapi_write.  Returns -1 and logs on failure;
- * otherwise, returns 0 and marks the connection as ready for GSSAPI
+ * be_gssapi_encrypt() and be_gssapi_decrypt().  Returns -1 and logs on
+ * failure; otherwise, returns 0 and marks the connection as ready for GSSAPI
  * encryption.
  *
- * Note that unlike the be_gssapi_read/be_gssapi_write functions, this
- * function WILL block on the socket to be ready for read/write (using
- * WaitLatchOrSocket) as appropriate while establishing the GSSAPI
- * session.
+ * This function WILL block on port_send_all() and port_recv_all(), as
+ * appropriate while establishing the GSSAPI session.  Note that those
+ * functions go directly to the network at this point, but after we've
+ * established port->gss->env they'll go through port_encrypt() and
+ * port_decrypt().
  */
 ssize_t
 secure_open_gssapi(Port *port)
@@ -437,6 +284,8 @@ secure_open_gssapi(Port *port)
 	OM_uint32	major,
 				minor;
 	gss_cred_id_t delegated_creds;
+	gss_iov_buffer_desc iov[4];
+	uint32		max_text_size;
 
 	INJECTION_POINT("backend-gssapi-startup");
 
@@ -448,23 +297,6 @@ secure_open_gssapi(Port *port)
 
 	delegated_creds = GSS_C_NO_CREDENTIAL;
 	port->gss->delegated_creds = false;
-
-	/*
-	 * Allocate buffers and initialize state variables.  By malloc'ing the
-	 * buffers at this point, we avoid wasting static data space in processes
-	 * that will never use them, and we ensure that the buffers are
-	 * sufficiently aligned for the length-word accesses that we do in some
-	 * places in this file.
-	 */
-	PqGSSSendBuffer = malloc(PQ_GSS_SEND_BUFFER_SIZE);
-	PqGSSRecvBuffer = malloc(PQ_GSS_RECV_BUFFER_SIZE);
-	PqGSSResultBuffer = malloc(PQ_GSS_RECV_BUFFER_SIZE);
-	if (!PqGSSSendBuffer || !PqGSSRecvBuffer || !PqGSSResultBuffer)
-		ereport(FATAL,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory")));
-	PqGSSSendLength = PqGSSSendNext = PqGSSSendConsumed = 0;
-	PqGSSRecvLength = PqGSSResultLength = PqGSSResultNext = 0;
 
 	/*
 	 * Use the configured keytab, if there is one.  As we now require MIT
@@ -483,39 +315,38 @@ secure_open_gssapi(Port *port)
 	}
 
 	while (true)
-	{
-		ssize_t		ret;
+	{		
+		uint32		netlen;
 		gss_buffer_desc input,
 					output = GSS_C_EMPTY_BUFFER;
+		uint8		buffer[PQ_GSS_MAX_MESSAGE];
 
 		/*
 		 * The client always sends first, so try to go ahead and read the
 		 * length and wait on the socket to be readable again if that fails.
 		 */
-		ret = read_or_wait(port, sizeof(uint32));
-		if (ret < 0)
-			return ret;
+		if (port_recv_all(port, &netlen, sizeof(netlen),
+						  WAIT_EVENT_FSS_OPEN_SERVER) != 0)
+			return -1;
 
 		/*
 		 * Get the length for this packet from the length header.
 		 */
-		input.length = pg_ntoh32(*(uint32 *) PqGSSRecvBuffer);
-
-		/* Done with the length, reset our buffer */
-		PqGSSRecvLength = 0;
+		input.length = pg_ntoh32(netlen);
+		input.value = buffer;
 
 		/*
 		 * During initialization, packets are always fully consumed and
-		 * shouldn't ever be over PQ_GSS_RECV_BUFFER_SIZE in length.
+		 * shouldn't ever be over PQ_GSS_MAX_MESSAGE in length.
 		 *
 		 * Verify on our side that the client doesn't do something funny.
 		 */
-		if (input.length > PQ_GSS_RECV_BUFFER_SIZE)
+		if (input.length > lengthof(buffer))
 		{
 			ereport(COMMERROR,
-					(errmsg("oversize GSSAPI packet sent by the client (%zu > %d)",
+					(errmsg("oversize GSSAPI packet sent by the client (%zu > %zu)",
 							(size_t) input.length,
-							PQ_GSS_RECV_BUFFER_SIZE)));
+							lengthof(buffer))));
 			return -1;
 		}
 
@@ -523,11 +354,9 @@ secure_open_gssapi(Port *port)
 		 * Get the rest of the packet so we can pass it to GSSAPI to accept
 		 * the context.
 		 */
-		ret = read_or_wait(port, input.length);
-		if (ret < 0)
-			return ret;
-
-		input.value = PqGSSRecvBuffer;
+		if (port_recv_all(port, input.buffer, input.length,
+						  WAIT_EVENT_GSS_OPEN_SERVER) != 0)
+			return -1;
 
 		/* Process incoming data.  (The client sends first.) */
 		major = gss_accept_sec_context(&minor, &port->gss->ctx,
@@ -558,9 +387,6 @@ secure_open_gssapi(Port *port)
 			port->gss->delegated_creds = true;
 		}
 
-		/* Done handling the incoming packet, reset our buffer */
-		PqGSSRecvLength = 0;
-
 		/*
 		 * Check if we have data to send and, if we do, make sure to send it
 		 * all
@@ -569,56 +395,22 @@ secure_open_gssapi(Port *port)
 		{
 			uint32		netlen = pg_hton32(output.length);
 
-			if (output.length > PQ_GSS_SEND_BUFFER_SIZE - sizeof(uint32))
+			if (output.length > PQ_GSS_MAX_MESSAGE - sizeof(uint32))
 			{
 				ereport(COMMERROR,
 						(errmsg("server tried to send oversize GSSAPI packet (%zu > %zu)",
 								(size_t) output.length,
-								PQ_GSS_SEND_BUFFER_SIZE - sizeof(uint32))));
+								PQ_GSS_MAX_MESSAGE - sizeof(uint32))));
 				gss_release_buffer(&minor, &output);
 				return -1;
 			}
 
-			memcpy(PqGSSSendBuffer, (char *) &netlen, sizeof(uint32));
-			PqGSSSendLength += sizeof(uint32);
-
-			memcpy(PqGSSSendBuffer + PqGSSSendLength, output.value, output.length);
-			PqGSSSendLength += output.length;
-
-			/* we don't bother with PqGSSSendConsumed here */
-
-			while (PqGSSSendNext < PqGSSSendLength)
+			if (port_send_all(port, output.buffer, output.length,
+							  WAIT_EVENT_GSS_OPEN_SERVER) != 0)
 			{
-				ret = secure_raw_write(port, PqGSSSendBuffer + PqGSSSendNext,
-									   PqGSSSendLength - PqGSSSendNext);
-
-				/*
-				 * If we got back an error and it wasn't just
-				 * EWOULDBLOCK/EAGAIN/EINTR, then give up.
-				 */
-				if (ret < 0 &&
-					!(errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR))
-				{
-					gss_release_buffer(&minor, &output);
-					return -1;
-				}
-
-				/* Wait and retry if we couldn't write yet */
-				if (ret <= 0)
-				{
-					WaitLatchOrSocket(MyLatch,
-									  WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH,
-									  port->sock, 0, WAIT_EVENT_GSS_OPEN_SERVER);
-					continue;
-				}
-
-				PqGSSSendNext += ret;
+				gss_release_buffer(&minor, &output);
+				return -1;
 			}
-
-			/* Done sending the packet, reset our buffer */
-			PqGSSSendLength = PqGSSSendNext = 0;
-
-			gss_release_buffer(&minor, &output);
 		}
 
 		/*
@@ -628,20 +420,26 @@ secure_open_gssapi(Port *port)
 		if (complete_next)
 			break;
 	}
-
+									
 	/*
-	 * Determine the max packet size which will fit in our buffer, after
-	 * accounting for the length.  be_gssapi_write will need this.
+	 * Determine the size of the encryption framing, needed to set up the
+	 * 'segments' that allow encryption/decryption in place.
 	 */
-	major = gss_wrap_size_limit(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
-								PQ_GSS_SEND_BUFFER_SIZE - sizeof(uint32),
-								&PqGSSMaxPktSize);
-
+	iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER;
+	iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
+	iov[1].buffer.value = NULL;
+	iov[1].buffer.length = 42;	/* arbitrary length, only affects padding */
+	iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING;
+	iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER;
+	major = gss_wrap_iov_length(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
+								NULL, iov, lengthof(iov));
 	if (GSS_ERROR(major))
 	{
-		pg_GSS_error(_("GSSAPI size check error"), major, minor);
+		pg_GSS_error(_("gss_wrap_iov_length error"), major, minor);
 		return -1;
 	}
+	port->gss->header_size = iov[0].buffer.length;
+	port->gss->trailer_size = iov[3].buffer.length;
 
 	port->gss->enc = true;
 

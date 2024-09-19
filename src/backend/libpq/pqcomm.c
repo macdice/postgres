@@ -132,6 +132,7 @@
 #include "storage/ipc.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
+#include "utils/wait_event_types.h"
 
 /*
  * Cope with the various platform-specific ways to spell TCP keepalive socket
@@ -310,17 +311,15 @@ pq_init(ClientSocket *client_sock)
 	/* Allocate socket buffers, aligned on typical memory pages. */
 	bufq_init(&port->recv.io_buffers);
 	bufq_init(&port->recv.crypt_buffers);
-	bufq_init(&port->recv.crypt_buffers_reserved);
 	bufq_init(&port->recv.clear_buffers);
 	port->recv.eof = false;
 	port->recv.error = 0;
 	bufq_init(&port->send.io_buffers);
 	bufq_init(&port->send.crypt_buffers);
-	bufq_init(&port->send.crypt_buffers_reserved);
 	bufq_init(&port->send.clear_buffers);
 	bufq_init(&port->free_buffers);
 	port->send.eof = false;
-	port->send.error = 0;
+	port->send.error = 0;	
 	buffer_space = MemoryContextAllocAligned(TopMemoryContext,
 											 socket_buffers * socket_buffer_size,
 											 PG_IO_ALIGN_SIZE,
@@ -332,7 +331,7 @@ pq_init(ClientSocket *client_sock)
 		PqBuffer   *buf = &bufs[i];
 
 		buf->data = buffer_space + socket_buffer_size * i;
-		dclist_push_tail(&port->free_buffers, &buf->node);
+		bufq_push_tail(&port->free_buffers, buf);
 	}
 
 	/* initialize state variables */
@@ -1037,7 +1036,7 @@ pq_getbytes(char *s, size_t len)
 {
 	Assert(PqCommReadingMsg);
 
-	return port_recv_all(MyProcPort, s, len) < 0 ? EOF : 0;
+	return port_recv_all(MyProcPort, s, len, WAIT_EVENT_CLIENT_READ) < 0 ? EOF : 0;
 }
 
 /* --------------------------------
@@ -1231,7 +1230,7 @@ pq_getmessage(StringInfo s, int maxlen)
 static int
 socket_flush(void)
 {
-	return port_flush(MyProcPort) == 0 ? 0 : EOF;
+	return port_flush(MyProcPort, WAIT_EVENT_CLIENT_WRITE) == 0 ? 0 : EOF;
 }
 
 /* --------------------------------
@@ -1269,14 +1268,14 @@ socket_putmessage(char msgtype, const char *s, size_t len)
 	if (PqCommBusy)
 		return 0;
 	PqCommBusy = true;
-	if (port_send_all(port, &msgtype, 1) == EOF)
+	if (port_send_all(port, &msgtype, 1, 0) == EOF)
 		goto fail;
 
 	n32 = pg_hton32((uint32) (len + 4));
-	if (port_send_all(port, (char *) &n32, 4) == EOF)
+	if (port_send_all(port, (char *) &n32, 4, 0) == EOF)
 		goto fail;
 
-	if (port_send_all(port, s, len) == EOF)
+	if (port_send_all(port, s, len, 0) == EOF)
 		goto fail;
 	PqCommBusy = false;
 	return 0;
@@ -1325,10 +1324,10 @@ pq_putmessage_v2(char msgtype, const char *s, size_t len)
 	if (PqCommBusy)
 		return 0;
 	PqCommBusy = true;
-	if (port_send_all(port, &msgtype, 1))
+	if (port_send_all(port, &msgtype, 1, 0))
 		goto fail;
 
-	if (port_send_all(port, s, len))
+	if (port_send_all(port, s, len, 0))
 		goto fail;
 	PqCommBusy = false;
 	return 0;

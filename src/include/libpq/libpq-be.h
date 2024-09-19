@@ -77,6 +77,8 @@ typedef struct
 	bool		auth;			/* GSSAPI Authentication used */
 	bool		enc;			/* GSSAPI encryption in use */
 	bool		delegated_creds;	/* GSSAPI Delegated credentials */
+	uint32		header_size;	/* GSSAPI header size (excluding length) */
+	uint32		trailer_size;	/* GSSAPI trailer size (excluding padding) */
 #endif
 } pg_gssinfo;
 #endif
@@ -272,16 +274,17 @@ extern PGDLLIMPORT bool socket_aio;
  * Interfaces used to send/recv cleartext data, possibly via an encryption
  * library if configured.
  */
-extern ssize_t port_send(Port *port, const void *ptr, size_t len, bool wait);
-extern ssize_t port_recv(Port *port, void *ptr, size_t len, bool wait);
-extern int	port_send_all(Port *port, const void *ptr, size_t len);
-extern int	port_recv_all(Port *port, void *ptr, size_t len);
+extern ssize_t port_send(Port *port, const void *ptr, size_t len, int wait_event);
+extern ssize_t port_recv(Port *port, void *ptr, size_t len, int wait_event);
+extern int	port_send_all(Port *port, const void *ptr, size_t len, int wait_event);
+extern int	port_recv_all(Port *port, void *ptr, size_t len, int wait_event);
 extern int	port_peek(Port *port);
 extern size_t port_send_pending(Port *port);
 extern size_t port_send_reserved_ecrypted(Port *port);
 extern size_t port_recv_pending(Port *port);
 extern size_t port_recv_pending_encrypted(Port *port);
 extern int	port_flush(Port *port, int wait_event);
+extern int	port_flush_encrypted(Port *port, int wait_event);
 extern int	port_wait_io(Port *port, int timeout, int wait_event);
 extern int	port_free_buffer_count(Port *port);
 
@@ -385,9 +388,9 @@ extern bool be_gssapi_get_enc(Port *port);
 extern const char *be_gssapi_get_princ(Port *port);
 extern bool be_gssapi_get_delegation(Port *port);
 
-/* Read and write to a GSSAPI-encrypted connection. */
-extern ssize_t be_gssapi_read(Port *port, void *ptr, size_t len);
-extern ssize_t be_gssapi_write(Port *port, void *ptr, size_t len);
+/* Encrypt and decrypt with GSSAPI. */
+extern int be_gssapi_encrypt_buffer(PqBuffer *buffer);
+extern int be_gssapi_dbecrypt_buffer(PqBuffer *buffer, PqBuffer *overflow);
 #endif							/* ENABLE_GSS */
 
 extern PGDLLIMPORT ProtocolVersion FrontendProtocol;

@@ -3,9 +3,6 @@
  * pqbuffer.h
  *	  Types and routines for managing queues of network buffers.
  *
- *	  Note that this is backend-internal and is NOT exported to clients.
- *	  Structs that need to be client-visible are in pqcomm.h.
- *
  *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -21,14 +18,35 @@
 #include "lib/ilist.h"
 
 /*
- * A buffer used for sending and receiving data.
+ * A socket buffer used for sending and receiving data.
+ *
  */
 typedef struct PqBuffer
 {
-	dlist_node	node;
-	uint8	   *data;
-	uint32		begin;
-	uint32		end;
+	dlist_node	node;			/* Link for PortIoChannel queues. */
+	uint8	   *data;			/* Pointer to I/O aligned memory. */
+	uint32		begin;			/* Beginning of populated data. */
+	uint32		end;			/* End of populated data. */
+	uint32		max_end;		/* Maximum possible end of populated data. */
+
+	/*
+	 * A socket buffer can hold multiple 'segments' of populated bytes with
+	 * holes in between.  For non-encrypted and TLS connections, there is just
+	 * one segment covering the whole buffer.  For GSSAPI connections,
+	 * cleartext buffers may have more than one segment, to allow space
+	 * reserved for GSSAPI framing.  This complication allows GSSAPI to
+	 * perform encryption and decryption in place, so that a large
+	 * socket_buffer_size can contain many 16kB GSSAPI messages.
+	 *
+	 * If nsegments is > 1, then port_buffer_segment(buffer, n) can be used to
+	 * select a different segment, which has the effect of changing the begin,
+	 * end and max_end values.  The GSSAPI support code stores the state
+	 * required to implement this in the spare holes, which exist only while a
+	 * buffer holds cleartext.  When the buffer hold crypt text, it is always
+	 * one segment of raw data to/from the network.
+	 */
+	int			nsegments;
+	int			segment;
 } PqBuffer;
 
 /* An ordered queue of buffers. */

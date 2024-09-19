@@ -500,7 +500,7 @@ aloop:
 				 * point authentication_timeout still employs
 				 * StartupPacketTimeoutHandler() which directly exits.
 				 */
-				if (port_flush(port) != 0)
+				if (port_flush(port, WAIT_EVENT_SSL_OPEN_SERVER) != 0)
 				{
 					ereport(COMMERROR,
 							(errcode_for_socket_access(),

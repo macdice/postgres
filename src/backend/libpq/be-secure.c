@@ -473,7 +473,7 @@ port_wait_io(Port *port, int timeout, int wait_event)
 		if (events[i].events == WL_SOCKET_SEND)
 		{
 			/* Where should unsent data be re-queued for retrying? */
-			if (port->ssl_in_use || port->gss)
+			if (port->ssl_in_use || (port->gss && port->gss->enc))
 				queue = &port->send.crypt_buffers;
 			else
 				queue = &port->send.clear_buffers;
@@ -485,7 +485,7 @@ port_wait_io(Port *port, int timeout, int wait_event)
 		else if (events[i].events == WL_SOCKET_RECV)
 		{
 			/* Where should received data be appended? */
-			if (port->ssl_in_use || port->gss)
+			if (port->ssl_in_use || (port->gss && port->gss->enc))
 				queue = &port->recv.crypt_buffers;
 			else
 				queue = &port->recv.clear_buffers;
@@ -721,7 +721,7 @@ port_recv_impl(Port *port, bool encryption_lib, void *data, size_t size)
 }
 
 /*
- * Transfer data from port->recv.crypt_buffers to a destination buffer.
+ * Transfer data to port->recv.crypt_buffers from a destination buffer.
  * Called by encryption library BIO routines, which must be ready for
  * EINPROGRESS.
  */
@@ -754,45 +754,72 @@ port_encrypt(Port *port)
 {
 	ssize_t		r;
 
-	Assert(port->ssl_in_use || port->gss);
-
-	while (!bufq_empty(&port->send.clear_buffers))
-	{
-		PqBuffer   *buf;
-		void	   *data;
-		size_t		size;
-
-		buf = bufq_head(&port->send.clear_buffers);
-		data = buf->data + buf->begin;
-		size = buf->end - buf->begin;
+	Assert(port->ssl_in_use || (port->gss && port->gss->enc));
 
 #if defined(USE_SSL)
-		if (port->ssl_in_use)
-			r = be_tls_write(port, data, size);
-#endif
-
-#if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
-		if (port->gss)
-			r = be_gss_write(port, data, size);
-#endif
-
-		if (r >= 0)
+	if (port->ssl_in_use)
+	{
+		/*
+		 * We write data "through" OpenSSL, and it appends encrypted data to
+		 * new buffers in send.crypt_buffers with port_send_encrypted().
+		 */
+		while (!bufq_empty(&port->send.clear_buffers))
 		{
-			buf->begin += r;
-			if (buf->begin == buf->end)
+			PqBuffer   *buf;
+			void	   *data;
+			size_t		size;
+
+			buf = bufq_head(&port->send.clear_buffers);
+			data = buf->data + buf->begin;
+			size = buf->end - buf->begin;
+
+			if (port->ssl_in_use)
+				r = be_tls_write(port, data, size);
+
+			if (r >= 0)
 			{
-				/* Recycle buffer that has been wholly encrypted. */
-				bufq_pop_head(&port->send.clear_buffers);
-				port_put_free_buffer(port, buf);
+				buf->begin += r;
+				if (buf->begin == buf->end)
+				{
+					/* Recycle buffer that has been wholly encrypted. */
+					bufq_pop_head(&port->send.clear_buffers);
+					port_put_free_buffer(port, buf);
+				}
+			}
+			else
+			{
+				/* XXX store error */
+				return -1;
 			}
 		}
-		else
+	}
+#endif
+
+#if defined(ENABLE_GSS)
+	if (port->gss && port->gss->enc)
+	{
+		/*
+		 * We ask GSSAPI to encrypt cleartext buffers in place so we can just
+		 * re-queue them immediately to send.crypt_buffers, ready for the
+		 * network.
+		 */
+		while (!bufq_empty(&port->send.clear_buffers))
 		{
-			/* XXX store error */
-			return -1;
+			PqBuffer	   *buf;
+
+			buf = bufq_head(&port->send.clear_buffers);
+			if (be_gssapi_encrypt_buffer(buf) < 0)
+			{
+				/* XXX */
+				return -1;
+			}
+
+			bufq_pop_head(&port->send.clear_buffers);
+			bufq_push_tail(&port->send.crypt_buffers, buf);
 		}
 	}
-
+#endif
+	
 	return 0;
 }
 
@@ -808,81 +835,84 @@ port_decrypt(Port *port)
 
 	Assert(port->ssl_in_use || port->gss);
 
-	while (!bufq_empty(&port->recv.crypt_buffers))
-	{
-		PqBuffer   *buf;
-		void	   *data;
-		size_t		size;
-
-		/* Find a clear text buffer to append to. */
-		if (bufq_empty(&port->recv.clear_buffers))
-			buf = NULL;
-		else
-		{
-			/* Got one, but is it already full? */
-			buf = bufq_tail(&port->recv.clear_buffers);
-			if (buf->end == socket_buffer_size)
-				buf = NULL;
-		}
-
-		/* Do we need a new one? */
-		if (!buf)
-		{
-			/* XXX figure out flow control */
-			if (!port_has_free_buffer(port))
-				break;
-			buf = port_get_free_buffer(port);
-			buf->begin = 0;
-			buf->end = 0;
-			bufq_push_tail(&port->recv.clear_buffers, buf);
-		}
-
-		/* Read through the encryption library. */
-		data = buf->data + buf->end;
-		size = socket_buffer_size - buf->end;
-		elog(LOG, "port_decrypt will try to decrypt %d bytes", (int) size);
-
 #if defined(USE_SSL)
-		if (port->ssl_in_use)
-			r = be_tls_read(port, data, size);
-#endif
-
-#if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
-		if (port->gss)
-			r = be_gssapi_read(port, data, size);
-#endif
-
-		if (r >= 0)
+	if (port->ssl_in_use)
+	{
+		while (!bufq_empty(&port->recv.crypt_buffers))
 		{
-			buf->end += r;
-		}
-		else
-		{
-			if (errno == EAGAIN || errno == EWOULDBLOCK)
-				errno = EINPROGRESS;
-			/* XXX store error */
-			return -1;
+			PqBuffer   *buf;
+			void	   *data;
+			size_t		size;
+
+			/* Find a clear text buffer to append to. */
+			if (bufq_empty(&port->recv.clear_buffers))
+				buf = NULL;
+			else
+			{
+				/* Got one, but is it already full? */
+				buf = bufq_tail(&port->recv.clear_buffers);
+				if (buf->end == socket_buffer_size)
+					buf = NULL;
+			}
+
+			/* Do we need a new one? */
+			if (!buf)
+			{
+				/* XXX figure out flow control */
+				if (!port_has_free_buffer(port))
+					break;
+				buf = port_get_free_buffer(port);
+				buf->begin = 0;
+				buf->end = 0;
+				bufq_push_tail(&port->recv.clear_buffers, buf);
+			}
+
+			/* Read through the encryption library. */
+			data = buf->data + buf->end;
+			size = socket_buffer_size - buf->end;
+			elog(LOG, "port_decrypt will try to decrypt %d bytes", (int) size);
+
+			if (port->ssl_in_use)
+				r = be_tls_read(port, data, size);
+
+			if (r >= 0)
+			{
+				buf->end += r;
+			}
+			else
+			{
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					errno = EINPROGRESS;
+				/* XXX store error */
+				return -1;
+			}
 		}
 	}
+#endif
+
+#if defined(ENABLE_GSS)
+	if (port->gss && port->gss->enc)
+	{
+	}
+#endif
 
 	return 0;
 }
 
 
 /*
- * Called by pq_putXXX functions to send data, possibly via an encryption
- * library.
+ * Called by pq_putXXX functions to send data.
  */
 ssize_t
-port_send(Port *port, const void *data, size_t size, bool wait)
+port_send(Port *port, const void *data, size_t size, int wait_event)
 {
 	ssize_t		transferred;
 
 again:
 	transferred = port_send_impl(port, false, data, size);
-	if (transferred < 0 && errno == EINPROGRESS && wait)
+	if (transferred < 0 && errno == EINPROGRESS && wait_event != 0)
 	{
-		if (port_wait_io(port, -1, WAIT_EVENT_CLIENT_WRITE) == WL_LATCH_SET)
+		if (port_wait_io(port, -1, wait_event) == WL_LATCH_SET)
 		{
 			ResetLatch(MyLatch);
 			ProcessClientWriteInterrupt(true);
@@ -895,16 +925,17 @@ again:
 
 /*
  * Called by pq_getXXX functions to receive data, possibly via an encryption
- * library.
+ * library.  If wait_event is non-zero, will wait for network data, and
+ * service client read interrupts.
  */
 ssize_t
-port_recv(Port *port, void *data, size_t size, bool wait)
+port_recv(Port *port, void *data, size_t size, int wait_event)
 {
 	ssize_t		transferred;
 
 again:
 	transferred = port_recv_impl(port, false, data, size);
-	if (transferred < 0 && errno == EINPROGRESS && wait)
+	if (transferred < 0 && errno == EINPROGRESS && wait_event != 0)
 	{
 		if (port_wait_io(port, -1, WAIT_EVENT_CLIENT_READ) == WL_LATCH_SET)
 		{
@@ -922,13 +953,13 @@ again:
  * success, EOF on failure.
  */
 int
-port_send_all(Port *port, const void *data, size_t size)
+port_send_all(Port *port, const void *data, size_t size, int wait_event)
 {
 	while (size > 0)
 	{
 		ssize_t		transferred;
 
-		transferred = port_send(port, data, size, true);
+		transferred = port_send(port, data, size, wait_event);
 		if (transferred < 0)
 			return EOF;
 		data = (char *) data + transferred;
@@ -943,10 +974,11 @@ port_send_all(Port *port, const void *data, size_t size)
  * success, EOF on failure.
  */
 int
-port_recv_all(Port *port, void *data, size_t size)
+port_recv_all(Port *port, void *data, size_t size, int wait_event)
 {
 	ssize_t		transferred;
 
+	Assert(wait_event != 0);
 	while (size > 0)
 	{
 		transferred = port_recv(port, data, size, true);
@@ -979,7 +1011,6 @@ port_flush(Port *port, int wait_event)
 			{
 				ResetLatch(MyLatch);
 				ProcessClientWriteInterrupt(true);
-				continue;
 			}
 		}
 		else if (!bufq_empty(&port->send.crypt_buffers))
@@ -1009,6 +1040,48 @@ port_flush(Port *port, int wait_event)
 		else
 		{
 			/* All buffered data has been processed. */
+			break;
+		}
+	}
+	return 0;
+}
+
+/*
+ * Like port_flush(), but only flushes encrypted data.  If wait_event is zero,
+ * does not wait, but might fail with EINPROGRESS.
+ */
+int
+port_flush_encrypted(Port *port, int wait_event)
+{
+	for (;;)
+	{
+		if (!bufq_empty(&port->send.io_buffers))
+		{
+			if (wait_event == 0)
+			{
+				/*
+				 * Caller only wants to make as much progress as possible
+				 * without waiting, so report I/O in progress.
+				 */
+				errno = EINPROGRESS;
+				return -1;							 
+			}
+			/* Otherwise, caller wants to wait for all I/O to complete. */
+			if (port_wait_io(port, -1, wait_event) == WL_LATCH_SET)
+			{
+				ResetLatch(MyLatch);
+				ProcessClientWriteInterrupt(true);
+			}			
+		}
+		else if (!bufq_empty(&port->send.crypt_buffers))
+		{
+			if (port_start_send(port, &port->send.crypt_buffers) < 0 &&
+				errno != EINPROGRESS)
+				return -1;
+		}
+		else
+		{
+			/* There is no send.crypt_buffers or send.io_buffers. */
 			break;
 		}
 	}
