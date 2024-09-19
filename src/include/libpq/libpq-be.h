@@ -287,8 +287,8 @@ extern int	port_flush(Port *port, int wait_event);
 extern int	port_flush_encrypted(Port *port, int wait_event);
 extern int	port_wait_io(Port *port, int timeout, int wait_event);
 extern int	port_free_buffer_count(Port *port);
-extern void be_gssapi_buffer_init(Port *port, PqBuffer *buf);
-extern void be_gssapi_buffer_select_segment(Port *port, PqBuffer *buf, int segment);
+extern void be_gssapi_initialize_cleartext_buffer(Port *port, PqBuffer *buf);
+extern void be_gssapi_select_buffer_segment(Port *port, PqBuffer *buf, int segment);
 
 
 /* Interfaces used by encryption libraries to send/recv encrypted data. */

@@ -84,8 +84,15 @@ port_has_free_buffer(Port *port)
 static inline PqBuffer *
 port_get_free_buffer(Port *port)
 {
-	/* XXX heap sorted by buf->data so we can merge iovecs? */
-	return bufq_pop_head(&port->free_buffers);
+	PqBuffer *buf;
+
+	buf = bufq_pop_head(&port->free_buffers);
+	buf->nsegments = 1;
+	buf->begin = 0;
+	buf->end = 0;
+	buf->max_end = socket_buffer_size;
+
+	return buf;
 }
 
 static inline void
@@ -277,8 +284,6 @@ port_start_recv(Port *port, PqBufferQueue *queue)
 		PqBuffer   *buf;
 
 		buf = port_get_free_buffer(port);
-		buf->begin = 0;
-		buf->end = 0;
 		port->recv.iov[iovcnt].iov_base = buf->data;
 		port->recv.iov[iovcnt].iov_len = socket_buffer_size;
 		bufq_push_tail(&port->recv.io_buffers, buf);
@@ -502,6 +507,35 @@ port_wait_io(Port *port, int timeout, int wait_event)
 }
 
 /*
+ * Give GSS a chance to configure a multi-segment cleartext buffer.
+ */
+static void
+port_initialize_cleartext_buffer(Port *port, PqBuffer *buf)
+{
+#ifdef ENABLE_GSS
+	if (port->gss && port->gss->enc)
+		be_gssapi_initialize_cleartext_buffer(port, buf);
+#endif
+}
+
+/*
+ * Switch to the next segment in a multi-segment cleartext buffer, or return
+ * false if there are no more, or it's not a multi-segment cleartext buffer.
+ */
+static bool
+port_buffer_next_segment(Port *port, PqBuffer *buf)
+{
+#ifdef ENABLE_GSS
+	if (port->gss && port->gss->enc && (buf->segment + 1) < buf->nsegments)
+	{
+		be_gssapi_select_buffer_segment(port, buf, buf->segment + 1);
+		return true;
+	}
+#endif
+	return false;
+}
+
+/*
  * Send data to network buffers, draining as required but not waiting.
  *
  * Fails with errno == EINPROGRESS if an asynchronous network transfer is in
@@ -554,15 +588,22 @@ port_send_impl(Port *port, bool encryption_lib, const void *data, size_t size)
 			buf = NULL;
 
 		/* Find a new buffer to append to, if necessary. */
-		if (!buf || buf->end == socket_buffer_size)
+		if (!buf || buf->end == buf->max_end)
 		{
-			if (bufq_size(append_queue) < socket_combine_limit &&
-				port_has_free_buffer(port))
+			if (port_buffer_next_segment(port, buf))
+			{
+				/* We can fill in a new message for GSS. */
+				Assert(buf->begin == 0);
+				Assert(buf->end == 0);
+				Assert(buf->max_end > 0);
+			}
+			else if (bufq_size(append_queue) < socket_combine_limit &&
+					 port_has_free_buffer(port))
 			{
 				/* Nope, but we can add a new one. */
 				buf = port_get_free_buffer(port);
-				buf->begin = 0;
-				buf->end = 0;
+				/* Give GSS a chance to configure multi-segment buffer. */
+				port_initialize_cleartext_buffer(port, buf);
 				bufq_push_tail(append_queue, buf);
 			}
 			else if (!bufq_empty(&port->send.io_buffers))
@@ -598,8 +639,6 @@ port_send_impl(Port *port, bool encryption_lib, const void *data, size_t size)
 				/* Sending immediately frees up buffers. */
 				Assert(port_has_free_buffer(port));
 				buf = port_get_free_buffer(port);
-				buf->begin = 0;
-				buf->end = 0;
 				bufq_push_tail(append_queue, buf);
 			}
 		}
@@ -668,7 +707,11 @@ port_recv_impl(Port *port, bool encryption_lib, void *data, size_t size)
 			buf = bufq_head(consume_queue);
 			if (buf->begin == buf->end)
 			{
-				/* Nope, recycle. */
+				/* Is there another segment? */
+				if (port_buffer_next_segment(port, buf) && buf->begin < buf->end)
+					continue;
+				 
+				/* Otherwise, recycle this buffer. */
 				bufq_pop_head(consume_queue);
 				port_put_free_buffer(port, buf);
 				continue;
@@ -862,12 +905,10 @@ port_decrypt(Port *port)
 				if (!port_has_free_buffer(port))
 					break;
 				buf = port_get_free_buffer(port);
-				buf->begin = 0;
-				buf->end = 0;
 				bufq_push_tail(&port->recv.clear_buffers, buf);
 			}
 
-			/* Read through the encryption library. */
+			/* Read through OpenSSL. */
 			data = buf->data + buf->end;
 			size = socket_buffer_size - buf->end;
 			elog(LOG, "port_decrypt will try to decrypt %d bytes", (int) size);

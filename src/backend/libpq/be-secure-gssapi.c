@@ -62,7 +62,7 @@ be_gssapi_buffer_segment_end(PqBuffer *buf, int segment)
  * encryption framing.
  */
 void
-be_gssapi_buffer_init(Port *port, PqBuffer *buf)
+be_gssapi_initialize_cleartext_buffer(Port *port, PqBuffer *buf)
 {	
 	buf->nsegments = socket_buffer_size / PQ_GSS_MAX_MESSAGE;
 	buf->segment = 0;
@@ -73,11 +73,11 @@ be_gssapi_buffer_init(Port *port, PqBuffer *buf)
 /*  
  * Set begin, end, max_end to the values for a given segment.  This is used to
  * select between multiple cleartext message bodies decrypted from a single
- * large network buffer, while hiding the space in between that is used for
- * encryption framing.
+ * large network buffer, while hiding the space in between that was or will be
+ * used for encryption framing.
  */
 void
-be_gssapi_buffer_select_segment(Port *port, PqBuffer *buf, int segment)
+be_gssapi_select_buffer_segment(Port *port, PqBuffer *buf, int segment)
 {
 	Assert(segment < buf->nsegments);
 
@@ -106,7 +106,7 @@ be_gssapi_encrypt_buffer(Port *port, PqBuffer *buf)
 		uint32 start_of_message;
 		
 		/* An empty segment means were finished. */
-		be_gssapi_buffer_select_segment(port, buf, i);
+		be_gssapi_select_buffer_segment(port, buf, i);
 		if (buf->end == buf->begin)
 			break;
 		
@@ -285,7 +285,7 @@ be_gssapi_decrypt_buffer(Port *port, PqBuffer *buf, PqBuffer *overflow)
 	
 	/* Select the first segment, ready to be consumed. */
 	buf->nsegments = nsegments;
-	be_gssapi_buffer_select_segment(port, buf, 0);
+	be_gssapi_select_buffer_segment(port, buf, 0);
 
 	return 0;
 }
