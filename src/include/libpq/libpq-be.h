@@ -287,6 +287,9 @@ extern int	port_flush(Port *port, int wait_event);
 extern int	port_flush_encrypted(Port *port, int wait_event);
 extern int	port_wait_io(Port *port, int timeout, int wait_event);
 extern int	port_free_buffer_count(Port *port);
+extern void be_gssapi_buffer_init(Port *port, PqBuffer *buf);
+extern void be_gssapi_buffer_select_segment(Port *port, PqBuffer *buf, int segment);
+
 
 /* Interfaces used by encryption libraries to send/recv encrypted data. */
 extern ssize_t port_send_encrypted(Port *port, const void *data, size_t size);
@@ -389,8 +392,8 @@ extern const char *be_gssapi_get_princ(Port *port);
 extern bool be_gssapi_get_delegation(Port *port);
 
 /* Encrypt and decrypt with GSSAPI. */
-extern int be_gssapi_encrypt_buffer(PqBuffer *buffer);
-extern int be_gssapi_dbecrypt_buffer(PqBuffer *buffer, PqBuffer *overflow);
+extern int be_gssapi_encrypt_buffer(Port *port, PqBuffer *buffer);
+extern int be_gssapi_decrypt_buffer(Port *port, PqBuffer *buffer, PqBuffer *overflow);
 #endif							/* ENABLE_GSS */
 
 extern PGDLLIMPORT ProtocolVersion FrontendProtocol;

@@ -808,7 +808,7 @@ port_encrypt(Port *port)
 			PqBuffer	   *buf;
 
 			buf = bufq_head(&port->send.clear_buffers);
-			if (be_gssapi_encrypt_buffer(buf) < 0)
+			if (be_gssapi_encrypt_buffer(port, buf) < 0)
 			{
 				/* XXX */
 				return -1;
@@ -833,7 +833,7 @@ port_decrypt(Port *port)
 {
 	ssize_t		r;
 
-	Assert(port->ssl_in_use || port->gss);
+	Assert(port->ssl_in_use || (port->gss && port->gss->enc));
 
 #if defined(USE_SSL)
 	if (port->ssl_in_use)
@@ -898,7 +898,6 @@ port_decrypt(Port *port)
 
 	return 0;
 }
-
 
 /*
  * Called by pq_putXXX functions to send data.

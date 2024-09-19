@@ -76,6 +76,7 @@ be_gssapi_buffer_init(Port *port, PqBuffer *buf)
  * large network buffer, while hiding the space in between that is used for
  * encryption framing.
  */
+void
 be_gssapi_buffer_select_segment(Port *port, PqBuffer *buf, int segment)
 {
 	Assert(segment < buf->nsegments);
@@ -93,8 +94,10 @@ be_gssapi_buffer_select_segment(Port *port, PqBuffer *buf, int segment)
  * only one segment containing an encrypted message [begin, end) ready for the wire.
  */
 int
-be_gssapi_encrypt_buffer(PqBuffer *buf)
+be_gssapi_encrypt_buffer(Port *port, PqBuffer *buf)
 {
+	OM_uint32	major,
+				minor;
 	gss_iov_buffer_desc iov[4];
 	uint32 size;
 
@@ -103,8 +106,8 @@ be_gssapi_encrypt_buffer(PqBuffer *buf)
 		uint32 start_of_message;
 		
 		/* An empty segment means were finished. */
-		be_gssapi_buffer_select_segment(buf, i);
-		if (buf->end == buf_begin)
+		be_gssapi_buffer_select_segment(port, buf, i);
+		if (buf->end == buf->begin)
 			break;
 		
 		/* GSS header will go after the size, which we will store below.. */
@@ -118,148 +121,171 @@ be_gssapi_encrypt_buffer(PqBuffer *buf)
 		iov[1].buffer.length = buf->end - buf->begin;
 
 		/* Some amount of padding and a trailer will follow, and we ask where. */
-	iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING;
-	iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER;
+		iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING;
+		iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER;
 
-	/* Query padding and trailing locations and sizes. */
-	major = gss_wrap_iov_length(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
-								NULL, iov, lengthof(iov));
-	if (GSS_ERROR(major))
-	{
-		pg_GSS_error(_("gss_wrap_iov_length error"), major, minor);
-		errno = ECONNRESET;
-		return -1;
-	}
+		/* Query padding and trailing locations and sizes. */
+		major = gss_wrap_iov_length(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
+									NULL, iov, lengthof(iov));
+		if (GSS_ERROR(major))
+		{
+			pg_GSS_error(_("gss_wrap_iov_length error"), major, minor);
+			errno = ECONNRESET;
+			return -1;
+		}
 
-	/* Cross-check the header size against secure_open_gssapi(). */
-	if (iov[0].buffer.length + sizeof(uint32) != port->send_clear_min_begin)
-	{
-		ereport(COMERROR,
-				(errmsg("GSS header size changed")));
-		errno = ECONNRESET;
-		return -1;		
-	}
+		/* How big will the outgoing message be? */
+		size = sizeof(uint32) +
+			iov[0].buffer.length +
+			iov[1].buffer.length +
+			iov[2].buffer.length +
+			iov[3].buffer.length;
 
-	/* How big will the outgoing message be? */
-	size = sizeof(uint32) +
-		iov[0].buffer.length +
-		iov[1].buffer.length +
-		iov[2].buffer.length +
-		iov[3].buffer.length;
-
-	if (size > Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size))
-	{
-		ereport(COMERROR,
-				(errmsg("GSS message oversized")));
-		errno = ECONNRESET;
-		return -1;		
-	}
+		if (size > Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size))
+		{
+			ereport(COMMERROR,
+					(errmsg("GSS message oversized")));
+			errno = ECONNRESET;
+			return -1;		
+		}
 	
-	/* GSS padding and trailer will follow the message. */
-	iov[2].buffer = iov[1].buffer.value + iov[1].buffer.length;
-	iov[3].buffer = iov[2].buffer.value + iov[2].buffer.length;
+		/* GSS padding and trailer will follow the message. */
+		iov[2].buffer.value = (char *) iov[1].buffer.value + iov[1].buffer.length;
+		iov[3].buffer.value = (char *) iov[2].buffer.value + iov[2].buffer.length;
 
-	/*
-	 * Encrypt the message.  Cleartext is replaced with ciphertext, and
-	 * header, padding and trailer are populated.
-	 */
-	major = gss_wrap_iov(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
-						 NULL, iov, lengthof(iov));
-	if (GSS_ERROR(major))
-	{
-		pg_GSS_error(_("gss_wrap_iov error"), major, minor);
-		errno = ECONNRESET;
-		return -1;
+		/*
+		 * Encrypt the message.  Cleartext is replaced with ciphertext, and
+		 * header, padding and trailer are populated.
+		 */
+		major = gss_wrap_iov(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
+							 NULL, iov, lengthof(iov));
+		if (GSS_ERROR(major))
+		{
+			pg_GSS_error(_("gss_wrap_iov error"), major, minor);
+			errno = ECONNRESET;
+			return -1;
+		}
+
+		/* Store initial size and adjust range to include framing. */
+		*(uint32 *) buf->data = pg_hton32(size);
+		buf->begin = 0;
+		buf->end = size;
+		*be_gssapi_buffer_segment_end(buf, buf->segment) = size;
 	}
-
-	/* Store initial size and adjust range to include framing. */
-	*(uint32 *) buf->data = pg_hton32(size);
-	buf->begin = 0;
-	buf->end = size;
 
 	return 0;
 }
 
 /*
- * Decrypt a buffer in place.  On entry, the range [begin, end) contains an
- * encrypt message and possibly some trailing data.  On successful exit,
- * [begin, end) contains the cleartext message of one message, and any
- * trailing data is copied to the given overflow buffer.
+ * Decrypt a buffer in place.  On entry, nsegments is 1 and the range [begin,
+ * end) contains a number of encrypt messages, last last of which may be
+ * incomplete, spanning into the next buffer or needing more data to complete.
  *
- * The overflow buffer is not expected to be initalized, and is initialized by
+ * On successful exit, [begin, end) contains the cleartext message of the
+ * first message, nsegments is set to the number of messages and they can be
+ * accessed by calling port_buffer_select_segment(), and any trailing data is
+ * copied to the given overflow buffer.
+ *
+ * The overflow buffer doesn't need to be initalized, and is initialized by
  * this function.  If overflow->end is zero on return, then there is no
  * overflow data.  This is expected to be common when receiving a stream of
- * full-sized messages.
- *
- * If an incomplete message is received, then this fails with EWOULDBLOCK and
- * the caller is responsible for appending more data when it arrives.
+ * full-sized messages, if socket_buffer_size is a multiple of
+ * PQ_GSS_MAX_MESSAGE.
  */
 int
-be_gssapi_decrypt_buffer(PqBuffer *buf, PqBuffer *overflow)
+be_gssapi_decrypt_buffer(Port *port, PqBuffer *buf, PqBuffer *overflow)
 {
+	OM_uint32	major,
+				minor;
 	gss_iov_buffer_desc iov[2];
+	uint32 remaining_size;
 	uint32 size;
+	int nsegments;
+	uint8 *overflow_data;
+
+	overflow->begin = 0;
+	overflow->end = 0;
 
 	/* We expect a left-justified message in the buffer. */
-	if (buf->begin != 0 || buf->end < sizeof(size))
+	if (buf->begin != 0) // || buf->end < sizeof(size))
 	{
-		ereport(COMERROR,
+		ereport(COMMERROR,
 				(errmsg("GSS packet not correctly aligned")));
 		errno = ECONNRESET;
 		return -1;				
 	}
 
-	/* Decode and sanity-check the size. */
-	if (buf->end < sizeof(size))
+	nsegments = buf->end / PQ_GSS_MAX_MESSAGE;
+	if (buf->end % PQ_GSS_MAX_MESSAGE > 0)
+		nsegments++;	
+
+	overflow_data = NULL;
+	remaining_size = buf->end;
+	for (int i = 0; i < nsegments; ++i)
 	{
-		/* Incomplete message. */
-		errno = EWOULDBLOCK;
-		return -1;
-	}
-	size = pg_ntoh32(*(uint32 *) buf->data);
-	if (size > PQ_GSS_MAX_MESSAGE)
-	{
-		ereport(COMERROR,
-				(errmsg("GSS packet has unsupported size %u", size)));
-		errno = ECONNRESET;
-		return -1;				
-	}
-	if (buf->end < size)
-	{
-		/* Incomplete message. */
-		errno = EWOULDBLOCK;
-		return -1;
+		uint8 *message = buf->data + PQ_GSS_MAX_MESSAGE * i;
+		ssize_t message_size = Min(PQ_GSS_MAX_MESSAGE, remaining_size);
+
+		/* Decode and sanity-check the size. */
+		if (message_size < sizeof(size))
+		{
+			/* Incomplete message. */
+			overflow_data = message;
+			break;
+		}
+
+		/* Read the size from the start of the message. */
+		memcpy(&size, message, sizeof(size));
+		size = pg_ntoh32(size);
+
+		/* Sanity check. */
+		if (size > PQ_GSS_MAX_MESSAGE)
+		{
+			ereport(COMMERROR,
+					(errmsg("GSS packet has unsupported size %u", size)));
+			errno = ECONNRESET;
+			return -1;				
+		}
+		if (message_size < size)
+		{
+			/* Incomplete message. */
+			overflow_data = message;
+			break;
+		}
+
+		/*
+		 * Decrypt the GSS message that begins after size.  Ciphertext is
+		 * replaced with cleartext, and its location is report to us in
+		 * iov[1].
+		 */
+		iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
+		iov[1].buffer.value = message + sizeof(size);
+		iov[1].buffer.length = size - sizeof(size);
+		major = gss_unwrap_iov(&minor, port->gss->ctx, NULL, NULL,
+							   iov, lengthof(iov));
+		if (GSS_ERROR(major))
+		{
+			pg_GSS_error(_("gss_unwrap_iov error"), major, minor);
+			errno = ECONNRESET;
+			return -1;
+		}
+
+		/* Adjust [begin, end) for this segment to point to the cleartext. */
+		buf->begin = (uint8 *) iov[1].buffer.value - (uint8 *) buf->data;
+		buf->end = buf->begin + iov[1].buffer.length;
+		*be_gssapi_buffer_segment_end(buf, i) = buf->end;		
 	}
 
-	/*
-	 * Report the range of data that follows this message, for the caller to
-	 * deal with.
-	 */
-	*trailing_offset = size;
-	*trailing_size = buf->end - size;
-
-	/*
-	 * Decrypt the GSS message that begins after size.  Ciphertext is replaced
-	 * with cleartext, and its location is report to us in iov[1].
-	 */
-	iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
-	iov[1].buffer.value = buf->data + sizeof(size);
-	iov[1].buffer.length = size - sizeof(size);
-	major = gss_unwrap_iov(&minor, port->gss->ctx, NULL, NULL,
-						   iov, lengthof(iov));
-	if (GSS_ERROR(major))
+	if (overflow_data)
 	{
-		pg_GSS_error(_("gss_unwrap_iov error"), major, minor);
-		errno = ECONNRESET;
-		return -1;
+		/* Copy remaining data into overflow buffer. */
+		overflow->end = buf->end - (overflow_data - buf->data);
+		memcpy(overflow->data, overflow_data, overflow->end);
 	}
-
-	/* Adjust [begin, end) to point to the cleartext. */
-	Assert(iov[1].buffer.value >= buf->data);
-	Assert(iov[1].buffer.value < buf->data + buf->end);
-	Assert(iov[1].buffer.length < buf->end - buf->begin);
-	buf->begin = iov[1].buffer.value - buf->data;
-	buf->end = buf->begin + iov[1].buffer.length;
+	
+	/* Select the first segment, ready to be consumed. */
+	buf->nsegments = nsegments;
+	be_gssapi_buffer_select_segment(port, buf, 0);
 
 	return 0;
 }
@@ -285,7 +311,6 @@ secure_open_gssapi(Port *port)
 				minor;
 	gss_cred_id_t delegated_creds;
 	gss_iov_buffer_desc iov[4];
-	uint32		max_text_size;
 
 	INJECTION_POINT("backend-gssapi-startup");
 
@@ -326,7 +351,7 @@ secure_open_gssapi(Port *port)
 		 * length and wait on the socket to be readable again if that fails.
 		 */
 		if (port_recv_all(port, &netlen, sizeof(netlen),
-						  WAIT_EVENT_FSS_OPEN_SERVER) != 0)
+						  WAIT_EVENT_GSS_OPEN_SERVER) != 0)
 			return -1;
 
 		/*
@@ -354,7 +379,7 @@ secure_open_gssapi(Port *port)
 		 * Get the rest of the packet so we can pass it to GSSAPI to accept
 		 * the context.
 		 */
-		if (port_recv_all(port, input.buffer, input.length,
+		if (port_recv_all(port, input.value, input.length,
 						  WAIT_EVENT_GSS_OPEN_SERVER) != 0)
 			return -1;
 
@@ -393,7 +418,7 @@ secure_open_gssapi(Port *port)
 		 */
 		if (output.length > 0)
 		{
-			uint32		netlen = pg_hton32(output.length);
+			netlen = pg_hton32(output.length);
 
 			if (output.length > PQ_GSS_MAX_MESSAGE - sizeof(uint32))
 			{
@@ -405,7 +430,7 @@ secure_open_gssapi(Port *port)
 				return -1;
 			}
 
-			if (port_send_all(port, output.buffer, output.length,
+			if (port_send_all(port, output.value, output.length,
 							  WAIT_EVENT_GSS_OPEN_SERVER) != 0)
 			{
 				gss_release_buffer(&minor, &output);

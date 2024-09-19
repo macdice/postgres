@@ -38,6 +38,7 @@
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
+#include "utils/wait_event_types.h"
 
 /* GUCs */
 bool		Trace_connection_negotiation = false;
