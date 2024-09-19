@@ -33,17 +33,10 @@ typedef struct PqBuffer
 	 * A socket buffer can hold multiple 'segments' of populated bytes with
 	 * holes in between.  For non-encrypted and TLS connections, there is just
 	 * one segment covering the whole buffer.  For GSSAPI connections,
-	 * cleartext buffers may have more than one segment, to allow space
+	 * cleartext buffers may hold more than one message, to allow space
 	 * reserved for GSSAPI framing.  This complication allows GSSAPI to
 	 * perform encryption and decryption in place, so that a large
 	 * socket_buffer_size can contain many 16kB GSSAPI messages.
-	 *
-	 * If nsegments is > 1, then port_buffer_segment(buffer, n) can be used to
-	 * select a different segment, which has the effect of changing the begin,
-	 * end and max_end values.  The GSSAPI support code stores the state
-	 * required to implement this in the spare holes, which exist only while a
-	 * buffer holds cleartext.  When the buffer hold crypt text, it is always
-	 * one segment of raw data to/from the network.
 	 */
 	int			nsegments;
 	int			segment;

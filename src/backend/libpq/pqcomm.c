@@ -953,7 +953,7 @@ pq_getbyte(void)
 
 	Assert(PqCommReadingMsg);
 
-	r = port_recv(MyProcPort, &byte, 1, true);
+	r = port_recv(MyProcPort, &byte, 1, WAIT_EVENT_CLIENT_READ);
 
 	return r < 1 ? EOF : byte;
 }
@@ -985,7 +985,7 @@ pq_getbyte_if_available(unsigned char *c)
 
 	Assert(PqCommReadingMsg);
 
-	r = port_recv(MyProcPort, c, 1, false);
+	r = port_recv(MyProcPort, c, 1, 0);
 	if (r < 0)
 	{
 		/*

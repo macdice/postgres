@@ -101,6 +101,8 @@ be_gssapi_encrypt_buffer(Port *port, PqBuffer *buf)
 	gss_iov_buffer_desc iov[4];
 	uint32 size;
 
+	elog(LOG, "be_gssapi_encrypt_buffer");
+
 	for (int i = 0; i < buf->nsegments; ++i)
 	{
 		uint32 start_of_message;
@@ -203,6 +205,8 @@ be_gssapi_decrypt_buffer(Port *port, PqBuffer *buf, PqBuffer *overflow)
 	int nsegments;
 	uint8 *overflow_data;
 
+	elog(LOG, "be_gssapi_decrypt_buffer");
+
 	overflow->begin = 0;
 	overflow->end = 0;
 
@@ -300,7 +304,7 @@ be_gssapi_decrypt_buffer(Port *port, PqBuffer *buf, PqBuffer *overflow)
  * This function WILL block on port_send_all() and port_recv_all(), as
  * appropriate while establishing the GSSAPI session.  Note that those
  * functions go directly to the network at this point, but after we've
- * established port->gss->env they'll go through port_encrypt() and
+ * established port->gss->env they'll start going through port_encrypt() and
  * port_decrypt().
  */
 ssize_t
@@ -314,6 +318,7 @@ secure_open_gssapi(Port *port)
 
 	INJECTION_POINT("backend-gssapi-startup");
 
+	elog(LOG, "secure_open_gssapi");
 	/*
 	 * Allocate subsidiary Port data for GSSAPI operations.
 	 */

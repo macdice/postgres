@@ -461,9 +461,15 @@ port_wait_io(Port *port, int timeout, int wait_event)
 	 */
 	wait_for = 0;
 	if (!bufq_empty(&port->recv.io_buffers))
+	{
+		elog(LOG, "port_wait_io waiting for WL_SOCKET_RECV");
 		wait_for |= WL_SOCKET_RECV;
+	}
 	if (!bufq_empty(&port->send.io_buffers))
+	{
+		elog(LOG, "port_wait_io waiting for WL_SOCKET_SEND");
 		wait_for |= WL_SOCKET_SEND;
+	}
 	ModifyWaitEvent(port->wes, port->sock_pos, wait_for, NULL);
 
 	result = 0;
@@ -842,8 +848,8 @@ port_encrypt(Port *port)
 	if (port->gss && port->gss->enc)
 	{
 		/*
-		 * We ask GSSAPI to encrypt cleartext buffers in place so we can just
-		 * re-queue them immediately to send.crypt_buffers, ready for the
+		 * We ask GSSAPI to encrypt each cleartext buffer in place so we can
+		 * just re-queue them immediately to send.crypt_buffers, ready for the
 		 * network.
 		 */
 		while (!bufq_empty(&port->send.clear_buffers))
@@ -934,6 +940,32 @@ port_decrypt(Port *port)
 #if defined(ENABLE_GSS)
 	if (port->gss && port->gss->enc)
 	{
+		while (!bufq_empty(&port->recv.crypt_buffers))
+		{
+			PqBuffer *buf;
+			PqBuffer *overflow;
+
+			if (!port_has_free_buffer(port))
+			{
+				elog(LOG, "XXX port_decrypt gss no free buffer");
+				return 0;				
+			}
+			overflow = port_get_free_buffer(port);
+			buf = bufq_head(&port->recv.crypt_buffers);
+			if (be_gssapi_decrypt_buffer(port, buf, overflow) == 0)
+			{
+				bufq_push_tail(&port->recv.clear_buffers, buf);
+				if (overflow->end > 0)
+					bufq_push_head(&port->recv.crypt_buffers, overflow);
+				else
+					port_put_free_buffer(port, overflow);
+			}
+			else
+			{
+				port_put_free_buffer(port, overflow);
+				return -1;
+			}
+		}
 	}
 #endif
 
@@ -959,6 +991,8 @@ again:
 		}
 		goto again;
 	}
+	if (wait_event != 0 && port_flush(port, wait_event) != 0)
+		return -1;		
 
 	return transferred;
 }
@@ -1056,14 +1090,14 @@ port_flush(Port *port, int wait_event)
 		else if (!bufq_empty(&port->send.crypt_buffers))
 		{
 			/* Start sending buffered encrypted data. */
-			Assert(port->ssl_in_use || port->gss);
+			Assert(port->ssl_in_use || (port->gss && port->enc));
 			if (port_start_send(port, &port->send.crypt_buffers) < 0 &&
 				errno != EINPROGRESS)
 				return -1;
 		}
 		else if (!bufq_empty(&port->send.clear_buffers))
 		{
-			if (port->ssl_in_use || port->gss)
+			if (port->ssl_in_use || (port->gss && port->gss->enc))
 			{
 				/* Encrypt buffered clear text, to fill crypt_buffers. */
 				if (port_encrypt(port) < 0 && errno != EWOULDBLOCK)
@@ -1177,6 +1211,8 @@ port_peek(Port *port)
 
 	if (port_recv(port, &byte, 1, true) < 1)
 		return EOF;
+
+	/* XXX fix for multi-segment! */
 
 	/*
 	 * Receiving always leaves the most recently returned byte in the head

@@ -636,6 +636,7 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 	{
 		char		GSSok = 'N';
 
+		elog(LOG, "ProcessStartupPacket XXX NEGOTIATE_GSS_CODE");
 #ifdef ENABLE_GSS
 		/* No GSSAPI encryption when on Unix socket */
 		if (port->laddr.addr.ss_family != AF_UNIX)
