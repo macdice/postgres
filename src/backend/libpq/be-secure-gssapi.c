@@ -293,7 +293,12 @@ be_gssapi_encrypt(Port *port)
 				break;
 			Assert(end > begin);
 		
-			/* Query sizes, though only the padding is unknown to us. */
+			/*
+			 * Query sizes, though only the padding size is unknown to us.
+			 * (The length is easy to compute by RFC 1964 1.2.2.3, but the API
+			 * is the documented way of obtaining the lengths and also allows
+			 * us to cross check a few assertions.)
+			 */
 			iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER;
 			iov[0].buffer.value = buf->data + header;
 			iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
@@ -355,7 +360,7 @@ be_gssapi_encrypt(Port *port)
 			start_of_message += PQ_GSS_MAX_MESSAGE;
 		}
 
-		/* This is now a single segment encrypted buffer. */
+		/* This is now a non-segmented encrypted buffer. */
 		Assert(encrypted_end != 0);
 		buf->next_segment = 0;
 		buf->begin = 0;
