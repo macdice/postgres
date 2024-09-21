@@ -46,18 +46,35 @@
 #define PQ_GSS_MAX_MESSAGE 16384
 
 /*
+ * The maximum number of buffers a message could occupy is 3, given the
+ * current minimum buffer size and maximum message size.
+ */
+#define PQ_GSS_MAX_BUFFERS_PER_MESSAGE \
+	(1 + PQ_GSS_MAX_MESSAGE / MIN_SOCKET_BUFFER_SIZE)
+
+/*
+ * A size that is big enough to hold GSSAPI header, padding or trailer.  When
+ * those are split across buffer boundaries, in case we have to make a
+ * temporary copy.  (The GSSAPI IOV interfaces allow scatter/gather of the
+ * message data which we can use to deal with buffer boundaries, but not of
+ * these elements of a messages.)  GSSAPI doesn't give us a compile time
+ * constant, but we can check that this is enough at run time.
+ */
+#define PQ_GSS_MAX_METADATA_SIZE 64
+
+/*
  * The segmentation scheme that allow in place encryption/decryption without
- * copying in the common case works like this:
+ * copying works like this:
  *
  * Outgoing data
  *
- * As a simplification, outgoing messages are not allowed to span buffer
- * boundaries.  Depending on socket_buffer_size, a buffer can hold some number
- * of messages of size PQ_GSS_MAX_MESSAGE, and possibly a final message of
- * smaller size.  Outbound efficiency is therefore martinally better if
- * socket_buffer_size is set to a multiple of PQ_GSS_MAX_MESSAGE.  This is a
- * simplification, not a fundamental limitation, and with a bit more work we
- * could build message that span multiple buffers.
+ * Outgoing messages are not allowed to span buffer boundaries.  Depending on
+ * socket_buffer_size, a buffer can hold some number of messages of size
+ * PQ_GSS_MAX_MESSAGE, and possibly a final message of smaller size.  Outbound
+ * efficiency is therefore marginally better if socket_buffer_size is set to a
+ * multiple of PQ_GSS_MAX_MESSAGE.  This is a simplification, not a
+ * fundamental limitation, and with a bit more work we could build message
+ * that span multiple buffers.
  *
  * be_gssapi_initialize_cleartext_buffer() sets up the segments leaving holes
  * in the right places for encryption framing, and then port_send_impl()
@@ -67,7 +84,7 @@
  * contains cleartext), and buf->segment_next points to the next one, allowing
  * be_gssapi_segment_next() (called by port_segment_next()) to adjust begin,
  * end, max_end whenever port_send_impl() needs to advance to the next one.
- * This arrangement requires strictly zero copying for encryption.
+ * This arrangement allows strictly zero copying for encryption.
  *
  * Neither socket_buffer_size nor PQ_GSS_MAX_MESSAGE limits the size of
  * network transfer system calls, since buffers are grouped by up to
@@ -249,8 +266,8 @@ be_gssapi_next_segment(PqBuffer *buf)
  * On exit, they have been encrypted in place and there is one segment [begin,
  * end) holding the concatenated messages in wire format.
  *
- * This operation doesn't require any free buffers, so it can only fail if the
- * GSSAPI library fails.
+ * This operation doesn't require any free buffers, so it can always make
+ * progress, as long as the GSSAPI library doesn't fail.
  */
 int
 be_gssapi_encrypt(Port *port)
@@ -266,10 +283,9 @@ be_gssapi_encrypt(Port *port)
 		buf = bufq_head(&port->send.clear_buffers);
 
 		/*
-		 * We don't need access the be_gssapi_encrypt_buffer objects, because
-		 * we know how be_gssapi_encrypt_buffer() lays the segments out, and
-		 * we know that they are all full except perhaps for the final filled
-		 * one, whose end offset is in buf->end.
+		 * We know how that_gssapi_encrypt_buffer() lays the segments out on
+		 * PQ_GSS_MAX_MESSAGE boundaries, and we know that they are all full
+		 * except for the final filled one whose end offset is in buf->end.
 		 */
 		start_of_message = 0;
 		encrypted_end = 0;
@@ -294,10 +310,8 @@ be_gssapi_encrypt(Port *port)
 			Assert(end > begin);
 		
 			/*
-			 * Query sizes, though only the padding size is unknown to us.
-			 * (The length is easy to compute by RFC 1964 1.2.2.3, but the API
-			 * is the documented way of obtaining the lengths and also allows
-			 * us to cross check a few assertions.)
+			 * Ask GSSAPI for the layout of the padding and trailer, and
+			 * assert that everything else is as we expected.
 			 */
 			iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER;
 			iov[0].buffer.value = buf->data + header;
@@ -311,6 +325,7 @@ be_gssapi_encrypt(Port *port)
 										iov, lengthof(iov));
 			if (GSS_ERROR(major))
 			{
+				/* XXX throw away buffer, store error */
 				pg_GSS_error(_("gss_wrap_iov_length error"), major, minor);
 				errno = ECONNRESET;
 				return -1;
@@ -373,41 +388,161 @@ be_gssapi_encrypt(Port *port)
 }
 
 /*
- * XXX rewrite me completely
- 
- * Decrypt a buffer in place.  On entry, nsegments is 1 and the range [begin,
- * end) contains a number of encrypt messages, last last of which may be
- * incomplete, spanning into the next buffer or needing more data to complete.
+ * Populate 'buffers' with the set of buffers containing an incoming encrypted
+ * message beginning at 'offset' in buffers[0] extending for 'size' bytes.  On
+ * entry, *nbuffers says how many elements of buffers[] are populated already,
+ * and on exit it is updated with the new number.  Returns true if all the
+ * required buffers were found, and false if there aren't enough buffers in
+ * the recv.crypt_buffers queue yet and the caller will need to receive more
+ * buffers from the network.
+ */
+static bool
+find_buffers_for_message(Port *port,
+						 PqBuffer *buffers,
+						 int *nbuffers,
+						 uint32 offset,
+						 uint32 size)
+{
+	/* How many buffers will it take to gather 'size' bytes? */
+	i = 0;
+	offset = start_of_message;
+	remaining = size;
+	while (remaining > 0)
+	{
+		size_this_buffer = Min(buffer[i].end - offset, remaining);
+		remaining -= size_this_buffer;
+		if (i + 1 > nbuffers)
+		{
+			if (!bufq_has_next(buffer[i]))
+				return false;
+			buffer[++i] = bufq_next(buffer[i]);
+			nbuffers++;
+		}
+		else
+			++i;
+		offset = buffer[i].begin;
+	}
+	return true;
+}
+						 
+/*
+ * Fills a single GSSAPI IOV descriptor with the address and size of a
+ * fragment of a message beginining at 'offset' in buffers[0] and extending
+ * for 'size' bytes.  Normally it is a pointer directly into a buffer, but if
+ * the fragment would cross a buffer boundary then it is reassembled in
+ * 'temporary_space', which much have space for PQ_GSS_MAX_METADATA_SIZE
+ * bytes.  'type' must be GSS_IOV_BUFFER_TYPE_HEADER, _PADDING or _TRAILER.
  *
- * On successful exit, [begin, end) contains the cleartext message of the
- * first message, nsegments is set to the number of messages and they can be
- * accessed by calling port_buffer_select_segment(), and any trailing data is
- * copied to the given overflow buffer.
+ * This is used for the header, padding and trailer of a GSSAPI message,
+ * because gss_unwrap_iov() is not smart enough to deal with those parts being
+ * split.
+ */
+static void
+fill_gss_iov(gss_iov_buffer_desc *iov,
+			 OM_uint32 type,
+			 PqBuffer *buffers,
+			 int nbuffers,
+			 uint32 offset,
+			 uint32 size,
+			 void *temporary_space)
+{
+	
+}
+
+/*
+ * Fills 'iov' with ranges of data fragments beginning at 'offset' in
+ * buffers[0] extendeding for 'size' bytes, and return the number of filled
+ * iov entries.
  *
- * The overflow buffer doesn't need to be initalized, and is initialized by
- * this function.  If overflow->end is zero on return, then there is no
- * overflow data.  This is expected to be common when receiving a stream of
- * full-sized messages, if socket_buffer_size is a multiple of
- * PQ_GSS_MAX_MESSAGE.
+ * This is useful for telling gss_unwrap_iov() where ciphertext data
+ * is, so that it can be decrypted in place.
+ */
+static int
+find_gss_iov_list(gss_iov_buffer_desc *iov,
+				  PqBuffer *buffers,
+				  int nbuffers,
+				  uint32 offset,
+				  uint32 size)
+{
+}
+
+/*
+ * Decrypts as many buffers from recv.crypt_buffers as possible trying to do
+ * it in place where possible.
  */
 int
 be_gssapi_decrypt(Port *port)
 {
-	OM_uint32	major,
-				minor;
-	gss_iov_buffer_desc iov[2];
-	uint32 remaining_size;
-	uint32 size;
-	int nsegments;
-	uint8 *overflow_data;
+	PqBuffer *overflow;
 
 	elog(LOG, "be_gssapi_decrypt_buffer");
 
-
+	/* XXX */
+	overflow = port_get_free_buffer(port);
+	
 	while (!bufq_empty(&port->recv.crypt_buffers))
 	{
-		PqBuffer *buffers[1 + PQ_GSS_MAX_MESSAGE / MIN_SOCKET_BUFFER_SIZE];
+		OM_uint32	major, minor;
+		uint32 size;
+		uint8 temp_header[PQ_GSS_MAX_METADATA_SIZE];
+		uint8 temp_padding[PQ_GSS_MAX_METADATA_SIZE];
+		uint8 temp_trailer[PQ_GSS_MAX_METADATA_SIZE];
+		gss_iov_buffer_desc iov[2 + PQ_GSS_MAX_BUFFERS_PER_MESSAGE];
+		int iovcnt;
+		PqBuffer *buffers[PQ_GSS_MAX_BUFFERS_PER_MESSAGE];
+		int nbuffers;
 
+		nbuffers = 1;
+		buffer[0] = bufq_head(&port->recv.crypt_buffers);
+		Assert(buffer[0].begin < buffer[0].end);
+		Assert(buffer[0].next_segment == 0);
+		start_of_message = buf->begin;
+		
+		while (start_of_message < buf->end)
+		{
+			/* Decode size, possibly split across a buffer boundary. */
+			if (start_of_message <= buffer[0].end - sizeof(uint32))
+			{
+				memcpy(&size, buffer[0].data + start_of_message, sizeof(uint32));
+				size = pg_ntoh32(size);
+			}
+			else if (bufq_has_next(buffer[0]))
+			{
+				uint32 size_buffer0 = buffer[0].end - start_of_message;
+				uint32 size_buffer1 = sizeof(size) - size_buffer0;
+				
+				buffers[1] = bufq_next(buffer[0]);
+				nbuffers = 2;
+				/* XXX check size_buffer1 bytes are available! */
+				memcpy(&size,
+					   buffer[0].data + start_of_message,
+					   size_buffer0);
+				memcpy((uint8 *) &size + size_buffer0,
+					   buffer[1].data + buffer[1].begin,
+					   size_buffer1);
+			}
+			else
+			{
+				/* if already decrypted messages, requeue to cleartext and
+				 * copy size_buffer0 to overflow */
+			}
+		  
+			fill_gss_iov(&iov[0], GSS_IOV_BUFFER_TYPE_HEADER,
+						 buffers, nbuffers,
+						 start_of_message + sizeof(uint32),
+						 temp_header);
+			iovcnt = 1;
+			iovcnt += fill_gss_iov_list(&iov[iovcnt],
+										buffers, nbuffers,
+										start_of_message + sizeof(uint32) +
+										port->gss->header_size);
+			fill_gss_iov(&iov[iovcnt++], GSS_IOV_BUFFER_TYPE_PADDING,
+						 buffers, nbuffers,
+						 start_of_message + sizeof(uint32),
+						 temp_header);
+			iovcnt = 1;
+			
+			
 		for (int i = 0; i < nsegments; ++i)
 		{
 			uint8 *message = buf->data + PQ_GSS_MAX_MESSAGE * i;
