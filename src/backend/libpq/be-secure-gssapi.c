@@ -403,90 +403,78 @@ be_gssapi_decrypt(Port *port)
 
 	elog(LOG, "be_gssapi_decrypt_buffer");
 
-	overflow->begin = 0;
-	overflow->end = 0;
 
-	/* We expect a left-justified message in the buffer. */
-	if (buf->begin != 0) // || buf->end < sizeof(size))
+	while (!bufq_empty(&port->recv.crypt_buffers))
 	{
-		ereport(COMMERROR,
-				(errmsg("GSS packet not correctly aligned")));
-		errno = ECONNRESET;
-		return -1;				
-	}
+		PqBuffer *buffers[1 + PQ_GSS_MAX_MESSAGE / MIN_SOCKET_BUFFER_SIZE];
 
-	nsegments = buf->end / PQ_GSS_MAX_MESSAGE;
-	if (buf->end % PQ_GSS_MAX_MESSAGE > 0)
-		nsegments++;	
-
-	overflow_data = NULL;
-	remaining_size = buf->end;
-	for (int i = 0; i < nsegments; ++i)
-	{
-		uint8 *message = buf->data + PQ_GSS_MAX_MESSAGE * i;
-		ssize_t message_size = Min(PQ_GSS_MAX_MESSAGE, remaining_size);
-
-		/* Decode and sanity-check the size. */
-		if (message_size < sizeof(size))
+		for (int i = 0; i < nsegments; ++i)
 		{
-			/* Incomplete message. */
-			overflow_data = message;
-			break;
+			uint8 *message = buf->data + PQ_GSS_MAX_MESSAGE * i;
+			ssize_t message_size = Min(PQ_GSS_MAX_MESSAGE, remaining_size);
+
+			/* Decode and sanity-check the size. */
+			if (message_size < sizeof(size))
+			{
+				/* Incomplete message. */
+				overflow_data = message;
+				break;
+			}
+
+			/* Read the size from the start of the message. */
+			memcpy(&size, message, sizeof(size));
+			size = pg_ntoh32(size);
+
+			/* Sanity check. */
+			if (size > PQ_GSS_MAX_MESSAGE)
+			{
+				ereport(COMMERROR,
+						(errmsg("GSS packet has unsupported size %u", size)));
+				errno = ECONNRESET;
+				return -1;				
+			}
+			if (message_size < size)
+			{
+				/* Incomplete message. */
+				overflow_data = message;
+				break;
+			}
+
+			/*
+			 * Decrypt the GSS message that begins after size.  Ciphertext is
+			 * replaced with cleartext, and its location is report to us in
+			 * iov[1].
+			 */
+			iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
+			iov[1].buffer.value = message + sizeof(size);
+			iov[1].buffer.length = size - sizeof(size);
+			major = gss_unwrap_iov(&minor, port->gss->ctx, NULL, NULL,
+								   iov, lengthof(iov));
+			if (GSS_ERROR(major))
+			{
+				pg_GSS_error(_("gss_unwrap_iov error"), major, minor);
+				errno = ECONNRESET;
+				return -1;
+			}
+
+			/* Adjust [begin, end) for this segment to point to the cleartext. */
+			buf->begin = (uint8 *) iov[1].buffer.value - (uint8 *) buf->data;
+			buf->end = buf->begin + iov[1].buffer.length;
+			*be_gssapi_buffer_segment_end(buf, i) = buf->end;		
 		}
 
-		/* Read the size from the start of the message. */
-		memcpy(&size, message, sizeof(size));
-		size = pg_ntoh32(size);
-
-		/* Sanity check. */
-		if (size > PQ_GSS_MAX_MESSAGE)
+		if (overflow_data)
 		{
-			ereport(COMMERROR,
-					(errmsg("GSS packet has unsupported size %u", size)));
-			errno = ECONNRESET;
-			return -1;				
+			/* Copy remaining data into overflow buffer. */
+			overflow->end = buf->end - (overflow_data - buf->data);
+			memcpy(overflow->data, overflow_data, overflow->end);
 		}
-		if (message_size < size)
-		{
-			/* Incomplete message. */
-			overflow_data = message;
-			break;
-		}
-
-		/*
-		 * Decrypt the GSS message that begins after size.  Ciphertext is
-		 * replaced with cleartext, and its location is report to us in
-		 * iov[1].
-		 */
-		iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
-		iov[1].buffer.value = message + sizeof(size);
-		iov[1].buffer.length = size - sizeof(size);
-		major = gss_unwrap_iov(&minor, port->gss->ctx, NULL, NULL,
-							   iov, lengthof(iov));
-		if (GSS_ERROR(major))
-		{
-			pg_GSS_error(_("gss_unwrap_iov error"), major, minor);
-			errno = ECONNRESET;
-			return -1;
-		}
-
-		/* Adjust [begin, end) for this segment to point to the cleartext. */
-		buf->begin = (uint8 *) iov[1].buffer.value - (uint8 *) buf->data;
-		buf->end = buf->begin + iov[1].buffer.length;
-		*be_gssapi_buffer_segment_end(buf, i) = buf->end;		
-	}
-
-	if (overflow_data)
-	{
-		/* Copy remaining data into overflow buffer. */
-		overflow->end = buf->end - (overflow_data - buf->data);
-		memcpy(overflow->data, overflow_data, overflow->end);
+	
+		/* Select the first segment, ready to be consumed. */
+		buf->nsegments = nsegments;
+		be_gssapi_select_buffer_segment(port, buf, 0);
 	}
 	
-	/* Select the first segment, ready to be consumed. */
-	buf->nsegments = nsegments;
-	be_gssapi_select_buffer_segment(port, buf, 0);
-
 	return 0;
 }
 
