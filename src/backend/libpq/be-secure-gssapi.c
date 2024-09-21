@@ -634,7 +634,41 @@ secure_open_gssapi(Port *port)
 		if (complete_next)
 			break;
 	}
-									
+
+	/*
+	 * Determine the maximum cleartext message that can be encrypted and fit
+	 * in leading and final messages, given the way
+	 * be_gssapi_initialize_cleartext_buffer() lays out segments.  The reason
+	 * we have to ask this instead of working backwards from
+	 * GSS_IOV_BUFFER_TYPE_TRAILER is that the RFC... XXX
+	 */
+	major = gss_wrap_size_limit(&minor, port->gss->ctx, GSS_C_QOP_DEFAULT,
+								Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size) -
+								sizeof(uint32),
+								&port->gss->max_leading_cleartext_message);
+	if (GSS_ERROR(major))
+	{
+		pg_GSS_error(_("gss_wrap_size_limit error"), major, minor);
+		return -1;
+	}
+	if (socket_buffer_size % PQ_GSS_MAX_MESSAGE == 0)
+	{
+		port->gss->max_final_cleartext_message =
+			port->gss->max_leading_cleartext_message;
+	}
+	else
+	{
+		major = gss_wrap_size_limit(&minor, port->gss->ctx, GSS_C_QOP_DEFAULT,
+									(socket_buffer_size % PQ_GSS_MAX_MESSAGE) -
+									sizeof(uint32),
+									&port->gss->max_final_cleartext_message);
+		if (GSS_ERROR(major))
+		{
+			pg_GSS_error(_("gss_wrap_size_limit error"), major, minor);
+			return -1;
+		}
+	}
+	
 	/*
 	 * Determine the size of the encryption framing, needed to set up the
 	 * 'segments' that allow encryption/decryption in place.
