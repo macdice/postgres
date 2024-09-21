@@ -87,10 +87,10 @@ port_get_free_buffer(Port *port)
 	PqBuffer *buf;
 
 	buf = bufq_pop_head(&port->free_buffers);
-	buf->nsegments = 1;
 	buf->begin = 0;
 	buf->end = 0;
 	buf->max_end = socket_buffer_size;
+	buf->next_segment = 0;
 
 	return buf;
 }
@@ -529,14 +529,11 @@ port_initialize_cleartext_buffer(Port *port, PqBuffer *buf)
  * false if there are no more, or it's not a multi-segment cleartext buffer.
  */
 static bool
-port_buffer_next_segment(Port *port, PqBuffer *buf)
+port_next_segment(Port *port, PqBuffer *buf)
 {
 #ifdef ENABLE_GSS
-	if (port->gss && port->gss->enc && (buf->segment + 1) < buf->nsegments)
-	{
-		be_gssapi_select_buffer_segment(port, buf, buf->segment + 1);
-		return true;
-	}
+	if (port->gss && port->gss->enc)
+		return be_gssapi_next_segment(buf);
 #endif
 	return false;
 }
@@ -596,7 +593,7 @@ port_send_impl(Port *port, bool encryption_lib, const void *data, size_t size)
 		/* Find a new buffer to append to, if necessary. */
 		if (!buf || buf->end == buf->max_end)
 		{
-			if (port_buffer_next_segment(port, buf))
+			if (port_next_segment(port, buf))
 			{
 				/* We can fill in a new message for GSS. */
 				Assert(buf->begin == 0);
@@ -714,7 +711,7 @@ port_recv_impl(Port *port, bool encryption_lib, void *data, size_t size)
 			if (buf->begin == buf->end)
 			{
 				/* Is there another segment? */
-				if (port_buffer_next_segment(port, buf) && buf->begin < buf->end)
+				if (port_next_segment(port, buf) && buf->begin < buf->end)
 					continue;
 				 
 				/* Otherwise, recycle this buffer. */
@@ -809,8 +806,9 @@ port_encrypt(Port *port)
 	if (port->ssl_in_use)
 	{
 		/*
-		 * We write data "through" OpenSSL, and it appends encrypted data to
-		 * new buffers in send.crypt_buffers with port_send_encrypted().
+		 * We write data from send.clear_buffers "through" OpenSSL, and it
+		 * appends encrypted data to new buffers in send.crypt_buffers with
+		 * port_send_encrypted().
 		 */
 		while (!bufq_empty(&port->send.clear_buffers))
 		{
@@ -848,24 +846,10 @@ port_encrypt(Port *port)
 	if (port->gss && port->gss->enc)
 	{
 		/*
-		 * We ask GSSAPI to encrypt each cleartext buffer in place so we can
-		 * just re-queue them immediately to send.crypt_buffers, ready for the
-		 * network.
+		 * Encrypt buffers in place and move them directly from
+		 * send.clear_buffers to send.crypt_buffers.
 		 */
-		while (!bufq_empty(&port->send.clear_buffers))
-		{
-			PqBuffer	   *buf;
-
-			buf = bufq_head(&port->send.clear_buffers);
-			if (be_gssapi_encrypt_buffer(port, buf) < 0)
-			{
-				/* XXX */
-				return -1;
-			}
-
-			bufq_pop_head(&port->send.clear_buffers);
-			bufq_push_tail(&port->send.crypt_buffers, buf);
-		}
+		return be_gssapi_encrypt(port);
 	}
 #endif
 	
@@ -940,33 +924,12 @@ port_decrypt(Port *port)
 #if defined(ENABLE_GSS)
 	if (port->gss && port->gss->enc)
 	{
-		while (!bufq_empty(&port->recv.crypt_buffers))
-		{
-			PqBuffer *buf;
-			PqBuffer *overflow;
-
-			if (!port_has_free_buffer(port))
-			{
-				elog(LOG, "XXX port_decrypt gss no free buffer");
-				return 0;				
-			}
-			overflow = port_get_free_buffer(port);
-			buf = bufq_head(&port->recv.crypt_buffers);
-			if (be_gssapi_decrypt_buffer(port, buf, overflow) == 0)
-			{
-				bufq_push_tail(&port->recv.clear_buffers, buf);
-				if (overflow->end > 0)
-					bufq_push_head(&port->recv.crypt_buffers, overflow);
-				else
-					port_put_free_buffer(port, overflow);
-			}
-			else
-			{
-				port_put_free_buffer(port, overflow);
-				return -1;
-			}
-		}
-	}
+		/*
+		 * Decrypt buffers in place and move them directly from
+		 * recv.crypt_buffers to recv.clear_buffers.
+		 */
+		return be_gssapi_decrypt(port);
+	}		
 #endif
 
 	return 0;
@@ -1011,7 +974,7 @@ again:
 	transferred = port_recv_impl(port, false, data, size);
 	if (transferred < 0 && errno == EINPROGRESS && wait_event != 0)
 	{
-		if (port_wait_io(port, -1, WAIT_EVENT_CLIENT_READ) == WL_LATCH_SET)
+		if (port_wait_io(port, -1, wait_event) == WL_LATCH_SET)
 		{
 			ResetLatch(MyLatch);
 			ProcessClientReadInterrupt(true);
@@ -1025,6 +988,12 @@ again:
 /*
  * Like port_send(), but with internal retry on short transfer.  Returns 0 on
  * success, EOF on failure.
+ *
+ * If wait_event is non-zero, wait for data to be sent to the network as
+ * required to free buffers allowing this data to be accepted.  That doesn't
+ * mean that *this* data is sent to the network.  For that, see port_flush().
+ *
+ * XXX discuss deadlock avoidance
  */
 int
 port_send_all(Port *port, const void *data, size_t size, int wait_event)
@@ -1090,7 +1059,7 @@ port_flush(Port *port, int wait_event)
 		else if (!bufq_empty(&port->send.crypt_buffers))
 		{
 			/* Start sending buffered encrypted data. */
-			Assert(port->ssl_in_use || (port->gss && port->enc));
+			Assert(port->ssl_in_use || (port->gss && port->gss->enc));
 			if (port_start_send(port, &port->send.crypt_buffers) < 0 &&
 				errno != EINPROGRESS)
 				return -1;

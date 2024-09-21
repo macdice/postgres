@@ -30,16 +30,10 @@ typedef struct PqBuffer
 	uint32		max_end;		/* Maximum possible end of populated data. */
 
 	/*
-	 * A socket buffer can hold multiple 'segments' of populated bytes with
-	 * holes in between.  For non-encrypted and TLS connections, there is just
-	 * one segment covering the whole buffer.  For GSSAPI connections,
-	 * cleartext buffers may hold more than one message, to allow space
-	 * reserved for GSSAPI framing.  This complication allows GSSAPI to
-	 * perform encryption and decryption in place, so that a large
-	 * socket_buffer_size can contain many 16kB GSSAPI messages.
+	 * Location of the next segment.  Zero for all buffers except GSSAPI
+	 * cleartext buffers.  See be-secure-gssapi.c for details.
 	 */
-	int			nsegments;
-	int			segment;
+	uint32		next_segment;
 } PqBuffer;
 
 /* An ordered queue of buffers. */

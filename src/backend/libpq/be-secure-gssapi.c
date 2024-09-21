@@ -46,139 +46,330 @@
 #define PQ_GSS_MAX_MESSAGE 16384
 
 /*
- * When a buffer holds encrypted data, the first word of each message is the
- * size.  When it holds cleartext, it is part of the unused space so we steal
- * it to hold the size of the cleartext message.
+ * The segmentation scheme that allow in place encryption/decryption without
+ * copying in the common case works like this:
+ *
+ * Outgoing data
+ *
+ * As a simplification, outgoing messages are not allowed to span buffer
+ * boundaries.  Depending on socket_buffer_size, a buffer can hold some number
+ * of messages of size PQ_GSS_MAX_MESSAGE, and possibly a final message of
+ * smaller size.  Outbound efficiency is therefore martinally better if
+ * socket_buffer_size is set to a multiple of PQ_GSS_MAX_MESSAGE.  This is a
+ * simplification, not a fundamental limitation, and with a bit more work we
+ * could build message that span multiple buffers.
+ *
+ * be_gssapi_initialize_cleartext_buffer() sets up the segments leaving holes
+ * in the right places for encryption framing, and then port_send_impl()
+ * stores cleartext in those segments, ready for be_gssapi_encrypt() to
+ * perform encryption in place.  The segment layout information is stored in
+ * the holes themselves (since they are otherwise unused while the buffer
+ * contains cleartext), and buf->segment_next points to the next one, allowing
+ * be_gssapi_segment_next() (called by port_segment_next()) to adjust begin,
+ * end, max_end whenever port_send_impl() needs to advance to the next one.
+ * This arrangement requires strictly zero copying for encryption.
+ *
+ * Neither socket_buffer_size nor PQ_GSS_MAX_MESSAGE limits the size of
+ * network transfer system calls, since buffers are grouped by up to
+ * socket_combine_limit when they move to send.io_buffers, assuming
+ * socket_buffers is set high enough.
+  *
+ * Incoming data
+ *
+ * We are not in control of the layout of messages in buffers arriving from
+ * the wire, so we have to do a bit more work to tolerate messages with any
+ * buffer alignment.  Encrypted buffers arrive from the network with nsegment
+ * == 1 and whole or partial raw encrypted messages in the range [begin, end),
+ * and be_gssapi_decrypt() figures out where the messages are, decrypts them
+ * in place, and sets up the segmentation so that port_recv_impl() can find
+ * all the ranges of of cleartext.
+ *
+ * Complete messages are decrypted in place and the containing buffers are
+ * moved to recv.clear_buffers, but we might have to deal with a trailing
+ * incomplete message that occupies the same buffer as a number of complete
+ * messages.  In that case, we copy the incomplete message into a new buffer
+ * in recv.crypt_buffers, in order to be able to guarantee progress in finite
+ * space.
+ *
+ * If we waited for more buffers to arrive instead, a chain of buffers with
+ * unfortunate layout could require waiting for an unbounded number of buffers
+ * and never make progress.  Copying trailing data to a new buffer requires at
+ * most PQ_GSS_MAX_MESSAGE / socket_buffer_size spare buffers, which we are
+ * sure to be able to get, eventually (see pqcomm.c for details).  When this
+ * happens, we also try to resynchronize message alignment with future
+ * incoming network buffers, by starting an odd-size recv operation.  The goal
+ * of this strategy is to make sure that no copying is required in the common
+ * case, and in particular bulk data streams are decypted entirely in place in
+ * their original network buffers.
+ *
+ * Segment framing data
+ *
+ * If buf->segment_next is zero, there is no framing data, the available space
+ * is in the range [begin, max_end), the populated space is in the range
+ * [begin, end), and port_buffer_next_segment() returns false.  This is the
+ * case with non-GSSAPI buffers, encrypted GSSAPI buffers, and also GSSAPI
+ * cleartext buffers holding zero or one remaining message.
+ *
+ * If buf->segment_next is non-zero, [begin, end) and [begin, max_end) contain
+ * the values for the current segment as above, and buf->segment_next holds an
+ * offset interpreted by be_gssapi_next_segment() to advance begin, end and
+ * max_end to cover the next segment.
+ *
+ * We can safely store struct be_gssapi_segment_info in the GSSAPI header
+ * space for the next message fragment (in outgoing messages: whole message,
+ * in incoming message: possibly partial message), because RFC 1964 section
+ * 1.2.2 says that GSS wrap tokens are larger than
+ * sizeof(be_gssapi_segment_info).  In general we use gss_wrap_iov_length() to
+ * tell us about header sizes rather than trying to second-guess its
+ * implementation, but we do assume and assert that it's big enough for this
+ * object.
+ *
+ * If a GSSAPI message's header wraps over a buffer boundary in an incoming
+ * message, we don't need to store segment info.  The next cleartext segment
+ * will begin in the next buffer, and the first segment's info doesn't need to
+ * be stored, as it is instead stored in the initial values [begin, end)
+ * values when the buffer is decrypted.  So be_gssapi_next_segment_info
+ * objects are never split.
+ *
+ * An alternative approach to segment framing data would be to include space
+ * for an iov list in struct PqBuffer, while this approach reuses space inside
+ * the cleartext buffer itself temporarily, and avoids complicating other code
+ * paths with iov considerations.
  */
-static uint32 *
-be_gssapi_buffer_segment_end(PqBuffer *buf, int segment)
+typedef struct be_gssapi_next_segment_info
 {
-	return (uint32 *)(buf->data + segment * PQ_GSS_MAX_MESSAGE);
-}
+	uint32		next;
+	uint32		begin;
+	uint32		end;
+	uint32		max_end;
+} be_gssapi_next_segment_info;
 
 /*
- * Initialize an empty cleartext buffer with multiple segments, so that it can
- * be filled up with multiple cleartext messages leaving space in between for
- * encryption framing.
+ * Initialize an empty multi-segment cleartext buffer ready to be filled up by
+ * port_send_impl(), leaving holes for encryption framing.
  */
 void
 be_gssapi_initialize_cleartext_buffer(Port *port, PqBuffer *buf)
-{	
-	buf->nsegments = socket_buffer_size / PQ_GSS_MAX_MESSAGE;
-	buf->segment = 0;
-	for (int i = 0; i < buf->nsegments; ++i)
-		*be_gssapi_buffer_segment_end(buf, i) = 0;
+{
+	uint32		offset;
+	uint32		remaining;
+	uint32		message_size;
+
+	/*
+	 * The space reserved for our packet length and GSSAPI's header is big
+	 * enough to store a be_gssapi_segment_info object.
+	 */
+	Assert(sizeof(be_gssapi_next_segment_info) <=
+		   sizeof(uint32) + port->gss->header_size);
+
+	/*
+	 * Outgoing messages are also well aligned for a be_gssapi_segment_info
+	 * pointer, because socket_buffer_size is always a multiple of
+	 * PG_IO_ALIGN.
+	 */
+	Assert(Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size) % sizeof(uint32) == 0);
+	
+
+	/*
+	 * Compute the boundaries of the first segment, and write them directly
+	 * into buf to make the first segment active.
+	 */
+	offset = 0;
+	remaining = Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size);
+	message_size = Min(PQ_GSS_MAX_MESSAGE, remaining);
+	remaining -= message_size;
+	buf->next_segment = remaining > 0 ? message_size : 0;
+	buf->begin = sizeof(uint32) + port->gss->header_size;
+	buf->end = buf->begin;
+	buf->max_end = message_size - port->gss->trailer_size;
+
+	/*
+	 * Fill in the chain of be_gssapi_next_segment_info objects for the rest
+	 * of the segments.
+	 */
+	while (remaining > 0)
+	{
+		be_gssapi_next_segment_info *next;
+
+		/*
+		 * Find the boundaries of the next message, and the offset of the next
+		 * one after that.
+		 */
+		message_size = Min(PQ_GSS_MAX_MESSAGE, remaining);
+		offset += message_size;
+		remaining -= message_size;
+		next = (be_gssapi_next_segment_info *) (buf->data + offset);
+		next->next = remaining > 0 ? offset + message_size : 0;
+		next->begin = offset + sizeof(uint32) + port->gss->header_size;
+		next->end = next->begin;
+		next->max_end = offset + message_size - port->gss->trailer_size;
+	}
 }
 
 /*  
- * Set begin, end, max_end to the values for a given segment.  This is used to
- * select between multiple cleartext message bodies decrypted from a single
- * large network buffer, while hiding the space in between that was or will be
- * used for encryption framing.
+ * Advance begin, end, max_end to the values for the next segment.  This is
+ * used only for cleartext buffers, to select between fragments of cleartext
+ * while hiding the spaces reserved for in place GSS encryption.
  */
-void
-be_gssapi_select_buffer_segment(Port *port, PqBuffer *buf, int segment)
+bool
+be_gssapi_next_segment(PqBuffer *buf)
 {
-	Assert(segment < buf->nsegments);
+	be_gssapi_next_segment_info next;
 
-	buf->begin =
-		PQ_GSS_MAX_MESSAGE * segment + sizeof(uint32) + port->gss->header_size;
-	buf->end = *be_gssapi_buffer_segment_end(buf, segment);
-	buf->max_end = PQ_GSS_MAX_MESSAGE - port->gss->trailer_size;
-	buf->segment = segment;
+	/* Is there another segment? */
+	if (buf->next_segment == 0)
+		return false;
+
+	/*
+	 * We may not be able to assume that message from the network are aligned
+	 * suitably for uint32 access, so copy it out to a temporary variable.
+	 * (Right?  Or perhaps GSSAPI messages are always aligned on at least 4,
+	 * given their padding scheme?)
+	 */
+	Assert(buf->next_segment < socket_buffer_size);
+	memcpy(&next, buf->data + buf->next_segment, sizeof(next));
+
+	/* Reveal the next segment. */
+	buf->next_segment = next.next;
+	buf->begin = next.begin;
+	buf->end = next.end;
+	buf->max_end = next.max_end;
+	return true;
 }
 
 /*
- * Encrypt a clear-text buffer in place.  On entry, the ranges [begin, end)
- * for all segments contain a cleartext data.  On successful exit, there is
- * only one segment containing an encrypted message [begin, end) ready for the wire.
+ * Encrypts the buffers in send.clear_buffers in place and moves them to
+ * send.crypt_buffers.
+ *
+ * On entry, the ranges [begin, end) for all populated segments contain
+ * cleartext data.  Multi-segment layout was configured by
+ * be_gssapi_initialize_cleartext_buffer(), and port_send_impl() filled them
+ * up.
+ *
+ * On exit, they have been encrypted in place and there is one segment [begin,
+ * end) holding the concatenated messages in wire format.
+ *
+ * This operation doesn't require any free buffers, so it can only fail if the
+ * GSSAPI library fails.
  */
 int
-be_gssapi_encrypt_buffer(Port *port, PqBuffer *buf)
+be_gssapi_encrypt(Port *port)
 {
-	OM_uint32	major,
-				minor;
-	gss_iov_buffer_desc iov[4];
-	uint32 size;
-
 	elog(LOG, "be_gssapi_encrypt_buffer");
-
-	for (int i = 0; i < buf->nsegments; ++i)
-	{
-		uint32 start_of_message;
-		
-		/* An empty segment means were finished. */
-		be_gssapi_select_buffer_segment(port, buf, i);
-		if (buf->end == buf->begin)
-			break;
-		
-		/* GSS header will go after the size, which we will store below.. */
-		start_of_message = i * PQ_GSS_MAX_MESSAGE;
-		iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER;
-		iov[0].buffer.value = buf->data + start_of_message + sizeof(size);
-
-		/* The data to be encrypted is at 'begin', which we will adjust below. */
-		iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
-		iov[1].buffer.value = buf->data + buf->begin;
-		iov[1].buffer.length = buf->end - buf->begin;
-
-		/* Some amount of padding and a trailer will follow, and we ask where. */
-		iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING;
-		iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER;
-
-		/* Query padding and trailing locations and sizes. */
-		major = gss_wrap_iov_length(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
-									NULL, iov, lengthof(iov));
-		if (GSS_ERROR(major))
-		{
-			pg_GSS_error(_("gss_wrap_iov_length error"), major, minor);
-			errno = ECONNRESET;
-			return -1;
-		}
-
-		/* How big will the outgoing message be? */
-		size = sizeof(uint32) +
-			iov[0].buffer.length +
-			iov[1].buffer.length +
-			iov[2].buffer.length +
-			iov[3].buffer.length;
-
-		if (size > Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size))
-		{
-			ereport(COMMERROR,
-					(errmsg("GSS message oversized")));
-			errno = ECONNRESET;
-			return -1;		
-		}
 	
-		/* GSS padding and trailer will follow the message. */
-		iov[2].buffer.value = (char *) iov[1].buffer.value + iov[1].buffer.length;
-		iov[3].buffer.value = (char *) iov[2].buffer.value + iov[2].buffer.length;
+	while (!bufq_empty(&port->send.clear_buffers))
+	{
+		PqBuffer *buf;
+		uint32 start_of_message;
+		uint32 encrypted_end;
+
+		buf = bufq_head(&port->send.clear_buffers);
 
 		/*
-		 * Encrypt the message.  Cleartext is replaced with ciphertext, and
-		 * header, padding and trailer are populated.
+		 * We don't need access the be_gssapi_encrypt_buffer objects, because
+		 * we know how be_gssapi_encrypt_buffer() lays the segments out, and
+		 * we know that they are all full except perhaps for the final filled
+		 * one, whose end offset is in buf->end.
 		 */
-		major = gss_wrap_iov(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
-							 NULL, iov, lengthof(iov));
-		if (GSS_ERROR(major))
+		start_of_message = 0;
+		encrypted_end = 0;
+		while (start_of_message < buf->end)
 		{
-			pg_GSS_error(_("gss_wrap_iov error"), major, minor);
-			errno = ECONNRESET;
-			return -1;
+			OM_uint32 major, minor;
+			gss_iov_buffer_desc iov[4];
+			uint32 size;
+			uint32 header;
+			uint32 begin;
+			uint32 end;
+
+			header = start_of_message + sizeof(size);
+			begin = header + port->gss->header_size;
+			end = start_of_message + PQ_GSS_MAX_MESSAGE - port->gss->header_size;
+			if (end > buf->end)
+				end = buf->end;		/* final populated message */
+				
+			/* An empty segment means no more segments. */
+			if (end == begin)
+				break;
+			Assert(end > begin);
+		
+			/* Query sizes, though only the padding is unknown to us. */
+			iov[0].type = GSS_IOV_BUFFER_TYPE_HEADER;
+			iov[0].buffer.value = buf->data + header;
+			iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
+			iov[1].buffer.value = buf->data + begin;
+			iov[1].buffer.length = end - begin;
+			iov[2].type = GSS_IOV_BUFFER_TYPE_PADDING;
+			iov[3].type = GSS_IOV_BUFFER_TYPE_TRAILER;
+			major = gss_wrap_iov_length(&minor, port->gss->ctx, 1,
+										GSS_C_QOP_DEFAULT, NULL,
+										iov, lengthof(iov));
+			if (GSS_ERROR(major))
+			{
+				pg_GSS_error(_("gss_wrap_iov_length error"), major, minor);
+				errno = ECONNRESET;
+				return -1;
+			}
+			Assert(iov[0].buffer.length == port->gss->header_size);
+			Assert(iov[1].buffer.length == end - begin);
+			Assert(iov[3].buffer.length == port->gss->trailer_size);
+				   
+			/* Now we know where to put the padding and trailer. */
+			iov[2].buffer.value =
+				(char *) iov[1].buffer.value + iov[1].buffer.length;
+			iov[3].buffer.value =
+				(char *) iov[2].buffer.value + iov[2].buffer.length;
+
+			/* How big will the size + encrypted message be? */
+			size = sizeof(size) +
+				iov[0].buffer.length +
+				iov[1].buffer.length +
+				iov[2].buffer.length +
+				iov[3].buffer.length;
+			Assert(size <= Min(PQ_GSS_MAX_MESSAGE, socket_buffer_size));
+	
+			/*
+			 * If this is the final message, we know know the total size of
+			 * the full network-ready buffer region.
+			 */
+			if (end == buf->end)
+				encrypted_end = start_of_message + size;
+
+			/*
+			 * Encrypt the message.  Cleartext is replaced with ciphertext,
+			 * and header, padding and trailer are populated.
+			 */
+			major = gss_wrap_iov(&minor, port->gss->ctx, 1, GSS_C_QOP_DEFAULT,
+								 NULL, iov, lengthof(iov));
+			if (GSS_ERROR(major))
+			{
+				pg_GSS_error(_("gss_wrap_iov error"), major, minor);
+				errno = ECONNRESET;
+				return -1;
+			}
+
+			/* Store initial size. */
+			*(uint32 *) (buf->data + start_of_message) = pg_hton32(size);
+
+			/* Skip to next message, if there is one. */
+			start_of_message += PQ_GSS_MAX_MESSAGE;
 		}
 
-		/* Store initial size and adjust range to include framing. */
-		*(uint32 *) buf->data = pg_hton32(size);
+		/* This is now a single segment encrypted buffer. */
+		Assert(encrypted_end != 0);
+		buf->next_segment = 0;
 		buf->begin = 0;
-		buf->end = size;
-		*be_gssapi_buffer_segment_end(buf, buf->segment) = size;
+		buf->end = encrypted_end;		
+		bufq_pop_head(&port->send.clear_buffers);
+		bufq_push_tail(&port->send.crypt_buffers, buf);
 	}
 
 	return 0;
 }
 
 /*
+ * XXX rewrite me completely
+ 
  * Decrypt a buffer in place.  On entry, nsegments is 1 and the range [begin,
  * end) contains a number of encrypt messages, last last of which may be
  * incomplete, spanning into the next buffer or needing more data to complete.
@@ -195,7 +386,7 @@ be_gssapi_encrypt_buffer(Port *port, PqBuffer *buf)
  * PQ_GSS_MAX_MESSAGE.
  */
 int
-be_gssapi_decrypt_buffer(Port *port, PqBuffer *buf, PqBuffer *overflow)
+be_gssapi_decrypt(Port *port)
 {
 	OM_uint32	major,
 				minor;

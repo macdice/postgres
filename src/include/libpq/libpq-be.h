@@ -266,6 +266,8 @@ typedef struct ClientSocket
 
 /* GUCs */
 extern PGDLLIMPORT int socket_buffers;
+#define MIN_SOCKET_BUFFER_SIZE PG_IO_ALIGN_SIZE
+#define MAX_SOCKET_BUFFER_SIZE (1024 * 1024)
 extern PGDLLIMPORT int socket_buffer_size;
 extern PGDLLIMPORT int socket_combine_limit;
 extern PGDLLIMPORT bool socket_aio;
@@ -288,7 +290,7 @@ extern int	port_flush_encrypted(Port *port, int wait_event);
 extern int	port_wait_io(Port *port, int timeout, int wait_event);
 extern int	port_free_buffer_count(Port *port);
 extern void be_gssapi_initialize_cleartext_buffer(Port *port, PqBuffer *buf);
-extern void be_gssapi_select_buffer_segment(Port *port, PqBuffer *buf, int segment);
+extern bool be_gssapi_next_segment(PqBuffer *buf);
 
 
 /* Interfaces used by encryption libraries to send/recv encrypted data. */
@@ -392,8 +394,8 @@ extern const char *be_gssapi_get_princ(Port *port);
 extern bool be_gssapi_get_delegation(Port *port);
 
 /* Encrypt and decrypt with GSSAPI. */
-extern int be_gssapi_encrypt_buffer(Port *port, PqBuffer *buffer);
-extern int be_gssapi_decrypt_buffer(Port *port, PqBuffer *buffer, PqBuffer *overflow);
+extern int be_gssapi_encrypt(Port *port);
+extern int be_gssapi_decrypt(Port *port);
 #endif							/* ENABLE_GSS */
 
 extern PGDLLIMPORT ProtocolVersion FrontendProtocol;

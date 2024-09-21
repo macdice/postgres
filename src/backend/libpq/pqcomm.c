@@ -36,10 +36,7 @@
  * 2. crypt_buffers: If using an encryption library, received buffers move
  *	  from io_buffers to this queue when an I/O completes, or from this queue
  *	  to io_buffers when an I/O begins.  If not using an encryption library,
- *	  this queue is not used.  Exchange between the io_buffers and
- *	  crypt_buffers queues happens inside the secure_read_encrypted() and
- *	  secure_write_encrypted() functions, which are called by encryption
- *	  libraries.
+ *	  this queue is not used.
  *
  * 3. clear_buffers:
  *
@@ -48,12 +45,12 @@
  *		 clear_buffers to io_buffers when I/O begins.
  *
  * 3. 2. If using an encyption library, recv data (not buffers) moves from
- *		 crypto_buffers to clear_buffers on demand by reading through the
- *		 library, and send data (not buffers) moves from clear_buffers to
- *		 crypt_buffers by writing through the encryption library.
+ *		 crypto_buffers to clear_buffers.  For OpenSSL we have to read/write
+ *		 'through' the library from/to new buffers, and for GSSAPI we can
+ *		 encrypt/decrypt directly in place and require whole buffers.
  *
  * 3. 3. XXX In future, if we added KTLS support for kernel software or
- *		 hardware-accelerated AES, then perhaps the crypt_buffers data-copying
+ *		 hardware-accelerated AES, then perhaps the OpenSSL data-copying
  *		 pathway (3.2) would only only be needed during session establishment,
  *		 and after that buffers could move directly between clear_buffers and
  *		 io_buffers (like 3.1)?
@@ -68,6 +65,8 @@
  * interfaces (possibly simulated with synchronous readiness APIs).  At the
  * level of the crypt_buffers queues we expose a readiness-style interface to
  * the encryption libraries, because that is what they currently expect.
+ *
+ * In order to be able to guarantee forward progress, XXX...
  *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
