@@ -911,6 +911,7 @@ secure_open_gssapi(Port *port)
 			break;
 	}
 
+#if 0
 	/*
 	 * Determine the maximum cleartext message that can be encrypted and fit
 	 * in leading and final messages, given the way
@@ -944,6 +945,7 @@ secure_open_gssapi(Port *port)
 			return -1;
 		}
 	}
+#endif
 	
 	/*
 	 * Determine the size of the encryption framing, needed to set up the
