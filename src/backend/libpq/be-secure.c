@@ -75,13 +75,13 @@ static int	port_decrypt(Port *port);
 /*			 Buffer freelist management                         */
 /* ------------------------------------------------------------ */
 
-static inline bool
+bool
 port_has_free_buffer(Port *port)
 {
 	return !bufq_empty(&port->free_buffers);
 }
 
-static inline PqBuffer *
+PqBuffer *
 port_get_free_buffer(Port *port)
 {
 	PqBuffer *buf;
@@ -95,7 +95,7 @@ port_get_free_buffer(Port *port)
 	return buf;
 }
 
-static inline void
+void
 port_put_free_buffer(Port *port, PqBuffer *buf)
 {
 	bufq_push_tail(&port->free_buffers, buf);

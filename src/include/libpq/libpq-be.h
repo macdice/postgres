@@ -288,9 +288,14 @@ extern size_t port_recv_pending_encrypted(Port *port);
 extern int	port_flush(Port *port, int wait_event);
 extern int	port_flush_encrypted(Port *port, int wait_event);
 extern int	port_wait_io(Port *port, int timeout, int wait_event);
+extern bool port_has_free_buffer(Port *port);
+extern PqBuffer *port_get_free_buffer(Port *port);
+extern void port_put_free_buffer(Port *port, PqBuffer *buf);
 extern int	port_free_buffer_count(Port *port);
+
 extern void be_gssapi_initialize_cleartext_buffer(Port *port, PqBuffer *buf);
 extern bool be_gssapi_next_segment(PqBuffer *buf);
+
 
 
 /* Interfaces used by encryption libraries to send/recv encrypted data. */
