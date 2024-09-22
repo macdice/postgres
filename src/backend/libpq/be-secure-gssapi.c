@@ -473,15 +473,12 @@ be_gssapi_decrypt_message(Port *port,
 }
 
 /*
- * Copy 'size contiguous bytes to 'copy' from the memory beginning at 'offset'
- * in buffers[0] and extending into as many other buffers as needed according
- * to the buffers' end.
+ * Copy 'size contiguous bytes to 'destination' from the memory beginning at
+ * 'offset' in buffers[0] and extending into as many other buffers as needed
+ * according to the buffers' end.
  */
 static void
-be_gssapi_gather_bytes(uint8 *copy,
-					   PqBuffer **buffers,
-					   uint32 offset,
-					   uint32 size)
+gather_bytes(void *destination, PqBuffer **buffers, uint32 offset, uint32 size)
 {
 	while (size > 0)
 	{
@@ -489,8 +486,9 @@ be_gssapi_gather_bytes(uint8 *copy,
 
 		Assert(offset <= (*buffers)->end);
 		size_this_buffer = Min(size, (*buffers)->end - offset);
-		memcpy(copy, (*buffers)->data + offset, size_this_buffer);
+		memcpy(destination, (*buffers)->data + offset, size_this_buffer);
 		size -= size_this_buffer;
+		destination = (char *) destination + size_this_buffer;
 		buffers++;
 		Assert(size == 0 || (*buffers)->begin == 0);
 		offset = 0;
@@ -498,15 +496,12 @@ be_gssapi_gather_bytes(uint8 *copy,
 }
 
 /*
- * Copy contiguous bytes from 'copy' to the memory beginning at 'offset' in
+ * Copy contiguous bytes from 'source' to the memory beginning at 'offset' in
  * buffers[0] and extending into as many other buffers as needed according to
  * the buffers' "end" offsets.
  */
 static void
-be_gssapi_scatter_bytes(const uint8 *copy,
-						PqBuffer **buffers,
-						uint32 offset,
-						uint32 size)
+scatter_bytes(const void *source, PqBuffer **buffers, uint32 offset, uint32 size)
 {
 	while (size > 0)
 	{
@@ -514,8 +509,9 @@ be_gssapi_scatter_bytes(const uint8 *copy,
 
 		Assert(offset <= (*buffers)->end);
 		size_this_buffer = Min(size, (*buffers)->end - offset);
-		memcpy((*buffers)->data + offset, copy, size_this_buffer);
+		memcpy((*buffers)->data + offset, source, size_this_buffer);
 		size -= size_this_buffer;
+		source = (const char *) source + size_this_buffer;
 		buffers++;
 		Assert(size == 0 || (*buffers)->begin == 0);
 		offset = 0;
@@ -557,37 +553,14 @@ be_gssapi_decrypt(Port *port)
 
 		while (size_offset < buffers[0]->end)
 		{
-			if (size_offset <= buffers[0]->end - sizeof(size))
+			/* Read the size. */
+			if (!find_buffers_for_message(port, buffers, &nbuffers,
+										  size_offset, sizeof(size)))
 			{
-				/* 'size' is entirely in head buffer. */
-				memcpy(&size, buffers[0]->data + size_offset, sizeof(uint32));
+				elog(ERROR, "XXXX requeue and copy 1");
 			}
-			else if (bufq_has_next(&port->recv.crypt_buffers, buffers[0]))
-			{
-				uint32 size_buffer0;
-				uint32 size_buffer1;
-
-				/* We have to stitch 'size' together from two buffers. */
-				size_buffer0 = buffers[0]->end - size_offset;
-				size_buffer1 = sizeof(size) - size_buffer0;
-				buffers[1] = bufq_next(&port->recv.crypt_buffers, buffers[0]);
-				nbuffers = 2;
-				
-				/* XXX check size_buffer1 bytes are available! */
-				Assert(buffers[1]->end - buffers[1]->begin >= size_buffer1);
-				
-				memcpy(&size, buffers[0]->data + size_offset, size_buffer0);
-				memcpy((uint8 *) &size + size_buffer0,
-					   buffers[1]->data + buffers[1]->begin,
-					   size_buffer1);
-			}
-			else
-			{
-				/* Size spans two buffers, but the second isn't here yet. */
-				/* XXX requeue and copy! */
-				elog(ERROR, "XXX requeue and copy 1!");
-			}
-
+			gather_bytes(&size, buffers, size_offset, sizeof(size));
+					
 			size = pg_ntoh32(size);
 			elog(LOG, "XXX decrypt size = %u", size); 
 			gss_message_size = size;
@@ -612,10 +585,10 @@ be_gssapi_decrypt(Port *port)
 			else
 			{
 				/* Gather GSS message from multiple buffers. */
-				be_gssapi_gather_bytes(gss_message_copy,
-									   buffers,
-									   gss_message_offset,
-									   gss_message_size);
+				gather_bytes(gss_message_copy,
+							 buffers,
+							 gss_message_offset,
+							 gss_message_size);
 				gss_message = gss_message_copy;
 				elog(LOG, "XXXX gather");
 			}
@@ -646,10 +619,10 @@ be_gssapi_decrypt(Port *port)
 			else
 			{
 				/* Scatter cleartext over ciphertext in buffers. */
-				be_gssapi_scatter_bytes(gss_message_copy,
-										buffers,
-										cleartext_offset,
-										cleartext_size);				
+				scatter_bytes(gss_message_copy,
+							  buffers,
+							  cleartext_offset,
+							  cleartext_size);
 			}
 
 			/*
