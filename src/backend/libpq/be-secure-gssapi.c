@@ -631,7 +631,7 @@ be_gssapi_decrypt(Port *port)
 			 * Build the chain of segments so that port_recv_impl() can read
 			 * the cleartext and skip the holes.
 			 */
-			for (int i = 0; i < nbuffers - 1; ++i)
+			for (int i = 0; i < nbuffers; ++i)
 			{
 				PqBuffer *buf;
 				uint32 size_this_buffer;
@@ -673,6 +673,7 @@ be_gssapi_decrypt(Port *port)
 						buf->max_end = buf->end;
 						buf->next_segment = 0;
 						buffer_has_segments = true;
+						elog(LOG, "set cleartext location to [%u, %u)", buf->begin, buf->end);
 					}
 					else
 					{
