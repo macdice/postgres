@@ -330,8 +330,8 @@ be_gssapi_encrypt(Port *port)
 			iov[3].buffer.value =
 				(char *) iov[2].buffer.value + iov[2].buffer.length;
 
-			/* How big will the size + encrypted message be? */
-			size = sizeof(size) +
+			/* How big will the GSS message be? */
+			size =
 				iov[0].buffer.length +
 				iov[1].buffer.length +
 				iov[2].buffer.length +
@@ -372,6 +372,7 @@ be_gssapi_encrypt(Port *port)
 		buf->end = encrypted_end;		
 		bufq_pop_head(&port->send.clear_buffers);
 		bufq_push_tail(&port->send.crypt_buffers, buf);
+		elog(LOG, "clear -> crypt");
 	}
 
 	return 0;
@@ -434,8 +435,8 @@ find_buffers_for_message(Port *port,
  */
 static int
 be_gssapi_decrypt_message(Port *port,
-						  uint8 *encrypted_message,
-						  uint32 encrypted_size,
+						  uint8 *gss_message,
+						  uint32 gss_message_size,
 						  uint8 **cleartext,
 						  uint32 *cleartext_size)
 {
@@ -445,9 +446,10 @@ be_gssapi_decrypt_message(Port *port,
 	int conf_state;
 		
 	iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
-	iov[0].buffer.value = encrypted_message;
-	iov[0].buffer.length = encrypted_size;
+	iov[0].buffer.value = gss_message;
+	iov[0].buffer.length = gss_message_size;
 	iov[1].type = GSS_IOV_BUFFER_TYPE_DATA;
+	conf_state = 0;
 	major = gss_unwrap_iov(&minor, port->gss->ctx, &conf_state, NULL,
 						   iov, lengthof(iov));
 	if (GSS_ERROR(major))
@@ -586,9 +588,9 @@ be_gssapi_decrypt(Port *port)
 				elog(ERROR, "XXX requeue and copy 1!");
 			}
 
-			/* Byte-swap, and subtract the size of the size itself. */
 			size = pg_ntoh32(size);
-			gss_message_size = size - sizeof(size);
+			elog(LOG, "XXX decrypt size = %u", size); 
+			gss_message_size = size;
 			gss_message_offset = size_offset + sizeof(size);
 
 			/* See if we have the buffers for the whole GSS message yet. */
@@ -605,6 +607,7 @@ be_gssapi_decrypt(Port *port)
 			{
 				/* All in one buffer, so we can decrypt in place. */
 				gss_message = buffers[0]->data + gss_message_offset;
+				elog(LOG, "XXXX decrypt in place offset = %u", gss_message_offset);
 			}
 			else
 			{
@@ -614,6 +617,7 @@ be_gssapi_decrypt(Port *port)
 									   gss_message_offset,
 									   gss_message_size);
 				gss_message = gss_message_copy;
+				elog(LOG, "XXXX gather");
 			}
 
 			/* Decrypt! */
@@ -625,6 +629,7 @@ be_gssapi_decrypt(Port *port)
 			{
 				/* Decryption failed. */
 				/* XXX FIXME */
+				elog(ERROR, "!");
 			}
 
 			/*
@@ -743,12 +748,13 @@ be_gssapi_decrypt(Port *port)
 					bufq_pop_head(&port->recv.crypt_buffers);
 					bufq_push_tail(&port->recv.crypt_buffers, buf);
 				}
-
-				/* Prepare to fill in the first segment in the next buffer. */
-				buffer_has_segments = false;
-				next_segment_offset = 0;
 			}
+			
+			size_offset += sizeof(size) + gss_message_size;
 		}
+		/* Prepare to fill in the first segment in the next buffer. */
+		buffer_has_segments = false;
+		next_segment_offset = 0;				
 	}
 	
 	return 0;
@@ -825,6 +831,7 @@ secure_open_gssapi(Port *port)
 		input.length = pg_ntoh32(netlen);
 		input.value = buffer;
 
+		elog(LOG, "secure_open_gssapi read length = %d", (int) input.length);
 		/*
 		 * During initialization, packets are always fully consumed and
 		 * shouldn't ever be over PQ_GSS_MAX_MESSAGE in length.
@@ -895,8 +902,11 @@ secure_open_gssapi(Port *port)
 				return -1;
 			}
 
-			if (port_send_all(port, output.value, output.length,
-							  WAIT_EVENT_GSS_OPEN_SERVER) != 0)
+			if (port_send_all(port, &netlen, sizeof(netlen),
+							  WAIT_EVENT_GSS_OPEN_SERVER) != 0 ||
+				port_send_all(port, output.value, output.length,
+							  WAIT_EVENT_GSS_OPEN_SERVER) != 0 ||
+				port_flush(port, WAIT_EVENT_GSS_OPEN_SERVER) != 0)
 			{
 				gss_release_buffer(&minor, &output);
 				return -1;
@@ -966,7 +976,7 @@ secure_open_gssapi(Port *port)
 	}
 	port->gss->header_size = iov[0].buffer.length;
 	port->gss->trailer_size = iov[3].buffer.length;
-
+	elog(LOG, "XXX enc = true");
 	port->gss->enc = true;
 
 	return 0;
