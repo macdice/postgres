@@ -384,41 +384,47 @@ be_gssapi_encrypt(Port *port)
  * and on exit it is updated with the new number.  Returns true if all the
  * required buffers were found, and false if there aren't enough buffers in
  * the recv.crypt_buffers queue yet and the caller will need to receive more
- * buffers from the network.
+ * buffers from the network before trying again.
+ *
+ * 'buffers' must have space for PQ_GSS_MAX_BUFFERS_PER_MESSAGE.
  */
 static bool
 find_buffers_for_message(Port *port,
-						 PqBuffer *buffers,
+						 PqBuffer **buffers,
 						 int *nbuffers,
 						 uint32 offset,
 						 uint32 size)
 {
-	/* How many buffers will it take to gather 'size' bytes? */
+	uint32 size_this_buffer;
+	uint32 remaining;
+	int i;
+	
 	i = 0;
-	offset = start_of_message;
 	remaining = size;
 	while (remaining > 0)
 	{
-		size_this_buffer = Min(buffer[i].end - offset, remaining);
+		size_this_buffer = Min(buffers[i]->end - offset, remaining);
 		remaining -= size_this_buffer;
-		if (i + 1 > nbuffers)
+		if (i + 1 > *nbuffers)
 		{
-			if (!bufq_has_next(buffer[i]))
+			/* Do we need to add a new buffer to the array? */
+			if (!bufq_has_next(&port->recv.crypt_buffers, buffers[i]))
 				return false;
-			buffer[++i] = bufq_next(buffer[i]);
-			nbuffers++;
+			++i;
+			buffers[i] = bufq_next(&port->recv.crypt_buffers, buffers[i]);
+			*nbuffers += 1;
 		}
 		else
-			++i;
-		offset = buffer[i].begin;
+			++i;			
+		offset = buffers[i]->begin;
 	}
 	return true;
 }
 
 /*
  * Decrypt a message.  On successful return, *cleartext and *cleartext_size
- * point to a subregion of the original message.  The encrypted message should
- * not include the size prefix.
+ * point to a subregion of the original message, which has been decrypted in
+ * place.  The encrypted message should not include the size prefix.
  *
  * Unfortunately the gss_unwrap_iov() API doesn't seem to allow decrypting
  * from an IOV list unless perhaps you know the size of the decrypted message
@@ -434,6 +440,8 @@ be_gssapi_decrypt_message(Port *port,
 						  uint32 *cleartext_size)
 {
 	gss_iov_buffer_desc iov[2];
+	OM_uint32	major,
+				minor;
 	int conf_state;
 		
 	iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
@@ -512,18 +520,15 @@ be_gssapi_scatter_bytes(const uint8 *copy,
 
 /*
  * Decrypts as many buffers from recv.crypt_buffers as possible trying to do
- * it in place where possible.
+ * it in place where possible.  In some cases, a 
  */
 int
 be_gssapi_decrypt(Port *port)
 {
-	PqBuffer *overflow;
+	PqBuffer *overflow = NULL; /* XXX FIXME */
 
 	elog(LOG, "be_gssapi_decrypt_buffer");
 
-	/* XXX */
-	overflow = port_get_free_buffer(port);
-	
 	while (!bufq_empty(&port->recv.crypt_buffers))
 	{
 		uint8 copy[PQ_GSS_MAX_MESSAGE];
@@ -533,24 +538,24 @@ be_gssapi_decrypt(Port *port)
 		uint32 size;
 
 		nbuffers = 1;
-		buffer[0] = bufq_head(&port->recv.crypt_buffers);
-		Assert(buffer[0].begin < buffer[0].end);
-		Assert(buffer[0].next_segment == 0);
+		buffers[0] = bufq_head(&port->recv.crypt_buffers);
+		Assert(buffers[0].begin < buffer[0].end);
+		Assert(buffers[0].next_segment == 0);
 		start_of_message = buf->begin;
-		
+
 		while (start_of_message < buf->end)
 		{
-			/* Decode size, possibly split across a buffer boundary. */
-			if (start_of_message <= buffer[0].end - sizeof(uint32))
+			if (start_of_message <= buffers[0].end - sizeof(uint32))
 			{
+				/* Size is entirely in one buffer. */
 				memcpy(&size, buffer[0].data + start_of_message, sizeof(uint32));
-				size = pg_ntoh32(size);
 			}
 			else if (bufq_has_next(buffer[0]))
 			{
 				uint32 size_buffer0 = buffer[0].end - start_of_message;
 				uint32 size_buffer1 = sizeof(size) - size_buffer0;
-				
+
+				/* We have to stitch the size together from two buffers. */
 				buffers[1] = bufq_next(buffer[0]);
 				nbuffers = 2;
 				/* XXX check size_buffer1 bytes are available! */
@@ -563,20 +568,24 @@ be_gssapi_decrypt(Port *port)
 			}
 			else
 			{
-				/* if already decrypted messages, requeue to cleartext and
-				 * copy size_buffer0 to overflow */
+				/* Size spans two buffers, but the second isn't here yet. */
+				/* XXX requeue and copy! */
 			}
 
+			size = pg_ntoh32(size);
+
+			/* Work out how many buffers are needed for the whole message. */
 			if (!find_buffers_for_message(port, buffers, &nbuffers,
 										  start_of_message,
 										  size - sizeof(size)))
 			{
-				/* We don't have all the buffers yet.  Requeue and copy! */
+				/* The needed data isn't here yet. */
+				/* XXX requeue and copy! */
 			}
 
 			if (nbuffers == 1)
 			{
-				/* We can decrypt in place in the buffer. */
+				/* We can decrypt in the buffer directly. */
 				encrypted_message =
 					buffer[0].data +
 					start_of_message +
@@ -584,7 +593,7 @@ be_gssapi_decrypt(Port *port)
 			}
 			else
 			{
-				/* Gather message into our stack space. */
+				/* Gather message from multiple buffers. */
 				be_gssapi_gather_bytes(copy,
 									   buffers,
 									   start_of_message,
@@ -597,6 +606,8 @@ be_gssapi_decrypt(Port *port)
 										  &cleartext,
 										  &cleartext_size) < 0)
 			{
+				/* Decryption failed. */
+				/* XXX FIXME */
 			}
 
 			/*
@@ -608,7 +619,7 @@ be_gssapi_decrypt(Port *port)
 			
 			if (nbuffers > 1)
 			{
-				/* Scatter cleartext back into buffers. */
+				/* Scatter cleartext back to multiple source buffers. */
 				be_gssapi_scatter_bytes(copy,
 										buffers,
 										start_of_cleartext,
