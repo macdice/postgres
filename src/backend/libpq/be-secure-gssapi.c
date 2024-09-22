@@ -551,6 +551,7 @@ be_gssapi_decrypt(Port *port)
 		buffer_has_segments = false;
 		next_segment_offset = 0;
 
+		elog(LOG, "XXXX have head buffer %p", buffers[0]);
 		while (size_offset < buffers[0]->end)
 		{
 			/* Read the size. */
@@ -594,6 +595,7 @@ be_gssapi_decrypt(Port *port)
 			}
 
 			/* Decrypt! */
+			elog(LOG, "XXXX decrypt size = %u", gss_message_size);
 			if (be_gssapi_decrypt_message(port,
 										  gss_message,
 										  gss_message_size,
@@ -722,12 +724,17 @@ be_gssapi_decrypt(Port *port)
 					bufq_push_tail(&port->recv.crypt_buffers, buf);
 				}
 			}
-			
 			size_offset += sizeof(size) + gss_message_size;
+			elog(LOG, "XXX size_offset to %u", size_offset);
 		}
 		/* Prepare to fill in the first segment in the next buffer. */
 		buffer_has_segments = false;
-		next_segment_offset = 0;				
+		next_segment_offset = 0;
+		Assert(size_offset == buffers[0]->end);
+		
+		elog(LOG, "XXXX to cleartext!");
+		bufq_pop_head(&port->recv.crypt_buffers);
+		bufq_push_tail(&port->recv.clear_buffers, buffers[0]);
 	}
 	
 	return 0;
