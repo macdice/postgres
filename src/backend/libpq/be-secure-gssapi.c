@@ -552,6 +552,7 @@ be_gssapi_decrypt(Port *port)
 		next_segment_offset = 0;
 
 		elog(LOG, "XXXX have head buffer %p", buffers[0]);
+		/* Loop finding messages/segments. */
 		while (size_offset < buffers[0]->end)
 		{
 			/* Read the size. */
@@ -636,29 +637,19 @@ be_gssapi_decrypt(Port *port)
 				PqBuffer *buf;
 				uint32 size_this_buffer;
 
+				if (i > 0)
+				{
+					buffer_has_segments = false;
+				}
+
 				/* How many bytes of cleartext are in this buffer? */
 				buf = buffers[i];
 				if (cleartext_offset >= buf->end)
 					size_this_buffer = 0;
 				else
 					size_this_buffer = Min(cleartext_offset, buffers[i]->end);
-
-				if (size_this_buffer == 0)
-				{
-					/* None, just size/header bytes. */
-					bufq_pop_head(&port->recv.crypt_buffers);
-					if (buffer_has_segments)
-					{
-						/* This is now a cleartext buffer. */
-						bufq_push_tail(&port->recv.crypt_buffers, buf);
-					}
-					else
-					{
-						/* Recycle buffer with no segments in it. */
-						port_put_free_buffer(port, buffers[i]);
-					}
-				}
-				else
+				
+				if (size_this_buffer > 0)
 				{
 					if (!buffer_has_segments)
 					{
@@ -719,12 +710,23 @@ be_gssapi_decrypt(Port *port)
 						next_segment_offset = size_offset +
 							offsetof(be_gssapi_next_segment_info, next);
 					}
-
-					/* This is now a cleartext buffer. */
+				}
+				if (!buffer_has_segments)
+				{
 					bufq_pop_head(&port->recv.crypt_buffers);
-					bufq_push_tail(&port->recv.crypt_buffers, buf);
+					port_put_free_buffer(port, buffers[i]);
+				}
+				else if (size_this_buffer >= buffers[i].end)
+				{
+					bufq_pop_head(&port->recv.crypt_buffers);
+					bufq_push_tail(&port->recv.clear_buffers);
+				}
+				else
+				{
+					b
 				}
 			}
+			if (nbuffers 
 			size_offset += sizeof(size) + gss_message_size;
 			elog(LOG, "XXX size_offset to %u", size_offset);
 		}
@@ -733,9 +735,9 @@ be_gssapi_decrypt(Port *port)
 		next_segment_offset = 0;
 		Assert(size_offset == buffers[0]->end);
 		
-		elog(LOG, "XXXX to cleartext!");
-		bufq_pop_head(&port->recv.crypt_buffers);
-		bufq_push_tail(&port->recv.clear_buffers, buffers[0]);
+//		elog(LOG, "XXXX to cleartext!");
+//		bufq_pop_head(&port->recv.crypt_buffers);
+//		bufq_push_tail(&port->recv.clear_buffers, buffers[0]);
 	}
 	
 	return 0;
