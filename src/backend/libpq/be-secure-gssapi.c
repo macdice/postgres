@@ -379,50 +379,6 @@ be_gssapi_encrypt(Port *port)
 }
 
 /*
- * Populate 'buffers' with the set of buffers containing an incoming encrypted
- * message beginning at 'offset' in buffers[0] extending for 'size' bytes.  On
- * entry, *nbuffers says how many elements of buffers[] are populated already,
- * and on exit it is updated with the new number.  Returns true if all the
- * required buffers were found, and false if there aren't enough buffers in
- * the recv.crypt_buffers queue yet and the caller will need to receive more
- * buffers from the network before trying again.
- *
- * 'buffers' must have space for PQ_GSS_MAX_BUFFERS_PER_MESSAGE.
- */
-static bool
-find_buffers_for_message(Port *port,
-						 PqBuffer **buffers,
-						 int *nbuffers,
-						 uint32 offset,
-						 uint32 size)
-{
-	uint32 size_this_buffer;
-	uint32 remaining;
-	int i;
-	
-	i = 0;
-	remaining = size;
-	while (remaining > 0)
-	{
-		size_this_buffer = Min(buffers[i]->end - offset, remaining);
-		remaining -= size_this_buffer;
-		if (i + 1 > *nbuffers)
-		{
-			/* Do we need to add a new buffer to the array? */
-			if (!bufq_has_next(&port->recv.crypt_buffers, buffers[i]))
-				return false;
-			++i;
-			buffers[i] = bufq_next(&port->recv.crypt_buffers, buffers[i]);
-			*nbuffers += 1;
-		}
-		else
-			++i;			
-		offset = buffers[i]->begin;
-	}
-	return true;
-}
-
-/*
  * Decrypt a message.  On successful return, *cleartext and *cleartext_size
  * point to a subregion of the original message, which has been decrypted in
  * place.  The encrypted message should not include the size prefix.
@@ -474,82 +430,131 @@ be_gssapi_decrypt_message(Port *port,
 
 /*
  * Copy 'size' contiguous bytes to 'destination' from the memory beginning at
- * 'offset' in the head buffer of  and extending into as many other buffers as needed
- * according to the buffers' end.
+ * 'offset' in the head buffer of 'queue' and extending into as many other
+ * buffers as needed according to the buffers' [begin, end) ranges.  Returns
+ * true on success, or false if there wasn't enough data (yet).
  */
 static bool
-gather_bytes(void *destination, PqBuffer **buffers, uint32 offset, uint32 size)
+gather_bytes(void *destination, PqBufferQueue *queue, uint32 offset, uint32 size)
 {
-	while (size > 0)
-	{
-		uint32 size_this_buffer;
+	PqBuffer *buf;
 
-		Assert(offset <= (*buffers)->end);
-		size_this_buffer = Min(size, (*buffers)->end - offset);
-		memcpy(destination, (*buffers)->data + offset, size_this_buffer);
-		size -= size_this_buffer;
-		destination = (char *) destination + size_this_buffer;
-		buffers++;
-		Assert(size == 0 || (*buffers)->begin == 0);
-		offset = 0;
+	if (bufq_empty(queue))
+		return false;
+
+	/* Skip if pointing past end. */
+	buf = bufq_head(queue);
+	while (offset >= buf->end)
+	{
+		offset -= buf->end;
+		if (!bufq_has_next(queue, buf))
+			return false;
+		buf = bufq_next(queue, buf);
+		offset += buf->begin;
 	}
+
+	/* Copy data. */
+	do
+	{		
+		uint32 size_this_buffer;
+		
+		size_this_buffer = Min(size, buf->end - offset);
+		memcpy(destination, buf->data + offset, size_this_buffer);
+		size -= size_this_buffer;
+		destination = (uint8 *) destination + size_this_buffer;
+		if (size > 0)
+		{
+			if (!bufq_has_next(queue, buf))
+				return false;
+			buf = bufq_next(queue, buf);
+			offset = buf->begin;
+		}
+	}
+	while (size > 0);
+	return true;
 }
 
 /*
  * Copy contiguous bytes from 'source' to the memory beginning at 'offset' in
- * buffers[0] and extending into as many other buffers as needed according to
- * the buffers' "end" offsets.
+ * the buffers in 'queue' extending into as many other buffers as needed
+ * according to the buffers' "end" offsets.
+ *
+ * There must be enough buffers.
  */
 static void
-scatter_bytes(const void *source, PqBuffer **buffers, uint32 offset, uint32 size)
+scatter_bytes(const void *source, PqBufferQueue *queue, uint32 offset, uint32 size)
 {
-	while (size > 0)
+	PqBuffer *buf;
+
+	Assert(!bufq_empty(queue));
+
+	/* Skip if pointing past end. */	
+	buf = bufq_head(queue);
+	while (offset >= buf->end)
+	{
+		offset -= buf->end;
+		Assert(bufq_has_next(queue, buf));
+		buf = bufq_next(queue, buf);
+		offset += buf->begin;
+	}
+
+	/* Copy data. */
+	do
 	{
 		uint32 size_this_buffer;
 
-		Assert(offset <= (*buffers)->end);
-		size_this_buffer = Min(size, (*buffers)->end - offset);
-		memcpy((*buffers)->data + offset, source, size_this_buffer);
+		size_this_buffer = Min(size, buf->end - offset);
+		memcpy(buf->data + offset, source, size_this_buffer);
 		size -= size_this_buffer;
 		source = (const char *) source + size_this_buffer;
-		buffers++;
-		Assert(size == 0 || (*buffers)->begin == 0);
-		offset = 0;
+		if (size > 0)
+		{
+			Assert(bufq_has_next(queue, buf));
+			buf = bufq_next(queue, buf);
+			offset = buf->begin;
+		}
 	}
+	while (size > 0);
 }
 
 /*
  * XXX
  */
-static void
-set_segments_and_requeue(Port *port,
-						 uint32 cleartext_offset,
-						 uint32 cleartext_size)
+static bool
+add_segments(Port *port, uint32 cleartext_offset, uint32 cleartext_size)
 {
+	bool requeued;
+
+	requeued = false;
 	while (cleartext_size > 0)
 	{
 		PqBuffer *buf;
 		uint32 size_this_buffer;
 		uint32 previous_segment_end;
 
-		buf = bufq_pop_head(&port->recv.crypt_buffers);
+		buf = bufq_head(&port->recv.crypt_buffers);
 
+		/* XXX the probnlem is that buf->end needs to be set to 0, or we need more fields, or ... XXX */
+		
 		previous_segment_end = buf->end;
-		if (cleartext_offset >= socket_buffer_size)
+		if (cleartext_offset >= buf->max_end)
 		{
-			/* No new cleartext in this buffer (just size/header). */
+			/* Past the end of this buffer (just size/header). */
+			cleartext_offset -= buf->max_end;
+			bufq_pop_head(&port->recv.crypt_buffers);
 			if (previous_segment_end > 0)
 				bufq_push_tail(&port->recv.clear_buffers, buf);
 			else
 				port_put_free_buffer(port, buf);
-			cleartext_offset -= socket_buffer_size;
+			requeued = true;
 		}
 		else
 		{
 			size_this_buffer = Min(cleartext_size,
-								   socket_buffer_size - cleartext_size);
+								   buf->max_end - cleartext_size);
 			if (previous_segment_end == 0)
 			{
+				elog(LOG, "XXXX add_segments %u %u", cleartext_offset, size_this_buffer);
 				/* This is the first cleartext segment. */
 				buf->begin = cleartext_offset;
 				buf->end = cleartext_offset + size_this_buffer;
@@ -561,11 +566,12 @@ set_segments_and_requeue(Port *port,
 				uint32 segment_info_offset;
 				
 				/*
-				 * All subsequent segments form a chain.  Copy the link object
-				 * into the space after the last cleartext segment, which was
+				 * Following segments form a chain.  Copy the link object into
+				 * the space after the last cleartext segment, which was
 				 * previously occupied by a GSS trailer, and the size and
 				 * header of the this message.
 				 */
+				elog(LOG, "XXXX add_segments/2 %u %u", cleartext_offset, size_this_buffer);
 				segment_info_offset = previous_segment_end;
 				next.begin = cleartext_offset;
 				next.end = cleartext_offset + size_this_buffer;
@@ -601,12 +607,22 @@ set_segments_and_requeue(Port *port,
 						   sizeof(segment_info_offset));
 				}
 				buf->last_segment = segment_info_offset;
-				bufq_push_tail(&port->recv.clear_buffers, buf);
-			}			
-			cleartext_offset = 0;
+			}
+
 			cleartext_size -= size_this_buffer;
+			cleartext_offset += size_this_buffer;
+			
+			if (cleartext_offset == buf->max_end)
+			{
+				/* Entirely filled buffer.  Requeue. */
+				bufq_pop_head(&port->recv.crypt_buffers);
+				bufq_push_tail(&port->recv.clear_buffers, buf);
+				cleartext_offset = 0;
+				requeued = true;
+			}
 		}
 	}
+	return requeued;
 }
 
 /*
@@ -622,65 +638,63 @@ be_gssapi_decrypt(Port *port)
 		PqBuffer *buf;
 		uint8 *gss_message;
 		uint8 *cleartext;
-		int nbuffers;
-		uint32 size_offset;
 		uint32 size;
 		uint32 gss_message_offset;
 		uint32 gss_message_size;
 		uint32 cleartext_offset;
 		uint32 cleartext_size;
-		uint32 next_segment_offset;
-		uint32 encrypted_begin;
-		uint32 encrypted_end;
+		uint32 size_offset;
+		bool single_buffer;
 		uint8 gss_message_copy[PQ_GSS_MAX_MESSAGE];
 		
 
+		/*
+		 * Since we will overwrite [begin, end) with the location of the first
+		 * segment, we need to take a copy of the original encrypted data
+		 * range received from the network.
+		 */
 		buf = bufq_head(&port->recv.crypt_buffers);
-		encrypted_begin = buf->begin;
-		encrypted_end = buf->end;
 
-		elog(LOG, "XXXX have head buffer %p", buffers[0]);
 		/* Loop finding messages/segments. */
-		while (encrypted_begin < encrypted_end)
+		size_offset = buf->cursor;
+		while (size_offset < buf->max_end)
 		{
-			/* Read the size. */
-			if (!find_buffers_for_message(port, buffers, &nbuffers,
-										  size_offset, sizeof(size)))
+			/* Read the size (even if it spans a buffer boundary). */
+			if (!gather_bytes(&size,
+							  &port->recv.crypt_buffers,
+							  size_offset,
+							  sizeof(size)))
 			{
-				elog(ERROR, "XXXX requeue and copy 1");
+				elog(ERROR, "XXX requeue and copy 1");
 			}
-			gather_bytes(&size, buffers, size_offset, sizeof(size));
 					
 			size = pg_ntoh32(size);
+			/* XXX sanity check size */
 			elog(LOG, "XXX decrypt size = %u", size); 
 			gss_message_size = size;
 			gss_message_offset = size_offset + sizeof(size);
 
-			/* See if we have the buffers for the whole GSS message yet. */
-			if (!find_buffers_for_message(port, buffers, &nbuffers,
-										  gss_message_offset,
-										  gss_message_size))
-			{
-				/* The needed data isn't here yet. */
-				/* XXX requeue and copy! */
-				elog(ERROR, "XXX requeue and copy 2!");
-			}
+			single_buffer =
+				gss_message_offset + gss_message_size <= buf->max_end;
 
-			if (nbuffers == 1)
+			if (single_buffer)
 			{
-				/* All in one buffer, so we can decrypt in place. */
-				gss_message = buffers[0]->data + gss_message_offset;
+				/* We can decrypt in place. */
+				gss_message = buf->data + gss_message_offset;
 				elog(LOG, "XXXX decrypt in place offset = %u", gss_message_offset);
+			}
+			else if (gather_bytes(gss_message_copy,
+								  &port->recv.crypt_buffers,
+								  gss_message_offset,
+								  gss_message_size))
+			{
+				/* Gathered GSS message from multiple buffers. */
+				gss_message = gss_message_copy;
+				elog(LOG, "XXXX gather");
 			}
 			else
 			{
-				/* Gather GSS message from multiple buffers. */
-				gather_bytes(gss_message_copy,
-							 buffers,
-							 gss_message_offset,
-							 gss_message_size);
-				gss_message = gss_message_copy;
-				elog(LOG, "XXXX gather");
+				elog(ERROR, "XXX require and copy 2");
 			}
 
 			/* Decrypt! */
@@ -696,28 +710,42 @@ be_gssapi_decrypt(Port *port)
 				elog(ERROR, "!");
 			}
 
-			/*
-			 * Offset of the first byte of cleartext.  Note that it might be
-			 * past the end of buffers[0] if we have a copy.
-			 */
-			cleartext_offset = size_offset + (cleartext - gss_message);
+			/* Offset of the first byte of cleartext, relative to the head buffer. */
+			cleartext_offset = gss_message_offset + (cleartext - gss_message);
 			
-			if (nbuffers == 1)
+			if (single_buffer)
 			{
-				/* Cleartext has replaced the ciphertext. */
-				Assert(cleartext_offset + cleartext_size <= buffers[0]->end);
+				/* Ciphertext is replaced with cleartext. */
+				Assert(cleartext_offset >= buf->end);
+				Assert(cleartext_offset + cleartext_size <= buf->end);
 			}
 			else
 			{
 				/* Scatter cleartext over ciphertext in buffers. */
 				scatter_bytes(gss_message_copy,
-							  buffers,
+							  &port->recv.crypt_buffers,
 							  cleartext_offset,
 							  cleartext_size);
 			}
 
+			/*
+			 * Add segments where the cleartext overlaps with buffers.  The
+			 * causes full buffers to be requeued to port->recv.clear_buffers.
+			 */
+			if (add_segments(port, cleartext_offset, cleartext_size))
+			{
+				elog(LOG, "XXXX will break!");
+				break;
+			}
+			size_offset += sizeof(size) + gss_message_size;
+
+			if (size_offset == buf->max_end)
+			{
+				/* Ran out of data on a complete message.  Requeue. */
+				bufq_pop_head(&port->recv.crypt_buffers);
+				bufq_push_tail(&port->recv.clear_buffers, buf);
+			}
 		}
-		set_segments_and_requeue(port, cleartext_offset, cleartext_size);
 	}
 	
 	return 0;

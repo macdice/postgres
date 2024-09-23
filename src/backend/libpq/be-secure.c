@@ -88,6 +88,7 @@ port_get_free_buffer(Port *port)
 
 	buf = bufq_pop_head(&port->free_buffers);
 	buf->begin = 0;
+	buf->cursor = 0;
 	buf->end = 0;
 	buf->max_end = socket_buffer_size;
 	buf->next_segment = 0;
@@ -423,6 +424,7 @@ port_complete_recv(Port *port,
 			 * was already there.
 			 */
 			buf->end = transferred_this_buffer;
+			buf->max_end = transferred_this_buffer;
 			bufq_push_tail(queue, buf);
 		}
 
