@@ -145,10 +145,10 @@
  */
 typedef struct be_gssapi_next_segment_info
 {
-	uint32		next;
 	uint32		begin;
 	uint32		end;
 	uint32		max_end;
+	uint32		next_segment;
 } be_gssapi_next_segment_info;
 
 /*
@@ -206,7 +206,7 @@ be_gssapi_initialize_cleartext_buffer(Port *port, PqBuffer *buf)
 		offset += message_size;
 		remaining -= message_size;
 		next = (be_gssapi_next_segment_info *) (buf->data + offset);
-		next->next = remaining > 0 ? offset + message_size : 0;
+		next->next_segment = remaining > 0 ? offset + message_size : 0;
 		next->begin = offset + sizeof(uint32) + port->gss->header_size;
 		next->end = next->begin;
 		next->max_end = offset + message_size - port->gss->trailer_size;
@@ -237,7 +237,7 @@ be_gssapi_next_segment(PqBuffer *buf)
 	memcpy(&next, buf->data + buf->next_segment, sizeof(next));
 
 	/* Reveal the next segment. */
-	buf->next_segment = next.next;
+	buf->next_segment = next.next_segment;
 	buf->begin = next.begin;
 	buf->end = next.end;
 	buf->max_end = next.max_end;
@@ -473,11 +473,11 @@ be_gssapi_decrypt_message(Port *port,
 }
 
 /*
- * Copy 'size contiguous bytes to 'destination' from the memory beginning at
- * 'offset' in buffers[0] and extending into as many other buffers as needed
+ * Copy 'size' contiguous bytes to 'destination' from the memory beginning at
+ * 'offset' in the head buffer of  and extending into as many other buffers as needed
  * according to the buffers' end.
  */
-static void
+static bool
 gather_bytes(void *destination, PqBuffer **buffers, uint32 offset, uint32 size)
 {
 	while (size > 0)
@@ -519,6 +519,97 @@ scatter_bytes(const void *source, PqBuffer **buffers, uint32 offset, uint32 size
 }
 
 /*
+ * XXX
+ */
+static void
+set_segments_and_requeue(Port *port,
+						 uint32 cleartext_offset,
+						 uint32 cleartext_size)
+{
+	while (cleartext_size > 0)
+	{
+		PqBuffer *buf;
+		uint32 size_this_buffer;
+		uint32 previous_segment_end;
+
+		buf = bufq_pop_head(&port->recv.crypt_buffers);
+
+		previous_segment_end = buf->end;
+		if (cleartext_offset >= socket_buffer_size)
+		{
+			/* No new cleartext in this buffer (just size/header). */
+			if (previous_segment_end > 0)
+				bufq_push_tail(&port->recv.clear_buffers, buf);
+			else
+				port_put_free_buffer(port, buf);
+			cleartext_offset -= socket_buffer_size;
+		}
+		else
+		{
+			size_this_buffer = Min(cleartext_size,
+								   socket_buffer_size - cleartext_size);
+			if (previous_segment_end == 0)
+			{
+				/* This is the first cleartext segment. */
+				buf->begin = cleartext_offset;
+				buf->end = cleartext_offset + size_this_buffer;
+				buf->next_segment = 0;		/* end of chain so far */
+			}
+			else
+			{
+				be_gssapi_next_segment_info next;
+				uint32 segment_info_offset;
+				
+				/*
+				 * All subsequent segments form a chain.  Copy the link object
+				 * into the space after the last cleartext segment, which was
+				 * previously occupied by a GSS trailer, and the size and
+				 * header of the this message.
+				 */
+				segment_info_offset = previous_segment_end;
+				next.begin = cleartext_offset;
+				next.end = cleartext_offset + size_this_buffer;
+				next.max_end = 0;
+				next.next_segment = 0;		/* end of chain so far */
+				memcpy(buf->data + segment_info_offset, &next, sizeof(next));
+
+				/*
+				 * We haven't clobbered any cleartext, because there were GSS
+				 * trailer, size, and GSS header between cleartext messages.
+				 */
+				Assert(cleartext_offset >= segment_info_offset + sizeof(next));
+
+				if (buf->next_segment == 0)
+				{
+					/*
+					 * There is only one segment already, so append to the
+					 * chain using the link in the PqBuffer object.
+					 */
+					buf->next_segment = segment_info_offset;
+				}
+				else
+				{
+					/*
+					 * There are two or more segments already, so append to
+					 * the last segment object, without assuming anything
+					 * about alignment.
+					 */
+					memcpy(&buf->data +
+						   buf->last_segment +
+						   offsetof(be_gssapi_next_segment_info, next_segment),
+						   &segment_info_offset,
+						   sizeof(segment_info_offset));
+				}
+				buf->last_segment = segment_info_offset;
+				bufq_push_tail(&port->recv.clear_buffers, buf);
+			}			
+			cleartext_offset = 0;
+			cleartext_size -= size_this_buffer;
+		}
+	}
+}
+
+/*
  * Decrypts as many buffers from recv.crypt_buffers as possible without waiting.
  */
 int
@@ -528,9 +619,9 @@ be_gssapi_decrypt(Port *port)
 
 	while (!bufq_empty(&port->recv.crypt_buffers))
 	{
+		PqBuffer *buf;
 		uint8 *gss_message;
 		uint8 *cleartext;
-		PqBuffer *buffers[PQ_GSS_MAX_BUFFERS_PER_MESSAGE];
 		int nbuffers;
 		uint32 size_offset;
 		uint32 size;
@@ -539,21 +630,18 @@ be_gssapi_decrypt(Port *port)
 		uint32 cleartext_offset;
 		uint32 cleartext_size;
 		uint32 next_segment_offset;
+		uint32 encrypted_begin;
+		uint32 encrypted_end;
 		uint8 gss_message_copy[PQ_GSS_MAX_MESSAGE];
-		bool buffer_has_segments;
+		
 
-		/* Start off assuming we can find a whole message in head buffer. */
-		nbuffers = 1;
-		buffers[0] = bufq_head(&port->recv.crypt_buffers);
-		Assert(buffers[0]->begin < buffers[0]->end);
-		Assert(buffers[0]->next_segment == 0);
-		size_offset = buffers[0]->begin;
-		buffer_has_segments = false;
-		next_segment_offset = 0;
+		buf = bufq_head(&port->recv.crypt_buffers);
+		encrypted_begin = buf->begin;
+		encrypted_end = buf->end;
 
 		elog(LOG, "XXXX have head buffer %p", buffers[0]);
 		/* Loop finding messages/segments. */
-		while (size_offset < buffers[0]->end)
+		while (encrypted_begin < encrypted_end)
 		{
 			/* Read the size. */
 			if (!find_buffers_for_message(port, buffers, &nbuffers,
@@ -628,116 +716,8 @@ be_gssapi_decrypt(Port *port)
 							  cleartext_size);
 			}
 
-			/*
-			 * Build the chain of segments so that port_recv_impl() can read
-			 * the cleartext and skip the holes.
-			 */
-			for (int i = 0; i < nbuffers; ++i)
-			{
-				PqBuffer *buf;
-				uint32 size_this_buffer;
-
-				if (i > 0)
-				{
-					buffer_has_segments = false;
-				}
-
-				/* How many bytes of cleartext are in this buffer? */
-				buf = buffers[i];
-				if (cleartext_offset >= buf->end)
-					size_this_buffer = 0;
-				else
-					size_this_buffer = Min(cleartext_offset, buffers[i]->end);
-				
-				if (size_this_buffer > 0)
-				{
-					if (!buffer_has_segments)
-					{
-						/*
-						 * This is the first segment of cleartext in this
-						 * buffer, so set the [begin, end) range.  No need for
-						 * a be_gssapi_next_segment_info object for the first
-						 * segment.
-						 */
-						buf->begin = cleartext_offset;
-						buf->end = cleartext_offset + size_this_buffer;
-						buf->max_end = buf->end;
-						buf->next_segment = 0;
-						buffer_has_segments = true;
-						elog(LOG, "set cleartext location to [%u, %u)", buf->begin, buf->end);
-					}
-					else
-					{
-						be_gssapi_next_segment_info next;
-						
-						/*
-						 * All subsequent segments need a
-						 * be_gssapi_next_segment_info to record where they
-						 * are.  Copy it into place so we don't have to make
-						 * an assumption about alignment.
-						 */
-						next.begin = cleartext_offset;
-						next.end = cleartext_offset + size_this_buffer;
-						next.max_end = next.end;	/* don't upset valgrind */
-						next.next = 0;		/* end of chain so far */
-
-						/*
-						 * This is only possible for the head buffer (later
-						 * buffers in the queue surely have 'first segment'
-						 * case above).  We steal the space from the now
-						 * unused 'size' and 'header' space.
-						 */
-						Assert(i == 0);
-						memcpy(buffers[i]->data + size_offset, &next, sizeof(next));						
-
-						/*
-						 * If this is the second segment in the buffer, we
-						 * need to store its offset in the PqBuffer object,
-						 * and for later ones we need to set an earlier
-						 * segment's next_segment value, begin careful not to
-						 * assume anything about its alignment.
-						 */
-						if (next_segment_offset == 0)
-							buffers[i]->next_segment = size_offset;
-						else
-							memcpy(buffers[i]->data + next_segment_offset,
-								   &size_offset, sizeof(size_offset));
-
-						/*
-						 * Allow any future segment to find this one's
-						 * next_segment element to extend the chain.
-						 */
-						next_segment_offset = size_offset +
-							offsetof(be_gssapi_next_segment_info, next);
-					}
-				}
-				if (!buffer_has_segments)
-				{
-					bufq_pop_head(&port->recv.crypt_buffers);
-					port_put_free_buffer(port, buffers[i]);
-				}
-				else if (size_this_buffer >= buffers[i].end)
-				{
-					bufq_pop_head(&port->recv.crypt_buffers);
-					bufq_push_tail(&port->recv.clear_buffers);
-				}
-				else
-				{
-					b
-				}
-			}
-			if (nbuffers 
-			size_offset += sizeof(size) + gss_message_size;
-			elog(LOG, "XXX size_offset to %u", size_offset);
 		}
-		/* Prepare to fill in the first segment in the next buffer. */
-		buffer_has_segments = false;
-		next_segment_offset = 0;
-		Assert(size_offset == buffers[0]->end);
-		
-//		elog(LOG, "XXXX to cleartext!");
-//		bufq_pop_head(&port->recv.crypt_buffers);
-//		bufq_push_tail(&port->recv.clear_buffers, buffers[0]);
+		set_segments_and_requeue(port, cleartext_offset, cleartext_size);
 	}
 	
 	return 0;
@@ -795,10 +775,10 @@ secure_open_gssapi(Port *port)
 
 	while (true)
 	{		
+		uint8		buffer[PQ_GSS_MAX_MESSAGE];
 		uint32		netlen;
 		gss_buffer_desc input,
 					output = GSS_C_EMPTY_BUFFER;
-		uint8		buffer[PQ_GSS_MAX_MESSAGE];
 
 		/*
 		 * The client always sends first, so try to go ahead and read the

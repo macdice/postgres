@@ -29,11 +29,10 @@ typedef struct PqBuffer
 	uint32		end;			/* End of populated data. */
 	uint32		max_end;		/* Maximum possible end of populated data. */
 
-	/*
-	 * Location of the next segment.  Zero for all buffers except GSSAPI
-	 * cleartext buffers.  See be-secure-gssapi.c for details.
-	 */
+	/* Fields used by be-secure-gssapi.c for multi-segment support. */
+	uint32		cursor;
 	uint32		next_segment;
+	uint32		last_segment;
 } PqBuffer;
 
 /* An ordered queue of buffers. */
