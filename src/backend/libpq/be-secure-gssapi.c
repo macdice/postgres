@@ -657,6 +657,10 @@ be_gssapi_decrypt(Port *port)
 
 		/* Loop finding messages/segments. */
 		size_offset = buf->cursor;
+		buf->begin = 0;
+		buf->end = 0;
+		buf->next_segment = 0;
+		
 		while (size_offset < buf->max_end)
 		{
 			/* Read the size (even if it spans a buffer boundary). */
