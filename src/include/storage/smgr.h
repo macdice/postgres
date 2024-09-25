@@ -16,7 +16,20 @@
 
 #include "lib/ilist.h"
 #include "storage/block.h"
+#include "storage/buf.h"
 #include "storage/relfilelocator.h"
+
+typedef struct SMgrBufferLruEntry
+{
+	BlockNumber block;
+	Buffer		buffer;
+} SMgrBufferLruEntry;
+
+/* For each fork we'll use one (typical) cache line of recent memory. */
+#define SMGR_BUFFER_LRU_SIZE (64 / sizeof(SMgrBufferLruEntry))
+
+/* We have separate classes for 'hot' and 'warm' pages. */
+#define SMGR_BUFFER_LRU_CLASSES 2
 
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
@@ -52,6 +65,9 @@ typedef struct SMgrRelationData
 	 * submodules.  Do not touch them from elsewhere.
 	 */
 	int			smgr_which;		/* storage manager selector */
+
+	/* for bufmgr.c; cached recently accessed buffers */
+	SMgrBufferLruEntry recent_buffer_lru[MAX_FORKNUM + 1][SMGR_BUFFER_LRU_CLASSES][SMGR_BUFFER_LRU_SIZE];
 
 	/*
 	 * for md.c; per-fork arrays of the number of open segments

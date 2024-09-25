@@ -228,7 +228,12 @@ smgropen(RelFileLocator rlocator, ProcNumber backend)
 		/* hash_search already filled in the lookup key */
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
+		{
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
+			memset(reln->recent_buffer_lru,
+				   0xff,
+				   sizeof(reln->recent_buffer_lru));
+		}
 		reln->smgr_which = 0;	/* we only have md.c at present */
 
 		/* implementation-specific initialization */
