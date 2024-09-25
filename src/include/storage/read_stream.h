@@ -42,6 +42,14 @@
  */
 #define READ_STREAM_FULL 0x04
 
+/*
+ * If the number of blocks accessed repeatedly from one relation is
+ * SMGR_BUFFER_LRU_SIZE or less, this flag may be set to try to use the local
+ * LRU mechanism for faster buffer mapping.  For example, this might be used
+ * for scans of small tables.
+ */
+#define READ_STREAM_MAPPING_HOT 0x10
+
 struct ReadStream;
 typedef struct ReadStream ReadStream;
 

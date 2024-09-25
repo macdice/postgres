@@ -116,6 +116,7 @@ struct ReadStream
 	int16		pinned_buffers;
 	int16		distance;
 	bool		advice_enabled;
+	bool		mapping_hot;
 
 	/*
 	 * One-block buffer to support 'ungetting' a block number, to resolve flow
@@ -248,6 +249,10 @@ read_stream_start_pending_read(ReadStream *stream, bool suppress_advice)
 		flags = READ_BUFFERS_ISSUE_ADVICE;
 	else
 		flags = 0;
+
+	/* Use the buffer mapping cache if requested. */
+	if (stream->mapping_hot)
+		flags |= READ_BUFFERS_MAPPING_HOT;
 
 	/* We say how many blocks we want to read, but may be smaller on return. */
 	buffer_index = stream->next_buffer_index;
@@ -500,6 +505,9 @@ read_stream_begin_impl(int flags,
 		max_ios > 0)
 		stream->advice_enabled = true;
 #endif
+
+	if (flags & READ_STREAM_MAPPING_HOT)
+		stream->mapping_hot = true;
 
 	/*
 	 * For now, max_ios = 0 is interpreted as max_ios = 1 with advice disabled
