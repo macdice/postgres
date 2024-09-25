@@ -1247,8 +1247,13 @@ extern int	_bt_getrootheight(Relation rel);
 extern void _bt_metaversion(Relation rel, bool *heapkeyspace,
 							bool *allequalimage);
 extern void _bt_checkpage(Relation rel, Buffer buf);
+extern Buffer _bt_getbufmode(Relation rel, BlockNumber blkno, int access,
+							 ReadBufferMode mode);
 extern Buffer _bt_getbuf(Relation rel, BlockNumber blkno, int access);
 extern Buffer _bt_allocbuf(Relation rel, Relation heaprel);
+extern Buffer _bt_relandgetbufmode(Relation rel, Buffer obuf,
+								   BlockNumber blkno, int access,
+								   ReadBufferMode mode);
 extern Buffer _bt_relandgetbuf(Relation rel, Buffer obuf,
 							   BlockNumber blkno, int access);
 extern void _bt_relbuf(Relation rel, Buffer buf);

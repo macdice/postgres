@@ -175,7 +175,8 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 			page_access = BT_WRITE;
 
 		/* drop the read lock on the page, then acquire one on its child */
-		*bufP = _bt_relandgetbuf(rel, *bufP, child, page_access);
+		*bufP = _bt_relandgetbufmode(rel, *bufP, child, page_access,
+									 RBM_MAPPING_WARM);
 
 		/* okay, all set to move down a level */
 		stack_in = new_stack;
