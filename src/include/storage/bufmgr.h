@@ -43,6 +43,8 @@ typedef enum BufferAccessStrategyType
 typedef enum
 {
 	RBM_NORMAL,					/* Normal read */
+	RBM_MAPPING_HOT,			/* Normal, but use 'hot' mapping cache. */
+	RBM_MAPPING_WARM,			/* Normal, but use 'warm' mapping cache. */
 	RBM_ZERO_AND_LOCK,			/* Don't read from disk, caller will
 								 * initialize. Also locks the page. */
 	RBM_ZERO_AND_CLEANUP_LOCK,	/* Like RBM_ZERO_AND_LOCK, but locks the page
@@ -111,6 +113,10 @@ typedef struct BufferManagerRelation
 #define READ_BUFFERS_ZERO_ON_ERROR (1 << 0)
 /* Call smgrprefetch() if I/O necessary. */
 #define READ_BUFFERS_ISSUE_ADVICE (1 << 1)
+/* Hints about buffer mapping class, for local buffer mapping LRUs. */
+#define READ_BUFFERS_MAPPING_HOT 0x10
+#define READ_BUFFERS_MAPPING_WARM 0x20
+#define READ_BUFFERS_MAPPING_MASK 0x30
 
 struct ReadBuffersOperation
 {

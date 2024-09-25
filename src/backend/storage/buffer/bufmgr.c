@@ -1083,6 +1083,77 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 	}
 }
 
+static inline int
+ReadBufferFlagsToLruClass(int flags)
+{
+	flags &= (READ_BUFFERS_MAPPING_HOT | READ_BUFFERS_MAPPING_WARM);
+	flags /= READ_BUFFERS_MAPPING_HOT;
+	Assert(flags < SMGR_BUFFER_LRU_CLASSES);
+	return flags;
+}
+
+/*
+ * Try to find a buffer using our tiny LRU cache, to avoid a trip through the
+ * buffer mapping table.  Only for non-local RBM_NORMAL reads.
+ */
+static Buffer
+PinRecentBufferForBlock(SMgrRelation smgr, ForkNumber forkNum,
+						BlockNumber blockNum, int flags)
+{
+	int			class;
+	SMgrBufferLruEntry *lru;
+
+	class = ReadBufferFlagsToLruClass(flags);
+	lru = &smgr->recent_buffer_lru[forkNum][class][0];
+	for (int i = 0; i < SMGR_BUFFER_LRU_SIZE; ++i)
+	{
+		SMgrBufferLruEntry found;
+
+		if (lru[i].block != blockNum)
+			continue;
+
+		/* Check if the buffer mapping is still correct. */
+		found = lru[i];
+		if (found.buffer != InvalidBuffer &&
+			ReadRecentBuffer(smgr->smgr_rlocator.locator,
+							 forkNum,
+							 blockNum,
+							 found.buffer))
+		{
+			/* Yes, so move to front of LRU. */
+			if (i > 0)
+			{
+				memmove(&lru[1], &lru[0], sizeof(lru[0]) * i);
+				lru[0] = found;
+			}
+			return found.buffer;
+		}
+
+		/* Drop stale buffer mapping and give up. */
+		if (i < SMGR_BUFFER_LRU_SIZE - 1)
+			memmove(&lru[i], &lru[i + 1], SMGR_BUFFER_LRU_SIZE - i);
+		lru[SMGR_BUFFER_LRU_SIZE - 1].block = InvalidBlockNumber;
+		break;
+	}
+
+	return InvalidBuffer;
+}
+
+static void
+RememberRecentBufferForBlock(SMgrRelation smgr, ForkNumber forkNum,
+							 BlockNumber blockNum, int flags, Buffer buffer)
+{
+	int			class;
+	SMgrBufferLruEntry *lru;
+
+	/* Only called if not already found.  Forget oldest, insert at front. */
+	class = ReadBufferFlagsToLruClass(flags);
+	lru = &smgr->recent_buffer_lru[forkNum][class][0];
+	memmove(&lru[1], &lru[0], sizeof(lru[0]) * (SMGR_BUFFER_LRU_SIZE - 1));
+	lru[0].block = blockNum;
+	lru[0].buffer = buffer;
+}
+
 /*
  * Pin a buffer for a given block.  *foundPtr is set to true if the block was
  * already present, or false if more work is required to either read it in or
@@ -1095,8 +1166,10 @@ PinBufferForBlock(Relation rel,
 				  ForkNumber forkNum,
 				  BlockNumber blockNum,
 				  BufferAccessStrategy strategy,
+				  int flags,
 				  bool *foundPtr)
 {
+	Buffer		buffer;
 	BufferDesc *bufHdr;
 	IOContext	io_context;
 	IOObject	io_object;
@@ -1125,16 +1198,28 @@ PinBufferForBlock(Relation rel,
 									   smgr->smgr_rlocator.locator.relNumber,
 									   smgr->smgr_rlocator.backend);
 
+	/* If requested, use the cache of recently accessed buffer mappings. */
+	if (flags & READ_BUFFERS_MAPPING_MASK)
+	{
+		buffer = PinRecentBufferForBlock(smgr, forkNum, blockNum, flags);
+		if (buffer != InvalidBuffer)
+			*foundPtr = true;
+	}
+	else
+		buffer = InvalidBuffer;
+
 	if (persistence == RELPERSISTENCE_TEMP)
 	{
-		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
+		if (buffer == InvalidBuffer)
+			bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
 		if (*foundPtr)
 			pgBufferUsage.local_blks_hit++;
 	}
 	else
 	{
-		bufHdr = BufferAlloc(smgr, persistence, forkNum, blockNum,
-							 strategy, foundPtr, io_context);
+		if (buffer == InvalidBuffer)
+			bufHdr = BufferAlloc(smgr, persistence, forkNum, blockNum,
+								 strategy, foundPtr, io_context);
 		if (*foundPtr)
 			pgBufferUsage.shared_blks_hit++;
 	}
@@ -1163,7 +1248,19 @@ PinBufferForBlock(Relation rel,
 										  true);
 	}
 
-	return BufferDescriptorGetBuffer(bufHdr);
+	if (flags & READ_BUFFERS_MAPPING_MASK)
+	{
+		if (buffer == InvalidBuffer)
+		{
+			buffer = BufferDescriptorGetBuffer(bufHdr);
+			RememberRecentBufferForBlock(smgr, forkNum, blockNum, flags,
+										 buffer);
+		}
+	}
+	else
+		buffer = BufferDescriptorGetBuffer(bufHdr);
+
+	return buffer;
 }
 
 /*
@@ -1213,7 +1310,8 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 		bool		found;
 
 		buffer = PinBufferForBlock(rel, smgr, persistence,
-								   forkNum, blockNum, strategy, &found);
+								   forkNum, blockNum, strategy, 0,
+								   &found);
 		ZeroAndLockBuffer(buffer, mode, found);
 		return buffer;
 	}
@@ -1222,6 +1320,10 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 		flags = READ_BUFFERS_ZERO_ON_ERROR;
 	else
 		flags = 0;
+	if (mode == RBM_MAPPING_HOT)
+		flags |= READ_BUFFERS_MAPPING_HOT;
+	else if (mode == RBM_MAPPING_WARM)
+		flags |= READ_BUFFERS_MAPPING_WARM;
 	operation.smgr = smgr;
 	operation.rel = rel;
 	operation.persistence = persistence;
@@ -1259,6 +1361,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 									   operation->forknum,
 									   blockNum + i,
 									   operation->strategy,
+									   flags,
 									   &found);
 
 		if (found)
