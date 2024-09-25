@@ -373,7 +373,7 @@ _bt_getroot(Relation rel, Relation heaprel, int access)
 		Assert(rootblkno != P_NONE);
 		rootlevel = metad->btm_fastlevel;
 
-		rootbuf = _bt_getbuf(rel, rootblkno, BT_READ);
+		rootbuf = _bt_getbufmode(rel, rootblkno, BT_READ, RBM_MAPPING_HOT);
 		rootpage = BufferGetPage(rootbuf);
 		rootopaque = BTPageGetOpaque(rootpage);
 
@@ -844,12 +844,25 @@ _bt_checkpage(Relation rel, Buffer buf)
 Buffer
 _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 {
+	return _bt_getbufmode(rel, blkno, access, RBM_NORMAL);
+}
+
+/*
+ * Like _bt_getbuf(), but rbm may be set to RBM_NORMAL, RBM_MAPPING_HOT or
+ * RBM_MAPPING_WARM.  The 'hot' class is only used for accessing the root
+ * page.  The 'warm' class is used for internal pages.
+ */
+Buffer
+_bt_getbufmode(Relation rel, BlockNumber blkno, int access, ReadBufferMode mode)
+{
 	Buffer		buf;
 
 	Assert(BlockNumberIsValid(blkno));
+	Assert(mode == RBM_NORMAL || mode == RBM_MAPPING_HOT || mode == RBM_MAPPING_WARM);
 
+	elog(LOG, "_bt_getbufmode block %u, mode = %s", blkno, mode == RBM_NORMAL ? "RBM_NORMAL" : mode == RBM_MAPPING_HOT ? "RBM_MAPPING_HOT" : "RBM_MAPPING_WARM");
 	/* Read an existing block of the relation */
-	buf = ReadBuffer(rel, blkno);
+	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, mode, NULL);
 	_bt_lockbuf(rel, buf, access);
 	_bt_checkpage(rel, buf);
 
@@ -1002,13 +1015,23 @@ _bt_allocbuf(Relation rel, Relation heaprel)
 Buffer
 _bt_relandgetbuf(Relation rel, Buffer obuf, BlockNumber blkno, int access)
 {
+	return _bt_relandgetbufmode(rel, obuf, blkno, access, RBM_NORMAL);
+}
+
+/*
+ * As _bt_relandgetbuf(), but a mode can be specified with the same
+ * restrictions and semantics as for _bt_getbuf().
+ */
+Buffer
+_bt_relandgetbufmode(Relation rel, Buffer obuf, BlockNumber blkno, int access,
+					 ReadBufferMode mode)
+{
 	Buffer		buf;
 
 	Assert(BlockNumberIsValid(blkno));
 	if (BufferIsValid(obuf))
-		_bt_unlockbuf(rel, obuf);
-	buf = ReleaseAndReadBuffer(obuf, rel, blkno);
-	_bt_lockbuf(rel, buf, access);
+		_bt_relbuf(rel, obuf);
+	buf = _bt_getbufmode(rel, blkno, access, mode);
 
 	_bt_checkpage(rel, buf);
 	return buf;
