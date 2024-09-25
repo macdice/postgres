@@ -1120,13 +1120,24 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 		scan->rs_base.rs_flags & SO_TYPE_TIDRANGESCAN)
 	{
 		ReadStreamBlockNumberCB cb;
+		int			flags;
 
 		if (scan->rs_base.rs_parallel)
 			cb = heap_scan_stream_read_next_parallel;
 		else
 			cb = heap_scan_stream_read_next_serial;
 
-		scan->rs_read_stream = read_stream_begin_relation(READ_STREAM_SEQUENTIAL,
+		flags = READ_STREAM_SEQUENTIAL;
+
+		/*
+		 * If it's a tiny table, use the small buffer mapping cache.  The
+		 * cache would be destroyed by a larger scan and certainly not help,
+		 * so we don't turn it on otherwise.
+		 */
+		if (scan->rs_nblocks <= SMGR_BUFFER_LRU_SIZE)
+			flags |= READ_STREAM_MAPPING_HOT;
+
+		scan->rs_read_stream = read_stream_begin_relation(flags,
 														  scan->rs_strategy,
 														  scan->rs_base.rs_rd,
 														  MAIN_FORKNUM,
