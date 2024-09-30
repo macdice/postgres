@@ -444,6 +444,28 @@ typedef struct XLogCtlInsert
 } XLogCtlInsert;
 
 /*
+ * Flag set by XLogHelpWrite() if an entirely filled buffer has been written to
+ * disk, possibly by a backend that couldn't obtain WALWriteLock.
+ */
+#define XLOGBUFHEADER_CLEAN 0x80000000
+
+/*
+ * Mask of the flags bits used to count the current number of backends that
+ * would like to clean this buffer.  If the counter is 1 after incrementing and
+ * it's not marked CLEAN, you win the right to clean.  Otherwise, sleep on
+ * write_finished until it eventually is 1 (you win eventually) or marked
+ * CLEAN.
+ */
+#define XLOGBUFHEADER_WRITER_MASK 0x7fffffff
+
+typedef struct XLogBufHeader
+{
+	pg_atomic_uint64 xlblock; /* 1st byte ptr + XLOG_BLCKSZ */
+	pg_atomic_uint32 flags;
+	ConditionVariable write_finished;
+} XLogBufHeader;
+
+/*
  * Total shared-memory state for XLOG.
  */
 typedef struct XLogCtlData
@@ -489,7 +511,7 @@ typedef struct XLogCtlData
 	 * WALBufMappingLock.
 	 */
 	char	   *pages;			/* buffers for unwritten XLOG pages */
-	pg_atomic_uint64 *xlblocks; /* 1st byte ptr-s + XLOG_BLCKSZ */
+	XLogBufHeader *headers;
 	int			XLogCacheBlck;	/* highest allocated xlog buffer index */
 
 	/*
@@ -1670,7 +1692,7 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
 	expectedEndPtr = ptr;
 	expectedEndPtr += XLOG_BLCKSZ - ptr % XLOG_BLCKSZ;
 
-	endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
+	endptr = pg_atomic_read_u64(&XLogCtl->headers[idx].xlblock);
 	if (expectedEndPtr != endptr)
 	{
 		XLogRecPtr	initializedUpto;
@@ -1701,7 +1723,7 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
 		WALInsertLockUpdateInsertingAt(initializedUpto);
 
 		AdvanceXLInsertBuffer(ptr, tli, false);
-		endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
+		endptr = pg_atomic_read_u64(&XLogCtl->headers[idx].xlblock);
 
 		if (expectedEndPtr != endptr)
 			elog(PANIC, "could not find WAL buffer for %X/%X",
@@ -1802,7 +1824,7 @@ WALReadFromBuffers(char *dstbuf, XLogRecPtr startptr, Size count,
 		 * First verification step: check that the correct page is present in
 		 * the WAL buffers.
 		 */
-		endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
+		endptr = pg_atomic_read_u64(&XLogCtl->headers[idx].xlblock);
 		if (expectedEndPtr != endptr)
 			break;
 
@@ -1834,7 +1856,7 @@ WALReadFromBuffers(char *dstbuf, XLogRecPtr startptr, Size count,
 		 * Second verification step: check that the page we read from wasn't
 		 * evicted while we were copying the data.
 		 */
-		endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
+		endptr = pg_atomic_read_u64(&XLogCtl->headers[idx].xlblock);
 		if (expectedEndPtr != endptr)
 			break;
 
@@ -2007,7 +2029,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		 * be zero if the buffer hasn't been used yet).  Fall through if it's
 		 * already written out.
 		 */
-		OldPageRqstPtr = pg_atomic_read_u64(&XLogCtl->xlblocks[nextidx]);
+		OldPageRqstPtr = pg_atomic_read_u64(&XLogCtl->headers[nextidx].xlblock);
 		if (LogwrtResult.Write < OldPageRqstPtr)
 		{
 			/*
@@ -2081,7 +2103,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		 * before initializing. Otherwise, the old page may be partially
 		 * zeroed but look valid.
 		 */
-		pg_atomic_write_u64(&XLogCtl->xlblocks[nextidx], InvalidXLogRecPtr);
+		pg_atomic_write_u64(&XLogCtl->headers[nextidx].xlblock, InvalidXLogRecPtr);
 		pg_write_barrier();
 
 		/*
@@ -2137,7 +2159,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		 */
 		pg_write_barrier();
 
-		pg_atomic_write_u64(&XLogCtl->xlblocks[nextidx], NewPageEndPtr);
+		pg_atomic_write_u64(&XLogCtl->headers[nextidx].xlblock, NewPageEndPtr);
 		XLogCtl->InitializedUpTo = NewPageEndPtr;
 
 		npages++;
@@ -2355,7 +2377,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 		 * if we're passed a bogus WriteRqst.Write that is past the end of the
 		 * last page that's been initialized by AdvanceXLInsertBuffer.
 		 */
-		XLogRecPtr	EndPtr = pg_atomic_read_u64(&XLogCtl->xlblocks[curridx]);
+		XLogRecPtr	EndPtr = pg_atomic_read_u64(&XLogCtl->headers[curridx].xlblock);
 
 		if (LogwrtResult.Write >= EndPtr)
 			elog(PANIC, "xlog write request %X/%X is past end of log %X/%X",
@@ -4892,7 +4914,7 @@ XLOGShmemSize(void)
 	/* WAL insertion locks, plus alignment */
 	size = add_size(size, mul_size(sizeof(WALInsertLockPadded), NUM_XLOGINSERT_LOCKS + 1));
 	/* xlblocks array */
-	size = add_size(size, mul_size(sizeof(pg_atomic_uint64), XLOGbuffers));
+	size = add_size(size, mul_size(sizeof(XLogBufHeader), XLOGbuffers));
 	/* extra alignment padding for XLOG I/O buffers */
 	size = add_size(size, Max(XLOG_BLCKSZ, PG_IO_ALIGN_SIZE));
 	/* and the buffers themselves */
@@ -4970,12 +4992,13 @@ XLOGShmemInit(void)
 	 * needed here.
 	 */
 	allocptr = ((char *) XLogCtl) + sizeof(XLogCtlData);
-	XLogCtl->xlblocks = (pg_atomic_uint64 *) allocptr;
-	allocptr += sizeof(pg_atomic_uint64) * XLOGbuffers;
+	XLogCtl->headers = (XLogBufHeader *) allocptr;
+	allocptr += sizeof(XLogBufHeader) * XLOGbuffers;
 
 	for (i = 0; i < XLOGbuffers; i++)
 	{
-		pg_atomic_init_u64(&XLogCtl->xlblocks[i], InvalidXLogRecPtr);
+		pg_atomic_init_u64(&XLogCtl->headers[i].xlblock, InvalidXLogRecPtr);
+		pg_atomic_init_u32(&XLogCtl->headers[i].flags, 0);
 	}
 
 	/* WAL insertion locks. Ensure they're aligned to the full padded size */
@@ -6034,7 +6057,7 @@ StartupXLOG(void)
 		memcpy(page, endOfRecoveryInfo->lastPage, len);
 		memset(page + len, 0, XLOG_BLCKSZ - len);
 
-		pg_atomic_write_u64(&XLogCtl->xlblocks[firstIdx], endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ);
+		pg_atomic_write_u64(&XLogCtl->headers[firstIdx].xlblock, endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ);
 		XLogCtl->InitializedUpTo = endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ;
 	}
 	else
