@@ -2432,6 +2432,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 			nleft = nbytes;
 			do
 			{
+				char		tail_copy[XLOG_BLCKSZ];
+				struct iovec iov[2];
+				int			iovcnt;
+
 				errno = 0;
 
 				/* Measure I/O timing to write WAL data */
@@ -2440,8 +2444,41 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 				else
 					INSTR_TIME_SET_ZERO(start);
 
+				if (ispartialpage)
+				{
+					/*
+					 * Make a temporary copy of the final partial page,
+					 * because other backends might write to it and that
+					 * upsets some file systems while writing.
+					 */
+					if (nleft > XLOG_BLCKSZ)
+					{
+						memcpy(tail_copy,
+							   from + (nleft - XLOG_BLCKSZ),
+							   XLOG_BLCKSZ);
+						iov[0].iov_base = from;
+						iov[0].iov_len = nleft - XLOG_BLCKSZ;
+						iov[1].iov_base = tail_copy;
+						iov[1].iov_len = XLOG_BLCKSZ;
+						iovcnt = 2;
+					}
+					else
+					{
+						memcpy(tail_copy, from, nleft);
+						iov[0].iov_base = tail_copy;
+						iov[0].iov_len = nleft;
+						iovcnt = 1;
+					}
+				}
+				else
+				{
+					iov[0].iov_base = from;
+					iov[0].iov_len = nleft;
+					iovcnt = 1;
+				}
+
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = pg_pwrite(openLogFile, from, nleft, startoffset);
+				written = pg_pwritev(openLogFile, iov, iovcnt, startoffset);
 				pgstat_report_wait_end();
 
 				/*
