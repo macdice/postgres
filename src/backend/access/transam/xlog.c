@@ -2426,6 +2426,16 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 			Size		nleft;
 			ssize_t		written;
 			instr_time	start;
+			bool		copy_tail;
+
+			/*
+			 * Do we need to treat the tail page specially to avoid writing
+			 * data out while the buffer is still potentially changing?  We
+			 * enable this only for direct I/O currently, where that is known
+			 * to cause checksum failures on some file systems.
+			 */
+			copy_tail = (io_direct_flags & IO_DIRECT_WAL) != 0 &&
+				ispartialpage;
 
 			/* OK to write the page(s) */
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
@@ -2433,6 +2443,37 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 			nleft = nbytes;
 			do
 			{
+				char		tail_page[XLOG_BLCKSZ];
+				struct iovec iov[2];
+				int			iovcnt = 0;
+
+				if (!copy_tail || nleft > XLOG_BLCKSZ)
+				{
+					/*
+					 * Write as many pages as possible directly from WAL
+					 * buffers.
+					 */
+					iov[iovcnt].iov_base = from;
+					iov[iovcnt].iov_len = nleft - (copy_tail ? XLOG_BLCKSZ : 0);
+					++iovcnt;
+				}
+
+				if (copy_tail)
+				{
+					size_t		tail_nleft = Min(nleft, XLOG_BLCKSZ);
+
+					/*
+					 * Copy the tail page into a temporary buffer and write
+					 * that part from there instead, because the WAL buffer is
+					 * potentially still changing underneath our feet and our
+					 * defense against that is enabled.
+					 */
+					memcpy(tail_page, from + nleft - tail_nleft, tail_nleft);
+					iov[iovcnt].iov_base = tail_page;
+					iov[iovcnt].iov_len = tail_nleft;
+					++iovcnt;
+				}
+
 				errno = 0;
 
 				/* Measure I/O timing to write WAL data */
@@ -2442,7 +2483,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 					INSTR_TIME_SET_ZERO(start);
 
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = pg_pwrite(openLogFile, from, nleft, startoffset);
+				written = pg_pwritev(openLogFile, iov, iovcnt, startoffset);
 				pgstat_report_wait_end();
 
 				/*
