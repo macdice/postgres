@@ -4605,7 +4605,7 @@ GetFakeLSNForUnloggedRel(void)
  * The preferred setting for wal_buffers is about 3% of shared_buffers, with
  * a maximum of one XLOG segment (there is little reason to think that more
  * is helpful, at least so long as we force an fsync when switching log files)
- * and a minimum of 8 blocks (which was the default value prior to PostgreSQL
+ * and a minimum of 64kB (which was the default value prior to PostgreSQL
  * 9.1, when auto-tuning was added).
  *
  * This should not be called until NBuffers has received its final value.
@@ -4615,11 +4615,11 @@ XLOGChooseNumBuffers(void)
 {
 	int			xbuffers;
 
-	xbuffers = NBuffers / 32;
+	xbuffers = (((size_t) NBuffers * BLCKSZ) / 32) / XLOG_BLCKSZ;
 	if (xbuffers > (wal_segment_size / XLOG_BLCKSZ))
 		xbuffers = (wal_segment_size / XLOG_BLCKSZ);
-	if (xbuffers < 8)
-		xbuffers = 8;
+	if ((xbuffers * XLOG_BLCKSZ) < (64 * 1024))
+		xbuffers = (64 * 1024) / XLOG_BLCKSZ;
 	return xbuffers;
 }
 

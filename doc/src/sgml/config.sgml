@@ -3386,7 +3386,7 @@ include_dir 'conf.d'
         but any positive value less than <literal>32kB</literal> will be
         treated as <literal>32kB</literal>.
         If this value is specified without units, it is taken as WAL blocks,
-        that is <symbol>XLOG_BLCKSZ</symbol> bytes, typically 8kB.
+        that is <symbol>XLOG_BLCKSZ</symbol> bytes, typically 4kB.
         This parameter can only be set at server start.
        </para>
 
