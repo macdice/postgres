@@ -2319,6 +2319,39 @@ XLogCheckpointNeeded(XLogSegNo new_segno)
 	return false;
 }
 
+static bool
+XLogStartIO(int idx, bool wait)
+{
+	XLogBufHeader *header;
+	uint32 old_flags;
+
+	header = &XLogCtl->headers[idx];
+	old_flags = pg_atomic_fetch_add(&header->flags, 1);
+	if (old_flags & XLOGBUFHEADER_CLEAN)
+	{
+		/* Someone has already written this block. */
+		pg_atomic_fetch_add(&header->flags, -1);
+		return false;
+	}
+	if (old_flags == 0)
+	{
+		/* We won, we can write this block. */
+		return true;
+	}
+	/* Someone else is writing it out.  Wait, if requested. */
+	ConditionVariablePrepareSleep(&header->write_finished);
+	for (;;)
+	{
+		...
+	}
+	ConditionVariableCancelSleep();
+}
+
+static bool
+XLogTerminateIO(int idx)
+{
+}
+
 /*
  * Write and/or fsync the log at least as far as WriteRqst indicates.
  *
@@ -4999,6 +5032,7 @@ XLOGShmemInit(void)
 	{
 		pg_atomic_init_u64(&XLogCtl->headers[i].xlblock, InvalidXLogRecPtr);
 		pg_atomic_init_u32(&XLogCtl->headers[i].flags, 0);
+		ConditionVariableInit(&XLogCtl->headers[i].write_finished);
 	}
 
 	/* WAL insertion locks. Ensure they're aligned to the full padded size */
