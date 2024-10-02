@@ -72,7 +72,14 @@ else
 fi
 
 # Create temp directory.
-tmp=`mktemp -d /tmp/$me.XXXXXX`
+if [ -z "$TMPDIR" ] ; then
+	tmp=`mktemp -d /tmp/$me.XXXXXX`
+else
+	# Use a directory name provided.  It will be removed at end.  A stable name
+	# is needed for ccache to be effective.
+	tmp="$TMPDIR"
+	mkdir -p "$tmp"
+fi
 
 trap "ret=$?; rm -rf $tmp; exit $ret" 0 1 2 3 15
 
@@ -81,6 +88,9 @@ exit_status=0
 # Scan all of src/ and contrib/ for header files.
 for f in `cd "$srcdir" && find src contrib -name '*.h' -print`
 do
+	# Help ccache by using a stable name.  Remove slashes and dots.
+	name=$(echo $f | tr "\/." "__")
+
 	# Ignore files that are unportable or intentionally not standalone.
 
 	# These files are platform-specific, and c.h will include the
@@ -227,7 +237,7 @@ do
 	    esac
 	    echo "#include \"$f\""
 	    $cplusplus && echo '};'
-	} >$tmp/test.$ext
+	} >$tmp/$name.$ext
 
 	# Some subdirectories need extra -I switches.
 	case "$f" in
@@ -249,7 +259,7 @@ do
 	if ! $COMPILER $COMPILER_FLAGS -I $builddir -I $srcdir \
 		-I $builddir/src/include -I $srcdir/src/include \
 		-I $builddir/src/interfaces/libpq -I $srcdir/src/interfaces/libpq \
-		$EXTRAINCLUDES $EXTRAFLAGS -c $tmp/test.$ext -o $tmp/test.o
+		$EXTRAINCLUDES $EXTRAFLAGS -c $tmp/$name.$ext -o $tmp/$name.o
 	then
 		exit_status=1
 	fi

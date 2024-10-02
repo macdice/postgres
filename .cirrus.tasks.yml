@@ -775,8 +775,6 @@ task:
   ###
   # Verify headerscheck / cpluspluscheck succeed
   #
-  # - Don't use ccache, the files are uncacheable, polluting ccache's
-  #   cache
   # - Use -fmax-errors, as particularly cpluspluscheck can be very verbose
   # - XXX have to disable ICU to avoid errors:
   #   https://postgr.es/m/20220323002024.f2g6tivduzrktgfa%40alap3.anarazel.de
@@ -787,11 +785,11 @@ task:
         ${LINUX_CONFIGURE_FEATURES} \
         --without-icu \
         --quiet \
-        CC="gcc" CXX"=g++" CLANG="clang-16"
+        CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang-16"
       make -s -j${BUILD_JOBS} clean
-      time make -s headerscheck EXTRAFLAGS='-fmax-errors=10'
+      time make -s headerscheck EXTRAFLAGS='-fmax-errors=10' TMPDIR="headerscheck_tmp"
     headers_cpluspluscheck_script: |
-      time make -s cpluspluscheck EXTRAFLAGS='-fmax-errors=10'
+      time make -s cpluspluscheck EXTRAFLAGS='-fmax-errors=10' TMPDIR="cpluspluscheck_tmp"
 
   always:
     upload_caches: ccache
