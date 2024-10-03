@@ -234,6 +234,24 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
   --with-uuid=ossp
   --with-zstd
 
+LINUX_CONFIGURE_32_FEATURES: &LINUX_CONFIGURE_32_FEATURES >-
+  --with-gssapi
+  --with-icu
+  --with-ldap
+  --with-libxml
+  --with-libxslt
+  --with-llvm
+  --with-lz4
+  --with-pam
+  --with-perl
+  --with-python
+  --with-selinux
+  --with-ssl=openssl
+  --with-systemd
+  --with-tcl --with-tclconfig=/usr/lib/i386-linux-gnu/tcl8.6/
+  --with-uuid=e2fs
+  --with-zstd
+
 LINUX_MESON_FEATURES: &LINUX_MESON_FEATURES >-
   -Dllvm=enabled
   -Duuid=e2fs
@@ -723,6 +741,21 @@ task:
         --enable-cassert \
         ${LINUX_CONFIGURE_FEATURES} \
         CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang-16"
+      make -s -j${BUILD_JOBS} clean
+      time make -s -j${BUILD_JOBS} world-bin
+
+  # gcc, cassert on, 32 bit
+  always:
+    gcc_32_a_warning_script: |
+      time ./configure \
+        --cache gcc32.cache \
+        --enable-cassert \
+        ${LINUX_CONFIGURE_32_FEATURES} \
+        CC="ccache gcc -m32" \
+        CXX="ccache g++ -m32" \
+        CLANG="ccache clang-16 -m32" \
+        PERL="perl5.36-i386-linux-gnu" \
+        PKG_CONFIG_PATH="/usr/lib/i386-linux-gnu/pkgconfig"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 
