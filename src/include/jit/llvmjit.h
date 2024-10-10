@@ -18,6 +18,9 @@
 #ifdef USE_LLVM
 
 #include <llvm-c/Types.h>
+#if LLVM_VERSION_MAJOR >= 14
+#include <llvm-c/OrcEE.h>
+#endif
 
 
 /*
@@ -135,6 +138,10 @@ extern LLVMValueRef slot_compile_deform(struct LLVMJitContext *context, TupleDes
  */
 extern LLVMTypeRef LLVMGetFunctionReturnType(LLVMValueRef r);
 extern LLVMTypeRef LLVMGetFunctionType(LLVMValueRef r);
+
+#if LLVM_VERSION_MAJOR >= 14
+extern LLVMOrcObjectLayerRef LLVMOrcCreateJITLinkObjectLinkingLayer(LLVMOrcExecutionSessionRef ES);
+#endif
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -1166,8 +1166,12 @@ llvm_log_jit_error(void *ctx, LLVMErrorRef error)
 static LLVMOrcObjectLayerRef
 llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *Triple)
 {
-	LLVMOrcObjectLayerRef objlayer =
-		LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
+	LLVMOrcObjectLayerRef objlayer;
+
+#if LLVM_VERSION_MAJOR >= 14
+	objlayer = LLVMOrcCreateJITLinkObjectLinkingLayer(ES);
+#else
+	objlayer = LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
 
 #if defined(HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER) && HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER
 	if (jit_debugging_support)
@@ -1185,6 +1189,7 @@ llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *T
 
 		LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener(objlayer, l);
 	}
+#endif
 #endif
 
 	return objlayer;
