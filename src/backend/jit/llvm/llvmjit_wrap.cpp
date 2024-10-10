@@ -20,7 +20,9 @@ extern "C"
 #include <llvm/IR/Function.h>
 
 #include "jit/llvmjit.h"
+#if LLVM_VERSION_MAJOR < 22
 #include "jit/llvmjit_backport.h"
+#endif
 
 #ifdef USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
 #include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
