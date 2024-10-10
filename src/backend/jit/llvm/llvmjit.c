@@ -1172,15 +1172,29 @@ llvm_log_jit_error(void *ctx, LLVMErrorRef error)
 static LLVMOrcObjectLayerRef
 llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *Triple)
 {
-#ifdef USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
-	LLVMOrcObjectLayerRef objlayer =
-		LLVMOrcCreateRTDyldObjectLinkingLayerWithSafeSectionMemoryManager(ES);
+	LLVMOrcObjectLayerRef objlayer;
+
+#if defined(USE_LLVM_JITLINK)
+	objlayer = LLVMOrcCreateJITLinkObjectLinkingLayer(ES);
+#elif defined(USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER)
+	objlayer = LLVMOrcCreateRTDyldObjectLinkingLayerWithSafeSectionMemoryManager(ES);
 #else
-	LLVMOrcObjectLayerRef objlayer =
-		LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
+	objlayer = LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
 #endif
 
+	/*
+	 * XXX The JITLink equivalents of the following seem to be:
+	 *
+	 * llvm::orc::PerfSupportPlugin
+	 * llvm::orc::DebuggerSupportPlugin
+	 *
+	 * At least the first arrived in LLVM 18?  Need to decide how to access
+	 * those, either from C like below, or just shove it inot the C++ wrapper
+	 * function, and check if they are feature-equivalent and
+	 * portability-equivalent.
+	 */
 
+#if !defined(USE_LLVM_JITLINK)
 #if defined(HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER) && HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER
 	if (jit_debugging_support)
 	{
@@ -1197,6 +1211,7 @@ llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *T
 
 		LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener(objlayer, l);
 	}
+#endif
 #endif
 
 	return objlayer;

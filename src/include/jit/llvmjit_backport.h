@@ -8,6 +8,15 @@
 #include <llvm/Config/llvm-config.h>
 
 /*
+ * On newer LLVM versions, prefer JITLink over RuntimeDyld for linking.
+ * Earlier versions may also work on some platforms.
+ *
+ * XXX What should the conditions be for this?
+ */
+#if LLVM_VERSION_MAJOR >= 19
+#define USE_LLVM_JITLINK
+#else
+/*
  * LLVM's RuntimeDyld can produce code that crashes on larger memory ARM
  * systems, because llvm::SectionMemoryManager allocates multiple pieces of
  * memory that can be placed too far apart for the generated code.  See
@@ -17,6 +26,7 @@
  */
 #if defined(__aarch64__)
 #define USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
+#endif
 #endif
 
 #endif
