@@ -19,7 +19,7 @@ extern "C"
 #include <llvm-c/Core.h>
 #include <llvm-c/Types.h>
 #include <llvm/IR/Function.h>
-#if LLVM_VERSION_MAJOR >= 14
+#if USE_LLVM_JITLINK
 #include <llvm-c/OrcEE.h>
 #include <llvm/ExecutionEngine/JITLink/EHFrameSupport.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
@@ -45,7 +45,7 @@ LLVMGetFunctionType(LLVMValueRef r)
 	return llvm::wrap(llvm::unwrap<llvm::Function>(r)->getFunctionType());
 }
 
-#if LLVM_VERSION_MAJOR >= 14
+#if USE_LLVM_JITLINK
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(llvm::orc::ExecutionSession, LLVMOrcExecutionSessionRef)
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(llvm::orc::ObjectLayer, LLVMOrcObjectLayerRef)
 

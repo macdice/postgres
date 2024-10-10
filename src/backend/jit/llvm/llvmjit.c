@@ -1168,10 +1168,10 @@ llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *T
 {
 	LLVMOrcObjectLayerRef objlayer;
 
-#if LLVM_VERSION_MAJOR >= 14
+#if USE_LLVM_JITLINK
 	objlayer = LLVMOrcCreateJITLinkObjectLinkingLayer(ES);
 #else
-	objlayer = LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
+	objlayer = LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);	
 
 #if defined(HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER) && HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER
 	if (jit_debugging_support)

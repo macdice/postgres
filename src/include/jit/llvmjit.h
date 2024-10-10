@@ -17,8 +17,12 @@
  */
 #ifdef USE_LLVM
 
+#if LLVM_VERSION_MAJOR >= 20
+#define USE_LLVM_JITLINK
+#endif
+
 #include <llvm-c/Types.h>
-#if LLVM_VERSION_MAJOR >= 14
+#ifdef USE_LLVM_JITLINK
 #include <llvm-c/OrcEE.h>
 #endif
 
@@ -139,7 +143,7 @@ extern LLVMValueRef slot_compile_deform(struct LLVMJitContext *context, TupleDes
 extern LLVMTypeRef LLVMGetFunctionReturnType(LLVMValueRef r);
 extern LLVMTypeRef LLVMGetFunctionType(LLVMValueRef r);
 
-#if LLVM_VERSION_MAJOR >= 14
+#if USE_LLVM_JITLINK
 extern LLVMOrcObjectLayerRef LLVMOrcCreateJITLinkObjectLinkingLayer(LLVMOrcExecutionSessionRef ES);
 #endif
 
