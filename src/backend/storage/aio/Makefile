@@ -9,6 +9,7 @@ top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = \
+	auto_read_stream.o \
 	read_stream.o
 
 include $(top_srcdir)/src/backend/common.mk
