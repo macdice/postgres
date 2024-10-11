@@ -2203,7 +2203,8 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			/* check for interrupts while we're not holding any buffer lock */
 			CHECK_FOR_INTERRUPTS();
 			/* step right one page */
-			so->currPos.buf = _bt_getbuf(rel, blkno, BT_READ);
+			so->currPos.buf = _bt_getbuf_auto(so->auto_stream,
+											  rel, blkno, BT_READ);
 			page = BufferGetPage(so->currPos.buf);
 			opaque = BTPageGetOpaque(page);
 			/* check for deleted page */

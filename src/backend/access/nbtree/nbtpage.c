@@ -857,6 +857,28 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 }
 
 /*
+ * Like _bt_getbuf(), but use auto_stream instead of reading directly.  This
+ * allows I/O to be combined if the blocks happen to be sequential on disk.
+ */
+Buffer
+_bt_getbuf_auto(AutoReadStream *auto_stream,
+				Relation rel,
+				BlockNumber blkno,
+				int access)
+{
+	Buffer		buf;
+
+	Assert(BlockNumberIsValid(blkno));
+
+	/* Read an existing block of the relation */
+	buf = auto_read_buffer(auto_stream, blkno);
+	_bt_lockbuf(rel, buf, access);
+	_bt_checkpage(rel, buf);
+
+	return buf;
+}
+
+/*
  *	_bt_allocbuf() -- Allocate a new block/page.
  *
  * Returns a write-locked buffer containing an unallocated nbtree page.

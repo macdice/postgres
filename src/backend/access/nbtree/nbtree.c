@@ -339,6 +339,9 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	so->killedItems = NULL;		/* until needed */
 	so->numKilled = 0;
 
+	/* XXX defer until it looks like it's worth it? */
+	so->auto_stream = auto_read_stream_begin(NULL, rel, MAIN_FORKNUM);
+
 	/*
 	 * We don't know yet whether the scan will be index-only, so we do not
 	 * allocate the tuple workspace arrays until btrescan.  However, we set up
@@ -428,6 +431,8 @@ btendscan(IndexScanDesc scan)
 
 	so->markItemIndex = -1;
 	BTScanPosUnpinIfPinned(so->markPos);
+
+	auto_read_stream_end(so->auto_stream);
 
 	/* No need to invalidate positions, the RAM is about to be freed. */
 

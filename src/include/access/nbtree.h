@@ -22,6 +22,7 @@
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_index.h"
 #include "lib/stringinfo.h"
+#include "storage/auto_read_stream.h"
 #include "storage/bufmgr.h"
 #include "storage/shm_toc.h"
 
@@ -1056,6 +1057,8 @@ typedef struct BTScanOpaqueData
 	int		   *killedItems;	/* currPos.items indexes of killed items */
 	int			numKilled;		/* number of currently stored items */
 
+	AutoReadStream *auto_stream;
+
 	/*
 	 * If we are doing an index-only scan, these are the tuple storage
 	 * workspaces for the currPos and markPos respectively.  Each is of size
@@ -1248,6 +1251,8 @@ extern void _bt_metaversion(Relation rel, bool *heapkeyspace,
 							bool *allequalimage);
 extern void _bt_checkpage(Relation rel, Buffer buf);
 extern Buffer _bt_getbuf(Relation rel, BlockNumber blkno, int access);
+extern Buffer _bt_getbuf_auto(AutoReadStream *auto_stream,
+							  Relation rel, BlockNumber blkno, int access);
 extern Buffer _bt_allocbuf(Relation rel, Relation heaprel);
 extern Buffer _bt_relandgetbuf(Relation rel, Buffer obuf,
 							   BlockNumber blkno, int access);
