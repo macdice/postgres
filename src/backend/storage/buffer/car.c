@@ -158,7 +158,7 @@ car_init(car_control *car, int objects)
 int
 car_mappings(const car_control *ctl)
 {
-	return car->c * 2;
+	return ctl->c * 2;
 }
 
 /*
