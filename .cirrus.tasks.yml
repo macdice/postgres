@@ -691,8 +691,8 @@ task:
     folder: $CCACHE_DIR
 
   setup_additional_packages_script: |
-    #apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get -y install --reinstall docbook-xsl
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install --reinstall docbook-xml
 
   ###
   # Test that code can be built with gcc/clang without warnings
