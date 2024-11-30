@@ -277,6 +277,9 @@ CreateSharedComments(Oid oid, Oid classoid, const char *comment)
 
 	shdescription = table_open(SharedDescriptionRelationId, RowExclusiveLock);
 
+	if (comment)
+		ValidateClusterCatalogString(shdescription, comment);
+
 	sd = systable_beginscan(shdescription, SharedDescriptionObjIndexId, true,
 							NULL, 2, skey);
 

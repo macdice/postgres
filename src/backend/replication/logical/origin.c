@@ -286,6 +286,8 @@ replorigin_create(const char *roname)
 
 	rel = table_open(ReplicationOriginRelationId, ExclusiveLock);
 
+	ValidateClusterCatalogString(rel, roname);
+
 	for (roident = InvalidOid + 1; roident < PG_UINT16_MAX; roident++)
 	{
 		bool		nulls[Natts_pg_replication_origin];

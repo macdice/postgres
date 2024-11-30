@@ -218,6 +218,8 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 
 		case T_AlterSystemStmt:
 			{
+				AlterSystemStmt *stmt = (AlterSystemStmt *) parsetree;
+
 				/*
 				 * Surprisingly, ALTER SYSTEM meets all our definitions of
 				 * read-only: it changes nothing that affects the output of
@@ -227,8 +229,13 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 				 *
 				 * So, despite the fact that it writes to a file, it's read
 				 * only!
+				 *
+				 * XXX ^ that's about ALTER SYSTEM SET only
 				 */
-				return COMMAND_IS_STRICTLY_READ_ONLY;
+				if (stmt->setstmt)
+					return COMMAND_IS_STRICTLY_READ_ONLY;
+				else
+					return COMMAND_IS_NOT_READ_ONLY;
 			}
 
 		case T_CallStmt:
@@ -868,7 +875,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 		case T_AlterSystemStmt:
 			PreventInTransactionBlock(isTopLevel, "ALTER SYSTEM");
-			AlterSystemSetConfigFile((AlterSystemStmt *) parsetree);
+			AlterSystem((AlterSystemStmt *) parsetree);
 			break;
 
 		case T_VariableSetStmt:

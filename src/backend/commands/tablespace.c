@@ -311,6 +311,8 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	 */
 	rel = table_open(TableSpaceRelationId, RowExclusiveLock);
 
+	ValidateClusterCatalogString(rel, stmt->tablespacename);
+
 	if (IsBinaryUpgrade)
 	{
 		/* Use binary-upgrade override for tablespace oid */
@@ -940,6 +942,8 @@ RenameTableSpace(const char *oldname, const char *newname)
 
 	/* Search pg_tablespace */
 	rel = table_open(TableSpaceRelationId, RowExclusiveLock);
+
+	ValidateClusterCatalogString(rel, newname);
 
 	ScanKeyInit(&entry[0],
 				Anum_pg_tablespace_spcname,

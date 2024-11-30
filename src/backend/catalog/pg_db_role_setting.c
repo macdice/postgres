@@ -46,6 +46,11 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 							  NULL, 2, scankey);
 	tuple = systable_getnext(scan);
 
+	if (setstmt->name)
+		ValidateClusterCatalogString(rel, setstmt->name);
+	if (valuestr)
+		ValidateClusterCatalogString(rel, valuestr);
+
 	/*
 	 * There are three cases:
 	 *

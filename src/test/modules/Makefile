@@ -10,6 +10,7 @@ SUBDIRS = \
 		  delay_execution \
 		  dummy_index_am \
 		  dummy_seclabel \
+		  encoding \
 		  libpq_pipeline \
 		  plsample \
 		  spgist_name_ops \

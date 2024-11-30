@@ -467,6 +467,23 @@ set_locale_and_encoding(void)
 	PQfreemem(datctype_literal);
 	PQfreemem(datlocale_literal);
 
+	/*
+	 * Copy the CLUSTER CATALOG ENCODING.  This will be UNDEFINED if the
+	 * source database is from before v18.
+	 */
+	if (old_cluster.controldata.cluster_catalog_encoding == -1)
+		PQclear(executeQueryOrDie(conn_new_template1,
+								  "ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO UNDEFINED"));
+	else if (old_cluster.controldata.cluster_catalog_encoding == 0)
+		PQclear(executeQueryOrDie(conn_new_template1,
+								  "ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII"));
+	else if (old_cluster.controldata.cluster_catalog_encoding != locale->db_encoding)
+		pg_fatal("Source database has template0 encoding %d, but cluster_catalog_encoding %d",
+				 locale->db_encoding, old_cluster.controldata.cluster_catalog_encoding);
+	else
+		PQclear(executeQueryOrDie(conn_new_template1,
+								  "ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO DATABASE"));
+
 	PQfinish(conn_new_template1);
 
 	check_ok();

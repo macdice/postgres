@@ -31,4 +31,6 @@ extern ObjectAddress ExecAlterOwnerStmt(AlterOwnerStmt *stmt);
 extern void AlterObjectOwner_internal(Oid classId, Oid objectId,
 									  Oid new_ownerId);
 
+extern void AlterSystem(AlterSystemStmt *stmt);
+
 #endif							/* ALTER_H */

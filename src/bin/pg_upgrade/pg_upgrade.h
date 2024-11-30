@@ -245,6 +245,7 @@ typedef struct
 	bool		date_is_int;
 	bool		float8_pass_by_value;
 	uint32		data_checksum_version;
+	int			cluster_catalog_encoding;
 } ControlData;
 
 /*

@@ -552,6 +552,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	bits32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
+	ListCell   *l;
 
 	/*
 	 * Parse and check options.
@@ -618,6 +619,11 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 #endif
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
+
+	ValidateClusterCatalogString(rel, stmt->subname);
+	ValidateClusterCatalogString(rel, stmt->conninfo);
+	foreach(l, stmt->publication)
+		ValidateClusterCatalogString(rel, strVal(lfirst(l)));
 
 	/* Check if name is used */
 	subid = GetSysCacheOid2(SUBSCRIPTIONNAME, Anum_pg_subscription_oid,

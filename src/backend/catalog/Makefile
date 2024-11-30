@@ -17,6 +17,7 @@ OBJS = \
 	aclchk.o \
 	catalog.o \
 	dependency.o \
+	encoding.o \
 	heap.o \
 	index.o \
 	indexing.o \

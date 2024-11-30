@@ -1038,3 +1038,21 @@ AlterObjectOwner_internal(Oid classId, Oid objectId, Oid new_ownerId)
 
 	table_close(rel, RowExclusiveLock);
 }
+
+/*
+ * Main entry point for ALTER SYSTEM command.
+ */
+void
+AlterSystem(AlterSystemStmt *stmt)
+{
+	if (stmt->setstmt)
+	{
+		/* ALTER SYSTEM [RE]SET ... */
+		AlterSystemSetConfigFile(stmt);
+	}
+	else if (stmt->encoding_name)
+	{
+		/* ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ... */
+		AlterSystemSetClusterCatalogEncoding(stmt->encoding_name);
+	}
+}

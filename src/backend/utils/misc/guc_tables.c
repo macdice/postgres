@@ -621,6 +621,7 @@ char	   *role_string;
 /* should be static, but guc.c needs to get at this */
 bool		in_hot_standby_guc;
 
+static char *dummy = "";
 
 /*
  * Displayable names for context types (enum GucContext)
@@ -4811,6 +4812,17 @@ struct config_string ConfigureNamesString[] =
 		&restrict_nonsystem_relation_kind_string,
 		"",
 		check_restrict_nonsystem_relation_kind, assign_restrict_nonsystem_relation_kind, NULL
+	},
+
+	{
+		{"cluster_catalog_encoding", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("The encoding of text in system catalogs that are shared by all databases in the cluster."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_RUNTIME_COMPUTED
+		},
+		&dummy,
+		"",
+		NULL, NULL, show_cluster_catalog_encoding
 	},
 
 	/* End-of-list marker */

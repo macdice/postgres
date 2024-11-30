@@ -4088,6 +4088,7 @@ xl_btree_unlink_page
 xl_btree_update
 xl_btree_vacuum
 xl_clog_truncate
+xl_cluster_catalog_encoding_change
 xl_commit_ts_truncate
 xl_dbase_create_file_copy_rec
 xl_dbase_create_wal_log_rec

@@ -77,7 +77,7 @@ typedef struct CheckPoint
 #define XLOG_END_OF_RECOVERY			0x90
 #define XLOG_FPI_FOR_HINT				0xA0
 #define XLOG_FPI						0xB0
-/* 0xC0 is used in Postgres 9.5-11 */
+#define XLOG_CLUSTER_CATALOG_ENCODING_CHANGE	0xC0
 #define XLOG_OVERWRITE_CONTRECORD		0xD0
 #define XLOG_CHECKPOINT_REDO			0xE0
 
@@ -220,6 +220,9 @@ typedef struct ControlFileData
 
 	/* Are data pages protected by checksums? Zero if no checksum version */
 	uint32		data_checksum_version;
+
+	/* A pg_enc value, or -1 for UNKNOWN. */
+	int			cluster_catalog_encoding;
 
 	/*
 	 * Random nonce, used in authentication requests that need to proceed

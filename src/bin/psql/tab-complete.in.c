@@ -2551,11 +2551,18 @@ match_previous_words(int pattern_id,
 	/* ALTER SYSTEM SET, RESET, RESET ALL */
 	else if (Matches("ALTER", "SYSTEM"))
 		COMPLETE_WITH("SET", "RESET");
-	else if (Matches("ALTER", "SYSTEM", "SET|RESET"))
+	else if (Matches("ALTER", "SYSTEM", "SET"))
+		COMPLETE_WITH_QUERY_VERBATIM_PLUS(Query_for_list_of_alter_system_set_vars,
+										  "CLUSTER CATALOG ENCODING TO");
+	else if (Matches("ALTER", "SYSTEM", "RESET"))
 		COMPLETE_WITH_QUERY_VERBATIM_PLUS(Query_for_list_of_alter_system_set_vars,
 										  "ALL");
+	else if (Matches("ALTER", "SYSTEM", "SET", "CLUSTER"))
+		COMPLETE_WITH("TO", "CATALOG ENCODING TO");
 	else if (Matches("ALTER", "SYSTEM", "SET", MatchAny))
 		COMPLETE_WITH("TO");
+	else if (Matches("ALTER", "SYSTEM", "SET", "CLUSTER", "CATALOG", "ENCODING", "TO"))
+		COMPLETE_WITH("DATABASE", "ASCII", "UNDEFINED");
 	/* ALTER VIEW <name> */
 	else if (Matches("ALTER", "VIEW", MatchAny))
 		COMPLETE_WITH("ALTER COLUMN", "OWNER TO", "RENAME", "RESET", "SET");
@@ -4882,10 +4889,13 @@ match_previous_words(int pattern_id,
 										  "ALL");
 	else if (Matches("SHOW"))
 		COMPLETE_WITH_QUERY_VERBATIM_PLUS(Query_for_list_of_show_vars,
+										  "CLUSTER CATALOG ENCODING",
 										  "SESSION AUTHORIZATION",
 										  "ALL");
 	else if (Matches("SHOW", "SESSION"))
 		COMPLETE_WITH("AUTHORIZATION");
+	else if (Matches("SHOW", "CLUSTER"))
+		COMPLETE_WITH("CATALOG ENCODING");
 	/* Complete "SET TRANSACTION" */
 	else if (Matches("SET", "TRANSACTION"))
 		COMPLETE_WITH("SNAPSHOT", "ISOLATION LEVEL", "READ", "DEFERRABLE", "NOT DEFERRABLE");

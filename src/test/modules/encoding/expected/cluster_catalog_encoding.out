@@ -1,0 +1,208 @@
+-- Exercise the ValidateClusterCatalogString() calls that should cover all
+-- entry points (a few cases have ASCII-only validation of their own and give
+-- slightly different error messages).
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+SHOW CLUSTER CATALOG ENCODING;
+ cluster_catalog_encoding 
+--------------------------
+ ASCII
+(1 row)
+
+-- pg_authid
+CREATE USER regress_astérix;
+ERROR:  the string "regress_astérix" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+CREATE USER regress_fred;
+ALTER USER regress_fred RENAME TO regress_astérix;
+ERROR:  the string "regress_astérix" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+DROP USER regress_fred;
+-- pg_database
+CREATE DATABASE regression_café;
+ERROR:  the string "regression_café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+ALTER DATABASE template1 RENAME TO regression_café;
+ERROR:  the string "regression_café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+CREATE DATABASE regression_ok TEMPLATE template0 LOCALE 'français';
+WARNING:  locale name "français" contains non-ASCII characters
+ERROR:  invalid LC_COLLATE locale name: "français"
+HINT:  If the locale name is specific to ICU, use ICU_LOCALE.
+-- pg_db_role_setting
+CREATE USER regress_fred;
+ALTER ROLE regress_fred SET application_name TO 'café';
+ERROR:  the string "café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+DROP USER regress_fred;
+-- pg_parameter_acl
+-- XXX
+-- pg_replication_origin
+SELECT pg_replication_origin_create('regress_café');
+ERROR:  the string "regress_café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+-- pg_shdescription
+COMMENT ON DATABASE template0 IS 'café';
+ERROR:  the string "café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+-- non-shared objects are OK, because non-shared catalog
+COMMENT ON TABLE pg_catalog.pg_class IS 'café';
+COMMENT ON TABLE pg_catalog.pg_class IS NULL;
+-- pg_shseclabel
+-- XXX
+-- pg_subscription
+CREATE SUBSCRIPTION regress_café CONNECTION 'dbname=crême' PUBLICATION brûlée;
+ERROR:  the string "regress_café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+CREATE SUBSCRIPTION regress_ok   CONNECTION 'dbname=crême' PUBLICATION brûlée;
+ERROR:  the string "dbname=crême" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+CREATE SUBSCRIPTION regress_ok   CONNECTION 'dbname=ok'    PUBLICATION brûlée;
+ERROR:  the string "brûlée" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+CREATE SUBSCRIPTION regress_ok   CONNECTION 'dbname=ok'    PUBLICATION ok      WITH (slot_name = 'café');
+ERROR:  replication slot name "café" contains invalid character
+HINT:  Replication slot names may only contain lower case letters, numbers, and the underscore character.
+CREATE SUBSCRIPTION regress_ok   CONNECTION 'dbname=ok'    PUBLICATION ok      WITH (synchronous_commit = 'café');
+ERROR:  invalid value for parameter "synchronous_commit": "café"
+HINT:  Available values: local, remote_write, remote_apply, on, off.
+CREATE SUBSCRIPTION regress_ok   CONNECTION 'dbname=ok'    PUBLICATION ok      WITH (origin = 'café');
+ERROR:  unrecognized origin value: "café"
+-- pg_tablespace
+SET allow_in_place_tablespaces = 'on';
+CREATE TABLESPACE regress_café LOCATION '';
+ERROR:  the string "regress_café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+CREATE TABLESPACE regress_ok LOCATION '';
+ALTER TABLESPACE regress_ok RENAME TO regress_café;
+ERROR:  the string "regress_café" contains invalid characters
+DETAIL:  CLUSTER CATALOG ENCODING is set to ASCII.
+HINT:  Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.
+DROP TABLESPACE regress_ok;
+-- Check that we can create a new database with a different encoding,
+-- while the shared catalog encoding is ASCII
+CREATE DATABASE regression_latin1 TEMPLATE template0 LOCALE 'C' ENCODING LATIN1;
+-- Check that we can't change the shared catalog encoding to UTF8, because that
+-- LATIN1 database is in the way, then drop it so we can.
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO DATABASE;
+ERROR:  database "regression_latin1" has incompatible encoding LATIN1
+DROP DATABASE regression_latin1;
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO DATABASE;
+-- Test that we can now do each of those things that failed before, and that
+-- those things block us from going back to ASCII.
+-- pg_authid
+CREATE USER regress_astérix;
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  existing role name "regress_astérix" contains invalid characters
+HINT:  Consider ALTER ROLE ... RENAME TO ... using ASCII characters.
+DROP USER regress_astérix;
+-- pg_database
+CREATE DATABASE regression_café;
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  existing database name "regression_café" contains invalid characters
+HINT:  Consider ALTER DATABASE ... RENAME TO ... using ASCII characters.
+DROP DATABASE regression_café;
+-- but we can't make a LATIN1 database while we have UTF8 catalogs
+CREATE DATABASE regression_latin1 TEMPLATE template0 LOCALE 'C' ENCODING LATIN1;
+ERROR:  encoding "LATIN1" is not compatible with CLUSTER CATALOG ENCODING "UTF8"
+HINT:  Consider ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII.
+-- pg_db_role_setting
+CREATE USER regress_fred;
+ALTER ROLE regress_fred SET application_name TO 'café';
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  role "regress_fred" has setting "application_name" with value "café" that contains invalid characters
+HINT:  Consider ALTER ROLE ... SET ... TO ... using ASCII characters.
+DROP USER regress_fred;
+-- pg_parameter_acl
+-- XXX
+-- pg_replication_origin
+SELECT pg_replication_origin_create('regress_café');
+ pg_replication_origin_create 
+------------------------------
+                            1
+(1 row)
+
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  replication origin "regress_café" contains invalid characters
+HINT:  Consider recreating the replication origin using ASCII characters.
+SELECT pg_replication_origin_drop('regress_café');
+ pg_replication_origin_drop 
+----------------------------
+ 
+(1 row)
+
+-- pg_shdescription
+COMMENT ON DATABASE template0 IS 'café';
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  comment "café" on a shared database object contains invalid characters
+HINT:  Consider COMMENT ON ... IS ... using ASCII characters.
+COMMENT ON DATABASE template0 IS 'unmodifiable empty database';
+-- pg_shseclabel
+-- XXX
+-- pg_subscription
+-- XXX
+-- pg_tablespace
+CREATE TABLESPACE regress_café LOCATION '';
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  existing tablespace name "regress_café" contains invalid characters
+HINT:  Consider ALTER TABLESPACE ... RENAME TO ... using ASCII characters.
+DROP TABLESPACE regress_café;
+-- We dropped everything that was in the way, so we should be able to go back
+-- to ASCII now.
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+-- Try out UNDEFINED mode, which is the only way to have a non-ASCII database
+-- name and mutiple encodings at the same time
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO UNDEFINED;
+SHOW CLUSTER CATALOG ENCODING;
+ cluster_catalog_encoding 
+--------------------------
+ UNDEFINED
+(1 row)
+
+CREATE DATABASE regression_café ENCODING UTF8;
+CREATE DATABASE regression_latin1 TEMPLATE template0 LOCALE 'C' ENCODING LATIN1;
+-- We can't switch to ASCII from this state
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  existing database name "regression_café" contains invalid characters
+HINT:  Consider ALTER DATABASE ... RENAME TO ... using ASCII characters.
+SHOW CLUSTER CATALOG ENCODING;
+ cluster_catalog_encoding 
+--------------------------
+ UNDEFINED
+(1 row)
+
+-- We also can't switch to UTF8 from this state
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO DATABASE;
+ERROR:  database "regression_latin1" has incompatible encoding LATIN1
+SHOW CLUSTER CATALOG ENCODING;
+ cluster_catalog_encoding 
+--------------------------
+ UNDEFINED
+(1 row)
+
+-- If we get rid of the LATIN1 database, we can go to UTF8
+DROP DATABASE regression_latin1;
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO DATABASE;
+SHOW CLUSTER CATALOG ENCODING;
+ cluster_catalog_encoding 
+--------------------------
+ DATABASE
+(1 row)
+
+-- We still can't go back to ASCII unless we also get rid of the non-ASCII
+-- database name.
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;
+ERROR:  existing database name "regression_café" contains invalid characters
+HINT:  Consider ALTER DATABASE ... RENAME TO ... using ASCII characters.
+DROP DATABASE regression_café;
+ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII;

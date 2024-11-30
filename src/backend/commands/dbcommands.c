@@ -1429,6 +1429,32 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	Assert((dblocprovider != COLLPROVIDER_LIBC && dblocale) ||
 		   (dblocprovider == COLLPROVIDER_LIBC && !dblocale));
 
+	/*
+	 * Check encoding of strings going into shared catalog.  Locales have
+	 * already been verified as ASCII by checklocale() so we skip those.
+	 */
+	ValidateClusterCatalogString(pg_database_rel, dbname);
+	if (dblocale)
+		ValidateClusterCatalogString(pg_database_rel, dblocale);
+	if (dbicurules)
+		ValidateClusterCatalogString(pg_database_rel, dbicurules);
+	if (dbcollversion)
+		ValidateClusterCatalogString(pg_database_rel, dbcollversion);
+
+	/*
+	 * Check encoding of the contents of the data, for compatibility with the
+	 * shared catalogs.
+	 */
+	if (GetClusterCatalogEncoding() != -1 &&
+		GetClusterCatalogEncoding() != PG_SQL_ASCII &&
+		GetClusterCatalogEncoding() != encoding)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("encoding \"%s\" is not compatible with CLUSTER CATALOG ENCODING \"%s\"",
+						pg_encoding_to_char(encoding),
+						pg_encoding_to_char(GetClusterCatalogEncoding())),
+				 errhint("Consider ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII.")));
+
 	/* Form tuple */
 	new_record[Anum_pg_database_oid - 1] = ObjectIdGetDatum(dboid);
 	new_record[Anum_pg_database_datname - 1] =
@@ -1888,6 +1914,8 @@ RenameDatabase(const char *oldname, const char *newname)
 	 * need this for the same reasons as DROP DATABASE.
 	 */
 	rel = table_open(DatabaseRelationId, RowExclusiveLock);
+
+	ValidateClusterCatalogString(rel, newname);
 
 	if (!get_db_info(oldname, AccessExclusiveLock, &db_id, NULL, NULL, NULL,
 					 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))

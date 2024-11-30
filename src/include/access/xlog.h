@@ -234,7 +234,8 @@ extern bool DataChecksumsEnabled(void);
 extern XLogRecPtr GetFakeLSNForUnloggedRel(void);
 extern Size XLOGShmemSize(void);
 extern void XLOGShmemInit(void);
-extern void BootStrapXLOG(uint32 data_checksum_version);
+extern void BootStrapXLOG(int cluster_catalog_encoding,
+						  uint32 data_checksum_version);
 extern void InitializeWalConsistencyChecking(void);
 extern void LocalProcessControlFile(bool reset);
 extern WalLevel GetActiveWalLevelOnStandby(void);
@@ -253,6 +254,8 @@ extern XLogRecPtr GetFlushRecPtr(TimeLineID *insertTLI);
 extern TimeLineID GetWALInsertionTimeLine(void);
 extern TimeLineID GetWALInsertionTimeLineIfSet(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
+extern int	GetClusterCatalogEncoding(void);
+extern void SetClusterCatalogEncoding(int encoding);
 
 extern void SetWalWriterSleeping(bool sleeping);
 

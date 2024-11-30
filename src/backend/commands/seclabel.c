@@ -363,6 +363,9 @@ SetSharedSecurityLabel(const ObjectAddress *object,
 
 	pg_shseclabel = table_open(SharedSecLabelRelationId, RowExclusiveLock);
 
+	ValidateClusterCatalogString(pg_shseclabel, provider);
+	ValidateClusterCatalogString(pg_shseclabel, label);
+
 	scan = systable_beginscan(pg_shseclabel, SharedSecLabelObjectIndexId, true,
 							  NULL, 3, keys);
 

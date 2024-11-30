@@ -202,6 +202,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	int			flag;
 	char	   *userDoption = NULL;
 	uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
+	int			cluster_catalog_encoding = -1;
 
 	Assert(!IsUnderPostmaster);
 
@@ -217,7 +218,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:C:d:D:Fkr:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -278,6 +279,9 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 									PGC_POSTMASTER, PGC_S_ARGV);
 					pfree(debugstr);
 				}
+				break;
+			case 'C':
+				cluster_catalog_encoding = atoi(optarg);
 				break;
 			case 'F':
 				SetConfigOption("fsync", "false", PGC_POSTMASTER, PGC_S_ARGV);
@@ -354,7 +358,8 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	BaseInit();
 
 	bootstrap_signals();
-	BootStrapXLOG(bootstrap_data_checksum_version);
+	BootStrapXLOG(cluster_catalog_encoding,
+				  bootstrap_data_checksum_version);
 
 	/*
 	 * To ensure that src/common/link-canary.c is linked into the backend, we

@@ -2341,6 +2341,8 @@ regression_main(int argc, char *argv[],
 				appendStringInfoString(&cmd, " --debug");
 			if (nolocale)
 				appendStringInfoString(&cmd, " --no-locale");
+			if (encoding)
+				appendStringInfo(&cmd, " --encoding %s", encoding);
 			if (initdb_extra_opts_env)
 				appendStringInfo(&cmd, " %s", initdb_extra_opts_env);
 			appendStringInfo(&cmd, " > \"%s/log/initdb.log\" 2>&1", outputdir);

@@ -3841,6 +3841,7 @@ typedef struct AlterSystemStmt
 {
 	NodeTag		type;
 	VariableSetStmt *setstmt;	/* SET subcommand */
+	const char *encoding_name;	/* CATALOG ENCODING subcommand */
 } AlterSystemStmt;
 
 /* ----------------------

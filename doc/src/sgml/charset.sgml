@@ -2222,7 +2222,10 @@ initdb -E EUC_JP
 
     <para>
      You can specify a non-default encoding at database creation time,
-     provided that the encoding is compatible with the selected locale:
+     provided that the encoding is compatible with the selected locale,
+     and <literal>CLUSTER CATALOG ENCODING</literal> is set to
+     <literal>ASCII</literal> (or <literal>UNDEFINED</literal>, not
+     recommended).
 
 <screen>
 createdb -E EUC_KR -T template0 --lc-collate=ko_KR.euckr --lc-ctype=ko_KR.euckr korean
@@ -2398,6 +2401,67 @@ RESET client_encoding;
      though the client character set were the same as the server's.)
      Just as for the server, use of <literal>SQL_ASCII</literal> is unwise
      unless you are working with all-ASCII data.
+    </para>
+   </sect2>
+
+   <sect2 id="cluster-catalog-encoding">
+    <title>Character Sets and Catalogs Shared by the Whole Cluster</title>
+    <para>
+     The names of databases, roles and a small number of other object type
+     are
+     stored in <link linkend="catalogs-overview">shared catalogs</link>,
+     and are visible from all the databases in a cluster.
+     Since databases can use different encodings, a trade-off is required to
+     make sure that they use compatible character sets.
+     Two main configurations are available, controlled by the system setting
+     <literal>CLUSTER CATALOG ENCODING</literal>:
+
+     <itemizedlist>
+      <listitem>
+       <para>
+        <literal>DATABASE</literal>:  To allow non-ASCII characters to be used in
+        database and role names, all databases must use the same encoding.
+        This is the default setting used by <command>initdb</command>.
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        <literal>ASCII</literal>: To allow databases with different
+        encodings to co-exist, the shared catalogs must use only ASCII
+        characters.  It is a subset of all supported server encodings, so
+        conforming strings are also valid in every database's encoding without
+        conversion (or risk of conversion failure).
+       </para>
+      </listitem>
+     </itemizedlist>
+    </para>
+    <para>
+     A third setting <literal>UNDEFINED</literal> allows
+     databases with different encodings to co-exist while also allowing
+     non-ASCII characters in database and role names.
+     Corruption can occcur when in this mode.  It is provided to
+     support upgrading from older PostgreSQL releases, but is not
+     recommended for new deployments.
+    </para>
+    <para>
+     <literal>CLUSTER CATALOG ENCODING</literal> can be set with the
+     <xref linkend="app-initdb-option-cluster-catalog-encoding"/> option to <command>initdb</command>, or
+     changed later using the <xref linkend="sql-altersystem"/>
+     command.  To change to
+     <literal>ASCII</literal>, shared catalogs must have no existing non-ASCII
+     characters.
+     To change to <literal>DATABASE</literal> encoding, all existing databases must be using
+     that encoding.
+     It is always possible to change to <literal>UNDEFINED</literal> without restriction,
+     but not recommended.
+    </para>
+    <para>
+     Note that when <literal>CLUSTER CATALOG ENCODING</literal> is set to
+     <literal>ASCII</literal>,
+     it only restricts the names and properties of a small number of kinds of database
+     objects that have cluster-wide visibility.  Most objects such as tables,
+     indexes and functions are stored in per-database catalogs and can always
+     use the full character set of the database's encoding.
     </para>
    </sect2>
 
