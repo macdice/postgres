@@ -66,9 +66,9 @@ RestoreArchivedFile(const char *path, const char *xlogfname,
 		if (stat(xlogpath, &stat_buf) == 0)
 		{
 			if (expectedSize > 0 && stat_buf.st_size != expectedSize)
-				pg_fatal("unexpected file size for \"%s\": %lld instead of %lld",
-						 xlogfname, (long long int) stat_buf.st_size,
-						 (long long int) expectedSize);
+				pg_fatal("unexpected file size for \"%s\": %" PRId64 " instead of %" PRId64,
+						 xlogfname, (pgoff_t) stat_buf.st_size,
+						 (pgoff_t) expectedSize);
 			else
 			{
 				int			xlogfd = open(xlogpath, O_RDONLY | PG_BINARY, 0);

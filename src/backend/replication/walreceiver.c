@@ -387,8 +387,8 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 		if (is_temp_slot)
 		{
 			snprintf(slotname, sizeof(slotname),
-					 "pg_walreceiver_%lld",
-					 (long long int) walrcv_get_backend_pid(wrconn));
+					 "pg_walreceiver_%" PRId64,
+					 (int64) walrcv_get_backend_pid(wrconn));
 
 			walrcv_create_slot(wrconn, slotname, true, false, false, 0, NULL);
 

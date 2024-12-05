@@ -210,10 +210,10 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 				else
 					elevel = FATAL;
 				ereport(elevel,
-						(errmsg("archive file \"%s\" has wrong size: %lld instead of %lld",
+						(errmsg("archive file \"%s\" has wrong size: %" PRId64 " instead of %" PRId64,
 								xlogfname,
-								(long long int) stat_buf.st_size,
-								(long long int) expectedSize)));
+								(pgoff_t) stat_buf.st_size,
+								(pgoff_t) expectedSize)));
 				return false;
 			}
 			else

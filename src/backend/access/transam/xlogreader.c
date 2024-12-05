@@ -769,9 +769,9 @@ restart:
 				total_len != (pageHeader->xlp_rem_len + gotlen))
 			{
 				report_invalid_record(state,
-									  "invalid contrecord length %u (expected %lld) at %X/%X",
+									  "invalid contrecord length %u (expected %u) at %X/%X",
 									  pageHeader->xlp_rem_len,
-									  ((long long) total_len) - gotlen,
+									  total_len - gotlen,
 									  LSN_FORMAT_ARGS(RecPtr));
 				goto err;
 			}
@@ -1272,9 +1272,9 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 			longhdr->xlp_sysid != state->system_identifier)
 		{
 			report_invalid_record(state,
-								  "WAL file is from different database system: WAL file database system identifier is %llu, pg_control database system identifier is %llu",
-								  (unsigned long long) longhdr->xlp_sysid,
-								  (unsigned long long) state->system_identifier);
+								  "WAL file is from different database system: WAL file database system identifier is %" PRIu64 ", pg_control database system identifier is %" PRIu64,
+								  longhdr->xlp_sysid,
+								  state->system_identifier);
 			return false;
 		}
 		else if (longhdr->xlp_seg_size != state->segcxt.ws_segsize)

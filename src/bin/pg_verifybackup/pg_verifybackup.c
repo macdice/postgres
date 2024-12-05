@@ -438,8 +438,8 @@ parse_manifest_file(char *manifest_path)
 			if (rc < 0)
 				pg_fatal("could not read file \"%s\": %m", manifest_path);
 			else
-				pg_fatal("could not read file \"%s\": read %d of %lld",
-						 manifest_path, rc, (long long int) statbuf.st_size);
+				pg_fatal("could not read file \"%s\": read %d of %" PRId64,
+						 manifest_path, rc, (pgoff_t) statbuf.st_size);
 		}
 
 		/* Close the manifest file. */
@@ -476,10 +476,10 @@ parse_manifest_file(char *manifest_path)
 				if (rc < 0)
 					pg_fatal("could not read file \"%s\": %m", manifest_path);
 				else
-					pg_fatal("could not read file \"%s\": read %lld of %lld",
+					pg_fatal("could not read file \"%s\": read %" PRId64 " of %" PRId64,
 							 manifest_path,
-							 (long long int) (statbuf.st_size + rc - bytes_left),
-							 (long long int) statbuf.st_size);
+							 (pgoff_t) (statbuf.st_size + rc - bytes_left),
+							 (pgoff_t) statbuf.st_size);
 			}
 			bytes_left -= rc;
 			json_parse_manifest_incremental_chunk(inc_state, buffer, rc,
@@ -719,9 +719,9 @@ verify_plain_backup_file(verifier_context *context, char *relpath,
 	if (m->size != sb.st_size)
 	{
 		report_backup_error(context,
-							"\"%s\" has size %llu on disk but size %llu in the manifest",
-							relpath, (unsigned long long) sb.st_size,
-							(unsigned long long) m->size);
+							"\"%s\" has size %" PRId64 " on disk but size %" PRId64 " in the manifest",
+							relpath, (pgoff_t) sb.st_size,
+							m->size);
 		m->bad = true;
 	}
 
@@ -770,10 +770,10 @@ verify_control_file(const char *controlpath, uint64 manifest_system_identifier)
 
 	/* System identifiers should match. */
 	if (manifest_system_identifier != control_file->system_identifier)
-		report_fatal_error("%s: manifest system identifier is %llu, but control file has %llu",
+		report_fatal_error("%s: manifest system identifier is %" PRIu64 ", but control file has %" PRIu64,
 						   controlpath,
-						   (unsigned long long) manifest_system_identifier,
-						   (unsigned long long) control_file->system_identifier);
+						   manifest_system_identifier,
+						   control_file->system_identifier);
 
 	/* Release memory. */
 	pfree(control_file);
@@ -1165,9 +1165,8 @@ verify_file_checksum(verifier_context *context, manifest_file *m,
 	if (bytes_read != m->size)
 	{
 		report_backup_error(context,
-							"file \"%s\" should contain %llu bytes, but read %llu bytes",
-							relpath, (unsigned long long) m->size,
-							(unsigned long long) bytes_read);
+							"file \"%s\" should contain %" PRIu64 " bytes, but read %" PRIu64,
+							relpath, m->size, bytes_read);
 		return;
 	}
 

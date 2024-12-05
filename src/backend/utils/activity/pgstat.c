@@ -1684,9 +1684,9 @@ pgstat_write_statsfile(XLogRecPtr redo)
 		 */
 		if (!pgstat_is_kind_valid(ps->key.kind))
 		{
-			elog(WARNING, "found unknown stats entry %u/%u/%llu",
+			elog(WARNING, "found unknown stats entry %u/%u/%" PRIu64,
 				 ps->key.kind, ps->key.dboid,
-				 (unsigned long long) ps->key.objid);
+				 ps->key.objid);
 			continue;
 		}
 
@@ -1926,9 +1926,9 @@ pgstat_read_statsfile(XLogRecPtr redo)
 
 						if (!pgstat_is_kind_valid(key.kind))
 						{
-							elog(WARNING, "invalid stats kind for entry %u/%u/%llu of type %c",
+							elog(WARNING, "invalid stats kind for entry %u/%u/%" PRIu64 " of type %c",
 								 key.kind, key.dboid,
-								 (unsigned long long) key.objid, t);
+								 key.objid, t);
 							goto error;
 						}
 					}
@@ -1999,9 +1999,9 @@ pgstat_read_statsfile(XLogRecPtr redo)
 					if (found)
 					{
 						dshash_release_lock(pgStatLocal.shared_hash, p);
-						elog(WARNING, "found duplicate stats entry %u/%u/%llu of type %c",
+						elog(WARNING, "found duplicate stats entry %u/%u/%" PRIu64 " of type %c",
 							 key.kind, key.dboid,
-							 (unsigned long long) key.objid, t);
+							 key.objid, t);
 						goto error;
 					}
 
@@ -2012,9 +2012,9 @@ pgstat_read_statsfile(XLogRecPtr redo)
 									pgstat_get_entry_data(key.kind, header),
 									pgstat_get_entry_len(key.kind)))
 					{
-						elog(WARNING, "could not read data for entry %u/%u/%llu of type %c",
+						elog(WARNING, "could not read data for entry %u/%u/%" PRIu64 " of type %c",
 							 key.kind, key.dboid,
-							 (unsigned long long) key.objid, t);
+							 key.objid, t);
 						goto error;
 					}
 

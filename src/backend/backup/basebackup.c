@@ -123,7 +123,7 @@ static ssize_t basebackup_read_file(int fd, char *buf, size_t nbytes, off_t offs
 static bool backup_started_in_recovery = false;
 
 /* Total number of checksum failures during base backup. */
-static long long int total_checksum_failures;
+static int64 total_checksum_failures;
 
 /* Do not verify checksums. */
 static bool noverify_checksums = false;
@@ -655,8 +655,8 @@ perform_base_backup(basebackup_options *opt, bbsink *sink,
 	{
 		if (total_checksum_failures > 1)
 			ereport(WARNING,
-					(errmsg_plural("%lld total checksum verification failure",
-								   "%lld total checksum verification failures",
+					(errmsg_plural("%" PRId64 " total checksum verification failure",
+								   "%" PRId64 " total checksum verification failures",
 								   total_checksum_failures,
 								   total_checksum_failures)));
 

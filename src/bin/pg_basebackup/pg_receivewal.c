@@ -320,8 +320,8 @@ FindStreamingStart(uint32 *tli)
 
 			if (statbuf.st_size != WalSegSz)
 			{
-				pg_log_warning("segment file \"%s\" has incorrect size %lld, skipping",
-							   dirent->d_name, (long long int) statbuf.st_size);
+				pg_log_warning("segment file \"%s\" has incorrect size %" PRId64 ", skipping",
+							   dirent->d_name, (pgoff_t) statbuf.st_size);
 				continue;
 			}
 		}

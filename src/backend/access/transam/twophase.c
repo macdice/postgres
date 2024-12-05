@@ -1326,10 +1326,10 @@ ReadTwoPhaseFile(TransactionId xid, bool missing_ok)
 		stat.st_size > MaxAllocSize)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg_plural("incorrect size of file \"%s\": %lld byte",
-							   "incorrect size of file \"%s\": %lld bytes",
-							   (long long int) stat.st_size, path,
-							   (long long int) stat.st_size)));
+				 errmsg_plural("incorrect size of file \"%s\": %" PRId64 " byte",
+							   "incorrect size of file \"%s\": %" PRId64 " bytes",
+							   (pgoff_t) stat.st_size, path,
+							   (pgoff_t) stat.st_size)));
 
 	crc_offset = stat.st_size - sizeof(pg_crc32c);
 	if (crc_offset != MAXALIGN(crc_offset))
@@ -1353,8 +1353,8 @@ ReadTwoPhaseFile(TransactionId xid, bool missing_ok)
 					 errmsg("could not read file \"%s\": %m", path)));
 		else
 			ereport(ERROR,
-					(errmsg("could not read file \"%s\": read %d of %lld",
-							path, r, (long long int) stat.st_size)));
+					(errmsg("could not read file \"%s\": read %d of %" PRId64,
+							path, r, (pgoff_t) stat.st_size)));
 	}
 
 	pgstat_report_wait_end();

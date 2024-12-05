@@ -598,8 +598,7 @@ get_primary_sysid(const char *conninfo)
 
 	sysid = strtou64(PQgetvalue(res, 0, 0), NULL, 10);
 
-	pg_log_info("system identifier is %llu on publisher",
-				(unsigned long long) sysid);
+	pg_log_info("system identifier is %" PRIu64 " on publisher", sysid);
 
 	PQclear(res);
 	disconnect_database(conn, false);
@@ -627,8 +626,7 @@ get_standby_sysid(const char *datadir)
 
 	sysid = cf->system_identifier;
 
-	pg_log_info("system identifier is %llu on subscriber",
-				(unsigned long long) sysid);
+	pg_log_info("system identifier is %" PRIu64 " on subscriber", sysid);
 
 	pg_free(cf);
 
@@ -668,8 +666,8 @@ modify_subscriber_sysid(const struct CreateSubscriberOptions *opt)
 	if (!dry_run)
 		update_controlfile(subscriber_dir, cf, true);
 
-	pg_log_info("system identifier is %llu on subscriber",
-				(unsigned long long) cf->system_identifier);
+	pg_log_info("system identifier is %" PRIu64 " on subscriber",
+				cf->system_identifier);
 
 	pg_log_info("running pg_resetwal on the subscriber");
 

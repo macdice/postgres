@@ -160,8 +160,8 @@ load_backup_manifest(char *backup_directory)
 			if (rc < 0)
 				pg_fatal("could not read file \"%s\": %m", pathname);
 			else
-				pg_fatal("could not read file \"%s\": read %d of %lld",
-						 pathname, rc, (long long int) statbuf.st_size);
+				pg_fatal("could not read file \"%s\": read %d of %" PRId64,
+						 pathname, rc, (pgoff_t) statbuf.st_size);
 		}
 
 		/* Close the manifest file. */
@@ -198,10 +198,10 @@ load_backup_manifest(char *backup_directory)
 				if (rc < 0)
 					pg_fatal("could not read file \"%s\": %m", pathname);
 				else
-					pg_fatal("could not read file \"%s\": read %lld of %lld",
+					pg_fatal("could not read file \"%s\": read %" PRId64 " of %" PRId64,
 							 pathname,
-							 (long long int) (statbuf.st_size + rc - bytes_left),
-							 (long long int) statbuf.st_size);
+							 (pgoff_t) (statbuf.st_size + rc - bytes_left),
+							 (pgoff_t) statbuf.st_size);
 			}
 			bytes_left -= rc;
 			json_parse_manifest_incremental_chunk(inc_state, buffer, rc, bytes_left == 0);

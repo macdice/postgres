@@ -1048,8 +1048,8 @@ _tarAddFile(ArchiveHandle *AH, TAR_MEMBER *th)
 		pg_fatal("could not close temporary file: %m");
 
 	if (len != th->fileLen)
-		pg_fatal("actual file length (%lld) does not match expected (%lld)",
-				 (long long) len, (long long) th->fileLen);
+		pg_fatal("actual file length (%" PRId64 ") does not match expected (%" PRId64 ")",
+				 len, th->fileLen);
 
 	pad = tarPaddingBytesRequired(len);
 	for (i = 0; i < pad; i++)
@@ -1079,14 +1079,14 @@ _tarPositionTo(ArchiveHandle *AH, const char *filename)
 	/* Go to end of current file, if any */
 	if (ctx->tarFHpos != 0)
 	{
-		pg_log_debug("moving from position %lld to next member at file position %lld",
-					 (long long) ctx->tarFHpos, (long long) ctx->tarNextMember);
+		pg_log_debug("moving from position %" PRId64 " to next member at file position %" PRId64,
+					 ctx->tarFHpos, ctx->tarNextMember);
 
 		while (ctx->tarFHpos < ctx->tarNextMember)
 			_tarReadRaw(AH, &c, 1, NULL, ctx->tarFH);
 	}
 
-	pg_log_debug("now at file position %lld", (long long) ctx->tarFHpos);
+	pg_log_debug("now at file position %" PRId64, ctx->tarFHpos);
 
 	/* We are at the start of the file, or at the next member */
 
@@ -1194,12 +1194,12 @@ _tarGetHeader(ArchiveHandle *AH, TAR_MEMBER *th)
 
 	len = read_tar_number(&h[TAR_OFFSET_SIZE], 12);
 
-	pg_log_debug("TOC Entry %s at %llu (length %llu, checksum %d)",
-				 tag, (unsigned long long) hPos, (unsigned long long) len, sum);
+	pg_log_debug("TOC Entry %s at %" PRIu64 " (length %" PRIu64 ", checksum %d)",
+				 tag, hPos, len, sum);
 
 	if (chk != sum)
-		pg_fatal("corrupt tar header found in %s (expected %d, computed %d) file position %llu",
-				 tag, sum, chk, (unsigned long long) ftello(ctx->tarFH));
+		pg_fatal("corrupt tar header found in %s (expected %d, computed %d) file position %" PRIu64,
+				 tag, sum, chk, ftello(ctx->tarFH));
 
 	th->targetFile = pg_strdup(tag);
 	th->fileLen = len;

@@ -1186,7 +1186,7 @@ test_pipelined_insert(PGconn *conn, int n_rows)
 			{
 				snprintf(insert_param_0, MAXINTLEN, "%d", rows_to_send);
 				/* use up some buffer space with a wide value */
-				snprintf(insert_param_1, MAXINT8LEN, "%lld", 1LL << 62);
+				snprintf(insert_param_1, MAXINT8LEN, "%" PRId64, UINT64_C(1) << 62);
 
 				if (PQsendQueryPrepared(conn, "my_insert",
 										2, insert_params, NULL, NULL, 0) == 1)
