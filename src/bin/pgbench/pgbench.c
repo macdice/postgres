@@ -6201,7 +6201,7 @@ parseScriptWeight(const char *option, char **script)
 	if ((sep = strrchr(option, WSEP)))
 	{
 		int			namelen = sep - option;
-		long		wtmp;
+		int64		wtmp;
 		char	   *badp;
 
 		/* generate the script name */
@@ -6211,12 +6211,12 @@ parseScriptWeight(const char *option, char **script)
 
 		/* process digits of the weight spec */
 		errno = 0;
-		wtmp = strtol(sep + 1, &badp, 10);
+		wtmp = strtoi64(sep + 1, &badp, 10);
 		if (errno != 0 || badp == sep + 1 || *badp != '\0')
 			pg_fatal("invalid weight specification: %s", sep);
 		if (wtmp > INT_MAX || wtmp < 0)
-			pg_fatal("weight specification out of range (0 .. %d): %lld",
-					 INT_MAX, (long long) wtmp);
+			pg_fatal("weight specification out of range (0 .. %d): %" PRId64,
+					 INT_MAX, wtmp);
 		weight = wtmp;
 	}
 	else
