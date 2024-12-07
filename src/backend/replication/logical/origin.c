@@ -286,7 +286,7 @@ replorigin_create(const char *roname)
 
 	rel = table_open(ReplicationOriginRelationId, ExclusiveLock);
 
-	ValidateClusterCatalogString(rel, roname);
+	ValidateSharedCatalogString(rel, roname);
 
 	for (roident = InvalidOid + 1; roident < PG_UINT16_MAX; roident++)
 	{

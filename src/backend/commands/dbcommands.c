@@ -1433,27 +1433,27 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 * Check encoding of strings going into shared catalog.  Locales have
 	 * already been verified as ASCII by checklocale() so we skip those.
 	 */
-	ValidateClusterCatalogString(pg_database_rel, dbname);
+	ValidateSharedCatalogString(pg_database_rel, dbname);
 	if (dblocale)
-		ValidateClusterCatalogString(pg_database_rel, dblocale);
+		ValidateSharedCatalogString(pg_database_rel, dblocale);
 	if (dbicurules)
-		ValidateClusterCatalogString(pg_database_rel, dbicurules);
+		ValidateSharedCatalogString(pg_database_rel, dbicurules);
 	if (dbcollversion)
-		ValidateClusterCatalogString(pg_database_rel, dbcollversion);
+		ValidateSharedCatalogString(pg_database_rel, dbcollversion);
 
 	/*
 	 * Check encoding of the contents of the data, for compatibility with the
 	 * shared catalogs.
 	 */
-	if (GetClusterCatalogEncoding() != -1 &&
-		GetClusterCatalogEncoding() != PG_SQL_ASCII &&
-		GetClusterCatalogEncoding() != encoding)
+	if (GetClusterEncoding() != -1 &&
+		GetClusterEncoding() != PG_SQL_ASCII &&
+		GetClusterEncoding() != encoding)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("encoding \"%s\" is not compatible with CLUSTER CATALOG ENCODING \"%s\"",
+				 errmsg("encoding \"%s\" is not compatible with CLUSTER ENCODING \"%s\"",
 						pg_encoding_to_char(encoding),
-						pg_encoding_to_char(GetClusterCatalogEncoding())),
-				 errhint("Consider ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ASCII.")));
+						pg_encoding_to_char(GetClusterEncoding())),
+				 errhint("Consider ALTER SYSTEM SET CLUSTER ENCODING TO ASCII.")));
 
 	/* Form tuple */
 	new_record[Anum_pg_database_oid - 1] = ObjectIdGetDatum(dboid);
@@ -1915,7 +1915,7 @@ RenameDatabase(const char *oldname, const char *newname)
 	 */
 	rel = table_open(DatabaseRelationId, RowExclusiveLock);
 
-	ValidateClusterCatalogString(rel, newname);
+	ValidateSharedCatalogString(rel, newname);
 
 	if (!get_db_info(oldname, AccessExclusiveLock, &db_id, NULL, NULL, NULL,
 					 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))

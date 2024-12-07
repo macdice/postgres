@@ -2553,12 +2553,12 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH("SET", "RESET");
 	else if (Matches("ALTER", "SYSTEM", "SET"))
 		COMPLETE_WITH_QUERY_VERBATIM_PLUS(Query_for_list_of_alter_system_set_vars,
-										  "CLUSTER CATALOG ENCODING TO");
+										  "CLUSTER ENCODING TO");
 	else if (Matches("ALTER", "SYSTEM", "RESET"))
 		COMPLETE_WITH_QUERY_VERBATIM_PLUS(Query_for_list_of_alter_system_set_vars,
 										  "ALL");
 	else if (Matches("ALTER", "SYSTEM", "SET", "CLUSTER"))
-		COMPLETE_WITH("TO", "CATALOG ENCODING TO");
+		COMPLETE_WITH("ENCODING TO");
 	else if (Matches("ALTER", "SYSTEM", "SET", MatchAny))
 		COMPLETE_WITH("TO");
 	else if (Matches("ALTER", "SYSTEM", "SET", "CLUSTER", "CATALOG", "ENCODING", "TO"))
@@ -4889,13 +4889,13 @@ match_previous_words(int pattern_id,
 										  "ALL");
 	else if (Matches("SHOW"))
 		COMPLETE_WITH_QUERY_VERBATIM_PLUS(Query_for_list_of_show_vars,
-										  "CLUSTER CATALOG ENCODING",
+										  "CLUSTER ENCODING",
 										  "SESSION AUTHORIZATION",
 										  "ALL");
 	else if (Matches("SHOW", "SESSION"))
 		COMPLETE_WITH("AUTHORIZATION");
 	else if (Matches("SHOW", "CLUSTER"))
-		COMPLETE_WITH("CATALOG ENCODING");
+		COMPLETE_WITH("ENCODING");
 	/* Complete "SET TRANSACTION" */
 	else if (Matches("SET", "TRANSACTION"))
 		COMPLETE_WITH("SNAPSHOT", "ISOLATION LEVEL", "READ", "DEFERRABLE", "NOT DEFERRABLE");

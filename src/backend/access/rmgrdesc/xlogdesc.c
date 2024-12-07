@@ -134,11 +134,11 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec.wal_log_hints ? "on" : "off",
 						 xlrec.track_commit_timestamp ? "on" : "off");
 	}
-	else if (info == XLOG_CLUSTER_CATALOG_ENCODING_CHANGE)
+	else if (info == XLOG_CLUSTER_ENCODING_CHANGE)
 	{
-		xl_cluster_catalog_encoding_change xlrec;
+		xl_cluster_encoding_change xlrec;
 
-		memcpy(&xlrec, rec, sizeof(xl_cluster_catalog_encoding_change));
+		memcpy(&xlrec, rec, sizeof(xl_cluster_encoding_change));
 		appendStringInfo(buf, "encoding=%d", xlrec.encoding);
 	}
 	else if (info == XLOG_FPW_CHANGE)
@@ -204,8 +204,8 @@ xlog_identify(uint8 info)
 		case XLOG_PARAMETER_CHANGE:
 			id = "PARAMETER_CHANGE";
 			break;
-		case XLOG_CLUSTER_CATALOG_ENCODING_CHANGE:
-			id = "CLUSTER_CATALOG_ENCODING_CHANGE";
+		case XLOG_CLUSTER_ENCODING_CHANGE:
+			id = "CLUSTER_ENCODING_CHANGE";
 			break;
 		case XLOG_RESTORE_POINT:
 			id = "RESTORE_POINT";

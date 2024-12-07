@@ -47,9 +47,9 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 	tuple = systable_getnext(scan);
 
 	if (setstmt->name)
-		ValidateClusterCatalogString(rel, setstmt->name);
+		ValidateSharedCatalogString(rel, setstmt->name);
 	if (valuestr)
-		ValidateClusterCatalogString(rel, valuestr);
+		ValidateSharedCatalogString(rel, valuestr);
 
 	/*
 	 * There are three cases:

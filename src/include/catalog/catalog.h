@@ -43,8 +43,8 @@ extern Oid	GetNewOidWithIndex(Relation relation, Oid indexId,
 extern RelFileNumber GetNewRelFileNumber(Oid reltablespace,
 										 Relation pg_class,
 										 char relpersistence);
-extern void ValidateClusterCatalogString(Relation rel, const char *s);
-extern void AlterSystemSetClusterCatalogEncoding(const char *encoding_name);
-extern const char *show_cluster_catalog_encoding(void);
+extern void ValidateSharedCatalogString(Relation rel, const char *s);
+extern void AlterSystemSetClusterEncoding(const char *encoding_name);
+extern const char *show_cluster_encoding(void);
 
 #endif							/* CATALOG_H */

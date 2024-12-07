@@ -371,7 +371,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	pg_authid_rel = table_open(AuthIdRelationId, RowExclusiveLock);
 	pg_authid_dsc = RelationGetDescr(pg_authid_rel);
 
-	ValidateClusterCatalogString(pg_authid_rel, stmt->role);
+	ValidateSharedCatalogString(pg_authid_rel, stmt->role);
 
 	if (OidIsValid(get_role_oid(stmt->role, true)))
 		ereport(ERROR,
@@ -1352,7 +1352,7 @@ RenameRole(const char *oldname, const char *newname)
 	rel = table_open(AuthIdRelationId, RowExclusiveLock);
 	dsc = RelationGetDescr(rel);
 
-	ValidateClusterCatalogString(rel, newname);
+	ValidateSharedCatalogString(rel, newname);
 
 	oldtuple = SearchSysCache1(AUTHNAME, CStringGetDatum(oldname));
 	if (!HeapTupleIsValid(oldtuple))

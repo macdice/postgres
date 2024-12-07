@@ -133,7 +133,7 @@ PostgreSQL documentation
   <para>
    To alter the default encoding, use the <option>--encoding</option>.
    To specify a different encoding for the shared catalogs with
-   <option>--cluster-catalog-encoding</option>; this affects the character
+   <option>--cluster-encoding</option>; this affects the character
    set available for database and role names, and the ability to create
    databases with different encodings.
    More details can be found in <xref linkend="multibyte"/>.
@@ -231,19 +231,19 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry id="app-initdb-option-cluster-catalog-encoding">
+     <varlistentry id="app-initdb-option-cluster-encoding">
       <term><option>-C <replaceable class="parameter">encoding</replaceable></option></term>
-      <term><option>--cluster-catalog-encoding=<replaceable class="parameter">encoding</replaceable></option></term>
+      <term><option>--cluster-encoding=<replaceable class="parameter">encoding</replaceable></option></term>
       <listitem>
        <para>
-        Specifies the initial <literal>CLUSTER CATALOG ENCODING</literal> setting.
+        Specifies the initial <literal>CLUSTER ENCODING</literal> setting.
        </para>
        <para>
         By default, shared catalog encoding is set to <literal>DATABASE</literal>.
         Valid options are <literal>DATABASE</literal>, <literal>ASCII</literal>
         and <literal>UNDEFINED</literal>.  The value can be changed later with
         the <literal>ALTER SYSTEM</literal> command.
-        See <xref linkend="cluster-catalog-encoding"/> for details.
+        See <xref linkend="cluster-encoding"/> for details.
        </para>
       </listitem>
      </varlistentry>

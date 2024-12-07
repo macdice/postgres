@@ -137,7 +137,7 @@ static char *share_path = NULL;
 /* values to be obtained from arguments */
 static char *pg_data = NULL;
 static char *encoding = NULL;
-static char *cluster_catalog_encoding = NULL;
+static char *cluster_encoding = NULL;
 static char *locale = NULL;
 static char *lc_collate = NULL;
 static char *lc_ctype = NULL;
@@ -174,7 +174,7 @@ static DataDirSyncMethod sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
 /* internal vars */
 static const char *progname;
 static int	encodingid;
-static int	cluster_catalog_encodingid;
+static int	cluster_encodingid;
 static char *bki_file;
 static char *hba_file;
 static char *ident_file;
@@ -1595,7 +1595,7 @@ bootstrap_template1(void)
 
 	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s", backend_exec, boot_options, extra_options);
 	appendPQExpBuffer(&cmd, " -X %d", wal_segment_size_mb * (1024 * 1024));
-	appendPQExpBuffer(&cmd, " -C %d", cluster_catalog_encodingid);
+	appendPQExpBuffer(&cmd, " -C %d", cluster_encodingid);
 	if (data_checksums)
 		appendPQExpBuffer(&cmd, " -k");
 	if (debug)
@@ -2751,18 +2751,18 @@ setup_locale_encoding(void)
 	else
 		encodingid = get_encoding_id(encoding);
 
-	/* Choose initial value of CLUSTER CATALOG ENCODING. */
-	if (cluster_catalog_encoding == NULL ||
-		pg_strcasecmp(cluster_catalog_encoding, "DATABASE") == 0)
-		cluster_catalog_encodingid = encodingid;
-	else if (pg_strcasecmp(cluster_catalog_encoding, "ASCII") == 0)
-		cluster_catalog_encodingid = PG_SQL_ASCII;
-	else if (pg_strcasecmp(cluster_catalog_encoding, "UNDEFINED") == 0)
-		cluster_catalog_encodingid = -1;
-	printf(_("The initial cluster catalog encoding has been set to \"%s\".\n"),
-		   cluster_catalog_encodingid == -1 ? "UNDEFINED" :
-		   cluster_catalog_encodingid == PG_SQL_ASCII ? "ASCII" :
-		   pg_encoding_to_char(cluster_catalog_encodingid));
+	/* Choose initial value of CLUSTER ENCODING. */
+	if (cluster_encoding == NULL ||
+		pg_strcasecmp(cluster_encoding, "DATABASE") == 0)
+		cluster_encodingid = encodingid;
+	else if (pg_strcasecmp(cluster_encoding, "ASCII") == 0)
+		cluster_encodingid = PG_SQL_ASCII;
+	else if (pg_strcasecmp(cluster_encoding, "UNDEFINED") == 0)
+		cluster_encodingid = -1;
+	printf(_("The initial cluster encoding has been set to \"%s\".\n"),
+		   cluster_encodingid == -1 ? "UNDEFINED" :
+		   cluster_encodingid == PG_SQL_ASCII ? "ASCII" :
+		   pg_encoding_to_char(cluster_encodingid));
 
 	if (!check_locale_encoding(lc_ctype, encodingid) ||
 		!check_locale_encoding(lc_collate, encodingid))
@@ -3162,7 +3162,7 @@ main(int argc, char *argv[])
 	static struct option long_options[] = {
 		{"pgdata", required_argument, NULL, 'D'},
 		{"encoding", required_argument, NULL, 'E'},
-		{"cluster-catalog-encoding", required_argument, NULL, 'C'},
+		{"cluster-encoding", required_argument, NULL, 'C'},
 		{"locale", required_argument, NULL, 1},
 		{"lc-collate", required_argument, NULL, 2},
 		{"lc-ctype", required_argument, NULL, 3},
@@ -3290,7 +3290,7 @@ main(int argc, char *argv[])
 				encoding = pg_strdup(optarg);
 				break;
 			case 'C':
-				cluster_catalog_encoding = pg_strdup(optarg);
+				cluster_encoding = pg_strdup(optarg);
 				break;
 			case 'W':
 				pwprompt = true;

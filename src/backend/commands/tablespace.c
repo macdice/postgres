@@ -311,7 +311,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	 */
 	rel = table_open(TableSpaceRelationId, RowExclusiveLock);
 
-	ValidateClusterCatalogString(rel, stmt->tablespacename);
+	ValidateSharedCatalogString(rel, stmt->tablespacename);
 
 	if (IsBinaryUpgrade)
 	{
@@ -943,7 +943,7 @@ RenameTableSpace(const char *oldname, const char *newname)
 	/* Search pg_tablespace */
 	rel = table_open(TableSpaceRelationId, RowExclusiveLock);
 
-	ValidateClusterCatalogString(rel, newname);
+	ValidateSharedCatalogString(rel, newname);
 
 	ScanKeyInit(&entry[0],
 				Anum_pg_tablespace_spcname,

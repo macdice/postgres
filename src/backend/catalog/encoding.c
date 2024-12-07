@@ -40,10 +40,10 @@
 /*
  * Check if a NULL-terminated string can be inserted into a shared catalog.
  * The caller must hold a lock on the shared catalog table, to block
- * AlterSystemSetClusterCatalogEncoding().
+ * AlterSystemSetClusterEncoding().
  */
 void
-ValidateClusterCatalogString(Relation rel, const char *s)
+ValidateSharedCatalogString(Relation rel, const char *s)
 {
 	/*
 	 * The main reason for taking the rel argument is to make sure that caller
@@ -57,15 +57,15 @@ ValidateClusterCatalogString(Relation rel, const char *s)
 	 * If using SQL_ASCII, then we have to make sure this string is clean
 	 * 7-bit ASCII, so that it is valid in every supported encoding.
 	 */
-	if (GetClusterCatalogEncoding() != PG_SQL_ASCII)
+	if (GetClusterEncoding() != PG_SQL_ASCII)
 	{
 		/*
 		 * Otherwise, either we're in UNKNOWN mode where anything goes, or all
 		 * databases are using the same encoding and matches the shared
 		 * catalog encoding.  We don't have to validate anything.
 		 */
-		Assert(GetClusterCatalogEncoding() == -1 ||
-			   GetClusterCatalogEncoding() == GetDatabaseEncoding());
+		Assert(GetClusterEncoding() == -1 ||
+			   GetClusterEncoding() == GetDatabaseEncoding());
 		return;
 	}
 
@@ -73,15 +73,15 @@ ValidateClusterCatalogString(Relation rel, const char *s)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("the string \"%s\" contains invalid characters", s),
-				 errdetail("CLUSTER CATALOG ENCODING is set to ASCII."),
-				 errhint("Consider ALTER SYSTEM SET CATALOG ENCODING TO DATABASE.")));
+				 errdetail("CLUSTER ENCODING is set to ASCII."),
+				 errhint("Consider ALTER SYSTEM SET CLUSTER ENCODING TO DATABASE.")));
 }
 
 /*
- * Try to change the cluster catalog encoding, if all the conditions are met.
+ * Try to change the cluster encoding, if all the conditions are met.
  */
 void
-AlterSystemSetClusterCatalogEncoding(const char *encoding_name)
+AlterSystemSetClusterEncoding(const char *encoding_name)
 {
 	Relation	rel;
 	SysScanDesc scan;
@@ -103,7 +103,7 @@ AlterSystemSetClusterCatalogEncoding(const char *encoding_name)
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("invalid shared catalog encoding: %s",
+				 errmsg("invalid cluster encoding: %s",
 						encoding_name)));
 
 	/*
@@ -112,7 +112,7 @@ AlterSystemSetClusterCatalogEncoding(const char *encoding_name)
 	 * contain text.  If new shared catalogs are invented that hold text they
 	 * will need to be handled here too.  For every validation that we perform
 	 * below, there must also be corresponding calls to
-	 * ValidateClusterCatalogString() in the commands that CREATE or ALTER
+	 * ValidateSharedCatalogString() in the commands that CREATE or ALTER
 	 * these database objects.
 	 */
 	LockRelationOid(AuthIdRelationId, AccessExclusiveLock);
@@ -126,7 +126,7 @@ AlterSystemSetClusterCatalogEncoding(const char *encoding_name)
 	LockRelationOid(TableSpaceRelationId, AccessExclusiveLock);
 
 	/* No change? */
-	if (GetClusterCatalogEncoding() == encoding)
+	if (GetClusterEncoding() == encoding)
 		return;
 
 	if (encoding == -1)
@@ -323,7 +323,7 @@ AlterSystemSetClusterCatalogEncoding(const char *encoding_name)
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 						 errmsg("security label provider name \"%s\" contains invalid characters",
 								s),
-						 errhint("This security label provider cannot be used with CATALOG ENCODING set to ASCII.")));
+						 errhint("This security label provider cannot be used with CLUSTER ENCODING set to ASCII.")));
 			pfree(s);
 
 			s = TextDatumGetCString(heap_getattr(tup, Anum_pg_shseclabel_label,
@@ -332,7 +332,7 @@ AlterSystemSetClusterCatalogEncoding(const char *encoding_name)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 						 errmsg("a security label on a shared database object contains invalid characters"),
-						 errhint("Security labels applied to shared database objects must be representable in the CATALOG ENCODING.")));
+						 errhint("Security labels applied to shared database objects must be compatible with the current CLUSTER ENCODING.")));
 			pfree(s);
 		}
 		systable_endscan(scan);
@@ -414,15 +414,16 @@ AlterSystemSetClusterCatalogEncoding(const char *encoding_name)
 	}
 
 	/* If we made it this far, we are allowed to change it. */
-	SetClusterCatalogEncoding(encoding);
+	SetClusterEncoding(encoding);
 }
 
 const char *
-show_cluster_catalog_encoding(void)
+show_cluster_encoding(void)
 {
 	int			encoding;
 
-	encoding = GetClusterCatalogEncoding();
+	/* XXX locking? */
+	encoding = GetClusterEncoding();
 	if (encoding == -1)
 		return "UNDEFINED";
 	else if (encoding == PG_SQL_ASCII)

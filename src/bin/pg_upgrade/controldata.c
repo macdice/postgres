@@ -61,7 +61,7 @@ get_control_data(ClusterInfo *cluster)
 	bool		got_large_object = false;
 	bool		got_date_is_int = false;
 	bool		got_data_checksum_version = false;
-	bool		got_cluster_catalog_encoding = false;
+	bool		got_cluster_encoding = false;
 	bool		got_cluster_state = false;
 	char	   *lc_collate = NULL;
 	char	   *lc_ctype = NULL;
@@ -502,15 +502,15 @@ get_control_data(ClusterInfo *cluster)
 			cluster->controldata.data_checksum_version = str2uint(p);
 			got_data_checksum_version = true;
 		}
-		else if ((p = strstr(bufin, "Cluster catalog encoding")) != NULL)
+		else if ((p = strstr(bufin, "Cluster encoding")) != NULL)
 		{
 			p = strchr(p, ':');
 
 			if (p == NULL || strlen(p) <= 1)
 				pg_fatal("%d: controldata retrieval problem", __LINE__);
 			p++;
-			cluster->controldata.cluster_catalog_encoding = atoi(p);
-			got_cluster_catalog_encoding = true;
+			cluster->controldata.cluster_encoding = atoi(p);
+			got_cluster_encoding = true;
 		}
 	}
 
@@ -573,9 +573,9 @@ get_control_data(ClusterInfo *cluster)
 	}
 
 	if (GET_MAJOR_VERSION(cluster->major_version) < 1800)
-		cluster->controldata.cluster_catalog_encoding = -1; /* UNDEFINED */
-	else if (!got_cluster_catalog_encoding)
-		pg_fatal("Expected cluster catalog encoding from version 18+");
+		cluster->controldata.cluster_encoding = -1; /* UNDEFINED */
+	else if (!got_cluster_encoding)
+		pg_fatal("Expected cluster encoding from version 18+");
 
 	/* verify that we got all the mandatory pg_control data */
 	if (!got_xid || !got_oid ||

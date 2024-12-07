@@ -4815,14 +4815,14 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"cluster_catalog_encoding", PGC_INTERNAL, PRESET_OPTIONS,
-			gettext_noop("The encoding of text in system catalogs that are shared by all databases in the cluster."),
+		{"cluster_encoding", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("The encoding of shared catalogs and other text, other than database contents."),
 			NULL,
 			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_RUNTIME_COMPUTED
 		},
 		&dummy,
 		"",
-		NULL, NULL, show_cluster_catalog_encoding
+		NULL, NULL, show_cluster_encoding
 	},
 
 	/* End-of-list marker */

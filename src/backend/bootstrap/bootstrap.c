@@ -202,7 +202,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	int			flag;
 	char	   *userDoption = NULL;
 	uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
-	int			cluster_catalog_encoding = -1;
+	int			bootstrap_cluster_encoding = -1;
 
 	Assert(!IsUnderPostmaster);
 
@@ -281,7 +281,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				}
 				break;
 			case 'C':
-				cluster_catalog_encoding = atoi(optarg);
+				bootstrap_cluster_encoding = atoi(optarg);
 				break;
 			case 'F':
 				SetConfigOption("fsync", "false", PGC_POSTMASTER, PGC_S_ARGV);
@@ -358,7 +358,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	BaseInit();
 
 	bootstrap_signals();
-	BootStrapXLOG(cluster_catalog_encoding,
+	BootStrapXLOG(bootstrap_cluster_encoding,
 				  bootstrap_data_checksum_version);
 
 	/*

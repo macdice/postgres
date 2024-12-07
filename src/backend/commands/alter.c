@@ -1052,7 +1052,7 @@ AlterSystem(AlterSystemStmt *stmt)
 	}
 	else if (stmt->encoding_name)
 	{
-		/* ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO ... */
-		AlterSystemSetClusterCatalogEncoding(stmt->encoding_name);
+		/* ALTER SYSTEM SET CLUSTER ENCODING TO ... */
+		AlterSystemSetClusterEncoding(stmt->encoding_name);
 	}
 }

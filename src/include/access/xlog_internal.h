@@ -305,11 +305,11 @@ typedef struct xl_end_of_recovery
 	int			wal_level;
 } xl_end_of_recovery;
 
-/* Change of CLUSTER CATALOG ENCODING. */
-typedef struct xl_cluster_catalog_encoding_change
+/* Change of CLUSTER ENCODING. */
+typedef struct xl_cluster_encoding_change
 {
 	int			encoding;
-} xl_cluster_catalog_encoding_change;
+} xl_cluster_encoding_change;
 
 /*
  * The functions in xloginsert.c construct a chain of XLogRecData structs

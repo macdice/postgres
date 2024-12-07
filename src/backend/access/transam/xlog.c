@@ -5031,8 +5031,7 @@ XLOGShmemInit(void)
  * and the initial XLOG segment.
  */
 void
-BootStrapXLOG(int cluster_catalog_encoding,
-			  uint32 data_checksum_version)
+BootStrapXLOG(int cluster_encoding, uint32 data_checksum_version)
 {
 	CheckPoint	checkPoint;
 	char	   *buffer;
@@ -5175,7 +5174,7 @@ BootStrapXLOG(int cluster_catalog_encoding,
 
 	/* Now create pg_control */
 	InitControlFile(sysidentifier, data_checksum_version);
-	ControlFile->cluster_catalog_encoding = cluster_catalog_encoding;
+	ControlFile->cluster_encoding = cluster_encoding;
 	ControlFile->time = checkPoint.time;
 	ControlFile->checkPoint = checkPoint.redo;
 	ControlFile->checkPointCopy = checkPoint;
@@ -8560,12 +8559,12 @@ xlog_redo(XLogReaderState *record)
 		/* Check to see if any parameter change gives a problem on recovery */
 		CheckRequiredParameterValues();
 	}
-	else if (info == XLOG_CLUSTER_CATALOG_ENCODING_CHANGE)
+	else if (info == XLOG_CLUSTER_ENCODING_CHANGE)
 	{
-		xl_cluster_catalog_encoding_change xlrec;
+		xl_cluster_encoding_change xlrec;
 
 		memcpy(&xlrec, XLogRecGetData(record), sizeof(xlrec));
-		ControlFile->cluster_catalog_encoding = xlrec.encoding;
+		ControlFile->cluster_encoding = xlrec.encoding;
 	}
 	else if (info == XLOG_FPW_CHANGE)
 	{
@@ -9522,31 +9521,31 @@ SetWalWriterSleeping(bool sleeping)
 }
 
 /*
- * Get the shared catalog encoding.  This should only be called when a lock is
- * held on one of the shared catalog tables.
+ * Get the cluster encoding.  This should only be called when a lock is held on
+ * one of the shared catalog tables.
  */
 int
-GetClusterCatalogEncoding(void)
+GetClusterEncoding(void)
 {
-	return ControlFile->cluster_catalog_encoding;
+	return ControlFile->cluster_encoding;
 }
 
 /*
- * Set CLUSTER CATALOG ENCODING.  This should only be called with
- * AccessExclusiveLock held on *all* shared catalog tables that contain text.
+ * Set CLUSTER ENCODING.  This should only be called with AccessExclusiveLock
+ * held on *all* shared catalog tables that contain text.
  */
 void
-SetClusterCatalogEncoding(int encoding)
+SetClusterEncoding(int encoding)
 {
-	xl_cluster_catalog_encoding_change xlrec;
+	xl_cluster_encoding_change xlrec;
 
 	START_CRIT_SECTION();
 	MyProc->delayChkptFlags |= DELAY_CHKPT_START;
 	xlrec.encoding = encoding;
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-	XLogFlush(XLogInsert(RM_XLOG_ID, XLOG_CLUSTER_CATALOG_ENCODING_CHANGE));
-	ControlFile->cluster_catalog_encoding = encoding;
+	XLogFlush(XLogInsert(RM_XLOG_ID, XLOG_CLUSTER_ENCODING_CHANGE));
+	ControlFile->cluster_encoding = encoding;
 	MyProc->delayChkptFlags &= ~DELAY_CHKPT_START;
 	END_CRIT_SECTION();
 }

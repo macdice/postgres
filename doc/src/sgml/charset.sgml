@@ -2223,7 +2223,7 @@ initdb -E EUC_JP
     <para>
      You can specify a non-default encoding at database creation time,
      provided that the encoding is compatible with the selected locale,
-     and <literal>CLUSTER CATALOG ENCODING</literal> is set to
+     and <literal>CLUSTER ENCODING</literal> is set to
      <literal>ASCII</literal> (or <literal>UNDEFINED</literal>, not
      recommended).
 
@@ -2404,8 +2404,8 @@ RESET client_encoding;
     </para>
    </sect2>
 
-   <sect2 id="cluster-catalog-encoding">
-    <title>Character Sets and Catalogs Shared by the Whole Cluster</title>
+   <sect2 id="cluster-encoding">
+    <title>Character Sets Used for Cluster-Wide Text</title>
     <para>
      The names of databases, roles and a small number of other object type
      are
@@ -2414,7 +2414,7 @@ RESET client_encoding;
      Since databases can use different encodings, a trade-off is required to
      make sure that they use compatible character sets.
      Two main configurations are available, controlled by the system setting
-     <literal>CLUSTER CATALOG ENCODING</literal>:
+     <literal>CLUSTER ENCODING</literal>:
 
      <itemizedlist>
       <listitem>
@@ -2444,8 +2444,8 @@ RESET client_encoding;
      recommended for new deployments.
     </para>
     <para>
-     <literal>CLUSTER CATALOG ENCODING</literal> can be set with the
-     <xref linkend="app-initdb-option-cluster-catalog-encoding"/> option to <command>initdb</command>, or
+     <literal>CLUSTER ENCODING</literal> can be set with the
+     <xref linkend="app-initdb-option-cluster-encoding"/> option to <command>initdb</command>, or
      changed later using the <xref linkend="sql-altersystem"/>
      command.  To change to
      <literal>ASCII</literal>, shared catalogs must have no existing non-ASCII
@@ -2456,7 +2456,7 @@ RESET client_encoding;
      but not recommended.
     </para>
     <para>
-     Note that when <literal>CLUSTER CATALOG ENCODING</literal> is set to
+     Note that when <literal>CLUSTER ENCODING</literal> is set to
      <literal>ASCII</literal>,
      it only restricts the names and properties of a small number of kinds of database
      objects that have cluster-wide visibility.  Most objects such as tables,

@@ -6,7 +6,7 @@ tests += {
   'bd': meson.current_build_dir(),
   'regress': {
     'sql': [
-      'cluster_catalog_encoding',
+      'cluster_encoding',
     ],
     'regress_args': ['--no-locale', '--encoding=UTF8'],
     'runningcheck': false,

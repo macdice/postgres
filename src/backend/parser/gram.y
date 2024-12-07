@@ -1985,11 +1985,11 @@ VariableShowStmt:
 					n->name = "session_authorization";
 					$$ = (Node *) n;
 				}
-			| SHOW CLUSTER CATALOG_P ENCODING
+			| SHOW CLUSTER ENCODING
 				{
 					VariableShowStmt *n = makeNode(VariableShowStmt);
 
-					n->name = "cluster_catalog_encoding";
+					n->name = "cluster_encoding";
 					$$ = (Node *) n;
 				}
 			| SHOW ALL
@@ -11547,11 +11547,11 @@ AlterSystemStmt:
 					n->setstmt = $4;
 					$$ = (Node *) n;
 				}
-			| ALTER SYSTEM_P SET CLUSTER CATALOG_P ENCODING TO name
+			| ALTER SYSTEM_P SET CLUSTER ENCODING TO name
 				{
 					AlterSystemStmt *n = makeNode(AlterSystemStmt);
 
-					n->encoding_name = $8;
+					n->encoding_name = $7;
 					$$ = (Node *) n;
 				}
 		;

@@ -37,7 +37,7 @@
    catalogs are physically shared across all databases in a cluster;
    these are noted in the descriptions of the individual catalogs.
    This has implications for their character set; see
-   <xref linkend="cluster-catalog-encoding"/> for details.
+   <xref linkend="cluster-encoding"/> for details.
   </para>
 
   <table id="catalog-table">

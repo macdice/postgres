@@ -620,10 +620,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
-	ValidateClusterCatalogString(rel, stmt->subname);
-	ValidateClusterCatalogString(rel, stmt->conninfo);
+	ValidateSharedCatalogString(rel, stmt->subname);
+	ValidateSharedCatalogString(rel, stmt->conninfo);
 	foreach(l, stmt->publication)
-		ValidateClusterCatalogString(rel, strVal(lfirst(l)));
+		ValidateSharedCatalogString(rel, strVal(lfirst(l)));
 
 	/* Check if name is used */
 	subid = GetSysCacheOid2(SUBSCRIPTIONNAME, Anum_pg_subscription_oid,

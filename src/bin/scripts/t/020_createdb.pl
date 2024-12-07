@@ -12,10 +12,10 @@ program_help_ok('createdb');
 program_version_ok('createdb');
 program_options_handling_ok('createdb');
 
-# Because we're using different encodings in the same cluster, we need shared
-# catalog encoding set to ASCII for this test.
+# Because we're using different encodings in the same cluster, we need cluster
+# encoding set to ASCII for this test.
 my $node = PostgreSQL::Test::Cluster->new('main');
-$node->init(extra => [ '--cluster-catalog-encoding=ASCII' ]);
+$node->init(extra => [ '--cluster-encoding=ASCII' ]);
 $node->start;
 
 $node->issues_sql_like(

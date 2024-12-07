@@ -26,7 +26,7 @@ ALTER SYSTEM SET <replaceable class="parameter">configuration_parameter</replace
 ALTER SYSTEM RESET <replaceable class="parameter">configuration_parameter</replaceable>
 ALTER SYSTEM RESET ALL
 
-ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO { DATABASE | ASCII | UNKNOWN }
+ALTER SYSTEM SET CLUSTER ENCODING TO { DATABASE | ASCII | UNKNOWN }
 </synopsis>
  </refsynopsisdiv>
 
@@ -57,7 +57,7 @@ ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO { DATABASE | ASCII | UNKNOWN }
   </para>
 
   <para>
-   <command>ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO</command> selects the
+   <command>ALTER SYSTEM SET CLUSTER ENCODING TO</command> selects the
    character set used for role names, database names and the properties of
    certain other database objects that are shared
    by all databases in the cluster.  <literal>DATABASE</literal> means that database
@@ -65,7 +65,7 @@ ALTER SYSTEM SET CLUSTER CATALOG ENCODING TO { DATABASE | ASCII | UNKNOWN }
    <literal>ASCII</literal> means that only the ASCII character set can used,
    but databases can use any encoding.
    <literal>UNDEFINED</literal> disables enforcement of character set restrictions and is
-   not recommended.  See <xref linkend="cluster-catalog-encoding"/> for details.
+   not recommended.  See <xref linkend="cluster-encoding"/> for details.
    Unlike other <command>ALTER SYSTEM SET</command> commands, this change takes
    effect immediately, if the required conditions required are met.
   </para>
