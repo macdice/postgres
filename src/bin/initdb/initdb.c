@@ -2751,19 +2751,6 @@ setup_locale_encoding(void)
 	else
 		encodingid = get_encoding_id(encoding);
 
-	/* Choose initial value of CLUSTER ENCODING. */
-	if (cluster_encoding == NULL ||
-		pg_strcasecmp(cluster_encoding, "DATABASE") == 0)
-		cluster_encodingid = encodingid;
-	else if (pg_strcasecmp(cluster_encoding, "ASCII") == 0)
-		cluster_encodingid = PG_SQL_ASCII;
-	else if (pg_strcasecmp(cluster_encoding, "UNDEFINED") == 0)
-		cluster_encodingid = -1;
-	printf(_("The initial cluster encoding has been set to \"%s\".\n"),
-		   cluster_encodingid == -1 ? "UNDEFINED" :
-		   cluster_encodingid == PG_SQL_ASCII ? "ASCII" :
-		   pg_encoding_to_char(cluster_encodingid));
-
 	if (!check_locale_encoding(lc_ctype, encodingid) ||
 		!check_locale_encoding(lc_collate, encodingid))
 		exit(1);				/* check_locale_encoding printed the error */
@@ -2780,6 +2767,21 @@ setup_locale_encoding(void)
 		exit(1);
 }
 
+static void
+setup_cluster_encoding(void)
+{
+	if (cluster_encoding == NULL ||
+		pg_strcasecmp(cluster_encoding, "DATABASE") == 0)
+		cluster_encodingid = encodingid;
+	else if (pg_strcasecmp(cluster_encoding, "ASCII") == 0)
+		cluster_encodingid = PG_SQL_ASCII;
+	else if (pg_strcasecmp(cluster_encoding, "UNDEFINED") == 0)
+		cluster_encodingid = -1;
+	printf(_("The initial cluster encoding has been set to \"%s\".\n"),
+		   cluster_encodingid == -1 ? "UNDEFINED" :
+		   cluster_encodingid == PG_SQL_ASCII ? "ASCII" :
+		   pg_encoding_to_char(cluster_encodingid));
+}
 
 void
 setup_data_file_paths(void)
@@ -3048,6 +3050,16 @@ initialize_data_directory(void)
 	PG_CMD_DECL;
 	PQExpBufferData cmd;
 	int			i;
+
+	/* Check that the pathname is valid in the cluster encoding. */
+	if ((cluster_encodingid == PG_SQL_ASCII &&
+		 !pg_is_ascii(pg_data)) ||
+		(cluster_encodingid > 0 &&
+		 !pg_encoding_verifymbstr(cluster_encodingid,
+								  pg_data,
+								  strlen(pg_data))))
+		pg_fatal("pathname \"%s\" is not valid in the cluster encoding",
+				 pg_data);
 
 	setup_signals();
 
@@ -3490,6 +3502,7 @@ main(int argc, char *argv[])
 	setup_data_file_paths();
 
 	setup_locale_encoding();
+	setup_cluster_encoding();
 
 	setup_text_search();
 
