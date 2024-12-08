@@ -21,6 +21,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_namespace.h"
@@ -41,7 +42,7 @@ bool
 StringIsValidInClusterEncoding(const char *s, int cluster_encoding)
 {
 	/* In UNDEFINED mode, it is valid by definition. */
-	if (cluster_encoding == -1)
+	if (cluster_encoding == CLUSTER_ENCODING_UNDEFINED)
 		return true;
 
 	/*
@@ -49,7 +50,7 @@ StringIsValidInClusterEncoding(const char *s, int cluster_encoding)
 	 * anything-goes), here we accept only 7-bit ASCII because only 7-bit
 	 * ASCII is a subset of all server encodings.
 	 */
-	if (cluster_encoding == PG_SQL_ASCII)
+	if (cluster_encoding == CLUSTER_ENCODING_ASCII)
 		return pg_is_ascii(s);
 
 	/*
@@ -86,11 +87,11 @@ ValidateSharedCatalogString(Relation rel, const char *s)
 	cluster_encoding = GetClusterEncoding();
 
 	/* UNDEFINED is valid by definition. */
-	if (cluster_encoding == -1)
+	if (cluster_encoding == CLUSTER_ENCODING_UNDEFINED)
 		return;
 
 	/* ASCII requires explicit validation. */
-	if (cluster_encoding == PG_SQL_ASCII)
+	if (cluster_encoding == CLUSTER_ENCODING_ASCII)
 	{		
 		if (!pg_is_ascii(s))
 			ereport(ERROR,
@@ -130,9 +131,9 @@ AlterSystemSetClusterEncoding(const char *encoding_name)
 	if (pg_strcasecmp(encoding_name, "DATABASE") == 0)
 		encoding = GetDatabaseEncoding();
 	else if (pg_strcasecmp(encoding_name, "ASCII") == 0)
-		encoding = PG_SQL_ASCII;
+		encoding = CLUSTER_ENCODING_ASCII;
 	else if (pg_strcasecmp(encoding_name, "UNDEFINED") == 0)
-		encoding = -1;
+		encoding = CLUSTER_ENCODING_UNDEFINED;
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -162,11 +163,11 @@ AlterSystemSetClusterEncoding(const char *encoding_name)
 	if (GetClusterEncoding() == encoding)
 		return;
 
-	if (encoding == -1)
+	if (encoding == CLUSTER_ENCODING_UNDEFINED)
 	{
 		/* There are no encoding restrictions for UNDEFINED.  Good luck. */
 	}
-	else if (encoding == PG_SQL_ASCII)
+	else if (encoding == CLUSTER_ENCODING_ASCII)
 	{
 		/* Make sure all the shared GUCs contain only pure 7-bit ASCII. */
 		ValidateSharedGucEncoding(ERROR, encoding);
@@ -460,9 +461,9 @@ show_cluster_encoding(void)
 
 	/* XXX locking? */
 	encoding = GetClusterEncoding();
-	if (encoding == -1)
+	if (encoding == CLUSTER_ENCODING_UNDEFINED)
 		return "UNDEFINED";
-	else if (encoding == PG_SQL_ASCII)
+	else if (encoding == CLUSTER_ENCODING_ASCII)
 		return "ASCII";
 	else
 		return "DATABASE";

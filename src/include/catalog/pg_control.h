@@ -81,6 +81,10 @@ typedef struct CheckPoint
 #define XLOG_OVERWRITE_CONTRECORD		0xD0
 #define XLOG_CHECKPOINT_REDO			0xE0
 
+/* Special values for cluster_encoding. */
+#define CLUSTER_ENCODING_UNDEFINED -1
+#define CLUSTER_ENCODING_ASCII 0
+
 
 /*
  * System status indicator.  Note this is stored in pg_control; if you change
@@ -221,7 +225,7 @@ typedef struct ControlFileData
 	/* Are data pages protected by checksums? Zero if no checksum version */
 	uint32		data_checksum_version;
 
-	/* A pg_enc value, or -1 for UNDEFINED. */
+	/* A pg_enc value, CLUSTER_ENCODING_UNDEFINED or CLUSTER_ENCODING_ASCII. */
 	int			cluster_encoding;
 
 	/*

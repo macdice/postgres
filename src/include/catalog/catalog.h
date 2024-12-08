@@ -43,6 +43,7 @@ extern Oid	GetNewOidWithIndex(Relation relation, Oid indexId,
 extern RelFileNumber GetNewRelFileNumber(Oid reltablespace,
 										 Relation pg_class,
 										 char relpersistence);
+
 extern bool StringIsValidInClusterEncoding(const char *s, int cluster_encoding);
 extern bool StringIsValidInCurrentClusterEncoding(const char *s);
 extern void ValidateSharedCatalogString(Relation rel, const char *s);

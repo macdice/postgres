@@ -68,6 +68,7 @@
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_class_d.h" /* pgrminclude ignore */
 #include "catalog/pg_collation_d.h"
+#include "catalog/pg_control.h"
 #include "catalog/pg_database_d.h"	/* pgrminclude ignore */
 #include "common/file_perm.h"
 #include "common/file_utils.h"
@@ -2774,13 +2775,16 @@ setup_cluster_encoding(void)
 		pg_strcasecmp(cluster_encoding, "DATABASE") == 0)
 		cluster_encodingid = encodingid;
 	else if (pg_strcasecmp(cluster_encoding, "ASCII") == 0)
-		cluster_encodingid = PG_SQL_ASCII;
+		cluster_encodingid = CLUSTER_ENCODING_ASCII;
 	else if (pg_strcasecmp(cluster_encoding, "UNDEFINED") == 0)
-		cluster_encodingid = -1;
+		cluster_encodingid = CLUSTER_ENCODING_UNDEFINED;
+	else
+		pg_fatal("invalid cluster encoding \"%s\"; expected DATABASE, ASCII or UNDEFINED",
+				 cluster_encoding);
 
 	printf(_("The initial cluster encoding has been set to \"%s\".\n"),
-		   cluster_encodingid == -1 ? "UNDEFINED" :
-		   cluster_encodingid == PG_SQL_ASCII ? "ASCII" :
+		   cluster_encodingid == CLUSTER_ENCODING_UNDEFINED ? "UNDEFINED" :
+		   cluster_encodingid == CLUSTER_ENCODING_ASCII ? "ASCII" :
 		   pg_encoding_to_char(cluster_encodingid));
 }
 
@@ -3059,9 +3063,9 @@ initialize_data_directory(void)
 	 * from, it's not right to check it against cluster_encodingid.  The
 	 * correct test might be "can we convert it to the cluster encoding".
 	 */
-	if ((cluster_encodingid == PG_SQL_ASCII &&
+	if ((cluster_encodingid == CLUSTER_ENCODING_ASCII &&
 		 !pg_is_ascii(pg_data)) ||
-		(cluster_encodingid > 0 &&
+		(cluster_encodingid != CLUSTER_ENCODING_UNDEFINED &&
 		 !pg_encoding_verifymbstr(cluster_encodingid,
 								  pg_data,
 								  strlen(pg_data))))
