@@ -76,7 +76,7 @@ StringIsValidInCurrentClusterEncoding(const char *s)
 void
 ValidateSharedCatalogString(Relation rel, const char *s)
 {
-	int cluster_encoding;
+	int			cluster_encoding;
 
 	/*
 	 * The rel argument helps to make sure that caller remembered to lock the
@@ -92,7 +92,7 @@ ValidateSharedCatalogString(Relation rel, const char *s)
 
 	/* ASCII requires explicit validation. */
 	if (cluster_encoding == CLUSTER_ENCODING_ASCII)
-	{		
+	{
 		if (!pg_is_ascii(s))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
@@ -171,7 +171,7 @@ AlterSystemSetClusterEncoding(const char *encoding_name)
 	{
 		/* Make sure all the shared GUCs contain only pure 7-bit ASCII. */
 		ValidateSharedGucEncoding(ERROR, encoding);
-		
+
 		/* Make sure all shared catalogs contain only pure 7-bit ASCII. */
 
 		/* pg_authid */

@@ -2319,8 +2319,8 @@ process_pm_child_exit(void)
 			 * validate changes made via ALTER SYSTEM since the last
 			 * checkpoint.
 			 */
-			ValidateSharedGucEncoding(WARNING, GetClusterEncoding());			
-			
+			ValidateSharedGucEncoding(WARNING, GetClusterEncoding());
+
 			/*
 			 * At the next iteration of the postmaster's main loop, we will
 			 * crank up the background tasks like the autovacuum launcher and
