@@ -31,6 +31,7 @@
 
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "catalog/catalog.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_parameter_acl.h"
@@ -1883,6 +1884,14 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 					 progname, ConfigFileName);
 		return false;
 	}
+
+	/*
+	 * XXX: Windows' argv[] and environ are in ACP, while the data_directory
+	 * value from postgresql.conf should be assumed to be in CLUSTER ENCODING.
+	 * So depending where DataDir came from, but we don't pass on enough
+	 * information for SetConfigOption() to validate or convert it in the
+	 * correct way!
+	 */
 
 	/*
 	 * Reflect the final DataDir value back into the data_directory GUC var.
@@ -6979,4 +6988,62 @@ call_enum_check_hook(struct config_enum *conf, int *newval, void **extra,
 	}
 
 	return true;
+}
+
+/*
+ * Is a non-default GUC source defined at a scope that effects all sessions?
+ */
+static bool
+IsSharedGucSource(GucSource source)
+{
+	return source < PGC_S_INTERACTIVE;
+	return
+		source == PGC_S_ARGV ||
+		source == PGC_S_ENV_VAR ||
+		source == PGC_S_FILE;
+}
+
+/*
+ * Called with WARNING level at startup for the current CLUSTER ENCODING, and
+ * with ERROR level with a proposed new CLUSTER ENCODING, when attempting to
+ * change it.
+ */
+void
+ValidateSharedGucEncoding(int elevel, int cluster_encoding)
+{
+	HASH_SEQ_STATUS status;
+	GUCHashEntry *hentry;
+
+	hash_seq_init(&status, guc_hashtab);
+	while ((hentry = (GUCHashEntry *) hash_seq_search(&status)))
+	{
+		struct config_generic *gconf = hentry->gucvar;
+		struct config_string *lconf;
+		const char *value = NULL;
+
+		if (gconf->vartype != PGC_STRING)
+			continue;
+
+		/*
+		 * Check for a value defined at a shared scope.  It doesn't matter
+		 * about session-local settings.  XXX Do we need to check the stack or
+		 * is reset value enough?
+		 */
+		lconf = (struct config_string *) gconf;
+		if (IsSharedGucSource(gconf->source))
+			value = *lconf->variable;
+		else if (lconf->reset_val &&
+				 IsSharedGucSource(gconf->reset_source))
+			value = lconf->reset_val;
+		else
+			continue;
+
+		if (!StringIsValidInClusterEncoding(value, cluster_encoding))
+			ereport(elevel,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("configuration parameter \"%s\" has invalid value \"%s\"",
+							gconf->name,
+							value),
+					 errdetail("Configuration parameter values defined at scopes affecting all sessions must be valid in CLUSTER ENCODING")));
+	}
 }

@@ -37,44 +37,77 @@
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
 
+bool
+StringIsValidInClusterEncoding(const char *s, int cluster_encoding)
+{
+	/* In UNDEFINED mode, it is valid by definition. */
+	if (cluster_encoding == -1)
+		return true;
+
+	/*
+	 * Despite using the value PG_SQL_ASCII (which in other contexts means
+	 * anything-goes), here we accept only 7-bit ASCII because only 7-bit
+	 * ASCII is a subset of all server encodings.
+	 */
+	if (cluster_encoding == PG_SQL_ASCII)
+		return pg_is_ascii(s);
+
+	/*
+	 * Otherwise it has to match the database encoding.  Since this function
+	 * handles externally sourced strings, we validate even database encoding
+	 * instead of assuming it is valid.
+	 */
+	return pg_encoding_verifymbstr(cluster_encoding, s, strlen(s));
+}
+
+bool
+StringIsValidInCurrentClusterEncoding(const char *s)
+{
+	/* XXX think about locking */
+	return StringIsValidInClusterEncoding(s, GetClusterEncoding());
+}
+
 /*
- * Check if a NULL-terminated string can be inserted into a shared catalog.
- * The caller must hold a lock on the shared catalog table, to block
- * AlterSystemSetClusterEncoding().
+ * Check if a NULL-terminated string can be inserted into a shared catalog,
+ * reporting an error it not.  The caller must hold a lock on the shared
+ * catalog table, to block AlterSystemSetClusterEncoding().
  */
 void
 ValidateSharedCatalogString(Relation rel, const char *s)
 {
-	/*
-	 * The main reason for taking the rel argument is to make sure that caller
-	 * remembered to lock the catalog before validating strings to be
-	 * inserted.  But we might as well check it's a shared relation since we
-	 * have it.
-	 */
-	Assert(rel->rd_rel->relisshared);
+	int cluster_encoding;
 
 	/*
-	 * If using SQL_ASCII, then we have to make sure this string is clean
-	 * 7-bit ASCII, so that it is valid in every supported encoding.
+	 * The rel argument helps to make sure that caller remembered to lock the
+	 * catalog before validating strings to be inserted.  We can use it to
+	 * create a better error message below.
 	 */
-	if (GetClusterEncoding() != PG_SQL_ASCII)
-	{
-		/*
-		 * Otherwise, either we're in UNKNOWN mode where anything goes, or all
-		 * databases are using the same encoding and matches the shared
-		 * catalog encoding.  We don't have to validate anything.
-		 */
-		Assert(GetClusterEncoding() == -1 ||
-			   GetClusterEncoding() == GetDatabaseEncoding());
+	Assert(rel->rd_rel->relisshared);
+	cluster_encoding = GetClusterEncoding();
+
+	/* UNDEFINED is valid by definition. */
+	if (cluster_encoding == -1)
+		return;
+
+	/* ASCII requires explicit validation. */
+	if (cluster_encoding == PG_SQL_ASCII)
+	{		
+		if (!pg_is_ascii(s))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("the value \"%s\" contains invalid characters for shared catalog \"%s\"",
+							s,
+							RelationGetRelationName(rel)),
+					 errdetail("CLUSTER ENCODING is set to ASCII."),
+					 errhint("Consider ALTER SYSTEM SET CLUSTER ENCODING TO DATABASE.")));
 		return;
 	}
 
-	if (!pg_is_ascii(s))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("the string \"%s\" contains invalid characters", s),
-				 errdetail("CLUSTER ENCODING is set to ASCII."),
-				 errhint("Consider ALTER SYSTEM SET CLUSTER ENCODING TO DATABASE.")));
+	/*
+	 * Otherwise the string must be valid in the database encoding, because it
+	 * came from a session connected to the database.
+	 */
+	Assert(cluster_encoding == GetClusterEncoding());
 }
 
 /*
@@ -135,6 +168,9 @@ AlterSystemSetClusterEncoding(const char *encoding_name)
 	}
 	else if (encoding == PG_SQL_ASCII)
 	{
+		/* Make sure all the shared GUCs contain only pure 7-bit ASCII. */
+		ValidateSharedGucEncoding(ERROR, encoding);
+		
 		/* Make sure all shared catalogs contain only pure 7-bit ASCII. */
 
 		/* pg_authid */

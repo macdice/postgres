@@ -2312,6 +2312,16 @@ process_pm_child_exit(void)
 			connsAllowed = true;
 
 			/*
+			 * Generate warnings for GUC settings that are not valid in the
+			 * CLUSTER ENCODING.  This might seem like a strange place to do
+			 * it, but recovery might have replayed changes to CLUSTER
+			 * ENCODING.  Any time before now would have been too soon to
+			 * validate changes made via ALTER SYSTEM since the last
+			 * checkpoint.
+			 */
+			ValidateSharedGucEncoding(WARNING, GetClusterEncoding());			
+			
+			/*
 			 * At the next iteration of the postmaster's main loop, we will
 			 * crank up the background tasks like the autovacuum launcher and
 			 * background workers that were not started earlier already.

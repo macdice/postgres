@@ -430,6 +430,7 @@ extern config_handle *get_config_handle(const char *name);
 extern void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt);
 extern char *GetConfigOptionByName(const char *name, const char **varname,
 								   bool missing_ok);
+extern void ValidateSharedGucEncoding(int elevel, int cluster_encoding);
 
 extern void TransformGUCArray(ArrayType *array, List **names,
 							  List **values);

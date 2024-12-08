@@ -3052,7 +3052,13 @@ initialize_data_directory(void)
 	PQExpBufferData cmd;
 	int			i;
 
-	/* Check that the pathname is valid in the cluster encoding. */
+	/*
+	 * Check that the pathname is valid in the cluster encoding.
+	 *
+	 * XXX: Windows uses ACP for argv[] and environ, so whichever it came
+	 * from, it's not right to check it against cluster_encodingid.  The
+	 * correct test might be "can we convert it to the cluster encoding".
+	 */
 	if ((cluster_encodingid == PG_SQL_ASCII &&
 		 !pg_is_ascii(pg_data)) ||
 		(cluster_encodingid > 0 &&
