@@ -2777,6 +2777,7 @@ setup_cluster_encoding(void)
 		cluster_encodingid = PG_SQL_ASCII;
 	else if (pg_strcasecmp(cluster_encoding, "UNDEFINED") == 0)
 		cluster_encodingid = -1;
+
 	printf(_("The initial cluster encoding has been set to \"%s\".\n"),
 		   cluster_encodingid == -1 ? "UNDEFINED" :
 		   cluster_encodingid == PG_SQL_ASCII ? "ASCII" :
