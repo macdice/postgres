@@ -41,24 +41,21 @@
 bool
 StringIsValidInClusterEncoding(const char *s, int cluster_encoding)
 {
-	/* In UNDEFINED mode, it is valid by definition. */
+	size_t len;
+	
 	if (cluster_encoding == CLUSTER_ENCODING_UNDEFINED)
 		return true;
-
-	/*
-	 * Despite using the value PG_SQL_ASCII (which in other contexts means
-	 * anything-goes), here we accept only 7-bit ASCII because only 7-bit
-	 * ASCII is a subset of all server encodings.
-	 */
 	if (cluster_encoding == CLUSTER_ENCODING_ASCII)
 		return pg_is_ascii(s);
 
 	/*
-	 * Otherwise it has to match the database encoding.  Since this function
-	 * handles externally sourced strings, we validate even database encoding
-	 * instead of assuming it is valid.
+	 * In DATABASE mode, explicitly check if it matches the cluster encoding.
+	 * Since this function handles externally sourced strings and can be used
+	 * outside the context of a database, we can't assume it has already been
+	 * validated.
 	 */
-	return pg_encoding_verifymbstr(cluster_encoding, s, strlen(s));
+	len = strlen(s);
+	return pg_encoding_verifymbstr(cluster_encoding, s, len) == len;
 }
 
 bool

@@ -7038,7 +7038,7 @@ ValidateSharedGucEncoding(int elevel, int cluster_encoding)
 		else
 			continue;
 
-		if (!StringIsValidInClusterEncoding(value, cluster_encoding))
+		if (value && !StringIsValidInClusterEncoding(value, cluster_encoding))
 			ereport(elevel,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("configuration parameter \"%s\" has invalid value \"%s\"",
