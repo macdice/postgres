@@ -26,7 +26,7 @@ provider postgresql {
 
 	probe transaction__start(LocalTransactionId);
 	probe transaction__commit(LocalTransactionId);
-	probe transaction__abort(LocalTransactionId);
+	probe transaction__abortx(LocalTransactionId);
 
 	probe lwlock__acquire(const char *, LWLockMode);
 	probe lwlock__release(const char *);
