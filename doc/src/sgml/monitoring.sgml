@@ -7037,7 +7037,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </row>
     <row>
      <entry><literal>wal-insert</literal></entry>
-     <entry><literal>(unsigned char, unsigned char)</literal></entry>
+     <entry><literal>(uint8_t, uint8_t)</literal></entry>
      <entry>Probe that fires when a WAL record is inserted.
       arg0 is the resource manager (rmid) for the record.
       arg1 contains the info flags.</entry>
@@ -7105,7 +7105,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </row>
     <row>
      <entry><literal>sort-done</literal></entry>
-     <entry><literal>(bool, long)</literal></entry>
+     <entry><literal>(bool, int64_t)</literal></entry>
      <entry>Probe that fires when a sort is complete.
       arg0 is true for external sort, false for internal sort.
       arg1 is the number of disk blocks used for an external sort,
@@ -7159,7 +7159,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </row>
     <row>
      <entry><literal>lock-wait-start</literal></entry>
-     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
+     <entry><literal>(uint32_t, uint32_t, uint32_t, uint16_t, uint8_t, LOCKMODE)</literal></entry>
      <entry>Probe that fires when a request for a heavyweight lock (lmgr lock)
       has begun to wait because the lock is not available.
       arg0 through arg3 are the tag fields identifying the object being
@@ -7168,7 +7168,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </row>
     <row>
      <entry><literal>lock-wait-done</literal></entry>
-     <entry><literal>(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE)</literal></entry>
+     <entry><literal>(uint32_t, uint32_t, uint32_t, uint16_t, uint8_t, LOCKMODE)</literal></entry>
      <entry>Probe that fires when a request for a heavyweight lock (lmgr lock)
       has finished waiting (i.e., has acquired the lock).
       The arguments are the same as for <literal>lock-wait-start</literal>.</entry>
@@ -7198,7 +7198,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
 
     <row>
      <entry><type>LocalTransactionId</type></entry>
-     <entry><type>unsigned int</type></entry>
+     <entry><type>uint32_t</type></entry>
     </row>
     <row>
      <entry><type>LWLockMode</type></entry>
@@ -7210,7 +7210,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </row>
     <row>
      <entry><type>BlockNumber</type></entry>
-     <entry><type>unsigned int</type></entry>
+     <entry><type>uint32_t</type></entry>
     </row>
     <row>
      <entry><type>Oid</type></entry>
@@ -7222,7 +7222,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </row>
     <row>
      <entry><type>bool</type></entry>
-     <entry><type>unsigned char</type></entry>
+     <entry><type>_Bool</type></entry>
     </row>
 
    </tbody>

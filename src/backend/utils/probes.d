@@ -10,17 +10,14 @@
 
 /*
  * Typedefs used in PostgreSQL probes.
- *
- * NOTE: Do not use system-provided typedefs (e.g. uintptr_t, uint32_t, etc)
- * in probe definitions, as they cause compilation errors on macOS.
  */
-#define LocalTransactionId unsigned int
+#define LocalTransactionId uint32_t
 #define LWLockMode int
 #define LOCKMODE int
-#define BlockNumber unsigned int
+#define BlockNumber uint32_t
 #define Oid unsigned int
 #define ForkNumber int
-#define bool unsigned char
+#define bool _Bool
 
 provider postgresql {
 
@@ -37,8 +34,8 @@ provider postgresql {
 	probe lwlock__acquire__or__wait(const char *, LWLockMode);
 	probe lwlock__acquire__or__wait__fail(const char *, LWLockMode);
 
-	probe lock__wait__start(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
-	probe lock__wait__done(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
+	probe lock__wait__start(uint32_t, uint32_t, uint32_t, uint16_t, uint8_t, LOCKMODE);
+	probe lock__wait__done(uint32_t, uint32_t, uint32_t, uint16_t, uint8_t, LOCKMODE);
 
 	probe query__parse__start(const char *);
 	probe query__parse__done(const char *);
@@ -53,7 +50,7 @@ provider postgresql {
 	probe statement__status(const char *);
 
 	probe sort__start(int, bool, int, int, bool, int);
-	probe sort__done(bool, long);
+	probe sort__done(bool, int64_t);
 
 	probe buffer__read__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int);
 	probe buffer__read__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool);
@@ -87,7 +84,7 @@ provider postgresql {
 	probe smgr__md__write__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int);
 	probe smgr__md__write__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int);
 
-	probe wal__insert(unsigned char, unsigned char);
+	probe wal__insert(uint8_t, uint8_t);
 	probe wal__switch();
 	probe wal__buffer__write__dirty__start();
 	probe wal__buffer__write__dirty__done();
