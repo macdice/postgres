@@ -19,6 +19,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/read_stream.h"
 #include "storage/smgr.h"
@@ -390,6 +391,7 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	Relation	rel;
 	ForkNumber	fork;
 	BlockNumber block;
+	BlockNumber old_block;
 
 	rel = relation_open(relid, AccessExclusiveLock);
 
@@ -399,12 +401,22 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	/* Forcibly reset cached file size */
 	RelationGetSmgr(rel)->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = InvalidBlockNumber;
 
+	/* Compute new and old size before entering critical section. */
+	fork = VISIBILITYMAP_FORKNUM;
 	block = visibilitymap_prepare_truncate(rel, 0);
-	if (BlockNumberIsValid(block))
-	{
-		fork = VISIBILITYMAP_FORKNUM;
-		smgrtruncate(RelationGetSmgr(rel), &fork, 1, &block);
-	}
+	old_block = BlockNumberIsValid(block) ? smgrnblocks(RelationGetSmgr(rel), fork) : 0;
+
+	/*
+	 * Buffer dropping, file truncation and WAL logging must be effectively
+	 * atomic.  Interrupts are suppressed (waits for buffer I/O must be
+	 * non-cancellable), and we either succeed in all steps or panic.  Also
+	 * prevent checkpoint start/complete, so we can't recovery from a redo
+	 * point after the record without having truncated and fsync'd the file(s).
+	 * See RelationTruncate() for discussion.
+	 */
+	Assert((MyProc->delayChkptFlags & (DELAY_CHKPT_START | DELAY_CHKPT_COMPLETE)) == 0);
+	MyProc->delayChkptFlags |= DELAY_CHKPT_START | DELAY_CHKPT_COMPLETE;
+	START_CRIT_SECTION();
 
 	if (RelationNeedsWAL(rel))
 	{
@@ -420,6 +432,12 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 		XLogInsert(RM_SMGR_ID, XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
 	}
 
+	if (BlockNumberIsValid(block))
+		smgrtruncatefrom(RelationGetSmgr(rel), &fork, 1, &old_block, &block);
+
+	END_CRIT_SECTION();
+	MyProc->delayChkptFlags &= ~(DELAY_CHKPT_START | DELAY_CHKPT_COMPLETE);
+
 	/*
 	 * Release the lock right away, not at commit time.
 	 *
@@ -430,7 +448,7 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	 * here and when we sent the messages at our eventual commit.  However,
 	 * we're currently only sending a non-transactional smgr invalidation,
 	 * which will have been posted to shared memory immediately from within
-	 * smgr_truncate.  Therefore, there should be no race here.
+	 * smgrtruncatefrom.  Therefore, there should be no race here.
 	 *
 	 * The reason why it's desirable to release the lock early here is because
 	 * of the possibility that someone will need to use this to blow away many
