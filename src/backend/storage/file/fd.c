@@ -2390,7 +2390,7 @@ FileZero(File file, off_t offset, off_t amount, uint32 wait_event_info)
 int
 FileFallocate(File file, off_t offset, off_t amount, uint32 wait_event_info)
 {
-#ifdef HAVE_POSIX_FALLOCATE
+#if defined(HAVE_POSIX_FALLOCATE) || defined(WIN32)
 	int			returnCode;
 
 	Assert(FileIsValid(file));
@@ -2405,7 +2405,31 @@ FileFallocate(File file, off_t offset, off_t amount, uint32 wait_event_info)
 
 retry:
 	pgstat_report_wait_start(wait_event_info);
+#ifdef WIN32
+	{
+		off_t		old_size;
+		off_t		new_size;
+
+		/*
+		 * On Windows, files are not sparse by default, so ftruncate() can
+		 * allocate new disk blocks without writing through the page cache.
+		 */
+		old_size = lseek(VfdCache[file].fd, 0, SEEK_END);
+		if (old_size < 0)
+			return -1;
+		new_size = offset + amount;
+		if (new_size > old_size)
+			if (ftruncate(VfdCache[file].fd, new_size) < 0)
+				return -1;
+	}
+#else
+
+	/*
+	 * On Unix, files are usually sparse by default, so posix_fallocate() is
+	 * needed to allocate disk blocks without writing through the page cache.
+	 */
 	returnCode = posix_fallocate(VfdCache[file].fd, offset, amount);
+#endif
 	pgstat_report_wait_end();
 
 	if (returnCode == 0)
