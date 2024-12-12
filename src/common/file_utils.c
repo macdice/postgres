@@ -687,8 +687,16 @@ pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 ssize_t
 pg_pwrite_zeros(int fd, size_t size, off_t offset)
 {
-	static const PGIOAlignedBlock zbuffer = {{0}};	/* worth BLCKSZ */
-	void	   *zerobuf_addr = unconstify(PGIOAlignedBlock *, &zbuffer)->data;
+	/*
+	 * On Windows, pg_pwritev() isn't a system call, it's a loop.  It might be
+	 * worth wasting more memory on zero buffers to get fewer loops.
+	 */
+#ifdef WIN32
+	static const PGIOAlignedBlock zbuffer[8] = {{{0}}};
+#else
+	static const PGIOAlignedBlock zbuffer[1] = {{{0}}};
+#endif
+	void	   *zerobuf_addr = unconstify(PGIOAlignedBlock *, &zbuffer[0])->data;
 	struct iovec iov[PG_IOV_MAX];
 	size_t		remaining_size = size;
 	ssize_t		total_written = 0;
@@ -703,13 +711,8 @@ pg_pwrite_zeros(int fd, size_t size, off_t offset)
 		{
 			size_t		this_iov_size;
 
+			this_iov_size = Min(remaining_size, sizeof(zbuffer));
 			iov[iovcnt].iov_base = zerobuf_addr;
-
-			if (remaining_size < BLCKSZ)
-				this_iov_size = remaining_size;
-			else
-				this_iov_size = BLCKSZ;
-
 			iov[iovcnt].iov_len = this_iov_size;
 			remaining_size -= this_iov_size;
 		}
