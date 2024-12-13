@@ -1649,6 +1649,9 @@ ServerLoop(void)
 		 */
 		for (int i = 0; i < nevents; i++)
 		{
+			if (events[i].events & WL_LATCH_SET)
+				ResetLatch(MyLatch);
+
 			/*
 			 * The following requests are handled unconditionally, even if we
 			 * didn't see WL_LATCH_SET.  This gives high priority to shutdown
@@ -1667,14 +1670,11 @@ ServerLoop(void)
 			/*
 			 * When receiving high frequency PM signals, we only want to
 			 * process them once per server loop, not once per event of any
-			 * kind, so wait for the corresponding WL_LATCH_SET.
+			 * kind, so we defer until we see the corresponding WL_LATCH_SET.
 			 */
 			if (events[i].events & WL_LATCH_SET)
-			{
-				ResetLatch(MyLatch);
 				if (pending_pm_pmsignal)
 					process_pm_pmsignal();
-			}
 
 			/*
 			 * For every server loop, we can accept one socket from each
