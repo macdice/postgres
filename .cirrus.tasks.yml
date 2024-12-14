@@ -526,6 +526,7 @@ WINDOWS_ENVIRONMENT_BASE: &WINDOWS_ENVIRONMENT_BASE
     # git's tar doesn't deal with drive letters, see
     # https://postgr.es/m/b6782dc3-a7b0-ed56-175f-f8f54cb08d67%40dunslane.net
     TAR: "c:/windows/system32/tar.exe"
+    DTRACE: "c:/Program Files/DTrace/dtrace.exe"
     # Avoids port conflicts between concurrent tap test runs
     PG_TEST_USE_UNIX_SOCKETS: 1
     PG_REGRESS_SOCK_DIR: "c:/cirrus/"
@@ -561,7 +562,7 @@ task:
   only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*windows.*'
 
   setup_additional_packages_script: |
-    REM choco install -y --no-progress ...
+    REM choco install -y --no-progress dtrace
 
   setup_hosts_file_script: |
     echo 127.0.0.1 pg-loadbalancetest >> c:\Windows\System32\Drivers\etc\hosts
@@ -572,7 +573,7 @@ task:
   # Use /DEBUG:FASTLINK to avoid high memory usage during linking
   configure_script: |
     vcvarsall x64
-    meson setup --backend ninja --buildtype debug -Dc_link_args=/DEBUG:FASTLINK -Dcassert=true -Dinjection_points=true -Db_pch=true -Dextra_lib_dirs=c:\openssl\1.1\lib -Dextra_include_dirs=c:\openssl\1.1\include -DTAR=%TAR% build
+    meson setup --backend ninja --buildtype debug -Dc_link_args=/DEBUG:FASTLINK -Dcassert=true -Dinjection_points=true -Ddtrace=auto -Db_pch=true -Dextra_lib_dirs=c:\openssl\1.1\lib -Dextra_include_dirs=c:\openssl\1.1\include -DTAR=%TAR% build
 
   build_script: |
     vcvarsall x64
@@ -621,7 +622,7 @@ task:
     folder: ${CCACHE_DIR}
 
   setup_additional_packages_script: |
-    REM C:\msys64\usr\bin\pacman.exe -S --noconfirm ...
+    REM C:\msys64\usr\bin\pacman.exe -S --noconfirm dtrace
 
   mingw_info_script: |
     %BASH% -c "where gcc"
