@@ -40,6 +40,13 @@
 dlist_head	BackgroundWorkerList = DLIST_STATIC_INIT(BackgroundWorkerList);
 
 /*
+ * An array of registered background workers indexed by slot number.
+ * BackgroundWorkerList entries are also in this table for fast lookup, and
+ * must be kept in sync.
+ */
+static RegisteredBgWorker **BackgroundWorkerTable;
+
+/*
  * BackgroundWorkerSlots exist in shared memory and can be accessed (via
  * the BackgroundWorkerArray) by both the postmaster and by regular backends.
  * However, the postmaster cannot take locks, even spinlocks, because this
@@ -203,6 +210,19 @@ BackgroundWorkerShmemInit(void)
 		BackgroundWorkerData->change_queue_tail = 0;
 
 		/*
+		 * Allocate an array to let us find RegisteredBgWorker objects by slot
+		 * number.
+		 *
+		 * XXX Where else could this allocation happen?
+		 */
+		if (PostmasterContext && !BackgroundWorkerTable)
+			BackgroundWorkerTable =
+				MemoryContextAllocExtended(PostmasterContext,
+										   sizeof(BackgroundWorkerTable[0]) *
+										   max_worker_processes,
+										   MCXT_ALLOC_ZERO);
+
+		/*
 		 * Copy contents of worker list into shared memory.  Record the shared
 		 * memory slot assigned to each worker.  This ensures a 1-to-1
 		 * correspondence between the postmaster's private list and the array
@@ -222,6 +242,9 @@ BackgroundWorkerShmemInit(void)
 			rw->rw_shmem_slot = slotno;
 			rw->rw_worker.bgw_notify_pid = 0;	/* might be reinit after crash */
 			memcpy(&slot->worker, &rw->rw_worker, sizeof(BackgroundWorker));
+
+			/* Add to slot-number lookup table. */
+			BackgroundWorkerTable[rw->rw_shmem_slot] = rw;
 
 			/* Enqueue change notifications for all populated slots. */
 			BackgroundWorkerData->change_queue[BackgroundWorkerData->change_queue_head++] = slotno;
@@ -252,18 +275,11 @@ BackgroundWorkerShmemInit(void)
 static RegisteredBgWorker *
 FindRegisteredWorkerBySlotNumber(int slotno)
 {
-	dlist_iter	iter;
+	RegisteredBgWorker *rw = BackgroundWorkerTable[slotno];
 
-	dlist_foreach(iter, &BackgroundWorkerList)
-	{
-		RegisteredBgWorker *rw;
+	Assert(!rw || rw->rw_shmem_slot == slotno);
 
-		rw = dlist_container(RegisteredBgWorker, rw_lnode, iter.cur);
-		if (rw->rw_shmem_slot == slotno)
-			return rw;
-	}
-
-	return NULL;
+	return rw;
 }
 
 /*
@@ -487,6 +503,9 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 								 rw->rw_worker.bgw_name)));
 
 		dlist_push_head(&BackgroundWorkerList, &rw->rw_lnode);
+
+		/* Add to slot-number lookup table. */
+		BackgroundWorkerTable[rw->rw_shmem_slot] = rw;
 	}
 }
 
@@ -550,6 +569,10 @@ ForgetBackgroundWorker(RegisteredBgWorker *rw)
 	Assert(rw->rw_shmem_slot < max_worker_processes);
 	slot = &BackgroundWorkerData->slot[rw->rw_shmem_slot];
 	Assert(slot->in_use);
+
+	/* Remove from slot-number lookup table. */
+	Assert(BackgroundWorkerTable[rw->rw_shmem_slot] == rw);
+	BackgroundWorkerTable[rw->rw_shmem_slot] = NULL;
 
 	/*
 	 * We need a memory barrier here to make sure that the update of
