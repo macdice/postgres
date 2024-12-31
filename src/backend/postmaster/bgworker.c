@@ -96,8 +96,25 @@ typedef struct BackgroundWorkerArray
 	int			total_slots;
 	uint32		parallel_register_count;
 	uint32		parallel_terminate_count;
+
+	/*
+	 * A circular queue of slot change notifications.  Backends write slot
+	 * numbers into this queue at the "head" position to tell the postmaster
+	 * that a slot is now being used, or should now be terminated.
+	 */
+	int		   *change_queue;
+	uint32		change_queue_tail;	/* postmaster advances (consumer) */
+	uint32		change_queue_head;	/* backends advance (producers) */
+
 	BackgroundWorkerSlot slot[FLEXIBLE_ARRAY_MEMBER];
 } BackgroundWorkerArray;
+
+/*
+ * Each slot can have at most two unconsumed events produced by a backend:
+ * when in_use is set, and when terminate is set.  We need one extra element
+ * because tail==head means empty.
+ */
+#define BGWORKER_CHANGE_QUEUE_SIZE (max_worker_processes * 2 + 1)
 
 struct BackgroundWorkerHandle
 {
@@ -151,6 +168,7 @@ BackgroundWorkerShmemSize(void)
 	size = offsetof(BackgroundWorkerArray, slot);
 	size = add_size(size, mul_size(max_worker_processes,
 								   sizeof(BackgroundWorkerSlot)));
+	size = add_size(size, mul_size(BGWORKER_CHANGE_QUEUE_SIZE, sizeof(int)));
 
 	return size;
 }
@@ -176,6 +194,15 @@ BackgroundWorkerShmemInit(void)
 		BackgroundWorkerData->parallel_terminate_count = 0;
 
 		/*
+		 * Set up the change notification queue.  The queue itself is after
+		 * slots[] in memory.
+		 */
+		BackgroundWorkerData->change_queue = (int *)
+			&BackgroundWorkerData->slot[max_worker_processes];
+		BackgroundWorkerData->change_queue_head = 0;
+		BackgroundWorkerData->change_queue_tail = 0;
+
+		/*
 		 * Copy contents of worker list into shared memory.  Record the shared
 		 * memory slot assigned to each worker.  This ensures a 1-to-1
 		 * correspondence between the postmaster's private list and the array
@@ -195,6 +222,10 @@ BackgroundWorkerShmemInit(void)
 			rw->rw_shmem_slot = slotno;
 			rw->rw_worker.bgw_notify_pid = 0;	/* might be reinit after crash */
 			memcpy(&slot->worker, &rw->rw_worker, sizeof(BackgroundWorker));
+
+			/* Enqueue change notifications for all populated slots. */
+			BackgroundWorkerData->change_queue[BackgroundWorkerData->change_queue_head++] = slotno;
+
 			++slotno;
 		}
 
@@ -208,6 +239,7 @@ BackgroundWorkerShmemInit(void)
 			slot->in_use = false;
 			++slotno;
 		}
+
 	}
 	else
 		Assert(found);
@@ -235,7 +267,7 @@ FindRegisteredWorkerBySlotNumber(int slotno)
 }
 
 /*
- * Notice changes to shared memory made by other backends.
+ * Process state change notifications enqueued by backends.
  * Accept new worker requests only if allow_new_workers is true.
  *
  * This code runs in the postmaster, so we must be very careful not to assume
@@ -245,41 +277,80 @@ FindRegisteredWorkerBySlotNumber(int slotno)
 void
 BackgroundWorkerStateChange(bool allow_new_workers)
 {
-	int			slotno;
+	uint32		tail;
+	uint32		head;
+
+	Assert(!IsUnderPostmaster);
 
 	/*
-	 * The total number of slots stored in shared memory should match our
-	 * notion of max_worker_processes.  If it does not, something is very
-	 * wrong.  Further down, we always refer to this value as
-	 * max_worker_processes, in case shared memory gets corrupted while we're
-	 * looping.
+	 * The queue head might be advanced concurrently, but in that case we'll
+	 * receive another PMSIGNAL_BACKGROUND_WORKER_CHANGE notification.  So we
+	 * take one snapshot of the current values, and process only that range.
+	 * The signal handler is assumed to have been a memory barrier, so we see
+	 * the new head.  The tail is only written by the postmaster.
 	 */
-	if (max_worker_processes != BackgroundWorkerData->total_slots)
+	tail = BackgroundWorkerData->change_queue_tail;
+	head = BackgroundWorkerData->change_queue_head;
+
+	/* Sanity check queue range. */
+	if (tail >= BGWORKER_CHANGE_QUEUE_SIZE ||
+		head >= BGWORKER_CHANGE_QUEUE_SIZE)
 	{
+		/* This corruption isn't recoverable, so just squawk. */
 		ereport(LOG,
-				(errmsg("inconsistent background worker state (\"max_worker_processes\"=%d, total slots=%d)",
-						max_worker_processes,
-						BackgroundWorkerData->total_slots)));
+				(errmsg("background worker change queue range out of bounds (tail=%u, head=%u, size=%d)",
+						tail, head, BGWORKER_CHANGE_QUEUE_SIZE)));
 		return;
 	}
 
 	/*
-	 * Iterate through slots, looking for newly-registered workers or workers
-	 * who must die.
+	 * Make sure that we can load change_queue[] values and referenced slot[]
+	 * values contents that were stored before head was stored.  Pairs with
+	 * EnqueueBackgroundWorkerStateChange().
 	 */
-	for (slotno = 0; slotno < max_worker_processes; ++slotno)
+	pg_read_barrier();
+
+	/*
+	 * Consume from slot change queue, looking for newly-registered workers or
+	 * workers who must die.
+	 */
+	while (tail != head)
 	{
-		BackgroundWorkerSlot *slot = &BackgroundWorkerData->slot[slotno];
+		int			slotno = BackgroundWorkerData->change_queue[tail];
+		BackgroundWorkerSlot *slot;
 		RegisteredBgWorker *rw;
 
-		if (!slot->in_use)
+		/*
+		 * Advance tail.  It doesn't really need to be in shared memory
+		 * because we reserved space to make overflow impossible, but we put
+		 * it there so that EnqueueBackgroundWorkerStateChange() can make an
+		 * assertion check.
+		 */
+		if (++tail == BGWORKER_CHANGE_QUEUE_SIZE)
+			tail = 0;
+		BackgroundWorkerData->change_queue_tail = tail;
+
+		/* Sanity check slot index. */
+		if (slotno < 0 || slotno >= max_worker_processes)
+		{
+			ereport(LOG,
+					(errmsg("background worker change queue contains out of range slot number %d",
+							slotno)));
 			continue;
+		}
 
 		/*
-		 * Make sure we don't see the in_use flag before the updated slot
-		 * contents.
+		 * We only expect to receive change notifications for slots that are
+		 * in use.
 		 */
-		pg_read_barrier();
+		slot = &BackgroundWorkerData->slot[slotno];
+		if (!slot->in_use)
+		{
+			ereport(LOG,
+					(errmsg("received background worker change request for slot %d but it is not in use",
+							slotno)));
+			continue;
+		}
 
 		/* See whether we already know about this worker. */
 		rw = FindRegisteredWorkerBySlotNumber(slotno);
@@ -313,6 +384,21 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 			slot->terminate = true;
 
 		/*
+		 * Try to allocate space for the registration data in the registered
+		 * workers list, or log and treat as terminated immediately.
+		 */
+		rw = MemoryContextAllocExtended(PostmasterContext,
+										sizeof(RegisteredBgWorker),
+										MCXT_ALLOC_NO_OOM | MCXT_ALLOC_ZERO);
+		if (rw == NULL)
+		{
+			ereport(LOG,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+			slot->terminate = true;
+		}
+
+		/*
 		 * If the worker is marked for termination, we don't need to add it to
 		 * the registered workers list; we can just free the slot. However, if
 		 * bgw_notify_pid is set, the process that registered the worker may
@@ -339,21 +425,10 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 			if (notify_pid != 0)
 				kill(notify_pid, SIGUSR1);
 
-			continue;
-		}
+			if (rw)
+				pfree(rw);
 
-		/*
-		 * Copy the registration data into the registered workers list.
-		 */
-		rw = MemoryContextAllocExtended(PostmasterContext,
-										sizeof(RegisteredBgWorker),
-										MCXT_ALLOC_NO_OOM | MCXT_ALLOC_ZERO);
-		if (rw == NULL)
-		{
-			ereport(LOG,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-			return;
+			continue;
 		}
 
 		/*
@@ -413,6 +488,48 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 
 		dlist_push_head(&BackgroundWorkerList, &rw->rw_lnode);
 	}
+}
+
+/*
+ * Enqueue a change notification for a background worker slot.  The caller is
+ * reponsible for sending PMSIGNAL_BACKGROUND_WORKER_CHANGE, and serializing
+ * insertions with BackgroundWorkerLock.  The memory barriers pair with
+ * BackgroundWorkerStateChange() in the postmaster, which consumes from the
+ * queue without taking the lock.
+ */
+static inline void
+EnqueueBackgroundWorkerStateChange(int slotno)
+{
+	uint32		head;
+
+	Assert(IsUnderPostmaster);
+	Assert(LWLockHeldByMe(BackgroundWorkerLock));
+
+	/* Make sure slot contents are stored before queue contents. */
+	pg_write_barrier();
+
+	/* Write the slot number at head position in the queue. */
+	head = BackgroundWorkerData->change_queue_head;
+	Assert(head < BGWORKER_CHANGE_QUEUE_SIZE);
+	BackgroundWorkerData->change_queue[head] = slotno;
+
+	/* Make sure the queue entry is stored before the new head. */
+	pg_write_barrier();
+	if (++head == BGWORKER_CHANGE_QUEUE_SIZE)
+		head = 0;
+	BackgroundWorkerData->change_queue_head = head;
+
+	/*
+	 * It is impossible for the head to crash into the tail, because we
+	 * reserved space for the is_use and terminate state changes, and no other
+	 * changes are possible until the slot is recycled by the postmaster. This
+	 * barrier pairs with the memory barrier issued by the postmaster before
+	 * it clears in_use.
+	 */
+#ifdef USE_ASSERT_CHECKING
+	pg_read_barrier();
+	Assert(head != BackgroundWorkerData->change_queue_tail);
+#endif
 }
 
 /*
@@ -1104,14 +1221,8 @@ RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
 			generation = slot->generation;
 			if (parallel)
 				BackgroundWorkerData->parallel_register_count++;
-
-			/*
-			 * Make sure postmaster doesn't see the slot as in use before it
-			 * sees the new contents.
-			 */
-			pg_write_barrier();
-
 			slot->in_use = true;
+			EnqueueBackgroundWorkerStateChange(slotno);
 			success = true;
 			break;
 		}
@@ -1301,16 +1412,22 @@ TerminateBackgroundWorker(BackgroundWorkerHandle *handle)
 	Assert(handle->slot < max_worker_processes);
 	slot = &BackgroundWorkerData->slot[handle->slot];
 
-	/* Set terminate flag in shared memory, unless slot has been reused. */
+	/*
+	 * Set terminate flag in shared memory, unless slot has been reused, or a
+	 * backend has already set terminate.  The latter check avoids overflowing
+	 * the chagne queue in the unlikely event of many calls to terminate the
+	 * same worker (see BGWORKER_CHANGE_QUEUE_SIZE).
+	 */
 	LWLockAcquire(BackgroundWorkerLock, LW_EXCLUSIVE);
-	if (handle->generation == slot->generation)
+	if (handle->generation == slot->generation && !slot->terminate)
 	{
 		slot->terminate = true;
+		EnqueueBackgroundWorkerStateChange(handle->slot);
 		signal_postmaster = true;
 	}
 	LWLockRelease(BackgroundWorkerLock);
 
-	/* Make sure the postmaster notices the change to shared memory. */
+	/* Tell postmaster to process state changes */
 	if (signal_postmaster)
 		SendPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE);
 }
