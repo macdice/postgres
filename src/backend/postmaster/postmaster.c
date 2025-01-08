@@ -371,10 +371,6 @@ static bool avlauncher_needs_signal = false;
 /* received START_WALRECEIVER signal */
 static bool WalReceiverRequested = false;
 
-/* set when there's a worker that needs to be started up */
-static bool StartWorkerNeeded = true;
-static bool HaveCrashedWorker = false;
-
 /* set when signals arrive */
 static volatile sig_atomic_t pending_pm_pmsignal;
 static volatile sig_atomic_t pending_pm_child_exit;
@@ -429,13 +425,16 @@ static bool SignalChildren(int signal, BackendTypeMask targetMask);
 static void TerminateChildren(int signal);
 static int	CountChildren(BackendTypeMask targetMask);
 static void LaunchMissingBackgroundProcesses(void);
-static void maybe_start_bgworkers(void);
+static void maybe_start_bgworker(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
 static PMChild *StartChildProcess(BackendType type);
 static void StartSysLogger(void);
 static void StartAutovacuumWorker(void);
 static bool StartBackgroundWorker(RegisteredBgWorker *rw);
 static void InitPostmasterDeathWatchHandle(void);
+static void bgworker_requeue_on_state_change(void);
+static int	bgworker_requeue_on_time(void);
+static void bgworker_schedule_restart(RegisteredBgWorker *rw);
 
 #ifdef WIN32
 #define WNOHANG 0				/* ignored, so any integer value will do */
@@ -1371,9 +1370,6 @@ PostmasterMain(int argc, char *argv[])
 	StartupStatus = STARTUP_RUNNING;
 	UpdatePMState(PM_STARTUP);
 
-	/* Some workers may be scheduled to start now */
-	maybe_start_bgworkers();
-
 	status = ServerLoop();
 
 	/*
@@ -1520,14 +1516,10 @@ checkControlFile(void)
 static int
 DetermineSleepTime(void)
 {
-	TimestampTz next_wakeup = 0;
+	int			sleep_ms;
 
-	/*
-	 * Normal case: either there are no background workers at all, or we're in
-	 * a shutdown sequence (during which we ignore bgworkers altogether).
-	 */
-	if (Shutdown > NoShutdown ||
-		(!StartWorkerNeeded && !HaveCrashedWorker))
+	/* If we're in a shutdown sequence, we ignore bgworkers altogether. */
+	if (Shutdown > NoShutdown)
 	{
 		if (AbortStartTime != 0)
 		{
@@ -1543,54 +1535,18 @@ DetermineSleepTime(void)
 			return 60 * 1000;
 	}
 
-	if (StartWorkerNeeded)
+	/*
+	 * Check if any deferred workers should be moved to the start queue.  This
+	 * also tells us how long until the next one is ready, or INT_MAX if there
+	 * are none.
+	 */
+	sleep_ms = bgworker_requeue_on_time();
+
+	/* Don't sleep at all if there is a worker ready to be started. */
+	if (!dlist_is_empty(&BackgroundWorkerStartQueue))
 		return 0;
 
-	if (HaveCrashedWorker)
-	{
-		dlist_mutable_iter iter;
-
-		/*
-		 * When there are crashed bgworkers, we sleep just long enough that
-		 * they are restarted when they request to be.  Scan the list to
-		 * determine the minimum of all wakeup times according to most recent
-		 * crash time and requested restart interval.
-		 */
-		dlist_foreach_modify(iter, &BackgroundWorkerList)
-		{
-			RegisteredBgWorker *rw;
-			TimestampTz this_wakeup;
-
-			rw = dlist_container(RegisteredBgWorker, rw_lnode, iter.cur);
-
-			if (rw->rw_crashed_at == 0)
-				continue;
-
-			if (rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART
-				|| rw->rw_terminate)
-			{
-				ForgetBackgroundWorker(rw);
-				continue;
-			}
-
-			this_wakeup = TimestampTzPlusMilliseconds(rw->rw_crashed_at,
-													  1000L * rw->rw_worker.bgw_restart_time);
-			if (next_wakeup == 0 || this_wakeup < next_wakeup)
-				next_wakeup = this_wakeup;
-		}
-	}
-
-	if (next_wakeup != 0)
-	{
-		int			ms;
-
-		/* result of TimestampDifferenceMilliseconds is in [0, INT_MAX] */
-		ms = (int) TimestampDifferenceMilliseconds(GetCurrentTimestamp(),
-												   next_wakeup);
-		return Min(60 * 1000, ms);
-	}
-
-	return 60 * 1000;
+	return Min(60 * 1000, sleep_ms);
 }
 
 /*
@@ -2313,13 +2269,6 @@ process_pm_child_exit(void)
 			UpdatePMState(PM_RUN);
 			connsAllowed = true;
 
-			/*
-			 * At the next iteration of the postmaster's main loop, we will
-			 * crank up the background tasks like the autovacuum launcher and
-			 * background workers that were not started earlier already.
-			 */
-			StartWorkerNeeded = true;
-
 			/* at this point we are really open for business */
 			ereport(LOG,
 					(errmsg("database system is ready to accept connections")));
@@ -2615,6 +2564,8 @@ CleanupBackend(PMChild *bp,
 
 	if (crashed)
 	{
+		if (rw)
+			rw->rw_pid = 0;
 		HandleChildCrash(bp_pid, exitstatus, procname);
 		return;
 	}
@@ -2635,19 +2586,18 @@ CleanupBackend(PMChild *bp,
 	 */
 	if (bp_bkend_type == B_BG_WORKER)
 	{
-		if (!EXIT_STATUS_0(exitstatus))
-		{
-			/* Record timestamp, so we know when to restart the worker. */
-			rw->rw_crashed_at = GetCurrentTimestamp();
-		}
-		else
-		{
-			/* Zero exit status means terminate */
-			rw->rw_crashed_at = 0;
-			rw->rw_terminate = true;
-		}
-
 		rw->rw_pid = 0;
+
+		/*
+		 * Zero exist status means terminate.  Otherwise we schedule a delayed
+		 * restart.  Note that ReportBackgroundWorkerExit() will free the
+		 * worker if appropriate.
+		 */
+		if (EXIT_STATUS_0(exitstatus))
+			rw->rw_terminate = true;
+		else
+			bgworker_schedule_restart(rw);
+
 		ReportBackgroundWorkerExit(rw); /* report child death */
 
 		if (!logged)
@@ -2656,9 +2606,6 @@ CleanupBackend(PMChild *bp,
 						 procname, bp_pid, exitstatus);
 			logged = true;
 		}
-
-		/* have it be restarted */
-		HaveCrashedWorker = true;
 	}
 
 	if (!logged)
@@ -3144,8 +3091,7 @@ pmstate_name(PMState state)
 }
 
 /*
- * Simple wrapper for updating pmState. The main reason to have this wrapper
- * is that it makes it easy to log all state transitions.
+ * Update pmState.
  */
 static void
 UpdatePMState(PMState newState)
@@ -3153,6 +3099,9 @@ UpdatePMState(PMState newState)
 	elog(DEBUG1, "updating PMState from %s to %s",
 		 pmstate_name(pmState), pmstate_name(newState));
 	pmState = newState;
+
+	/* Some bgworkers might need to move to the start queue. */
+	bgworker_requeue_on_state_change();
 }
 
 /*
@@ -3265,8 +3214,7 @@ LaunchMissingBackgroundProcesses(void)
 		WalSummarizerPMChild = StartChildProcess(B_WAL_SUMMARIZER);
 
 	/* Get other worker processes running, if needed */
-	if (StartWorkerNeeded || HaveCrashedWorker)
-		maybe_start_bgworkers();
+	maybe_start_bgworker();
 }
 
 /*
@@ -3621,9 +3569,6 @@ process_pm_pmsignal(void)
 
 		UpdatePMState(PM_HOT_STANDBY);
 		connsAllowed = true;
-
-		/* Some workers may be scheduled to start now */
-		StartWorkerNeeded = true;
 	}
 
 	/* Process background worker state changes. */
@@ -3631,7 +3576,6 @@ process_pm_pmsignal(void)
 	{
 		/* Accept new worker requests only if not stopping. */
 		BackgroundWorkerStateChange(pmState < PM_STOP_BACKENDS);
-		StartWorkerNeeded = true;
 	}
 
 	/* Tell syslogger to rotate logfile if requested */
@@ -3954,7 +3898,8 @@ StartBackgroundWorker(RegisteredBgWorker *rw)
 		ereport(LOG,
 				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 				 errmsg("no slot available for new background worker process")));
-		rw->rw_crashed_at = GetCurrentTimestamp();
+		bgworker_schedule_restart(rw);
+		ReportBackgroundWorkerExit(rw);
 		return false;
 	}
 	bn->rw = rw;
@@ -3975,8 +3920,8 @@ StartBackgroundWorker(RegisteredBgWorker *rw)
 		/* undo what AssignPostmasterChildSlot did */
 		ReleasePostmasterChildSlot(bn);
 
-		/* mark entry as crashed, so we'll try again later */
-		rw->rw_crashed_at = GetCurrentTimestamp();
+		bgworker_schedule_restart(rw);
+		ReportBackgroundWorkerExit(rw);
 		return false;
 	}
 
@@ -4026,48 +3971,128 @@ bgworker_should_start_now(BgWorkerStartTime start_time)
 }
 
 /*
- * If the time is right, start background worker(s).
- *
- * As a side effect, the bgworker control variables are set or reset
- * depending on whether more workers may need to be started.
- *
- * We limit the number of workers started per call, to avoid consuming the
- * postmaster's attention for too long when many such requests are pending.
- * As long as StartWorkerNeeded is true, ServerLoop will not block and will
- * call this function again after dealing with any other issues.
+ * Schedule deferred workers to start if the state they are waiting for has
+ * arrived.  This should be called whenever pmState moves to states for which
+ * bgworker_should_start_now() can return true.
  */
 static void
-maybe_start_bgworkers(void)
+bgworker_requeue_on_state_change(void)
 {
-#define MAX_BGWORKERS_TO_LAUNCH 100
-	int			num_launched = 0;
-	TimestampTz now = 0;
 	dlist_mutable_iter iter;
 
-	/*
-	 * During crash recovery, we have no need to be called until the state
-	 * transition out of recovery.
-	 */
-	if (FatalError)
-	{
-		StartWorkerNeeded = false;
-		HaveCrashedWorker = false;
-		return;
-	}
-
-	/* Don't need to be called again unless we find a reason for it below */
-	StartWorkerNeeded = false;
-	HaveCrashedWorker = false;
-
-	dlist_foreach_modify(iter, &BackgroundWorkerList)
+	dlist_foreach_modify(iter, &BackgroundWorkerWaitStateQueue)
 	{
 		RegisteredBgWorker *rw;
 
-		rw = dlist_container(RegisteredBgWorker, rw_lnode, iter.cur);
+		rw = dlist_container(RegisteredBgWorker, rw_queue_node, iter.cur);
+		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time))
+		{
+			dlist_delete(&rw->rw_queue_node);
+			dlist_push_tail(&BackgroundWorkerStartQueue, &rw->rw_queue_node);
+		}
+	}
+}
 
-		/* ignore if already running */
-		if (rw->rw_pid != 0)
-			continue;
+/*
+ * Schedule workers to start if their start time has arrived.  Returns the
+ * number of milliseconds until the next time-delayed worker wants to start,
+ * or INT_MAX if there are none.
+ */
+static int
+bgworker_requeue_on_time(void)
+{
+	dlist_head *queue = &BackgroundWorkerWaitTimeQueue;
+
+	if (!dlist_is_empty(queue))
+	{
+		TimestampTz now = GetCurrentTimestamp();
+
+		do
+		{
+			RegisteredBgWorker *rw;
+
+			/* If the head item in the queue needs more time, we are done. */
+			rw = dlist_head_element(RegisteredBgWorker, rw_queue_node, queue);
+			if (rw->rw_restart_at > now)
+				return TimestampDifferenceMilliseconds(now, rw->rw_restart_at);
+
+			/* Move this one to the start queue, and go around again. */
+			dlist_delete(&rw->rw_queue_node);
+			dlist_push_tail(&BackgroundWorkerStartQueue, &rw->rw_queue_node);
+		} while (!dlist_is_empty(queue));
+	}
+
+	return INT_MAX;
+}
+
+/*
+ * After a background worker exits unsuccessfully or fails to start, this
+ * function can be used to schedule a restart attempt after "bgw_restart_time"
+ * seconds.
+ */
+static void
+bgworker_schedule_restart(RegisteredBgWorker *rw)
+{
+	dlist_head *queue = &BackgroundWorkerWaitTimeQueue;
+	RegisteredBgWorker *other = NULL;
+
+	if (rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART)
+		return;
+
+	/* Compute restart time. */
+	rw->rw_restart_at = TimestampTzPlusSeconds(GetCurrentTimestamp(),
+											   rw->rw_worker.bgw_restart_time);
+
+	/*
+	 * Find insertion point in the time-order queue.  Start the search at the
+	 * tail end, since it has the highest time so far and there is a good
+	 * chance we have a higher time.
+	 *
+	 * XXX We could use a binary heap instead, but this should be very
+	 * infrequent and the list should usually be empty, so it doesn't really
+	 * matter.  The more important thing is that bgworker_requeue_on_time() is
+	 * O(1), since it is called frequently.
+	 */
+	if (!dlist_is_empty(queue))
+	{
+		other = dlist_tail_element(RegisteredBgWorker,
+								   rw_queue_node,
+								   queue);
+		while (other && other->rw_restart_at > rw->rw_restart_at)
+		{
+			if (!dlist_has_prev(queue, &other->rw_queue_node))
+				other = NULL;
+			else
+				other =
+					dlist_container(RegisteredBgWorker,
+									rw_queue_node,
+									dlist_prev_node(queue,
+													&other->rw_queue_node));
+		}
+	}
+
+	if (other)
+		dlist_insert_after(&other->rw_queue_node, &rw->rw_queue_node);
+	else
+		dlist_push_head(queue, &rw->rw_queue_node);
+}
+
+/*
+ * Start at most one background worker from BackgroundWorkerStartList.
+ */
+static void
+maybe_start_bgworker(void)
+{
+	while (!dlist_is_empty(&BackgroundWorkerStartQueue))
+	{
+		RegisteredBgWorker *rw;
+
+		/* pop thoroughly (so we can tell we're not on any list) */
+		rw = dlist_head_element(RegisteredBgWorker, rw_queue_node,
+								&BackgroundWorkerStartQueue);
+		dlist_delete_thoroughly(&rw->rw_queue_node);
+
+		Assert(rw->rw_pid == 0);
 
 		/* if marked for death, clean up and remove from list */
 		if (rw->rw_terminate)
@@ -4077,76 +4102,22 @@ maybe_start_bgworkers(void)
 		}
 
 		/*
-		 * If this worker has crashed previously, maybe it needs to be
-		 * restarted (unless on registration it specified it doesn't want to
-		 * be restarted at all).  Check how long ago did a crash last happen.
-		 * If the last crash is too recent, don't start it right away; let it
-		 * be restarted once enough time has passed.
+		 * If this worker is waiting for a different postmaster state, then
+		 * requeue it.
 		 */
-		if (rw->rw_crashed_at != 0)
+		if (!bgworker_should_start_now(rw->rw_worker.bgw_start_time))
 		{
-			if (rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART)
-			{
-				int			notify_pid;
-
-				notify_pid = rw->rw_worker.bgw_notify_pid;
-
-				ForgetBackgroundWorker(rw);
-
-				/* Report worker is gone now. */
-				if (notify_pid != 0)
-					kill(notify_pid, SIGUSR1);
-
-				continue;
-			}
-
-			/* read system time only when needed */
-			if (now == 0)
-				now = GetCurrentTimestamp();
-
-			if (!TimestampDifferenceExceeds(rw->rw_crashed_at, now,
-											rw->rw_worker.bgw_restart_time * 1000))
-			{
-				/* Set flag to remember that we have workers to start later */
-				HaveCrashedWorker = true;
-				continue;
-			}
+			dlist_push_tail(&BackgroundWorkerWaitStateQueue,
+							&rw->rw_queue_node);
+			continue;
 		}
 
-		if (bgworker_should_start_now(rw->rw_worker.bgw_start_time))
-		{
-			/* reset crash time before trying to start worker */
-			rw->rw_crashed_at = 0;
-
-			/*
-			 * Try to start the worker.
-			 *
-			 * On failure, give up processing workers for now, but set
-			 * StartWorkerNeeded so we'll come back here on the next iteration
-			 * of ServerLoop to try again.  (We don't want to wait, because
-			 * there might be additional ready-to-run workers.)  We could set
-			 * HaveCrashedWorker as well, since this worker is now marked
-			 * crashed, but there's no need because the next run of this
-			 * function will do that.
-			 */
-			if (!StartBackgroundWorker(rw))
-			{
-				StartWorkerNeeded = true;
-				return;
-			}
-
-			/*
-			 * If we've launched as many workers as allowed, quit, but have
-			 * ServerLoop call us again to look for additional ready-to-run
-			 * workers.  There might not be any, but we'll find out the next
-			 * time we run.
-			 */
-			if (++num_launched >= MAX_BGWORKERS_TO_LAUNCH)
-			{
-				StartWorkerNeeded = true;
-				return;
-			}
-		}
+		/*
+		 * Only try to start one worker, and then return control so that other
+		 * kinds of postmaster work can be processed.
+		 */
+		StartBackgroundWorker(rw);
+		break;
 	}
 }
 

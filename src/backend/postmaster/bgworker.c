@@ -40,6 +40,19 @@
 dlist_head	BackgroundWorkerList = DLIST_STATIC_INIT(BackgroundWorkerList);
 
 /*
+ * A background worker that is not running is also in one of these queues
+ * waiting to start, using rw_queue_node.  These queues represent workers that
+ * should be started immediately, after a future postmaster state is reached,
+ * or after a specific time in the future, respectively.
+ */
+dlist_head	BackgroundWorkerStartQueue =
+DLIST_STATIC_INIT(BackgroundWorkerStartQueue);
+dlist_head	BackgroundWorkerWaitStateQueue =
+DLIST_STATIC_INIT(BackgroundWorkerWaitStateQueue);
+dlist_head	BackgroundWorkerWaitTimeQueue =
+DLIST_STATIC_INIT(BackgroundWorkerWaitTimeQueue);
+
+/*
  * An array of registered background workers indexed by slot number.
  * BackgroundWorkerList entries are also in this table for fast lookup, and
  * must be kept in sync.
@@ -246,8 +259,11 @@ BackgroundWorkerShmemInit(void)
 			/* Add to slot-number lookup table. */
 			BackgroundWorkerTable[rw->rw_shmem_slot] = rw;
 
-			/* Enqueue change notifications for all populated slots. */
-			BackgroundWorkerData->change_queue[BackgroundWorkerData->change_queue_head++] = slotno;
+			/*
+			 * Schedule to start.  It'll be requeued if it wants to wait for a
+			 * different state.
+			 */
+			dlist_push_tail(&BackgroundWorkerStartQueue, &rw->rw_queue_node);
 
 			++slotno;
 		}
@@ -493,7 +509,6 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 
 		/* Initialize postmaster bookkeeping. */
 		rw->rw_pid = 0;
-		rw->rw_crashed_at = 0;
 		rw->rw_shmem_slot = slotno;
 		rw->rw_terminate = false;
 
@@ -502,10 +517,14 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 				(errmsg_internal("registering background worker \"%s\"",
 								 rw->rw_worker.bgw_name)));
 
+		/* Put it on the list of all workers. */
 		dlist_push_head(&BackgroundWorkerList, &rw->rw_lnode);
 
 		/* Add to slot-number lookup table. */
 		BackgroundWorkerTable[rw->rw_shmem_slot] = rw;
+
+		/* Add to the start queue. */
+		dlist_push_tail(&BackgroundWorkerStartQueue, &rw->rw_queue_node);
 	}
 }
 
@@ -588,6 +607,8 @@ ForgetBackgroundWorker(RegisteredBgWorker *rw)
 			(errmsg_internal("unregistering background worker \"%s\"",
 							 rw->rw_worker.bgw_name)));
 
+	if (!dlist_node_is_detached(&rw->rw_queue_node))
+		dlist_delete_thoroughly(&rw->rw_queue_node);
 	dlist_delete(&rw->rw_lnode);
 	pfree(rw);
 }
@@ -726,6 +747,9 @@ ResetBackgroundWorkerCrashTimes(void)
 
 		rw = dlist_container(RegisteredBgWorker, rw_lnode, iter.cur);
 
+		/* We waited for them all to exit, so they should have no pid. */
+		Assert(rw->rw_pid == 0);
+
 		if (rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART)
 		{
 			/*
@@ -749,17 +773,19 @@ ResetBackgroundWorkerCrashTimes(void)
 			Assert((rw->rw_worker.bgw_flags & BGWORKER_CLASS_PARALLEL) == 0);
 
 			/*
-			 * Allow this worker to be restarted immediately after we finish
-			 * resetting.
-			 */
-			rw->rw_crashed_at = 0;
-
-			/*
 			 * If there was anyone waiting for it, they're history.
 			 */
 			rw->rw_worker.bgw_notify_pid = 0;
 		}
 	}
+
+	/* Remove everything from queues. */
+	while (!dlist_is_empty(&BackgroundWorkerStartQueue))
+		dlist_delete_thoroughly(dlist_head_node(&BackgroundWorkerStartQueue));
+	while (!dlist_is_empty(&BackgroundWorkerWaitStateQueue))
+		dlist_delete_thoroughly(dlist_head_node(&BackgroundWorkerWaitStateQueue));
+	while (!dlist_is_empty(&BackgroundWorkerWaitTimeQueue))
+		dlist_delete_thoroughly(dlist_head_node(&BackgroundWorkerWaitTimeQueue));
 }
 
 /*
@@ -1165,7 +1191,6 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 
 	rw->rw_worker = *worker;
 	rw->rw_pid = 0;
-	rw->rw_crashed_at = 0;
 	rw->rw_terminate = false;
 
 	dlist_push_head(&BackgroundWorkerList, &rw->rw_lnode);

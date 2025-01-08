@@ -33,13 +33,17 @@ typedef struct RegisteredBgWorker
 {
 	BackgroundWorker rw_worker; /* its registry entry */
 	pid_t		rw_pid;			/* 0 if not running */
-	TimestampTz rw_crashed_at;	/* if not 0, time it last crashed */
 	int			rw_shmem_slot;
 	bool		rw_terminate;
-	dlist_node	rw_lnode;		/* list link */
+	dlist_node	rw_lnode;		/* node for list of all workers */
+	dlist_node	rw_queue_node;	/* node for start/wait queues */
+	TimestampTz rw_restart_at;	/* deferred start time after failure */
 } RegisteredBgWorker;
 
 extern PGDLLIMPORT dlist_head BackgroundWorkerList;
+extern PGDLLIMPORT dlist_head BackgroundWorkerStartQueue;
+extern PGDLLIMPORT dlist_head BackgroundWorkerWaitStateQueue;
+extern PGDLLIMPORT dlist_head BackgroundWorkerWaitTimeQueue;
 
 extern Size BackgroundWorkerShmemSize(void);
 extern void BackgroundWorkerShmemInit(void);
