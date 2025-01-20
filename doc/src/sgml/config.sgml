@@ -2644,6 +2644,8 @@ include_dir 'conf.d'
          This parameter can only be set in
          the <filename>postgresql.conf</filename> file or on the server
          command line.
+         The maximum possible size depends on the operating system and block
+         size, but is typically 1MB on Unix and 128kB on Windows.
          The default is 128kB.
         </para>
        </listitem>
@@ -2661,6 +2663,8 @@ include_dir 'conf.d'
          higher than the <varname>max_io_combine_limit</varname> parameter, the
          smaller value will silently be used instead, so both may need to be raised
          to increase the I/O size.
+         The maximum possible size depends on the operating system and block
+         size, but is typically 1MB on Unix and 128kB on Windows.
          The default is 128kB.
         </para>
        </listitem>
