@@ -186,7 +186,9 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 
 struct PgAioHandleCallbacks;
 extern const struct PgAioHandleCallbacks aio_shared_buffer_readv_cb;
+extern const struct PgAioHandleCallbacks aio_shared_buffer_writev_cb;
 extern const struct PgAioHandleCallbacks aio_local_buffer_readv_cb;
+extern const struct PgAioHandleCallbacks aio_local_buffer_writev_cb;
 
 
 /* upper limit for effective_io_concurrency */

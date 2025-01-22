@@ -6516,6 +6516,42 @@ SharedBufferCompleteRead(int buf_off, Buffer buffer, int mode, bool failed)
 	return result;
 }
 
+static uint64
+BufferCompleteWriteShared(Buffer buffer, bool release_lock, bool failed)
+{
+	BufferDesc *bufHdr;
+	bool		result = false;
+
+	Assert(BufferIsValid(buffer));
+
+	bufHdr = GetBufferDescriptor(buffer - 1);
+
+#ifdef USE_ASSERT_CHECKING
+	{
+		uint32		buf_state = pg_atomic_read_u32(&bufHdr->state);
+
+		Assert(buf_state & BM_VALID);
+		Assert(buf_state & BM_TAG_VALID);
+		Assert(buf_state & BM_IO_IN_PROGRESS);
+		Assert(buf_state & BM_DIRTY);
+	}
+#endif
+
+	TerminateBufferIO(bufHdr, /* clear_dirty = */ true,
+					  failed ? BM_IO_ERROR : 0,
+					   /* forget_owner = */ false,
+					   /* syncio = */ false);
+
+	/*
+	 * The initiator of IO is not managing the lock (i.e. called
+	 * LWLockDisown()), we are.
+	 */
+	if (release_lock)
+		LWLockReleaseDisowned(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
+
+	return result;
+}
+
 /*
  * Helper to prepare IO on shared buffers for execution, shared between reads
  * and writes.
@@ -6594,6 +6630,12 @@ static void
 shared_buffer_readv_stage(PgAioHandle *ioh)
 {
 	shared_buffer_stage_common(ioh, false);
+}
+
+static void
+shared_buffer_writev_stage(PgAioHandle *ioh)
+{
+	shared_buffer_stage_common(ioh, true);
 }
 
 static void
@@ -6683,6 +6725,33 @@ shared_buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result)
 	return buffer_readv_complete_common(ioh, prior_result, false);
 }
 
+static PgAioResult
+shared_buffer_writev_complete(PgAioHandle *ioh, PgAioResult prior_result)
+{
+	PgAioResult result = prior_result;
+	uint64	   *io_data;
+	uint8		handle_data_len;
+
+	ereport(DEBUG5,
+			errmsg("%s: %d %d", __func__, prior_result.status, prior_result.result),
+			errhidestmt(true), errhidecontext(true));
+
+	io_data = pgaio_io_get_handle_data(ioh, &handle_data_len);
+
+	/* FIXME: handle outright errors */
+
+	for (int io_data_off = 0; io_data_off < handle_data_len; io_data_off++)
+	{
+		Buffer		buf = io_data[io_data_off];
+
+		/* FIXME: handle short writes / failures */
+		/* FIXME: ioh->target_data.shared_buffer.release_lock */
+		BufferCompleteWriteShared(buf, true, false);
+	}
+
+	return result;
+}
+
 /*
  * Helper to stage IO on local buffers for execution, shared between reads
  * and writes.
@@ -6725,7 +6794,16 @@ static PgAioResult
 local_buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result)
 {
 	return buffer_readv_complete_common(ioh, prior_result, true);
+}
 
+static void
+local_buffer_writev_stage(PgAioHandle *ioh)
+{
+	/*
+	 * Currently this is unreachable as the only write support is for
+	 * checkpointer / bgwriter, which don't deal with local buffers.
+	 */
+	elog(ERROR, "not yet");
 }
 
 
@@ -6733,6 +6811,10 @@ const struct PgAioHandleCallbacks aio_shared_buffer_readv_cb = {
 	.stage = shared_buffer_readv_stage,
 	.complete_shared = shared_buffer_readv_complete,
 	.report = buffer_readv_report,
+};
+const struct PgAioHandleCallbacks aio_shared_buffer_writev_cb = {
+	.stage = shared_buffer_writev_stage,
+	.complete_shared = shared_buffer_writev_complete,
 };
 const struct PgAioHandleCallbacks aio_local_buffer_readv_cb = {
 	.stage = local_buffer_readv_stage,
@@ -6745,4 +6827,7 @@ const struct PgAioHandleCallbacks aio_local_buffer_readv_cb = {
 	 */
 	.complete_local = local_buffer_readv_complete,
 	.report = buffer_readv_report,
+};
+const struct PgAioHandleCallbacks aio_local_buffer_writev_cb = {
+	.stage = local_buffer_writev_stage,
 };
