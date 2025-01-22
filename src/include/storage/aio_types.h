@@ -58,11 +58,17 @@ typedef struct PgAioWaitRef
  */
 typedef union PgAioTargetData
 {
-	/* just as an example placeholder for later */
 	struct
 	{
-		uint32		queue_id;
-	}			wal;
+		RelFileLocator rlocator;	/* physical relation identifier */
+		BlockNumber blockNum;	/* blknum relative to begin of reln */
+		BlockNumber nblocks;
+		ForkNumber	forkNum:8;	/* don't waste 4 byte for four values */
+		bool		is_temp:1;	/* proc can be inferred by owning AIO */
+		bool		release_lock:1;
+		bool		skip_fsync:1;
+		uint8		mode;
+	}			smgr;
 } PgAioTargetData;
 
 

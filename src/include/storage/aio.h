@@ -108,9 +108,10 @@ typedef enum PgAioTargetID
 {
 	/* intentionally the zero value, to help catch zeroed memory etc */
 	PGAIO_TID_INVALID = 0,
+	PGAIO_TID_SMGR,
 } PgAioTargetID;
 
-#define PGAIO_TID_COUNT (PGAIO_TID_INVALID + 1)
+#define PGAIO_TID_COUNT (PGAIO_TID_SMGR + 1)
 
 
 /*
@@ -174,6 +175,9 @@ typedef struct PgAioTargetInfo
 typedef enum PgAioHandleCallbackID
 {
 	PGAIO_HCB_INVALID,
+
+	PGAIO_HCB_MD_READV,
+	PGAIO_HCB_MD_WRITEV,
 } PgAioHandleCallbackID;
 
 

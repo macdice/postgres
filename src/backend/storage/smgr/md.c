@@ -31,6 +31,7 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/md.h"
@@ -151,6 +152,22 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forknum,
 							 BlockNumber blkno, bool skipFsync, int behavior);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
+
+static PgAioResult md_readv_complete(PgAioHandle *ioh, PgAioResult prior_result);
+static void md_readv_report(PgAioResult result, const PgAioTargetData *target_data, int elevel);
+static PgAioResult md_writev_complete(PgAioHandle *ioh, PgAioResult prior_result);
+static void md_writev_report(PgAioResult result, const PgAioTargetData *target_data, int elevel);
+
+const struct PgAioHandleCallbacks aio_md_readv_cb = {
+	.complete_shared = md_readv_complete,
+	.report = md_readv_report,
+};
+
+const struct PgAioHandleCallbacks aio_md_writev_cb = {
+	.complete_shared = md_writev_complete,
+	.report = md_writev_report,
+};
+
 
 static inline int
 _mdfd_open_flags(void)
@@ -937,6 +954,53 @@ mdreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	}
 }
 
+void
+mdstartreadv(PgAioHandle *ioh,
+			 SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			 void **buffers, BlockNumber nblocks)
+{
+	off_t		seekpos;
+	MdfdVec    *v;
+	BlockNumber nblocks_this_segment;
+	struct iovec *iov;
+	int			iovcnt;
+
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	nblocks_this_segment =
+		Min(nblocks,
+			RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE)));
+
+	if (nblocks_this_segment != nblocks)
+		elog(ERROR, "read crossing segment boundary");
+
+	iovcnt = pgaio_io_get_iovec(ioh, &iov);
+
+	Assert(nblocks <= iovcnt);
+
+	iovcnt = buffers_to_iovec(iov, buffers, nblocks_this_segment);
+
+	Assert(iovcnt <= nblocks_this_segment);
+
+	if (!(io_direct_flags & IO_DIRECT_DATA))
+		pgaio_io_set_flag(ioh, PGAIO_HF_BUFFERED);
+
+	pgaio_io_set_target_smgr(ioh,
+							 reln,
+							 forknum,
+							 blocknum,
+							 nblocks,
+							 false);
+	pgaio_io_register_callbacks(ioh, PGAIO_HCB_MD_READV);
+
+	FileStartReadV(ioh, v->mdfd_vfd, iovcnt, seekpos, WAIT_EVENT_DATA_FILE_READ);
+}
+
 /*
  * mdwritev() -- Write the supplied blocks at the appropriate location.
  *
@@ -1040,6 +1104,53 @@ mdwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		buffers += nblocks_this_segment;
 		blocknum += nblocks_this_segment;
 	}
+}
+
+void
+mdstartwritev(PgAioHandle *ioh,
+			  SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			  const void **buffers, BlockNumber nblocks, bool skipFsync)
+{
+	off_t		seekpos;
+	MdfdVec    *v;
+	BlockNumber nblocks_this_segment;
+	struct iovec *iov;
+	int			iovcnt;
+
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	nblocks_this_segment =
+		Min(nblocks,
+			RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE)));
+
+	if (nblocks_this_segment != nblocks)
+		elog(ERROR, "write crossing segment boundary");
+
+	iovcnt = pgaio_io_get_iovec(ioh, &iov);
+
+	Assert(nblocks <= iovcnt);
+
+	iovcnt = buffers_to_iovec(iov, unconstify(void **, buffers), nblocks_this_segment);
+
+	Assert(iovcnt <= nblocks_this_segment);
+
+	if (!(io_direct_flags & IO_DIRECT_DATA))
+		pgaio_io_set_flag(ioh, PGAIO_HF_BUFFERED);
+
+	pgaio_io_set_target_smgr(ioh,
+							 reln,
+							 forknum,
+							 blocknum,
+							 nblocks,
+							 skipFsync);
+	pgaio_io_register_callbacks(ioh, PGAIO_HCB_MD_WRITEV);
+
+	FileStartWriteV(ioh, v->mdfd_vfd, iovcnt, seekpos, WAIT_EVENT_DATA_FILE_WRITE);
 }
 
 
@@ -1365,6 +1476,21 @@ mdimmedsync(SMgrRelation reln, ForkNumber forknum)
 	}
 }
 
+int
+mdfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
+{
+	MdfdVec    *v = mdopenfork(reln, forknum, EXTENSION_FAIL);
+
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 EXTENSION_FAIL);
+
+	*off = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(*off < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	return FileGetRawDesc(v->mdfd_vfd);
+}
+
 /*
  * register_dirty_segment() -- Mark a relation segment as needing fsync
  *
@@ -1412,6 +1538,35 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 		 */
 		pgstat_count_io_op_time(IOOBJECT_RELATION, IOCONTEXT_NORMAL,
 								IOOP_FSYNC, io_start, 1, 0);
+	}
+}
+
+/*
+ * Like register_dirty_segment(), except for use by AIO. In the completion
+ * callback we don't have access to the MdfdVec (the completion callback might
+ * be executed in a different backend than the issuing backend), therefore we
+ * have to implement this slightly differently.
+ */
+static void
+register_dirty_segment_aio(RelFileLocator locator, ForkNumber forknum, uint64 segno)
+{
+	FileTag		tag;
+
+	INIT_MD_FILETAG(tag, locator, forknum, segno);
+
+	if (!RegisterSyncRequest(&tag, SYNC_REQUEST, true /* retryOnError */))
+	{
+		char		path[MAXPGPATH];
+
+		ereport(DEBUG1,
+				(errmsg_internal("could not forward fsync request because request queue is full")));
+
+		/* reuse mdsyncfiletag() to avoid duplicating code */
+		if (mdsyncfiletag(&tag, path))
+			ereport(data_sync_elevel(ERROR),
+					(errcode_for_file_access(),
+					 errmsg("could not fsync file \"%s\": %m",
+							path)));
 	}
 }
 
@@ -1840,4 +1995,197 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	 * the ftag from the SYNC_FILTER_REQUEST request, so they're forgotten.
 	 */
 	return ftag->rlocator.dbOid == candidate->rlocator.dbOid;
+}
+
+/*
+ * AIO completion callback for mdstartreadv().
+ */
+static PgAioResult
+md_readv_complete(PgAioHandle *ioh, PgAioResult prior_result)
+{
+	PgAioTargetData *td = pgaio_io_get_target_data(ioh);
+	PgAioResult result = prior_result;
+
+	if (prior_result.result < 0)
+	{
+		result.status = ARS_ERROR;
+		result.id = PGAIO_HCB_MD_READV;
+		/* For "hard" errors, track the error number in error_data */
+		result.error_data = -prior_result.result;
+		result.result = 0;
+
+		md_readv_report(result, td, LOG);
+
+		return result;
+	}
+
+	/*
+	 * The smgr API operates in blocks, therefore convert the result from
+	 * bytes to blocks.
+	 */
+	result.result /= BLCKSZ;
+
+	if (result.result == 0)
+	{
+		/* consider 0 blocks read a failure */
+		result.status = ARS_ERROR;
+		result.id = PGAIO_HCB_MD_READV;
+		result.error_data = 0;
+
+		md_readv_report(result, td, LOG);
+
+		return result;
+	}
+
+	if (result.status != ARS_ERROR &&
+		result.result < td->smgr.nblocks)
+	{
+		/* partial reads should be retried at upper level */
+		result.status = ARS_PARTIAL;
+		result.id = PGAIO_HCB_MD_READV;
+	}
+
+	return result;
+}
+
+/*
+ * AIO error reporting callback for mdstartreadv().
+ */
+static void
+md_readv_report(PgAioResult result, const PgAioTargetData *td, int elevel)
+{
+	RelPathStr	path;
+
+	path = relpathbackend(td->smgr.rlocator,
+						  td->smgr.is_temp ? MyProcNumber : INVALID_PROC_NUMBER,
+						  td->smgr.forkNum);
+
+	if (result.error_data != 0)
+	{
+		errno = result.error_data;	/* for errcode_for_file_access() */
+
+		ereport(elevel,
+				errcode_for_file_access(),
+				errmsg("could not read blocks %u..%u in file \"%s\": %m",
+					   td->smgr.blockNum,
+					   td->smgr.blockNum + td->smgr.nblocks,
+					   path.str
+					   )
+			);
+	}
+	else
+	{
+		/*
+		 * NB: This will typically only be output in debug messages, while
+		 * retrying a partial IO.
+		 */
+		ereport(elevel,
+				errcode(ERRCODE_DATA_CORRUPTED),
+				errmsg("could not read blocks %u..%u in file \"%s\": read only %zu of %zu bytes",
+					   td->smgr.blockNum,
+					   td->smgr.blockNum + td->smgr.nblocks - 1,
+					   path.str,
+					   result.result * (size_t) BLCKSZ,
+					   td->smgr.nblocks * (size_t) BLCKSZ
+					   )
+			);
+	}
+}
+
+/*
+ * AIO completion callback for mdstartwritev().
+ */
+static PgAioResult
+md_writev_complete(PgAioHandle *ioh, PgAioResult prior_result)
+{
+	PgAioTargetData *td = pgaio_io_get_target_data(ioh);
+	PgAioResult result = prior_result;
+
+	if (prior_result.result < 0)
+	{
+		result.status = ARS_ERROR;
+		result.id = PGAIO_HCB_MD_WRITEV;
+		/* For "hard" errors, track the error number in error_data */
+		result.error_data = -prior_result.result;
+		result.result = 0;
+
+		md_writev_report(result, td, LOG);
+
+		return result;
+	}
+
+	/*
+	 * The smgr API operates in blocks, therefore convert the result from
+	 * bytes to blocks.
+	 */
+	result.result /= BLCKSZ;
+
+	if (result.result == 0)
+	{
+		/* consider 0 blocks written a failure */
+		result.status = ARS_ERROR;
+		result.id = PGAIO_HCB_MD_WRITEV;
+		result.error_data = 0;
+
+		md_writev_report(result, td, LOG);
+
+		return result;
+	}
+
+	if (result.status != ARS_ERROR &&
+		result.result < td->smgr.nblocks)
+	{
+		/* partial writes should be retried at upper level */
+		result.status = ARS_PARTIAL;
+		result.id = PGAIO_HCB_MD_WRITEV;
+	}
+
+	if (!td->smgr.skip_fsync)
+		register_dirty_segment_aio(td->smgr.rlocator, td->smgr.forkNum,
+								   td->smgr.blockNum / ((BlockNumber) RELSEG_SIZE));
+
+	return result;
+}
+
+/*
+ * AIO error reporting callback for mdstartwritev().
+ */
+static void
+md_writev_report(PgAioResult result, const PgAioTargetData *td, int elevel)
+{
+	RelPathStr	path;
+
+	path = relpathbackend(td->smgr.rlocator,
+						  td->smgr.is_temp ? MyProcNumber : INVALID_PROC_NUMBER,
+						  td->smgr.forkNum);
+
+	if (result.error_data != 0)
+	{
+		errno = result.error_data;	/* for errcode_for_file_access() */
+
+		ereport(elevel,
+				errcode_for_file_access(),
+				errmsg("could not write blocks %u..%u in file \"%s\": %m",
+					   td->smgr.blockNum,
+					   td->smgr.blockNum + td->smgr.nblocks,
+					   path.str)
+			);
+	}
+	else
+	{
+		/*
+		 * NB: This will typically only be output in debug messages, while
+		 * retrying a partial IO.
+		 */
+		ereport(elevel,
+				errcode(ERRCODE_DATA_CORRUPTED),
+				errmsg("could not write blocks %u..%u in file \"%s\": wrote only %zu of %zu bytes",
+					   td->smgr.blockNum,
+					   td->smgr.blockNum + td->smgr.nblocks - 1,
+					   path.str,
+					   result.result * (size_t) BLCKSZ,
+					   td->smgr.nblocks * (size_t) BLCKSZ
+					   )
+			);
+	}
 }
