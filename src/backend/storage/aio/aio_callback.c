@@ -18,6 +18,7 @@
 #include "miscadmin.h"
 #include "storage/aio.h"
 #include "storage/aio_internal.h"
+#include "storage/bufmgr.h"
 #include "storage/md.h"
 #include "utils/memutils.h"
 
@@ -42,6 +43,10 @@ static const PgAioHandleCallbacksEntry aio_handle_cbs[] = {
 
 	CALLBACK_ENTRY(PGAIO_HCB_MD_READV, aio_md_readv_cb),
 	CALLBACK_ENTRY(PGAIO_HCB_MD_WRITEV, aio_md_writev_cb),
+
+	CALLBACK_ENTRY(PGAIO_HCB_SHARED_BUFFER_READV, aio_shared_buffer_readv_cb),
+
+	CALLBACK_ENTRY(PGAIO_HCB_LOCAL_BUFFER_READV, aio_local_buffer_readv_cb),
 #undef CALLBACK_ENTRY
 };
 

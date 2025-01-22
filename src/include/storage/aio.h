@@ -178,6 +178,10 @@ typedef enum PgAioHandleCallbackID
 
 	PGAIO_HCB_MD_READV,
 	PGAIO_HCB_MD_WRITEV,
+
+	PGAIO_HCB_SHARED_BUFFER_READV,
+
+	PGAIO_HCB_LOCAL_BUFFER_READV,
 } PgAioHandleCallbackID;
 
 

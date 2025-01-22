@@ -17,7 +17,9 @@
 
 #include "access/parallel.h"
 #include "executor/instrument.h"
+#include "pg_trace.h"
 #include "pgstat.h"
+#include "storage/aio.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
@@ -649,6 +651,8 @@ InitLocalBuffers(void)
 		 */
 		buf->buf_id = -i - 2;
 
+		pgaio_wref_clear(&buf->io_wref);
+
 		/*
 		 * Intentionally do not initialize the buffer's atomic variable
 		 * (besides zeroing the underlying memory above). That way we get
@@ -875,4 +879,77 @@ AtProcExit_LocalBuffers(void)
 	 * drop the temp rels.
 	 */
 	CheckForLocalBufferLeaks();
+}
+
+PgAioResult
+LocalBufferCompleteRead(int buf_off, Buffer buffer, int mode, bool failed)
+{
+	BufferDesc *bufHdr = GetLocalBufferDescriptor(-buffer - 1);
+	BufferTag	tag = bufHdr->tag;
+	char	   *bufdata = BufferGetBlock(buffer);
+	PgAioResult result;
+
+	Assert(BufferIsValid(buffer));
+
+	result.status = ARS_OK;
+
+	/* check for garbage data */
+	if (!failed &&
+		!PageIsVerifiedExtended((Page) bufdata, tag.blockNum,
+								PIV_LOG_WARNING | PIV_REPORT_STAT))
+	{
+		RelFileLocator rlocator = BufTagGetRelFileLocator(&tag);
+		BlockNumber forkNum = tag.forkNum;
+
+		MemoryContextSwitchTo(ErrorContext);
+
+		if (mode == READ_BUFFERS_ZERO_ON_ERROR || zero_damaged_pages)
+		{
+
+			ereport(LOG,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("invalid page in block %u of relation %s; zeroing out page",
+							tag.blockNum,
+							relpathbackend(rlocator, MyProcNumber, forkNum).str)));
+			memset(bufdata, 0, BLCKSZ);
+		}
+		else
+		{
+			/* mark buffer as having failed */
+			failed = true;
+
+			/* encode error for buffer_readv_report */
+			result.status = ARS_ERROR;
+			result.id = PGAIO_HCB_LOCAL_BUFFER_READV;
+			result.error_data = buf_off;
+		}
+	}
+
+	/* Terminate I/O and set BM_VALID. */
+	pgaio_wref_clear(&bufHdr->io_wref);
+
+	{
+		uint32		buf_state;
+
+		buf_state = pg_atomic_read_u32(&bufHdr->state);
+		buf_state |= BM_VALID;
+
+		/*
+		 * Release pin held by IO subsystem, see also
+		 * local_buffer_readv_prepare().
+		 */
+		buf_state -= BUF_REFCOUNT_ONE;
+		pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+	}
+
+
+	TRACE_POSTGRESQL_BUFFER_READ_DONE(tag.forkNum,
+									  tag.blockNum,
+									  tag.spcOid,
+									  tag.dbOid,
+									  tag.relNumber,
+									  INVALID_PROC_NUMBER,
+									  false);
+
+	return result;
 }
