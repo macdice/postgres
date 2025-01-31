@@ -23,10 +23,11 @@
 typedef enum IoMethod
 {
 	IOMETHOD_SYNC = 0,
+	IOMETHOD_WORKER,
 } IoMethod;
 
-/* We'll default to synchronous execution. */
-#define DEFAULT_IO_METHOD IOMETHOD_SYNC
+/* We'll default to worker based execution. */
+#define DEFAULT_IO_METHOD IOMETHOD_WORKER
 
 
 /*
