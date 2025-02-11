@@ -24,6 +24,9 @@ typedef enum IoMethod
 {
 	IOMETHOD_SYNC = 0,
 	IOMETHOD_WORKER,
+#ifdef USE_LIBURING
+	IOMETHOD_IO_URING,
+#endif
 } IoMethod;
 
 /* We'll default to worker based execution. */

@@ -2140,6 +2140,7 @@ PgAioReturn
 PgAioTargetData
 PgAioTargetID
 PgAioTargetInfo
+PgAioUringContext
 PgAioWaitRef
 PgArchData
 PgBackendGSSStatus
