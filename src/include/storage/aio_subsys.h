@@ -25,4 +25,9 @@ extern void AioShmemInit(void);
 
 extern void pgaio_init_backend(void);
 
+
+/* aio.c */
+extern void pgaio_error_cleanup(void);
+extern void AtEOXact_Aio(bool is_commit);
+
 #endif							/* AIO_SUBSYS_H */
