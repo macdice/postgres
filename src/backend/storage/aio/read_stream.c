@@ -32,9 +32,14 @@
  * calls.  Looking further ahead would pin many buffers and perform
  * speculative work for no benefit.
  *
+ * FIXME: This only applies to io_method == sync, otherwise this path is not
+ * used.
+ *
  * C) I/O is necessary, it appears to be random, and this system supports
  * read-ahead advice.  We'll look further ahead in order to reach the
  * configured level of I/O concurrency.
+ *
+ * FIXME: restriction to random only applies to io_method == sync
  *
  * The distance increases rapidly and decays slowly, so that it moves towards
  * those levels as different I/O patterns are discovered.  For example, a
@@ -90,6 +95,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "storage/aio.h"
 #include "storage/fd.h"
 #include "storage/smgr.h"
 #include "storage/read_stream.h"
@@ -116,6 +122,7 @@ struct ReadStream
 	int16		pinned_buffers;
 	int16		distance;
 	int16		initialized_buffers;
+	bool		sync_mode;
 	bool		advice_enabled;
 	bool		temporary;
 
@@ -458,6 +465,19 @@ read_stream_look_ahead(ReadStream *stream, bool suppress_advice)
 {
 	int16		buffer_limit;
 
+	if (stream->distance > (io_combine_limit * 8))
+	{
+		if (stream->pinned_buffers + stream->pending_read_nblocks > ((stream->distance * 3) / 4))
+		{
+			return;
+		}
+	}
+
+	/*
+	 * Try to amortize cost of submitting IOs over multiple IOs.
+	 */
+	pgaio_enter_batchmode();
+
 	/*
 	 * Check how many pins we could acquire now.  We do this here rather than
 	 * pushing it down into read_stream_start_pending_read(), because it
@@ -524,6 +544,7 @@ read_stream_look_ahead(ReadStream *stream, bool suppress_advice)
 			{
 				/* And we've hit a limit.  Rewind, and stop here. */
 				read_stream_unget_block(stream, blocknum);
+				pgaio_exit_batchmode();
 				return;
 			}
 		}
@@ -549,6 +570,8 @@ read_stream_look_ahead(ReadStream *stream, bool suppress_advice)
 		 stream->distance == 0) &&
 		stream->ios_in_progress < stream->max_ios)
 		read_stream_start_pending_read(stream, buffer_limit, suppress_advice);
+
+	pgaio_exit_batchmode();
 }
 
 /*
@@ -668,6 +691,8 @@ read_stream_begin_impl(int flags,
 		stream->per_buffer_data = (void *)
 			MAXALIGN(&stream->ios[Max(1, max_ios)]);
 
+	stream->sync_mode = io_method == IOMETHOD_SYNC;
+
 #ifdef USE_PREFETCH
 
 	/*
@@ -676,7 +701,8 @@ read_stream_begin_impl(int flags,
 	 * (overriding our detection heuristics), and max_ios hasn't been set to
 	 * zero.
 	 */
-	if ((io_direct_flags & IO_DIRECT_DATA) == 0 &&
+	if (stream->sync_mode &&
+		(io_direct_flags & IO_DIRECT_DATA) == 0 &&
 		(flags & READ_STREAM_SEQUENTIAL) == 0 &&
 		max_ios > 0)
 		stream->advice_enabled = true;
@@ -919,7 +945,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		if (++stream->oldest_io_index == stream->max_ios)
 			stream->oldest_io_index = 0;
 
-		if (stream->ios[io_index].op.flags & READ_BUFFERS_ISSUE_ADVICE)
+		if (!stream->sync_mode ||
+			stream->ios[io_index].op.flags & READ_BUFFERS_ISSUE_ADVICE)
 		{
 			/* Distance ramps up fast (behavior C). */
 			distance = stream->distance * 2;
