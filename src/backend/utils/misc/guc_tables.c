@@ -3241,6 +3241,20 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_io_combine_limit",
+			PGC_POSTMASTER,
+			RESOURCES_IO,
+			gettext_noop("System-wide limit applied to io_combine_limit."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&max_io_combine_limit,
+		DEFAULT_IO_COMBINE_LIMIT,
+		1, MAX_IO_COMBINE_LIMIT,
+		NULL, assign_max_io_combine_limit, NULL
+	},
+
+	{
 		{"io_combine_limit",
 			PGC_USERSET,
 			RESOURCES_IO,
@@ -3251,7 +3265,7 @@ struct config_int ConfigureNamesInt[] =
 		&io_combine_limit,
 		DEFAULT_IO_COMBINE_LIMIT,
 		1, MAX_IO_COMBINE_LIMIT,
-		NULL, NULL, NULL
+		NULL, assign_io_combine_limit, NULL
 	},
 
 	{

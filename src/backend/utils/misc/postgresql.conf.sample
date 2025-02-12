@@ -200,6 +200,8 @@
 #backend_flush_after = 0		# measured in pages, 0 disables
 #effective_io_concurrency = 1		# 1-1000; 0 disables prefetching
 #maintenance_io_concurrency = 10	# 1-1000; 0 disables prefetching
+#max_io_combine_limit = 128kB		# usually 1-32 blocks (depends on OS)
+					# (change requires restart)
 #io_combine_limit = 128kB		# usually 1-32 blocks (depends on OS)
 
 # - Worker Processes -
