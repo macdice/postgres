@@ -73,6 +73,7 @@
 
 #include "miscadmin.h"
 #include "storage/aio.h"
+#include "storage/buf_internals.h"
 #include "storage/fd.h"
 #include "storage/smgr.h"
 #include "storage/read_stream.h"
@@ -805,8 +806,38 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 		if (likely(next_blocknum != InvalidBlockNumber))
 		{
-			int			flags = stream->read_buffers_flags;
+			bool		set_sequential_hint;
+			bool		wait;
+			int			flags;
 
+			/*
+			 * Try to use sequential buffer hints to avoid buffer mapping
+			 * table overheads.
+			 */
+			if (!stream->temporary &&
+				BufferGetBlockNumber(buffer) + 1 == next_blocknum)
+			{
+				Buffer		recent_buffer = BufferHintGetNext(buffer);
+
+				if (recent_buffer != InvalidBuffer &&
+					ReadRecentBuffer(stream->ios[0].op.smgr->smgr_rlocator.locator,
+									 stream->ios[0].op.forknum,
+									 next_blocknum,
+									 recent_buffer))
+				{
+					//elog(LOG, "XXX used recent hint");
+					stream->buffers[oldest_buffer_index] = recent_buffer;
+					return buffer;
+				}
+
+				set_sequential_hint = true;
+			}
+			else
+			{
+				set_sequential_hint = false;
+			}
+
+			flags = stream->read_buffers_flags;
 			if (stream->advice_enabled)
 				flags |= READ_BUFFERS_ISSUE_ADVICE;
 
@@ -822,10 +853,17 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			 * held at the same time, the model used here is that the stream
 			 * holds only one, and the other now belongs to the caller.
 			 */
-			if (likely(!StartReadBuffer(&stream->ios[0].op,
-										&stream->buffers[oldest_buffer_index],
-										next_blocknum,
-										flags)))
+			wait = StartReadBuffer(&stream->ios[0].op,
+								   &stream->buffers[oldest_buffer_index],
+								   next_blocknum,
+								   flags);
+
+			/* Remember sequential chain for next time. */
+			if (set_sequential_hint)
+				BufferHintSetSequential(buffer,
+										stream->buffers[oldest_buffer_index]);
+
+			if (likely(!wait))
 			{
 				/* Fast return. */
 				return buffer;

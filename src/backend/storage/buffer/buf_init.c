@@ -20,6 +20,7 @@
 
 BufferDescPadded *BufferDescriptors;
 char	   *BufferBlocks;
+BufferHint *BufferHints;
 ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
@@ -68,6 +69,7 @@ void
 BufferManagerShmemInit(void)
 {
 	bool		foundBufs,
+				foundHints,
 				foundDescs,
 				foundIOCV,
 				foundBufCkpt;
@@ -84,6 +86,12 @@ BufferManagerShmemInit(void)
 				  ShmemInitStruct("Buffer Blocks",
 								  NBuffers * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
 								  &foundBufs));
+
+	/* Buffer hints. */
+	BufferHints = (BufferHint *)
+		ShmemInitStruct("Buffer Hints",
+						NBuffers * sizeof(BufferHint),
+						&foundHints);
 
 	/* Align condition variables to cacheline boundary. */
 	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
@@ -102,10 +110,10 @@ BufferManagerShmemInit(void)
 		ShmemInitStruct("Checkpoint BufferIds",
 						NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
 
-	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt)
+	if (foundDescs || foundBufs || foundHints || foundIOCV || foundBufCkpt)
 	{
 		/* should find all of these, or none of them */
-		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt);
+		Assert(foundDescs && foundBufs && foundHints && foundIOCV && foundBufCkpt);
 		/* note: this path is only taken in EXEC_BACKEND case */
 	}
 	else
@@ -138,6 +146,13 @@ BufferManagerShmemInit(void)
 							 LWTRANCHE_BUFFER_CONTENT);
 
 			ConditionVariableInit(BufferDescriptorGetIOCV(buf));
+		}
+
+		/* Initialize the buffer hint array. */
+		for (i = 0; i < NBuffers; ++i)
+		{
+			BufferHints[i].recent_prev = InvalidBuffer;
+			BufferHints[i].recent_next = InvalidBuffer;
 		}
 
 		/* Correct last entry of linked list */
@@ -180,6 +195,10 @@ BufferManagerShmemSize(void)
 								   sizeof(ConditionVariableMinimallyPadded)));
 	/* to allow aligning the above */
 	size = add_size(size, PG_CACHE_LINE_SIZE);
+
+	/* size of the buffer hints */
+	size = add_size(size, mul_size(NBuffers,
+								   sizeof(BufferHint)));
 
 	/* size of checkpoint sort array in bufmgr.c */
 	size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));

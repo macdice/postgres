@@ -321,10 +321,17 @@ typedef struct WritebackContext
 	PendingWriteback pending_writebacks[WRITEBACK_MAX_PENDING_FLUSHES];
 } WritebackContext;
 
+typedef struct BufferHint
+{
+	Buffer		recent_prev;
+	Buffer		recent_next;
+}			BufferHint;
+
 /* in buf_init.c */
 extern PGDLLIMPORT BufferDescPadded *BufferDescriptors;
 extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferIOCVArray;
 extern PGDLLIMPORT WritebackContext BackendWritebackContext;
+extern PGDLLIMPORT BufferHint * BufferHints;
 
 /* in localbuf.c */
 extern PGDLLIMPORT BufferDesc *LocalBufferDescriptors;
@@ -423,6 +430,55 @@ static inline void
 ResourceOwnerForgetBufferIO(ResourceOwner owner, Buffer buffer)
 {
 	ResourceOwnerForget(owner, Int32GetDatum(buffer), &buffer_io_resowner_desc);
+}
+
+static inline Buffer
+BufferHintGetNext(Buffer buffer)
+{
+	return BufferHints[buffer - 1].recent_next;
+}
+
+static inline Buffer
+BufferHintGetPrev(Buffer buffer)
+{
+	return BufferHints[buffer - 1].recent_prev;
+}
+
+static inline void
+BufferHintSetNext(Buffer buffer, Buffer next)
+{
+	BufferHints[buffer - 1].recent_next = next;
+}
+
+static inline void
+BufferHintSetPrev(Buffer buffer, Buffer prev)
+{
+	BufferHints[buffer - 1].recent_prev = prev;
+}
+
+static inline void
+BufferHintSetSequential(Buffer b1, Buffer b2)
+{
+	BufferHintSetNext(b1, b2);
+	BufferHintSetPrev(b2, b1);
+}
+
+static inline void
+BufferHintForget(Buffer buffer)
+{
+	Buffer		prev = BufferHintGetPrev(buffer);
+	Buffer		next = BufferHintGetNext(buffer);
+
+	if (prev != InvalidBuffer)
+	{
+		BufferHintSetNext(prev, InvalidBuffer);
+		BufferHintSetPrev(buffer, InvalidBuffer);
+	}
+	if (next != InvalidBuffer)
+	{
+		BufferHintSetPrev(next, InvalidBuffer);
+		BufferHintSetNext(buffer, InvalidBuffer);
+	}
 }
 
 /*
