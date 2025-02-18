@@ -131,6 +131,7 @@ struct ReadStream
 
 	/* Next expected block, for detecting sequential access. */
 	BlockNumber seq_blocknum;
+	BlockNumber seq_start;
 
 	/* The read operation we are currently preparing. */
 	BlockNumber pending_read_blocknum;
@@ -248,16 +249,30 @@ read_stream_start_pending_read(ReadStream *stream, bool suppress_advice)
 	else
 		Assert(stream->next_buffer_index == stream->oldest_buffer_index);
 
-	/*
-	 * If advice hasn't been suppressed, this system supports it, and this
-	 * isn't a strictly sequential pattern, then we'll issue advice.
-	 */
-	if (!suppress_advice &&
-		stream->advice_enabled &&
-		stream->pending_read_blocknum != stream->seq_blocknum)
+	/* Do we need to issue read-ahead advice? */
+	flags = 0;
+	if (stream->advice_enabled)
+	{
 		flags = READ_BUFFERS_ISSUE_ADVICE;
-	else
-		flags = 0;
+
+		if (stream->pending_read_blocknum == stream->seq_blocknum)
+		{
+			/*
+			 * Suppress advice if our WaitReadBuffers() calls have caught up
+			 * with the first advice we issued for this sequential run.
+			 */
+			if (stream->seq_start == InvalidBlockNumber)
+				suppress_advice = true;
+		}
+		else
+		{
+			/* Random jump, so start a new sequential run. */
+			stream->seq_start = stream->pending_read_blocknum;
+		}
+
+		if (suppress_advice)
+			flags = 0;
+	}
 
 	/* We say how many blocks we want to read, but may be smaller on return. */
 	buffer_index = stream->next_buffer_index;
@@ -526,6 +541,8 @@ read_stream_begin_impl(int flags,
 	stream->callback = callback;
 	stream->callback_private_data = callback_private_data;
 	stream->buffered_blocknum = InvalidBlockNumber;
+	stream->seq_blocknum = InvalidBlockNumber;
+	stream->seq_start = InvalidBlockNumber;
 
 	/*
 	 * Skip the initial ramp-up phase if the caller says we're going to be
@@ -744,6 +761,15 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			distance = stream->distance * 2;
 			distance = Min(distance, stream->max_pinned_buffers);
 			stream->distance = distance;
+
+			/*
+			 * If we've caught up with the first advice issued for the current
+			 * sequential run, cancel further advice until the next random
+			 * jump.  The kernel should be able to see the pattern now that
+			 * we're issuing sequential preadv() calls.
+			 */
+			if (stream->ios[io_index].op.blocknum == stream->seq_start)
+				stream->seq_start = InvalidBlockNumber;
 		}
 		else
 		{
