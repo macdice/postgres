@@ -1138,7 +1138,7 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 		else
 			cb = heap_scan_stream_read_next_serial;
 
-		scan->rs_read_stream = read_stream_begin_relation(READ_STREAM_SEQUENTIAL,
+		scan->rs_read_stream = read_stream_begin_relation(READ_STREAM_DEFAULT,
 														  scan->rs_strategy,
 														  scan->rs_base.rs_rd,
 														  MAIN_FORKNUM,
