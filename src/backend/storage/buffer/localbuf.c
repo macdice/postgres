@@ -207,10 +207,19 @@ GetLocalVictimBuffer(void)
 				pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
 				trycounter = NLocBuffer;
 			}
+			else if (BUF_STATE_GET_REFCOUNT(buf_state) > 0)
+			{
+				/*
+				 * This can be reached if the backend initiated AIO for this
+				 * buffer and then errored out.
+				 */
+			}
 			else
 			{
 				/* Found a usable buffer */
 				PinLocalBuffer(bufHdr, false);
+				/* the buf_state may be modified inside PinLocalBuffer */
+				buf_state = pg_atomic_read_u32(&bufHdr->state);
 				break;
 			}
 		}
@@ -491,6 +500,44 @@ MarkLocalBufferDirty(Buffer buffer)
 	pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
 }
 
+static void
+InvalidateLocalBuffer(BufferDesc *bufHdr)
+{
+	Buffer		buffer = BufferDescriptorGetBuffer(bufHdr);
+	int			bufid = -buffer - 1;
+	uint32		buf_state;
+	LocalBufferLookupEnt *hresult;
+
+	buf_state = pg_atomic_read_u32(&bufHdr->state);
+
+	/*
+	 * We need to test not just LocalRefCount[bufid] but also the BufferDesc
+	 * itself, as the latter is used to represent a pin by the AIO subsystem.
+	 * This can happen if AIO is initiated and then the query errors out.
+	 */
+	if (LocalRefCount[bufid] != 0 ||
+		BUF_STATE_GET_REFCOUNT(buf_state) > 0)
+		elog(ERROR, "block %u of %s is still referenced (local %u)",
+			 bufHdr->tag.blockNum,
+			 relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
+							MyProcNumber,
+							BufTagGetForkNum(&bufHdr->tag)).str,
+			 LocalRefCount[bufid]);
+
+	/* Remove entry from hashtable */
+	hresult = (LocalBufferLookupEnt *)
+		hash_search(LocalBufHash, &bufHdr->tag, HASH_REMOVE, NULL);
+	if (!hresult)				/* shouldn't happen */
+		elog(ERROR, "local buffer hash table corrupted");
+	/* Mark buffer invalid */
+	ClearBufferTag(&bufHdr->tag);
+
+	buf_state &= ~BUF_FLAG_MASK;
+	buf_state &= ~BUF_USAGECOUNT_MASK;
+	pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+
+}
+
 /*
  * DropRelationLocalBuffers
  *		This function removes from the buffer pool all the pages of the
@@ -511,7 +558,6 @@ DropRelationLocalBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 	for (i = 0; i < NLocBuffer; i++)
 	{
 		BufferDesc *bufHdr = GetLocalBufferDescriptor(i);
-		LocalBufferLookupEnt *hresult;
 		uint32		buf_state;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
@@ -521,24 +567,7 @@ DropRelationLocalBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 			BufTagGetForkNum(&bufHdr->tag) == forkNum &&
 			bufHdr->tag.blockNum >= firstDelBlock)
 		{
-			if (LocalRefCount[i] != 0)
-				elog(ERROR, "block %u of %s is still referenced (local %u)",
-					 bufHdr->tag.blockNum,
-					 relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
-									MyProcNumber,
-									BufTagGetForkNum(&bufHdr->tag)).str,
-					 LocalRefCount[i]);
-
-			/* Remove entry from hashtable */
-			hresult = (LocalBufferLookupEnt *)
-				hash_search(LocalBufHash, &bufHdr->tag, HASH_REMOVE, NULL);
-			if (!hresult)		/* shouldn't happen */
-				elog(ERROR, "local buffer hash table corrupted");
-			/* Mark buffer invalid */
-			ClearBufferTag(&bufHdr->tag);
-			buf_state &= ~BUF_FLAG_MASK;
-			buf_state &= ~BUF_USAGECOUNT_MASK;
-			pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+			InvalidateLocalBuffer(bufHdr);
 		}
 	}
 }
@@ -558,7 +587,6 @@ DropRelationAllLocalBuffers(RelFileLocator rlocator)
 	for (i = 0; i < NLocBuffer; i++)
 	{
 		BufferDesc *bufHdr = GetLocalBufferDescriptor(i);
-		LocalBufferLookupEnt *hresult;
 		uint32		buf_state;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
@@ -566,23 +594,7 @@ DropRelationAllLocalBuffers(RelFileLocator rlocator)
 		if ((buf_state & BM_TAG_VALID) &&
 			BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator))
 		{
-			if (LocalRefCount[i] != 0)
-				elog(ERROR, "block %u of %s is still referenced (local %u)",
-					 bufHdr->tag.blockNum,
-					 relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
-									MyProcNumber,
-									BufTagGetForkNum(&bufHdr->tag)).str,
-					 LocalRefCount[i]);
-			/* Remove entry from hashtable */
-			hresult = (LocalBufferLookupEnt *)
-				hash_search(LocalBufHash, &bufHdr->tag, HASH_REMOVE, NULL);
-			if (!hresult)		/* shouldn't happen */
-				elog(ERROR, "local buffer hash table corrupted");
-			/* Mark buffer invalid */
-			ClearBufferTag(&bufHdr->tag);
-			buf_state &= ~BUF_FLAG_MASK;
-			buf_state &= ~BUF_USAGECOUNT_MASK;
-			pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+			InvalidateLocalBuffer(bufHdr);
 		}
 	}
 }
@@ -680,12 +692,13 @@ PinLocalBuffer(BufferDesc *buf_hdr, bool adjust_usagecount)
 	if (LocalRefCount[bufid] == 0)
 	{
 		NLocalPinnedBuffers++;
+		buf_state += BUF_REFCOUNT_ONE;
 		if (adjust_usagecount &&
 			BUF_STATE_GET_USAGECOUNT(buf_state) < BM_MAX_USAGE_COUNT)
 		{
 			buf_state += BUF_USAGECOUNT_ONE;
-			pg_atomic_unlocked_write_u32(&buf_hdr->state, buf_state);
 		}
+		pg_atomic_unlocked_write_u32(&buf_hdr->state, buf_state);
 	}
 	LocalRefCount[bufid]++;
 	ResourceOwnerRememberBuffer(CurrentResourceOwner,
@@ -711,7 +724,17 @@ UnpinLocalBufferNoOwner(Buffer buffer)
 	Assert(NLocalPinnedBuffers > 0);
 
 	if (--LocalRefCount[buffid] == 0)
+	{
+		BufferDesc *buf_hdr = GetLocalBufferDescriptor(buffid);
+		uint32		buf_state;
+
 		NLocalPinnedBuffers--;
+
+		buf_state = pg_atomic_read_u32(&buf_hdr->state);
+		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+		buf_state -= BUF_REFCOUNT_ONE;
+		pg_atomic_unlocked_write_u32(&buf_hdr->state, buf_state);
+	}
 }
 
 /*
