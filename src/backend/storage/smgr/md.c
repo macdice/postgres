@@ -1554,7 +1554,12 @@ register_dirty_segment_aio(RelFileLocator locator, ForkNumber forknum, uint64 se
 
 	INIT_MD_FILETAG(tag, locator, forknum, segno);
 
-	if (!RegisterSyncRequest(&tag, SYNC_REQUEST, true /* retryOnError */))
+	/*
+	 * Can't block here waiting for checkpointer to accept our sync request,
+	 * as checkpointer might be waiting for this AIO to finish if offloaded to
+	 * a worker.
+	 */
+	if (!RegisterSyncRequest(&tag, SYNC_REQUEST, false /* retryOnError */))
 	{
 		char		path[MAXPGPATH];
 
