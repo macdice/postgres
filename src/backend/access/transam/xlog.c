@@ -1017,7 +1017,7 @@ XLogInsertRecord(XLogRecData *rdata,
 		oldCxt = MemoryContextSwitchTo(walDebugCxt);
 
 		initStringInfo(&buf);
-		appendStringInfo(&buf, "INSERT @ %X/%X: ", LSN_FORMAT_ARGS(EndPos));
+		appendStringInfo(&buf, "INSERT @ %016" PRIX64 ": ", EndPos);
 
 		/*
 		 * We have to piece together the WAL record data from the XLogRecData
@@ -1538,8 +1538,9 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 	if (upto > reservedUpto)
 	{
 		ereport(LOG,
-				(errmsg("request to flush past end of generated WAL; request %X/%X, current position %X/%X",
-						LSN_FORMAT_ARGS(upto), LSN_FORMAT_ARGS(reservedUpto))));
+				(errmsg("request to flush past end of generated WAL; request %016"
+						PRIX64 ", current position %016" PRIX64,
+						upto, reservedUpto)));
 		upto = reservedUpto;
 	}
 
@@ -1705,8 +1706,7 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
 		endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
 
 		if (expectedEndPtr != endptr)
-			elog(PANIC, "could not find WAL buffer for %X/%X",
-				 LSN_FORMAT_ARGS(ptr));
+			elog(PANIC, "could not find WAL buffer for %016" PRIX64, ptr);
 	}
 	else
 	{
@@ -1765,9 +1765,10 @@ WALReadFromBuffers(char *dstbuf, XLogRecPtr startptr, Size count,
 	inserted = pg_atomic_read_u64(&XLogCtl->logInsertResult);
 	if (startptr + count > inserted)
 		ereport(ERROR,
-				errmsg("cannot read past end of generated WAL: requested %X/%X, current position %X/%X",
-					   LSN_FORMAT_ARGS(startptr + count),
-					   LSN_FORMAT_ARGS(inserted)));
+				errmsg("cannot read past end of generated WAL: requested %016"
+					   PRIX64 ", current position %016" PRIX64,
+					   startptr + count,
+					   inserted));
 
 	/*
 	 * Loop through the buffers without a lock. For each buffer, atomically
@@ -2148,8 +2149,8 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 #ifdef WAL_DEBUG
 	if (XLOG_DEBUG && npages > 0)
 	{
-		elog(DEBUG1, "initialized %d pages, up to %X/%X",
-			 npages, LSN_FORMAT_ARGS(NewPageEndPtr));
+		elog(DEBUG1, "initialized %d pages, up to %016" PRIX64,
+			 npages, NewPageEndPtr);
 	}
 #endif
 }
@@ -2359,9 +2360,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 		XLogRecPtr	EndPtr = pg_atomic_read_u64(&XLogCtl->xlblocks[curridx]);
 
 		if (LogwrtResult.Write >= EndPtr)
-			elog(PANIC, "xlog write request %X/%X is past end of log %X/%X",
-				 LSN_FORMAT_ARGS(LogwrtResult.Write),
-				 LSN_FORMAT_ARGS(EndPtr));
+			elog(PANIC, "xlog write request %016" PRIX64
+				 " is past end of log %016" PRIX64,
+				 LogwrtResult.Write,
+				 EndPtr);
 
 		/* Advance LogwrtResult.Write to end of current buffer page */
 		LogwrtResult.Write = EndPtr;
@@ -2759,8 +2761,9 @@ UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force)
 		newMinRecoveryPoint = GetCurrentReplayRecPtr(&newMinRecoveryPointTLI);
 		if (!force && newMinRecoveryPoint < lsn)
 			elog(WARNING,
-				 "xlog min recovery request %X/%X is past current point %X/%X",
-				 LSN_FORMAT_ARGS(lsn), LSN_FORMAT_ARGS(newMinRecoveryPoint));
+				 "xlog min recovery request %016" PRIX64
+				 " is past current point %016" PRIX64,
+				 lsn, newMinRecoveryPoint);
 
 		/* update control file */
 		if (ControlFile->minRecoveryPoint < newMinRecoveryPoint)
@@ -2772,8 +2775,9 @@ UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force)
 			LocalMinRecoveryPointTLI = newMinRecoveryPointTLI;
 
 			ereport(DEBUG2,
-					(errmsg_internal("updated min recovery point to %X/%X on timeline %u",
-									 LSN_FORMAT_ARGS(newMinRecoveryPoint),
+					(errmsg_internal("updated min recovery point to %016" PRIX64
+									 " on timeline %u",
+									 newMinRecoveryPoint,
 									 newMinRecoveryPointTLI)));
 		}
 	}
@@ -2812,10 +2816,11 @@ XLogFlush(XLogRecPtr record)
 
 #ifdef WAL_DEBUG
 	if (XLOG_DEBUG)
-		elog(LOG, "xlog flush request %X/%X; write %X/%X; flush %X/%X",
-			 LSN_FORMAT_ARGS(record),
-			 LSN_FORMAT_ARGS(LogwrtResult.Write),
-			 LSN_FORMAT_ARGS(LogwrtResult.Flush));
+		elog(LOG, "xlog flush request %016" PRIX64 "; write %016" PRIX64
+			 "; flush %016" PRIX64,
+			 record,
+			 LogwrtResult.Write,
+			 LogwrtResult.Flush);
 #endif
 
 	START_CRIT_SECTION();
@@ -2945,9 +2950,9 @@ XLogFlush(XLogRecPtr record)
 	 */
 	if (LogwrtResult.Flush < record)
 		elog(ERROR,
-			 "xlog flush request %X/%X is not satisfied --- flushed only to %X/%X",
-			 LSN_FORMAT_ARGS(record),
-			 LSN_FORMAT_ARGS(LogwrtResult.Flush));
+			 "xlog flush request %016" PRIX64 " is not satisfied --- flushed only to %016" PRIX64,
+			 record,
+			 LogwrtResult.Flush);
 }
 
 /*
@@ -3072,11 +3077,12 @@ XLogBackgroundFlush(void)
 
 #ifdef WAL_DEBUG
 	if (XLOG_DEBUG)
-		elog(LOG, "xlog bg flush request write %X/%X; flush: %X/%X, current is write %X/%X; flush %X/%X",
-			 LSN_FORMAT_ARGS(WriteRqst.Write),
-			 LSN_FORMAT_ARGS(WriteRqst.Flush),
-			 LSN_FORMAT_ARGS(LogwrtResult.Write),
-			 LSN_FORMAT_ARGS(LogwrtResult.Flush));
+		elog(LOG, "xlog bg flush request write %016" PRIX64 "; flush: %016" PRIX64
+			 ", current is write %016" PRIX64 "; flush %016" PRIX6,
+			 WriteRqst.Write,
+			 WriteRqst.Flush,
+			 LogwrtResult.Write,
+			 LogwrtResult.Flush);
 #endif
 
 	START_CRIT_SECTION();
@@ -6779,7 +6785,7 @@ LogCheckpointEnd(bool restartpoint)
 						"%d removed, %d recycled; write=%ld.%03d s, "
 						"sync=%ld.%03d s, total=%ld.%03d s; sync files=%d, "
 						"longest=%ld.%03d s, average=%ld.%03d s; distance=%d kB, "
-						"estimate=%d kB; lsn=%X/%X, redo lsn=%X/%X",
+						"estimate=%d kB; lsn=%016" PRIX64 ", redo lsn=%016" PRIX64,
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_slru_written,
@@ -6794,8 +6800,8 @@ LogCheckpointEnd(bool restartpoint)
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
 						(int) (CheckPointDistanceEstimate / 1024.0),
-						LSN_FORMAT_ARGS(ControlFile->checkPoint),
-						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
+						ControlFile->checkPoint,
+						ControlFile->checkPointCopy.redo)));
 	else
 		ereport(LOG,
 				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%), "
@@ -6803,7 +6809,7 @@ LogCheckpointEnd(bool restartpoint)
 						"%d removed, %d recycled; write=%ld.%03d s, "
 						"sync=%ld.%03d s, total=%ld.%03d s; sync files=%d, "
 						"longest=%ld.%03d s, average=%ld.%03d s; distance=%d kB, "
-						"estimate=%d kB; lsn=%X/%X, redo lsn=%X/%X",
+						"estimate=%d kB; lsn=%016" PRIX64 ", redo lsn=%016" PRIX64,
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_slru_written,
@@ -6818,8 +6824,8 @@ LogCheckpointEnd(bool restartpoint)
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
 						(int) (CheckPointDistanceEstimate / 1024.0),
-						LSN_FORMAT_ARGS(ControlFile->checkPoint),
-						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
+						ControlFile->checkPoint,
+						ControlFile->checkPointCopy.redo)));
 }
 
 /*
@@ -7495,8 +7501,9 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 	if (!RecoveryInProgress())
 		elog(ERROR, "can only be used at end of recovery");
 	if (pagePtr % XLOG_BLCKSZ != 0)
-		elog(ERROR, "invalid position for missing continuation record %X/%X",
-			 LSN_FORMAT_ARGS(pagePtr));
+		elog(ERROR,
+			 "invalid position for missing continuation record %016" PRIX64,
+			 pagePtr);
 
 	/* The current WAL insert position should be right after the page header */
 	startPos = pagePtr;
@@ -7506,8 +7513,9 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 		startPos += SizeOfXLogShortPHD;
 	recptr = GetXLogInsertRecPtr();
 	if (recptr != startPos)
-		elog(ERROR, "invalid WAL insert position %X/%X for OVERWRITE_CONTRECORD",
-			 LSN_FORMAT_ARGS(recptr));
+		elog(ERROR, "invalid WAL insert position %016" PRIX64
+			 " for OVERWRITE_CONTRECORD",
+			 recptr);
 
 	START_CRIT_SECTION();
 
@@ -7536,8 +7544,10 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 
 	/* check that the record was inserted to the right place */
 	if (ProcLastRecPtr != startPos)
-		elog(ERROR, "OVERWRITE_CONTRECORD was inserted to unexpected position %X/%X",
-			 LSN_FORMAT_ARGS(ProcLastRecPtr));
+		elog(ERROR,
+			 "OVERWRITE_CONTRECORD was inserted to unexpected position %016"
+			 PRIX64,
+			 ProcLastRecPtr);
 
 	XLogFlush(recptr);
 
@@ -7605,9 +7615,9 @@ RecoveryRestartPoint(const CheckPoint *checkPoint, XLogReaderState *record)
 	if (XLogHaveInvalidPages())
 	{
 		elog(DEBUG2,
-			 "could not record restart point at %X/%X because there "
+			 "could not record restart point at %016" PRIX64 " because there "
 			 "are unresolved references to invalid pages",
-			 LSN_FORMAT_ARGS(checkPoint->redo));
+			 checkPoint->redo);
 		return;
 	}
 
@@ -7686,8 +7696,9 @@ CreateRestartPoint(int flags)
 		lastCheckPoint.redo <= ControlFile->checkPointCopy.redo)
 	{
 		ereport(DEBUG2,
-				(errmsg_internal("skipping restartpoint, already performed at %X/%X",
-								 LSN_FORMAT_ARGS(lastCheckPoint.redo))));
+				(errmsg_internal("skipping restartpoint, already performed at %016"
+								 PRIX64,
+								 lastCheckPoint.redo)));
 
 		UpdateMinRecoveryPoint(InvalidXLogRecPtr, true);
 		if (flags & CHECKPOINT_IS_SHUTDOWN)
@@ -7871,8 +7882,8 @@ CreateRestartPoint(int flags)
 
 	xtime = GetLatestXTime();
 	ereport((log_checkpoints ? LOG : DEBUG2),
-			(errmsg("recovery restart point at %X/%X",
-					LSN_FORMAT_ARGS(lastCheckPoint.redo)),
+			(errmsg("recovery restart point at %016" PRIX64,
+					lastCheckPoint.redo),
 			 xtime ? errdetail("Last completed transaction was at log time %s.",
 							   timestamptz_to_str(xtime)) : 0));
 
@@ -8135,8 +8146,8 @@ XLogRestorePoint(const char *rpName)
 	RecPtr = XLogInsert(RM_XLOG_ID, XLOG_RESTORE_POINT);
 
 	ereport(LOG,
-			(errmsg("restore point \"%s\" created at %X/%X",
-					rpName, LSN_FORMAT_ARGS(RecPtr))));
+			(errmsg("restore point \"%s\" created at %016" PRIX64,
+					rpName, RecPtr)));
 
 	return RecPtr;
 }

@@ -4764,10 +4764,10 @@ ReorderBufferSerializedPath(char *path, ReplicationSlot *slot, TransactionId xid
 
 	XLogSegNoOffsetToRecPtr(segno, 0, wal_segment_size, recptr);
 
-	snprintf(path, MAXPGPATH, "%s/%s/xid-%u-lsn-%X-%X.spill",
+	snprintf(path, MAXPGPATH, "%s/%s/xid-%u-lsn-%016" PRIX64 ".spill",
 			 PG_REPLSLOT_DIR,
 			 NameStr(MyReplicationSlot->data.name),
-			 xid, LSN_FORMAT_ARGS(recptr));
+			 xid, recptr);
 }
 
 /*
@@ -5333,8 +5333,6 @@ UpdateLogicalMappings(HTAB *tuplecid_data, Oid relid, Snapshot snapshot)
 		TransactionId f_mapped_xid;
 		TransactionId f_create_xid;
 		XLogRecPtr	f_lsn;
-		uint32		f_hi,
-					f_lo;
 		RewriteMappingFile *f;
 
 		if (strcmp(mapping_de->d_name, ".") == 0 ||
@@ -5345,12 +5343,10 @@ UpdateLogicalMappings(HTAB *tuplecid_data, Oid relid, Snapshot snapshot)
 		if (strncmp(mapping_de->d_name, "map-", 4) != 0)
 			continue;
 
-		if (sscanf(mapping_de->d_name, LOGICAL_REWRITE_FORMAT,
-				   &f_dboid, &f_relid, &f_hi, &f_lo,
-				   &f_mapped_xid, &f_create_xid) != 6)
+		if (sscanf(mapping_de->d_name, LOGICAL_REWRITE_FORMAT_SCANF,
+				   &f_dboid, &f_relid, &f_lsn,
+				   &f_mapped_xid, &f_create_xid) != 5)
 			elog(ERROR, "could not parse filename \"%s\"", mapping_de->d_name);
-
-		f_lsn = ((uint64) f_hi) << 32 | f_lo;
 
 		/* mapping for another database */
 		if (f_dboid != dboid)

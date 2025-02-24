@@ -1539,9 +1539,9 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					if (!XLogRecPtrIsInvalid(remote_lsn) && opts.lsn < remote_lsn)
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-								 errmsg("skip WAL location (LSN %X/%X) must be greater than origin LSN %X/%X",
-										LSN_FORMAT_ARGS(opts.lsn),
-										LSN_FORMAT_ARGS(remote_lsn))));
+								 errmsg("skip WAL location (LSN %016" PRIX64 ") must be greater than origin LSN %016" PRIX64,
+										opts.lsn,
+										remote_lsn)));
 				}
 
 				values[Anum_pg_subscription_subskiplsn - 1] = LSNGetDatum(opts.lsn);

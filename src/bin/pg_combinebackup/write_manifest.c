@@ -155,11 +155,11 @@ finalize_manifest(manifest_writer *mwriter,
 	for (wal_range = first_wal_range; wal_range != NULL;
 		 wal_range = wal_range->next)
 		appendStringInfo(&mwriter->buf,
-						 "%s{ \"Timeline\": %u, \"Start-LSN\": \"%X/%X\", \"End-LSN\": \"%X/%X\" }",
+						 "%s{ \"Timeline\": %u, \"Start-LSN\": \"%016" PRIX64 "\", \"End-LSN\": \"%016" PRIX64 "\" }",
 						 wal_range == first_wal_range ? "" : ",\n",
 						 wal_range->tli,
-						 LSN_FORMAT_ARGS(wal_range->start_lsn),
-						 LSN_FORMAT_ARGS(wal_range->end_lsn));
+						 wal_range->start_lsn,
+						 wal_range->end_lsn);
 
 	/* Terminate the list of WAL ranges. */
 	appendStringInfoString(&mwriter->buf, "\n],\n");

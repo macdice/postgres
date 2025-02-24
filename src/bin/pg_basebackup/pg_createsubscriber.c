@@ -1250,8 +1250,8 @@ setup_recovery(const struct LogicalRepInfo *dbinfo, const char *datadir, const c
 	{
 		appendPQExpBuffer(recoveryconfcontents, "# dry run mode");
 		appendPQExpBuffer(recoveryconfcontents,
-						  "recovery_target_lsn = '%X/%X'\n",
-						  LSN_FORMAT_ARGS((XLogRecPtr) InvalidXLogRecPtr));
+						  "recovery_target_lsn = '%016" PRIX64 "'\n",
+						  InvalidXLogRecPtr);
 	}
 	else
 	{
@@ -1814,7 +1814,7 @@ set_replication_progress(PGconn *conn, const struct LogicalRepInfo *dbinfo, cons
 	if (dry_run)
 	{
 		suboid = InvalidOid;
-		lsnstr = psprintf("%X/%X", LSN_FORMAT_ARGS((XLogRecPtr) InvalidXLogRecPtr));
+		lsnstr = psprintf("%016" PRIX64, InvalidXLogRecPtr);
 	}
 	else
 	{

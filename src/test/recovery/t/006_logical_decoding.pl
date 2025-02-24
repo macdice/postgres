@@ -33,7 +33,7 @@ $node_primary->safe_psql('postgres',
 # Cover walsender error shutdown code
 my ($result, $stdout, $stderr) = $node_primary->psql(
 	'template1',
-	qq[START_REPLICATION SLOT test_slot LOGICAL 0/0],
+	qq[START_REPLICATION SLOT test_slot LOGICAL 0000000000000000],
 	replication => 'database');
 ok( $stderr =~
 	  m/replication slot "test_slot" was not created in this database/,
@@ -52,7 +52,7 @@ like(
 # decoding should not be allowed.
 ($result, $stdout, $stderr) = $node_primary->psql(
 	'template1',
-	qq[START_REPLICATION SLOT s1 LOGICAL 0/1],
+	qq[START_REPLICATION SLOT s1 LOGICAL 0000000000000001],
 	replication => 'true');
 ok($stderr =~ /ERROR:  logical decoding requires a database connection/,
 	"Logical decoding fails on non-database connection");

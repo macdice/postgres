@@ -938,11 +938,5 @@ hexdecode_string(uint8 *result, char *input, int nbytes)
 static bool
 parse_xlogrecptr(XLogRecPtr *result, char *input)
 {
-	uint32		hi;
-	uint32		lo;
-
-	if (sscanf(input, "%X/%X", &hi, &lo) != 2)
-		return false;
-	*result = ((uint64) hi) << 32 | lo;
-	return true;
+	return sscanf(input, "%" SCNx64, result) == 1;
 }

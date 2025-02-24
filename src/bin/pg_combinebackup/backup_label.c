@@ -243,18 +243,13 @@ parse_lsn(char *s, char *e, XLogRecPtr *lsn, char **c)
 	char		save = *e;
 	int			nchars;
 	bool		success;
-	unsigned	hi;
-	unsigned	lo;
 
 	*e = '\0';
-	success = (sscanf(s, "%X/%X%n", &hi, &lo, &nchars) == 2);
+	success = (sscanf(s, "%" SCNx64 "%n", lsn, &nchars) == 1);
 	*e = save;
 
 	if (success)
-	{
-		*lsn = ((XLogRecPtr) hi) << 32 | (XLogRecPtr) lo;
 		*c = s + nchars;
-	}
 
 	return success;
 }

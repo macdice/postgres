@@ -615,9 +615,11 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		 * than ControlFile->checkPoint is used.
 		 */
 		ereport(LOG,
-				(errmsg("starting backup recovery with redo LSN %X/%X, checkpoint LSN %X/%X, on timeline ID %u",
-						LSN_FORMAT_ARGS(RedoStartLSN),
-						LSN_FORMAT_ARGS(CheckPointLoc),
+				(errmsg("starting backup recovery with redo LSN %016"
+						PRIX64 ", checkpoint LSN %016" PRIX64
+						", on timeline ID %u",
+						RedoStartLSN,
+						CheckPointLoc,
 						CheckPointTLI)));
 
 		/*
@@ -631,8 +633,8 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 			memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
 			wasShutdown = ((record->xl_info & ~XLR_INFO_MASK) == XLOG_CHECKPOINT_SHUTDOWN);
 			ereport(DEBUG1,
-					(errmsg_internal("checkpoint record is at %X/%X",
-									 LSN_FORMAT_ARGS(CheckPointLoc))));
+					(errmsg_internal("checkpoint record is at %016" PRIX64,
+									 CheckPointLoc)));
 			InRecovery = true;	/* force recovery even if SHUTDOWNED */
 
 			/*
@@ -647,8 +649,10 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 				if (!ReadRecord(xlogprefetcher, LOG, false,
 								checkPoint.ThisTimeLineID))
 					ereport(FATAL,
-							(errmsg("could not find redo location %X/%X referenced by checkpoint record at %X/%X",
-									LSN_FORMAT_ARGS(checkPoint.redo), LSN_FORMAT_ARGS(CheckPointLoc)),
+							(errmsg("could not find redo location %016" PRIX64
+									" referenced by checkpoint record at %016"
+									PRIX64,
+									checkPoint.redo, CheckPointLoc),
 							 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" or \"%s/standby.signal\" and add required recovery options.\n"
 									 "If you are not restoring from a backup, try removing the file \"%s/backup_label\".\n"
 									 "Be careful: removing \"%s/backup_label\" will result in a corrupt cluster if restoring from a backup.",
@@ -658,8 +662,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		else
 		{
 			ereport(FATAL,
-					(errmsg("could not locate required checkpoint record at %X/%X",
-							LSN_FORMAT_ARGS(CheckPointLoc)),
+					(errmsg("could not locate required checkpoint record at %016"
+							PRIX64,
+							CheckPointLoc),
 					 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" or \"%s/standby.signal\" and add required recovery options.\n"
 							 "If you are not restoring from a backup, try removing the file \"%s/backup_label\".\n"
 							 "Be careful: removing \"%s/backup_label\" will result in a corrupt cluster if restoring from a backup.",
@@ -768,8 +773,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		 */
 		if (!XLogRecPtrIsInvalid(ControlFile->backupStartPoint))
 			ereport(LOG,
-					(errmsg("restarting backup recovery with redo LSN %X/%X",
-							LSN_FORMAT_ARGS(ControlFile->backupStartPoint))));
+					(errmsg("restarting backup recovery with redo LSN %016"
+							PRIX64,
+							ControlFile->backupStartPoint)));
 
 		/* Get the last valid checkpoint record. */
 		CheckPointLoc = ControlFile->checkPoint;
@@ -781,8 +787,8 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		if (record != NULL)
 		{
 			ereport(DEBUG1,
-					(errmsg_internal("checkpoint record is at %X/%X",
-									 LSN_FORMAT_ARGS(CheckPointLoc))));
+					(errmsg_internal("checkpoint record is at %016" PRIX64,
+									 CheckPointLoc)));
 		}
 		else
 		{
@@ -793,8 +799,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 			 * simplify processing around checkpoints.
 			 */
 			ereport(PANIC,
-					(errmsg("could not locate a valid checkpoint record at %X/%X",
-							LSN_FORMAT_ARGS(CheckPointLoc))));
+					(errmsg("could not locate a valid checkpoint record at %016"
+							PRIX64,
+							CheckPointLoc)));
 		}
 		memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
 		wasShutdown = ((record->xl_info & ~XLR_INFO_MASK) == XLOG_CHECKPOINT_SHUTDOWN);
@@ -819,8 +826,8 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 							recoveryTargetName)));
 		else if (recoveryTarget == RECOVERY_TARGET_LSN)
 			ereport(LOG,
-					(errmsg("starting point-in-time recovery to WAL location (LSN) \"%X/%X\"",
-							LSN_FORMAT_ARGS(recoveryTargetLSN))));
+					(errmsg("starting point-in-time recovery to WAL location (LSN) \"%016" PRIX64 "\"",
+							recoveryTargetLSN)));
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
@@ -850,11 +857,11 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 				(errmsg("requested timeline %u is not a child of this server's history",
 						recoveryTargetTLI),
 		/* translator: %s is a backup_label file or a pg_control file */
-				 errdetail("Latest checkpoint in file \"%s\" is at %X/%X on timeline %u, but in the history of the requested timeline, the server forked off from that timeline at %X/%X.",
+				 errdetail("Latest checkpoint in file \"%s\" is at %016" PRIX64 " on timeline %u, but in the history of the requested timeline, the server forked off from that timeline at %016" PRIX64 ".",
 						   haveBackupLabel ? "backup_label" : "pg_control",
-						   LSN_FORMAT_ARGS(CheckPointLoc),
+						   CheckPointLoc,
 						   CheckPointTLI,
-						   LSN_FORMAT_ARGS(switchpoint))));
+						   switchpoint)));
 	}
 
 	/*
@@ -865,14 +872,14 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		tliOfPointInHistory(ControlFile->minRecoveryPoint - 1, expectedTLEs) !=
 		ControlFile->minRecoveryPointTLI)
 		ereport(FATAL,
-				(errmsg("requested timeline %u does not contain minimum recovery point %X/%X on timeline %u",
+				(errmsg("requested timeline %u does not contain minimum recovery point %016" PRIX64 " on timeline %u",
 						recoveryTargetTLI,
-						LSN_FORMAT_ARGS(ControlFile->minRecoveryPoint),
+						ControlFile->minRecoveryPoint,
 						ControlFile->minRecoveryPointTLI)));
 
 	ereport(DEBUG1,
-			(errmsg_internal("redo record is at %X/%X; shutdown %s",
-							 LSN_FORMAT_ARGS(checkPoint.redo),
+			(errmsg_internal("redo record is at %016" PRIX64 "; shutdown %s",
+							 checkPoint.redo,
 							 wasShutdown ? "true" : "false")));
 	ereport(DEBUG1,
 			(errmsg_internal("next transaction ID: " UINT64_FORMAT "; next OID: %u",
@@ -1220,8 +1227,7 @@ read_backup_label(XLogRecPtr *checkPointLoc, TimeLineID *backupLabelTLI,
 	char		backupfrom[20];
 	char		backuplabel[MAXPGPATH];
 	char		backuptime[128];
-	uint32		hi,
-				lo;
+	XLogRecPtr	dummy_lsn;
 
 	/* suppress possible uninitialized-variable warnings */
 	*checkPointLoc = InvalidXLogRecPtr;
@@ -1248,19 +1254,17 @@ read_backup_label(XLogRecPtr *checkPointLoc, TimeLineID *backupLabelTLI,
 	 * is pretty crude, but we are not expecting any variability in the file
 	 * format).
 	 */
-	if (fscanf(lfp, "START WAL LOCATION: %X/%X (file %08X%16s)%c",
-			   &hi, &lo, &tli_from_walseg, startxlogfilename, &ch) != 5 || ch != '\n')
+	if (fscanf(lfp, "START WAL LOCATION: %" SCNx64 " (file %08X%16s)%c",
+			   &RedoStartLSN, &tli_from_walseg, startxlogfilename, &ch) != 4 || ch != '\n')
 		ereport(FATAL,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("invalid data in file \"%s\"", BACKUP_LABEL_FILE)));
-	RedoStartLSN = ((uint64) hi) << 32 | lo;
 	RedoStartTLI = tli_from_walseg;
-	if (fscanf(lfp, "CHECKPOINT LOCATION: %X/%X%c",
-			   &hi, &lo, &ch) != 3 || ch != '\n')
+	if (fscanf(lfp, "CHECKPOINT LOCATION: %" SCNx64 "%c",
+			   checkPointLoc, &ch) != 2 || ch != '\n')
 		ereport(FATAL,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("invalid data in file \"%s\"", BACKUP_LABEL_FILE)));
-	*checkPointLoc = ((uint64) hi) << 32 | lo;
 	*backupLabelTLI = tli_from_walseg;
 
 	/*
@@ -1327,7 +1331,7 @@ read_backup_label(XLogRecPtr *checkPointLoc, TimeLineID *backupLabelTLI,
 								 tli_from_file, BACKUP_LABEL_FILE)));
 	}
 
-	if (fscanf(lfp, "INCREMENTAL FROM LSN: %X/%X\n", &hi, &lo) > 0)
+	if (fscanf(lfp, "INCREMENTAL FROM LSN: %" SCNx64 "\n", &dummy_lsn) > 0)
 		ereport(FATAL,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("this is an incremental backup, not a data directory"),
@@ -1717,8 +1721,9 @@ PerformWalRecovery(void)
 		if (record->xl_rmid != RM_XLOG_ID ||
 			(record->xl_info & ~XLR_INFO_MASK) != XLOG_CHECKPOINT_REDO)
 			ereport(FATAL,
-					(errmsg("unexpected record type found at redo point %X/%X",
-							LSN_FORMAT_ARGS(xlogreader->ReadRecPtr))));
+					(errmsg("unexpected record type found at redo point %016"
+							PRIX64,
+							xlogreader->ReadRecPtr)));
 	}
 	else
 	{
@@ -1740,8 +1745,7 @@ PerformWalRecovery(void)
 		RmgrStartup();
 
 		ereport(LOG,
-				(errmsg("redo starts at %X/%X",
-						LSN_FORMAT_ARGS(xlogreader->ReadRecPtr))));
+				(errmsg("redo starts at %016" PRIX64, xlogreader->ReadRecPtr)));
 
 		/* Prepare to report progress of the redo phase. */
 		if (!StandbyMode)
@@ -1753,8 +1757,8 @@ PerformWalRecovery(void)
 		do
 		{
 			if (!StandbyMode)
-				ereport_startup_progress("redo in progress, elapsed time: %ld.%02d s, current LSN: %X/%X",
-										 LSN_FORMAT_ARGS(xlogreader->ReadRecPtr));
+				ereport_startup_progress("redo in progress, elapsed time: %ld.%02d s, current LSN: %016" PRIX64,
+										 xlogreader->ReadRecPtr);
 
 #ifdef WAL_DEBUG
 			if (XLOG_DEBUG)
@@ -1762,9 +1766,9 @@ PerformWalRecovery(void)
 				StringInfoData buf;
 
 				initStringInfo(&buf);
-				appendStringInfo(&buf, "REDO @ %X/%X; LSN %X/%X: ",
-								 LSN_FORMAT_ARGS(xlogreader->ReadRecPtr),
-								 LSN_FORMAT_ARGS(xlogreader->EndRecPtr));
+				appendStringInfo(&buf, "REDO @ %016" PRIX64 "; LSN %016" PRIX64 ": ",
+								 xlogreader->ReadRecPtr,
+								 xlogreader->EndRecPtr);
 				xlog_outrec(&buf, xlogreader);
 				appendStringInfoString(&buf, " - ");
 				xlog_outdesc(&buf, xlogreader);
@@ -1875,8 +1879,8 @@ PerformWalRecovery(void)
 		RmgrCleanup();
 
 		ereport(LOG,
-				(errmsg("redo done at %X/%X system usage: %s",
-						LSN_FORMAT_ARGS(xlogreader->ReadRecPtr),
+				(errmsg("redo done at %016" PRIX64 " system usage: %s",
+						xlogreader->ReadRecPtr,
 						pg_rusage_show(&ru0))));
 		xtime = GetLatestXTime();
 		if (xtime)
@@ -2087,17 +2091,18 @@ xlogrecovery_redo(XLogReaderState *record, TimeLineID replayTLI)
 
 		memcpy(&xlrec, XLogRecGetData(record), sizeof(xl_overwrite_contrecord));
 		if (xlrec.overwritten_lsn != record->overwrittenRecPtr)
-			elog(FATAL, "mismatching overwritten LSN %X/%X -> %X/%X",
-				 LSN_FORMAT_ARGS(xlrec.overwritten_lsn),
-				 LSN_FORMAT_ARGS(record->overwrittenRecPtr));
+			elog(FATAL, "mismatching overwritten LSN %016" PRIX64 " -> %016" PRIX64,
+				 xlrec.overwritten_lsn,
+				 record->overwrittenRecPtr);
 
 		/* We have safely skipped the aborted record */
 		abortedRecPtr = InvalidXLogRecPtr;
 		missingContrecPtr = InvalidXLogRecPtr;
 
 		ereport(LOG,
-				(errmsg("successfully skipped missing contrecord at %X/%X, overwritten at %s",
-						LSN_FORMAT_ARGS(xlrec.overwritten_lsn),
+				(errmsg("successfully skipped missing contrecord at %016" PRIX64
+						", overwritten at %s",
+						xlrec.overwritten_lsn,
 						timestamptz_to_str(xlrec.overwrite_time))));
 
 		/* Verifying the record should only happen once */
@@ -2124,8 +2129,9 @@ xlogrecovery_redo(XLogReaderState *record, TimeLineID replayTLI)
 			backupEndPoint = lsn;
 		}
 		else
-			elog(DEBUG1, "saw end-of-backup record for backup starting at %X/%X, waiting for %X/%X",
-				 LSN_FORMAT_ARGS(startpoint), LSN_FORMAT_ARGS(backupStartPoint));
+			elog(DEBUG1, "saw end-of-backup record for backup starting at %016"
+				 PRIX64 ", waiting for %016" PRIX64,
+				 startpoint, backupStartPoint);
 	}
 }
 
@@ -2219,9 +2225,10 @@ CheckRecoveryConsistency(void)
 		backupEndRequired = false;
 
 		ereport(LOG,
-				(errmsg("completed backup recovery with redo LSN %X/%X and end LSN %X/%X",
-						LSN_FORMAT_ARGS(saveBackupStartPoint),
-						LSN_FORMAT_ARGS(saveBackupEndPoint))));
+				(errmsg("completed backup recovery with redo LSN %016" PRIX64
+						" and end LSN %016" PRIX64,
+						saveBackupStartPoint,
+						saveBackupEndPoint)));
 	}
 
 	/*
@@ -2249,8 +2256,8 @@ CheckRecoveryConsistency(void)
 
 		reachedConsistency = true;
 		ereport(LOG,
-				(errmsg("consistent recovery state reached at %X/%X",
-						LSN_FORMAT_ARGS(lastReplayedEndRecPtr))));
+				(errmsg("consistent recovery state reached at %016" PRIX64,
+						lastReplayedEndRecPtr)));
 	}
 
 	/*
@@ -2287,8 +2294,8 @@ rm_redo_error_callback(void *arg)
 	xlog_block_info(&buf, record);
 
 	/* translator: %s is a WAL record description */
-	errcontext("WAL redo at %X/%X for %s",
-			   LSN_FORMAT_ARGS(record->ReadRecPtr),
+	errcontext("WAL redo at %016" PRIX64 " for %s",
+			   record->ReadRecPtr,
 			   buf.data);
 
 	pfree(buf.data);
@@ -2322,8 +2329,8 @@ xlog_outdesc(StringInfo buf, XLogReaderState *record)
 static void
 xlog_outrec(StringInfo buf, XLogReaderState *record)
 {
-	appendStringInfo(buf, "prev %X/%X; xid %u",
-					 LSN_FORMAT_ARGS(XLogRecGetPrev(record)),
+	appendStringInfo(buf, "prev %016" PRIX64 "; xid %u",
+					 XLogRecGetPrev(record),
 					 XLogRecGetXid(record));
 
 	appendStringInfo(buf, "; len %u",
@@ -2410,9 +2417,9 @@ checkTimeLineSwitch(XLogRecPtr lsn, TimeLineID newTLI, TimeLineID prevTLI,
 		lsn < minRecoveryPoint &&
 		newTLI > minRecoveryPointTLI)
 		ereport(PANIC,
-				(errmsg("unexpected timeline ID %u in checkpoint record, before reaching minimum recovery point %X/%X on timeline %u",
+				(errmsg("unexpected timeline ID %u in checkpoint record, before reaching minimum recovery point %016" PRIX64 " on timeline %u",
 						newTLI,
-						LSN_FORMAT_ARGS(minRecoveryPoint),
+						minRecoveryPoint,
 						minRecoveryPointTLI)));
 
 	/* Looks good */
@@ -2615,8 +2622,9 @@ recoveryStopsBefore(XLogReaderState *record)
 		recoveryStopTime = 0;
 		recoveryStopName[0] = '\0';
 		ereport(LOG,
-				(errmsg("recovery stopping before WAL location (LSN) \"%X/%X\"",
-						LSN_FORMAT_ARGS(recoveryStopLSN))));
+				(errmsg("recovery stopping before WAL location (LSN) \"%016"
+						PRIX64 "\"",
+						recoveryStopLSN)));
 		return true;
 	}
 
@@ -2783,8 +2791,9 @@ recoveryStopsAfter(XLogReaderState *record)
 		recoveryStopTime = 0;
 		recoveryStopName[0] = '\0';
 		ereport(LOG,
-				(errmsg("recovery stopping after WAL location (LSN) \"%X/%X\"",
-						LSN_FORMAT_ARGS(recoveryStopLSN))));
+				(errmsg("recovery stopping after WAL location (LSN) \"%016"
+						PRIX64 "\"",
+						recoveryStopLSN)));
 		return true;
 	}
 
@@ -2904,9 +2913,9 @@ getRecoveryStopReason(void)
 				 timestamptz_to_str(recoveryStopTime));
 	else if (recoveryTarget == RECOVERY_TARGET_LSN)
 		snprintf(reason, sizeof(reason),
-				 "%s LSN %X/%X\n",
+				 "%s LSN %016" PRIX64 "\n",
 				 recoveryStopAfter ? "after" : "before",
-				 LSN_FORMAT_ARGS(recoveryStopLSN));
+				 recoveryStopLSN);
 	else if (recoveryTarget == RECOVERY_TARGET_NAME)
 		snprintf(reason, sizeof(reason),
 				 "at restore point \"%s\"",
@@ -3207,10 +3216,10 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			XLogFileName(fname, xlogreader->seg.ws_tli, segno,
 						 wal_segment_size);
 			ereport(emode_for_corrupt_record(emode, xlogreader->EndRecPtr),
-					(errmsg("unexpected timeline ID %u in WAL segment %s, LSN %X/%X, offset %u",
+					(errmsg("unexpected timeline ID %u in WAL segment %s, LSN %016" PRIX64 ", offset %u",
 							xlogreader->latestPageTLI,
 							fname,
-							LSN_FORMAT_ARGS(xlogreader->latestPagePtr),
+							xlogreader->latestPagePtr,
 							offset)));
 			record = NULL;
 		}
@@ -3423,15 +3432,17 @@ retry:
 			errno = save_errno;
 			ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
 					(errcode_for_file_access(),
-					 errmsg("could not read from WAL segment %s, LSN %X/%X, offset %u: %m",
-							fname, LSN_FORMAT_ARGS(targetPagePtr),
+					 errmsg("could not read from WAL segment %s, LSN %016" PRIX64
+							", offset %u: %m",
+							fname, targetPagePtr,
 							readOff)));
 		}
 		else
 			ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read from WAL segment %s, LSN %X/%X, offset %u: read %d of %zu",
-							fname, LSN_FORMAT_ARGS(targetPagePtr),
+					 errmsg("could not read from WAL segment %s, LSN %016" PRIX64
+							", offset %u: read %d of %zu",
+							fname, targetPagePtr,
 							readOff, r, (Size) XLOG_BLCKSZ)));
 		goto next_record_is_invalid;
 	}
@@ -3712,8 +3723,9 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						wait_time = wal_retrieve_retry_interval -
 							TimestampDifferenceMilliseconds(last_fail_time, now);
 
-						elog(LOG, "waiting for WAL to become available at %X/%X",
-							 LSN_FORMAT_ARGS(RecPtr));
+						elog(LOG, "waiting for WAL to become available at %016"
+							 PRIX64,
+							 RecPtr);
 
 						/* Do background tasks that might benefit us later. */
 						KnownAssignedTransactionIdsIdleMaintenance();
@@ -3858,8 +3870,8 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 							tli = tliOfPointInHistory(tliRecPtr, expectedTLEs);
 
 							if (curFileTLI > 0 && tli < curFileTLI)
-								elog(ERROR, "according to history file, WAL location %X/%X belongs to timeline %u, but previous recovered WAL file came from timeline %u",
-									 LSN_FORMAT_ARGS(tliRecPtr),
+								elog(ERROR, "according to history file, WAL location %016" PRIX64 " belongs to timeline %u, but previous recovered WAL file came from timeline %u",
+									 tliRecPtr,
 									 tli, curFileTLI);
 						}
 						curFileTLI = tli;
@@ -4171,10 +4183,10 @@ rescanLatestTimeLine(TimeLineID replayTLI, XLogRecPtr replayLSN)
 	if (currentTle->end < replayLSN)
 	{
 		ereport(LOG,
-				(errmsg("new timeline %u forked off current database system timeline %u before current recovery point %X/%X",
+				(errmsg("new timeline %u forked off current database system timeline %u before current recovery point %016" PRIX64,
 						newtarget,
 						replayTLI,
-						LSN_FORMAT_ARGS(replayLSN))));
+						replayLSN)));
 		return false;
 	}
 

@@ -559,10 +559,10 @@ check_backup_label_files(int n_backups, char **backup_dirs)
 			pg_fatal("backup at \"%s\" starts on timeline %u, but expected %u",
 					 backup_dirs[i], start_tli, check_tli);
 		if (i < n_backups - 1 && start_lsn != check_lsn)
-			pg_fatal("backup at \"%s\" starts at LSN %X/%X, but expected %X/%X",
+			pg_fatal("backup at \"%s\" starts at LSN %016" PRIX64 ", but expected %016" PRIX64,
 					 backup_dirs[i],
-					 LSN_FORMAT_ARGS(start_lsn),
-					 LSN_FORMAT_ARGS(check_lsn));
+					 start_lsn,
+					 check_lsn);
 		check_tli = previous_tli;
 		check_lsn = previous_lsn;
 

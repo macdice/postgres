@@ -402,7 +402,7 @@ IdentifySystem(void)
 	else
 		logptr = GetFlushRecPtr(&currTLI);
 
-	snprintf(xloc, sizeof(xloc), "%X/%X", LSN_FORMAT_ARGS(logptr));
+	snprintf(xloc, sizeof(xloc), "%016" PRIX64, logptr);
 
 	if (MyDatabaseId != InvalidOid)
 	{
@@ -509,8 +509,8 @@ ReadReplicationSlot(ReadReplicationSlotCmd *cmd)
 		{
 			char		xloc[64];
 
-			snprintf(xloc, sizeof(xloc), "%X/%X",
-					 LSN_FORMAT_ARGS(slot_contents.data.restart_lsn));
+			snprintf(xloc, sizeof(xloc), "%016" PRIX64,
+					 slot_contents.data.restart_lsn);
 			values[i] = CStringGetTextDatum(xloc);
 			nulls[i] = false;
 		}
@@ -886,12 +886,12 @@ StartReplication(StartReplicationCmd *cmd)
 				switchpoint < cmd->startpoint)
 			{
 				ereport(ERROR,
-						(errmsg("requested starting point %X/%X on timeline %u is not in this server's history",
-								LSN_FORMAT_ARGS(cmd->startpoint),
+						(errmsg("requested starting point %016" PRIX64 " on timeline %u is not in this server's history",
+								cmd->startpoint,
 								cmd->timeline),
-						 errdetail("This server's history forked from timeline %u at %X/%X.",
+						 errdetail("This server's history forked from timeline %u at %016" PRIX64 ".",
 								   cmd->timeline,
-								   LSN_FORMAT_ARGS(switchpoint))));
+								   switchpoint)));
 			}
 			sendTimeLineValidUpto = switchpoint;
 		}
@@ -933,9 +933,9 @@ StartReplication(StartReplicationCmd *cmd)
 		if (FlushPtr < cmd->startpoint)
 		{
 			ereport(ERROR,
-					(errmsg("requested starting point %X/%X is ahead of the WAL flush position of this server %X/%X",
-							LSN_FORMAT_ARGS(cmd->startpoint),
-							LSN_FORMAT_ARGS(FlushPtr))));
+					(errmsg("requested starting point %016" PRIX64 " is ahead of the WAL flush position of this server %016" PRIX64,
+							cmd->startpoint,
+							FlushPtr)));
 		}
 
 		/* Start streaming from the requested point */
@@ -977,8 +977,8 @@ StartReplication(StartReplicationCmd *cmd)
 		Datum		values[2];
 		bool		nulls[2] = {0};
 
-		snprintf(startpos_str, sizeof(startpos_str), "%X/%X",
-				 LSN_FORMAT_ARGS(sendTimeLineValidUpto));
+		snprintf(startpos_str, sizeof(startpos_str), "%016" PRIX64,
+				 sendTimeLineValidUpto);
 
 		dest = CreateDestReceiver(DestRemoteSimple);
 
@@ -1318,8 +1318,8 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 			ReplicationSlotPersist();
 	}
 
-	snprintf(xloc, sizeof(xloc), "%X/%X",
-			 LSN_FORMAT_ARGS(MyReplicationSlot->data.confirmed_flush));
+	snprintf(xloc, sizeof(xloc), "%016" PRIX64,
+			 MyReplicationSlot->data.confirmed_flush);
 
 	dest = CreateDestReceiver(DestRemoteSimple);
 
@@ -1958,6 +1958,7 @@ exec_replication_command(const char *cmd_string)
 	MemoryContext cmd_context;
 	MemoryContext old_context;
 
+elog(LOG, "XXX: %s", cmd_string);
 	/*
 	 * If WAL sender has been told that shutdown is getting close, switch its
 	 * status accordingly to handle the next replication commands correctly.
@@ -2387,10 +2388,10 @@ ProcessStandbyReplyMessage(void)
 		/* Copy because timestamptz_to_str returns a static buffer */
 		replyTimeStr = pstrdup(timestamptz_to_str(replyTime));
 
-		elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X%s reply_time %s",
-			 LSN_FORMAT_ARGS(writePtr),
-			 LSN_FORMAT_ARGS(flushPtr),
-			 LSN_FORMAT_ARGS(applyPtr),
+		elog(DEBUG2, "write %016" PRIX64 " flush %016" PRIX64 " apply %016" PRIX64 "%s reply_time %s",
+			 writePtr,
+			 flushPtr,
+			 applyPtr,
 			 replyRequested ? " (reply requested)" : "",
 			 replyTimeStr);
 
@@ -3193,9 +3194,9 @@ XLogSendPhysical(void)
 
 		WalSndCaughtUp = true;
 
-		elog(DEBUG1, "walsender reached end of timeline at %X/%X (sent up to %X/%X)",
-			 LSN_FORMAT_ARGS(sendTimeLineValidUpto),
-			 LSN_FORMAT_ARGS(sentPtr));
+		elog(DEBUG1, "walsender reached end of timeline at %016" PRIX64 " (sent up to %016" PRIX64 ")",
+			 sendTimeLineValidUpto,
+			 sentPtr);
 		return;
 	}
 
@@ -3334,8 +3335,8 @@ retry:
 	{
 		char		activitymsg[50];
 
-		snprintf(activitymsg, sizeof(activitymsg), "streaming %X/%X",
-				 LSN_FORMAT_ARGS(sentPtr));
+		snprintf(activitymsg, sizeof(activitymsg), "streaming %016" PRIX64,
+				 sentPtr);
 		set_ps_display(activitymsg);
 	}
 }

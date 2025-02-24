@@ -79,10 +79,10 @@ my ($tli, $start_lsn, $end_lsn) = split(/\|/, $lines[0]);
 note("examining summary for TLI $tli from $start_lsn to $end_lsn");
 
 # Reconstruct the full pathname for the WAL summary file.
-my $filename = sprintf "%s/pg_wal/summaries/%08s%08s%08s%08s%08s.summary",
+my $filename = sprintf "%s/pg_wal/summaries/%08s%016s%016s.summary",
   $node1->data_dir, $tli,
-  split(m@/@, $start_lsn),
-  split(m@/@, $end_lsn);
+  $start_lsn,
+  $end_lsn;
 ok(-f $filename, "WAL summary file exists");
 
 # Run pg_walsummary on it. We expect exactly two blocks to be modified,

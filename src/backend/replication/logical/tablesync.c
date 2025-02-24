@@ -1549,8 +1549,8 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 copy_table_done:
 
 	elog(DEBUG1,
-		 "LogicalRepSyncTableStart: '%s' origin_startpos lsn %X/%X",
-		 originname, LSN_FORMAT_ARGS(*origin_startpos));
+		 "LogicalRepSyncTableStart: '%s' origin_startpos lsn %016" PRIX64,
+		 originname, *origin_startpos);
 
 	/*
 	 * We are done with the initial data synchronization, update the state.

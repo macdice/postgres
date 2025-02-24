@@ -393,8 +393,8 @@ main(int argc, char **argv)
 								   targetHistory, targetNentries,
 								   &divergerec, &lastcommontliIndex);
 
-		pg_log_info("servers diverged at WAL location %X/%X on timeline %u",
-					LSN_FORMAT_ARGS(divergerec),
+		pg_log_info("servers diverged at WAL location %016" PRIX64 " on timeline %u",
+					divergerec,
 					targetHistory[lastcommontliIndex].tli);
 
 		/*
@@ -460,8 +460,8 @@ main(int argc, char **argv)
 
 	findLastCheckpoint(datadir_target, divergerec, lastcommontliIndex,
 					   &chkptrec, &chkpttli, &chkptredo, restore_command);
-	pg_log_info("rewinding from last common checkpoint at %X/%X on timeline %u",
-				LSN_FORMAT_ARGS(chkptrec), chkpttli);
+	pg_log_info("rewinding from last common checkpoint at %016" PRIX64 " on timeline %u",
+				chkptrec, chkpttli);
 
 	/* Initialize the hash table to track the status of each file */
 	filehash_init();
@@ -900,9 +900,9 @@ getTimelineHistory(TimeLineID tli, bool is_source, int *nentries)
 			TimeLineHistoryEntry *entry;
 
 			entry = &history[i];
-			pg_log_debug("%u: %X/%X - %X/%X", entry->tli,
-						 LSN_FORMAT_ARGS(entry->begin),
-						 LSN_FORMAT_ARGS(entry->end));
+			pg_log_debug("%u: %016" PRIX64 " - %016" PRIX64, entry->tli,
+						 entry->begin,
+						 entry->end);
 		}
 	}
 
@@ -979,14 +979,14 @@ createBackupLabel(XLogRecPtr startpoint, TimeLineID starttli, XLogRecPtr checkpo
 	strftime(strfbuf, sizeof(strfbuf), "%Y-%m-%d %H:%M:%S %Z", tmp);
 
 	len = snprintf(buf, sizeof(buf),
-				   "START WAL LOCATION: %X/%X (file %s)\n"
-				   "CHECKPOINT LOCATION: %X/%X\n"
+				   "START WAL LOCATION: %016" PRIX64 " (file %s)\n"
+				   "CHECKPOINT LOCATION: %016" PRIX64 "\n"
 				   "BACKUP METHOD: pg_rewind\n"
 				   "BACKUP FROM: standby\n"
 				   "START TIME: %s\n",
 	/* omit LABEL: line */
-				   LSN_FORMAT_ARGS(startpoint), xlogfilename,
-				   LSN_FORMAT_ARGS(checkpointloc),
+				   startpoint, xlogfilename,
+				   checkpointloc,
 				   strfbuf);
 	if (len >= sizeof(buf))
 		pg_fatal("backup label buffer too small");	/* shouldn't happen */

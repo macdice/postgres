@@ -80,7 +80,7 @@ $node->command_ok(
 	'pg_waldump with --save-fullpage runs');
 
 # This regexp will match filenames formatted as:
-# TLI-LSNh-LSNl.TBLSPCOID.DBOID.NODEOID.dd_fork with the components being:
+# TLI-LSN.TBLSPCOID.DBOID.NODEOID.dd_fork with the components being:
 # - Timeline ID in hex format.
 # - WAL LSN in hex format, as two 8-character numbers.
 # - Tablespace OID (0 for global).
@@ -89,7 +89,7 @@ $node->command_ok(
 # - Block number.
 # - Fork this block came from (vm, init, fsm, or main).
 my $file_re =
-  qr/^[0-9A-F]{8}-([0-9A-F]{8})-([0-9A-F]{8})[.][0-9]+[.][0-9]+[.][0-9]+[.][0-9]+(?:_vm|_init|_fsm|_main)?$/;
+  qr/^[0-9A-F]{8}-([0-9A-F]{16})[.][0-9]+[.][0-9]+[.][0-9]+[.][0-9]+(?:_vm|_init|_fsm|_main)?$/;
 
 my $file_count = 0;
 
@@ -101,11 +101,11 @@ for my $fullpath (glob "$tmp_folder/raw/*")
 	like($file, $file_re, "verify filename format for file $file");
 	$file_count++;
 
-	my ($hi_lsn_fn, $lo_lsn_fn) = ($file =~ $file_re);
+	my ($lsn_fn) = ($file =~ $file_re);
 	my ($hi_lsn_bk, $lo_lsn_bk) = get_block_lsn($fullpath, $blocksize);
 
 	# The LSN on the block comes before the file's LSN.
-	ok( $hi_lsn_fn . $lo_lsn_fn gt $hi_lsn_bk . $lo_lsn_bk,
+	ok( $lsn_fn gt $hi_lsn_bk . $lo_lsn_bk,
 		'LSN stored in the file precedes the one stored in the block');
 }
 

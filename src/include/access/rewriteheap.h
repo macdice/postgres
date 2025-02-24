@@ -45,13 +45,13 @@ typedef struct LogicalRewriteMappingData
  * components:
  * 1) database oid or InvalidOid for shared relations
  * 2) the oid of the relation
- * 3) upper 32bit of the LSN at which a rewrite started
- * 4) lower 32bit of the LSN at which a rewrite started
- * 5) xid we are mapping for
- * 6) xid of the xact performing the mapping
+ * 3) LSN at which a rewrite started
+ * 4) xid we are mapping for
+ * 5) xid of the xact performing the mapping
  * ---
  */
-#define LOGICAL_REWRITE_FORMAT "map-%x-%x-%X_%X-%x-%x"
+#define LOGICAL_REWRITE_FORMAT "map-%x-%x-%016" PRIX64 "-%x-%x"
+#define LOGICAL_REWRITE_FORMAT_SCANF "map-%x-%x-%" SCNx64 "-%x-%x"
 extern void CheckPointLogicalRewriteHeap(void);
 
 #endif							/* REWRITE_HEAP_H */

@@ -25,7 +25,7 @@ typedef uint64 XLogRecPtr;
  * WAL segment, initializing the first WAL page at WAL segment size, so no XLOG
  * record can begin at zero.
  */
-#define InvalidXLogRecPtr	0
+#define InvalidXLogRecPtr	((XLogRecPtr) 0)
 #define XLogRecPtrIsInvalid(r)	((r) == InvalidXLogRecPtr)
 
 /*
@@ -34,13 +34,6 @@ typedef uint64 XLogRecPtr;
  * Values smaller than this can be used for special per-AM purposes.
  */
 #define FirstNormalUnloggedLSN	((XLogRecPtr) 1000)
-
-/*
- * Handy macro for printing XLogRecPtr in conventional format, e.g.,
- *
- * printf("%X/%X", LSN_FORMAT_ARGS(lsn));
- */
-#define LSN_FORMAT_ARGS(lsn) (AssertVariableIsOfTypeMacro((lsn), XLogRecPtr), (uint32) ((lsn) >> 32)), ((uint32) (lsn))
 
 /*
  * XLogSegNo - physical log file sequence number.

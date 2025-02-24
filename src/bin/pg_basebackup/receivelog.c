@@ -571,9 +571,9 @@ ReceiveXlogStream(PGconn *conn, StreamCtl *stream)
 			return true;
 
 		/* Initiate the replication stream at specified location */
-		snprintf(query, sizeof(query), "START_REPLICATION %s%X/%X TIMELINE %u",
+		snprintf(query, sizeof(query), "START_REPLICATION %s%016" PRIX64 " TIMELINE %u",
 				 slotcmd,
-				 LSN_FORMAT_ARGS(stream->startpos),
+				 stream->startpos,
 				 stream->timeline);
 		res = PQexec(conn, query);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
@@ -628,9 +628,9 @@ ReceiveXlogStream(PGconn *conn, StreamCtl *stream)
 			}
 			if (stream->startpos > stoppos)
 			{
-				pg_log_error("server stopped streaming timeline %u at %X/%X, but reported next timeline %u to begin at %X/%X",
-							 stream->timeline, LSN_FORMAT_ARGS(stoppos),
-							 newtimeline, LSN_FORMAT_ARGS(stream->startpos));
+				pg_log_error("server stopped streaming timeline %u at %016" PRIX64 ", but reported next timeline %u to begin at %016" PRIX64,
+							 stream->timeline, stoppos,
+							 newtimeline, stream->startpos);
 				goto error;
 			}
 
@@ -697,15 +697,12 @@ error:
 static bool
 ReadEndOfStreamingResult(PGresult *res, XLogRecPtr *startpos, uint32 *timeline)
 {
-	uint32		startpos_xlogid,
-				startpos_xrecoff;
-
 	/*----------
 	 * The result set consists of one row and two columns, e.g:
 	 *
 	 *	next_tli | next_tli_startpos
 	 * ----------+-------------------
-	 *		   4 | 0/9949AE0
+	 *		   4 | 0000000009949AE0
 	 *
 	 * next_tli is the timeline ID of the next timeline after the one that
 	 * just finished streaming. next_tli_startpos is the WAL location where
@@ -720,14 +717,12 @@ ReadEndOfStreamingResult(PGresult *res, XLogRecPtr *startpos, uint32 *timeline)
 	}
 
 	*timeline = atoi(PQgetvalue(res, 0, 0));
-	if (sscanf(PQgetvalue(res, 0, 1), "%X/%X", &startpos_xlogid,
-			   &startpos_xrecoff) != 2)
+	if (sscanf(PQgetvalue(res, 0, 1), "%" SCNx64, startpos) != 1)
 	{
 		pg_log_error("could not parse next timeline's starting point \"%s\"",
 					 PQgetvalue(res, 0, 1));
 		return false;
 	}
-	*startpos = ((uint64) startpos_xlogid << 32) | startpos_xrecoff;
 
 	return true;
 }

@@ -1364,17 +1364,17 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 
 	if (xlrec.subxid_overflow)
 		elog(DEBUG2,
-			 "snapshot of %d running transactions overflowed (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %d running transactions overflowed (lsn %016" PRIX64 " oldest xid %u latest complete %u next xid %u)",
 			 CurrRunningXacts->xcnt,
-			 LSN_FORMAT_ARGS(recptr),
+			 recptr,
 			 CurrRunningXacts->oldestRunningXid,
 			 CurrRunningXacts->latestCompletedXid,
 			 CurrRunningXacts->nextXid);
 	else
 		elog(DEBUG2,
-			 "snapshot of %d+%d running transaction ids (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %d+%d running transaction ids (lsn %016" PRIX64 " oldest xid %u latest complete %u next xid %u)",
 			 CurrRunningXacts->xcnt, CurrRunningXacts->subxcnt,
-			 LSN_FORMAT_ARGS(recptr),
+			 recptr,
 			 CurrRunningXacts->oldestRunningXid,
 			 CurrRunningXacts->latestCompletedXid,
 			 CurrRunningXacts->nextXid);

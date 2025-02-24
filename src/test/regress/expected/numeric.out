@@ -3860,21 +3860,21 @@ ERROR:  factorial of a negative number is undefined
 -- Tests for pg_lsn()
 --
 SELECT pg_lsn(23783416::numeric);
-  pg_lsn   
------------
- 0/16AE7F8
+      pg_lsn      
+------------------
+ 00000000016AE7F8
 (1 row)
 
 SELECT pg_lsn(0::numeric);
- pg_lsn 
---------
- 0/0
+      pg_lsn      
+------------------
+ 0000000000000000
 (1 row)
 
 SELECT pg_lsn(18446744073709551615::numeric);
-      pg_lsn       
--------------------
- FFFFFFFF/FFFFFFFF
+      pg_lsn      
+------------------
+ FFFFFFFFFFFFFFFF
 (1 row)
 
 SELECT pg_lsn(-1::numeric);

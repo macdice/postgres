@@ -1547,10 +1547,10 @@ ReportSlotInvalidation(ReplicationSlotInvalidationCause cause,
 				uint64		ex = oldestLSN - restart_lsn;
 
 				appendStringInfo(&err_detail,
-								 ngettext("The slot's restart_lsn %X/%X exceeds the limit by %" PRIu64 " byte.",
-										  "The slot's restart_lsn %X/%X exceeds the limit by %" PRIu64 " bytes.",
+								 ngettext("The slot's restart_lsn %016" PRIX64 " exceeds the limit by %" PRIu64 " byte.",
+										  "The slot's restart_lsn %016" PRIX64 " exceeds the limit by %" PRIu64 " bytes.",
 										  ex),
-								 LSN_FORMAT_ARGS(restart_lsn),
+								 restart_lsn,
 								 ex);
 				/* translator: %s is a GUC variable name */
 				appendStringInfo(&err_hint, _("You might need to increase \"%s\"."),

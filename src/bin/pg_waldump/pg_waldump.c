@@ -522,9 +522,9 @@ XLogRecordSaveFPWs(XLogReaderState *record, const char *savepath)
 		else
 			pg_fatal("invalid fork number: %u", fork);
 
-		snprintf(filename, MAXPGPATH, "%s/%08X-%08X-%08X.%u.%u.%u.%u%s", savepath,
+		snprintf(filename, MAXPGPATH, "%s/%08X-%016" PRIX64 ".%u.%u.%u.%u%s", savepath,
 				 record->seg.ws_tli,
-				 LSN_FORMAT_ARGS(record->ReadRecPtr),
+				 record->ReadRecPtr,
 				 rnode.spcOid, rnode.dbOid, rnode.relNumber, blk, forkname);
 
 		file = fopen(filename, PG_BINARY_W);
@@ -555,12 +555,12 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 
 	XLogRecGetLen(record, &rec_len, &fpi_len);
 
-	printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %X/%08X, prev %X/%08X, ",
+	printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %016" PRIX64 ", prev %016" PRIX64 ", ",
 		   desc->rm_name,
 		   rec_len, XLogRecGetTotalLen(record),
 		   XLogRecGetXid(record),
-		   LSN_FORMAT_ARGS(record->ReadRecPtr),
-		   LSN_FORMAT_ARGS(xl_prev));
+		   record->ReadRecPtr,
+		   xl_prev);
 
 	id = desc->rm_identify(info);
 	if (id == NULL)
@@ -656,8 +656,8 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogStats *stats)
 	}
 	total_len = total_rec_len + total_fpi_len;
 
-	printf("WAL statistics between %X/%X and %X/%X:\n",
-		   LSN_FORMAT_ARGS(stats->startptr), LSN_FORMAT_ARGS(stats->endptr));
+	printf("WAL statistics between %016" PRIX64 "and %016" PRIX64 ":\n",
+		   stats->startptr, stats->endptr);
 
 	/*
 	 * 27 is strlen("Transaction/COMMIT_PREPARED"), 20 is strlen(2^64), 8 is
@@ -791,8 +791,6 @@ usage(void)
 int
 main(int argc, char **argv)
 {
-	uint32		xlogid;
-	uint32		xrecoff;
 	XLogReaderState *xlogreader_state;
 	XLogDumpPrivate private;
 	XLogDumpConfig config;
@@ -904,13 +902,12 @@ main(int argc, char **argv)
 				config.filter_by_extended = true;
 				break;
 			case 'e':
-				if (sscanf(optarg, "%X/%X", &xlogid, &xrecoff) != 2)
+				if (sscanf(optarg, "%" SCNx64, &private.endptr) != 1)
 				{
 					pg_log_error("invalid WAL location: \"%s\"",
 								 optarg);
 					goto bad_argument;
 				}
-				private.endptr = (uint64) xlogid << 32 | xrecoff;
 				break;
 			case 'f':
 				config.follow = true;
@@ -1002,14 +999,12 @@ main(int argc, char **argv)
 				config.filter_by_extended = true;
 				break;
 			case 's':
-				if (sscanf(optarg, "%X/%X", &xlogid, &xrecoff) != 2)
+				if (sscanf(optarg, "%" SCNx64, &private.startptr) != 1)
 				{
 					pg_log_error("invalid WAL location: \"%s\"",
 								 optarg);
 					goto bad_argument;
 				}
-				else
-					private.startptr = (uint64) xlogid << 32 | xrecoff;
 				break;
 			case 't':
 
@@ -1140,8 +1135,8 @@ main(int argc, char **argv)
 			XLogSegNoOffsetToRecPtr(segno, 0, WalSegSz, private.startptr);
 		else if (!XLByteInSeg(private.startptr, segno, WalSegSz))
 		{
-			pg_log_error("start WAL location %X/%X is not inside file \"%s\"",
-						 LSN_FORMAT_ARGS(private.startptr),
+			pg_log_error("start WAL location %016" PRIX64 " is not inside file \"%s\"",
+						 private.startptr,
 						 fname);
 			goto bad_argument;
 		}
@@ -1182,8 +1177,8 @@ main(int argc, char **argv)
 		if (!XLByteInSeg(private.endptr, segno, WalSegSz) &&
 			private.endptr != (segno + 1) * WalSegSz)
 		{
-			pg_log_error("end WAL location %X/%X is not inside file \"%s\"",
-						 LSN_FORMAT_ARGS(private.endptr),
+			pg_log_error("end WAL location %016" PRIX64 " is not inside file \"%s\"",
+						 private.endptr,
 						 argv[argc - 1]);
 			goto bad_argument;
 		}
@@ -1214,8 +1209,8 @@ main(int argc, char **argv)
 	first_record = XLogFindNextRecord(xlogreader_state, private.startptr);
 
 	if (first_record == InvalidXLogRecPtr)
-		pg_fatal("could not find a valid record after %X/%X",
-				 LSN_FORMAT_ARGS(private.startptr));
+		pg_fatal("could not find a valid record after %016" PRIX64,
+				 private.startptr);
 
 	/*
 	 * Display a message that we're skipping data if `from` wasn't a pointer
@@ -1224,11 +1219,11 @@ main(int argc, char **argv)
 	 */
 	if (first_record != private.startptr &&
 		XLogSegmentOffset(private.startptr, WalSegSz) != 0)
-		pg_log_info(ngettext("first record is after %X/%X, at %X/%X, skipping over %u byte",
-							 "first record is after %X/%X, at %X/%X, skipping over %u bytes",
+		pg_log_info(ngettext("first record is after %016" PRIX64 ", at %016" PRIX64 ", skipping over %u byte",
+							 "first record is after %016" PRIX64 ", at %016" PRIX64 ", skipping over %u bytes",
 							 (first_record - private.startptr)),
-					LSN_FORMAT_ARGS(private.startptr),
-					LSN_FORMAT_ARGS(first_record),
+					private.startptr,
+					first_record,
 					(uint32) (first_record - private.startptr));
 
 	if (config.stats == true && !config.quiet)
@@ -1309,8 +1304,8 @@ main(int argc, char **argv)
 		exit(0);
 
 	if (errormsg)
-		pg_fatal("error in WAL record at %X/%X: %s",
-				 LSN_FORMAT_ARGS(xlogreader_state->ReadRecPtr),
+		pg_fatal("error in WAL record at %016" PRIX64 ": %s",
+				 xlogreader_state->ReadRecPtr,
 				 errormsg);
 
 	XLogReaderFree(xlogreader_state);

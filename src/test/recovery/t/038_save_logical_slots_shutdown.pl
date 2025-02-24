@@ -96,13 +96,13 @@ $node_publisher->restart();
 
 # Wait until the walsender creates decoding context
 $node_publisher->wait_for_log(
-	qr/Streaming transactions committing after ([A-F0-9]+\/[A-F0-9]+), reading WAL from ([A-F0-9]+\/[A-F0-9]+)./,
+	qr/Streaming transactions committing after ([A-F0-9]+), reading WAL from ([A-F0-9]+)./,
 	$offset);
 
 # Extract confirmed_flush from the logfile
 my $log_contents = slurp_file($node_publisher->logfile, $offset);
 $log_contents =~
-  qr/Streaming transactions committing after ([A-F0-9]+\/[A-F0-9]+), reading WAL from ([A-F0-9]+\/[A-F0-9]+)./
+  qr/Streaming transactions committing after ([A-F0-9]+), reading WAL from ([A-F0-9]+)./
   or die "could not get confirmed_flush_lsn";
 
 # Ensure that the slot's confirmed_flush LSN is the same as the

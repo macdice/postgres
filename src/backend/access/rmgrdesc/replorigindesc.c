@@ -29,9 +29,9 @@ replorigin_desc(StringInfo buf, XLogReaderState *record)
 
 				xlrec = (xl_replorigin_set *) rec;
 
-				appendStringInfo(buf, "set %u; lsn %X/%X; force: %d",
+				appendStringInfo(buf, "set %u; lsn %016" PRIX64 "; force: %d",
 								 xlrec->node_id,
-								 LSN_FORMAT_ARGS(xlrec->remote_lsn),
+								 xlrec->remote_lsn,
 								 xlrec->force);
 				break;
 			}

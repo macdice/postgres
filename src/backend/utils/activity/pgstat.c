@@ -1602,8 +1602,8 @@ pgstat_write_statsfile(XLogRecPtr redo)
 	/* we're shutting down, so it's ok to just override this */
 	pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_NONE;
 
-	elog(DEBUG2, "writing stats file \"%s\" with redo %X/%X", statfile,
-		 LSN_FORMAT_ARGS(redo));
+	elog(DEBUG2, "writing stats file \"%s\" with redo %016" PRIX64, statfile,
+		 redo);
 
 	/*
 	 * Open the statistics temp file to write out the current values.
@@ -1785,8 +1785,8 @@ pgstat_read_statsfile(XLogRecPtr redo)
 	/* shouldn't be called from postmaster */
 	Assert(IsUnderPostmaster || !IsPostmasterEnvironment);
 
-	elog(DEBUG2, "reading stats file \"%s\" with redo %X/%X", statfile,
-		 LSN_FORMAT_ARGS(redo));
+	elog(DEBUG2, "reading stats file \"%s\" with redo %016" PRIX64, statfile,
+		 redo);
 
 	/*
 	 * Try to open the stats file. If it doesn't exist, the backends simply
@@ -1835,8 +1835,8 @@ pgstat_read_statsfile(XLogRecPtr redo)
 
 	if (file_redo != redo)
 	{
-		elog(WARNING, "found incorrect redo LSN %X/%X (expected %X/%X)",
-			 LSN_FORMAT_ARGS(file_redo), LSN_FORMAT_ARGS(redo));
+		elog(WARNING, "found incorrect redo LSN %016" PRIX64 " (expected %016" PRIX64 ")",
+			 file_redo, redo);
 		goto error;
 	}
 

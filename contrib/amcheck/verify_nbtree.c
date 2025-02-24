@@ -1037,9 +1037,9 @@ bt_report_duplicate(BtreeCheckState *state,
 			(errcode(ERRCODE_INDEX_CORRUPTED),
 			 errmsg("index uniqueness is violated for index \"%s\"",
 					RelationGetRelationName(state->rel)),
-			 errdetail("Index %s%s and%s%s (point to heap %s and %s) page lsn=%X/%X.",
+			 errdetail("Index %s%s and%s%s (point to heap %s and %s) page lsn=%016" PRIX64 ".",
 					   itid, pposting, nitid, pnposting, htid, nhtid,
-					   LSN_FORMAT_ARGS(state->targetlsn))));
+					   state->targetlsn)));
 }
 
 /* Check if current nbtree leaf entry complies with UNIQUE constraint */
@@ -1182,9 +1182,9 @@ bt_leftmost_ignoring_half_dead(BtreeCheckState *state,
 					(errcode(ERRCODE_NO_DATA),
 					 errmsg_internal("harmless interrupted page deletion detected in index \"%s\"",
 									 RelationGetRelationName(state->rel)),
-					 errdetail_internal("Block=%u right block=%u page lsn=%X/%X.",
+					 errdetail_internal("Block=%u right block=%u page lsn=%016" PRIX64 ".",
 										reached, reached_from,
-										LSN_FORMAT_ARGS(pagelsn))));
+										pagelsn)));
 
 			reached_from = reached;
 			reached = reached_opaque->btpo_prev;
@@ -1407,11 +1407,11 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("wrong number of high key index tuple attributes in index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Index block=%u natts=%u block type=%s page lsn=%X/%X.",
+					 errdetail_internal("Index block=%u natts=%u block type=%s page lsn=%016" PRIX64 ".",
 										state->targetblock,
 										BTreeTupleGetNAtts(itup, state->rel),
 										P_ISLEAF(topaque) ? "heap" : "index",
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 		}
 	}
 
@@ -1456,10 +1456,10 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("index tuple size does not equal lp_len in index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Index tid=(%u,%u) tuple size=%zu lp_len=%u page lsn=%X/%X.",
+					 errdetail_internal("Index tid=(%u,%u) tuple size=%zu lp_len=%u page lsn=%016" PRIX64 ".",
 										state->targetblock, offset,
 										tupsize, ItemIdGetLength(itemid),
-										LSN_FORMAT_ARGS(state->targetlsn)),
+										state->targetlsn),
 					 errhint("This could be a torn page problem.")));
 
 		/* Check the number of index tuple attributes */
@@ -1480,12 +1480,12 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("wrong number of index tuple attributes in index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Index tid=%s natts=%u points to %s tid=%s page lsn=%X/%X.",
+					 errdetail_internal("Index tid=%s natts=%u points to %s tid=%s page lsn=%016" PRIX64 ".",
 										itid,
 										BTreeTupleGetNAtts(itup, state->rel),
 										P_ISLEAF(topaque) ? "heap" : "index",
 										htid,
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 		}
 
 		/*
@@ -1530,9 +1530,9 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("could not find tuple using search from root page in index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Index tid=%s points to heap tid=%s page lsn=%X/%X.",
+					 errdetail_internal("Index tid=%s points to heap tid=%s page lsn=%016" PRIX64 ".",
 										itid, htid,
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 		}
 
 		/*
@@ -1559,9 +1559,9 @@ bt_target_page_check(BtreeCheckState *state)
 							(errcode(ERRCODE_INDEX_CORRUPTED),
 							 errmsg_internal("posting list contains misplaced TID in index \"%s\"",
 											 RelationGetRelationName(state->rel)),
-							 errdetail_internal("Index tid=%s posting list offset=%d page lsn=%X/%X.",
+							 errdetail_internal("Index tid=%s posting list offset=%d page lsn=%016" PRIX64 ".",
 												itid, i,
-												LSN_FORMAT_ARGS(state->targetlsn))));
+												state->targetlsn)));
 				}
 
 				ItemPointerCopy(current, &last);
@@ -1613,11 +1613,11 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("index row size %zu exceeds maximum for index \"%s\"",
 							tupsize, RelationGetRelationName(state->rel)),
-					 errdetail_internal("Index tid=%s points to %s tid=%s page lsn=%X/%X.",
+					 errdetail_internal("Index tid=%s points to %s tid=%s page lsn=%016" PRIX64 ".",
 										itid,
 										P_ISLEAF(topaque) ? "heap" : "index",
 										htid,
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 		}
 
 		/* Fingerprint leaf page tuples (those that point to the heap) */
@@ -1720,11 +1720,11 @@ bt_target_page_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("high key invariant violated for index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Index tid=%s points to %s tid=%s page lsn=%X/%X.",
+					 errdetail_internal("Index tid=%s points to %s tid=%s page lsn=%016" PRIX64 ".",
 										itid,
 										P_ISLEAF(topaque) ? "heap" : "index",
 										htid,
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 		}
 		/* Reset, in case scantid was set to (itup) posting tuple's max TID */
 		skey->scantid = scantid;
@@ -1768,14 +1768,14 @@ bt_target_page_check(BtreeCheckState *state)
 							RelationGetRelationName(state->rel)),
 					 errdetail_internal("Lower index tid=%s (points to %s tid=%s) "
 										"higher index tid=%s (points to %s tid=%s) "
-										"page lsn=%X/%X.",
+										"page lsn=%016" PRIX64 ".",
 										itid,
 										P_ISLEAF(topaque) ? "heap" : "index",
 										htid,
 										nitid,
 										P_ISLEAF(topaque) ? "heap" : "index",
 										nhtid,
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 		}
 
 		/*
@@ -1885,9 +1885,9 @@ bt_target_page_check(BtreeCheckState *state)
 						(errcode(ERRCODE_INDEX_CORRUPTED),
 						 errmsg("cross page item order invariant violated for index \"%s\"",
 								RelationGetRelationName(state->rel)),
-						 errdetail_internal("Last item on page tid=(%u,%u) page lsn=%X/%X.",
+						 errdetail_internal("Last item on page tid=(%u,%u) page lsn=%016" PRIX64 ".",
 											state->targetblock, offset,
-											LSN_FORMAT_ARGS(state->targetlsn))));
+											state->targetlsn)));
 			}
 
 			/*
@@ -1938,9 +1938,9 @@ bt_target_page_check(BtreeCheckState *state)
 								(errcode(ERRCODE_INDEX_CORRUPTED),
 								 errmsg("right block of leaf block is non-leaf for index \"%s\"",
 										RelationGetRelationName(state->rel)),
-								 errdetail_internal("Block=%u page lsn=%X/%X.",
+								 errdetail_internal("Block=%u page lsn=%016" PRIX64 ".",
 													state->targetblock,
-													LSN_FORMAT_ARGS(state->targetlsn))));
+													state->targetlsn)));
 
 					itemid = PageGetItemIdCareful(state, rightblock_number,
 												  rightpage,
@@ -2362,9 +2362,9 @@ bt_child_highkey_check(BtreeCheckState *state,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("the first child of leftmost target page is not leftmost of its level in index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Target block=%u child block=%u target page lsn=%X/%X.",
+					 errdetail_internal("Target block=%u child block=%u target page lsn=%016" PRIX64 ".",
 										state->targetblock, blkno,
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 
 		/* Do level sanity check */
 		if ((!P_ISDELETED(opaque) || P_HAS_FULLXID(opaque)) &&
@@ -2448,9 +2448,9 @@ bt_child_highkey_check(BtreeCheckState *state,
 								(errcode(ERRCODE_INDEX_CORRUPTED),
 								 errmsg("child high key is greater than rightmost pivot key on target level in index \"%s\"",
 										RelationGetRelationName(state->rel)),
-								 errdetail_internal("Target block=%u child block=%u target page lsn=%X/%X.",
+								 errdetail_internal("Target block=%u child block=%u target page lsn=%016" PRIX64 ".",
 													state->targetblock, blkno,
-													LSN_FORMAT_ARGS(state->targetlsn))));
+													state->targetlsn)));
 					pivotkey_offset = P_HIKEY;
 				}
 				itemid = PageGetItemIdCareful(state, state->targetblock,
@@ -2478,9 +2478,9 @@ bt_child_highkey_check(BtreeCheckState *state,
 							(errcode(ERRCODE_INDEX_CORRUPTED),
 							 errmsg("can't find left sibling high key in index \"%s\"",
 									RelationGetRelationName(state->rel)),
-							 errdetail_internal("Target block=%u child block=%u target page lsn=%X/%X.",
+							 errdetail_internal("Target block=%u child block=%u target page lsn=%016" PRIX64 ".",
 												state->targetblock, blkno,
-												LSN_FORMAT_ARGS(state->targetlsn))));
+												state->targetlsn)));
 				itup = state->lowkey;
 			}
 
@@ -2490,9 +2490,9 @@ bt_child_highkey_check(BtreeCheckState *state,
 						(errcode(ERRCODE_INDEX_CORRUPTED),
 						 errmsg("mismatch between parent key and child high key in index \"%s\"",
 								RelationGetRelationName(state->rel)),
-						 errdetail_internal("Target block=%u child block=%u target page lsn=%X/%X.",
+						 errdetail_internal("Target block=%u child block=%u target page lsn=%016" PRIX64 ".",
 											state->targetblock, blkno,
-											LSN_FORMAT_ARGS(state->targetlsn))));
+											state->targetlsn)));
 			}
 		}
 
@@ -2630,9 +2630,9 @@ bt_child_check(BtreeCheckState *state, BTScanInsert targetkey,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg("downlink to deleted page found in index \"%s\"",
 						RelationGetRelationName(state->rel)),
-				 errdetail_internal("Parent block=%u child block=%u parent page lsn=%X/%X.",
+				 errdetail_internal("Parent block=%u child block=%u parent page lsn=%016" PRIX64 ".",
 									state->targetblock, childblock,
-									LSN_FORMAT_ARGS(state->targetlsn))));
+									state->targetlsn)));
 
 	for (offset = P_FIRSTDATAKEY(copaque);
 		 offset <= maxoffset;
@@ -2671,9 +2671,9 @@ bt_child_check(BtreeCheckState *state, BTScanInsert targetkey,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("down-link lower bound invariant violated for index \"%s\"",
 							RelationGetRelationName(state->rel)),
-					 errdetail_internal("Parent block=%u child index tid=(%u,%u) parent page lsn=%X/%X.",
+					 errdetail_internal("Parent block=%u child index tid=(%u,%u) parent page lsn=%016" PRIX64 ".",
 										state->targetblock, childblock, offset,
-										LSN_FORMAT_ARGS(state->targetlsn))));
+										state->targetlsn)));
 	}
 
 	pfree(child);
@@ -2741,10 +2741,10 @@ bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
 				(errcode(ERRCODE_NO_DATA),
 				 errmsg_internal("harmless interrupted page split detected in index \"%s\"",
 								 RelationGetRelationName(state->rel)),
-				 errdetail_internal("Block=%u level=%u left sibling=%u page lsn=%X/%X.",
+				 errdetail_internal("Block=%u level=%u left sibling=%u page lsn=%016" PRIX64 ".",
 									blkno, opaque->btpo_level,
 									opaque->btpo_prev,
-									LSN_FORMAT_ARGS(pagelsn))));
+									pagelsn)));
 		return;
 	}
 
@@ -2763,9 +2763,9 @@ bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg("leaf index block lacks downlink in index \"%s\"",
 						RelationGetRelationName(state->rel)),
-				 errdetail_internal("Block=%u page lsn=%X/%X.",
+				 errdetail_internal("Block=%u page lsn=%016" PRIX64 ".",
 									blkno,
-									LSN_FORMAT_ARGS(pagelsn))));
+									pagelsn)));
 
 	/* Descend from the given page, which is an internal page */
 	elog(DEBUG1, "checking for interrupted multi-level deletion due to missing downlink in index \"%s\"",
@@ -2829,9 +2829,9 @@ bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg_internal("downlink to deleted leaf page found in index \"%s\"",
 								 RelationGetRelationName(state->rel)),
-				 errdetail_internal("Top parent/target block=%u leaf block=%u top parent/under check lsn=%X/%X.",
+				 errdetail_internal("Top parent/target block=%u leaf block=%u top parent/under check lsn=%016" PRIX64 ".",
 									blkno, childblk,
-									LSN_FORMAT_ARGS(pagelsn))));
+									pagelsn)));
 
 	/*
 	 * Iff leaf page is half-dead, its high key top parent link should point
@@ -2855,9 +2855,9 @@ bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
 			(errcode(ERRCODE_INDEX_CORRUPTED),
 			 errmsg("internal index block lacks downlink in index \"%s\"",
 					RelationGetRelationName(state->rel)),
-			 errdetail_internal("Block=%u level=%u page lsn=%X/%X.",
+			 errdetail_internal("Block=%u level=%u page lsn=%016" PRIX64 ".",
 								blkno, opaque->btpo_level,
-								LSN_FORMAT_ARGS(pagelsn))));
+								pagelsn)));
 }
 
 /*

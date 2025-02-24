@@ -147,17 +147,14 @@ UPLOAD_MANIFEST		{ return K_UPLOAD_MANIFEST; }
 
 {space}+		{ /* do nothing */ }
 
-{digit}+		{
+{digit}{1,10}	{
 					yylval->uintval = strtoul(yytext, NULL, 10);
 					return UCONST;
 				}
 
-{hexdigit}+\/{hexdigit}+		{
-					uint32	hi,
-							lo;
-					if (sscanf(yytext, "%X/%X", &hi, &lo) != 2)
+{hexdigit}{16}	{
+					if (sscanf(yytext, "%" SCNx64, &yylval->recptr) != 1)
 						replication_yyerror(NULL, yyscanner, "invalid streaming start location");
-					yylval->recptr = ((uint64) hi) << 32 | lo;
 					return RECPTR;
 				}
 

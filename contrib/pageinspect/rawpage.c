@@ -279,7 +279,7 @@ page_header(PG_FUNCTION_ARGS)
 	{
 		char		lsnchar[64];
 
-		snprintf(lsnchar, sizeof(lsnchar), "%X/%X", LSN_FORMAT_ARGS(lsn));
+		snprintf(lsnchar, sizeof(lsnchar), "%016" PRIX64, lsn);
 		values[0] = CStringGetTextDatum(lsnchar);
 	}
 	else

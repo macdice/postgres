@@ -417,12 +417,12 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 		{
 			if (first_stream)
 				ereport(LOG,
-						(errmsg("started streaming WAL from primary at %X/%X on timeline %u",
-								LSN_FORMAT_ARGS(startpoint), startpointTLI)));
+						(errmsg("started streaming WAL from primary at %016" PRIX64 " on timeline %u",
+								startpoint, startpointTLI)));
 			else
 				ereport(LOG,
-						(errmsg("restarted WAL streaming at %X/%X on timeline %u",
-								LSN_FORMAT_ARGS(startpoint), startpointTLI)));
+						(errmsg("restarted WAL streaming at %016" PRIX64 " on timeline %u",
+								startpoint, startpointTLI)));
 			first_stream = false;
 
 			/* Initialize LogstreamResult and buffers for processing messages */
@@ -501,9 +501,9 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 						{
 							ereport(LOG,
 									(errmsg("replication terminated by primary server"),
-									 errdetail("End of WAL reached on timeline %u at %X/%X.",
+									 errdetail("End of WAL reached on timeline %u at %016" PRIX64 ".",
 											   startpointTLI,
-											   LSN_FORMAT_ARGS(LogstreamResult.Write))));
+											   LogstreamResult.Write)));
 							endofwal = true;
 							break;
 						}
@@ -732,8 +732,8 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 	{
 		char		activitymsg[50];
 
-		snprintf(activitymsg, sizeof(activitymsg), "restarting at %X/%X",
-				 LSN_FORMAT_ARGS(*startpoint));
+		snprintf(activitymsg, sizeof(activitymsg), "restarting at %016" PRIX64,
+				 *startpoint);
 		set_ps_display(activitymsg);
 	}
 }
@@ -1023,8 +1023,8 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 		{
 			char		activitymsg[50];
 
-			snprintf(activitymsg, sizeof(activitymsg), "streaming %X/%X",
-					 LSN_FORMAT_ARGS(LogstreamResult.Write));
+			snprintf(activitymsg, sizeof(activitymsg), "streaming %016" PRIX64,
+					 LogstreamResult.Write);
 			set_ps_display(activitymsg);
 		}
 
@@ -1147,10 +1147,10 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	pq_sendbyte(&reply_message, requestReply ? 1 : 0);
 
 	/* Send it */
-	elog(DEBUG2, "sending write %X/%X flush %X/%X apply %X/%X%s",
-		 LSN_FORMAT_ARGS(writePtr),
-		 LSN_FORMAT_ARGS(flushPtr),
-		 LSN_FORMAT_ARGS(applyPtr),
+	elog(DEBUG2, "sending write %016" PRIX64 " flush %016" PRIX64 " apply %016" PRIX64 "%s",
+		 writePtr,
+		 flushPtr,
+		 applyPtr,
 		 requestReply ? " (reply requested)" : "");
 
 	walrcv_send(wrconn, reply_message.data, reply_message.len);

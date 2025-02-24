@@ -479,8 +479,6 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 				  XLogRecPtr *startpos, char **db_name)
 {
 	PGresult   *res;
-	uint32		hi,
-				lo;
 
 	/* Check connection existence */
 	Assert(conn != NULL);
@@ -514,7 +512,7 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 	/* Get LSN start position if necessary */
 	if (startpos != NULL)
 	{
-		if (sscanf(PQgetvalue(res, 0, 2), "%X/%X", &hi, &lo) != 2)
+		if (sscanf(PQgetvalue(res, 0, 2), "%" SCNx64, startpos) != 1)
 		{
 			pg_log_error("could not parse write-ahead log location \"%s\"",
 						 PQgetvalue(res, 0, 2));
@@ -522,7 +520,6 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 			PQclear(res);
 			return false;
 		}
-		*startpos = ((uint64) hi) << 32 | lo;
 	}
 
 	/* Get database name, only available in 9.4 and newer versions */
@@ -617,17 +614,13 @@ GetSlotInformation(PGconn *conn, const char *slot_name,
 	/* restart LSN */
 	if (!PQgetisnull(res, 0, 1))
 	{
-		uint32		hi,
-					lo;
-
-		if (sscanf(PQgetvalue(res, 0, 1), "%X/%X", &hi, &lo) != 2)
+		if (sscanf(PQgetvalue(res, 0, 1), "%" SCNx64, &lsn_loc) != 1)
 		{
 			pg_log_error("could not parse restart_lsn \"%s\" for replication slot \"%s\"",
 						 PQgetvalue(res, 0, 1), slot_name);
 			PQclear(res);
 			return false;
 		}
-		lsn_loc = ((uint64) hi) << 32 | lo;
 	}
 
 	/* current TLI */

@@ -963,7 +963,7 @@ logical_rewrite_log_mapping(RewriteState state, TransactionId xid,
 		snprintf(path, MAXPGPATH,
 				 "%s/" LOGICAL_REWRITE_FORMAT,
 				 PG_LOGICAL_MAPPINGS_DIR, dboid, relid,
-				 LSN_FORMAT_ARGS(state->rs_begin_lsn),
+				 state->rs_begin_lsn,
 				 xid, GetCurrentTransactionId());
 
 		dclist_init(&src->mappings);
@@ -1083,7 +1083,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 	snprintf(path, MAXPGPATH,
 			 "%s/" LOGICAL_REWRITE_FORMAT,
 			 PG_LOGICAL_MAPPINGS_DIR, xlrec->mapped_db, xlrec->mapped_rel,
-			 LSN_FORMAT_ARGS(xlrec->start_lsn),
+			 xlrec->start_lsn,
 			 xlrec->mapped_xid, XLogRecGetXid(r));
 
 	fd = OpenTransientFile(path,
@@ -1181,8 +1181,6 @@ CheckPointLogicalRewriteHeap(void)
 		XLogRecPtr	lsn;
 		TransactionId rewrite_xid;
 		TransactionId create_xid;
-		uint32		hi,
-					lo;
 		PGFileType	de_type;
 
 		if (strcmp(mapping_de->d_name, ".") == 0 ||
@@ -1199,11 +1197,9 @@ CheckPointLogicalRewriteHeap(void)
 		if (strncmp(mapping_de->d_name, "map-", 4) != 0)
 			continue;
 
-		if (sscanf(mapping_de->d_name, LOGICAL_REWRITE_FORMAT,
-				   &dboid, &relid, &hi, &lo, &rewrite_xid, &create_xid) != 6)
+		if (sscanf(mapping_de->d_name, LOGICAL_REWRITE_FORMAT_SCANF,
+				   &dboid, &relid, &lsn, &rewrite_xid, &create_xid) != 5)
 			elog(ERROR, "could not parse filename \"%s\"", mapping_de->d_name);
-
-		lsn = ((uint64) hi) << 32 | lo;
 
 		if (lsn < cutoff || cutoff == InvalidXLogRecPtr)
 		{

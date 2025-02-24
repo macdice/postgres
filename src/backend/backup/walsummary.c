@@ -208,10 +208,10 @@ OpenWalSummaryFile(WalSummaryFile *ws, bool missing_ok)
 	File		file;
 
 	snprintf(path, MAXPGPATH,
-			 XLOGDIR "/summaries/%08X%08X%08X%08X%08X.summary",
+			 XLOGDIR "/summaries/%08X%016" PRIX64 "%016" PRIX64 ".summary",
 			 ws->tli,
-			 LSN_FORMAT_ARGS(ws->start_lsn),
-			 LSN_FORMAT_ARGS(ws->end_lsn));
+			 ws->start_lsn,
+			 ws->end_lsn);
 
 	file = PathNameOpenFile(path, O_RDONLY);
 	if (file < 0 && (errno != EEXIST || !missing_ok))
@@ -233,10 +233,10 @@ RemoveWalSummaryIfOlderThan(WalSummaryFile *ws, time_t cutoff_time)
 	struct stat statbuf;
 
 	snprintf(path, MAXPGPATH,
-			 XLOGDIR "/summaries/%08X%08X%08X%08X%08X.summary",
+			 XLOGDIR "/summaries/%08X%016" PRIX64 "%016" PRIX64 ".summary",
 			 ws->tli,
-			 LSN_FORMAT_ARGS(ws->start_lsn),
-			 LSN_FORMAT_ARGS(ws->end_lsn));
+			 ws->start_lsn,
+			 ws->end_lsn);
 
 	if (lstat(path, &statbuf) != 0)
 	{

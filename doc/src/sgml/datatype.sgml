@@ -5090,19 +5090,22 @@ WHERE ...
 
    <para>
     Internally, an LSN is a 64-bit integer, representing a byte position in
-    the write-ahead log stream.  It is printed as two hexadecimal numbers of
-    up to 8 digits each, separated by a slash; for example,
-    <literal>16/B374D848</literal>.  The <type>pg_lsn</type> type supports the
-    standard comparison operators, like <literal>=</literal> and
-    <literal>&gt;</literal>.  Two LSNs can be subtracted using the
+    the write-ahead log stream.  It is printed as 16 hexadecimal digits; for
+    example <literal>00000016B374D848</literal>.  (Historically it was printed
+    as two 32-bit hexadecimal numbers separated by a slash, for example
+    <literal>16/B374D848</literal>.  This format is
+    still accepted as the <type>pg_lsn</type> as an input string.)
+    The <type>pg_lsn</type> type supports the standard comparison operators,
+    like <literal>=</literal> and <literal>&gt;</literal>.  Two LSNs can be
+    subtracted using the
     <literal>-</literal> operator; the result is the number of bytes separating
     those write-ahead log locations.  Also the number of bytes can be
     added into and subtracted from LSN using the
     <literal>+(pg_lsn,numeric)</literal> and
     <literal>-(pg_lsn,numeric)</literal> operators, respectively. Note that
     the calculated LSN should be in the range of <type>pg_lsn</type> type,
-    i.e., between <literal>0/0</literal> and
-    <literal>FFFFFFFF/FFFFFFFF</literal>.
+    i.e., between <literal>0000000000000000</literal> and
+    <literal>FFFFFFFFFFFFFFFF</literal>.
    </para>
   </sect1>
 

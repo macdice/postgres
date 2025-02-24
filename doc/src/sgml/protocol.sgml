@@ -2402,13 +2402,13 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </varlistentry>
 
     <varlistentry id="protocol-replication-start-replication">
-     <term><literal>START_REPLICATION</literal> [ <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable> ] [ <literal>PHYSICAL</literal> ] <replaceable class="parameter">XXX/XXX</replaceable> [ <literal>TIMELINE</literal> <replaceable class="parameter">tli</replaceable> ]
+     <term><literal>START_REPLICATION</literal> [ <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable> ] [ <literal>PHYSICAL</literal> ] <replaceable class="parameter">XXXXXXXXXXXXXX</replaceable> [ <literal>TIMELINE</literal> <replaceable class="parameter">tli</replaceable> ]
       <indexterm><primary>START_REPLICATION</primary></indexterm>
      </term>
      <listitem>
       <para>
        Instructs server to start streaming WAL, starting at
-       WAL location <replaceable class="parameter">XXX/XXX</replaceable>.
+       WAL location <replaceable class="parameter">XXXXXXXXXXXXXXXX</replaceable>.
        If <literal>TIMELINE</literal> option is specified,
        streaming starts on timeline <replaceable class="parameter">tli</replaceable>;
        otherwise, the server's current timeline is selected. The server can
@@ -2714,12 +2714,12 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </varlistentry>
 
     <varlistentry id="protocol-replication-start-replication-slot-logical">
-     <term><literal>START_REPLICATION</literal> <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable> <literal>LOGICAL</literal> <replaceable class="parameter">XXX/XXX</replaceable> [ ( <replaceable>option_name</replaceable> [ <replaceable>option_value</replaceable> ] [, ...] ) ]</term>
+     <term><literal>START_REPLICATION</literal> <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable> <literal>LOGICAL</literal> <replaceable class="parameter">XXXXXXXXXXXXXXXX</replaceable> [ ( <replaceable>option_name</replaceable> [ <replaceable>option_value</replaceable> ] [, ...] ) ]</term>
      <listitem>
       <para>
        Instructs server to start streaming WAL for logical replication,
        starting at either WAL location <replaceable
-       class="parameter">XXX/XXX</replaceable> or the slot's
+       class="parameter">XXXXXXXXXXXXXXXX</replaceable> or the slot's
        <literal>confirmed_flush_lsn</literal> (see <xref
        linkend="view-pg-replication-slots"/>), whichever is greater. This
        behavior makes it easier for clients to avoid updating their local LSN
@@ -2761,7 +2761,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        </varlistentry>
 
        <varlistentry>
-        <term><replaceable class="parameter">XXX/XXX</replaceable></term>
+        <term><replaceable class="parameter">XXXXXXXXXXXXXXXX</replaceable></term>
         <listitem>
          <para>
           The WAL location to begin streaming at.

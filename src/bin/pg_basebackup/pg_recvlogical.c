@@ -140,9 +140,9 @@ sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRequested)
 		return true;
 
 	if (verbose)
-		pg_log_info("confirming write up to %X/%X, flush to %X/%X (slot %s)",
-					LSN_FORMAT_ARGS(output_written_lsn),
-					LSN_FORMAT_ARGS(output_fsync_lsn),
+		pg_log_info("confirming write up to %016" PRIX64 ", flush to %016" PRIX64 " (slot %s)",
+					output_written_lsn,
+					output_fsync_lsn,
 					replication_slot);
 
 	replybuf[len] = 'r';
@@ -234,14 +234,14 @@ StreamLogicalLog(void)
 	 * Start the replication
 	 */
 	if (verbose)
-		pg_log_info("starting log streaming at %X/%X (slot %s)",
-					LSN_FORMAT_ARGS(startpos),
+		pg_log_info("starting log streaming at %016" PRIX64 " (slot %s)",
+					startpos,
 					replication_slot);
 
 	/* Initiate the replication stream at specified location */
 	query = createPQExpBuffer();
-	appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %X/%X",
-					  replication_slot, LSN_FORMAT_ARGS(startpos));
+	appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %016" PRIX64,
+					  replication_slot, startpos);
 
 	/* print options if there are any */
 	if (noptions)
@@ -721,8 +721,6 @@ main(int argc, char **argv)
 	};
 	int			c;
 	int			option_index;
-	uint32		hi,
-				lo;
 	char	   *db_name;
 
 	pg_logging_init(argv[0]);
@@ -790,14 +788,12 @@ main(int argc, char **argv)
 				break;
 /* replication options */
 			case 'I':
-				if (sscanf(optarg, "%X/%X", &hi, &lo) != 2)
+				if (sscanf(optarg, "%" SCNx64, &startpos) != 1)
 					pg_fatal("could not parse start position \"%s\"", optarg);
-				startpos = ((uint64) hi) << 32 | lo;
 				break;
 			case 'E':
-				if (sscanf(optarg, "%X/%X", &hi, &lo) != 2)
+				if (sscanf(optarg, "%" SCNx64, &endpos) != 1)
 					pg_fatal("could not parse end position \"%s\"", optarg);
-				endpos = ((uint64) hi) << 32 | lo;
 				break;
 			case 'o':
 				{
@@ -1051,13 +1047,13 @@ prepareToTerminate(PGconn *conn, XLogRecPtr endpos, StreamStopReason reason,
 				pg_log_info("received interrupt signal, exiting");
 				break;
 			case STREAM_STOP_KEEPALIVE:
-				pg_log_info("end position %X/%X reached by keepalive",
-							LSN_FORMAT_ARGS(endpos));
+				pg_log_info("end position %016" PRIX64 " reached by keepalive",
+							endpos);
 				break;
 			case STREAM_STOP_END_OF_WAL:
 				Assert(!XLogRecPtrIsInvalid(lsn));
-				pg_log_info("end position %X/%X reached by WAL record at %X/%X",
-							LSN_FORMAT_ARGS(endpos), LSN_FORMAT_ARGS(lsn));
+				pg_log_info("end position %016" PRIX64 " reached by WAL record at %016" PRIX64,
+							endpos, lsn);
 				break;
 			case STREAM_STOP_NONE:
 				Assert(false);

@@ -71,11 +71,11 @@
       after the <replaceable>in_lsn</replaceable> argument.  For
       example:
 <screen>
-postgres=# SELECT * FROM pg_get_wal_record_info('0/E419E28');
+postgres=# SELECT * FROM pg_get_wal_record_info('000000000E419E28');
 -[ RECORD 1 ]----+-------------------------------------------------
-start_lsn        | 0/E419E28
-end_lsn          | 0/E419E68
-prev_lsn         | 0/E419D78
+start_lsn        | 000000000E419E28
+end_lsn          | 000000000E419E68
+prev_lsn         | 000000000E419D78
 xid              | 0
 resource_manager | Heap2
 record_type      | VACUUM
@@ -109,11 +109,11 @@ block_ref        | blkref #0: rel 1663/16385/1249 fork main blk 364
       <replaceable>start_lsn</replaceable> and <replaceable>end_lsn</replaceable>.
       Returns one row per WAL record.  For example:
 <screen>
-postgres=# SELECT * FROM pg_get_wal_records_info('0/1E913618', '0/1E913740') LIMIT 1;
+postgres=# SELECT * FROM pg_get_wal_records_info('1E913618', '1E913740') LIMIT 1;
 -[ RECORD 1 ]----+--------------------------------------------------------------
-start_lsn        | 0/1E913618
-end_lsn          | 0/1E913650
-prev_lsn         | 0/1E9135A0
+start_lsn        | 000000001E913618
+end_lsn          | 000000001E913650
+prev_lsn         | 000000001E9135A0
 xid              | 0
 resource_manager | Standby
 record_type      | RUNNING_XACTS
@@ -144,11 +144,11 @@ block_ref        |
       references.  Returns one row per block reference per WAL record.
       For example:
 <screen>
-postgres=# SELECT * FROM pg_get_wal_block_info('0/1230278', '0/12302B8');
+postgres=# SELECT * FROM pg_get_wal_block_info('1230278', '12302B8');
 -[ RECORD 1 ]-----+-----------------------------------
-start_lsn         | 0/1230278
-end_lsn           | 0/12302B8
-prev_lsn          | 0/122FD40
+start_lsn         | 0000000001230278
+end_lsn           | 00000000012302B8
+prev_lsn          | 000000000122FD40
 block_id          | 0
 reltablespace     | 1663
 reldatabase       | 1
@@ -249,7 +249,7 @@ block_fpi_data    |
       it returns one row per <replaceable>record_type</replaceable>.
       For example:
 <screen>
-postgres=# SELECT * FROM pg_get_wal_stats('0/1E847D00', '0/1E84F500')
+postgres=# SELECT * FROM pg_get_wal_stats('1E847D00', '1E84F500')
            WHERE count > 0 AND
                  "resource_manager/record_type" = 'Transaction'
            LIMIT 1;

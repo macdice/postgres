@@ -188,15 +188,15 @@ stop_streaming(XLogRecPtr xlogpos, uint32 timeline, bool segment_finished)
 
 	/* we assume that we get called once at the end of each segment */
 	if (verbose && segment_finished)
-		pg_log_info("finished segment at %X/%X (timeline %u)",
-					LSN_FORMAT_ARGS(xlogpos),
+		pg_log_info("finished segment at %016" PRIX64 " (timeline %u)",
+					xlogpos,
 					timeline);
 
 	if (!XLogRecPtrIsInvalid(endpos) && endpos < xlogpos)
 	{
 		if (verbose)
-			pg_log_info("stopped log streaming at %X/%X (timeline %u)",
-						LSN_FORMAT_ARGS(xlogpos),
+			pg_log_info("stopped log streaming at %016" PRIX64 " (timeline %u)",
+						xlogpos,
 						timeline);
 		time_to_stop = true;
 		return true;
@@ -211,9 +211,9 @@ stop_streaming(XLogRecPtr xlogpos, uint32 timeline, bool segment_finished)
 	 * timeline, but it's close enough for reporting purposes.
 	 */
 	if (verbose && prevtimeline != 0 && prevtimeline != timeline)
-		pg_log_info("switched to timeline %u at %X/%X",
+		pg_log_info("switched to timeline %u at %016" PRIX64,
 					timeline,
-					LSN_FORMAT_ARGS(prevpos));
+					prevpos);
 
 	prevtimeline = timeline;
 	prevpos = xlogpos;
@@ -575,8 +575,8 @@ StreamLog(void)
 	 * Start the replication
 	 */
 	if (verbose)
-		pg_log_info("starting log streaming at %X/%X (timeline %u)",
-					LSN_FORMAT_ARGS(stream.startpos),
+		pg_log_info("starting log streaming at %016" PRIX64 " (timeline %u)",
+					stream.startpos,
 					stream.timeline);
 
 	stream.stream_stop = stop_streaming;
@@ -651,8 +651,6 @@ main(int argc, char **argv)
 	int			c;
 	int			option_index;
 	char	   *db_name;
-	uint32		hi,
-				lo;
 	pg_compress_specification compression_spec;
 	char	   *compression_detail = NULL;
 	char	   *compression_algorithm_str = "none";
@@ -689,9 +687,8 @@ main(int argc, char **argv)
 				basedir = pg_strdup(optarg);
 				break;
 			case 'E':
-				if (sscanf(optarg, "%X/%X", &hi, &lo) != 2)
+				if (sscanf(optarg, "%" SCNx64, &endpos) != 1)
 					pg_fatal("could not parse end position \"%s\"", optarg);
-				endpos = ((uint64) hi) << 32 | lo;
 				break;
 			case 'h':
 				dbhost = pg_strdup(optarg);

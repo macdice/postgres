@@ -89,12 +89,12 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 			XLogRecPtr	errptr = xlogreader->EndRecPtr;
 
 			if (errormsg)
-				pg_fatal("could not read WAL record at %X/%X: %s",
-						 LSN_FORMAT_ARGS(errptr),
+				pg_fatal("could not read WAL record at %016" PRIX64 ": %s",
+						 errptr,
 						 errormsg);
 			else
-				pg_fatal("could not read WAL record at %X/%X",
-						 LSN_FORMAT_ARGS(errptr));
+				pg_fatal("could not read WAL record at %016" PRIX64,
+						 errptr);
 		}
 
 		extractPageInfo(xlogreader);
@@ -105,8 +105,8 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 	 * messed up.
 	 */
 	if (xlogreader->EndRecPtr != endpoint)
-		pg_fatal("end pointer %X/%X is not a valid end point; expected %X/%X",
-				 LSN_FORMAT_ARGS(endpoint), LSN_FORMAT_ARGS(xlogreader->EndRecPtr));
+		pg_fatal("end pointer %016" PRIX64 " is not a valid end point; expected %016" PRIX64,
+				 endpoint, xlogreader->EndRecPtr);
 
 	XLogReaderFree(xlogreader);
 	if (xlogreadfd != -1)
@@ -143,11 +143,11 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex,
 	if (record == NULL)
 	{
 		if (errormsg)
-			pg_fatal("could not read WAL record at %X/%X: %s",
-					 LSN_FORMAT_ARGS(ptr), errormsg);
+			pg_fatal("could not read WAL record at %016" PRIX64 ": %s",
+					 ptr, errormsg);
 		else
-			pg_fatal("could not read WAL record at %X/%X",
-					 LSN_FORMAT_ARGS(ptr));
+			pg_fatal("could not read WAL record at %016" PRIX64,
+					 ptr);
 	}
 	endptr = xlogreader->EndRecPtr;
 
@@ -211,12 +211,12 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 		if (record == NULL)
 		{
 			if (errormsg)
-				pg_fatal("could not find previous WAL record at %X/%X: %s",
-						 LSN_FORMAT_ARGS(searchptr),
+				pg_fatal("could not find previous WAL record at %016" PRIX64 ": %s",
+						 searchptr,
 						 errormsg);
 			else
-				pg_fatal("could not find previous WAL record at %X/%X",
-						 LSN_FORMAT_ARGS(searchptr));
+				pg_fatal("could not find previous WAL record at %016" PRIX64,
+						 searchptr);
 		}
 
 		/* Detect if a new WAL file has been opened */
@@ -459,8 +459,8 @@ extractPageInfo(XLogReaderState *record)
 		 * track that change.
 		 */
 		pg_fatal("WAL record modifies a relation, but record type is not recognized: "
-				 "lsn: %X/%X, rmid: %d, rmgr: %s, info: %02X",
-				 LSN_FORMAT_ARGS(record->ReadRecPtr),
+				 "lsn: %016" PRIX64 ", rmid: %d, rmgr: %s, info: %02X",
+				 record->ReadRecPtr,
 				 rmid, RmgrName(rmid), info);
 	}
 

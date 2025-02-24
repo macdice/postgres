@@ -546,8 +546,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 					elog(XLOGPREFETCHER_DEBUG_LEVEL,
-						 "suppressing all readahead until %X/%X is replayed due to possible TLI change",
-						 LSN_FORMAT_ARGS(record->lsn));
+						 "suppressing all readahead until %016" PRIX64 " is replayed due to possible TLI change",
+						 record->lsn);
 #endif
 
 					/* Fall through so we move past this record. */
@@ -579,9 +579,10 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 					elog(XLOGPREFETCHER_DEBUG_LEVEL,
-						 "suppressing prefetch in database %u until %X/%X is replayed due to raw file copy",
+						 "suppressing prefetch in database %u until %016" PRIX64
+						 " is replayed due to raw file copy",
 						 rlocator.dbOid,
-						 LSN_FORMAT_ARGS(record->lsn));
+						 record->lsn);
 #endif
 				}
 			}
@@ -607,11 +608,12 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 						elog(XLOGPREFETCHER_DEBUG_LEVEL,
-							 "suppressing prefetch in relation %u/%u/%u until %X/%X is replayed, which creates the relation",
+							 "suppressing prefetch in relation %u/%u/%u until %016"
+							 PRIX64 " is replayed, which creates the relation",
 							 xlrec->rlocator.spcOid,
 							 xlrec->rlocator.dbOid,
 							 xlrec->rlocator.relNumber,
-							 LSN_FORMAT_ARGS(record->lsn));
+							 record->lsn);
 #endif
 					}
 				}
@@ -630,12 +632,13 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 					elog(XLOGPREFETCHER_DEBUG_LEVEL,
-						 "suppressing prefetch in relation %u/%u/%u from block %u until %X/%X is replayed, which truncates the relation",
+						 "suppressing prefetch in relation %u/%u/%u from block %u until %016"
+						 PRIX64 " is replayed, which truncates the relation",
 						 xlrec->rlocator.spcOid,
 						 xlrec->rlocator.dbOid,
 						 xlrec->rlocator.relNumber,
 						 xlrec->blkno,
-						 LSN_FORMAT_ARGS(record->lsn));
+						 record->lsn);
 #endif
 				}
 			}
@@ -729,11 +732,11 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			{
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 				elog(XLOGPREFETCHER_DEBUG_LEVEL,
-					 "suppressing all prefetch in relation %u/%u/%u until %X/%X is replayed, because the relation does not exist on disk",
+					 "suppressing all prefetch in relation %u/%u/%u until %016" PRIX64 " is replayed, because the relation does not exist on disk",
 					 reln->smgr_rlocator.locator.spcOid,
 					 reln->smgr_rlocator.locator.dbOid,
 					 reln->smgr_rlocator.locator.relNumber,
-					 LSN_FORMAT_ARGS(record->lsn));
+					 record->lsn);
 #endif
 				XLogPrefetcherAddFilter(prefetcher, block->rlocator, 0,
 										record->lsn);
@@ -750,12 +753,12 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			{
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 				elog(XLOGPREFETCHER_DEBUG_LEVEL,
-					 "suppressing prefetch in relation %u/%u/%u from block %u until %X/%X is replayed, because the relation is too small",
+					 "suppressing prefetch in relation %u/%u/%u from block %u until %016" PRIX64 " is replayed, because the relation is too small",
 					 reln->smgr_rlocator.locator.spcOid,
 					 reln->smgr_rlocator.locator.dbOid,
 					 reln->smgr_rlocator.locator.relNumber,
 					 block->blkno,
-					 LSN_FORMAT_ARGS(record->lsn));
+					 record->lsn);
 #endif
 				XLogPrefetcherAddFilter(prefetcher, block->rlocator, block->blkno,
 										record->lsn);
@@ -928,9 +931,9 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileLocator rlocator,
 		{
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 			elog(XLOGPREFETCHER_DEBUG_LEVEL,
-				 "prefetch of %u/%u/%u block %u suppressed; filtering until LSN %X/%X is replayed (blocks >= %u filtered)",
+				 "prefetch of %u/%u/%u block %u suppressed; filtering until LSN %016" PRIX64 " is replayed (blocks >= %u filtered)",
 				 rlocator.spcOid, rlocator.dbOid, rlocator.relNumber, blockno,
-				 LSN_FORMAT_ARGS(filter->filter_until_replayed),
+				 filter->filter_until_replayed,
 				 filter->filter_from_block);
 #endif
 			return true;
@@ -944,9 +947,9 @@ XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher, RelFileLocator rlocator,
 		{
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 			elog(XLOGPREFETCHER_DEBUG_LEVEL,
-				 "prefetch of %u/%u/%u block %u suppressed; filtering until LSN %X/%X is replayed (whole database)",
+				 "prefetch of %u/%u/%u block %u suppressed; filtering until LSN %016" PRIX64 " is replayed (whole database)",
 				 rlocator.spcOid, rlocator.dbOid, rlocator.relNumber, blockno,
-				 LSN_FORMAT_ARGS(filter->filter_until_replayed));
+				 filter->filter_until_replayed);
 #endif
 			return true;
 		}

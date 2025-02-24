@@ -409,20 +409,20 @@ PrepareForIncrementalBackup(IncrementalBackupInfo *ib,
 			if (range->start_lsn < tlep[i]->begin)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("manifest requires WAL from initial timeline %u starting at %X/%X, but that timeline begins at %X/%X",
+						 errmsg("manifest requires WAL from initial timeline %u starting at %016" PRIX64 ", but that timeline begins at %016" PRIX64,
 								range->tli,
-								LSN_FORMAT_ARGS(range->start_lsn),
-								LSN_FORMAT_ARGS(tlep[i]->begin))));
+								range->start_lsn,
+								tlep[i]->begin)));
 		}
 		else
 		{
 			if (range->start_lsn != tlep[i]->begin)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("manifest requires WAL from continuation timeline %u starting at %X/%X, but that timeline begins at %X/%X",
+						 errmsg("manifest requires WAL from continuation timeline %u starting at %016" PRIX64 ", but that timeline begins at %016" PRIX64,
 								range->tli,
-								LSN_FORMAT_ARGS(range->start_lsn),
-								LSN_FORMAT_ARGS(tlep[i]->begin))));
+								range->start_lsn,
+								tlep[i]->begin)));
 		}
 
 		if (range->tli == latest_wal_range_tli)
@@ -430,10 +430,10 @@ PrepareForIncrementalBackup(IncrementalBackupInfo *ib,
 			if (range->end_lsn > backup_state->startpoint)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("manifest requires WAL from final timeline %u ending at %X/%X, but this backup starts at %X/%X",
+						 errmsg("manifest requires WAL from final timeline %u ending at %016" PRIX64 ", but this backup starts at %016" PRIX64,
 								range->tli,
-								LSN_FORMAT_ARGS(range->end_lsn),
-								LSN_FORMAT_ARGS(backup_state->startpoint)),
+								range->end_lsn,
+								backup_state->startpoint),
 						 errhint("This can happen for incremental backups on a standby if there was little activity since the previous backup.")));
 		}
 		else
@@ -441,10 +441,10 @@ PrepareForIncrementalBackup(IncrementalBackupInfo *ib,
 			if (range->end_lsn != tlep[i]->end)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("manifest requires WAL from non-final timeline %u ending at %X/%X, but this server switched timelines at %X/%X",
+						 errmsg("manifest requires WAL from non-final timeline %u ending at %016" PRIX64 ", but this server switched timelines at %016" PRIX64,
 								range->tli,
-								LSN_FORMAT_ARGS(range->end_lsn),
-								LSN_FORMAT_ARGS(tlep[i]->end))));
+								range->end_lsn,
+								tlep[i]->end)));
 		}
 
 	}
@@ -522,19 +522,19 @@ PrepareForIncrementalBackup(IncrementalBackupInfo *ib,
 			if (XLogRecPtrIsInvalid(tli_missing_lsn))
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("WAL summaries are required on timeline %u from %X/%X to %X/%X, but no summaries for that timeline and LSN range exist",
+						 errmsg("WAL summaries are required on timeline %u from %016" PRIX64 " to %016" PRIX64 ", but no summaries for that timeline and LSN range exist",
 								tle->tli,
-								LSN_FORMAT_ARGS(tli_start_lsn),
-								LSN_FORMAT_ARGS(tli_end_lsn))));
+								tli_start_lsn,
+								tli_end_lsn)));
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("WAL summaries are required on timeline %u from %X/%X to %X/%X, but the summaries for that timeline and LSN range are incomplete",
+						 errmsg("WAL summaries are required on timeline %u from %016" PRIX64 " to %016" PRIX64 ", but the summaries for that timeline and LSN range are incomplete",
 								tle->tli,
-								LSN_FORMAT_ARGS(tli_start_lsn),
-								LSN_FORMAT_ARGS(tli_end_lsn)),
-						 errdetail("The first unsummarized LSN in this range is %X/%X.",
-								   LSN_FORMAT_ARGS(tli_missing_lsn))));
+								tli_start_lsn,
+								tli_end_lsn),
+						 errdetail("The first unsummarized LSN in this range is %016" PRIX64 ".",
+								   tli_missing_lsn)));
 		}
 
 		/*

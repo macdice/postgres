@@ -1021,9 +1021,9 @@ apply_handle_commit(StringInfo s)
 	if (commit_data.commit_lsn != remote_final_lsn)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg_internal("incorrect commit LSN %X/%X in commit message (expected %X/%X)",
-								 LSN_FORMAT_ARGS(commit_data.commit_lsn),
-								 LSN_FORMAT_ARGS(remote_final_lsn))));
+				 errmsg_internal("incorrect commit LSN %016" PRIX64 " in commit message (expected %016" PRIX64 ")",
+								 commit_data.commit_lsn,
+								 remote_final_lsn)));
 
 	apply_handle_commit_internal(&commit_data);
 
@@ -1113,9 +1113,9 @@ apply_handle_prepare(StringInfo s)
 	if (prepare_data.prepare_lsn != remote_final_lsn)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg_internal("incorrect prepare LSN %X/%X in prepare message (expected %X/%X)",
-								 LSN_FORMAT_ARGS(prepare_data.prepare_lsn),
-								 LSN_FORMAT_ARGS(remote_final_lsn))));
+				 errmsg_internal("incorrect prepare LSN %016" PRIX64 " in prepare message (expected %016" PRIX64 ")",
+								 prepare_data.prepare_lsn,
+								 remote_final_lsn)));
 
 	/*
 	 * Unlike commit, here, we always prepare the transaction even though no
@@ -3912,11 +3912,11 @@ send_feedback(XLogRecPtr recvpos, bool force, bool requestReply)
 	pq_sendint64(reply_message, now);	/* sendTime */
 	pq_sendbyte(reply_message, requestReply);	/* replyRequested */
 
-	elog(DEBUG2, "sending feedback (force %d) to recv %X/%X, write %X/%X, flush %X/%X",
+	elog(DEBUG2, "sending feedback (force %d) to recv %016" PRIX64 ", write %016" PRIX64 ", flush %016" PRIX64,
 		 force,
-		 LSN_FORMAT_ARGS(recvpos),
-		 LSN_FORMAT_ARGS(writepos),
-		 LSN_FORMAT_ARGS(flushpos));
+		 recvpos,
+		 writepos,
+		 flushpos);
 
 	walrcv_send(LogRepWorkerWalRcvConn,
 				reply_message->data, reply_message->len);
@@ -4894,8 +4894,8 @@ maybe_start_skipping_changes(XLogRecPtr finish_lsn)
 	skip_xact_finish_lsn = finish_lsn;
 
 	ereport(LOG,
-			errmsg("logical replication starts skipping transaction at LSN %X/%X",
-				   LSN_FORMAT_ARGS(skip_xact_finish_lsn)));
+			errmsg("logical replication starts skipping transaction at LSN %016" PRIX64,
+				   skip_xact_finish_lsn));
 }
 
 /*
@@ -4908,8 +4908,8 @@ stop_skipping_changes(void)
 		return;
 
 	ereport(LOG,
-			(errmsg("logical replication completed skipping transaction at LSN %X/%X",
-					LSN_FORMAT_ARGS(skip_xact_finish_lsn))));
+			(errmsg("logical replication completed skipping transaction at LSN %016" PRIX64,
+					skip_xact_finish_lsn)));
 
 	/* Stop skipping changes */
 	skip_xact_finish_lsn = InvalidXLogRecPtr;
@@ -4991,9 +4991,9 @@ clear_subscription_skip_lsn(XLogRecPtr finish_lsn)
 		if (myskiplsn != finish_lsn)
 			ereport(WARNING,
 					errmsg("skip-LSN of subscription \"%s\" cleared", MySubscription->name),
-					errdetail("Remote transaction's finish WAL location (LSN) %X/%X did not match skip-LSN %X/%X.",
-							  LSN_FORMAT_ARGS(finish_lsn),
-							  LSN_FORMAT_ARGS(myskiplsn)));
+					errdetail("Remote transaction's finish WAL location (LSN) %016" PRIX64 " did not match skip-LSN %016" PRIX64 ".",
+							  finish_lsn,
+							  myskiplsn));
 	}
 
 	heap_freetuple(tup);
@@ -5037,11 +5037,11 @@ apply_error_callback(void *arg)
 					   logicalrep_message_type(errarg->command),
 					   errarg->remote_xid);
 		else
-			errcontext("processing remote data for replication origin \"%s\" during message type \"%s\" in transaction %u, finished at %X/%X",
+			errcontext("processing remote data for replication origin \"%s\" during message type \"%s\" in transaction %u, finished at %016" PRIX64,
 					   errarg->origin_name,
 					   logicalrep_message_type(errarg->command),
 					   errarg->remote_xid,
-					   LSN_FORMAT_ARGS(errarg->finish_lsn));
+					   errarg->finish_lsn);
 	}
 	else
 	{
@@ -5055,13 +5055,13 @@ apply_error_callback(void *arg)
 						   errarg->rel->remoterel.relname,
 						   errarg->remote_xid);
 			else
-				errcontext("processing remote data for replication origin \"%s\" during message type \"%s\" for replication target relation \"%s.%s\" in transaction %u, finished at %X/%X",
+				errcontext("processing remote data for replication origin \"%s\" during message type \"%s\" for replication target relation \"%s.%s\" in transaction %u, finished at %016" PRIX64,
 						   errarg->origin_name,
 						   logicalrep_message_type(errarg->command),
 						   errarg->rel->remoterel.nspname,
 						   errarg->rel->remoterel.relname,
 						   errarg->remote_xid,
-						   LSN_FORMAT_ARGS(errarg->finish_lsn));
+						   errarg->finish_lsn);
 		}
 		else
 		{
@@ -5074,14 +5074,14 @@ apply_error_callback(void *arg)
 						   errarg->rel->remoterel.attnames[errarg->remote_attnum],
 						   errarg->remote_xid);
 			else
-				errcontext("processing remote data for replication origin \"%s\" during message type \"%s\" for replication target relation \"%s.%s\" column \"%s\" in transaction %u, finished at %X/%X",
+				errcontext("processing remote data for replication origin \"%s\" during message type \"%s\" for replication target relation \"%s.%s\" column \"%s\" in transaction %u, finished at %016" PRIX64,
 						   errarg->origin_name,
 						   logicalrep_message_type(errarg->command),
 						   errarg->rel->remoterel.nspname,
 						   errarg->rel->remoterel.relname,
 						   errarg->rel->remoterel.attnames[errarg->remote_attnum],
 						   errarg->remote_xid,
-						   LSN_FORMAT_ARGS(errarg->finish_lsn));
+						   errarg->finish_lsn);
 		}
 	}
 }

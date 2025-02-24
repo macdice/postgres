@@ -18,6 +18,7 @@
 #include "utils/numeric.h"
 #include "utils/pg_lsn.h"
 
+/* These values are used for the legacy format with a slash. */
 #define MAXPG_LSNLEN			17
 #define MAXPG_LSNCOMPONENT	8
 
@@ -33,9 +34,16 @@ pg_lsn_in_internal(const char *str, bool *have_error)
 	uint32		id,
 				off;
 	XLogRecPtr	result;
+	char		dummy;
 
 	Assert(have_error != NULL);
 	*have_error = false;
+
+	/* Try to parse it directly as a simple hex value. */
+	if (sscanf(str, "%" SCNx64 "%c", &result, &dummy) == 1)
+		return result;
+
+	/* Otherwise try to parse the legacy format. */
 
 	/* Sanity check input format. */
 	len1 = strspn(str, "0123456789abcdefABCDEF");
@@ -83,7 +91,7 @@ pg_lsn_out(PG_FUNCTION_ARGS)
 	char		buf[MAXPG_LSNLEN + 1];
 	char	   *result;
 
-	snprintf(buf, sizeof buf, "%X/%X", LSN_FORMAT_ARGS(lsn));
+	snprintf(buf, sizeof buf, "%016" PRIX64, lsn);
 	result = pstrdup(buf);
 	PG_RETURN_CSTRING(result);
 }

@@ -854,7 +854,7 @@ $node->command_ok(
 $lsn = $node->safe_psql('postgres',
 	q{SELECT restart_lsn FROM pg_replication_slots WHERE slot_name = 'slot1'}
 );
-like($lsn, qr!^0/[0-9A-Z]{7,8}$!, 'restart LSN of slot has advanced');
+like($lsn, qr!^[0-9A-Z]{16}$!, 'restart LSN of slot has advanced');
 rmtree("$tempdir/backupxs_sl");
 
 $node->command_ok(

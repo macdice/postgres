@@ -185,7 +185,7 @@ $node->write_wal($TLI, $end_lsn, $WAL_SEGMENT_SIZE,
 $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"record with incorrect prev-link 0/DEADBEEF at .*", $log_size),
+		"record with incorrect prev-link 00000000DEADBEEF at .*", $log_size),
 	"xl_prev bad");
 
 # xl_crc check fails.
@@ -249,7 +249,7 @@ $node->write_wal($TLI, start_of_next_page($end_lsn),
 $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"unexpected pageaddr 0/BAAAAAAD in .*, LSN .*,", $log_size),
+		"unexpected pageaddr 00000000BAAAAAAD in .*, LSN .*,", $log_size),
 	"xlp_pageaddr bad");
 
 # Good xl_prev, xlp_magic, xlp_pageaddr, but bogus xlp_info.
@@ -339,7 +339,7 @@ $node->write_wal(
 $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"unexpected pageaddr 0/BAAAAAAD in .*, LSN .*,", $log_size),
+		"unexpected pageaddr 00000000BAAAAAAD in .*, LSN .*,", $log_size),
 	"xlp_pageaddr bad (split record header)");
 
 # We'll also discover that xlp_rem_len doesn't add up before any

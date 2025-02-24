@@ -128,8 +128,7 @@ readTimeLineHistory(TimeLineID targetTLI)
 		char	   *res;
 		char	   *ptr;
 		TimeLineID	tli;
-		uint32		switchpoint_hi;
-		uint32		switchpoint_lo;
+		XLogRecPtr	switchpoint;
 		int			nfields;
 
 		pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_READ);
@@ -154,7 +153,7 @@ readTimeLineHistory(TimeLineID targetTLI)
 		if (*ptr == '\0' || *ptr == '#')
 			continue;
 
-		nfields = sscanf(fline, "%u\t%X/%X", &tli, &switchpoint_hi, &switchpoint_lo);
+		nfields = sscanf(fline, "%u\t%" SCNx64, &tli, &switchpoint);
 
 		if (nfields < 1)
 		{
@@ -163,7 +162,7 @@ readTimeLineHistory(TimeLineID targetTLI)
 					(errmsg("syntax error in history file: %s", fline),
 					 errhint("Expected a numeric timeline ID.")));
 		}
-		if (nfields != 3)
+		if (nfields != 2)
 			ereport(FATAL,
 					(errmsg("syntax error in history file: %s", fline),
 					 errhint("Expected a write-ahead log switchpoint location.")));
@@ -178,7 +177,7 @@ readTimeLineHistory(TimeLineID targetTLI)
 		entry = (TimeLineHistoryEntry *) palloc(sizeof(TimeLineHistoryEntry));
 		entry->tli = tli;
 		entry->begin = prevend;
-		entry->end = ((uint64) (switchpoint_hi)) << 32 | (uint64) switchpoint_lo;
+		entry->end = switchpoint;
 		prevend = entry->end;
 
 		/* Build list with newest item first */
@@ -399,10 +398,10 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	 * parent file failed to end with one.
 	 */
 	snprintf(buffer, sizeof(buffer),
-			 "%s%u\t%X/%X\t%s\n",
+			 "%s%u\t%016" PRIX64 "\t%s\n",
 			 (srcfd < 0) ? "" : "\n",
 			 parentTLI,
-			 LSN_FORMAT_ARGS(switchpoint),
+			 switchpoint,
 			 reason);
 
 	nbytes = strlen(buffer);

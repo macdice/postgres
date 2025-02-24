@@ -41,11 +41,11 @@ command_fails_like(
 	qr/error: resource manager .* does not exist/,
 	'invalid rmgr name');
 command_fails_like(
-	[ 'pg_waldump', '--start' => 'bad' ],
+	[ 'pg_waldump', '--start' => 'hexbad' ],
 	qr/error: invalid WAL location/,
 	'invalid start LSN');
 command_fails_like(
-	[ 'pg_waldump', '--end' => 'bad' ],
+	[ 'pg_waldump', '--end' => 'hexbad' ],
 	qr/error: invalid WAL location/,
 	'invalid end LSN');
 
@@ -242,10 +242,9 @@ command_fails_like(
 {
 	# Construct a new LSN that is one byte past the original
 	# start_lsn.
-	my ($part1, $part2) = split qr{/}, $start_lsn;
-	my $lsn2 = hex $part2;
+	my $lsn2 = hex $start_lsn;
 	$lsn2++;
-	my $new_start = sprintf("%s/%X", $part1, $lsn2);
+	my $new_start = sprintf("%016X", $lsn2);
 
 	my (@cmd, $stdout, $stderr, $result);
 

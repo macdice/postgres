@@ -565,9 +565,10 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 		 * kinds of client errors; so the client may wish to check that
 		 * confirmed_flush_lsn matches its expectations.
 		 */
-		elog(LOG, "%X/%X has been already streamed, forwarding to %X/%X",
-			 LSN_FORMAT_ARGS(start_lsn),
-			 LSN_FORMAT_ARGS(slot->data.confirmed_flush));
+		elog(LOG, "%016" PRIX64
+			 " has been already streamed, forwarding to %016" PRIX64,
+			 start_lsn,
+			 slot->data.confirmed_flush);
 
 		start_lsn = slot->data.confirmed_flush;
 	}
@@ -608,9 +609,10 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 	ereport(LOG,
 			(errmsg("starting logical decoding for slot \"%s\"",
 					NameStr(slot->data.name)),
-			 errdetail("Streaming transactions committing after %X/%X, reading WAL from %X/%X.",
-					   LSN_FORMAT_ARGS(slot->data.confirmed_flush),
-					   LSN_FORMAT_ARGS(slot->data.restart_lsn))));
+			 errdetail("Streaming transactions committing after %016" PRIX64
+					   ", reading WAL from %016" PRIX64 ".",
+					   slot->data.confirmed_flush,
+					   slot->data.restart_lsn)));
 
 	return ctx;
 }
@@ -635,8 +637,8 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 	/* Initialize from where to start reading WAL. */
 	XLogBeginRead(ctx->reader, slot->data.restart_lsn);
 
-	elog(DEBUG1, "searching for logical decoding starting point, starting at %X/%X",
-		 LSN_FORMAT_ARGS(slot->data.restart_lsn));
+	elog(DEBUG1, "searching for logical decoding starting point, starting at %016" PRIX64,
+		 slot->data.restart_lsn);
 
 	/* Wait for a consistent starting point */
 	for (;;)
@@ -756,11 +758,11 @@ output_plugin_error_callback(void *arg)
 
 	/* not all callbacks have an associated LSN  */
 	if (state->report_location != InvalidXLogRecPtr)
-		errcontext("slot \"%s\", output plugin \"%s\", in the %s callback, associated LSN %X/%X",
+		errcontext("slot \"%s\", output plugin \"%s\", in the %s callback, associated LSN %016" PRIX64,
 				   NameStr(state->ctx->slot->data.name),
 				   NameStr(state->ctx->slot->data.plugin),
 				   state->callback_name,
-				   LSN_FORMAT_ARGS(state->report_location));
+				   state->report_location);
 	else
 		errcontext("slot \"%s\", output plugin \"%s\", in the %s callback",
 				   NameStr(state->ctx->slot->data.name),
@@ -1723,8 +1725,8 @@ LogicalIncreaseXminForSlot(XLogRecPtr current_lsn, TransactionId xmin)
 	SpinLockRelease(&slot->mutex);
 
 	if (got_new_xmin)
-		elog(DEBUG1, "got new catalog xmin %u at %X/%X", xmin,
-			 LSN_FORMAT_ARGS(current_lsn));
+		elog(DEBUG1, "got new catalog xmin %u at %016" PRIX64, xmin,
+			 current_lsn);
 
 	/* candidate already valid with the current flush position, apply */
 	if (updated_xmin)
@@ -1783,9 +1785,9 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 		slot->candidate_restart_lsn = restart_lsn;
 		SpinLockRelease(&slot->mutex);
 
-		elog(DEBUG1, "got new restart lsn %X/%X at %X/%X",
-			 LSN_FORMAT_ARGS(restart_lsn),
-			 LSN_FORMAT_ARGS(current_lsn));
+		elog(DEBUG1, "got new restart lsn %016" PRIX64 " at %016" PRIX64,
+			 restart_lsn,
+			 current_lsn);
 	}
 	else
 	{
@@ -1798,12 +1800,14 @@ LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn, XLogRecPtr restart
 		confirmed_flush = slot->data.confirmed_flush;
 		SpinLockRelease(&slot->mutex);
 
-		elog(DEBUG1, "failed to increase restart lsn: proposed %X/%X, after %X/%X, current candidate %X/%X, current after %X/%X, flushed up to %X/%X",
-			 LSN_FORMAT_ARGS(restart_lsn),
-			 LSN_FORMAT_ARGS(current_lsn),
-			 LSN_FORMAT_ARGS(candidate_restart_lsn),
-			 LSN_FORMAT_ARGS(candidate_restart_valid),
-			 LSN_FORMAT_ARGS(confirmed_flush));
+		elog(DEBUG1, "failed to increase restart lsn: proposed %016" PRIX64
+			 ", after %016" PRIX64 ", current candidate %016" PRIX64
+			 ", current after %016" PRIX64 ", flushed up to %016" PRIX64,
+			 restart_lsn,
+			 current_lsn,
+			 candidate_restart_lsn,
+			 candidate_restart_valid,
+			 confirmed_flush);
 	}
 
 	/* candidates are already valid with the current flush position, apply */
