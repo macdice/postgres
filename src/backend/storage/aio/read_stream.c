@@ -73,6 +73,7 @@
 
 #include "miscadmin.h"
 #include "storage/aio.h"
+#include "storage/aio_controller.h"
 #include "storage/fd.h"
 #include "storage/smgr.h"
 #include "storage/read_stream.h"
@@ -84,6 +85,7 @@ typedef struct InProgressIO
 {
 	int16		buffer_index;
 	ReadBuffersOperation op;
+	AioControllerProbe probe;
 } InProgressIO;
 
 /*
@@ -104,6 +106,8 @@ struct ReadStream
 	bool		batch_mode;		/* READ_STREAM_USE_BATCHING */
 	bool		advice_enabled;
 	bool		temporary;
+
+	AioController controller;
 
 	/*
 	 * One-block buffer to support 'ungetting' a block number, to resolve flow
@@ -133,6 +137,7 @@ struct ReadStream
 	/* Read operations that have been started but not waited for yet. */
 	InProgressIO *ios;
 	int16		oldest_io_index;
+	int16		oldest_running_io_index;
 	int16		next_io_index;
 
 	bool		fast_path;
@@ -348,6 +353,7 @@ read_stream_start_pending_read(ReadStream *stream)
 		 * Remember to call WaitReadBuffers() before returning head buffer.
 		 * Look-ahead distance will be adjusted after waiting.
 		 */
+		aio_controller_start(&stream->controller, &stream->ios[io_index].probe);
 		stream->ios[io_index].buffer_index = buffer_index;
 		if (++stream->next_io_index == stream->max_ios)
 			stream->next_io_index = 0;
@@ -726,6 +732,8 @@ read_stream_begin_impl(int flags,
 		stream->ios[i].op.strategy = strategy;
 	}
 
+	aio_controller_initialize(&stream->controller);
+
 	return stream;
 }
 
@@ -849,7 +857,9 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			}
 
 			/* Next call must wait for I/O for the newly pinned buffer. */
+			aio_controller_start(&stream->controller, &stream->ios[0].probe);
 			stream->oldest_io_index = 0;
+			stream->oldest_running_io_index = 0;
 			stream->next_io_index = stream->max_ios > 1 ? 1 : 0;
 			stream->ios_in_progress = 1;
 			stream->ios[0].buffer_index = oldest_buffer_index;
@@ -909,7 +919,52 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
 		int16		io_index = stream->oldest_io_index;
-		int32		distance;	/* wider temporary value, clamped below */
+		int			i;
+		int			avg_nblocks;
+		int16		depth_change;
+		int16		distance_change;
+
+		/* If this was the oldest running I/O, advance past it. */
+		if (stream->oldest_running_io_index == io_index)
+		{
+			if (++stream->oldest_running_io_index == stream->max_ios)
+				stream->oldest_running_io_index = 0;
+		}
+
+		/* Can we advance the needle any further than that yet? */
+		while (stream->oldest_running_io_index != stream->next_io_index)
+		{
+			if (WaitReadBuffersMightStall(&stream->ios[stream->oldest_running_io_index].op))
+				break;
+			aio_controller_done(&stream->controller,
+								&stream->ios[stream->oldest_running_io_index].probe);
+			if (++stream->oldest_running_io_index == stream->max_ios)
+				stream->oldest_running_io_index = 0;
+		}
+
+		/* Get controller's recommended I/O depth change. */
+		depth_change = aio_controller_wait(&stream->controller,
+										   &stream->ios[io_index].probe);
+
+		/* Convert it to blocks based on the two most recently started I/Os. */
+		i = stream->next_io_index - 1;
+		if (i < 0)
+			i += stream->max_ios;
+		avg_nblocks = stream->ios[i].op.nblocks;
+		if (i != io_index)
+		{
+			if (--i < 0)
+				i += stream->max_ios;
+			avg_nblocks += stream->ios[i].op.nblocks;
+			avg_nblocks /= 2;
+		}
+		distance_change = depth_change * avg_nblocks;
+		if (stream->max_pinned_buffers - stream->distance < distance_change)
+			stream->distance = stream->max_pinned_buffers;
+		else
+			stream->distance += distance_change;
+		if (stream->distance < 1)
+			stream->distance = 1;
 
 		/* Sanity check that we still agree on the buffers. */
 		Assert(stream->ios[io_index].op.buffers ==
@@ -921,11 +976,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios_in_progress--;
 		if (++stream->oldest_io_index == stream->max_ios)
 			stream->oldest_io_index = 0;
-
-		/* Look-ahead distance ramps up rapidly after we do I/O. */
-		distance = stream->distance * 2;
-		distance = Min(distance, stream->max_pinned_buffers);
-		stream->distance = distance;
 
 		/*
 		 * If we've reached the first block of a sequential region we're
