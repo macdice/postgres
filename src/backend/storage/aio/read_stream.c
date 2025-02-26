@@ -97,6 +97,7 @@ struct ReadStream
 	int16		max_pinned_buffers;
 	int16		pinned_buffers;
 	int16		distance;
+	int16		sustain;
 	bool		advice_enabled;
 	bool		temporary;
 
@@ -128,6 +129,7 @@ struct ReadStream
 	/* Read operations that have been started but not waited for yet. */
 	InProgressIO *ios;
 	int16		oldest_io_index;
+	int16		oldest_stalling_io_index;
 	int16		next_io_index;
 
 	bool		fast_path;
@@ -758,6 +760,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			}
 
 			/* Next call must wait for I/O for the newly pinned buffer. */
+			stream->oldest_stalling_io_index = 0;
 			stream->oldest_io_index = 0;
 			stream->next_io_index = stream->max_ios > 1 ? 1 : 0;
 			stream->ios_in_progress = 1;
@@ -817,7 +820,77 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
 		int16		io_index = stream->oldest_io_index;
-		int32		distance;	/* wider temporary value, clamped below */
+		int16		nowait_ios;
+		int16		remaining_ios;
+
+		/* If this was the oldest I/O that might stall, advance past it. */
+		if (stream->oldest_stalling_io_index == io_index)
+			if (++stream->oldest_stalling_io_index)
+				stream->oldest_stalling_io_index = 0;
+
+		/* Can we advance the needle any further than that? */
+		while (stream->oldest_stalling_io_index != stream->next_io_index)
+		{
+			if (WaitReadBuffersMightStall(&stream->ios[stream->oldest_stalling_io_index].op))
+				break;
+			if (++stream->oldest_stalling_io_index == stream->max_ios)
+				stream->oldest_stalling_io_index = 0;
+		}
+
+		/* How many I/Os could we complete now without stalling? */
+		if (stream->oldest_stalling_io_index == stream->next_io_index)
+			nowait_ios = 0;
+		else
+			nowait_ios = stream->oldest_stalling_io_index - io_index;
+		if (nowait_ios < 0)
+			nowait_ios += stream->max_ios;
+		remaining_ios = stream->ios_in_progress - 1;	/* don't count this one */
+
+		/* Distance control algorithm. */
+		if (remaining_ios == 0)
+		{
+			/* Just double it to avoid dealing with zero. */
+			stream->distance = Min((int32) stream->distance * 2,
+								   stream->max_pinned_buffers);
+		}
+		else
+		{
+			double		set_point;
+			double		process_variable;
+			double		control_variable;
+			int32		new_distance;
+
+			/* Target fraction of the I/O queue that we want to be nowait. */
+			set_point = 0.25;
+
+			/* Current fraction of the I/O queue that is nowait. */
+			process_variable = (double) nowait_ios / (double) remaining_ios;
+
+			/* The control knob. */
+			control_variable = stream->distance;
+
+			/*
+			 * DUMMY ALGORITHM: just scale it proportionally.  A PID or other
+			 * clever control theory algorithm should replace this.  Note that
+			 * we probably couldn't really use floating point arithmetic in
+			 * this code, but this is just for experimentation.
+			 */
+			control_variable *= set_point / process_variable;
+
+			/* Clamp at double and half the old value. */
+			if (control_variable < stream->distance / 2)
+				new_distance = stream->distance / 2;
+			else if (control_variable > (int32) stream->distance * 2)
+				new_distance = (int32) stream->distance * 2;
+			else
+				new_distance = control_variable;
+
+			if (new_distance < 1)
+				new_distance = 1;
+			if (new_distance > stream->max_pinned_buffers)
+				new_distance = stream->max_pinned_buffers;
+			stream->distance = new_distance;
+		}
 
 		/* Sanity check that we still agree on the buffers. */
 		Assert(stream->ios[io_index].op.buffers ==
@@ -829,11 +902,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios_in_progress--;
 		if (++stream->oldest_io_index == stream->max_ios)
 			stream->oldest_io_index = 0;
-
-		/* Look-ahead distance ramps up rapidly after we do I/O. */
-		distance = stream->distance * 2;
-		distance = Min(distance, stream->max_pinned_buffers);
-		stream->distance = distance;
 
 		/*
 		 * If we've reached the first block of a sequential region we're
