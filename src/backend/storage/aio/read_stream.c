@@ -98,6 +98,7 @@ struct ReadStream
 	int16		forwarded_buffers;
 	int16		pinned_buffers;
 	int16		distance;
+	int16		sustain;
 	int16		initialized_buffers;
 	bool		sync_mode;
 	bool		advice_enabled;
@@ -354,8 +355,11 @@ read_stream_start_pending_read(ReadStream *stream,
 	if (!need_wait)
 	{
 		/* Look-ahead distance decays, no I/O necessary. */
-		if (stream->distance > 1)
+		if (stream->sustain > 0)
+			stream->sustain--;
+		else if (stream->distance > 1)
 			stream->distance--;
+		stream->seq_blocknum = InvalidBlockNumber;
 	}
 	else
 	{
@@ -879,6 +883,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			stream->next_io_index = stream->max_ios > 1 ? 1 : 0;
 			stream->ios_in_progress = 1;
 			stream->ios[0].buffer_index = oldest_buffer_index;
+			stream->seq_start = next_blocknum;
 			stream->seq_blocknum = next_blocknum + 1;
 		}
 		else
@@ -965,11 +970,18 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		if (stream->ios_in_progress == 0 ||
 			WaitReadBuffersMightStall(&stream->ios[a].op))
 		{
-			/* Boost: it's not OK if something as close as A might stall. */
+			/* Attack: it's not OK if something as close as A might stall. */
 			if (stream->distance > stream->max_pinned_buffers / 2)
 				stream->distance = stream->max_pinned_buffers;
 			else
 				stream->distance *= 2;
+
+			/*
+			 * Don't let interleaving hits decay the distance immediately, as
+			 * we might be sent back to 1 immediately.  We hold this value for
+			 * a while.
+			 */
+			stream->sustain = 16;
 		}
 		else if (a != b &&
 				 !WaitReadBuffersMightStall(&stream->ios[b].op))
@@ -1047,6 +1059,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 	if (stream->ios_in_progress == 0 &&
 		stream->forwarded_buffers == 0 &&
 		stream->pinned_buffers == 1 &&
+		stream->sustain == 0 &&
 		stream->distance == 1 &&
 		stream->pending_read_nblocks == 0 &&
 		stream->per_buffer_data_size == 0)
