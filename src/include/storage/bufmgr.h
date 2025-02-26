@@ -237,6 +237,19 @@ extern bool StartReadBuffers(ReadBuffersOperation *operation,
 							 int flags);
 extern void WaitReadBuffers(ReadBuffersOperation *operation);
 
+static inline bool
+WaitReadBuffersMightStall(ReadBuffersOperation *operation)
+{
+	/* Without AIO support just assume that every operation might stall. */
+	return true;
+#if 0
+	if (!pgaio_wref_valid(&operation->io_wref))
+		return true;			/* must be synchronous mode */
+	else
+		return !pgaio_wref_check_done(&operation->io_wref);
+#endif
+}
+
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern bool BufferIsExclusiveLocked(Buffer buffer);
