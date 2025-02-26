@@ -221,6 +221,13 @@ extern bool StartReadBuffers(ReadBuffersOperation *operation,
 							 int flags);
 extern void WaitReadBuffers(ReadBuffersOperation *operation);
 
+static inline bool
+WaitReadBuffersMightStall(ReadBuffersOperation *operation)
+{
+	/* With no information available, assume every operation might stall. */
+	return true;
+}
+
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern bool BufferIsExclusiveLocked(Buffer buffer);

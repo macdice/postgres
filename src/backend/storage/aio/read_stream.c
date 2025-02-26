@@ -97,6 +97,7 @@ struct ReadStream
 	int16		max_pinned_buffers;
 	int16		pinned_buffers;
 	int16		distance;
+	int16		sustain;
 	bool		advice_enabled;
 	bool		temporary;
 
@@ -816,8 +817,108 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 	if (stream->ios_in_progress > 0 &&
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
+		const int16 sample_min_ios = 4;
 		int16		io_index = stream->oldest_io_index;
-		int32		distance;	/* wider temporary value, clamped below */
+		int16		sample_distance_ios;
+		int16		sample_index[2];
+
+		/*
+		 * Sample two queued I/Os "near", ahead by 25% of the I/O queue, and
+		 * "far" at 50%.  We'll be waiting for them pretty soon, but for now
+		 * we just want to know if they *would* stall if waited for right now.
+		 * Then continually adjust the distance to encourage physical I/Os to
+		 * finish in between those two fence posts, so that our distance is
+		 * just right: we want to avoid stalls without overusing resources to
+		 * achieve that.
+		 *
+		 * We do this *before* waiting for the present I/O whose data we need
+		 * right now, because a stall here would interfere with our samples by
+		 * giving them unknown extra time to make progress.  That's why we add
+		 * or subtract one in a couple of places below, representing the I/O
+		 * that's about to be removed from the queue.
+		 */
+		sample_distance_ios = (stream->ios_in_progress - 1) / sample_min_ios;
+		sample_index[0] = io_index + 1 + sample_distance_ios;
+		sample_index[1] = io_index + 1 + sample_distance_ios * 2;
+		for (int i = 0; i < lengthof(sample_index); ++i)
+			if (sample_index[i] >= stream->max_ios) /* modulo I/O queue */
+				sample_index[i] -= stream->max_ios;
+		if (stream->ios_in_progress == 1 ||
+			WaitReadBuffersMightStall(&stream->ios[sample_index[0]].op))
+		{
+			/*
+			 * Boost the distance.  No sample window yet (initial ramp-up),
+			 * the near sample is warning of a stall, or this system can't
+			 * tell us about potential stalls so we've fallen back to boosting
+			 * on every I/O.
+			 */
+			if (stream->distance > stream->max_pinned_buffers / 2)
+				stream->distance = stream->max_pinned_buffers;
+			else
+				stream->distance *= 2;
+		}
+		else if (sample_distance_ios < 1)
+		{
+			int16		nblocks;
+
+			/*
+			 * The near sample isn't warning of a stall, but we don't have
+			 * enough depth for a second sample yet.  Increase the distance
+			 * enough to hope that one more I/O starts.  Use the average size
+			 * of the completing I/O and the first sample I/O as a guess.
+			 * There's a risk of undershooting, and then the near sample might
+			 * soon warn of a stall, but if so we'll boost next time; we also
+			 * don't want to overshoot by default as that'd produce sawtooth
+			 * I/O depth oscillations.
+			 */
+			nblocks = (stream->ios[io_index].op.nblocks +
+					   stream->ios[sample_index[0]].op.nblocks) / 2;
+			nblocks++;			/* round up */
+			if (stream->distance >= stream->max_pinned_buffers - nblocks)
+				stream->distance = stream->max_pinned_buffers;
+			else
+				stream->distance += nblocks;
+		}
+		else if (!WaitReadBuffersMightStall(&stream->ios[sample_index[1]].op))
+		{
+			/*
+			 * We have a workable sample window, but the far sample indicates
+			 * that the distance is too long.  If it wouldn't stall, that
+			 * means that I/Os are either physically completing some time
+			 * before the halfway point in the queue, or the data is already
+			 * cached due to external actions and our look-ahead efforts are
+			 * for nothing.
+			 */
+			if (stream->sustain > 0)
+			{
+				/* It takes more than one decision to decay the distance. */
+				stream->sustain--;
+			}
+			else if (stream->distance > 1)
+			{
+				/* Decay the distance. */
+				stream->distance--;
+
+				/*
+				 * Make it harder and harder to decay as you approach
+				 * sample_min_ios, because we don't want to lose the sampling
+				 * window and then have to build it back up again.
+				 *
+				 * XXX dubious arithmetic with unprincipled magic 16; folksy
+				 * explanation: I want the I/O depth to plateau gradually as
+				 * it approaches sample_min_ios.  Perhaps this should make
+				 * some reference to recent read sizes since we're trying to
+				 * control I/O depth, but using a block-based distance.
+				 */
+				stream->sustain = 16;
+				stream->sustain -= stream->ios_in_progress - 1 - sample_min_ios;
+				stream->sustain = Max(stream->sustain, 1);
+			}
+		}
+		else
+		{
+			/* Physical I/O is completing inside target window, no change. */
+		}
 
 		/* Sanity check that we still agree on the buffers. */
 		Assert(stream->ios[io_index].op.buffers ==
@@ -829,11 +930,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios_in_progress--;
 		if (++stream->oldest_io_index == stream->max_ios)
 			stream->oldest_io_index = 0;
-
-		/* Look-ahead distance ramps up rapidly after we do I/O. */
-		distance = stream->distance * 2;
-		distance = Min(distance, stream->max_pinned_buffers);
-		stream->distance = distance;
 
 		/*
 		 * If we've reached the first block of a sequential region we're
