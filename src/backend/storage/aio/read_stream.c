@@ -961,7 +961,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		 * window just ahead of us.  Tweak the distance up or down whenever
 		 * I/Os don't seem to be physically completing within that window.
 		 */
-		window = stream->ios_in_progress / 8;
+		window = stream->ios_in_progress / 4;
 		a = stream->oldest_io_index + window;
 		b = stream->oldest_io_index + window * 2;
 		if (a >= stream->max_ios)
