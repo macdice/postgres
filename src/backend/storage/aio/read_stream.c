@@ -627,7 +627,8 @@ read_stream_begin_impl(int flags,
 	 * would look ahead pinning many buffers for no benefit, for lack of
 	 * advice and AIO.
 	 */
-	if (io_direct_flags & IO_DIRECT_DATA)
+	if (io_method == IOMETHOD_SYNC &&
+		(io_direct_flags & IO_DIRECT_DATA))
 		max_ios = 0;
 
 	/* Cap to INT16_MAX to avoid overflowing below */
@@ -975,6 +976,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 				stream->distance = stream->max_pinned_buffers;
 			else
 				stream->distance *= 2;
+elog(LOG, "attack: %d", stream->distance);
 
 			/*
 			 * Don't let interleaving hits decay the distance immediately, as
@@ -993,7 +995,12 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			 */
 			if (stream->distance > 1)
 				stream->distance--;
+elog(LOG, "decay: %d", stream->distance);
 		}
+else
+{
+elog(LOG, "in window: distance = %d, ios_in_progress = %d", stream->distance, stream->ios_in_progress);
+}
 
 		/*
 		 * If we've caught up with the first advice issued for the current
