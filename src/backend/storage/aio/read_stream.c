@@ -735,7 +735,9 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
 		int16		io_index = stream->oldest_io_index;
-		int32		distance;	/* wider temporary value, clamped below */
+		int16		window;
+		int16		a;
+		int16		b;
 
 		/* Sanity check that we still agree on the buffers. */
 		Assert(stream->ios[io_index].op.buffers ==
@@ -748,10 +750,38 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		if (++stream->oldest_io_index == stream->max_ios)
 			stream->oldest_io_index = 0;
 
-		/* Look-ahead distance ramps up quickly after we do I/O. */
-		distance = stream->distance * 2;
-		distance = Min(distance, stream->max_pinned_buffers);
-		stream->distance = distance;
+		/*
+		 * Choose a couple of already running I/Os A and B forming a small
+		 * window just ahead of us.  Tweak the distance up or down whenever
+		 * I/Os don't seem to be physically completing within that window.
+		 */
+		window = stream->ios_in_progress / 8;
+		a = stream->oldest_io_index + window;
+		b = stream->oldest_io_index + window * 2;
+		if (a >= stream->max_ios)
+			a -= stream->max_ios;
+		if (b >= stream->max_ios)
+			b -= stream->max_ios;
+		if (stream->ios_in_progress == 0 ||
+			WaitReadBuffersMightStall(&stream->ios[a].op))
+		{
+			/* Boost: it's not OK if something as close as A might stall. */
+			if (stream->distance > stream->max_pinned_buffers / 2)
+				stream->distance = stream->max_pinned_buffers;
+			else
+				stream->distance *= 2;
+		}
+		else if (a != b &&
+				 !WaitReadBuffersMightStall(&stream->ios[b].op))
+		{
+			/*
+			 * Decay: neither A or B would stall currently.  We want I/Os as
+			 * far away as B to still be running at this stage, or we must be
+			 * starting it too soon and wasting resources.
+			 */
+			if (stream->distance > 1)
+				stream->distance--;
+		}
 
 		/*
 		 * If we've caught up with the first advice issued for the current
