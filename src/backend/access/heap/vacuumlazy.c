@@ -1230,7 +1230,6 @@ lazy_scan_heap(LVRelState *vacrel)
 		Page		page;
 		uint8		blk_info = 0;
 		bool		has_lpdead_items;
-		void	   *per_buffer_data = NULL;
 		bool		vm_page_frozen = false;
 		bool		got_cleanup_lock = false;
 
@@ -1287,13 +1286,12 @@ lazy_scan_heap(LVRelState *vacrel)
 										 PROGRESS_VACUUM_PHASE_SCAN_HEAP);
 		}
 
-		buf = read_stream_next_buffer(stream, &per_buffer_data);
+		buf = read_stream_get_buffer_and_value(stream, &blk_info);
 
 		/* The relation is exhausted. */
 		if (!BufferIsValid(buf))
 			break;
 
-		blk_info = *((uint8 *) per_buffer_data);
 		CheckBufferIsPinnedOnce(buf);
 		page = BufferGetPage(buf);
 		blkno = BufferGetBlockNumber(buf);
@@ -2740,7 +2738,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 		vacuum_delay_point(false);
 
-		buf = read_stream_next_buffer(stream, (void **) &iter_result);
+		buf = read_stream_get_buffer_and_pointer(stream, &iter_result);
 
 		/* The relation is exhausted */
 		if (!BufferIsValid(buf))

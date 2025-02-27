@@ -1010,7 +1010,7 @@ heapam_scan_analyze_next_block(TableScanDesc scan, ReadStream *stream)
 	 * re-acquire sharelock for each tuple, but since we aren't doing much
 	 * work per tuple, the extra lock traffic is probably better avoided.
 	 */
-	hscan->rs_cbuf = read_stream_next_buffer(stream, NULL);
+	hscan->rs_cbuf = read_stream_get_buffer(stream);
 	if (!BufferIsValid(hscan->rs_cbuf))
 		return false;
 
