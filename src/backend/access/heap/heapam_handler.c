@@ -1014,7 +1014,7 @@ heapam_scan_analyze_next_block(TableScanDesc scan, ReadStream *stream)
 	 * re-acquire sharelock for each tuple, but since we aren't doing much
 	 * work per tuple, the extra lock traffic is probably better avoided.
 	 */
-	hscan->rs_cbuf = read_stream_next_buffer(stream, NULL);
+	hscan->rs_cbuf = read_stream_get_buffer(stream);
 	if (!BufferIsValid(hscan->rs_cbuf))
 		return false;
 
@@ -2477,7 +2477,6 @@ BitmapHeapScanNextBlock(TableScanDesc scan,
 	BitmapHeapScanDesc bscan = (BitmapHeapScanDesc) scan;
 	HeapScanDesc hscan = (HeapScanDesc) bscan;
 	BlockNumber block;
-	void	   *per_buffer_data;
 	Buffer		buffer;
 	Snapshot	snapshot;
 	int			ntup;
@@ -2498,8 +2497,8 @@ BitmapHeapScanNextBlock(TableScanDesc scan,
 		hscan->rs_cbuf = InvalidBuffer;
 	}
 
-	hscan->rs_cbuf = read_stream_next_buffer(hscan->rs_read_stream,
-											 &per_buffer_data);
+	hscan->rs_cbuf = read_stream_get_buffer_and_pointer(hscan->rs_read_stream,
+														&tbmres);
 
 	if (BufferIsInvalid(hscan->rs_cbuf))
 	{
@@ -2521,10 +2520,6 @@ BitmapHeapScanNextBlock(TableScanDesc scan,
 		*recheck = false;
 		return bscan->rs_empty_tuples_pending > 0;
 	}
-
-	Assert(per_buffer_data);
-
-	tbmres = per_buffer_data;
 
 	Assert(BlockNumberIsValid(tbmres->blockno));
 	Assert(BufferGetBlockNumber(hscan->rs_cbuf) == tbmres->blockno);
