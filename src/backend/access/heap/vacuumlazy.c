@@ -1612,7 +1612,7 @@ heap_vac_scan_next_block(ReadStream *stream,
 		 */
 		vacrel->current_block = next_block;
 		blk_info |= VAC_BLK_ALL_VISIBLE_ACCORDING_TO_VM;
-		*((uint8 *) per_buffer_data) = blk_info;
+		read_stream_put_value(stream, per_buffer_data, blk_info);
 		return vacrel->current_block;
 	}
 	else
@@ -1628,7 +1628,7 @@ heap_vac_scan_next_block(ReadStream *stream,
 			blk_info |= VAC_BLK_ALL_VISIBLE_ACCORDING_TO_VM;
 		if (vacrel->next_unskippable_eager_scanned)
 			blk_info |= VAC_BLK_WAS_EAGER_SCANNED;
-		*((uint8 *) per_buffer_data) = blk_info;
+		read_stream_put_value(stream, per_buffer_data, blk_info);
 		return vacrel->current_block;
 	}
 }
@@ -2671,7 +2671,7 @@ vacuum_reap_lp_read_stream_next(ReadStream *stream,
 	 * Save the TidStoreIterResult for later, so we can extract the offsets.
 	 * It is safe to copy the result, according to TidStoreIterateNext().
 	 */
-	memcpy(per_buffer_data, iter_result, sizeof(*iter_result));
+	read_stream_put_value(stream, per_buffer_data, *iter_result);
 
 	return iter_result->blkno;
 }
