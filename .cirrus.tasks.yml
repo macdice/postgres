@@ -155,8 +155,7 @@ task:
 
   ccache_cache:
     folder: $CCACHE_DIR
-  # Work around performance issues due to 32KB block size
-  repartition_script: src/tools/ci/gcp_freebsd_repartition.sh
+  prepare_filesystem_script: src/tools/ci/prepare_filesystem.sh
   create_user_script: |
     pw useradd postgres
     chown -R postgres:postgres .
@@ -277,6 +276,7 @@ task:
   ccache_cache:
     folder: $CCACHE_DIR
 
+  prepare_filesystem_script: src/tools/ci/prepare_filesystem.sh
   create_user_script: |
     useradd postgres
     chown -R postgres:users /home/postgres
