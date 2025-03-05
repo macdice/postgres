@@ -358,3 +358,15 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 			SetLatch(&proc->procLatch);
 	}
 }
+
+/*
+ * If the waiter and waker use a lock to serialize access to the state being
+ * waited for, then it is safe to check for an empty list with a relaxed load.
+ */
+void
+ConditionVariableBroadcastRelaxed(ConditionVariable *cv)
+{
+	if (proclist_is_empty(&cv->wakeup))
+		return;
+	ConditionVariableBroadcast(cv);
+}

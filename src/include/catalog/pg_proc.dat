@@ -6724,6 +6724,13 @@
   prorettype => 'timestamptz', proargtypes => '',
   prosrc => 'pg_last_xact_replay_timestamp' },
 
+{ oid => '8888', descr => 'query standby a wal location as reported to the local WAL sender',
+  proname => 'pg_last_standby_lsn', provolatile => 'v', prorettype => 'pg_lsn',
+  proargtypes => 'text text', prosrc => 'pg_last_standby_lsn' },
+{ oid => '8889', descr => 'query and wait for a standby wal location as reported to the local WAL sender',
+  proname => 'pg_wait_standby_lsn', provolatile => 'v', prorettype => 'pg_lsn',
+  proargtypes => 'text text pg_lsn int4', prosrc => 'pg_wait_standby_lsn' },
+
 { oid => '3071', descr => 'pause wal replay',
   proname => 'pg_wal_replay_pause', provolatile => 'v', prorettype => 'void',
   proargtypes => '', prosrc => 'pg_wal_replay_pause' },

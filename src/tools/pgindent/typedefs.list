@@ -3190,6 +3190,7 @@ WalReceiverConn
 WalReceiverFunctionsType
 WalSnd
 WalSndCtlData
+WalSndExtended
 WalSndSendDataCallback
 WalSndState
 WalSummarizerData

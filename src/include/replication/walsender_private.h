@@ -78,7 +78,32 @@ typedef struct WalSnd
 	ReplicationKind kind;
 } WalSnd;
 
+/*
+ * Extra per-slot space that is rarely accessed and doesn't need to be covered
+ * in the main object.
+ */
+typedef struct WalSndExtended
+{
+	/*
+	 * Name used to find standbys by name without having to go via pgstats.
+	 * This is protected by the spinlock in WalSnd, but kept out of the main
+	 * struct.
+	 *
+	 * XXX Would probably be better if there were separate system wide lock
+	 * for "mapping" (setting pid and name), separate from whatever locking
+	 * should apply to individual slots?
+	 */
+	char		standby_name[NAMEDATALEN];
+
+	/*
+	 * Fires when the WalSnd LSNs area are changed, or the slot is
+	 * deactivated.
+	 */
+	ConditionVariable wal_feedback_cv;
+} WalSndExtended;
+
 extern PGDLLIMPORT WalSnd *MyWalSnd;
+extern PGDLLIMPORT WalSndExtended *MyWalSndExtended;
 
 /* There is one WalSndCtl struct for the whole database cluster */
 typedef struct
@@ -112,6 +137,12 @@ typedef struct
 	 * logical failover slots when a walreceiver confirms the receipt of LSN.
 	 */
 	ConditionVariable wal_confirm_rcv_cv;
+
+	/* Fires when any slot becomes active. */
+	ConditionVariable slot_change_cv;
+
+	/* An array with the same indexes as walsnds. */
+	WalSndExtended *extended;
 
 	WalSnd		walsnds[FLEXIBLE_ARRAY_MEMBER];
 } WalSndCtlData;

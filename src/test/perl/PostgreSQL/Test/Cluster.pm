@@ -3237,10 +3237,9 @@ sub wait_for_catchup
 	  . $self->name . "\n";
 	# Before release 12 walreceiver just set the application name to
 	# "walreceiver"
-	my $query = qq[SELECT '$target_lsn' <= ${mode}_lsn AND state = 'streaming'
-         FROM pg_catalog.pg_stat_replication
-         WHERE application_name IN ('$standby_name', 'walreceiver')];
-	if (!$self->poll_query_until('postgres', $query))
+	my $wait_ms = 1000 * $PostgreSQL::Test::Utils::timeout_default;
+	my $query = qq[SELECT pg_wait_standby_lsn('${standby_name}', '${mode}', '${target_lsn}', ${wait_ms}) >= '${target_lsn}'];
+	if ($self->safe_psql('postgres', $query) ne 't')
 	{
 		if (PostgreSQL::Test::Utils::has_wal_read_bug)
 		{

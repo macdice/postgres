@@ -110,6 +110,7 @@ WalSndCtlData *WalSndCtl = NULL;
 
 /* My slot in the shared memory array */
 WalSnd	   *MyWalSnd = NULL;
+WalSndExtended *MyWalSndExtended = NULL;
 
 /* Global state */
 bool		am_walsender = false;	/* Am I a walsender process? */
@@ -2444,6 +2445,17 @@ ProcessStandbyReplyMessage(void)
 			walsnd->applyLag = applyLag;
 		walsnd->replyTime = replyTime;
 		SpinLockRelease(&walsnd->mutex);
+
+		/*
+		 * Someone might be waiting for LSNs to advance.  We can use the
+		 * relaxed variant because this code and pg_wait_for_standby_lsn()
+		 * serialize on the mutex above.  If it read walsnd before we wrote
+		 * it, it is already on the wait list and we will see that it's
+		 * non-empty with a relaxed load because of the spinlock
+		 * acquire/release. That avoids adding another spinlock acquisition to
+		 * this path.
+		 */
+		ConditionVariableBroadcastRelaxed(&MyWalSndExtended->wal_feedback_cv);
 	}
 
 	if (!am_cascading_walsender)
@@ -2874,6 +2886,7 @@ InitWalSenderSlot(void)
 	 */
 	Assert(WalSndCtl != NULL);
 	Assert(MyWalSnd == NULL);
+	Assert(MyWalSndExtended == NULL);
 
 	/*
 	 * Find a free walsender slot and reserve it. This must not fail due to
@@ -2882,6 +2895,7 @@ InitWalSenderSlot(void)
 	for (i = 0; i < max_wal_senders; i++)
 	{
 		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
+		WalSndExtended *extended = &WalSndCtl->extended[i];
 
 		SpinLockAcquire(&walsnd->mutex);
 
@@ -2924,15 +2938,24 @@ InitWalSenderSlot(void)
 			else
 				walsnd->kind = REPLICATION_KIND_LOGICAL;
 
+			strlcpy(extended->standby_name,
+					application_name,
+					sizeof(extended->standby_name));
+
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
 			MyWalSnd = (WalSnd *) walsnd;
+			MyWalSndExtended = extended;
+
+			/* Someone might be waiting for a standby to connect. */
+			ConditionVariableBroadcast(&WalSndCtl->slot_change_cv);
 
 			break;
 		}
 	}
 
 	Assert(MyWalSnd != NULL);
+	Assert(MyWalSndExtended != NULL);
 
 	/* Arrange to clean up at walsender exit */
 	on_shmem_exit(WalSndKill, 0);
@@ -2943,15 +2966,24 @@ static void
 WalSndKill(int code, Datum arg)
 {
 	WalSnd	   *walsnd = MyWalSnd;
+	WalSndExtended *extended = MyWalSndExtended;
 
 	Assert(walsnd != NULL);
+	Assert(extended != NULL);
 
 	MyWalSnd = NULL;
+	MyWalSndExtended = NULL;
 
 	SpinLockAcquire(&walsnd->mutex);
 	/* Mark WalSnd struct as no longer being in use. */
 	walsnd->pid = 0;
 	SpinLockRelease(&walsnd->mutex);
+
+	/*
+	 * Even though this isn't an LSN update, someone might be waiting for
+	 * those in this slot, and had better stop doing that.
+	 */
+	ConditionVariableBroadcast(&extended->wal_feedback_cv);
 }
 
 /* XLogReaderRoutine->segment_open callback */
@@ -3583,6 +3615,7 @@ WalSndShmemSize(void)
 
 	size = offsetof(WalSndCtlData, walsnds);
 	size = add_size(size, mul_size(max_wal_senders, sizeof(WalSnd)));
+	size = add_size(size, mul_size(max_wal_senders, sizeof(WalSndExtended)));
 
 	return size;
 }
@@ -3605,17 +3638,24 @@ WalSndShmemInit(void)
 		for (i = 0; i < NUM_SYNC_REP_WAIT_MODE; i++)
 			dlist_init(&(WalSndCtl->SyncRepQueue[i]));
 
+		WalSndCtl->extended = (void *)
+			&WalSndCtl->walsnds[max_wal_senders];
 		for (i = 0; i < max_wal_senders; i++)
 		{
 			WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
+			WalSndExtended *extended = &WalSndCtl->extended[i];
 
 			SpinLockInit(&walsnd->mutex);
+			ConditionVariableInit(&extended->wal_feedback_cv);
 		}
 
+		ConditionVariableInit(&WalSndCtl->slot_change_cv);
 		ConditionVariableInit(&WalSndCtl->wal_flush_cv);
 		ConditionVariableInit(&WalSndCtl->wal_replay_cv);
 		ConditionVariableInit(&WalSndCtl->wal_confirm_rcv_cv);
 	}
+
+
 }
 
 /*
@@ -3824,6 +3864,157 @@ offset_to_interval(TimeOffset offset)
 	result->time = offset;
 
 	return result;
+}
+
+static int
+milliseconds_until(TimestampTz wait_time)
+{
+	if (wait_time == 0)
+		return 0;
+	return TimestampDifferenceMilliseconds(GetCurrentTimestamp(), wait_time);
+}
+
+/*
+ * Common implementations for:
+ *
+ *  * pg_last_standby_lsn(standby_name, field_name)
+ *  * pg_wait_standby_lsn(standby_name, field_name, wait_lsn, wait_ms).
+ */
+static XLogRecPtr
+pg_query_standby_lsn(const char *standby_name,
+					 const char *field_name,
+					 XLogRecPtr wait_lsn,
+					 int wait_ms)
+{
+	size_t		member_offset;
+	TimestampTz wait_time;
+	XLogRecPtr	result;
+
+	/* At what absolute time should we give up waiting? */
+	if (wait_ms < 0)
+		wait_time = INT_MAX;	/* wait forever */
+	else if (wait_ms == 0)
+		wait_time = 0;			/* don't wait at all */
+	else
+		wait_time = TimestampTzPlusMilliseconds(GetCurrentTimestamp(),
+												wait_ms);
+
+	/* Avoid branches under spinlock by noting the offset. */
+	if (strcmp(field_name, "sent") == 0)
+		member_offset = offsetof(WalSnd, sentPtr);
+	else if (strcmp(field_name, "write") == 0)
+		member_offset = offsetof(WalSnd, write);
+	else if (strcmp(field_name, "flush") == 0)
+		member_offset = offsetof(WalSnd, flush);
+	else if (strcmp(field_name, "replay") == 0)
+		member_offset = offsetof(WalSnd, apply);
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("field name must be \"sent\", \"write\", \"flush\" or \"replay\"")));
+
+	/* Search for the standby by name. */
+	for (int i = 0;;)
+	{
+		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
+		WalSndExtended *extended = &WalSndCtl->extended[i];
+		char	   *base = (char *) walsnd;
+		XLogRecPtr *member = (XLogRecPtr *) (base + member_offset);
+		bool		found;
+
+		/* Inspect the slot quickly as we can. */
+		SpinLockAcquire(&walsnd->mutex);
+		found = walsnd->pid && !strcmp(extended->standby_name, standby_name);
+		result = *member;
+		SpinLockRelease(&walsnd->mutex);
+
+		if (!found)
+		{
+			result = InvalidXLogRecPtr;
+
+			if (++i == max_wal_senders)
+			{
+				/*
+				 * We have searched all active slots and not found the name
+				 * we're looking for.  Give up if the caller doesn't want to
+				 * wait or we've reached the timeout.
+				 */
+				if ((wait_ms = milliseconds_until(wait_time)) == 0)
+					break;
+
+				/*
+				 * Wait for new standbys to show up before we go around again
+				 * searching the slots.
+				 */
+				ConditionVariableTimedSleep(&WalSndCtl->slot_change_cv,
+											wait_ms,
+											WAIT_EVENT_WAL_SENDER_STANDBY_CONNECTION);
+				i = 0;
+			}
+
+			/* Keep searching... */
+			continue;
+		}
+
+		/* Found it!  Can we return the value immediately? */
+		if (result != InvalidXLogRecPtr &&
+			(wait_lsn == InvalidXLogRecPtr || result >= wait_lsn))
+			break;
+
+		/*
+		 * Figure out the wait time, if any.  This CV will be triggered by
+		 * updates to the LSNs, but also by disconnection, in which case we'll
+		 * go back to searching all slots to see if it reconnects.
+		 */
+		if ((wait_ms = milliseconds_until(wait_time)) == 0)
+			break;
+		ConditionVariableTimedSleep(&extended->wal_feedback_cv,
+									wait_ms,
+									WAIT_EVENT_WAL_SENDER_STANDBY_LSN);
+	}
+	ConditionVariableCancelSleep();
+
+	return result;
+}
+
+Datum
+pg_last_standby_lsn(PG_FUNCTION_ARGS)
+{
+	char	   *standby_name;
+	char	   *field_name;
+	XLogRecPtr	result;
+
+	standby_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	field_name = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	result = pg_query_standby_lsn(standby_name, field_name, 0, 0);
+
+	if (result == InvalidXLogRecPtr)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_LSN(result);
+}
+
+Datum
+pg_wait_standby_lsn(PG_FUNCTION_ARGS)
+{
+	char	   *standby_name;
+	char	   *field_name;
+	XLogRecPtr	wait_lsn;
+	int			wait_ms;
+	XLogRecPtr	result;
+
+	standby_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	field_name = text_to_cstring(PG_GETARG_TEXT_PP(1));
+	wait_lsn = PG_GETARG_LSN(2);
+	wait_ms = PG_GETARG_INT32(3);
+
+	result = pg_query_standby_lsn(standby_name, field_name, wait_lsn, wait_ms);
+
+	if (result == InvalidXLogRecPtr)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_LSN(result);
 }
 
 /*
