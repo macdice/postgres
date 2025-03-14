@@ -241,10 +241,15 @@ describeTablespaces(const char *pattern, bool verbose)
 		printACLColumn(&buf, "spcacl");
 		appendPQExpBuffer(&buf,
 						  ",\n  spcoptions AS \"%s\""
-						  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_tablespace_size(oid)) AS \"%s\""
-						  ",\n  pg_catalog.shobj_description(oid, 'pg_tablespace') AS \"%s\"",
+						  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_tablespace_size(oid)) AS \"%s\"",
 						  gettext_noop("Options"),
-						  gettext_noop("Size"),
+						  gettext_noop("Size"));
+		if (pset.sversion >= 180000)
+			appendPQExpBuffer(&buf,
+							  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_tablespace_avail(oid)) AS \"%s\"",
+							  gettext_noop("Free"));
+		appendPQExpBuffer(&buf,
+						  ",\n  pg_catalog.shobj_description(oid, 'pg_tablespace') AS \"%s\"",
 						  gettext_noop("Description"));
 	}
 
