@@ -2128,6 +2128,58 @@ retry:
 #endif
 }
 
+/*
+ * FileCacheHint - estimate whether file range is cached by the kernel
+ *
+ * Returns 0 for unknown or probably not, a positive number for probably,
+ * or -1 for error with errno set.
+ *
+ * This function is optimized for callers that predict 0 as the likely result.
+ * (If predicting non-zero, it'd be better to use a hypothetical
+ * FileReadVNoWait() operation instead so the data is transferred if the
+ * prediction is true without extra probing overhead.)
+ */
+int
+FileCacheHint(File file, off_t offset, off_t amount)
+{
+#ifdef RWF_NOWAIT
+	int			rc;
+	char		dummy;
+	struct iovec iov = {
+		.iov_base = &dummy,
+		.iov_len = sizeof(dummy)
+	};
+
+	Assert(FileIsValid(file));
+
+	if ((rc = FileAccess(file)) < 0)
+		return -1;
+
+	/*
+	 * We check only the first byte to get an estimate without performing a
+	 * lot of useless data copying.  For larger "amount" we could potentially
+	 * sample every N bytes.  For callers who want to know if FilePrefetch()
+	 * or kernel read-ahead have been effective, the first byte is probably
+	 * often enough of an indication.
+	 *
+	 * RWF_NOWAIT and preadv2() were introduced in Linux 4.14.
+	 */
+	rc = preadv2(VfdCache[file].fd, &iov, 1, offset, RWF_NOWAIT);
+	if (rc < 0)
+		return errno == EAGAIN ? 0 : -1;
+	else if (rc > 0)
+		return 1;
+	else
+		return 0;
+#else
+	/*
+	 * Information not available.  (Many systems could tell you with mincore()
+	 * but that'd require mapping the file and that's probably too much.)
+	 */
+	return 0;
+#endif
+}
+
 void
 FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 {

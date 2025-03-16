@@ -107,6 +107,7 @@ extern File PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fil
 extern File OpenTemporaryFile(bool interXact);
 extern void FileClose(File file);
 extern int	FilePrefetch(File file, off_t offset, off_t amount, uint32 wait_event_info);
+extern int	FileCacheHint(File file, off_t offset, off_t amount);
 extern ssize_t FileReadV(File file, const struct iovec *iov, int iovcnt, off_t offset, uint32 wait_event_info);
 extern ssize_t FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset, uint32 wait_event_info);
 extern int	FileSync(File file, uint32 wait_event_info);

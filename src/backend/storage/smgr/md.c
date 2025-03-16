@@ -754,6 +754,42 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 }
 
 /*
+ * mdcachehint() -- Estimate whether the kernel has cached some blocks.
+ */
+bool
+mdcachehint(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			int nblocks)
+{
+	int			r;
+	int			nblocks_this_segment;
+	off_t		seekpos;
+	MdfdVec    *v;
+
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 InRecovery ? EXTENSION_RETURN_NULL : EXTENSION_FAIL);
+	if (v == NULL)
+		return false;
+
+	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+
+	nblocks_this_segment =
+		Min(nblocks,
+			RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE)));
+
+	r = FileCacheHint(v->mdfd_vfd, seekpos, BLCKSZ * nblocks_this_segment);
+	if (r < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not check cache hint for blocks %u..%u in file \"%s\": %m",
+						blocknum,
+						blocknum + nblocks_this_segment - 1,
+						FilePathName(v->mdfd_vfd))));
+	return r > 0;
+}
+
+/*
  * Convert an array of buffer address into an array of iovec objects, and
  * return the number that were required.  'iov' must have enough space for up
  * to 'nblocks' elements, but the number used may be less depending on
