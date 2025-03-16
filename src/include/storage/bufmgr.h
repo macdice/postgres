@@ -225,6 +225,42 @@ extern void WaitReadBuffers(ReadBuffersOperation *operation);
 static inline bool
 WaitReadBuffersMightStall(ReadBuffersOperation *operation)
 {
+
+#if 0
+	/*
+	 * (XXX:TM AIO branch:  This is code that I had working on a branch of the
+	 * AIO code at one point, but IIRC I had to jigger some headers around
+	 * slightly to use this from here.  Showing here ifdef'd out for
+	 * illustration and explanation of the key points below.)
+	 *
+	 * If there is a valid I/O handle, then we must be using an io_method
+	 * other than synchronous.  We can check if it's already completed just by
+	 * inspecting the handle in shared memory, with some slight complications
+	 * depending on the active io_method:
+	 *
+	 * 1. For io_method=worker, it will be marked done concurrently by an I/O
+	 * worker without any participation from this backend.
+	 *
+	 * 2. For io_method=io_uring (and any potential similar OS-specific
+	 * methods that drain completion events from a kernel-managed queue),
+	 * things are more complicated: unless some other backend happens to
+	 * process the completion (unlikely for I/Os recently submitted by this
+	 * backend), it will only be completed when this backend drains the
+	 * completion queue while actually waiting for *other* I/O operations.
+	 *
+	 * For adaptive I/O control algorithms, it's therefore only useful to poll
+	 * I/Os that will be waited on some distance ahead in the queue.  That
+	 * allows the the completion queue to be pumped, providing a chance to see
+	 * that future I/Os including this one have also been completed, if the
+	 * storage hardware is staying ahead of the consumer.  It is best to do
+	 * that *before* waiting for another I/O, since you can't easily tell if
+	 * that one stalls: if it did, predictions about *this* I/O would become
+	 * less meaningful.
+	 */
+	if (pgaio_wref_valid(&operation->io_wref))
+		return !pgaio_wref_check_done(&operation->io_wref);
+#endif
+
 	/*
 	 * Estimate whether the blocks are already cached.  On systems without a
 	 * way to check, we'll always return true for lack of information.
