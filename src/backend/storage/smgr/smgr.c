@@ -88,6 +88,8 @@ typedef struct f_smgr
 									BlockNumber blocknum, int nblocks, bool skipFsync);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber blocknum, int nblocks);
+	bool		(*smgr_cachehint) (SMgrRelation reln, ForkNumber forknum,
+								   BlockNumber blocknum, int nblocks);
 	uint32		(*smgr_maxcombine) (SMgrRelation reln, ForkNumber forknum,
 									BlockNumber blocknum);
 	void		(*smgr_readv) (SMgrRelation reln, ForkNumber forknum,
@@ -119,6 +121,7 @@ static const f_smgr smgrsw[] = {
 		.smgr_extend = mdextend,
 		.smgr_zeroextend = mdzeroextend,
 		.smgr_prefetch = mdprefetch,
+		.smgr_cachehint = mdcachehint,
 		.smgr_maxcombine = mdmaxcombine,
 		.smgr_readv = mdreadv,
 		.smgr_writev = mdwritev,
@@ -589,6 +592,18 @@ smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 			 int nblocks)
 {
 	return smgrsw[reln->smgr_which].smgr_prefetch(reln, forknum, blocknum, nblocks);
+}
+
+/*
+ * smgrcached() -- Estimate whether the kernel has cached some blocks.
+ *
+ * Returns false if the information is not avaliable on this system.
+ */
+bool
+smgrcachehint(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			  int nblocks)
+{
+	return smgrsw[reln->smgr_which].smgr_cachehint(reln, forknum, blocknum, nblocks);
 }
 
 /*
