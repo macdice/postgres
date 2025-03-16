@@ -19,6 +19,7 @@
 #include "storage/buf.h"
 #include "storage/bufpage.h"
 #include "storage/relfilelocator.h"
+#include "storage/smgr.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 
@@ -224,8 +225,26 @@ extern void WaitReadBuffers(ReadBuffersOperation *operation);
 static inline bool
 WaitReadBuffersMightStall(ReadBuffersOperation *operation)
 {
-	/* With no information available, assume every operation might stall. */
-	return true;
+	/*
+	 * Estimate whether the blocks are already cached.  On systems without a
+	 * way to check, we'll always return true for lack of information.
+	 *
+	 * XXX If this function took a predict_stall argument, we could perform a
+	 * hypothetical WaitReadBuffersNoWait() call if predict_stall == false,
+	 * which would do the BM_IO_IN_PROGRESS setup and call a hypothetical
+	 * smgrreadv_nowait(), which would call preadv2(RWF_NOWAIT).  Or just
+	 * return false if that's not available on this system.  Then we'd get the
+	 * actual transfer to user space done if the prediction is true, and make
+	 * WaitReadBuffers() into a no-op.  That'd suit the probe of the first
+	 * sample I/O, which we expect to be able to complete without stalling,
+	 * assuming the feedback-based flow control algorithm is doing its job.
+	 * Then you'd left with just one new system call: the one-byte probe for
+	 * the far sample I/O.
+	 */
+	return !smgrcachehint(operation->smgr,
+						  operation->forknum,
+						  operation->blocknum,
+						  operation->nblocks);
 }
 
 extern void ReleaseBuffer(Buffer buffer);
