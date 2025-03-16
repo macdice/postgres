@@ -73,6 +73,7 @@
 
 #include "miscadmin.h"
 #include "storage/aio.h"
+#include "storage/aio_stream_controller.h"
 #include "storage/fd.h"
 #include "storage/smgr.h"
 #include "storage/read_stream.h"
@@ -84,6 +85,7 @@ typedef struct InProgressIO
 {
 	int16		buffer_index;
 	ReadBuffersOperation op;
+	bool		done;
 } InProgressIO;
 
 /*
@@ -94,6 +96,7 @@ struct ReadStream
 	int16		max_ios;
 	int16		io_combine_limit;
 	int16		ios_in_progress;
+	int16		ios_target;
 	int16		queue_size;
 	int16		max_pinned_buffers;
 	int16		forwarded_buffers;
@@ -134,9 +137,11 @@ struct ReadStream
 	/* Read operations that have been started but not waited for yet. */
 	InProgressIO *ios;
 	int16		oldest_io_index;
+	int16		oldest_inflight;
 	int16		next_io_index;
-
 	bool		fast_path;
+
+	AioStreamController controller;
 
 	/* Circular queue of buffers. */
 	int16		oldest_buffer_index;	/* Next pinned buffer to return */
@@ -214,6 +219,14 @@ read_stream_unget_block(ReadStream *stream, BlockNumber blocknum)
 	Assert(stream->buffered_blocknum == InvalidBlockNumber);
 	Assert(blocknum != InvalidBlockNumber);
 	stream->buffered_blocknum = blocknum;
+}
+
+static inline void
+read_stream_advance_io_index(ReadStream *stream, int16 *io_index)
+{
+	*io_index += 1;
+	if (*io_index == stream->max_ios)
+		*io_index = 0;
 }
 
 /*
@@ -353,8 +366,7 @@ read_stream_start_pending_read(ReadStream *stream)
 		 * Look-ahead distance will be adjusted after waiting.
 		 */
 		stream->ios[io_index].buffer_index = buffer_index;
-		if (++stream->next_io_index == stream->max_ios)
-			stream->next_io_index = 0;
+		read_stream_advance_io_index(stream, &stream->next_io_index);
 		Assert(stream->ios_in_progress < stream->max_ios);
 		stream->ios_in_progress++;
 		stream->seq_blocknum = stream->pending_read_blocknum + nblocks;
@@ -416,7 +428,7 @@ read_stream_look_ahead(ReadStream *stream)
 	if (stream->batch_mode)
 		pgaio_enter_batchmode();
 
-	while (stream->ios_in_progress < stream->max_ios &&
+	while (stream->ios_in_progress < stream->ios_target &&
 		   stream->pinned_buffers + stream->pending_read_nblocks < stream->distance)
 	{
 		BlockNumber blocknum;
@@ -489,7 +501,7 @@ read_stream_look_ahead(ReadStream *stream)
 		 (stream->pending_read_nblocks >= stream->distance &&
 		  stream->pinned_buffers == 0) ||
 		 stream->distance == 0) &&
-		stream->ios_in_progress < stream->max_ios)
+		stream->ios_in_progress < stream->ios_target)
 		read_stream_start_pending_read(stream);
 
 	/*
@@ -690,6 +702,7 @@ read_stream_begin_impl(int flags,
 		stream->distance = Min(max_pinned_buffers, stream->io_combine_limit);
 	else
 		stream->distance = 1;
+	stream->ios_target = 1;
 
 	/*
 	 * Since we always access the same relation, we can initialize parts of
@@ -833,6 +846,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 			/* Next call must wait for I/O for the newly pinned buffer. */
 			stream->oldest_io_index = 0;
+			stream->oldest_inflight = 0;
 			stream->next_io_index = stream->max_ios > 1 ? 1 : 0;
 			stream->ios_in_progress = 1;
 			stream->ios[0].buffer_index = oldest_buffer_index;
@@ -892,7 +906,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
 		int16		io_index = stream->oldest_io_index;
-		int32		distance;	/* wider temporary value, clamped below */
 
 		/* Sanity check that we still agree on the buffers. */
 		Assert(stream->ios[io_index].op.buffers ==
@@ -900,15 +913,47 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 		WaitReadBuffers(&stream->ios[io_index].op);
 
+		if (io_index == stream->oldest_inflight)
+		{
+			int16 ios_done = 0;			
+
+			/*
+			 * Whenever we wait for the oldest inflight IO, we check how many
+			 * others were drained at the same time, and feed that number into
+			 * the adaptive controller.  Hnnghhg...
+			 *
+			 * XXX This would give a false reading if another backend drained
+			 * the owner's queue in between...  It seems we would need to be
+			 * able to get the done/inflight numbers more directly from pgaio
+			 * somehow...
+			 */
+			read_stream_advance_io_index(stream, &stream->oldest_inflight);
+			while (stream->oldest_inflight != stream->next_io_index &&
+				   ReadBuffersDone(&stream->ios[stream->oldest_inflight].op))
+			{
+				ios_done++;
+				read_stream_advance_io_index(stream, &stream->oldest_inflight);
+			}
+			
+			stream->ios_target =
+				aio_stream_controller_update(&stream->controller,
+											 stream->pinned_buffers <
+											 stream->max_pinned_buffers,
+											 stream->ios_target,
+											 ios_done,
+											 stream->max_ios);
+		}
+
+		/* Distance ramp-up, measured in buffers. */
+		if (stream->distance >= stream->max_pinned_buffers / 2)
+			stream->distance = stream->max_pinned_buffers;
+		else
+			stream->distance *= 2;
+
+		/* Advance oldest I/O. */
+		read_stream_advance_io_index(stream, &stream->oldest_io_index);
 		Assert(stream->ios_in_progress > 0);
 		stream->ios_in_progress--;
-		if (++stream->oldest_io_index == stream->max_ios)
-			stream->oldest_io_index = 0;
-
-		/* Look-ahead distance ramps up rapidly after we do I/O. */
-		distance = stream->distance * 2;
-		distance = Min(distance, stream->max_pinned_buffers);
-		stream->distance = distance;
 
 		/*
 		 * If we've reached the first block of a sequential region we're

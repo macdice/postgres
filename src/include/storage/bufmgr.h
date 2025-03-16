@@ -15,6 +15,7 @@
 #define BUFMGR_H
 
 #include "port/pg_iovec.h"
+#include "storage/aio.h"
 #include "storage/aio_types.h"
 #include "storage/block.h"
 #include "storage/buf.h"
@@ -227,6 +228,17 @@ extern bool StartReadBuffers(ReadBuffersOperation *operation,
 							 int *nblocks,
 							 int flags);
 extern void WaitReadBuffers(ReadBuffersOperation *operation);
+
+/*
+ * Check if WaitReadBuffers() would return immediately without stalling
+ * (though it must still be called).
+  */
+static inline bool
+ReadBuffersDone(ReadBuffersOperation *operation)
+{
+	return pgaio_wref_valid(&operation->io_wref) &&
+		pgaio_wref_check_done(&operation->io_wref);
+}
 
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);

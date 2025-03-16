@@ -55,6 +55,7 @@ AggStrategy
 AggTransInfo
 Aggref
 AggregateInstrumentation
+AioStreamController
 AioWorkerControl
 AioWorkerSlot
 AioWorkerSubmissionQueue
