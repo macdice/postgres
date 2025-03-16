@@ -15,6 +15,7 @@
 #define BUFMGR_H
 
 #include "port/pg_iovec.h"
+#include "storage/aio.h"
 #include "storage/aio_types.h"
 #include "storage/block.h"
 #include "storage/buf.h"
@@ -227,6 +228,22 @@ extern bool StartReadBuffers(ReadBuffersOperation *operation,
 							 int *nblocks,
 							 int flags);
 extern void WaitReadBuffers(ReadBuffersOperation *operation);
+
+/*
+ * Check if WaitReadBuffers() might stall.  Always returns true for
+ * io_method=sync.  For io_method=worker, returns true as soon as a worker has
+ * completed the I/O.  For io_method=io_uring (and future native AIO methods
+ * that drain events from the kernel), returns true only if a completion event
+ * has already been processed incidentally as part of a wait for some other
+ * I/O.  That creates lag in the information, making it useful only for probing
+ * I/Os that you'll wait for some distance ahead in a queue of operations.
+ */
+static inline bool
+WaitReadBuffersMightStall(ReadBuffersOperation *operation)
+{
+	return pgaio_wref_valid(&operation->io_wref) &&
+		!pgaio_wref_check_done(&operation->io_wref);
+}
 
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
