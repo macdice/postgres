@@ -282,7 +282,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	{
 		while (true)
 		{
-			Buffer b;
+			int buffer_id;
 
 			/* Acquire the spinlock to remove element from the freelist */
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
@@ -293,7 +293,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 				break;
 			}
 
-			b = StrategyControl->firstFreeBuffer;
+			buffer_id = StrategyControl->firstFreeBuffer;
 			buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
 			Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
 
@@ -311,7 +311,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 			 * After shrinking the buffer pool, buffers in the inactive range
 			 * may still be on the free list.  Skip them.
 			 */
-			if (b - 1 >= StrategyControl->active_buffers)
+			if (buffer_id + 1 > StrategyControl->active_buffers)
 				continue;
 
 			/*
@@ -335,7 +335,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	}
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
-	trycounter = NBuffers;
+	trycounter = StrategyControl->active_buffers;
 	for (;;)
 	{
 		buf = GetBufferDescriptor(ClockSweepTick());
@@ -352,7 +352,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 			{
 				local_buf_state -= BUF_USAGECOUNT_ONE;
 
-				trycounter = NBuffers;
+				trycounter = StrategyControl->active_buffers;
 			}
 			else
 			{
@@ -743,7 +743,7 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 	 * After shrinking the buffer pool, buffers in the inactive range might
 	 * still be in strategy rings.  Reject them.
 	 */
-	if (bufnum - 1 >= StrategyControl->active_buffers)
+	if (bufnum > StrategyControl->active_buffers)
 		return NULL;
 
 	/*
@@ -874,14 +874,14 @@ pg_set_active_shared_buffers(PG_FUNCTION_ARGS)
 	LWLockRelease(BufferPoolResizeLock);
 
 	/* Growing? */
-	if (new_buffers >= old_buffers)
+	if (new_buffers > old_buffers)
 	{
 #ifdef MADV_POPULATE_WRITE
 		/*
 		 * Linux-only way we can populate the expanded memory range up front
 		 * and handle failure gracefully.
 		 */
-		if (madvise(BufferGetPage(old_buffers),
+		if (madvise(BufferGetPage(old_buffers + 1),
 					(new_buffers - old_buffers) * BLCKSZ,
 					MY_MADV_POPULATE_WRITE) < 0)
 		{
@@ -902,6 +902,16 @@ pg_set_active_shared_buffers(PG_FUNCTION_ARGS)
 		LWLockRelease(BufferPoolResizeLock);
 
 		elog(NOTICE, "active shared buffers grew %d -> %d", old_buffers, new_buffers);
+
+		PG_RETURN_VOID();
+	}
+	else if (new_buffers == old_buffers)
+	{
+		LWLockAcquire(BufferPoolResizeLock, LW_EXCLUSIVE);
+		StrategyControl->resize_in_progress = false;
+		LWLockRelease(BufferPoolResizeLock);
+
+		elog(NOTICE, "active shared buffers did not change");
 
 		PG_RETURN_VOID();
 	}
@@ -932,8 +942,8 @@ pg_set_active_shared_buffers(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	/* Invalidate buffers in the range we are deactivating. */
-	elog(NOTICE, "evicting buffers %u..%u", new_buffers, old_buffers);
-	for (Buffer b = new_buffers; b < old_buffers; ++b)
+	elog(NOTICE, "evicting buffers %u..%u", new_buffers + 1, old_buffers);
+	for (Buffer b = new_buffers + 1; b <= old_buffers; ++b)
 	{
 		if (!EvictUnpinnedBuffer(b))
 		{
@@ -954,7 +964,7 @@ pg_set_active_shared_buffers(PG_FUNCTION_ARGS)
 #endif
 
 	/* Ask the kernel to free the memory pages. */
-	if (madvise(BufferGetPage(new_buffers),
+	if (madvise(BufferGetPage(new_buffers + 1),
 				(old_buffers - new_buffers) * BLCKSZ,
 				MY_MADV_REMOVE) < 0)
 	{
