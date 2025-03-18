@@ -2712,6 +2712,12 @@ include_dir 'conf.d'
           </listitem>
           <listitem>
            <para>
+            <literal>io_uring</literal> (execute asynchronous I/O using
+            io_uring, if available)
+           </para>
+          </listitem>
+          <listitem>
+           <para>
             <literal>sync</literal> (execute asynchronous-eligible I/O synchronously)
            </para>
           </listitem>

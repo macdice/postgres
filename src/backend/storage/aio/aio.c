@@ -65,6 +65,9 @@ static void pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation);
 const struct config_enum_entry io_method_options[] = {
 	{"sync", IOMETHOD_SYNC, false},
 	{"worker", IOMETHOD_WORKER, false},
+#ifdef IOMETHOD_IO_URING_ENABLED
+	{"io_uring", IOMETHOD_IO_URING, false},
+#endif
 	{NULL, 0, false}
 };
 
@@ -82,6 +85,9 @@ PgAioBackend *pgaio_my_backend;
 static const IoMethodOps *const pgaio_method_ops_table[] = {
 	[IOMETHOD_SYNC] = &pgaio_sync_ops,
 	[IOMETHOD_WORKER] = &pgaio_worker_ops,
+#ifdef IOMETHOD_IO_URING_ENABLED
+	[IOMETHOD_IO_URING] = &pgaio_uring_ops,
+#endif
 };
 
 /* callbacks for the configured io_method, set by assign_io_method */
