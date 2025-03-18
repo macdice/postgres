@@ -2133,6 +2133,7 @@ PermutationStep
 PermutationStepBlocker
 PermutationStepBlockerType
 PgAioBackend
+PgAioBounceBuffer
 PgAioCtl
 PgAioHandle
 PgAioHandleCallbackID
