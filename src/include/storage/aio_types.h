@@ -118,4 +118,6 @@ typedef struct PgAioReturn
 } PgAioReturn;
 
 
+typedef struct PgAioBounceBuffer PgAioBounceBuffer;
+
 #endif							/* AIO_TYPES_H */
