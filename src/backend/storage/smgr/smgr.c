@@ -115,6 +115,11 @@ typedef struct f_smgr
 								BlockNumber blocknum,
 								const void **buffers, BlockNumber nblocks,
 								bool skipFsync);
+	void		(*smgr_startwritev) (PgAioHandle *ioh,
+									 SMgrRelation reln, ForkNumber forknum,
+									 BlockNumber blocknum,
+									 const void **buffers, BlockNumber nblocks,
+									 bool skipFsync);
 	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
 								   BlockNumber blocknum, BlockNumber nblocks);
 	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
@@ -142,6 +147,7 @@ static const f_smgr smgrsw[] = {
 		.smgr_readv = mdreadv,
 		.smgr_startreadv = mdstartreadv,
 		.smgr_writev = mdwritev,
+		.smgr_startwritev = mdstartwritev,
 		.smgr_writeback = mdwriteback,
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
@@ -788,6 +794,29 @@ smgrwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 }
 
 /*
+ * smgrstartwritev() -- asynchronous version of smgrwritev()
+ *
+ * This starts an asynchronous writev IO using the IO handle `ioh`. Other than
+ * `ioh` all parameters are the same as smgrwritev().
+ *
+ * Completion callbacks above smgr will be passed the result as the number of
+ * successfully written blocks if the write [partially] succeeds. This
+ * maintains the abstraction that smgr operates on the level of blocks, rather
+ * than bytes.
+ */
+void
+smgrstartwritev(PgAioHandle *ioh,
+				SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+				const void **buffers, BlockNumber nblocks, bool skipFsync)
+{
+	HOLD_INTERRUPTS();
+	smgrsw[reln->smgr_which].smgr_startwritev(ioh,
+											  reln, forknum, blocknum, buffers,
+											  nblocks, skipFsync);
+	RESUME_INTERRUPTS();
+}
+
+/*
  * smgrwriteback() -- Trigger kernel writeback for the supplied range of
  *					   blocks.
  */
@@ -971,9 +1000,13 @@ smgrfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
 {
 	int			fd;
 
-	HOLD_INTERRUPTS();
+	/*
+	 * The caller needs to prevent interrupts from being processed, otherwise
+	 * the FD could be closed prematurely.
+	 */
+	Assert(!INTERRUPTS_CAN_BE_PROCESSED());
+
 	fd = smgrsw[reln->smgr_which].smgr_fd(reln, forknum, blocknum, off);
-	RESUME_INTERRUPTS();
 
 	return fd;
 }
@@ -1045,6 +1078,12 @@ smgr_aio_reopen(PgAioHandle *ioh)
 	SMgrRelation reln;
 	ProcNumber	procno;
 	uint32		off;
+
+	/*
+	 * The caller needs to prevent interrupts from being processed, otherwise
+	 * the FD could be closed again before we get to executing the IO.
+	 */
+	Assert(!INTERRUPTS_CAN_BE_PROCESSED());
 
 	if (sd->smgr.is_temp)
 		procno = pgaio_io_get_owner(ioh);
