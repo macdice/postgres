@@ -48,6 +48,7 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "storage/aio.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
@@ -519,7 +520,8 @@ static int	SyncOneBuffer(int buf_id, bool skip_recently_used,
 static void WaitIO(BufferDesc *buf);
 static bool StartBufferIO(BufferDesc *buf, bool forInput, bool nowait);
 static void TerminateBufferIO(BufferDesc *buf, bool clear_dirty,
-							  uint32 set_flag_bits, bool forget_owner);
+							  uint32 set_flag_bits, bool forget_owner,
+							  bool syncio);
 static void AbortBufferIO(Buffer buffer);
 static void shared_buffer_write_error_callback(void *arg);
 static void local_buffer_write_error_callback(void *arg);
@@ -1041,7 +1043,7 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 	{
 		/* Simple case for non-shared buffers. */
 		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
-		need_to_zero = StartLocalBufferIO(bufHdr, true);
+		need_to_zero = StartLocalBufferIO(bufHdr, true, false);
 	}
 	else
 	{
@@ -1077,9 +1079,9 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 
 		/* Set BM_VALID, terminate IO, and wake up any waiters */
 		if (isLocalBuf)
-			TerminateLocalBufferIO(bufHdr, false, BM_VALID);
+			TerminateLocalBufferIO(bufHdr, false, BM_VALID, true);
 		else
-			TerminateBufferIO(bufHdr, false, BM_VALID, true);
+			TerminateBufferIO(bufHdr, false, BM_VALID, true, true);
 	}
 	else if (!isLocalBuf)
 	{
@@ -1454,7 +1456,8 @@ static inline bool
 WaitReadBuffersCanStartIO(Buffer buffer, bool nowait)
 {
 	if (BufferIsLocal(buffer))
-		return StartLocalBufferIO(GetLocalBufferDescriptor(-buffer - 1), true);
+		return StartLocalBufferIO(GetLocalBufferDescriptor(-buffer - 1),
+								  true, nowait);
 	else
 		return StartBufferIO(GetBufferDescriptor(buffer - 1), true, nowait);
 }
@@ -1604,9 +1607,9 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 
 			/* Set BM_VALID, terminate IO, and wake up any waiters */
 			if (persistence == RELPERSISTENCE_TEMP)
-				TerminateLocalBufferIO(bufHdr, false, BM_VALID);
+				TerminateLocalBufferIO(bufHdr, false, BM_VALID, true);
 			else
-				TerminateBufferIO(bufHdr, false, BM_VALID, true);
+				TerminateBufferIO(bufHdr, false, BM_VALID, true, true);
 
 			/* Report I/Os as completing individually. */
 			TRACE_POSTGRESQL_BUFFER_READ_DONE(forknum, io_first_block + j,
@@ -1868,13 +1871,14 @@ retry:
 	}
 
 	/*
-	 * We assume the only reason for it to be pinned is that someone else is
-	 * flushing the page out.  Wait for them to finish.  (This could be an
-	 * infinite loop if the refcount is messed up... it would be nice to time
-	 * out after awhile, but there seems no way to be sure how many loops may
-	 * be needed.  Note that if the other guy has pinned the buffer but not
-	 * yet done StartBufferIO, WaitIO will fall through and we'll effectively
-	 * be busy-looping here.)
+	 * We assume the reason for it to be pinned is that either we were
+	 * asynchronously reading the page in before erroring out or someone else
+	 * is flushing the page out.  Wait for the IO to finish.  (This could be
+	 * an infinite loop if the refcount is messed up... it would be nice to
+	 * time out after awhile, but there seems no way to be sure how many loops
+	 * may be needed.  Note that if the other guy has pinned the buffer but
+	 * not yet done StartBufferIO, WaitIO will fall through and we'll
+	 * effectively be busy-looping here.)
 	 */
 	if (BUF_STATE_GET_REFCOUNT(buf_state) != 0)
 	{
@@ -2514,7 +2518,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		if (lock)
 			LWLockAcquire(BufferDescriptorGetContentLock(buf_hdr), LW_EXCLUSIVE);
 
-		TerminateBufferIO(buf_hdr, false, BM_VALID, true);
+		TerminateBufferIO(buf_hdr, false, BM_VALID, true, true);
 	}
 
 	pgBufferUsage.shared_blks_written += extend_by;
@@ -2861,6 +2865,44 @@ PinBuffer_Locked(BufferDesc *buf)
 }
 
 /*
+ * Support for waking up another backend that is waiting for the cleanup lock
+ * to be released using BM_PIN_COUNT_WAITER.
+ *
+ * See LockBufferForCleanup().
+ *
+ * Expected to be called just after releasing a buffer pin (in a BufferDesc,
+ * not just reducing the backend-local pincount for the buffer).
+ */
+static void
+WakePinCountWaiter(BufferDesc *buf)
+{
+	/*
+	 * Acquire the buffer header lock, re-check that there's a waiter. Another
+	 * backend could have unpinned this buffer, and already woken up the
+	 * waiter.
+	 *
+	 * There's no danger of the buffer being replaced after we unpinned it
+	 * above, as it's pinned by the waiter. The waiter removes
+	 * BM_PIN_COUNT_WAITER if it stops waiting for a reason other than this
+	 * backend waking it up.
+	 */
+	uint32		buf_state = LockBufHdr(buf);
+
+	if ((buf_state & BM_PIN_COUNT_WAITER) &&
+		BUF_STATE_GET_REFCOUNT(buf_state) == 1)
+	{
+		/* we just released the last pin other than the waiter's */
+		int			wait_backend_pgprocno = buf->wait_backend_pgprocno;
+
+		buf_state &= ~BM_PIN_COUNT_WAITER;
+		UnlockBufHdr(buf, buf_state);
+		ProcSendSignal(wait_backend_pgprocno);
+	}
+	else
+		UnlockBufHdr(buf, buf_state);
+}
+
+/*
  * UnpinBuffer -- make buffer available for replacement.
  *
  * This should be applied only to shared buffers, never local ones.  This
@@ -2928,29 +2970,8 @@ UnpinBufferNoOwner(BufferDesc *buf)
 
 		/* Support LockBufferForCleanup() */
 		if (buf_state & BM_PIN_COUNT_WAITER)
-		{
-			/*
-			 * Acquire the buffer header lock, re-check that there's a waiter.
-			 * Another backend could have unpinned this buffer, and already
-			 * woken up the waiter.  There's no danger of the buffer being
-			 * replaced after we unpinned it above, as it's pinned by the
-			 * waiter.
-			 */
-			buf_state = LockBufHdr(buf);
+			WakePinCountWaiter(buf);
 
-			if ((buf_state & BM_PIN_COUNT_WAITER) &&
-				BUF_STATE_GET_REFCOUNT(buf_state) == 1)
-			{
-				/* we just released the last pin other than the waiter's */
-				int			wait_backend_pgprocno = buf->wait_backend_pgprocno;
-
-				buf_state &= ~BM_PIN_COUNT_WAITER;
-				UnlockBufHdr(buf, buf_state);
-				ProcSendSignal(wait_backend_pgprocno);
-			}
-			else
-				UnlockBufHdr(buf, buf_state);
-		}
 		ForgetPrivateRefCountEntry(ref);
 	}
 }
@@ -3970,7 +3991,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 * Mark the buffer as clean (unless BM_JUST_DIRTIED has become set) and
 	 * end the BM_IO_IN_PROGRESS state.
 	 */
-	TerminateBufferIO(buf, true, 0, true);
+	TerminateBufferIO(buf, true, 0, true, true);
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(BufTagGetForkNum(&buf->tag),
 									   buf->tag.blockNum,
@@ -5529,6 +5550,7 @@ WaitIO(BufferDesc *buf)
 	for (;;)
 	{
 		uint32		buf_state;
+		PgAioWaitRef iow;
 
 		/*
 		 * It may not be necessary to acquire the spinlock to check the flag
@@ -5536,10 +5558,40 @@ WaitIO(BufferDesc *buf)
 		 * play it safe.
 		 */
 		buf_state = LockBufHdr(buf);
+
+		/*
+		 * Copy the wait reference while holding the spinlock. This protects
+		 * against a concurrent TerminateBufferIO() in another backend from
+		 * clearing the wref while it's being read.
+		 */
+		iow = buf->io_wref;
 		UnlockBufHdr(buf, buf_state);
 
+		/* no IO in progress, we don't need to wait */
 		if (!(buf_state & BM_IO_IN_PROGRESS))
 			break;
+
+		/*
+		 * The buffer has asynchronous IO in progress, wait for it to
+		 * complete.
+		 */
+		if (pgaio_wref_valid(&iow))
+		{
+			pgaio_wref_wait(&iow);
+
+			/*
+			 * The AIO subsystem internally uses condition variables and thus
+			 * might remove this backend from the BufferDesc's CV. While that
+			 * wouldn't cause a correctness issue (the first CV sleep just
+			 * immediately returns if not already registered), it seems worth
+			 * avoiding unnecessary loop iterations, given that we take care
+			 * to do so at the start of the function.
+			 */
+			ConditionVariablePrepareToSleep(cv);
+			continue;
+		}
+
+		/* wait on BufferDesc->cv, e.g. for concurrent synchronous IO */
 		ConditionVariableSleep(cv, WAIT_EVENT_BUFFER_IO);
 	}
 	ConditionVariableCancelSleep();
@@ -5548,13 +5600,12 @@ WaitIO(BufferDesc *buf)
 /*
  * StartBufferIO: begin I/O on this buffer
  *	(Assumptions)
- *	My process is executing no IO
+ *	My process is executing no IO on this buffer
  *	The buffer is Pinned
  *
- * In some scenarios there are race conditions in which multiple backends
- * could attempt the same I/O operation concurrently.  If someone else
- * has already started I/O on this buffer then we will block on the
- * I/O condition variable until he's done.
+ * In some scenarios multiple backends could attempt the same I/O operation
+ * concurrently.  If someone else has already started I/O on this buffer then
+ * we will wait for completion of the IO using WaitIO().
  *
  * Input operations are only attempted on buffers that are not BM_VALID,
  * and output operations only on buffers that are BM_VALID and BM_DIRTY,
@@ -5590,9 +5641,9 @@ StartBufferIO(BufferDesc *buf, bool forInput, bool nowait)
 
 	/* Once we get here, there is definitely no I/O active on this buffer */
 
+	/* Check if someone else already did the I/O */
 	if (forInput ? (buf_state & BM_VALID) : !(buf_state & BM_DIRTY))
 	{
-		/* someone else already did the I/O */
 		UnlockBufHdr(buf, buf_state);
 		return false;
 	}
@@ -5628,7 +5679,7 @@ StartBufferIO(BufferDesc *buf, bool forInput, bool nowait)
  */
 static void
 TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits,
-				  bool forget_owner)
+				  bool forget_owner, bool syncio)
 {
 	uint32		buf_state;
 
@@ -5643,6 +5694,14 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits,
 	if (clear_dirty && !(buf_state & BM_JUST_DIRTIED))
 		buf_state &= ~(BM_DIRTY | BM_CHECKPOINT_NEEDED);
 
+	if (!syncio)
+	{
+		/* release ownership by the AIO subsystem */
+		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+		buf_state -= BUF_REFCOUNT_ONE;
+		pgaio_wref_clear(&buf->io_wref);
+	}
+
 	buf_state |= set_flag_bits;
 	UnlockBufHdr(buf, buf_state);
 
@@ -5651,6 +5710,17 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits,
 									BufferDescriptorGetBuffer(buf));
 
 	ConditionVariableBroadcast(BufferDescriptorGetIOCV(buf));
+
+	/*
+	 * Support LockBufferForCleanup()
+	 *
+	 * We may have just released the last pin other than the waiter's. In most
+	 * cases, this backend holds another pin on the buffer. But, if, for
+	 * example, this backend is completing an IO issued by another backend, it
+	 * may be time to wake the waiter.
+	 */
+	if (buf_state & BM_PIN_COUNT_WAITER)
+		WakePinCountWaiter(buf);
 }
 
 /*
@@ -5699,7 +5769,7 @@ AbortBufferIO(Buffer buffer)
 		}
 	}
 
-	TerminateBufferIO(buf_hdr, false, BM_IO_ERROR, false);
+	TerminateBufferIO(buf_hdr, false, BM_IO_ERROR, false, true);
 }
 
 /*
@@ -6150,3 +6220,350 @@ EvictUnpinnedBuffer(Buffer buf)
 
 	return result;
 }
+
+/*
+ * Generic implementation of the AIO handle staging callback for readv/writev
+ * on local/shared buffers.
+ *
+ * Each readv/writev can target multiple buffers. The buffers have already
+ * been registered with the IO handle.
+ *
+ * To make the IO ready for execution ("staging"), we need to ensure that the
+ * targeted buffers are in an appropriate state while the IO is ongoing. For
+ * that the AIO subsystem needs to have its own buffer pin, otherwise an error
+ * in this backend could lead to this backend's buffer pin being released as
+ * part of error handling, which in turn could lead to the buffer being
+ * replaced while IO is ongoing.
+ */
+static pg_attribute_always_inline void
+buffer_stage_common(PgAioHandle *ioh, bool is_write, bool is_temp)
+{
+	uint64	   *io_data;
+	uint8		handle_data_len;
+	PgAioWaitRef io_ref;
+	BufferTag	first PG_USED_FOR_ASSERTS_ONLY = {0};
+
+	io_data = pgaio_io_get_handle_data(ioh, &handle_data_len);
+
+	pgaio_io_get_wref(ioh, &io_ref);
+
+	/* iterate over all buffers affected by the vectored readv/writev */
+	for (int i = 0; i < handle_data_len; i++)
+	{
+		Buffer		buffer = (Buffer) io_data[i];
+		BufferDesc *buf_hdr = is_temp ?
+			GetLocalBufferDescriptor(-buffer - 1)
+			: GetBufferDescriptor(buffer - 1);
+		uint32		buf_state;
+
+		/*
+		 * Check that all the buffers are actually ones that could conceivably
+		 * be done in one IO, i.e. are sequential. This is the last
+		 * buffer-aware code before IO is actually executed and confusion
+		 * about which buffers are target by IO can be hard to debug, making
+		 * it worth doing extra-paranoid checks.
+		 */
+		if (i == 0)
+			first = buf_hdr->tag;
+		else
+		{
+			Assert(buf_hdr->tag.relNumber == first.relNumber);
+			Assert(buf_hdr->tag.blockNum == first.blockNum + i);
+		}
+
+		if (is_temp)
+			buf_state = pg_atomic_read_u32(&buf_hdr->state);
+		else
+			buf_state = LockBufHdr(buf_hdr);
+
+		/* verify the buffer is in the expected state */
+		Assert(buf_state & BM_TAG_VALID);
+		if (is_write)
+		{
+			Assert(buf_state & BM_VALID);
+			Assert(buf_state & BM_DIRTY);
+		}
+		else
+		{
+			Assert(!(buf_state & BM_VALID));
+			Assert(!(buf_state & BM_DIRTY));
+		}
+
+		/* temp buffers don't use BM_IO_IN_PROGRESS */
+		if (!is_temp)
+			Assert(buf_state & BM_IO_IN_PROGRESS);
+
+		Assert(BUF_STATE_GET_REFCOUNT(buf_state) >= 1);
+
+		/*
+		 * Reflect that the buffer is now owned by the AIO subsystem.
+		 *
+		 * For local buffers: This can't be done just via LocalRefCount, as
+		 * one might initially think, as this backend could error out while
+		 * AIO is still in progress, releasing all the pins by the backend
+		 * itself.
+		 *
+		 * This pin is released again in TerminateBufferIO().
+		 */
+		buf_state += BUF_REFCOUNT_ONE;
+		buf_hdr->io_wref = io_ref;
+
+		if (is_temp)
+			pg_atomic_unlocked_write_u32(&buf_hdr->state, buf_state);
+		else
+			UnlockBufHdr(buf_hdr, buf_state);
+
+		/*
+		 * Ensure the content lock that prevents buffer modifications while
+		 * the buffer is being written out is not released early due to an
+		 * error.
+		 */
+		if (is_write && !is_temp)
+		{
+			LWLock	   *content_lock;
+
+			content_lock = BufferDescriptorGetContentLock(buf_hdr);
+
+			Assert(LWLockHeldByMe(content_lock));
+
+			/*
+			 * Lock is now owned by AIO subsystem.
+			 */
+			LWLockDisown(content_lock);
+		}
+
+		/*
+		 * Stop tracking this buffer via the resowner - the AIO system now
+		 * keeps track.
+		 */
+		if (!is_temp)
+			ResourceOwnerForgetBufferIO(CurrentResourceOwner, buffer);
+	}
+}
+
+/*
+ * Helper for AIO readv completion callbacks, supporting both shared and temp
+ * buffers. Gets called once for each buffer in a multi-page read.
+ */
+static pg_attribute_always_inline PgAioResult
+buffer_readv_complete_one(uint8 buf_off, Buffer buffer, uint8 flags,
+						  bool failed, bool is_temp)
+{
+	BufferDesc *buf_hdr = is_temp ?
+		GetLocalBufferDescriptor(-buffer - 1)
+		: GetBufferDescriptor(buffer - 1);
+	BufferTag	tag = buf_hdr->tag;
+	char	   *bufdata = BufferGetBlock(buffer);
+	PgAioResult result = {.status = PGAIO_RS_OK};
+	uint32		set_flag_bits;
+
+	/* check that the buffer is in the expected state for a read */
+#ifdef USE_ASSERT_CHECKING
+	{
+		uint32		buf_state = pg_atomic_read_u32(&buf_hdr->state);
+
+		Assert(buf_state & BM_TAG_VALID);
+		Assert(!(buf_state & BM_VALID));
+		/* temp buffers don't use BM_IO_IN_PROGRESS */
+		if (!is_temp)
+			Assert(buf_state & BM_IO_IN_PROGRESS);
+		Assert(!(buf_state & BM_DIRTY));
+	}
+#endif
+
+	/* check for garbage data */
+	if (!failed &&
+		!PageIsVerifiedExtended((Page) bufdata, tag.blockNum,
+								PIV_LOG_WARNING | PIV_REPORT_STAT))
+	{
+		RelFileLocator rlocator = BufTagGetRelFileLocator(&tag);
+
+		if ((flags & READ_BUFFERS_ZERO_ON_ERROR) || zero_damaged_pages)
+		{
+			ereport(WARNING,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("invalid page in block %u of relation %s; zeroing out page",
+							tag.blockNum,
+							relpathbackend(rlocator,
+										   is_temp ? MyProcNumber : INVALID_PROC_NUMBER,
+										   tag.forkNum).str)));
+			memset(bufdata, 0, BLCKSZ);
+		}
+		else
+		{
+			/* mark buffer as having failed */
+			failed = true;
+
+			/* encode error for buffer_readv_report */
+			result.status = PGAIO_RS_ERROR;
+			if (is_temp)
+				result.id = PGAIO_HCB_LOCAL_BUFFER_READV;
+			else
+				result.id = PGAIO_HCB_SHARED_BUFFER_READV;
+			result.error_data = buf_off;
+		}
+	}
+
+	/* Terminate I/O and set BM_VALID. */
+	set_flag_bits = failed ? BM_IO_ERROR : BM_VALID;
+	if (is_temp)
+		TerminateLocalBufferIO(buf_hdr, false, set_flag_bits, false);
+	else
+		TerminateBufferIO(buf_hdr, false, set_flag_bits, false, false);
+
+	/*
+	 * Call the BUFFER_READ_DONE tracepoint in the callback, even though the
+	 * callback may not be executed in the same backend that called
+	 * BUFFER_READ_START. The alternative would be to defer calling the
+	 * tracepoint to a later point (e.g. the local completion callback for
+	 * shared buffer reads), which seems even less helpful and would also
+	 * imply some overhead.
+	 */
+	TRACE_POSTGRESQL_BUFFER_READ_DONE(tag.forkNum,
+									  tag.blockNum,
+									  tag.spcOid,
+									  tag.dbOid,
+									  tag.relNumber,
+									  is_temp ? MyProcNumber : INVALID_PROC_NUMBER,
+									  false);
+
+	return result;
+}
+
+/*
+ * Perform completion handling of a single AIO read. This read may cover
+ * multiple blocks / buffers.
+ *
+ * Shared between shared and local buffers, to reduce code duplication.
+ */
+static pg_attribute_always_inline PgAioResult
+buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
+					  uint8 cb_data, bool is_temp)
+{
+	PgAioResult result = prior_result;
+	PgAioTargetData *td = pgaio_io_get_target_data(ioh);
+	uint64	   *io_data;
+	uint8		handle_data_len;
+
+	if (is_temp)
+	{
+		Assert(td->smgr.is_temp);
+		Assert(pgaio_io_get_owner(ioh) == MyProcNumber);
+	}
+	else
+		Assert(!td->smgr.is_temp);
+
+	/*
+	 * Iterate over all the buffers affected by this IO and call the
+	 * per-buffer completion function for each buffer.
+	 */
+	io_data = pgaio_io_get_handle_data(ioh, &handle_data_len);
+	for (uint8 buf_off = 0; buf_off < handle_data_len; buf_off++)
+	{
+		Buffer		buf = io_data[buf_off];
+		PgAioResult buf_result;
+		bool		failed;
+
+		Assert(BufferIsValid(buf));
+
+		/*
+		 * If the entire I/O failed on a lower-level, each buffer needs to be
+		 * marked as failed. In case of a partial read, some buffers may be
+		 * ok.
+		 */
+		failed =
+			prior_result.status == PGAIO_RS_ERROR
+			|| prior_result.result <= buf_off;
+
+		buf_result = buffer_readv_complete_one(buf_off, buf, cb_data, failed,
+											   is_temp);
+
+		/*
+		 * If there wasn't any prior error and page verification failed in
+		 * some form, set the whole IO's result to the page's result.
+		 */
+		if (result.status != PGAIO_RS_ERROR
+			&& buf_result.status != PGAIO_RS_OK)
+		{
+			result = buf_result;
+			pgaio_result_report(result, td, LOG);
+		}
+	}
+
+	return result;
+}
+
+/*
+ * AIO error reporting callback for aio_shared_buffer_readv_cb and
+ * aio_local_buffer_readv_cb.
+ *
+ * Errors are encoded as follows:
+ * - the only error is page verification failing
+ * - result.error_data is the offset of the first page that failed
+ *   verification in a larger IO
+ */
+static void
+buffer_readv_report(PgAioResult result, const PgAioTargetData *target_data,
+					int elevel)
+{
+	ProcNumber	errProc;
+
+	if (target_data->smgr.is_temp)
+		errProc = MyProcNumber;
+	else
+		errProc = INVALID_PROC_NUMBER;
+
+	ereport(elevel,
+			errcode(ERRCODE_DATA_CORRUPTED),
+			errmsg("invalid page in block %u of relation %s",
+				   target_data->smgr.blockNum + result.error_data,
+				   relpathbackend(target_data->smgr.rlocator, errProc,
+								  target_data->smgr.forkNum).str));
+}
+
+static void
+shared_buffer_readv_stage(PgAioHandle *ioh, uint8 cb_data)
+{
+	buffer_stage_common(ioh, false, false);
+}
+
+static PgAioResult
+shared_buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
+							 uint8 cb_data)
+{
+	return buffer_readv_complete(ioh, prior_result, cb_data, false);
+}
+
+static void
+local_buffer_readv_stage(PgAioHandle *ioh, uint8 cb_data)
+{
+	buffer_stage_common(ioh, false, true);
+}
+
+static PgAioResult
+local_buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
+							uint8 cb_data)
+{
+	return buffer_readv_complete(ioh, prior_result, cb_data, true);
+}
+
+/* readv callback is passed READ_BUFFERS_* flags as callback data */
+const PgAioHandleCallbacks aio_shared_buffer_readv_cb = {
+	.stage = shared_buffer_readv_stage,
+	.complete_shared = shared_buffer_readv_complete,
+	.report = buffer_readv_report,
+};
+
+/* readv callback is passed READ_BUFFERS_* flags as callback data */
+const PgAioHandleCallbacks aio_local_buffer_readv_cb = {
+	.stage = local_buffer_readv_stage,
+
+	/*
+	 * Note that this, in contrast to the shared_buffers case, uses
+	 * complete_local, as only the issuing backend has access to the required
+	 * datastructures. This is important in case the IO completion may be
+	 * consumed incidentally by another backend.
+	 */
+	.complete_local = local_buffer_readv_complete,
+	.report = buffer_readv_report,
+};
