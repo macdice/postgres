@@ -72,6 +72,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "storage/aio.h"
 #include "storage/fd.h"
 #include "storage/smgr.h"
 #include "storage/read_stream.h"
@@ -99,6 +100,7 @@ struct ReadStream
 	int16		pinned_buffers;
 	int16		distance;
 	int16		initialized_buffers;
+	bool		sync_mode;		/* using io_method=sync */
 	bool		advice_enabled;
 	bool		temporary;
 
@@ -613,15 +615,19 @@ read_stream_begin_impl(int flags,
 		stream->per_buffer_data = (void *)
 			MAXALIGN(&stream->ios[Max(1, max_ios)]);
 
+	stream->sync_mode = io_method == IOMETHOD_SYNC;
+
 #ifdef USE_PREFETCH
 
 	/*
-	 * This system supports prefetching advice.  We can use it as long as
-	 * direct I/O isn't enabled, the caller hasn't promised sequential access
-	 * (overriding our detection heuristics), and max_ios hasn't been set to
-	 * zero.
+	 * This system supports prefetching advice.
+	 *
+	 * Issue advice only if AIO is not used, direct I/O isn't enabled, the
+	 * caller hasn't promised sequential access (overriding our detection
+	 * heuristics), and max_ios hasn't been set to zero.
 	 */
-	if ((io_direct_flags & IO_DIRECT_DATA) == 0 &&
+	if (stream->sync_mode &&
+		(io_direct_flags & IO_DIRECT_DATA) == 0 &&
 		(flags & READ_STREAM_SEQUENTIAL) == 0 &&
 		max_ios > 0)
 		stream->advice_enabled = true;
@@ -631,6 +637,9 @@ read_stream_begin_impl(int flags,
 	 * For now, max_ios = 0 is interpreted as max_ios = 1 with advice disabled
 	 * above.  If we had real asynchronous I/O we might need a slightly
 	 * different definition.
+	 *
+	 * FIXME: Not sure what different definition we would need? I guess we
+	 * could add the READ_BUFFERS_SYNCHRONOUSLY flag automatically?
 	 */
 	if (max_ios == 0)
 		max_ios = 1;
