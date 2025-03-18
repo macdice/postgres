@@ -44,6 +44,7 @@
 #include "common/int.h"
 #include "nodes/bitmapset.h"
 #include "nodes/tidbitmap.h"
+#include "port/pg_bitutils.h"
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
 
@@ -241,6 +242,20 @@ static int	tbm_shared_comparator(const void *left, const void *right,
 #define SH_DECLARE
 #include "lib/simplehash.h"
 
+
+/*
+ * Return the position of the rightmost bit of *word, and also clear that bit.
+ * Useful for looping over the ones in a word.  *word must not be zero.
+ */
+static inline int
+bmw_pop_rightmost_one(bitmapword *word)
+{
+	int			position = bmw_rightmost_one_pos(*word);
+
+	*word &= ~((bitmapword) 1 << position);
+
+	return position;
+}
 
 /*
  * tbm_create - create an initially-empty bitmap
@@ -474,24 +489,20 @@ tbm_union_page(TIDBitmap *a, const PagetableEntry *bpage)
 
 	if (bpage->ischunk)
 	{
+		BlockNumber blockno = bpage->blockno;
+
 		/* Scan b's chunk, mark each indicated page lossy in a */
 		for (wordnum = 0; wordnum < WORDS_PER_CHUNK; wordnum++)
 		{
 			bitmapword	w = bpage->words[wordnum];
 
-			if (w != 0)
+			while (w != 0)
 			{
-				BlockNumber pg;
+				int			bitnum = bmw_pop_rightmost_one(&w);
 
-				pg = bpage->blockno + (wordnum * BITS_PER_BITMAPWORD);
-				while (w != 0)
-				{
-					if (w & 1)
-						tbm_mark_page_lossy(a, pg);
-					pg++;
-					w >>= 1;
-				}
+				tbm_mark_page_lossy(a, blockno + bitnum);
 			}
+			blockno += BITS_PER_BITMAPWORD;
 		}
 	}
 	else if (tbm_page_is_lossy(a, bpage->blockno))
@@ -584,38 +595,29 @@ tbm_intersect_page(TIDBitmap *a, PagetableEntry *apage, const TIDBitmap *b)
 	{
 		/* Scan each bit in chunk, try to clear */
 		bool		candelete = true;
+		BlockNumber blockno = apage->blockno;
 
 		for (wordnum = 0; wordnum < WORDS_PER_CHUNK; wordnum++)
 		{
 			bitmapword	w = apage->words[wordnum];
+			bitmapword	neww = w;
 
-			if (w != 0)
+			while (w != 0)
 			{
-				bitmapword	neww = w;
-				BlockNumber pg;
-				int			bitnum;
+				int			bitnum = bmw_pop_rightmost_one(&w);
+				BlockNumber pg = blockno + bitnum;
 
-				pg = apage->blockno + (wordnum * BITS_PER_BITMAPWORD);
-				bitnum = 0;
-				while (w != 0)
+				if (!tbm_page_is_lossy(b, pg) &&
+					tbm_find_pageentry(b, pg) == NULL)
 				{
-					if (w & 1)
-					{
-						if (!tbm_page_is_lossy(b, pg) &&
-							tbm_find_pageentry(b, pg) == NULL)
-						{
-							/* Page is not in b at all, lose lossy bit */
-							neww &= ~((bitmapword) 1 << bitnum);
-						}
-					}
-					pg++;
-					bitnum++;
-					w >>= 1;
+					/* Page is not in b at all, lose lossy bit */
+					neww &= ~((bitmapword) 1 << bitnum);
 				}
-				apage->words[wordnum] = neww;
-				if (neww != 0)
-					candelete = false;
 			}
+			apage->words[wordnum] = neww;
+			if (neww != 0)
+				candelete = false;
+			blockno += BITS_PER_BITMAPWORD;
 		}
 		return candelete;
 	}
@@ -910,21 +912,14 @@ tbm_extract_page_tuple(TBMIterateResult *iteritem,
 	{
 		bitmapword	w = page->words[wordnum];
 
-		if (w != 0)
+		while (w != 0)
 		{
-			int			off = wordnum * BITS_PER_BITMAPWORD + 1;
+			int			bitnum = bmw_pop_rightmost_one(&w);
+			int			off = wordnum * BITS_PER_BITMAPWORD + bitnum + 1;
 
-			while (w != 0)
-			{
-				if (w & 1)
-				{
-					if (ntuples < max_offsets)
-						offsets[ntuples] = (OffsetNumber) off;
-					ntuples++;
-				}
-				off++;
-				w >>= 1;
-			}
+			if (ntuples < max_offsets)
+				offsets[ntuples] = off;
+			ntuples++;
 		}
 	}
 
@@ -938,18 +933,29 @@ static inline void
 tbm_advance_schunkbit(PagetableEntry *chunk, int *schunkbitp)
 {
 	int			schunkbit = *schunkbitp;
+	int			wordnum = WORDNUM(schunkbit);
+	int			bitnum = BITNUM(schunkbit);
+	bitmapword	w;
 
-	while (schunkbit < PAGES_PER_CHUNK)
+	/* Chop off bits to the right of bitnum in starting word. */
+	w = chunk->words[wordnum] & ~((bitmapword) 0) << bitnum;
+
+	for (;;)
 	{
-		int			wordnum = WORDNUM(schunkbit);
-		int			bitnum = BITNUM(schunkbit);
+		if (w != 0)
+		{
+			*schunkbitp =
+				wordnum * BITS_PER_BITMAPWORD + bmw_rightmost_one_pos(w);
+			return;
+		}
 
-		if ((chunk->words[wordnum] & ((bitmapword) 1 << bitnum)) != 0)
+		if (++wordnum == WORDS_PER_CHUNK)
 			break;
-		schunkbit++;
+		w = chunk->words[wordnum];
 	}
 
-	*schunkbitp = schunkbit;
+	/* No bits found.  Point past end. */
+	*schunkbitp = WORDS_PER_CHUNK * BITS_PER_BITMAPWORD;
 }
 
 /*
