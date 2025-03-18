@@ -5350,6 +5350,18 @@ ConditionalLockBufferForCleanup(Buffer buffer)
 		Assert(refcount > 0);
 		if (refcount != 1)
 			return false;
+
+		/*
+		 * Check that the AIO subsystem doesn't have a pin. Likely not
+		 * possible today, but better safe than sorry.
+		 */
+		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
+		buf_state = pg_atomic_read_u32(&bufHdr->state);
+		refcount = BUF_STATE_GET_REFCOUNT(buf_state);
+		Assert(refcount > 0);
+		if (refcount != 1)
+			return false;
+
 		/* Nobody else to wait for */
 		return true;
 	}
@@ -5403,6 +5415,16 @@ IsBufferCleanupOK(Buffer buffer)
 		/* There should be exactly one pin */
 		if (LocalRefCount[-buffer - 1] != 1)
 			return false;
+
+		/*
+		 * Check that the AIO subsystem doesn't have a pin. Likely not
+		 * possible today, but better safe than sorry.
+		 */
+		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
+		buf_state = pg_atomic_read_u32(&bufHdr->state);
+		if (BUF_STATE_GET_REFCOUNT(buf_state) != 1)
+			return false;
+
 		/* Nobody else to wait for */
 		return true;
 	}
