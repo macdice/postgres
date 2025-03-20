@@ -1106,10 +1106,10 @@ tbm_shared_iterate_include_block_p(TBMSharedIterator *iterator,
 /*
  * Count pages in one more tail chunk, until we have enough information to
  * implement fair ramp-down.  How many it takes depends on their density and
- * how many backends there are sharing this iterator.
+ * how many backends there are to ramp down.  Returns true when work is done.
  */
-static void
-tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator)
+static bool
+tbm_shared_iterate_popcount(TBMSharedIterator *iterator)
 {
 	TBMSharedIteratorState *istate = iterator->state;
 	PagetableEntry *ptbase = iterator->ptbase->ptentry;
@@ -1119,8 +1119,8 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator)
 
 	if (iterator->ptchunks == NULL)
 	{
-		istate->schunkpages = 0;		/* no chunks */
-		return;
+		istate->schunkpages = 0;	/* no chunks */
+		return true;
 	}
 	idxchunks = iterator->ptchunks->index;
 
@@ -1130,7 +1130,7 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator)
 
 	/* The number of pages needed to ramp down by halving. */
 	ramp_down_pages = pg_nextpower2_32(iterator->result_capacity) - 1;
-	ramp_down_pages *= 2;		/* allow for double counting */
+	ramp_down_pages *= 2;		/* double counting */
 	ramp_down_pages *= 1 << istate->log2_backends;	/* partial scan */
 
 	/* We always know the number of exact pages left to scan. */
@@ -1167,6 +1167,8 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator)
 	if (istate->schunkpages != -1)
 		elog(DEBUG1, "tidbitmap counted %d bits in %d tail chunks",
 			 istate->schunkpages, istate->nchunks - istate->schunkcounted);
+
+	return istate->schunkpages != -1;
 }
 
 /*
@@ -1275,16 +1277,12 @@ tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres)
 		}
 
 		/*
-		 * Whenever a backend starts a new chunk, it helps count tail-end
-		 * chunk bits until enough have been counted to implement fair
-		 * ramp-down.
+		 * When starting a new chunk, also popcount one more tail chunk, if we
+		 * haven't counted enough to implement fair ramp-down yet.
 		 */
 		if (istate->schunkbit == 0 && istate->schunkpages == -1)
-		{
-			tbm_shared_iterate_count_one_more_chunk(iterator);
-			if (istate->schunkpages != -1)
+			if (tbm_shared_iterate_popcount(iterator))
 				max_results = tbm_shared_iterate_ramp_down(istate, max_results);
-		}
 
 		/*
 		 * If both chunk and per-page data remain, must output the numerically
