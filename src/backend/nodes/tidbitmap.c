@@ -202,6 +202,8 @@ typedef struct TBMSharedIteratorState
 	int			schunkptr;		/* next schunks index */
 	int			schunkbit;		/* next bit to check in current schunk */
 
+	int			backends;		/* expected number of backends */
+	int			log2_backends;	/* log2 for fast approximate division */
 	int			schunkpages;	/* number of pages left, -1 = not yet known */
 	int			schunkcounted;	/* index of the highest page counted */
 	int			schunksubtotal; /* counted so far */
@@ -771,7 +773,7 @@ tbm_begin_private_iterate(TIDBitmap *tbm)
  * into pagetable array.
  */
 dsa_pointer
-tbm_prepare_shared_iterate(TIDBitmap *tbm)
+tbm_prepare_shared_iterate(TIDBitmap *tbm, int backends)
 {
 	dsa_pointer dp;
 	TBMSharedIteratorState *istate;
@@ -905,7 +907,9 @@ tbm_prepare_shared_iterate(TIDBitmap *tbm)
 	istate->schunkptr = 0;
 	istate->spageptr = 0;
 
-	/* Initialize the incremental chunk counting state. */
+	/* Initialize the ramp-down control state */
+	istate->backends = backends;
+	istate->log2_backends = pg_ceil_log2_32(backends);
 	istate->schunkpages = -1;
 	istate->schunksubtotal = 0;
 	istate->schunkcounted = istate->nchunks;
@@ -1101,11 +1105,11 @@ tbm_shared_iterate_include_block_p(TBMSharedIterator *iterator,
 
 /*
  * Count pages in one more tail chunk, until we have enough information to
- * implement fair ramp-down.  How many it takes depends on their density.
+ * implement fair ramp-down.  How many it takes depends on their density and
+ * how many backends there are sharing this iterator.
  */
 static void
-tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator,
-										int log2_backends)
+tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator)
 {
 	TBMSharedIteratorState *istate = iterator->state;
 	PagetableEntry *ptbase = iterator->ptbase->ptentry;
@@ -1120,7 +1124,7 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator,
 	/* The number of pages needed to ramp down by halving. */
 	ramp_down_pages = pg_nextpower2_32(iterator->result_capacity) - 1;
 	ramp_down_pages *= 2;		/* allow for double counting */
-	ramp_down_pages *= 1 << log2_backends;	/* allow for partial scan */
+	ramp_down_pages *= 1 << istate->log2_backends;	/* partial scan */
 
 	/* We always know the number of exact pages left to scan. */
 	exact_pages = istate->npages - istate->spageptr;
@@ -1133,8 +1137,8 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator,
 		 * caught up with the counting (low memory limit), we stop counting.
 		 * Note that we pessimistically assumed that every page might appear
 		 * in a chunk *and* a page entry.  The ramp-down will start too soon
-		 * and ramp down more gently as they get deduplicated if that's really
-		 * true, but that's OK.
+		 * and happen more gently as they get deduplicated by the scan if
+		 * that's really true, but that's OK.
 		 */
 		istate->schunkpages = istate->schunksubtotal;
 	}
@@ -1149,9 +1153,13 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator,
 						sizeof(ptbase[idxchunks[chunk]].words));
 
 		/* Have we counted enough pages yet? */
-		if (exact_pages + istate->schunksubtotal > ramp_down_pages)
+		if (exact_pages + istate->schunksubtotal >= ramp_down_pages)
 			istate->schunkpages = istate->schunksubtotal;
 	}
+
+	if (istate->schunkpages != -1)
+		elog(DEBUG1, "tidbitmap counted %d bits in %d tail chunks",
+			 istate->schunkpages, istate->nchunks - istate->schunkcounted);
 }
 
 /*
@@ -1160,9 +1168,7 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator,
  * in as the unfairness risk of being wrong decreases as we approach one.
  */
 static inline BlockNumber
-tbm_shared_iterate_ramp_down(TBMSharedIteratorState *istate,
-							 int log2_backends,
-							 int max_results)
+tbm_shared_iterate_ramp_down(TBMSharedIteratorState *istate, int max_results)
 {
 	BlockNumber pages;
 	BlockNumber partial_pages;
@@ -1170,10 +1176,14 @@ tbm_shared_iterate_ramp_down(TBMSharedIteratorState *istate,
 
 	Assert(istate->schunkpages >= 0);
 	pages = (istate->npages - istate->spageptr) + istate->schunkpages;
-	partial_pages = pages >> log2_backends; /* fast div */
+	partial_pages = pages >> istate->log2_backends;
 	clamp = partial_pages / 2;
 	if (clamp < 1)
 		clamp = 1;
+
+	if (max_results > clamp)
+		elog(DEBUG1, "pages = %d, partial_pages = %d, log2_backends = %d, clamped %d->%d", pages, partial_pages, istate->log2_backends, max_results, clamp);
+	Assert(pages > 0);
 
 	return Min(max_results, clamp);
 }
@@ -1196,8 +1206,6 @@ tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres)
 	int			max_results;
 	int			seq_count;
 	BlockNumber next_blockno;
-	int			backends;
-	int			log2_backends;
 
 	/* Return results fetched earlier until they run out. */
 	if (iterator->result_index < iterator->result_count)
@@ -1211,8 +1219,6 @@ tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres)
 	ptbase = iterator->ptbase->ptentry;
 	idxpages = iterator->ptpages ? iterator->ptpages->index : NULL;
 	idxchunks = iterator->ptchunks ? iterator->ptchunks->index : NULL;
-	backends = pg_atomic_read_u32(&iterator->ptbase->refcount);
-	log2_backends = pg_ceil_log2_32(backends);
 
 	/* Ramp up from size 1 in case there is a small LIMIT. */
 	if (iterator->result_count == 0)
@@ -1237,9 +1243,7 @@ tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres)
 	 * enough information.  Otherwise see below.
 	 */
 	if (istate->schunkpages != -1)
-		max_results = tbm_shared_iterate_ramp_down(istate,
-												   log2_backends,
-												   max_results);
+		max_results = tbm_shared_iterate_ramp_down(istate, max_results);
 
 	do
 	{
@@ -1264,16 +1268,15 @@ tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres)
 		}
 
 		/*
-		 * Whenever a backend starts a new chunk, it helps count one tail-end
-		 * chunk, until enough have been counted to implement fair ramp-down.
+		 * Whenever a backend starts a new chunk, it helps count tail-end
+		 * chunk bits until enough have been counted to implement fair
+		 * ramp-down.
 		 */
 		if (istate->schunkbit == 0 && istate->schunkpages == -1)
 		{
-			tbm_shared_iterate_count_one_more_chunk(iterator, log2_backends);
+			tbm_shared_iterate_count_one_more_chunk(iterator);
 			if (istate->schunkpages != -1)
-				max_results = tbm_shared_iterate_ramp_down(istate,
-														   log2_backends,
-														   max_results);
+				max_results = tbm_shared_iterate_ramp_down(istate, max_results);
 		}
 
 		/*

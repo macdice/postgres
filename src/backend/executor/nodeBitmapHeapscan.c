@@ -75,6 +75,8 @@ BitmapTableScanSetup(BitmapHeapScanState *node)
 	}
 	else if (BitmapShouldInitializeSharedState(pstate))
 	{
+		int backends;
+
 		/*
 		 * The leader will immediately come out of the function, but others
 		 * will be blocked until leader populates the TBM and wakes them up.
@@ -83,12 +85,15 @@ BitmapTableScanSetup(BitmapHeapScanState *node)
 		if (!node->tbm || !IsA(node->tbm, TIDBitmap))
 			elog(ERROR, "unrecognized result from subplan");
 
+		/* How many backends are expected to iterate over the TBM? */
+		backends = node->ss.ps.state->es_parallel_workers_launched;
+
 		/*
 		 * Prepare to iterate over the TBM. This will return the dsa_pointer
 		 * of the iterator state which will be used by multiple processes to
 		 * iterate jointly.
 		 */
-		pstate->tbmiterator = tbm_prepare_shared_iterate(node->tbm);
+		pstate->tbmiterator = tbm_prepare_shared_iterate(node->tbm, backends);
 
 		/* We have initialized the shared state so wake up others. */
 		BitmapDoneInitializingSharedState(pstate);

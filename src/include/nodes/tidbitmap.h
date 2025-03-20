@@ -100,7 +100,7 @@ extern int	tbm_extract_page_tuple(TBMIterateResult *iteritem,
 extern bool tbm_is_empty(const TIDBitmap *tbm);
 
 extern TBMPrivateIterator *tbm_begin_private_iterate(TIDBitmap *tbm);
-extern dsa_pointer tbm_prepare_shared_iterate(TIDBitmap *tbm);
+extern dsa_pointer tbm_prepare_shared_iterate(TIDBitmap *tbm, int backends);
 extern bool tbm_private_iterate(TBMPrivateIterator *iterator, TBMIterateResult *tbmres);
 extern bool tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres);
 extern void tbm_end_private_iterate(TBMPrivateIterator *iterator);
