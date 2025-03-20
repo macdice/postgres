@@ -1113,9 +1113,16 @@ tbm_shared_iterate_count_one_more_chunk(TBMSharedIterator *iterator)
 {
 	TBMSharedIteratorState *istate = iterator->state;
 	PagetableEntry *ptbase = iterator->ptbase->ptentry;
-	int		   *idxchunks = iterator->ptchunks->index;
+	int		   *idxchunks;
 	int			ramp_down_pages;
 	int			exact_pages;
+
+	if (iterator->ptchunks == NULL)
+	{
+		istate->schunkpages = 0;		/* no chunks */
+		return;
+	}
+	idxchunks = iterator->ptchunks->index;
 
 	Assert(LWLockHeldByMeInMode(&istate->lock, LW_EXCLUSIVE));
 	Assert(istate->schunkpages == -1);
