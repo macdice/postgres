@@ -365,6 +365,7 @@ SerialControl	"Waiting to read or update shared <filename>pg_serial</filename> s
 AioWorkerSubmissionQueue	"Waiting to access AIO worker submission queue."
 WaitLSN	"Waiting to read or update shared Wait-for-LSN state."
 LogicalDecodingControl	"Waiting to read or update logical decoding status information."
+AioWorkerControl	"Waiting to update AIO worker information."
 
 #
 # END OF PREDEFINED LWLOCKS (DO NOT CHANGE THIS LINE)
