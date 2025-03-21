@@ -2174,6 +2174,7 @@ PgAioUringContext
 PgAioWaitRef
 PgAioWorkerControl
 PgAioWorkerSlot
+PgAioWorkerStatistics
 PgAioWorkerSubmissionQueue
 PgArchData
 PgBackendGSSStatus

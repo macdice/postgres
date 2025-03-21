@@ -3306,14 +3306,52 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"io_workers",
+		{"io_max_workers",
 			PGC_SIGHUP,
 			RESOURCES_IO,
-			gettext_noop("Number of IO worker processes, for io_method=worker."),
+			gettext_noop("Maximum number of IO worker processes, for io_method=worker."),
 			NULL,
 		},
-		&io_workers,
-		3, 1, MAX_IO_WORKERS,
+		&io_max_workers,
+		8, 1, MAX_IO_WORKERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_min_workers",
+			PGC_SIGHUP,
+			RESOURCES_IO,
+			gettext_noop("Minimum number of IO worker processes, for io_method=worker."),
+			NULL,
+		},
+		&io_min_workers,
+		1, 1, MAX_IO_WORKERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_worker_idle_timeout",
+			PGC_SIGHUP,
+			RESOURCES_IO,
+			gettext_noop("Maximum idle time before IO workers exit, for io_method=worker."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&io_worker_idle_timeout,
+		60 * 1000, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_worker_launch_interval",
+			PGC_SIGHUP,
+			RESOURCES_IO,
+			gettext_noop("Maximum idle time between launching IO workers, for io_method=worker."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&io_worker_launch_interval,
+		500, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

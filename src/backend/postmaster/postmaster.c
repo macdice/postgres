@@ -408,6 +408,7 @@ static DNSServiceRef bonjour_sdref = NULL;
 #endif
 
 /* State for IO worker management. */
+static TimestampTz io_worker_launch_delay_until = 0;
 static int	io_worker_count = 0;
 static PMChild *io_worker_children[MAX_IO_WORKERS];
 
@@ -1568,6 +1569,15 @@ DetermineSleepTime(void)
 
 	if (StartWorkerNeeded)
 		return 0;
+
+	/* If we need a new IO worker, defer until launch delay expires. */
+	if (pgaio_worker_test_new_worker_needed() &&
+		io_worker_count < io_max_workers)
+	{
+		if (io_worker_launch_delay_until == 0)
+			return 0;
+		next_wakeup = io_worker_launch_delay_until;
+	}
 
 	if (HaveCrashedWorker)
 	{
@@ -3750,6 +3760,15 @@ process_pm_pmsignal(void)
 		StartWorkerNeeded = true;
 	}
 
+	/* Process IO worker start requets. */
+	if (CheckPostmasterSignal(PMSIGNAL_IO_WORKER_CHANGE))
+	{
+		/*
+		 * No local flag, as the state is exposed through pgaio_worker_*()
+		 * functions.  This signal is received on potentially actionable level
+		 * changes, so that maybe_adjust_io_workers() will run.
+		 */
+	}
 	/* Process background worker state changes. */
 	if (CheckPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE))
 	{
@@ -4355,8 +4374,9 @@ maybe_reap_io_worker(int pid)
 /*
  * Start or stop IO workers, to close the gap between the number of running
  * workers and the number of configured workers.  Used to respond to change of
- * the io_workers GUC (by increasing and decreasing the number of workers), as
- * well as workers terminating in response to errors (by starting
+ * the io_{min,max}_workers GUCs (by increasing and decreasing the number of
+ * workers) and requests to start a new one due to submission queue backlog,
+ * as well as workers terminating in response to errors (by starting
  * "replacement" workers).
  */
 static void
@@ -4385,8 +4405,16 @@ maybe_adjust_io_workers(void)
 
 	Assert(pmState < PM_WAIT_IO_WORKERS);
 
-	/* Not enough running? */
-	while (io_worker_count < io_workers)
+	/* Cancel the launch delay when it expires to minimize clock access. */
+	if (io_worker_launch_delay_until != 0 &&
+		io_worker_launch_delay_until <= GetCurrentTimestamp())
+		io_worker_launch_delay_until = 0;
+
+	/* Not enough workers running? */
+	while (io_worker_launch_delay_until == 0 &&
+		   io_worker_count < io_max_workers &&
+		   ((io_worker_count < io_min_workers ||
+			 pgaio_worker_clear_new_worker_needed())))
 	{
 		PMChild    *child;
 		int			i;
@@ -4400,6 +4428,16 @@ maybe_adjust_io_workers(void)
 		if (i == MAX_IO_WORKERS)
 			elog(ERROR, "could not find a free IO worker slot");
 
+		/*
+		 * Apply launch delay even for failures to avoid retrying too fast on
+		 * fork() failure, but not while we're still building the minimum pool
+		 * size.
+		 */
+		if (io_worker_count >= io_min_workers)
+			io_worker_launch_delay_until =
+				TimestampTzPlusMilliseconds(GetCurrentTimestamp(),
+											io_worker_launch_interval);
+
 		/* Try to launch one. */
 		child = StartChildProcess(B_IO_WORKER);
 		if (child != NULL)
@@ -4411,19 +4449,11 @@ maybe_adjust_io_workers(void)
 			break;				/* try again next time */
 	}
 
-	/* Too many running? */
-	if (io_worker_count > io_workers)
-	{
-		/* ask the IO worker in the highest slot to exit */
-		for (int i = MAX_IO_WORKERS - 1; i >= 0; --i)
-		{
-			if (io_worker_children[i] != NULL)
-			{
-				kill(io_worker_children[i]->pid, SIGUSR2);
-				break;
-			}
-		}
-	}
+	/*
+	 * If there are too many running because io_max_workers changed, that will
+	 * be handled by the IO workers themselves so they can shut down in
+	 * preferred order.
+	 */
 }
 
 

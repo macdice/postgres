@@ -214,7 +214,10 @@
 					# can execute simultaneously
 					# -1 sets based on shared_buffers
 					# (change requires restart)
-#io_workers = 3				# 1-32;
+#io_min_workers = 1			# 1-32;
+#io_max_workers = 8			# 1-32;
+#io_worker_idle_timeout = 60s		# min 100ms
+#io_worker_launch_interval = 500ms	# min 0ms
 
 # - Worker Processes -
 
