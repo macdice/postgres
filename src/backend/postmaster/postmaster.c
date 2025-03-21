@@ -409,6 +409,8 @@ static DNSServiceRef bonjour_sdref = NULL;
 #endif
 
 /* State for IO worker management. */
+static TimestampTz io_worker_launch_next_time = 0;
+static TimestampTz io_worker_launch_last_time = 0;
 static int	io_worker_count = 0;
 static PMChild *io_worker_children[MAX_IO_WORKERS];
 
@@ -447,7 +449,8 @@ static int	CountChildren(BackendTypeMask targetMask);
 static void LaunchMissingBackgroundProcesses(void);
 static void maybe_start_bgworkers(void);
 static bool maybe_reap_io_worker(int pid);
-static void maybe_adjust_io_workers(void);
+static void maybe_start_io_workers(void);
+static TimestampTz maybe_start_io_workers_scheduled_at(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
 static PMChild *StartChildProcess(BackendType type);
 static void StartSysLogger(void);
@@ -1391,7 +1394,7 @@ PostmasterMain(int argc, char *argv[])
 	UpdatePMState(PM_STARTUP);
 
 	/* Make sure we can perform I/O while starting up. */
-	maybe_adjust_io_workers();
+	maybe_start_io_workers();
 
 	/* Start bgwriter and checkpointer so they can help with recovery */
 	if (CheckpointerPMChild == NULL)
@@ -1555,14 +1558,13 @@ checkControlFile(void)
 static int
 DetermineSleepTime(void)
 {
-	TimestampTz next_wakeup = 0;
+	TimestampTz next_wakeup;
 
 	/*
-	 * Normal case: either there are no background workers at all, or we're in
-	 * a shutdown sequence (during which we ignore bgworkers altogether).
+	 * If an ImmediateShutdown or a crash restart has set a SIGKILL timeout,
+	 * ignore everything else and wait for that.
 	 */
-	if (Shutdown > NoShutdown ||
-		(!StartWorkerNeeded && !HaveCrashedWorker))
+	if (Shutdown >= ImmediateShutdown || FatalError)
 	{
 		if (AbortStartTime != 0)
 		{
@@ -1582,14 +1584,16 @@ DetermineSleepTime(void)
 
 			return seconds * 1000;
 		}
-		else
-			return 60 * 1000;
 	}
 
-	if (StartWorkerNeeded)
+	/* Time of next maybe_start_io_workers() call, or 0 for none. */
+	next_wakeup = maybe_start_io_workers_scheduled_at();
+
+	/* Ignore bgworkers during shutdown. */
+	if (StartWorkerNeeded && Shutdown == NoShutdown)
 		return 0;
 
-	if (HaveCrashedWorker)
+	if (HaveCrashedWorker && Shutdown == NoShutdown)
 	{
 		dlist_mutable_iter iter;
 
@@ -2542,7 +2546,17 @@ process_pm_child_exit(void)
 			if (!EXIT_STATUS_0(exitstatus) && !EXIT_STATUS_1(exitstatus))
 				HandleChildCrash(pid, exitstatus, _("io worker"));
 
-			maybe_adjust_io_workers();
+			/*
+			 * A worker that exited with an error might have brought the pool
+			 * size below io_min_workers, or allowed the queue to grow to the
+			 * point where another worker called for growth.
+			 *
+			 * In the common case that a worker timed out due to idleness, no
+			 * replacement needs to be started.  maybe_start_io_workers() will
+			 * figure that out.
+			 */
+			maybe_start_io_workers();
+
 			continue;
 		}
 
@@ -3262,7 +3276,7 @@ PostmasterStateMachine(void)
 		UpdatePMState(PM_STARTUP);
 
 		/* Make sure we can perform I/O while starting up. */
-		maybe_adjust_io_workers();
+		maybe_start_io_workers();
 
 		StartupPMChild = StartChildProcess(B_STARTUP);
 		Assert(StartupPMChild != NULL);
@@ -3336,7 +3350,7 @@ LaunchMissingBackgroundProcesses(void)
 	 * A config file change will always lead to this function being called, so
 	 * we always will process the config change in a timely manner.
 	 */
-	maybe_adjust_io_workers();
+	maybe_start_io_workers();
 
 	/*
 	 * The checkpointer and the background writer are active from the start,
@@ -3797,6 +3811,15 @@ process_pm_pmsignal(void)
 		StartWorkerNeeded = true;
 	}
 
+	/* Process IO worker start requests. */
+	if (CheckPostmasterSignal(PMSIGNAL_IO_WORKER_GROW))
+	{
+		/*
+		 * No local flag, as the state is exposed through pgaio_worker_*()
+		 * functions.  This signal is received on potentially actionable level
+		 * changes, so that maybe_start_io_workers() will run.
+		 */
+	}
 	/* Process background worker state changes. */
 	if (CheckPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE))
 	{
@@ -4399,43 +4422,105 @@ maybe_reap_io_worker(int pid)
 }
 
 /*
- * Start or stop IO workers, to close the gap between the number of running
- * workers and the number of configured workers.  Used to respond to change of
- * the io_workers GUC (by increasing and decreasing the number of workers), as
- * well as workers terminating in response to errors (by starting
- * "replacement" workers).
+ * Returns the next time at which maybe_start_io_workers() would start one or
+ * more I/O workers.  Any time in the past means ASAP, and 0 means no worker
+ * is currently scheduled.
+ *
+ * This is called by DetermineSleepTime() and also maybe_start_io_workers()
+ * itself, to make sure that they agree.
  */
-static void
-maybe_adjust_io_workers(void)
+static TimestampTz
+maybe_start_io_workers_scheduled_at(void)
 {
 	if (!pgaio_workers_enabled())
-		return;
+		return 0;
 
 	/*
 	 * If we're in final shutting down state, then we're just waiting for all
 	 * processes to exit.
 	 */
 	if (pmState >= PM_WAIT_IO_WORKERS)
-		return;
+		return 0;
 
 	/* Don't start new workers during an immediate shutdown either. */
 	if (Shutdown >= ImmediateShutdown)
-		return;
+		return 0;
 
 	/*
 	 * Don't start new workers if we're in the shutdown phase of a crash
 	 * restart. But we *do* need to start if we're already starting up again.
 	 */
 	if (FatalError && pmState >= PM_STOP_BACKENDS)
-		return;
+		return 0;
 
-	Assert(pmState < PM_WAIT_IO_WORKERS);
+	/*
+	 * Don't start a worker if we're at or above the maximum.  (Excess workers
+	 * exit when the GUC is lowered, but the count can be temporarily too high
+	 * until they are reaped.)
+	 */
+	if (io_worker_count >= io_max_workers)
+		return 0;
 
-	/* Not enough running? */
-	while (io_worker_count < io_workers)
+	/* If we're under the minimum, start a worker as soon as possible. */
+	if (io_worker_count < io_min_workers)
+		return TIMESTAMP_MINUS_INFINITY;	/* start worker ASAP */
+
+	/* Only proceed if a "grow" request is pending from existing workers. */
+	if (!pgaio_worker_test_grow())
+		return 0;
+
+	/*
+	 * maybe_start_io_workers() should start a new I/O worker after this time,
+	 * or as soon as possible if is already in the past.
+	 */
+	return io_worker_launch_next_time;
+}
+
+/*
+ * Start I/O workers if required.  Used at startup, to respond to change of
+ * the io_min_workers GUC, when asked to start a new one due to submission
+ * queue backlog, and after workers terminate in response to errors (by
+ * starting "replacement" workers).
+ */
+static void
+maybe_start_io_workers(void)
+{
+	TimestampTz scheduled_at;
+
+	while ((scheduled_at = maybe_start_io_workers_scheduled_at()) != 0)
 	{
+		TimestampTz now = GetCurrentTimestamp();
 		PMChild    *child;
 		int			i;
+
+		Assert(pmState < PM_WAIT_IO_WORKERS);
+
+		/* Still waiting for the scheduled time? */
+		if (scheduled_at > now)
+			break;
+
+		/* Clear the grow request flag if it is set. */
+		pgaio_worker_clear_grow();
+
+		/*
+		 * Compute next launch time relative to the previous value, so that
+		 * time spent on the postmaster's other duties don't result in an
+		 * inaccurate launch interval.
+		 */
+		io_worker_launch_next_time =
+			TimestampTzPlusMilliseconds(io_worker_launch_next_time,
+										io_worker_launch_interval);
+
+		/*
+		 * If that's already in the past, the interval is either impossibly
+		 * short or we received no requests for new workers for a period.
+		 * Compute a new future time relative to the last launch time instead.
+		 */
+		if (io_worker_launch_next_time <= now)
+			io_worker_launch_next_time =
+				TimestampTzPlusMilliseconds(io_worker_launch_last_time,
+											io_worker_launch_interval);
+		io_worker_launch_last_time = now;
 
 		/* find unused entry in io_worker_children array */
 		for (i = 0; i < MAX_IO_WORKERS; ++i)
@@ -4454,20 +4539,14 @@ maybe_adjust_io_workers(void)
 			++io_worker_count;
 		}
 		else
-			break;				/* try again next time */
-	}
-
-	/* Too many running? */
-	if (io_worker_count > io_workers)
-	{
-		/* ask the IO worker in the highest slot to exit */
-		for (int i = MAX_IO_WORKERS - 1; i >= 0; --i)
 		{
-			if (io_worker_children[i] != NULL)
-			{
-				kill(io_worker_children[i]->pid, SIGUSR2);
-				break;
-			}
+			/*
+			 * Fork failure: we'll try again after the launch interval
+			 * expires, or be called again without delay if we don't yet have
+			 * io_min_workers.  Don't loop here though, the postmaster has
+			 * other duties.
+			 */
+			break;
 		}
 	}
 }
