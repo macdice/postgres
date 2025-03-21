@@ -218,7 +218,11 @@
                                         # can execute simultaneously
                                         # -1 sets based on shared_buffers
                                         # (change requires restart)
-#io_workers = 3                         # 1-32;
+
+#io_min_workers = 1                     # 1-32 (change requires pg_reload_conf())
+#io_max_workers = 8                     # 1-32
+#io_worker_idle_timeout = 60s
+#io_worker_launch_interval = 100ms
 
 # - Worker Processes -
 
