@@ -11,9 +11,10 @@
  * infrastructure for reopening the file, and must processed synchronously by
  * the client code when submitted.
  *
- * So that the submitter can make just one system call when submitting a batch
- * of IOs, wakeups "fan out"; each woken IO worker can wake two more. XXX This
- * could be improved by using futexes instead of latches to wake N waiters.
+ * When a batch of IOs is submitted, the lowest numbered idle worker is woken
+ * up.  If it sees more work in the queue it wakes a peer to help, and so on
+ * in a chain.  When a backlog is detected, the pool size is increased.  When
+ * the highest numbered worker times out after a period of inactivity.
  *
  * This method of AIO is available in all builds on all operating systems, and
  * is the default.
@@ -40,6 +41,8 @@
 #include "storage/io_worker.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
+#include "storage/lwlock.h"
+#include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/injection_point.h"
@@ -47,10 +50,8 @@
 #include "utils/ps_status.h"
 #include "utils/wait_event.h"
 
-
-/* How many workers should each worker wake up if needed? */
-#define IO_WORKER_WAKEUP_FANOUT 2
-
+/* Saturation for stats counters used to estimate wakeup:work ratio. */
+#define PGAIO_WORKER_STATS_MAX 64
 
 typedef struct PgAioWorkerSubmissionQueue
 {
@@ -63,16 +64,24 @@ typedef struct PgAioWorkerSubmissionQueue
 
 typedef struct PgAioWorkerSlot
 {
-	Latch	   *latch;
-	bool		in_use;
+	ProcNumber	proc_number;
 } PgAioWorkerSlot;
 
 typedef struct PgAioWorkerControl
 {
+	/* Seen by postmaster */
+	volatile bool new_worker_needed;
+
+	/* Potected by AioWorkerSubmissionQueueLock. */
 	uint64		idle_worker_mask;
+
+	/* Protected by AioWorkerControlLock. */
+	uint64		worker_set;
+	int			nworkers;
+
+	/* Protected by AioWorkerControlLock. */
 	PgAioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
 } PgAioWorkerControl;
-
 
 static size_t pgaio_worker_shmem_size(void);
 static void pgaio_worker_shmem_init(bool first_time);
@@ -91,11 +100,14 @@ const IoMethodOps pgaio_worker_ops = {
 
 
 /* GUCs */
-int			io_workers = 3;
+int			io_min_workers = 1;
+int			io_max_workers = 8;
+int			io_worker_idle_timeout = 60000;
+int			io_worker_launch_interval = 500;
 
 
 static int	io_worker_queue_size = 64;
-static int	MyIoWorkerId;
+static int	MyIoWorkerId = -1;
 static PgAioWorkerSubmissionQueue *io_worker_submission_queue;
 static PgAioWorkerControl *io_worker_control;
 
@@ -152,29 +164,162 @@ pgaio_worker_shmem_init(bool first_time)
 						&found);
 	if (!found)
 	{
+		io_worker_control->new_worker_needed = false;
+		io_worker_control->worker_set = 0;
 		io_worker_control->idle_worker_mask = 0;
 		for (int i = 0; i < MAX_IO_WORKERS; ++i)
-		{
-			io_worker_control->workers[i].latch = NULL;
-			io_worker_control->workers[i].in_use = false;
-		}
+			io_worker_control->workers[i].proc_number = INVALID_PROC_NUMBER;
 	}
+}
+
+static void
+pgaio_worker_consider_new_worker(uint32 queue_depth)
+{
+	/*
+	 * This is called from sites that don't hold AioWorkerControlLock, but it
+	 * changes infrequently and an up to date value is not required for this
+	 * heuristic purpose.
+	 */
+	if (!io_worker_control->new_worker_needed &&
+		queue_depth >= io_worker_control->nworkers)
+	{
+		io_worker_control->new_worker_needed = true;
+		SendPostmasterSignal(PMSIGNAL_IO_WORKER_CHANGE);
+	}
+}
+
+/*
+ * Called by a worker when the queue is empty, to try to prevent a delayed
+ * reaction to a brief burst.  This races against the postmaster acting on the
+ * old value if it was recently set to true, but that's OK, the ordering would
+ * be indeterminate anyway even if we could use locks in the postmaster.
+ */
+static void
+pgaio_worker_cancel_new_worker(void)
+{
+	io_worker_control->new_worker_needed = false;
+}
+
+/*
+ * Called by the postmaster to check if a new worker is needed.
+ */
+bool
+pgaio_worker_test_new_worker_needed(void)
+{
+	return io_worker_control->new_worker_needed;
+}
+
+/*
+ * Called by the postmaster to check if a new worker is needed when it's ready
+ * to launch one, and clear the flag.
+ */
+bool
+pgaio_worker_clear_new_worker_needed(void)
+{
+	bool		result;
+
+	result = io_worker_control->new_worker_needed;
+	if (result)
+		io_worker_control->new_worker_needed = false;
+
+	return result;
+}
+
+static uint64
+pgaio_worker_mask(int worker)
+{
+	return UINT64_C(1) << worker;
+}
+
+static void
+pgaio_worker_add(uint64 *set, int worker)
+{
+	*set |= pgaio_worker_mask(worker);
+}
+
+static void
+pgaio_worker_remove(uint64 *set, int worker)
+{
+	*set &= ~pgaio_worker_mask(worker);
+}
+
+#ifdef USE_ASSERT_CHECKING
+static bool
+pgaio_worker_in(uint64 set, int worker)
+{
+	return (set & pgaio_worker_mask(worker)) != 0;
+}
+#endif
+
+static uint64
+pgaio_worker_highest(uint64 set)
+{
+	return pg_leftmost_one_pos64(set);
+}
+
+static uint64
+pgaio_worker_lowest(uint64 set)
+{
+	return pg_rightmost_one_pos64(set);
+}
+
+static int
+pgaio_worker_pop(uint64 *set)
+{
+	int			worker;
+
+	Assert(set != 0);
+	worker = pgaio_worker_lowest(*set);
+	pgaio_worker_remove(set, worker);
+	return worker;
 }
 
 static int
 pgaio_worker_choose_idle(void)
 {
+	uint64		idle_worker_mask;
 	int			worker;
 
-	if (io_worker_control->idle_worker_mask == 0)
+	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+
+	/*
+	 * Workers only wake higher numbered workers, to try to encourage an
+	 * ordering of wakeup:work ratios, reducing spurious wakeups in lower
+	 * numbered workers.
+	 */
+	idle_worker_mask = io_worker_control->idle_worker_mask;
+	if (MyIoWorkerId != -1)
+		idle_worker_mask &= ~(pgaio_worker_mask(MyIoWorkerId) - 1);
+
+	if (idle_worker_mask == 0)
 		return -1;
 
 	/* Find the lowest bit position, and clear it. */
-	worker = pg_rightmost_one_pos64(io_worker_control->idle_worker_mask);
-	io_worker_control->idle_worker_mask &= ~(UINT64_C(1) << worker);
-	Assert(io_worker_control->workers[worker].in_use);
+	worker = pgaio_worker_lowest(idle_worker_mask);
+	pgaio_worker_remove(&io_worker_control->idle_worker_mask, worker);
 
 	return worker;
+}
+
+/*
+ * Try to wake a worker by setting its latch, to tell it there are IOs to
+ * process in the submission queue.
+ */
+static void
+pgaio_worker_wake(int worker)
+{
+	ProcNumber	proc_number;
+
+	/*
+	 * If the selected worker is concurrently exiting, then pgaio_worker_die()
+	 * had not yet removed it as of when we saw it in idle_worker_mask. That's
+	 * OK, because it will wake all remaining workers to close wakeup-vs-exit
+	 * races: *someone* will see the queued IO.  If there are no workers
+	 * running, the postmaster will start a new one.
+	 */
+	proc_number = io_worker_control->workers[worker].proc_number;
+	if (proc_number != INVALID_PROC_NUMBER)
+		SetLatch(&GetPGProcByNumber(proc_number)->procLatch);
 }
 
 static bool
@@ -182,6 +327,8 @@ pgaio_worker_submission_queue_insert(PgAioHandle *ioh)
 {
 	PgAioWorkerSubmissionQueue *queue;
 	uint32		new_head;
+
+	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
 
 	queue = io_worker_submission_queue;
 	new_head = (queue->head + 1) & (queue->size - 1);
@@ -204,6 +351,8 @@ pgaio_worker_submission_queue_consume(void)
 	PgAioWorkerSubmissionQueue *queue;
 	uint32		result;
 
+	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+
 	queue = io_worker_submission_queue;
 	if (queue->tail == queue->head)
 		return UINT32_MAX;		/* empty */
@@ -219,6 +368,8 @@ pgaio_worker_submission_queue_depth(void)
 {
 	uint32		head;
 	uint32		tail;
+
+	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
 
 	head = io_worker_submission_queue->head;
 	tail = io_worker_submission_queue->tail;
@@ -244,9 +395,9 @@ static void
 pgaio_worker_submit_internal(int num_staged_ios, PgAioHandle **staged_ios)
 {
 	PgAioHandle *synchronous_ios[PGAIO_SUBMIT_BATCH_SIZE];
+	uint32		queue_depth;
+	int			worker = -1;
 	int			nsync = 0;
-	Latch	   *wakeup = NULL;
-	int			worker;
 
 	Assert(num_staged_ios <= PGAIO_SUBMIT_BATCH_SIZE);
 
@@ -261,51 +412,48 @@ pgaio_worker_submit_internal(int num_staged_ios, PgAioHandle **staged_ios)
 			 * we can to workers, to maximize concurrency.
 			 */
 			synchronous_ios[nsync++] = staged_ios[i];
-			continue;
 		}
-
-		if (wakeup == NULL)
+		else if (worker == -1)
 		{
 			/* Choose an idle worker to wake up if we haven't already. */
 			worker = pgaio_worker_choose_idle();
-			if (worker >= 0)
-				wakeup = io_worker_control->workers[worker].latch;
 
 			pgaio_debug_io(DEBUG4, staged_ios[i],
 						   "choosing worker %d",
 						   worker);
 		}
 	}
+	queue_depth = pgaio_worker_submission_queue_depth();
 	LWLockRelease(AioWorkerSubmissionQueueLock);
 
-	if (wakeup)
-		SetLatch(wakeup);
+	if (worker != -1)
+		pgaio_worker_wake(worker);
+	else
+		pgaio_worker_consider_new_worker(queue_depth);
 
 	/* Run whatever is left synchronously. */
 	for (int i = 0; i < nsync; ++i)
 	{
-		wakeup = NULL;
-
 		/*
 		 * Between synchronous IO operations, try again to enqueue as many as
 		 * we can.
 		 */
 		if (i > 0)
 		{
-			wakeup = NULL;
+			worker = -1;
 
 			LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
 			while (i < nsync &&
 				   pgaio_worker_submission_queue_insert(synchronous_ios[i]))
 			{
-				if (wakeup == NULL && (worker = pgaio_worker_choose_idle()) >= 0)
-					wakeup = io_worker_control->workers[worker].latch;
+				if (worker == -1)
+					worker = pgaio_worker_choose_idle();
 				i++;
 			}
 			LWLockRelease(AioWorkerSubmissionQueueLock);
 
-			if (wakeup)
-				SetLatch(wakeup);
+			if (worker != -1)
+				pgaio_worker_wake(worker);
 
 			if (i == nsync)
 				break;
@@ -337,14 +485,27 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 static void
 pgaio_worker_die(int code, Datum arg)
 {
-	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-	Assert(io_worker_control->workers[MyIoWorkerId].in_use);
-	Assert(io_worker_control->workers[MyIoWorkerId].latch == MyLatch);
+	uint64		notify_set;
 
-	io_worker_control->idle_worker_mask &= ~(UINT64_C(1) << MyIoWorkerId);
-	io_worker_control->workers[MyIoWorkerId].in_use = false;
-	io_worker_control->workers[MyIoWorkerId].latch = NULL;
+	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+	pgaio_worker_remove(&io_worker_control->idle_worker_mask, MyIoWorkerId);
 	LWLockRelease(AioWorkerSubmissionQueueLock);
+
+	LWLockAcquire(AioWorkerControlLock, LW_EXCLUSIVE);
+	Assert(io_worker_control->workers[MyIoWorkerId].proc_number == MyProcNumber);
+	io_worker_control->workers[MyIoWorkerId].proc_number = INVALID_PROC_NUMBER;
+	Assert(pgaio_worker_in(io_worker_control->worker_set, MyIoWorkerId));
+	pgaio_worker_remove(&io_worker_control->worker_set, MyIoWorkerId);
+	notify_set = io_worker_control->worker_set;
+	Assert(io_worker_control->nworkers > 0);
+	io_worker_control->nworkers--;
+	Assert(pg_popcount64(io_worker_control->worker_set) ==
+		   io_worker_control->nworkers);
+	LWLockRelease(AioWorkerControlLock);
+
+	/* Notify other workers on pool change. */
+	while (notify_set != 0)
+		pgaio_worker_wake(pgaio_worker_pop(&notify_set));
 }
 
 /*
@@ -354,33 +515,37 @@ pgaio_worker_die(int code, Datum arg)
 static void
 pgaio_worker_register(void)
 {
+	uint64		worker_set_inverted;
+	uint64		old_worker_set;
+
 	MyIoWorkerId = -1;
 
-	/*
-	 * XXX: This could do with more fine-grained locking. But it's also not
-	 * very common for the number of workers to change at the moment...
-	 */
-	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-
-	for (int i = 0; i < MAX_IO_WORKERS; ++i)
+	LWLockAcquire(AioWorkerControlLock, LW_EXCLUSIVE);
+	worker_set_inverted = ~io_worker_control->worker_set;
+	if (worker_set_inverted != 0)
 	{
-		if (!io_worker_control->workers[i].in_use)
-		{
-			Assert(io_worker_control->workers[i].latch == NULL);
-			io_worker_control->workers[i].in_use = true;
-			MyIoWorkerId = i;
-			break;
-		}
-		else
-			Assert(io_worker_control->workers[i].latch != NULL);
+		MyIoWorkerId = pgaio_worker_lowest(worker_set_inverted);
+		if (MyIoWorkerId >= MAX_IO_WORKERS)
+			MyIoWorkerId = -1;
 	}
-
 	if (MyIoWorkerId == -1)
 		elog(ERROR, "couldn't find a free worker slot");
 
-	io_worker_control->idle_worker_mask |= (UINT64_C(1) << MyIoWorkerId);
-	io_worker_control->workers[MyIoWorkerId].latch = MyLatch;
-	LWLockRelease(AioWorkerSubmissionQueueLock);
+	Assert(io_worker_control->workers[MyIoWorkerId].proc_number ==
+		   INVALID_PROC_NUMBER);
+	io_worker_control->workers[MyIoWorkerId].proc_number = MyProcNumber;
+
+	old_worker_set = io_worker_control->worker_set;
+	Assert(!pgaio_worker_in(old_worker_set, MyIoWorkerId));
+	pgaio_worker_add(&io_worker_control->worker_set, MyIoWorkerId);
+	io_worker_control->nworkers++;
+	Assert(pg_popcount64(io_worker_control->worker_set) ==
+		   io_worker_control->nworkers);
+	LWLockRelease(AioWorkerControlLock);
+
+	/* Notify other workers on pool change. */
+	while (old_worker_set != 0)
+		pgaio_worker_wake(pgaio_worker_pop(&old_worker_set));
 
 	on_shmem_exit(pgaio_worker_die, 0);
 }
@@ -406,14 +571,47 @@ pgaio_worker_error_callback(void *arg)
 	errcontext("I/O worker executing I/O on behalf of process %d", owner_pid);
 }
 
+/*
+ * Check if this backend is allowed to time out, and thus should use a
+ * non-infinite sleep time.  Only the highest-numbered worker is allowed to
+ * time out, and only if the pool is above io_min_workers.  Serializing
+ * timeouts keeps IDs in a range 0..N without gaps, and avoids undershooting
+ * io_min_workers.
+ *
+ * The result is only instantaneously true and may be temporarily inconsistent
+ * in different workers around transitions, but all workers are woken up on
+ * pool size or GUC changes making the result eventually consistent.
+ */
+static bool
+pgaio_worker_can_timeout(void)
+{
+	uint64		worker_set;
+
+	/* Serialize against pool sized changes. */
+	LWLockAcquire(AioWorkerControlLock, LW_SHARED);
+	worker_set = io_worker_control->worker_set;
+	LWLockRelease(AioWorkerControlLock);
+
+	if (MyIoWorkerId != pgaio_worker_highest(worker_set))
+		return false;
+	if (MyIoWorkerId < io_min_workers)
+		return false;
+
+	return true;
+}
+
 void
 IoWorkerMain(const void *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
+	TimestampTz idle_timeout_abs = 0;
+	int			timeout_guc_used = 0;
 	PgAioHandle *volatile error_ioh = NULL;
 	ErrorContextCallback errcallback = {0};
 	volatile int error_errno = 0;
 	char		cmd[128];
+	int			ios = 0;
+	int			wakeups = 0;
 
 	MyBackendType = B_IO_WORKER;
 	AuxiliaryProcessMainCommon();
@@ -482,10 +680,8 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 	while (!ShutdownRequestPending)
 	{
 		uint32		io_index;
-		Latch	   *latches[IO_WORKER_WAKEUP_FANOUT];
-		int			nlatches = 0;
-		int			nwakeups = 0;
-		int			worker;
+		uint32		queue_depth;
+		int			worker = -1;
 
 		/*
 		 * Try to get a job to do.
@@ -494,39 +690,47 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		 * to ensure that we don't see an outdated data in the handle.
 		 */
 		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-		if ((io_index = pgaio_worker_submission_queue_consume()) == UINT32_MAX)
+		io_index = pgaio_worker_submission_queue_consume();
+		queue_depth = pgaio_worker_submission_queue_depth();
+		if (io_index == UINT32_MAX)
 		{
-			/*
-			 * Nothing to do.  Mark self idle.
-			 *
-			 * XXX: Invent some kind of back pressure to reduce useless
-			 * wakeups?
-			 */
-			io_worker_control->idle_worker_mask |= (UINT64_C(1) << MyIoWorkerId);
+			/* Nothing to do.  Mark self idle. */
+			pgaio_worker_add(&io_worker_control->idle_worker_mask,
+							 MyIoWorkerId);
 		}
 		else
 		{
 			/* Got one.  Clear idle flag. */
-			io_worker_control->idle_worker_mask &= ~(UINT64_C(1) << MyIoWorkerId);
+			pgaio_worker_remove(&io_worker_control->idle_worker_mask,
+								MyIoWorkerId);
 
-			/* See if we can wake up some peers. */
-			nwakeups = Min(pgaio_worker_submission_queue_depth(),
-						   IO_WORKER_WAKEUP_FANOUT);
-			for (int i = 0; i < nwakeups; ++i)
-			{
-				if ((worker = pgaio_worker_choose_idle()) < 0)
-					break;
-				latches[nlatches++] = io_worker_control->workers[worker].latch;
-			}
+			/*
+			 * See if we should wake up a peer.  Only do this if this worker
+			 * is not experiencing spurious wakeups itself, to end a chain of
+			 * wasted scheduling.
+			 */
+			if (queue_depth > 0 && wakeups <= ios)
+				worker = pgaio_worker_choose_idle();
 		}
 		LWLockRelease(AioWorkerSubmissionQueueLock);
 
-		for (int i = 0; i < nlatches; ++i)
-			SetLatch(latches[i]);
+		/* Propagate wakeups. */
+		if (worker != -1)
+			pgaio_worker_wake(worker);
+		else if (wakeups <= ios)
+			pgaio_worker_consider_new_worker(queue_depth);
 
 		if (io_index != UINT32_MAX)
 		{
 			PgAioHandle *ioh = NULL;
+
+			/* Cancel timeout and update wakeup:work ratio. */
+			idle_timeout_abs = 0;
+			if (++ios == PGAIO_WORKER_STATS_MAX)
+			{
+				ios /= 2;
+				wakeups /= 2;
+			}
 
 			ioh = &pgaio_ctl->io_handles[io_index];
 			error_ioh = ioh;
@@ -593,8 +797,69 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		}
 		else
 		{
-			WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, -1,
-					  WAIT_EVENT_IO_WORKER_MAIN);
+			int			timeout_ms;
+
+			/* Cancel new worker if pending. */
+			pgaio_worker_cancel_new_worker();
+
+			/* Compute the remaining allowed idle time. */
+			if (io_worker_idle_timeout == -1)
+			{
+				/* Never time out. */
+				timeout_ms = -1;
+			}
+			else
+			{
+				TimestampTz now = GetCurrentTimestamp();
+
+				/* If the GUC changes, reset timer. */
+				if (idle_timeout_abs != 0 &&
+					io_worker_idle_timeout != timeout_guc_used)
+					idle_timeout_abs = 0;
+
+				/* On first sleep, compute absolute timeout. */
+				if (idle_timeout_abs == 0)
+				{
+					idle_timeout_abs =
+						TimestampTzPlusMilliseconds(now,
+													io_worker_idle_timeout);
+					timeout_guc_used = io_worker_idle_timeout;
+				}
+
+				/*
+				 * All workers maintain the absolute timeout value, but only
+				 * the highest worker can actually time out and only if
+				 * io_min_workers is exceeded.  All others wait only for
+				 * explicit wakeups caused by queue insertion, wakeup
+				 * propagation, change of pool size (possibly making them
+				 * highest), or GUC reload.
+				 */
+				if (pgaio_worker_can_timeout())
+					timeout_ms =
+						TimestampDifferenceMilliseconds(now,
+														idle_timeout_abs);
+				else
+					timeout_ms = -1;
+			}
+
+			if (WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_TIMEOUT,
+						  timeout_ms,
+						  WAIT_EVENT_IO_WORKER_MAIN) == WL_TIMEOUT)
+			{
+				/* WL_TIMEOUT */
+				if (pgaio_worker_can_timeout())
+					if (GetCurrentTimestamp() >= idle_timeout_abs)
+						break;
+			}
+			else
+			{
+				/* WL_LATCH_SET */
+				if (++wakeups == PGAIO_WORKER_STATS_MAX)
+				{
+					ios /= 2;
+					wakeups /= 2;
+				}
+			}
 			ResetLatch(MyLatch);
 		}
 
@@ -604,6 +869,10 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		{
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
+
+			/* If io_max_workers has been decreased, exit highest first. */
+			if (MyIoWorkerId >= io_max_workers)
+				break;
 		}
 	}
 
