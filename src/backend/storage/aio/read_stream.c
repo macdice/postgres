@@ -86,11 +86,73 @@ typedef struct InProgressIO
 	ReadBuffersOperation op;
 } InProgressIO;
 
+#define READ_STREAM_INSTRUMENT
+#define READ_STREAM_HISTORY 1024
+
+#ifdef READ_STREAM_HISTORY
+struct stat_history
+{
+	int16		distance;
+	int16		ios;
+	int16		io_index;
+	int16		sample_index[2];
+	int16		change;
+};
+#endif
+
 /*
  * State for managing a stream of reads.
  */
 struct ReadStream
 {
+#ifdef READ_STREAM_INSTRUMENT
+	/* Peak values. */
+	int16		stat_io_peak;
+	int16		stat_buffer_peak;
+#define INSTRUMENT_PEAK(x, val) stream->x = Max(stream->x, val)
+	/* Counters. */
+	uint64		stat_cache_blocks;
+	uint64		stat_io_blocks;
+	uint64		stat_io_count;
+	uint64		stat_io_count_seq;
+	uint64		stat_io_advice;
+	uint64		stat_buffer_starved;
+	uint64		stat_distance_boost;
+	uint64		stat_distance_increase_window;
+	uint64		stat_distance_sustain;
+	uint64		stat_distance_decay;
+	uint64		stat_distance_hold;
+#define INSTRUMENT_ADD(x, n) stream->x += n
+#define INSTRUMENT_INC(x) INSTRUMENT_ADD(x, 1)
+#ifdef READ_STREAM_HISTORY
+	/* History of distance heuristics. */
+	struct stat_history stat_history[READ_STREAM_HISTORY];
+	int			stat_history_size;
+#define INSTRUMENT_HISTORY(c) \
+	do { \
+		if (stream->stat_history_size < READ_STREAM_HISTORY) \
+		{ \
+			struct stat_history *h; \
+			h = &stream->stat_history[stream->stat_history_size]; \
+			h->distance = stream->distance; \
+			h->ios = stream->ios_in_progress; \
+			h->io_index = stream->oldest_io_index; \
+			h->sample_index[0] = sample_index[0]; \
+			h->sample_index[1] = sample_index[1]; \
+			h->change = c; \
+			stream->stat_history_size++; \
+		} \
+	} while (0)
+#else
+#define INSTRUMENT_HISTORY(c)
+#endif
+#else
+#define INSTRUMENT_PEAK(x, val)
+#define INSTRUMENT_ADD(x, n)
+#define INSTRUMENT_INC(x)
+#define INSTRUMENT_HISTORY(c)
+#endif
+
 	int16		max_ios;
 	int16		io_combine_limit;
 	int16		ios_in_progress;
@@ -277,7 +339,11 @@ read_stream_start_pending_read(ReadStream *stream)
 			if (stream->pinned_buffers > 0)
 				flags = READ_BUFFERS_ISSUE_ADVICE;
 		}
+		if (flags)
+			INSTRUMENT_INC(stat_io_advice);
 	}
+	if (stream->pending_read_blocknum == stream->seq_blocknum)
+		INSTRUMENT_INC(stat_io_count_seq);
 
 	/*
 	 * How many more buffers is this backend allowed?
@@ -301,6 +367,8 @@ read_stream_start_pending_read(ReadStream *stream)
 	if (buffer_limit < nblocks)
 	{
 		int16		new_distance;
+
+		INSTRUMENT_INC(stat_buffer_starved);
 
 		/* Shrink distance: no more look-ahead until buffers are released. */
 		new_distance = stream->pinned_buffers + buffer_limit;
@@ -350,6 +418,7 @@ read_stream_start_pending_read(ReadStream *stream)
 								 &nblocks,
 								 flags);
 	stream->pinned_buffers += nblocks;
+	INSTRUMENT_PEAK(stat_buffer_peak, stream->pinned_buffers);
 
 	/* Remember whether we need to wait before returning this buffer. */
 	if (!need_wait)
@@ -357,6 +426,7 @@ read_stream_start_pending_read(ReadStream *stream)
 		/* Look-ahead distance decays, no I/O necessary. */
 		if (stream->distance > 1)
 			stream->distance--;
+		INSTRUMENT_ADD(stat_cache_blocks, nblocks);
 	}
 	else
 	{
@@ -370,6 +440,9 @@ read_stream_start_pending_read(ReadStream *stream)
 		Assert(stream->ios_in_progress < stream->max_ios);
 		stream->ios_in_progress++;
 		stream->seq_blocknum = stream->pending_read_blocknum + nblocks;
+		INSTRUMENT_PEAK(stat_io_peak, stream->ios_in_progress);
+		INSTRUMENT_INC(stat_io_count);
+		INSTRUMENT_ADD(stat_io_blocks, nblocks);
 	}
 
 	/*
@@ -954,6 +1027,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			 * tell us about potential stalls so we've fallen back to boosting
 			 * on every I/O.
 			 */
+			INSTRUMENT_HISTORY(2);
+			INSTRUMENT_INC(stat_distance_boost);
 			if (stream->distance > stream->max_pinned_buffers / 2)
 				stream->distance = stream->max_pinned_buffers;
 			else
@@ -973,6 +1048,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			 * don't want to overshoot by default as that'd produce sawtooth
 			 * I/O depth oscillations.
 			 */
+			INSTRUMENT_HISTORY(1);
+			INSTRUMENT_INC(stat_distance_increase_window);
 			nblocks = (stream->ios[io_index].op.nblocks +
 					   stream->ios[sample_index[0]].op.nblocks) / 2;
 			nblocks++;			/* round up */
@@ -991,14 +1068,17 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			 * cached due to external actions and our look-ahead efforts are
 			 * for nothing.
 			 */
+			INSTRUMENT_HISTORY(-1);
 			if (stream->sustain > 0)
 			{
 				/* It takes more than one decision to decay the distance. */
+				INSTRUMENT_INC(stat_distance_sustain);
 				stream->sustain--;
 			}
 			else if (stream->distance > 1)
 			{
 				/* Decay the distance. */
+				INSTRUMENT_INC(stat_distance_decay);
 				stream->distance--;
 
 				/*
@@ -1020,6 +1100,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		else
 		{
 			/* Physical I/O is completing inside target window, no change. */
+			INSTRUMENT_HISTORY(0);
+			INSTRUMENT_INC(stat_distance_hold);
 		}
 
 		/* Sanity check that we still agree on the buffers. */
@@ -1178,5 +1260,108 @@ void
 read_stream_end(ReadStream *stream)
 {
 	read_stream_reset(stream);
+
+#ifdef READ_STREAM_INSTRUMENT
+	elog(DEBUG1, "read stream end: queue_size=%d", stream->queue_size);
+	elog(DEBUG1,
+		 "read stream io stats: peak=%d, count=%" PRIu64 ", count_seq=%" PRIu64
+		 ", blocks=%" PRIu64 ", avg(nblocks) = %.1f, advice=%" PRIu64,
+		 stream->stat_io_peak,
+		 stream->stat_io_count,
+		 stream->stat_io_count_seq,
+		 stream->stat_io_blocks,
+		 stream->stat_io_count == 0 ?
+		 -1 : (double) stream->stat_io_blocks / stream->stat_io_count,
+		 stream->stat_io_advice);
+	elog(DEBUG1, "read stream cache stats: blocks=%" PRIu64, stream->stat_cache_blocks);
+	elog(DEBUG1, "read stream buffer stats: peak=%d, starved=%" PRIu64,
+		 stream->stat_buffer_peak, stream->stat_buffer_starved);
+	elog(DEBUG1,
+		 "read stream distance stats: boost=%" PRIu64 ", increase_window=%" PRIu64
+		 ", sustain=%" PRIu64 ", decay=%" PRIu64
+		 ", hold=%" PRIu64,
+		 stream->stat_distance_boost,
+		 stream->stat_distance_increase_window,
+		 stream->stat_distance_sustain,
+		 stream->stat_distance_decay,
+		 stream->stat_distance_hold);
+#ifdef READ_STREAM_HISTORY
+	for (int i = 0; i < stream->stat_history_size; ++i)
+	{
+		struct stat_history *h = &stream->stat_history[i];
+		char		queue[1024] = {0};
+
+		if (h->ios * 2 + 1 > lengthof(queue))
+			elog(ERROR, "queue array too small to plot I/O queue");
+
+		/*
+		 * Show every I/O in the queue including io_index, the one we're about
+		 * to wait for (so it's not part of the queue we're considering).
+		 */
+		Assert(h->ios >= 1);
+		for (int j = 0; j < h->ios; ++j)
+		{
+			queue[j * 2] = ' ';
+			queue[j * 2 + 1] = j == 0 ? 'w' : '.';
+		}
+
+		/*-------------------------------------------------------------------------
+		 * Show I/O queue history.
+		 *
+		 * One line for each I/O completion.  I/Os are represented as dots,
+		 * sample window as square brackets, I/Os with stall predictions as 'S'
+		 * if unwanted or 's' if wanted, no-stall predictions as 'n' if wanted
+		 * and 'N' if unwanted.  The lead I/O that we're about to wait for is
+		 * not part of our computation (it's about to be removed from the
+		 * queue), and is shown as 'w'.
+		 *
+		 * Sample window interpretation:
+		 *
+		 * ""           = no I/Os, no window, boost!
+		 * "[n"         = one sample, no-stall, good but want one more I/O
+		 * "[S"         = one sample, stall warning, boost!
+		 * "[n . . s]"  = two samples, no-stall, stall, happy state
+		 * "[n . . N]"  = two samples, no-stall, no-stall, too long, reduce
+		 * "[S . . .]   = two samples but first enough to see stall warning, boost!
+		 *
+		 * Change value interpretation:
+		 *
+		 * -1           = decision to reduce distance slowly
+		 *  0           = decision to hold distance
+		 *  1           = decision to add approximately one I/O to maintain window
+		 *  2           = decision to boost distance (double it)
+		 *-------------------------------------------------------------------------
+		 */
+		if (h->ios > 1)
+		{
+			int16		window[2];
+
+			/* Deep enough for one sample. */
+			for (int j = 0; j < 2; j++)
+			{
+				/* Convert sample indexes to offsets relative to io_index. */
+				window[j] = h->sample_index[j] - h->io_index;
+				if (window[j] < 0)
+					window[j] += stream->max_ios;
+				else if (window[j] >= stream->max_ios)
+					window[j] -= stream->max_ios;
+				Assert(window[j] >= 0 && window[j] < h->ios);
+			}
+			queue[window[0] * 2 + 0] = '[';
+			queue[window[0] * 2 + 1] = h->change == 2 ? 'S' : 'n';
+
+			if (window[0] < window[1])
+			{
+				/* Deep enough to have second sample. */
+				if (h->change <= 0)
+					queue[window[1] * 2 + 1] = h->change < 0 ? 'N' : 's';
+				queue[window[1] * 2 + 2] = ']';
+			}
+		}
+		elog(DEBUG1, "distance = %3d, change = %2d, queue = %s", h->distance, h->change, queue);
+	}
+#endif
+#endif
+
 	pfree(stream);
 }
