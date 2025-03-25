@@ -3,19 +3,16 @@
  * aio_controller.h
  *	  I/O depth control mechanism
  *
- * The algorithm has three goals in order of priority:
+ * The algorithm has two goals:
  *
  * 1.  Anti-flood: Don't increase depth if that also increases latency,
  * revealing that I/Os are queuing up somewhere.  Seek the level where the
  * correlation reverses, ie the current limit of the hardware.
  *
- * 2.  Anti-stall: As long as anti-flood isn't activated, control I/O depth
+ * 2.  Anti-stall: As long as anti-flood isn't activate, control I/O depth
  * continuously as required to keep the average done I/O count high enough to
- * understand a key fact about its distritbution: if we never see it drop
- * below half, we know approximately what its variance is and we also have a
- * buffer of that much again.  As an emergency override, if it does drop below
- * half (perhaps the PID algorithm performs badly in some statistical
- * environment), abandon all fancy notions and double the depth.
+ * avoid double the variance we've recently seen.  As an emergency override,
+ * if it does drop below half, abandon all fancy notions and double the depth.
  *
  * Portions Copyright (c) 2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -55,8 +52,12 @@ typedef struct AioController
 	int16		done;
 
 	/* Anti-stall statistics and PID state. */
+	int16		max_abs_dev_hand;
+	int16		max_abs_dev[4];
+
+	
+	int16		min_done;
 	fixed32		avg_done;
-	fixed32		lowest_recent_done;
 	fixed32		control_variable;
 	fixed32		control_variable_saturated;
 	fixed32		integral;
@@ -204,8 +205,6 @@ aio_controller_wait(AioController *controller, AioControllerProbe *probe)
 		return 2;
 
 	/*
-	 * Anti-stall
-	 *
 	 * If the done I/O counter drop below half its recent average, we panic
 	 * and double the I/O depth.
 	 *
@@ -213,25 +212,36 @@ aio_controller_wait(AioController *controller, AioControllerProbe *probe)
 	 * depth as required to keep the average number of done I/Os at 2.125 *
 	 * the lowest number number of done I/Os we've seen recently.
 	 *
-	 * The idea is to push the average number of done I/Os up far enough that
-	 * its (unknown) distribution doesn't have variance greater than half, as
-	 * a buffer zone that gives us a very low probability that it ever reaches
-	 * zero.
+	 * The idea is to push the average number of done I/Os up so high that we
+	 * never see it drop below half so you can count on at least half at all
+	 * times.
 	 */
 	fixed32_avg(&controller->avg_done, make_fixed32(controller->done));
 	half_avg_done = controller->avg_done / 2;
 
 	/*
-	 * Track lowest recent done count by hill-climbing.
-	 *
-	 * XXX This is terrible!  How can we get a super cheap online measure of
-	 * variance without division?
+	 * Track maximum absolute deviation from the mean in rotating buckets.
+	 * Values live long enough to remember events outside two standard
+	 * deviations (though we don't expect normal distribution).
 	 */
-	if (make_fixed32(controller->done) < controller->lowest_recent_done)
-		fixed32_avg_fast(&controller->lowest_recent_done, controller->done);
-	else
-		controller->lowest_recent_done += make_fixed32(1) / 2;
+	abs_dev = fixedcontroller->avg_done - make_fixed32(controller->done);
+	if (abs_dev > 0)
+	{
+		fixed32 max_abs_dev = 0;
+		uint8 hand = controller->max_abs_dev_hand++;
+		uint8 tick = hand % 32;
+		uint8 word = (tick / 32) % lengthof(controller->max_abs_dev);
 
+		if (time == 0 || controller->max_abs_dev[word] < abs_dev)
+			controller->max_abs_dev[word] = abs_dev;
+		for (int i = 0; i < lengthof(controller->max_abs_dev); ++i)
+			max_abs_dev = Max(max_abs_dev, controller->max_abs_dev[i]);
+		if (min_window == 0)
+			controller->min_done = 0;
+		else
+			controller->min_done = pg_rightmost_one_pos64(min_window) + 1;
+	}
+		
 	/* Boost if in danger, otherwise try to maintain steady state. */
 	if (controller->done < fixed32_to_int(half_avg_done))
 	{
@@ -264,7 +274,7 @@ aio_controller_wait(AioController *controller, AioControllerProbe *probe)
 					error;
 
 		/* The avg_done we want and the avg_done we have. */
-		setpoint = controller->lowest_recent_done * 2;
+		setpoint = controller->avg_done - lowest_recent_done * 2;
 		setpoint += setpoint / 8;	/* a bit more, avoid boost threshold */
 		process_variable = controller->avg_done;
 
