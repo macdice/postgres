@@ -429,6 +429,9 @@ extern PGDLLIMPORT const IoMethodOps pgaio_worker_ops;
 #ifdef IOMETHOD_IO_URING_ENABLED
 extern PGDLLIMPORT const IoMethodOps pgaio_uring_ops;
 #endif
+#ifdef IOMETHOD_POSIX_AIO_ENABLED
+extern PGDLLIMPORT const IoMethodOps pgaio_posix_aio_ops;
+#endif
 
 extern PGDLLIMPORT const IoMethodOps *pgaio_method_ops;
 extern PGDLLIMPORT PgAioCtl *pgaio_ctl;

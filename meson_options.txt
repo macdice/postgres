@@ -139,6 +139,9 @@ option('plpython', type: 'feature', value: 'auto',
 option('pltcl', type: 'feature', value: 'auto',
   description: 'Build with Tcl support (PL/Tcl)')
 
+option('posix_aio', type: 'feature', value: 'auto',
+  description: 'Build POSIX AIO support (FreeBSD only)')
+
 option('tcl_version', type: 'string', value: 'tcl',
   description: 'Tcl version')
 
