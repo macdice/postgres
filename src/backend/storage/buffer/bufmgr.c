@@ -1595,6 +1595,7 @@ static void
 ProcessReadBuffersResult(ReadBuffersOperation *operation)
 {
 	PgAioReturn *aio_ret = &operation->io_return;
+	PgAioResultStatus rs = aio_ret->result.status;
 	int			newly_read_blocks = 0;
 
 	Assert(pgaio_wref_valid(&operation->io_wref));
@@ -1605,8 +1606,12 @@ ProcessReadBuffersResult(ReadBuffersOperation *operation)
 	 * the IO operation. Thus we can simply add that to ->nblocks_done.
 	 */
 
-	if (likely(aio_ret->result.status == PGAIO_RS_OK))
+	if (likely(rs != PGAIO_RS_ERROR))
 		newly_read_blocks = aio_ret->result.result;
+
+	if (rs == PGAIO_RS_ERROR || rs == PGAIO_RS_WARNING)
+		pgaio_result_report(aio_ret->result, &aio_ret->target_data,
+							rs == PGAIO_RS_ERROR ? ERROR : WARNING);
 	else if (aio_ret->result.status == PGAIO_RS_PARTIAL)
 	{
 		/*
@@ -1614,13 +1619,8 @@ ProcessReadBuffersResult(ReadBuffersOperation *operation)
 		 * not even that in prod scenarios).
 		 */
 		pgaio_result_report(aio_ret->result, &aio_ret->target_data, DEBUG1);
-		newly_read_blocks = aio_ret->result.result;
-
 		elog(DEBUG3, "partial read, will retry");
-
 	}
-	else if (aio_ret->result.status == PGAIO_RS_ERROR)
-		pgaio_result_report(aio_ret->result, &aio_ret->target_data, ERROR);
 
 	Assert(newly_read_blocks > 0);
 	Assert(newly_read_blocks <= MAX_IO_COMBINE_LIMIT);
@@ -1799,6 +1799,20 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 		io_context = IOContextForStrategy(operation->strategy);
 		io_object = IOOBJECT_RELATION;
 	}
+
+	/*
+	 * If zero_damaged_pages is enabled, add the READ_BUFFERS_ZERO_ON_ERROR
+	 * flag. The reason for that is that, hopefully, zero_damaged_pages isn't
+	 * set globally, but on a per-session basis. The completion callback,
+	 * which may be run in other processes, e.g. in IO workers, may have a
+	 * different value of the zero_damaged_pages GUC.
+	 *
+	 * XXX: We probably should eventually use a different flag for
+	 * zero_damaged_pages, so we can report different log levels / error codes
+	 * for zero_damaged_pages and ZERO_ON_ERROR.
+	 */
+	if (zero_damaged_pages)
+		flags |= READ_BUFFERS_ZERO_ON_ERROR;
 
 	/*
 	 * Get IO handle before ReadBuffersCanStartIO(), as pgaio_io_acquire()
