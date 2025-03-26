@@ -10,6 +10,7 @@ backend_sources += files(
   'aio_target.c',
   'io_queue.c',
   'method_io_uring.c',
+  'method_posix_aio.c',
   'method_sync.c',
   'method_worker.c',
   'read_stream.c',

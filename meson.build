@@ -957,6 +957,21 @@ endif
 
 
 ###############################################################
+# Library: posix_aio (FreeBSD only)
+###############################################################
+
+posix_aioopt = get_option('posix_aio')
+posix_aio = not_found_dep
+if cc.has_function('aio_readv',
+    args: test_c_args, prefix: '#include <aio.h>',
+    include_directories: postgres_inc)
+  cdata.set('USE_POSIX_AIO', 1)
+  posix_aio = declare_dependency()
+endif
+
+
+
+###############################################################
 # Library: libxml
 ###############################################################
 

@@ -71,6 +71,9 @@ const struct config_enum_entry io_method_options[] = {
 #ifdef IOMETHOD_IO_URING_ENABLED
 	{"io_uring", IOMETHOD_IO_URING, false},
 #endif
+#ifdef IOMETHOD_POSIX_AIO_ENABLED
+	{"posix_aio", IOMETHOD_POSIX_AIO, false},
+#endif
 	{NULL, 0, false}
 };
 
@@ -91,6 +94,9 @@ static const IoMethodOps *const pgaio_method_ops_table[] = {
 	[IOMETHOD_WORKER] = &pgaio_worker_ops,
 #ifdef IOMETHOD_IO_URING_ENABLED
 	[IOMETHOD_IO_URING] = &pgaio_uring_ops,
+#endif
+#ifdef IOMETHOD_POSIX_AIO_ENABLED
+	[IOMETHOD_POSIX_AIO] = &pgaio_posix_aio_ops,
 #endif
 };
 
