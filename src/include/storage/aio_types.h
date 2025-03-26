@@ -79,8 +79,9 @@ typedef enum PgAioResultStatus
 {
 	PGAIO_RS_UNKNOWN,			/* not yet completed / uninitialized */
 	PGAIO_RS_OK,
-	PGAIO_RS_PARTIAL,			/* did not fully succeed, but no error */
-	PGAIO_RS_ERROR,
+	PGAIO_RS_PARTIAL,			/* did not fully succeed, no warning/error */
+	PGAIO_RS_WARNING,			/* [partially] succeeded, with a warning */
+	PGAIO_RS_ERROR,				/* failed entirely */
 } PgAioResultStatus;
 
 
@@ -96,10 +97,10 @@ typedef struct PgAioResult
 	uint32		id:8;
 
 	/* of type PgAioResultStatus, see above */
-	uint32		status:2;
+	uint32		status:3;
 
 	/* meaning defined by callback->error */
-	uint32		error_data:22;
+	uint32		error_data:21;
 
 	int32		result;
 } PgAioResult;
