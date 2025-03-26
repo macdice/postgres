@@ -152,8 +152,9 @@ if (ioret.result.status == PGAIO_RS_ERROR)
     pgaio_result_report(ioret.result, &ioret.target_data, ERROR);
 
 /*
- * Besides having succeeded completely, the IO could also have partially
- * completed. If we e.g. tried to read many blocks at once, the read might have
+ * Besides having succeeded completely, the IO could also have a) partially
+ * completed or b) succeeded with a warning (e.g. due to zero_damaged_pages).
+ * If we e.g. tried to read many blocks at once, the read might have
  * only succeeded for the first few blocks.
  *
  * If the IO partially succeeded and this backend needs all blocks to have
@@ -161,9 +162,9 @@ if (ioret.result.status == PGAIO_RS_ERROR)
  * The AIO subsystem cannot handle this retry transparently.
  *
  * As this example is already long, and we only read a single block, we'll just
- * error out if there's a partial read.
+ * error out if there's a partial read or a warning.
  */
-if (ioret.result.status == PGAIO_RS_PARTIAL)
+if (ioret.result.status != PGAIO_RS_OK)
     pgaio_result_report(ioret.result, &ioret.target_data, ERROR);
 
 /*
