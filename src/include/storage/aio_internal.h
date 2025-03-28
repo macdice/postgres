@@ -341,7 +341,7 @@ extern void pgaio_io_call_complete_shared(PgAioHandle *ioh);
 extern PgAioResult pgaio_io_call_complete_local(PgAioHandle *ioh);
 
 /* aio_io.c */
-extern void pgaio_io_perform_synchronously(PgAioHandle *ioh);
+extern int32 pgaio_io_perform_synchronously(PgAioHandle *ioh, bool process);
 extern const char *pgaio_io_get_op_name(PgAioHandle *ioh);
 extern bool pgaio_io_uses_fd(PgAioHandle *ioh, int fd);
 extern int	pgaio_io_get_iovec_length(PgAioHandle *ioh, struct iovec **iov);
@@ -412,6 +412,15 @@ extern PgAioHandle *pgaio_inj_io_get(void);
  */
 
 #endif
+
+
+/* Cross-process completion queue infrastructure used by some I/O methods. */
+extern size_t pgaio_cq_shmem_size(void);
+extern void pgaio_cq_shmem_init(bool first_time);
+extern void pgaio_cq_prepare_submit(PgAioHandle *ioh);
+extern void pgaio_cq_insert(PgAioHandle *ioh, int32 result, bool lock);
+extern bool pgaio_cq_in_progress(PgAioHandle *ioh);
+extern int	pgaio_cq_try_process_completion(PgAioHandle *ioh);
 
 
 /* Declarations for the tables of function pointers exposed by each IO method. */
