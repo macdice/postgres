@@ -216,6 +216,41 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 }
 
 /*
+ * A variant of ConditionVariableTimedSleep() that also returns when the
+ * caller's process latch is set.
+ *
+ * Unlike the regular sleep operations, this can be woken by the
+ * async-signal-safe ConditionaVariableWakeOne() function, in addition to the
+ * regular broadcast and signal functions.  Returns true if the timeout is
+ * reached, and otherwise false to indicate that the caller must retest its
+ * loop exit condition.
+ */
+bool
+ConditionVariableOrLatchSleep(ConditionVariable *cv, long timeout,
+							  uint32 wait_event_info)
+{
+	/* Add self to CV wait list if necessary (see regular sleep semantics). */
+	if (cv_sleep_target != cv)
+	{
+		ConditionVariablePrepareToSleep(cv);
+		return false;
+	}
+
+	/* Wake on CV or latch, but make sure we stay in the wait list. */
+	if (WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  timeout,
+				  wait_event_info) == WL_LATCH_SET)
+	{
+		ResetLatch(MyLatch);
+		ConditionVariablePrepareToSleep(cv);
+		return false;
+	}
+
+	return true;
+}
+
+/*
  * Cancel any pending sleep operation.
  *
  * We just need to remove ourselves from the wait queue of any condition
@@ -269,6 +304,26 @@ ConditionVariableSignal(ConditionVariable *cv)
 	/* If we found someone sleeping, set their latch to wake them up. */
 	if (proc != NULL)
 		SetLatch(&proc->procLatch);
+}
+
+/*
+ * Wake up one process that is sleeping using ConditionVariableOrLatchSleep(),
+ * if there is one.  The regular sleep functions are not woken by this
+ * function, because the woken process is not removed from the wait list.
+ *
+ * Unlike the regular broadcast/signal operations, which should be preferred in
+ * regular synchronous code, this verions is async-signal-safe ie can be called
+ * from a signal handler.
+ */
+void
+ConditionVariableWakeOne(ConditionVariable *cv)
+{
+	ProcNumber	head;
+
+	pg_memory_barrier();
+	head = cv->wakeup.head;
+	if (head != INVALID_PROC_NUMBER)
+		SetLatch(&GetPGProcByNumber(head)->procLatch);
 }
 
 /*
