@@ -449,7 +449,7 @@ pgaio_io_stage(PgAioHandle *ioh, PgAioOp op)
 	else
 	{
 		pgaio_io_prepare_submit(ioh);
-		pgaio_io_perform_synchronously(ioh);
+		pgaio_io_perform_synchronously(ioh, true);
 	}
 }
 

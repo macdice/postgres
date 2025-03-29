@@ -110,11 +110,18 @@ pgaio_io_start_writev(PgAioHandle *ioh,
  * method_sync.c, because other IO methods also might use it / fall back to
  * it.
  */
-void
-pgaio_io_perform_synchronously(PgAioHandle *ioh)
+int32
+pgaio_io_perform_synchronously(PgAioHandle *ioh, bool process)
 {
 	ssize_t		result = 0;
 	struct iovec *iov = &pgaio_ctl->iovecs[ioh->iovec_off];
+
+	/*
+	 * If not processing the completion here, the caller must already be in a
+	 * critical section.
+	 */
+	if (!process)
+		Assert(CritSectionCount > 0);
 
 	START_CRIT_SECTION();
 
@@ -139,11 +146,15 @@ pgaio_io_perform_synchronously(PgAioHandle *ioh)
 			elog(ERROR, "trying to execute invalid IO operation");
 	}
 
-	ioh->result = result < 0 ? -errno : result;
+	if (result < 0)
+		result = -errno;
 
-	pgaio_io_process_completion(ioh, ioh->result);
+	if (process)
+		pgaio_io_process_completion(ioh, result);
 
 	END_CRIT_SECTION();
+
+	return result;
 }
 
 /*
