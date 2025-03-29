@@ -54,26 +54,26 @@
 #define IO_WORKER_WAKEUP_FANOUT 2
 
 
-typedef struct AioWorkerSubmissionQueue
+typedef struct PgAioWorkerSubmissionQueue
 {
 	uint32		size;
 	uint32		mask;
 	uint32		head;
 	uint32		tail;
 	uint32		ios[FLEXIBLE_ARRAY_MEMBER];
-} AioWorkerSubmissionQueue;
+} PgAioWorkerSubmissionQueue;
 
-typedef struct AioWorkerSlot
+typedef struct PgAioWorkerSlot
 {
 	Latch	   *latch;
 	bool		in_use;
-} AioWorkerSlot;
+} PgAioWorkerSlot;
 
-typedef struct AioWorkerControl
+typedef struct PgAioWorkerControl
 {
 	uint64		idle_worker_mask;
-	AioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
-} AioWorkerControl;
+	PgAioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
+} PgAioWorkerControl;
 
 
 static size_t pgaio_worker_shmem_size(void);
@@ -98,8 +98,8 @@ int			io_workers = 3;
 
 static int	io_worker_queue_size = 64;
 static int	MyIoWorkerId;
-static AioWorkerSubmissionQueue *io_worker_submission_queue;
-static AioWorkerControl *io_worker_control;
+static PgAioWorkerSubmissionQueue *io_worker_submission_queue;
+static PgAioWorkerControl *io_worker_control;
 
 
 static size_t
@@ -108,15 +108,15 @@ pgaio_worker_queue_shmem_size(int *queue_size)
 	/* Round size up to next power of two so we can make a mask. */
 	*queue_size = pg_nextpower2_32(io_worker_queue_size);
 
-	return offsetof(AioWorkerSubmissionQueue, ios) +
+	return offsetof(PgAioWorkerSubmissionQueue, ios) +
 		sizeof(uint32) * *queue_size;
 }
 
 static size_t
 pgaio_worker_control_shmem_size(void)
 {
-	return offsetof(AioWorkerControl, workers) +
-		sizeof(AioWorkerSlot) * MAX_IO_WORKERS;
+	return offsetof(PgAioWorkerControl, workers) +
+		sizeof(PgAioWorkerSlot) * MAX_IO_WORKERS;
 }
 
 static size_t
@@ -181,7 +181,7 @@ pgaio_choose_idle_worker(void)
 static bool
 pgaio_worker_submission_queue_insert(PgAioHandle *ioh)
 {
-	AioWorkerSubmissionQueue *queue;
+	PgAioWorkerSubmissionQueue *queue;
 	uint32		new_head;
 
 	queue = io_worker_submission_queue;
@@ -202,7 +202,7 @@ pgaio_worker_submission_queue_insert(PgAioHandle *ioh)
 static uint32
 pgaio_worker_submission_queue_consume(void)
 {
-	AioWorkerSubmissionQueue *queue;
+	PgAioWorkerSubmissionQueue *queue;
 	uint32		result;
 
 	queue = io_worker_submission_queue;
