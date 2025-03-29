@@ -78,6 +78,7 @@ static void pgaio_worker_shmem_init(bool first_time);
 
 static bool pgaio_worker_needs_synchronous_execution(PgAioHandle *ioh);
 static int	pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios);
+static void pgaio_worker_wait_one(PgAioHandle *ioh, uint64 ref_generation);
 
 
 const IoMethodOps pgaio_worker_ops = {
@@ -86,6 +87,7 @@ const IoMethodOps pgaio_worker_ops = {
 
 	.needs_synchronous_execution = pgaio_worker_needs_synchronous_execution,
 	.submit = pgaio_worker_submit,
+	.wait_one = pgaio_worker_wait_one,
 };
 
 
@@ -124,6 +126,7 @@ pgaio_worker_shmem_size(void)
 
 	sz = pgaio_worker_queue_shmem_size(&queue_size);
 	sz = add_size(sz, pgaio_worker_control_shmem_size());
+	sz = add_size(sz, pgaio_cq_shmem_size());
 
 	return sz;
 }
@@ -133,6 +136,8 @@ pgaio_worker_shmem_init(bool first_time)
 {
 	bool		found;
 	int			queue_size;
+
+	pgaio_cq_shmem_init(first_time);
 
 	io_worker_submission_queue =
 		ShmemInitStruct("AioWorkerSubmissionQueue",
@@ -284,7 +289,7 @@ pgaio_worker_submit_internal(int nios, PgAioHandle *ios[])
 	{
 		for (int i = 0; i < nsync; ++i)
 		{
-			pgaio_io_perform_synchronously(synchronous_ios[i]);
+			pgaio_io_perform_synchronously(synchronous_ios[i], false);
 		}
 	}
 }
@@ -297,11 +302,53 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 		PgAioHandle *ioh = staged_ios[i];
 
 		pgaio_io_prepare_submit(ioh);
+		pgaio_cq_prepare_submit(ioh);
 	}
 
 	pgaio_worker_submit_internal(num_staged_ios, staged_ios);
 
 	return num_staged_ios;
+}
+
+static void
+pgaio_worker_wait_one(PgAioHandle *ioh, uint64 ref_generation)
+{
+	PgAioHandleState state;
+	int			processed = 0;
+
+	/*
+	 * Initial check without condition variable churn for the common case that
+	 * the worker has already called pgaio_cq_insert().
+	 */
+	START_CRIT_SECTION();
+	if (!pgaio_cq_in_progress(ioh))
+		processed = pgaio_cq_try_process_completion(ioh);
+	END_CRIT_SECTION();
+
+	if (processed > 0)
+		return;
+
+	/*
+	 * Wait for the worker to call pgaio_cq_insert(), or any backend to beat
+	 * us to pgaio_cq_try_process_completion().
+	 */
+	START_CRIT_SECTION();
+	ConditionVariablePrepareToSleep(&ioh->cv);
+	while (!pgaio_io_was_recycled(ioh, ref_generation, &state) &&
+		   state == PGAIO_HS_SUBMITTED)
+	{
+		bool in_progress = pgaio_cq_in_progress(ioh);
+
+		if (!in_progress && pgaio_cq_try_process_completion(ioh) > 0)
+			break;
+
+		ConditionVariableSleep(&ioh->cv,
+							   in_progress ?
+							   WAIT_EVENT_AIO_IO_IPC_EXECUTION :
+							   WAIT_EVENT_AIO_IO_COMPLETION);
+	}
+	ConditionVariableCancelSleep();
+	END_CRIT_SECTION();
 }
 
 /*
@@ -440,7 +487,7 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			errno = error_errno;
 
 			START_CRIT_SECTION();
-			pgaio_io_process_completion(error_ioh, -error_errno);
+			pgaio_cq_insert(error_ioh, -error_errno, true);
 			END_CRIT_SECTION();
 		}
 
@@ -495,6 +542,7 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		if (io_index != UINT32_MAX)
 		{
 			PgAioHandle *ioh = NULL;
+			int32		result;
 
 			ioh = &pgaio_ctl->io_handles[io_index];
 			error_ioh = ioh;
@@ -550,11 +598,13 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 
 			/*
 			 * We don't expect this to ever fail with ERROR or FATAL, no need
-			 * to keep error_ioh set to the IO.
-			 * pgaio_io_perform_synchronously() contains a critical section to
-			 * ensure we don't accidentally fail.
+			 * to keep error_ioh set to the IO.  We hand the result off to
+			 * regular backends to process.
 			 */
-			pgaio_io_perform_synchronously(ioh);
+			START_CRIT_SECTION();
+			result = pgaio_io_perform_synchronously(ioh, false);
+			pgaio_cq_insert(ioh, result, true);
+			END_CRIT_SECTION();
 
 			RESUME_INTERRUPTS();
 			errcallback.arg = NULL;
