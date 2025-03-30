@@ -1116,6 +1116,17 @@ AtEOXact_Aio(bool is_commit)
 }
 
 /*
+ * Might need to register fds used by IO method.
+ */
+void
+pgaio_opened_fd(int fd)
+{
+	if (pgaio_my_backend &&
+		pgaio_method_ops->opened_fd)
+		pgaio_method_ops->opened_fd(fd);
+}
+
+/*
  * Need to submit staged but not yet submitted IOs using the fd, otherwise
  * the IO would end up targeting something bogus.
  */

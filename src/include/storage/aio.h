@@ -31,6 +31,10 @@
 #define IOMETHOD_POSIX_AIO_ENABLED
 #endif
 
+#if defined(WIN32)
+#define IOMETHOD_IOCP_ENABLED
+#endif
+
 
 /* Enum for io_method GUC. */
 typedef enum IoMethod
@@ -42,6 +46,9 @@ typedef enum IoMethod
 #endif
 #ifdef IOMETHOD_POSIX_AIO_ENABLED
 	IOMETHOD_POSIX_AIO,
+#endif
+#ifdef IOMETHOD_IOCP_ENABLED
+	IOMETHOD_IOCP,
 #endif
 } IoMethod;
 
@@ -364,6 +371,7 @@ extern bool pgaio_have_staged(void);
  * --------------------------------------------------------------------------------
  */
 
+extern void pgaio_opened_fd(int fd);
 extern void pgaio_closing_fd(int fd);
 
 

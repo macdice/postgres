@@ -281,6 +281,10 @@ typedef struct IoMethodOps
 	 */
 	void		(*init_backend) (void);
 
+	/*
+	 * IO method might need to register fds for asynchronous usage. Optional.
+	 */
+	void		(*opened_fd) (int fd);
 
 	/* handling of IOs */
 

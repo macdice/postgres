@@ -789,6 +789,7 @@ ExtensionVersionInfo
 FDWCollateState
 FD_SET
 FILE
+FILE_SEGMENT_ELEMENT
 FILETIME
 FSMAddress
 FSMPage
