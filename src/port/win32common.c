@@ -19,6 +19,8 @@
 #include "postgres.h"
 #endif
 
+#include "port/pg_iovec.h"
+
 /*
  * pgwin32_get_file_type
  *
@@ -61,4 +63,40 @@ pgwin32_get_file_type(HANDLE hFile)
 	}
 
 	return fileType;
+}
+
+/*
+ * Windows scatter/gather works with lists of raw page addresses, which this
+ * function produces from Unix iovec format.  All iovecs must be aligned to
+ * PG_WIN32_FILE_SEGMENT_SIZE (but they always are in PostgreSQL when using
+ * direct I/O, and vectored I/O is only available on Windows with direct I/O).
+ * Returns zero on badly aligned or input that would exceed maxsegments.
+ */
+DWORD
+pg_win32_iovec_to_file_segments(FILE_SEGMENT_ELEMENT * segments,
+								int maxsegments,
+								struct iovec *iov,
+								int iovcnt)
+{
+	DWORD		nsegments = 0;
+
+	for (int i = 0; i < iovcnt; ++i)
+	{
+		char	   *base = iov[i].iov_base;
+		size_t		len = iov[i].iov_len;
+
+		if (nsegments > maxsegments ||
+			((intptr_t) base) % PG_WIN32_FILE_SEGMENT_SIZE != 0 ||
+			len % PG_WIN32_FILE_SEGMENT_SIZE != 0)
+			return 0;
+
+		while (len > 0)
+		{
+			segments[nsegments++].Buffer = base;
+			base += PG_WIN32_FILE_SEGMENT_SIZE;
+			len -= PG_WIN32_FILE_SEGMENT_SIZE;
+		}
+	}
+
+	return nsegments * PG_WIN32_FILE_SEGMENT_SIZE;
 }

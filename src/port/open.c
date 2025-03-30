@@ -75,6 +75,7 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 	assert((fileFlags & ((O_RDONLY | O_WRONLY | O_RDWR) | O_APPEND |
 						 (O_RANDOM | O_SEQUENTIAL | O_TEMPORARY) |
 						 _O_SHORT_LIVED | O_DSYNC | O_DIRECT |
+						 O_OVERLAPPED |
 						 (O_CREAT | O_TRUNC | O_EXCL) | (O_TEXT | O_BINARY))) == fileFlags);
 
 	sa.nLength = sizeof(sa);
@@ -95,6 +96,7 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 						   ((fileFlags & O_SEQUENTIAL) ? FILE_FLAG_SEQUENTIAL_SCAN : 0) |
 						   ((fileFlags & _O_SHORT_LIVED) ? FILE_ATTRIBUTE_TEMPORARY : 0) |
 						   ((fileFlags & O_TEMPORARY) ? FILE_FLAG_DELETE_ON_CLOSE : 0) |
+						   ((fileFlags & O_OVERLAPPED) ? FILE_FLAG_OVERLAPPED : 0) |
 						   ((fileFlags & O_DIRECT) ? FILE_FLAG_NO_BUFFERING : 0) |
 						   ((fileFlags & O_DSYNC) ? FILE_FLAG_WRITE_THROUGH : 0),
 						   NULL)) == INVALID_HANDLE_VALUE)
