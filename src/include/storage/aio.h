@@ -35,6 +35,9 @@
 #define IOMETHOD_IOCP_ENABLED
 #endif
 
+#if defined(WIN32)
+#define IOMETHOD_IORING_ENABLED
+#endif
 
 /* Enum for io_method GUC. */
 typedef enum IoMethod
@@ -49,6 +52,9 @@ typedef enum IoMethod
 #endif
 #ifdef IOMETHOD_IOCP_ENABLED
 	IOMETHOD_IOCP,
+#endif
+#ifdef IOMETHOD_IORING_ENABLED
+	IOMETHOD_IORING,
 #endif
 } IoMethod;
 

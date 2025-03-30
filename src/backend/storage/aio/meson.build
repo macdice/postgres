@@ -10,6 +10,7 @@ backend_sources += files(
   'aio_target.c',
   'method_io_uring.c',
   'method_iocp.c',
+  'method_ioring.c',
   'method_posix_aio.c',
   'method_sync.c',
   'method_worker.c',

@@ -73,6 +73,9 @@ const struct config_enum_entry io_method_options[] = {
 #ifdef IOMETHOD_POSIX_AIO_ENABLED
 	{"posix_aio", IOMETHOD_POSIX_AIO, false},
 #endif
+#ifdef IOMETHOD_IORING_ENABLED
+	{"ioring", IOMETHOD_IORING, false},
+#endif
 	{NULL, 0, false}
 };
 
