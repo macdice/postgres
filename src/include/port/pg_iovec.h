@@ -40,6 +40,18 @@ struct iovec
  */
 #define PG_IOV_MAX Min(IOV_MAX, 128)
 
+/* Expose whether vectored I/O is emulated on this platform. */
+#if defined(WIN32)
+/* Windows only has it for O_DIRECT | O_OVERLAPPED. */
+#define pg_iov_emulated(direct) (!(direct))
+#elif HAVE_DECL_PREADV && HAVE_DECL_PWRITEV
+/* In practice this covers all modern Unixen. */
+#define pg_iov_emulated(direct) false
+#else
+/* A few historical late adopters, not likely in the field. */
+#define pg_iov_emulated(direct) true
+#endif
+
 /*
  * Like preadv(), but with a prefix to remind us of a side-effect: on Windows
  * this changes the current file position.
@@ -116,6 +128,32 @@ pg_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 	}
 	return sum;
 #endif
+}
+
+/*
+ * Variants for callers that opened with O_DIRECT and (Windows only)
+ * O_OVERLAPPED.  This reaches real vectored I/O on Windows, but fails without
+ * those flags.
+ */
+
+static inline ssize_t
+pg_direct_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+{
+#ifdef WIN32
+	if (iovcnt > 1)
+		return pg_win32_direct_preadv(fd, iov, iovcnt, offset);
+#endif
+	return pg_preadv(fd, iov, iovcnt, offset);
+}
+
+static inline ssize_t
+pg_direct_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+{
+#ifdef WIN32
+	if (iovcnt > 1)
+		return pg_win32_direct_pwritev(fd, iov, iovcnt, offset);
+#endif
+	return pg_pwritev(fd, iov, iovcnt, offset);
 }
 
 #endif							/* PG_IOVEC_H */

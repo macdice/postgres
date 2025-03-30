@@ -166,6 +166,7 @@
 #define SIGTSTP				18
 #define SIGCONT				19
 #define SIGCHLD				20
+#define SIGIO				23
 #define SIGWINCH			28
 #define SIGUSR1				30
 #define SIGUSR2				31
@@ -585,8 +586,27 @@ typedef unsigned short mode_t;
 
 /* in port/win32pread.c */
 extern ssize_t pg_pread(int fd, void *buf, size_t nbyte, off_t offset);
+extern ssize_t pg_win32_direct_preadv(int fd, struct iovec *iovec, int iovcnt, off_t offset);
 
 /* in port/win32pwrite.c */
 extern ssize_t pg_pwrite(int fd, const void *buf, size_t nbyte, off_t offset);
+extern ssize_t pg_win32_direct_pwritev(int fd, struct iovec *iovec, int iovcnt, off_t offset);
+
+/*
+ * This should in theory be GetSystemInfo()'s dwPageSize, but it's
+ * PG_IO_ALIGN_SIZE on all known modern systems.  If it's ever wrong, direct
+ * I/O operations will fail here and elsewhere, and you'll have to turn that
+ * mode off, but that applies to every OS.
+ */
+#define PG_WIN32_FILE_SEGMENT_SIZE PG_IO_ALIGN_SIZE
+
+/* Max segments expected for block-oriented I/O. */
+#define PG_WIN32_FILE_SEGMENTS_MAX (PG_IOV_MAX * (BLCKSZ / PG_IO_ALIGN_SIZE))
+
+/* in port/win32common.c */
+extern DWORD pg_win32_iovec_to_file_segments(FILE_SEGMENT_ELEMENT * segments,
+											 int maxsegments,
+											 struct iovec *iov,
+											 int iovcnt);
 
 #endif							/* PG_WIN32_PORT_H */

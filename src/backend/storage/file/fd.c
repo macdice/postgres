@@ -1621,6 +1621,17 @@ PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 	 */
 	fileFlags |= O_CLOEXEC;
 
+#ifdef WIN32
+
+	/*
+	 * Enable overlapped for all vfds on Windows.  This is needed for
+	 * io_method=iocp, and it also allows true vectored I/O for any IO method
+	 * if O_DIRECT is also enabled.  Our pg_pread() etc functions know how to
+	 * wait for completion if requires, so they remain fully synchronous.
+	 */
+	fileFlags |= O_OVERLAPPED;
+#endif
+
 	vfdP->fd = BasicOpenFilePerm(fileName, fileFlags, fileMode);
 
 	if (vfdP->fd < 0)
@@ -2183,7 +2194,10 @@ FileReadV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 
 retry:
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_preadv(vfdP->fd, iov, iovcnt, offset);
+	if (vfdP->fileFlags & PG_O_DIRECT)
+		returnCode = pg_direct_preadv(vfdP->fd, iov, iovcnt, offset);
+	else
+		returnCode = pg_preadv(vfdP->fd, iov, iovcnt, offset);
 	pgstat_report_wait_end();
 
 	if (returnCode < 0)
@@ -2293,7 +2307,10 @@ FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 
 retry:
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pwritev(vfdP->fd, iov, iovcnt, offset);
+	if (vfdP->fileFlags & PG_O_DIRECT)
+		returnCode = pg_direct_pwritev(vfdP->fd, iov, iovcnt, offset);
+	else
+		returnCode = pg_pwritev(vfdP->fd, iov, iovcnt, offset);
 	pgstat_report_wait_end();
 
 	if (returnCode >= 0)
