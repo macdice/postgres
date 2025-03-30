@@ -73,6 +73,9 @@ const struct config_enum_entry io_method_options[] = {
 #ifdef IOMETHOD_POSIX_AIO_ENABLED
 	{"posix_aio", IOMETHOD_POSIX_AIO, false},
 #endif
+#ifdef IOMETHOD_IOCP_ENABLED
+	{"iocp", IOMETHOD_IOCP, false},
+#endif
 	{NULL, 0, false}
 };
 
@@ -95,6 +98,9 @@ static const IoMethodOps *const pgaio_method_ops_table[] = {
 #endif
 #ifdef IOMETHOD_POSIX_AIO_ENABLED
 	[IOMETHOD_POSIX_AIO] = &pgaio_posix_aio_ops,
+#endif
+#ifdef IOMETHOD_IOCP_ENABLED
+	[IOMETHOD_IOCP] = &pgaio_iocp_ops,
 #endif
 };
 
@@ -1113,6 +1119,17 @@ AtEOXact_Aio(bool is_commit)
 	 * As we aren't in batchmode, there shouldn't be any unsubmitted IOs.
 	 */
 	Assert(pgaio_my_backend->num_staged_ios == 0);
+}
+
+/*
+ * Might need to register fds used by IO method.
+ */
+void
+pgaio_opened_fd(int fd)
+{
+	if (pgaio_my_backend &&
+		pgaio_method_ops->opened_fd)
+		pgaio_method_ops->opened_fd(fd);
 }
 
 /*

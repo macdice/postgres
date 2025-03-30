@@ -1269,10 +1269,20 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 	int			actual_nblocks = *nblocks;
 	int			maxcombine = 0;
 	bool		did_start_io;
+	bool		stop_on_discontiguous_buffer;
 
 	Assert(*nblocks == 1 || allow_forwarding);
 	Assert(*nblocks > 0);
 	Assert(*nblocks <= MAX_IO_COMBINE_LIMIT);
+
+	/*
+	 * If this configuration can't use vectored I/O, then avoid the loop-based
+	 * synchronous fallback or pgaio failures by stopping at a non-combinable
+	 * address.  In practice only Windows buffered I/O is affected, and this
+	 * logic is constant-folded away for *nblocks==1 and non-Windows.
+	 */
+	stop_on_discontiguous_buffer = *nblocks > 1 &&
+		pg_iov_emulated(io_direct_flags & IO_DIRECT_DATA);
 
 	for (int i = 0; i < actual_nblocks; ++i)
 	{
@@ -1371,6 +1381,13 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 			 * Check how many blocks we can cover with the same IO. The smgr
 			 * implementation might e.g. be limited due to a segment boundary.
 			 */
+			if (stop_on_discontiguous_buffer &&
+				i > 1 &&
+				BufferGetPage(buffers[i - 1]) + BLCKSZ != BufferGetPage(buffers[i]))
+			{
+				actual_nblocks = i;
+				break;
+			}
 			if (i == 0 && actual_nblocks > 1)
 			{
 				maxcombine = smgrmaxcombine(operation->smgr,

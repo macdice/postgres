@@ -718,6 +718,9 @@ task:
     # 0x8001 is SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
     CIRRUS_WINDOWS_ERROR_MODE: 0x8001
 
+    PG_TEST_INITDB_EXTRA_OPTS: >-
+      -c io_method=iocp
+
   <<: *windows_task_template
 
   depends_on: SanityCheck

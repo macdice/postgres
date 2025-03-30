@@ -166,6 +166,7 @@
 #define SIGTSTP				18
 #define SIGCONT				19
 #define SIGCHLD				20
+#define SIGIO				23
 #define SIGWINCH			28
 #define SIGUSR1				30
 #define SIGUSR2				31
