@@ -18,6 +18,8 @@
 
 #include "postgres.h"
 
+#include <math.h>
+
 #include "access/relation.h"
 #include "fmgr.h"
 #include "storage/aio.h"
@@ -27,6 +29,7 @@
 #include "storage/checksum.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
+#include "storage/read_stream.h"
 #include "utils/builtins.h"
 #include "utils/injection_point.h"
 #include "utils/rel.h"
@@ -804,5 +807,61 @@ inj_io_reopen_detach(PG_FUNCTION_ARGS)
 #else
 	elog(ERROR, "injection points not supported");
 #endif
+	PG_RETURN_VOID();
+}
+
+static BlockNumber
+zero_callback(ReadStream *stream, void *user_data, void *pbd)
+{
+	return *(BlockNumber *) user_data;
+}
+
+PG_FUNCTION_INFO_V1(read_buffer_loop);
+Datum
+read_buffer_loop(PG_FUNCTION_ARGS)
+{
+	BlockNumber block = PG_GETARG_UINT32(0);
+	Relation	rel;
+	ReadStream *stream;
+	Buffer		buffer;
+	TimestampTz start;
+
+	rel = relation_open(TypeRelationId, AccessShareLock);
+	stream = read_stream_begin_relation(0, NULL, rel, MAIN_FORKNUM, zero_callback, &block, 0);
+	for (int loop = 0; loop < 10; loop++)
+	{
+		double		samples[25000];
+		double		avg = 0;
+		double		sum = 0;
+		double		var = 0;
+		double		dev;
+		double		stddev;
+
+		for (int i = 0; i < lengthof(samples); ++i)
+		{
+			bool flushed;
+
+			start = GetCurrentTimestamp();
+			buffer = read_stream_next_buffer(stream, NULL);
+			samples[i] = GetCurrentTimestamp() - start;
+			sum += samples[i];
+
+			ReleaseBuffer(buffer);
+			read_stream_reset(stream);
+			EvictUnpinnedBuffer(buffer, &flushed);
+		}
+		avg = sum / lengthof(samples);
+		for (int i = 0; i < lengthof(samples); i++)
+		{
+			dev = samples[i] - avg;
+			var += dev * dev;
+		}
+		stddev = sqrt(var / lengthof(samples));
+
+		elog(NOTICE, "n = %zu, avg = %.1fus, stddev = %.1f", lengthof(samples), avg, stddev);
+	}
+	read_stream_end(stream);
+	relation_close(rel, AccessShareLock);
+
 	PG_RETURN_VOID();
 }
