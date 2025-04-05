@@ -2731,16 +2731,76 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
-      <varlistentry id="guc-io-workers" xreflabel="io_workers">
-       <term><varname>io_workers</varname> (<type>int</type>)
+      <varlistentry id="guc-io-min-workers" xreflabel="io_min_workers">
+       <term><varname>io_min_workers</varname> (<type>int</type>)
        <indexterm>
-        <primary><varname>io_workers</varname> configuration parameter</primary>
+        <primary><varname>io_min_workers</varname> configuration parameter</primary>
        </indexterm>
        </term>
        <listitem>
         <para>
-         Selects the number of I/O worker processes to use. The default is
-         3. This parameter can only be set in the
+         Sets the minimum number of I/O worker processes to use. The default is
+         1. This parameter can only be set in the
+         <filename>postgresql.conf</filename> file or on the server command
+         line.
+        </para>
+        <para>
+         Only has an effect if <xref linkend="guc-io-method"/> is set to
+         <literal>worker</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry id="guc-io-max-workers" xreflabel="io_max_workers">
+       <term><varname>io_max_workers</varname> (<type>int</type>)
+       <indexterm>
+        <primary><varname>io_max_workers</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Sets the maximum number of I/O worker processes to use. The default is
+         8. This parameter can only be set in the
+         <filename>postgresql.conf</filename> file or on the server command
+         line.
+        </para>
+        <para>
+         Only has an effect if <xref linkend="guc-io-method"/> is set to
+         <literal>worker</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry id="guc-io-worker-idle-timeout" xreflabel="io_worker_idle_timeout">
+       <term><varname>io_worker_idle_timeout</varname> (<type>int</type>)
+       <indexterm>
+        <primary><varname>io_worker_idle_timeout</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Sets the time after which idle I/O worker processes will exit, reducing the
+         maximum size of the I/O worker pool towards the minimum.  The default
+         is 1 minute.
+         This parameter can only be set in the
+         <filename>postgresql.conf</filename> file or on the server command
+         line.
+        </para>
+        <para>
+         Only has an effect if <xref linkend="guc-io-method"/> is set to
+         <literal>worker</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry id="guc-io-worker-launch-interval" xreflabel="io_worker_launch_interval">
+       <term><varname>io_worker_launch_interval</varname> (<type>int</type>)
+       <indexterm>
+        <primary><varname>io_worker_launch_interval</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Sets the minimum time between launching new I/O workers.  This can be used to avoid
+         sudden bursts of new I/O workers.  The default is 100ms.
+         This parameter can only be set in the
          <filename>postgresql.conf</filename> file or on the server command
          line.
         </para>

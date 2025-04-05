@@ -40,6 +40,7 @@
 #include "storage/io_worker.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
+#include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/ps_status.h"
@@ -67,6 +68,7 @@ typedef struct PgAioWorkerSlot
 
 typedef struct PgAioWorkerControl
 {
+	volatile bool new_worker_needed;
 	uint64		idle_worker_mask;
 	PgAioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
 } PgAioWorkerControl;
@@ -89,7 +91,10 @@ const IoMethodOps pgaio_worker_ops = {
 
 
 /* GUCs */
-int			io_workers = 3;
+int			io_min_workers = 1;
+int			io_max_workers = 8;
+int			io_worker_idle_timeout = 60000;
+int			io_worker_launch_interval = 500;
 
 
 static int	io_worker_queue_size = 64;
@@ -157,6 +162,58 @@ pgaio_worker_shmem_init(bool first_time)
 			io_worker_control->workers[i].in_use = false;
 		}
 	}
+}
+
+/*
+ * Called by a worker to indicate that more workers would help.  Notifies the
+ * postmaster on level changes.  The postmaster decides whether and when to
+ * act on the information.
+ */
+static void
+pgaio_worker_set_new_worker_needed(void)
+{
+	if (!io_worker_control->new_worker_needed)
+	{
+		io_worker_control->new_worker_needed = true;
+		SendPostmasterSignal(PMSIGNAL_IO_WORKER_CHANGE);
+	}
+}
+
+/*
+ * Called by a worker when the queue is empty, to try to prevent a delayed
+ * reaction to a brief burst.  This races against the postmaster acting on the
+ * old value if it was recently set to true, but that's OK, the ordering would
+ * be indeterminate anyway even if we could use locks in the postmaster.
+ */
+static void
+pgaio_worker_reset_new_worker_needed(void)
+{
+	io_worker_control->new_worker_needed = false;
+}
+
+/*
+ * Called by the postmaster to check if a new worker is needed.
+ */
+bool
+pgaio_worker_test_new_worker_needed(void)
+{
+	return io_worker_control->new_worker_needed;
+}
+
+/*
+ * Called by the postmaster to check if a new worker is needed when it's ready
+ * to launch one, and clear the flag.
+ */
+bool
+pgaio_worker_clear_new_worker_needed(void)
+{
+	bool		result;
+
+	result = io_worker_control->new_worker_needed;
+	if (result)
+		io_worker_control->new_worker_needed = false;
+
+	return result;
 }
 
 static int
