@@ -906,6 +906,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
 		int16		io_index = stream->oldest_io_index;
+		bool		done = ReadBuffersDone(&stream->ios[io_index].op);
 
 		/* Sanity check that we still agree on the buffers. */
 		Assert(stream->ios[io_index].op.buffers ==
@@ -913,21 +914,31 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 		WaitReadBuffers(&stream->ios[io_index].op);
 
+		/* Distance ramp-up, measured in buffers. */
+		if (stream->distance >= stream->max_pinned_buffers / 2)
+			stream->distance = stream->max_pinned_buffers;
+		else
+			stream->distance *= 2;
+
 		if (io_index == stream->oldest_inflight)
 		{
+			bool		can_measure_done = false;
 			int16		ios_done = 0;
 
 			/*
-			 * Whenever we wait for the oldest inflight IO, we check how many
-			 * others were drained at the same time, and feed that number into
-			 * the adaptive controller.  Hnnghhg...
-			 *
-			 * XXX This would give a false reading if another backend drained
-			 * the owner's queue in between...  It seems we would need to be
-			 * able to get the done/inflight numbers more directly from pgaio
-			 * somehow...
+			 * When we've waited for the oldest known inflight IO and it was
+			 * not done yet, it means that we (or another backend that beats
+			 * us to it after the check, close enough in time not to matter)
+			 * will now drain IO results.  Check how many other IOs are done
+			 * at the same time, to provide the ios_done statistic to the
+			 * controller algorithm.  If it is already done, it means another
+			 * backend beat us and we have no information.  As an exception,
+			 * for worker mode we can always counts since that has no "drain"
+			 * step.
 			 */
 			read_stream_advance_io_index(stream, &stream->oldest_inflight);
+			if (io_method == IOMETHOD_WORKER || !done)
+				can_measure_done = true;
 			while (stream->oldest_inflight != stream->next_io_index &&
 				   ReadBuffersDone(&stream->ios[stream->oldest_inflight].op))
 			{
@@ -935,20 +946,17 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 				read_stream_advance_io_index(stream, &stream->oldest_inflight);
 			}
 
-			stream->ios_target =
-				aio_stream_controller_update(&stream->controller,
-											 stream->pinned_buffers <
-											 stream->max_pinned_buffers,
-											 stream->ios_target,
-											 ios_done,
-											 stream->max_ios);
-		}
+			if (can_measure_done)
+			{
+				stream->ios_target =
+					aio_stream_controller_update(&stream->controller,
+												 stream->ios_target,
+												 ios_done,
+												 stream->max_ios);
 
-		/* Distance ramp-up, measured in buffers. */
-		if (stream->distance >= stream->max_pinned_buffers / 2)
-			stream->distance = stream->max_pinned_buffers;
-		else
-			stream->distance *= 2;
+				elog(DEBUG1, "ios_done = %d, ios_target = %d", ios_done, stream->ios_target);
+			}
+		}
 
 		/* Advance oldest I/O. */
 		read_stream_advance_io_index(stream, &stream->oldest_io_index);
