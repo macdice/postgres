@@ -909,28 +909,12 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 	}
 #endif
 
-	if (unlikely(stream->pinned_buffers == 0))
+	/* Look ahead and check for end of stream. */
+	read_stream_look_ahead(stream);
+	if (stream->pinned_buffers == 0)
 	{
-		Assert(stream->oldest_buffer_index == stream->next_buffer_index);
-
-		/* End of stream reached?  */
-		if (stream->distance == 0)
-			return InvalidBuffer;
-
-		/*
-		 * The usual order of operations is that we look ahead at the bottom
-		 * of this function after potentially finishing an I/O and making
-		 * space for more, but if we're just starting up we'll need to crank
-		 * the handle to get started.
-		 */
-		read_stream_look_ahead(stream);
-
-		/* End of stream reached? */
-		if (stream->pinned_buffers == 0)
-		{
-			Assert(stream->distance == 0);
-			return InvalidBuffer;
-		}
+		Assert(stream->distance == 0);
+		return InvalidBuffer;
 	}
 
 	/* Grab the oldest pinned buffer and associated per-buffer data. */
@@ -1021,9 +1005,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 	/* Advance oldest buffer, with wrap-around. */
 	read_stream_advance_buffer(stream, &stream->oldest_buffer_index);
-
-	/* Prepare for the next call. */
-	read_stream_look_ahead(stream);
 
 #ifndef READ_STREAM_DISABLE_FAST_PATH
 	/* See if we can take the fast path for all-cached scans next time. */
