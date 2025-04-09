@@ -915,7 +915,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 		if (io_index == stream->oldest_inflight)
 		{
-			int16 ios_done = 0;			
+			int16		ios_done = 0;
 
 			/*
 			 * Whenever we wait for the oldest inflight IO, we check how many
@@ -934,7 +934,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 				ios_done++;
 				read_stream_advance_io_index(stream, &stream->oldest_inflight);
 			}
-			
+
 			stream->ios_target =
 				aio_stream_controller_update(&stream->controller,
 											 stream->pinned_buffers <
