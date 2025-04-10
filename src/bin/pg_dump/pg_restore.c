@@ -59,7 +59,7 @@ static void usage(const char *progname);
 static void read_restore_filters(const char *filename, RestoreOptions *opts);
 static bool file_exists_in_directory(const char *dir, const char *filename);
 static int	restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
-								 int numWorkers, bool append_data, int num);
+								 int numWorkers, bool append_data, int num, bool filespec_is_pipe);
 static int	read_one_statement(StringInfo inBuf, FILE *pfile);
 static int	restore_all_databases(PGconn *conn, const char *dumpdirpath,
 								  SimpleStringList db_exclude_patterns, RestoreOptions *opts, int numWorkers);
@@ -84,6 +84,7 @@ main(int argc, char **argv)
 	int			n_errors = 0;
 	bool		globals_only = false;
 	SimpleStringList db_exclude_patterns = {NULL, NULL};
+	bool 	   	filespec_is_pipe = false;
 	static int	disable_triggers = 0;
 	static int	enable_row_security = 0;
 	static int	if_exists = 0;
@@ -165,6 +166,7 @@ main(int argc, char **argv)
 		{"statistics-only", no_argument, &statistics_only, 1},
 		{"filter", required_argument, NULL, 4},
 		{"exclude-database", required_argument, NULL, 6},
+		{"pipe-command", required_argument, NULL, 7},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -346,6 +348,11 @@ main(int argc, char **argv)
 				simple_string_list_append(&db_exclude_patterns, optarg);
 				break;
 
+			case 7:			/* pipe-command */
+				inputFileSpec = pg_strdup(optarg);
+				filespec_is_pipe = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -353,11 +360,23 @@ main(int argc, char **argv)
 		}
 	}
 
-	/* Get file name from command line */
+	/* Get file name from command line. Note that filename argument and pipe-command can't both be set. */
 	if (optind < argc)
+	{
+		if (filespec_is_pipe)
+		{
+			pg_log_error_hint("Only one of [filespec, --pipe-command] allowed");
+			exit_nicely(1);
+		}
 		inputFileSpec = argv[optind++];
-	else
+	}
+	/* Even if the file argument is not provided, if the pipe-command is specified, we need to use that
+	 * as the file arg and not fallback to stdio.
+	 */
+	else if (!filespec_is_pipe)
+	{
 		inputFileSpec = NULL;
+	}
 
 	/* Complain if any arguments remain */
 	if (optind < argc)
@@ -567,7 +586,7 @@ main(int argc, char **argv)
 		if (globals_only)
 			pg_fatal("option -g/--globals-only can be used only when restoring an archive created by pg_dumpall");
 
-		n_errors = restore_one_database(inputFileSpec, opts, numWorkers, false, 0);
+		n_errors = restore_one_database(inputFileSpec, opts, numWorkers, false, 0, filespec_is_pipe);
 	}
 
 	/* Done, print a summary of ignored errors during restore. */
@@ -589,12 +608,18 @@ main(int argc, char **argv)
  */
 static int
 restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
-					 int numWorkers, bool append_data, int num)
+					 int numWorkers, bool append_data, int num, bool filespec_is_pipe)
 {
 	Archive    *AH;
 	int			n_errors;
 
-	AH = OpenArchive(inputFileSpec, opts->format, false); /*TODO: support pipes in restore */
+	if (filespec_is_pipe && opts->format != archDirectory)
+	{
+		pg_log_error_hint("Option --pipe-command is only supported with directory format.");
+		exit_nicely(1);
+	}
+
+	AH = OpenArchive(inputFileSpec, opts->format, filespec_is_pipe);
 
 	SetArchiveOptions(AH, NULL, opts);
 
@@ -1243,7 +1268,7 @@ restore_all_databases(PGconn *conn, const char *dumpdirpath,
 		opts->dumpStatistics = dumpStatistics;
 
 		/* Restore the single database. */
-		n_errors = restore_one_database(subdirpath, opts, numWorkers, true, count);
+		n_errors = restore_one_database(subdirpath, opts, numWorkers, true, count, false);
 
 		/* Print a summary of ignored errors during single database restore. */
 		if (n_errors)
