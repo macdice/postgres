@@ -75,6 +75,42 @@ command_fails_like(
 );
 
 command_fails_like(
+	[ 'pg_dump', '-Fd', '--pipe-command="cat"', '-f', 'testdir', 'test'],
+	qr/\Qpg_dump: hint: Only one of [--file, --pipe-command] allowed\E/,
+	'pg_dump: hint: Only one of [--file, --pipe-command] allowed'
+);
+
+command_fails_like(
+	[ 'pg_dump', '-Fd', '--pipe-command="cat"', '-Z', 'gzip', 'test'],
+	qr/\Qpg_dump: hint: Option --pipe-command is not supported with any compression type\E/,
+	'pg_dump: hint: Option --pipe-command is not supported with any compression type'
+);
+
+command_fails_like(
+	[ 'pg_dump', '-Fd', '--pipe-command="cat"', '--compress=lz4', 'test'],
+	qr/\Qpg_dump: hint: Option --pipe-command is not supported with any compression type\E/,
+	'pg_dump: hint: Option --pipe-command is not supported with any compression type'
+);
+
+command_fails_like(
+	[ 'pg_dump', '-Fd', '--pipe-command="cat"', '-Z', '1', 'test'],
+	qr/\Qpg_dump: hint: Option --pipe-command is not supported with any compression type\E/,
+	'pg_dump: hint: Option --pipe-command is not supported with any compression type'
+);
+
+command_fails_like(
+	[ 'pg_dump', '-Fc', '--pipe-command="cat"', 'test'],
+	qr/\Qpg_dump: hint: Option --pipe-command is only supported with directory format.\E/,
+	'pg_dump: hint: Option --pipe-command is only supported with directory format.'
+);
+
+command_fails_like(
+	[ 'pg_dump', '--format=tar', '--pipe-command="cat"', 'test'],
+	qr/\Qpg_dump: hint: Option --pipe-command is only supported with directory format.\E/,
+	'pg_dump: hint: Option --pipe-command is only supported with directory format.'
+);
+
+command_fails_like(
 	[ 'pg_dump', '-j2', '--include-foreign-data=xxx' ],
 	qr/\Qpg_dump: error: option --include-foreign-data is not supported with parallel backup\E/,
 	'pg_dump: option --include-foreign-data is not supported with parallel backup'
