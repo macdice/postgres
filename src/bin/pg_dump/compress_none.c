@@ -153,7 +153,12 @@ close_none(CompressFileHandle *CFH)
 	CFH->private_data = NULL;
 
 	if (fp)
-		ret = fclose(fp);
+	{
+		if(CFH->path_is_pipe_command)
+			ret = pclose(fp);
+		else
+			ret = fclose(fp);
+	}
 
 	return ret == 0;
 }
@@ -172,7 +177,12 @@ open_none(const char *path, int fd, const char *mode, CompressFileHandle *CFH)
 	if (fd >= 0)
 		CFH->private_data = fdopen(dup(fd), mode);
 	else
-		CFH->private_data = fopen(path, mode);
+	{
+		if (CFH->path_is_pipe_command)
+			CFH->private_data = popen(path, mode);
+		else
+			CFH->private_data = fopen(path, mode);
+	}
 
 	if (CFH->private_data == NULL)
 		return false;
@@ -185,7 +195,14 @@ open_write_none(const char *path, const char *mode, CompressFileHandle *CFH)
 {
 	Assert(CFH->private_data == NULL);
 
-	CFH->private_data = fopen(path, mode);
+	pg_log_debug("Opening %s, pipe is %s",
+				 path, CFH->path_is_pipe_command ? "true" : "false");
+
+    	if (CFH->path_is_pipe_command)
+		CFH->private_data = popen(path, mode);
+	else
+		CFH->private_data = fopen(path, mode);
+
 	if (CFH->private_data == NULL)
 		return false;
 
@@ -198,7 +215,8 @@ open_write_none(const char *path, const char *mode, CompressFileHandle *CFH)
 
 void
 InitCompressFileHandleNone(CompressFileHandle *CFH,
-						   const pg_compress_specification compression_spec)
+						   const pg_compress_specification compression_spec,
+						   bool path_is_pipe_command)
 {
 	CFH->open_func = open_none;
 	CFH->open_write_func = open_write_none;
@@ -209,6 +227,8 @@ InitCompressFileHandleNone(CompressFileHandle *CFH,
 	CFH->close_func = close_none;
 	CFH->eof_func = eof_none;
 	CFH->get_error_func = get_error_none;
+
+	CFH->path_is_pipe_command = path_is_pipe_command;
 
 	CFH->private_data = NULL;
 }

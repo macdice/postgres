@@ -594,7 +594,7 @@ restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
 	Archive    *AH;
 	int			n_errors;
 
-	AH = OpenArchive(inputFileSpec, opts->format);
+	AH = OpenArchive(inputFileSpec, opts->format, false); /*TODO: support pipes in restore */
 
 	SetArchiveOptions(AH, NULL, opts);
 

@@ -39,7 +39,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-#include "common/file_utils.h"
+//#include "common/file_utils.h"
+#include "common/percentrepl.h"
 #include "compress_io.h"
 #include "parallel.h"
 #include "pg_backup_utils.h"
@@ -158,39 +159,41 @@ InitArchiveFmt_Directory(ArchiveHandle *AH)
 	{
 		struct stat st;
 		bool		is_empty = false;
-
-		/* we accept an empty existing directory */
-		if (stat(ctx->directory, &st) == 0 && S_ISDIR(st.st_mode))
+        
+		if(!AH->fSpecIsPipe) /* no checks for pipe */
 		{
-			DIR		   *dir = opendir(ctx->directory);
-
-			if (dir)
+			/* we accept an empty existing directory */
+			if (stat(ctx->directory, &st) == 0 && S_ISDIR(st.st_mode))
 			{
-				struct dirent *d;
+				DIR		   *dir = opendir(ctx->directory);
 
-				is_empty = true;
-				while (errno = 0, (d = readdir(dir)))
+				if (dir)
 				{
-					if (strcmp(d->d_name, ".") != 0 && strcmp(d->d_name, "..") != 0)
+					struct dirent *d;
+
+					is_empty = true;
+					while (errno = 0, (d = readdir(dir)))
 					{
-						is_empty = false;
-						break;
+						if (strcmp(d->d_name, ".") != 0 && strcmp(d->d_name, "..") != 0)
+						{
+							is_empty = false;
+							break;
+						}
 					}
+
+					if (errno)
+						pg_fatal("could not read directory \"%s\": %m",
+								ctx->directory);
+
+					if (closedir(dir))
+						pg_fatal("could not close directory \"%s\": %m",
+								ctx->directory);
 				}
-
-				if (errno)
-					pg_fatal("could not read directory \"%s\": %m",
-							 ctx->directory);
-
-				if (closedir(dir))
-					pg_fatal("could not close directory \"%s\": %m",
-							 ctx->directory);
 			}
+			if (!is_empty && mkdir(ctx->directory, 0700) < 0)
+				pg_fatal("could not create directory \"%s\": %m",
+						ctx->directory);
 		}
-
-		if (!is_empty && mkdir(ctx->directory, 0700) < 0)
-			pg_fatal("could not create directory \"%s\": %m",
-					 ctx->directory);
 	}
 	else
 	{							/* Read Mode */
@@ -199,7 +202,7 @@ InitArchiveFmt_Directory(ArchiveHandle *AH)
 
 		setFilePath(AH, fname, "toc.dat");
 
-		tocFH = InitDiscoverCompressFileHandle(fname, PG_BINARY_R);
+		tocFH = InitDiscoverCompressFileHandle(fname, PG_BINARY_R, AH->fSpecIsPipe);
 		if (tocFH == NULL)
 			pg_fatal("could not open input file \"%s\": %m", fname);
 
@@ -327,7 +330,7 @@ _StartData(ArchiveHandle *AH, TocEntry *te)
 
 	setFilePath(AH, fname, tctx->filename);
 
-	ctx->dataFH = InitCompressFileHandle(AH->compression_spec);
+	ctx->dataFH = InitCompressFileHandle(AH->compression_spec, AH->fSpecIsPipe);
 
 	if (!ctx->dataFH->open_write_func(fname, PG_BINARY_W, ctx->dataFH))
 		pg_fatal("could not open output file \"%s\": %m", fname);
@@ -391,7 +394,7 @@ _PrintFileData(ArchiveHandle *AH, char *filename)
 	if (!filename)
 		return;
 
-	CFH = InitDiscoverCompressFileHandle(filename, PG_BINARY_R);
+	CFH = InitDiscoverCompressFileHandle(filename, PG_BINARY_R, AH->fSpecIsPipe);
 	if (!CFH)
 		pg_fatal("could not open input file \"%s\": %m", filename);
 
@@ -449,7 +452,7 @@ _LoadLOs(ArchiveHandle *AH, TocEntry *te)
 	 */
 	setFilePath(AH, tocfname, tctx->filename);
 
-	CFH = ctx->LOsTocFH = InitDiscoverCompressFileHandle(tocfname, PG_BINARY_R);
+	CFH = ctx->LOsTocFH = InitDiscoverCompressFileHandle(tocfname, PG_BINARY_R, AH->fSpecIsPipe);
 
 	if (ctx->LOsTocFH == NULL)
 		pg_fatal("could not open large object TOC file \"%s\" for input: %m",
@@ -460,6 +463,7 @@ _LoadLOs(ArchiveHandle *AH, TocEntry *te)
 	{
 		char		lofname[MAXPGPATH + 1];
 		char		path[MAXPGPATH];
+		char* pipe;
 
 		/* Can't overflow because line and lofname are the same length */
 		if (sscanf(line, "%u %" CppAsString2(MAXPGPATH) "s\n", &oid, lofname) != 2)
@@ -595,7 +599,7 @@ _CloseArchive(ArchiveHandle *AH)
 
 		/* The TOC is always created uncompressed */
 		compression_spec.algorithm = PG_COMPRESSION_NONE;
-		tocFH = InitCompressFileHandle(compression_spec);
+		tocFH = InitCompressFileHandle(compression_spec, AH->fSpecIsPipe);
 		if (!tocFH->open_write_func(fname, PG_BINARY_W, tocFH))
 			pg_fatal("could not open output file \"%s\": %m", fname);
 		ctx->dataFH = tocFH;
@@ -656,13 +660,42 @@ _StartLOs(ArchiveHandle *AH, TocEntry *te)
 	lclTocEntry *tctx = (lclTocEntry *) te->formatData;
 	pg_compress_specification compression_spec = {0};
 	char		fname[MAXPGPATH];
+	const char *mode;
 
 	setFilePath(AH, fname, tctx->filename);
 
 	/* The LO TOC file is never compressed */
 	compression_spec.algorithm = PG_COMPRESSION_NONE;
-	ctx->LOsTocFH = InitCompressFileHandle(compression_spec);
-	if (!ctx->LOsTocFH->open_write_func(fname, "ab", ctx->LOsTocFH))
+	ctx->LOsTocFH = InitCompressFileHandle(compression_spec, AH->fSpecIsPipe);
+	/* TODO: Finalize the correct approach for the mode.
+	 * The mode for the LOs TOC file has been "ab" from the start. That
+	 * is something we can't do for pipe-command as popen only supports
+	 * read and write. Just changing it to 'w' was not expected to be enough
+	 * and one possible solution considered is to open it in 'w' mode and
+	 * keep it open till all the LOs in the dump group are done.
+	 * 
+	 * The analysis of the current code shows that there is one ToCEntry
+	 * per blob group. And it is written by @WriteDataChunksForToCEntry.
+	 * This function calls _StartLOs once before the dumper function and
+	 * and _EndLOs once after the dumper. And the dumper dumps all the
+	 * LOs in the group. So a blob_NNN.toc is only opened once and closed
+	 * after all the entries are written. Therefore the mode can be made 'w'
+	 * for all the cases. We tested changing the mode to PG_BINARY_W and
+	 * the tests passed. But in case there are some missing scenarios, we
+	 * have not made that change here. Instead for now only doing it for the
+         * pipe command.
+	 * In short there are 3 solutions :
+	 * 1. Change the mode for everything (preferred)
+	 * 2. Change it only for pipe-command (done for time-being)
+	 * 3. Change it for pipe-command and then cache those handles and
+         *    close them in the end (based on the code review, we might
+	 *    pick this).
+	 */
+	if (AH->fSpecIsPipe)
+		mode = PG_BINARY_W;
+	else
+		mode = "ab";
+	if (!ctx->LOsTocFH->open_write_func(fname, mode, ctx->LOsTocFH))
 		pg_fatal("could not open output file \"%s\": %m", fname);
 }
 
@@ -676,10 +709,22 @@ _StartLO(ArchiveHandle *AH, TocEntry *te, Oid oid)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
 	char		fname[MAXPGPATH];
+	char* pipe;
+	char blob_name[MAXPGPATH];
 
-	snprintf(fname, MAXPGPATH, "%s/blob_%u.dat", ctx->directory, oid);
+	if(AH->fSpecIsPipe) 
+	{
+		snprintf(blob_name, MAXPGPATH, "blob_%u.dat", oid);
+		pipe = replace_percent_placeholders(ctx->directory, "pipe-command", "f", blob_name);
+		strcpy(fname, pipe);
+		/* TODO:figure out how to free the allocated string when replace_percent_placeholders isused in frontend*/
+	}
+	 else
+	{
+		snprintf(fname, MAXPGPATH, "%s/blob_%u.dat", ctx->directory, oid);
+	}
 
-	ctx->dataFH = InitCompressFileHandle(AH->compression_spec);
+	ctx->dataFH = InitCompressFileHandle(AH->compression_spec, AH->fSpecIsPipe);
 	if (!ctx->dataFH->open_write_func(fname, PG_BINARY_W, ctx->dataFH))
 		pg_fatal("could not open output file \"%s\": %m", fname);
 }
@@ -740,15 +785,26 @@ setFilePath(ArchiveHandle *AH, char *buf, const char *relativeFilename)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
 	char	   *dname;
+	char	   *pipe;
 
 	dname = ctx->directory;
 
-	if (strlen(dname) + 1 + strlen(relativeFilename) + 1 > MAXPGPATH)
-		pg_fatal("file name too long: \"%s\"", dname);
 
-	strcpy(buf, dname);
-	strcat(buf, "/");
-	strcat(buf, relativeFilename);
+	if(AH->fSpecIsPipe) 
+	{
+		pipe = replace_percent_placeholders(dname, "pipe-command", "f", relativeFilename);
+		strcpy(buf, pipe);
+		/* TODO:figure out how to free the allocated string when replace_percent_placeholders isused in frontend*/
+	}
+	else /* replace all ocurrences of %f in dname with relativeFilename */
+	{
+		if (strlen(dname) + 1 + strlen(relativeFilename) + 1 > MAXPGPATH)
+			pg_fatal("file name too long: \"%s\"", dname);
+
+		strcpy(buf, dname);
+		strcat(buf, "/");
+		strcat(buf, relativeFilename);
+	}
 }
 
 /*
@@ -790,17 +846,24 @@ _PrepParallelRestore(ArchiveHandle *AH)
 		 * only need an approximate indicator of that.
 		 */
 		setFilePath(AH, fname, tctx->filename);
+		pg_log_error("filename: %s", fname);
 
 		if (stat(fname, &st) == 0)
 			te->dataLength = st.st_size;
 		else if (AH->compression_spec.algorithm != PG_COMPRESSION_NONE)
 		{
+			if(AH->fSpecIsPipe)
+				pg_log_error("pipe and compressed");
+				
 			if (AH->compression_spec.algorithm == PG_COMPRESSION_GZIP)
 				strlcat(fname, ".gz", sizeof(fname));
 			else if (AH->compression_spec.algorithm == PG_COMPRESSION_LZ4)
 				strlcat(fname, ".lz4", sizeof(fname));
-			else if (AH->compression_spec.algorithm == PG_COMPRESSION_ZSTD)
+			else if (AH->compression_spec.algorithm == PG_COMPRESSION_ZSTD){
+				pg_log_error("filename: %s", fname);
 				strlcat(fname, ".zst", sizeof(fname));
+				pg_log_error("filename: %s", fname);
+			}
 
 			if (stat(fname, &st) == 0)
 				te->dataLength = st.st_size;
