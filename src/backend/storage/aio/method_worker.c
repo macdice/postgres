@@ -57,6 +57,16 @@
 /* Debugging support: show current IO and wakeups:ios statistics in ps. */
 /* #define PGAIO_WORKER_SHOW_PS_INFO */
 
+#define PGAIO_WORKER_LOCK_STATS
+#ifdef PGAIO_WORKER_LOCK_STATS
+#define PGAIO_WORKER_LOCK_STATS_LOG 8192
+static int	io_worker_lock_success[3];
+static int	io_worker_lock_failure[3];
+static int	io_worker_ios;
+static int	io_worker_ios_sync;
+static int	io_worker_ios_async;
+#endif
+
 typedef struct PgAioWorkerSubmissionQueue
 {
 	uint32		size;
@@ -408,19 +418,43 @@ pgaio_worker_needs_synchronous_execution(PgAioHandle *ioh)
 		|| !pgaio_io_can_reopen(ioh);
 }
 
+static bool
+pgaio_worker_lock_adaptive(LWLock *lock)
+{
+	if (LWLockConditionalAcquire(lock, LW_EXCLUSIVE))
+		return true;
+	for (int i = 0; i < 4; ++i)
+		pg_spin_delay();
+	return LWLockAcquire(lock, LW_EXCLUSIVE);
+}
+
+static bool
+pgaio_worker_try_lock_adaptive(LWLock *lock)
+{
+	if (LWLockConditionalAcquire(lock, LW_EXCLUSIVE))
+		return true;
+	for (int i = 0; i < 4; ++i)
+		pg_spin_delay();
+	return LWLockConditionalAcquire(lock, LW_EXCLUSIVE);
+}
+
 static int
 pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 {
 	PgAioHandle **synchronous_ios = NULL;
 	int			nsync = 0;
 	int			worker = -1;
+#ifdef PGAIO_WORKER_LOCK_STATS
+	int			sync_count = 0;
+	bool		before_syscall = true;
+#endif
 
 	Assert(num_staged_ios <= PGAIO_SUBMIT_BATCH_SIZE);
 
 	for (int i = 0; i < num_staged_ios; i++)
 		pgaio_io_prepare_submit(staged_ios[i]);
 
-	if (LWLockConditionalAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE))
+	if (pgaio_worker_try_lock_adaptive(AioWorkerSubmissionQueueLock))
 	{
 		for (int i = 0; i < num_staged_ios; ++i)
 		{
@@ -447,22 +481,92 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 		/* Wake up chosen worker.  It will wake peers if necessary. */
 		if (worker != -1)
 			pgaio_worker_wake(worker);
+
+#ifdef PGAIO_WORKER_LOCK_STATS
+		io_worker_lock_success[0]++;
+		if (io_worker_ios % PGAIO_WORKER_LOCK_STATS_LOG == PGAIO_WORKER_LOCK_STATS_LOG - 1)
+		{
+			elog(LOG, "1st attempt = %0.2f%%, 2nd attempt = %0.2f%%, after syscall = %0.2f%%, async = %0.2f%%",
+				 ((double) io_worker_lock_success[0] / ((double) io_worker_lock_success[0] + io_worker_lock_failure[0])) * 100.0,
+				 ((double) io_worker_lock_success[1] / ((double) io_worker_lock_success[1] + io_worker_lock_failure[1])) * 100.0,
+				 ((double) io_worker_lock_success[2] / ((double) io_worker_lock_success[2] + io_worker_lock_failure[2])) * 100.0,
+				 ((double) io_worker_ios_async / (double) io_worker_ios) * 100.0);
+			for (int i = 0; i < 3; ++i)
+			{
+				io_worker_lock_success[0] = 0;
+				io_worker_lock_failure[0] = 0;
+			}
+			io_worker_ios = 0;
+			io_worker_ios_sync = 0;
+			io_worker_ios_async = 0;
+		}
+#endif
 	}
 	else
 	{
-		/* do everything synchronously, no wakeup needed */
+		/* Prepare to do everything synchronously, no wakeup needed. */
 		synchronous_ios = staged_ios;
 		nsync = num_staged_ios;
+
+#ifdef PGAIO_WORKER_LOCK_STATS
+		io_worker_lock_failure[0]++;
+#endif
 	}
 
-	/* Run whatever is left synchronously. */
-	if (nsync > 0)
+	while (nsync > 0)
 	{
-		for (int i = 0; i < nsync; ++i)
+		/* Try again. */
+		if (pgaio_worker_try_lock_adaptive(AioWorkerSubmissionQueueLock))
 		{
-			pgaio_io_perform_synchronously(synchronous_ios[i]);
+			worker = -1;
+
+			while (pgaio_worker_submission_queue_insert(*synchronous_ios))
+			{
+				if (worker == -1)
+					worker = pgaio_worker_choose_idle(0);
+
+				++synchronous_ios;
+				if (--nsync == 0)
+					break;
+			}
+			LWLockRelease(AioWorkerSubmissionQueueLock);
+
+			if (worker != -1)
+				pgaio_worker_wake(worker);
+#ifdef PGAIO_WORKER_LOCK_STATS
+			if (before_syscall)
+				io_worker_lock_success[1]++;
+			else
+				io_worker_lock_success[2]++;
+#endif
+		}
+#ifdef PGAIO_WORKER_LOCK_STATS
+		else
+		{
+			if (before_syscall)
+				io_worker_lock_failure[1]++;
+			else
+				io_worker_lock_failure[2]++;
+		}
+#endif
+
+		/* Run one IO synchronously. */
+		if (nsync > 0)
+		{
+			pgaio_io_perform_synchronously(*synchronous_ios++);
+			nsync--;
+#ifdef PGAIO_WORKER_LOCK_STATS
+			before_syscall = false;
+			sync_count++;
+#endif
 		}
 	}
+
+#ifdef PGAIO_WORKER_LOCK_STATS
+	io_worker_ios += num_staged_ios;
+	io_worker_ios_sync += sync_count;
+	io_worker_ios_async += num_staged_ios - sync_count;
+#endif
 
 	return num_staged_ios;
 }
@@ -676,7 +780,7 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		 * The lwlock acquisition also provides the necessary memory barrier
 		 * to ensure that we don't see an outdated data in the handle.
 		 */
-		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+		pgaio_worker_lock_adaptive(AioWorkerSubmissionQueueLock);
 		if ((io_index = pgaio_worker_submission_queue_consume()) == -1)
 		{
 			/* Nothing to do.  Mark self idle. */
