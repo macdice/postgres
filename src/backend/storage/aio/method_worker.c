@@ -295,11 +295,29 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 		SetLatch(wakeup);
 
 	/* Run whatever is left synchronously. */
-	if (nsync > 0)
+	while (nsync > 0)
 	{
-		for (int i = 0; i < nsync; ++i)
+		pgaio_io_perform_synchronously(*synchronous_ios++);
+		nsync--;
+
+		/* Between synchronous operations, try to enqueue again. */
+		if (nsync > 0)
 		{
-			pgaio_io_perform_synchronously(synchronous_ios[i]);
+			wakeup = NULL;
+			if (LWLockConditionalAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE))
+			{
+				while (nsync > 0 &&
+					   pgaio_worker_submission_queue_insert(*synchronous_ios))
+				{
+					synchronous_ios++;
+					nsync--;
+					if (wakeup == NULL && (worker = pgaio_worker_choose_idle()) >= 0)
+						wakeup = io_worker_control->workers[worker].latch;
+				}
+				LWLockRelease(AioWorkerSubmissionQueueLock);
+			}
+			if (wakeup)
+				SetLatch(wakeup);
 		}
 	}
 
