@@ -250,6 +250,12 @@ pgaio_iocp_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 			/* Processed synchronously. */
 			pgaio_io_process_completion(ioh, size);
 		}
+		else if (GetLastError() == ERROR_HANDLE_EOF)
+		{
+			/* End of file processed synchonously. */
+			Assert(ioh->op == PGAIO_OP_READV);
+			pgaio_io_process_completion(ioh, 0);
+		}
 		else if (GetLastError() != ERROR_IO_PENDING)
 		{
 			/* Failed to start IO. */
@@ -349,10 +355,25 @@ pgaio_iocp_drain_local(bool wait, bool process)
 		int32		result;
 
 		overlapped = events[i].lpOverlapped;
+
+		/*
+		 * We might receive a notification about a pseudo-synchronous I/O from
+		 * win32pread.c etc.  Skip it.
+		 */
+		if (overlapped->hEvent != NULL)
+			continue;
+
 		if (!GetOverlappedResult(NULL, overlapped, &transferred, false))
 		{
-			_dosmaperr(GetLastError());
-			result = -errno;
+			if (GetLastError() == ERROR_HANDLE_EOF)
+			{
+				result = 0;
+			}
+			else
+			{
+				_dosmaperr(GetLastError());
+				result = -errno;
+			}
 		}
 		else
 		{
