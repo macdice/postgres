@@ -261,6 +261,8 @@ ecpg_log(const char *format,...)
 	else
 		snprintf(fmt, bufsize, "[%d]: %s", (int) getpid(), intl_format);
 
+	sqlca = ECPGget_sqlca();
+
 	pg_mtx_lock(&debug_mutex);
 
 	/* Now that we hold the mutex, recheck simple_debug */
