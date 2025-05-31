@@ -3266,6 +3266,18 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"io_min_fallocate",
+			PGC_USERSET,
+			RESOURCES_IO,
+			gettext_noop("Threshold for preferring posix_fallocate() when extending data files."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&io_min_fallocate,
+		8, 0, INT_MAX
+	},
+
+	{
 		{"io_max_combine_limit",
 			PGC_POSTMASTER,
 			RESOURCES_IO,

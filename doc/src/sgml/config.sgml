@@ -2684,6 +2684,23 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
+      <varlistentry id="guc-io-min-fallocate" xreflabel="io_min_fallocate">
+       <term><varname>io_min_fallocate</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>io_min_fallocate</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Threshold at which <function>posix_fallocate()</function> is used to
+         extend data files instead of writing zeroes.  <literal>0</literal>
+         means never (always write
+         zeroes), and other values indicate a number of blocks.
+         The default is <literal>8</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="guc-io-max-combine-limit" xreflabel="io_max_combine_limit">
        <term><varname>io_max_combine_limit</varname> (<type>integer</type>)
        <indexterm>

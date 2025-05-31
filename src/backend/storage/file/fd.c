@@ -164,6 +164,9 @@ bool		data_sync_retry = false;
 /* How SyncDataDirectory() should do its job. */
 int			recovery_init_sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
 
+/* At what size FileFallocate() should be preferred over FileZero(). */
+int			io_min_fallocate = 8;
+
 /* Which kinds of files should be opened with PG_O_DIRECT. */
 int			io_direct_flags;
 

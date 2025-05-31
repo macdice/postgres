@@ -588,11 +588,9 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		 * to allocate page cache space for the extended pages.
 		 *
 		 * However, we don't use FileFallocate() for small extensions, as it
-		 * defeats delayed allocation on some filesystems. Not clear where
-		 * that decision should be made though? For now just use a cutoff of
-		 * 8, anything between 4 and 8 worked OK in some local testing.
+		 * defeats delayed allocation on some filesystems.
 		 */
-		if (numblocks > 8)
+		if (io_min_fallocate > 0 && numblocks >= io_min_fallocate)
 		{
 			int			ret;
 

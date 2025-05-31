@@ -60,6 +60,7 @@ typedef int File;
 extern PGDLLIMPORT int max_files_per_process;
 extern PGDLLIMPORT bool data_sync_retry;
 extern PGDLLIMPORT int recovery_init_sync_method;
+extern PGDLLIMPORT int io_min_fallocate;
 extern PGDLLIMPORT int io_direct_flags;
 
 /*
