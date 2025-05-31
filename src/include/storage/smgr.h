@@ -19,6 +19,9 @@
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
+#define SMGR_FLAG_SKIP_FSYNC	(1 << 0)
+#define SMGR_FLAG_FALLOCATE 	(1 << 1)
+
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -90,9 +93,9 @@ extern void smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
 extern void smgrdosyncall(SMgrRelation *rels, int nrels);
 extern void smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo);
 extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
-					   BlockNumber blocknum, const void *buffer, bool skipFsync);
+					   BlockNumber blocknum, const void *buffer, int flags);
 extern void smgrzeroextend(SMgrRelation reln, ForkNumber forknum,
-						   BlockNumber blocknum, int nblocks, bool skipFsync);
+						   BlockNumber blocknum, int nblocks, int flags);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum, int nblocks);
 extern uint32 smgrmaxcombine(SMgrRelation reln, ForkNumber forknum,

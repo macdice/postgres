@@ -296,11 +296,12 @@ smgr_bulk_flush(BulkWriteState *bulkstate)
 				smgrextend(bulkstate->smgr, bulkstate->forknum,
 						   bulkstate->relsize,
 						   &zero_buffer,
-						   true);
+						   SMGR_FLAG_SKIP_FSYNC);
 				bulkstate->relsize++;
 			}
 
-			smgrextend(bulkstate->smgr, bulkstate->forknum, blkno, page, true);
+			smgrextend(bulkstate->smgr, bulkstate->forknum, blkno, page,
+					   SMGR_FLAG_SKIP_FSYNC);
 			bulkstate->relsize++;
 		}
 		else

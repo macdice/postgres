@@ -24,6 +24,7 @@
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
+#include "storage/fd.h"
 #include "utils/catcache.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
@@ -234,4 +235,16 @@ get_tablespace_maintenance_io_concurrency(Oid spcid)
 		return maintenance_io_concurrency;
 	else
 		return spc->opts->maintenance_io_concurrency;
+}
+
+int
+get_tablespace_io_min_fallocate(Oid spcid)
+{
+	TableSpaceCacheEntry *spc;
+
+	spc = get_tablespace(spcid);
+	if (!spc->opts || spc->opts->io_min_fallocate < 0)
+		return io_min_fallocate;
+	else
+		return spc->opts->io_min_fallocate;
 }

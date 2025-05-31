@@ -475,11 +475,12 @@ mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum, bool isRedo)
  */
 void
 mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		 const void *buffer, bool skipFsync)
+		 const void *buffer, int flags)
 {
 	off_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
+	bool		skipFsync = flags & SMGR_FLAG_SKIP_FSYNC;
 
 	/* If this build supports direct I/O, the buffer must be I/O aligned. */
 	if (PG_O_DIRECT != 0 && PG_IO_ALIGN_SIZE <= BLCKSZ)
@@ -540,11 +541,12 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  */
 void
 mdzeroextend(SMgrRelation reln, ForkNumber forknum,
-			 BlockNumber blocknum, int nblocks, bool skipFsync)
+			 BlockNumber blocknum, int nblocks, int flags)
 {
 	MdfdVec    *v;
 	BlockNumber curblocknum = blocknum;
 	int			remblocks = nblocks;
+	bool		skipFsync = flags & SMGR_FLAG_SKIP_FSYNC;
 
 	Assert(nblocks > 0);
 
@@ -588,9 +590,11 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		 * to allocate page cache space for the extended pages.
 		 *
 		 * However, we don't use FileFallocate() for small extensions, as it
-		 * defeats delayed allocation on some filesystems.
+		 * defeats delayed allocation on some filesystems.  bufmgr.c must make
+		 * that decision, because we can't access the tablespace catalog while
+		 * the extension lock is held.
 		 */
-		if (io_min_fallocate > 0 && numblocks >= io_min_fallocate)
+		if (flags & SMGR_FLAG_FALLOCATE)
 		{
 			int			ret;
 

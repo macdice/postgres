@@ -1030,8 +1030,7 @@ _hash_alloc_buckets(Relation rel, BlockNumber firstblock, uint32 nblocks)
 					true);
 
 	PageSetChecksumInplace(page, lastblock);
-	smgrextend(RelationGetSmgr(rel), MAIN_FORKNUM, lastblock, zerobuf.data,
-			   false);
+	smgrextend(RelationGetSmgr(rel), MAIN_FORKNUM, lastblock, zerobuf.data, 0);
 
 	return true;
 }

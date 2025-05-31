@@ -92,6 +92,7 @@ ALTER TABLESPACE <replaceable>name</replaceable> RESET ( <replaceable class="par
       by the configuration parameters of the
       same name (see <xref linkend="guc-seq-page-cost"/>,
       <xref linkend="guc-random-page-cost"/>,
+      <xref linkend="guc-io-min-fallocate"/>,
       <xref linkend="guc-effective-io-concurrency"/>,
       <xref linkend="guc-maintenance-io-concurrency"/>).  This may be useful if
       one tablespace is located on a disk which is faster or slower than the

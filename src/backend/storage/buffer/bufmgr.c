@@ -65,6 +65,7 @@
 #include "utils/ps_status.h"
 #include "utils/rel.h"
 #include "utils/resowner.h"
+#include "utils/spccache.h"
 #include "utils/timestamp.h"
 
 
@@ -2616,6 +2617,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 						Buffer *buffers,
 						uint32 *extended_by)
 {
+	int			smgr_flags = 0;
 	BlockNumber first_block;
 	IOContext	io_context = IOContextForStrategy(strategy);
 	instr_time	io_start;
@@ -2641,6 +2643,24 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 
 		/* new buffers are zero-filled */
 		MemSet(buf_block, 0, BLCKSZ);
+	}
+
+	/*
+	 * For multi-block extension, decide if smgr should use fallocate for an
+	 * extension of this size.  It can't decide for itself, because it can't
+	 * access the catalog with the extension lock held.  Likewise, initdb and
+	 * recovery can't access catalogs either.
+	 */
+	if (extend_by > 1 && IsUnderPostmaster)
+	{
+		int			threshold;
+
+		if (InRecovery)
+			threshold = io_min_fallocate;
+		else
+			threshold = get_tablespace_io_min_fallocate(bmr.smgr->smgr_rlocator.locator.spcOid);
+		if (threshold != 0 && extend_by >= threshold)
+			smgr_flags |= SMGR_FLAG_FALLOCATE;
 	}
 
 	/*
@@ -2836,7 +2856,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 	 *
 	 * We don't need to set checksum for all-zero pages.
 	 */
-	smgrzeroextend(bmr.smgr, fork, first_block, extend_by, false);
+	smgrzeroextend(bmr.smgr, fork, first_block, extend_by, smgr_flags);
 
 	/*
 	 * Release the file-extension lock; it's now OK for someone else to extend

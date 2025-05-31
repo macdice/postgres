@@ -97,9 +97,9 @@ typedef struct f_smgr
 	void		(*smgr_unlink) (RelFileLocatorBackend rlocator, ForkNumber forknum,
 								bool isRedo);
 	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
-								BlockNumber blocknum, const void *buffer, bool skipFsync);
+								BlockNumber blocknum, const void *buffer, int flags);
 	void		(*smgr_zeroextend) (SMgrRelation reln, ForkNumber forknum,
-									BlockNumber blocknum, int nblocks, bool skipFsync);
+									BlockNumber blocknum, int nblocks, int flags);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber blocknum, int nblocks);
 	uint32		(*smgr_maxcombine) (SMgrRelation reln, ForkNumber forknum,
@@ -618,12 +618,12 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
  */
 void
 smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		   const void *buffer, bool skipFsync)
+		   const void *buffer, int flags)
 {
 	HOLD_INTERRUPTS();
 
 	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
-										 buffer, skipFsync);
+										 buffer, flags);
 
 	/*
 	 * Normally we expect this to increase nblocks by one, but if the cached
@@ -647,12 +647,12 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  */
 void
 smgrzeroextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-			   int nblocks, bool skipFsync)
+			   int nblocks, int flags)
 {
 	HOLD_INTERRUPTS();
 
 	smgrsw[reln->smgr_which].smgr_zeroextend(reln, forknum, blocknum,
-											 nblocks, skipFsync);
+											 nblocks, flags);
 
 	/*
 	 * Normally we expect this to increase the fork size by nblocks, but if

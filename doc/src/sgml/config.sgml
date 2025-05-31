@@ -2696,8 +2696,11 @@ include_dir 'conf.d'
          extend data files instead of writing zeroes.  <literal>0</literal>
          means never (always write
          zeroes), and other values indicate a number of blocks.
-         The default is <literal>8</literal>.
-        </para>
+         The default is <literal>8</literal>.  This value can be overridden
+         for tables in a particular tablespace by setting the tablespace
+         parameter of the same name (see <xref
+         linkend="sql-altertablespace"/>).
+         </para>
        </listitem>
       </varlistentry>
 

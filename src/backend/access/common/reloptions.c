@@ -374,6 +374,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"io_min_fallocate",
+			"Threshold for preferring posix_fallocate() when extending data files.",
+			RELOPT_KIND_TABLESPACE,
+			ShareUpdateExclusiveLock
+		},
+		-1, 0, INT_MAX
+	},
+	{
+		{
 			"parallel_workers",
 			"Number of parallel processes that can be used per executor node for this relation.",
 			RELOPT_KIND_HEAP,
@@ -2116,7 +2125,8 @@ tablespace_reloptions(Datum reloptions, bool validate)
 		{"random_page_cost", RELOPT_TYPE_REAL, offsetof(TableSpaceOpts, random_page_cost)},
 		{"seq_page_cost", RELOPT_TYPE_REAL, offsetof(TableSpaceOpts, seq_page_cost)},
 		{"effective_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, effective_io_concurrency)},
-		{"maintenance_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, maintenance_io_concurrency)}
+		{"maintenance_io_concurrency", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, maintenance_io_concurrency)},
+		{"io_min_fallocate", RELOPT_TYPE_INT, offsetof(TableSpaceOpts, io_min_fallocate)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,
