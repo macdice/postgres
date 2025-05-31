@@ -588,23 +588,32 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		 * to allocate page cache space for the extended pages.
 		 *
 		 * However, we don't use FileFallocate() for small extensions, as it
-		 * defeats delayed allocation on some filesystems. Not clear where
-		 * that decision should be made though? For now just use a cutoff of
-		 * 8, anything between 4 and 8 worked OK in some local testing.
+		 * defeats delayed allocation on some filesystems.
 		 */
-		if (numblocks > 8)
+		if (file_extend_method_threshold > 0 &&
+			numblocks >= file_extend_method_threshold &&
+			file_extend_method != FILE_EXTEND_METHOD_WRITE)
 		{
 			int			ret;
 
-			ret = FileFallocate(v->mdfd_vfd,
-								seekpos, (off_t) BLCKSZ * numblocks,
-								WAIT_EVENT_DATA_FILE_EXTEND);
+			if (file_extend_method == FILE_EXTEND_METHOD_FTRUNCATE)
+				ret = FileTruncate(v->mdfd_vfd,
+								   seekpos + (off_t) BLCKSZ * numblocks,
+								   WAIT_EVENT_DATA_FILE_EXTEND);
+#ifdef FILE_EXTEND_METHOD_FALLOCATE
+			else
+				ret = FileFallocate(v->mdfd_vfd,
+									seekpos, (off_t) BLCKSZ * numblocks,
+									WAIT_EVENT_DATA_FILE_EXTEND);
+#endif
 			if (ret != 0)
 			{
 				ereport(ERROR,
 						errcode_for_file_access(),
-						errmsg("could not extend file \"%s\" with FileFallocate(): %m",
-							   FilePathName(v->mdfd_vfd)),
+						errmsg("could not extend file \"%s\" with %s(): %m",
+							   FilePathName(v->mdfd_vfd),
+							   file_extend_method == FILE_EXTEND_METHOD_FTRUNCATE ?
+							   "FileTruncate" : "FileFallocate"),
 						errhint("Check free disk space."));
 			}
 		}

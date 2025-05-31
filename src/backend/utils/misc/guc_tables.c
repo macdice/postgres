@@ -491,6 +491,15 @@ static const struct config_enum_entry file_copy_method_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry file_extend_method_options[] = {
+	{"write", FILE_EXTEND_METHOD_WRITE, false},
+	{"ftruncate", FILE_EXTEND_METHOD_FTRUNCATE, false},
+#ifdef FILE_EXTEND_METHOD_FALLOCATE
+	{"fallocate", FILE_EXTEND_METHOD_FALLOCATE, false},
+#endif
+	{NULL, 0, false}
+};
+
 /*
  * Options for enum values stored in other modules
  */
@@ -3266,6 +3275,18 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"file_extend_method_threshold",
+			PGC_USERSET,
+			RESOURCES_DISK,
+			gettext_noop("Threshold for using methods other than write when extending data files."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&file_extend_method_threshold,
+		8, 0, INT_MAX
+	},
+
+	{
 		{"io_max_combine_limit",
 			PGC_POSTMASTER,
 			RESOURCES_IO,
@@ -5261,6 +5282,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&file_copy_method,
 		FILE_COPY_METHOD_COPY, file_copy_method_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"file_extend_method", PGC_USERSET, RESOURCES_DISK,
+			gettext_noop("Selects the method used for extending data files."),
+			NULL
+		},
+		&file_extend_method,
+		DEFAULT_FILE_EXTEND_METHOD, file_extend_method_options,
 		NULL, NULL, NULL
 	},
 

@@ -179,6 +179,8 @@
 					# in kilobytes, or -1 for no limit
 
 #file_copy_method = copy		# copy, clone (if supported by OS)
+#file_extend_method = fallocate		# fallocate, ftruncate, write
+#file_extend_method_threshold = 8	# min to prefer selected method, 0 = never
 
 #max_notify_queue_pages = 1048576	# limits the number of SLRU pages allocated
 					# for NOTIFY / LISTEN queue

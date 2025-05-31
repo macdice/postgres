@@ -55,11 +55,24 @@ typedef int File;
 #define IO_DIRECT_WAL			0x02
 #define IO_DIRECT_WAL_INIT		0x04
 
+#define FILE_EXTEND_METHOD_WRITE 1
+#define FILE_EXTEND_METHOD_FTRUNCATE 2
+#ifdef HAVE_POSIX_FALLOCATE
+#define	FILE_EXTEND_METHOD_FALLOCATE 3
+#endif
+
+#ifdef FILE_EXTEND_METHOD_FALLOCATE
+#define DEFAULT_FILE_EXTEND_METHOD FILE_EXTEND_METHOD_FALLOCATE
+#else
+#define DEFAULT_FILE_EXTEND_METHOD FILE_EXTEND_METHOD_WRITE
+#endif
 
 /* GUC parameter */
 extern PGDLLIMPORT int max_files_per_process;
 extern PGDLLIMPORT bool data_sync_retry;
 extern PGDLLIMPORT int recovery_init_sync_method;
+extern PGDLLIMPORT int file_extend_method_threshold;
+extern PGDLLIMPORT int file_extend_method;
 extern PGDLLIMPORT int io_direct_flags;
 
 /*

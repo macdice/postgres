@@ -164,6 +164,12 @@ bool		data_sync_retry = false;
 /* How SyncDataDirectory() should do its job. */
 int			recovery_init_sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
 
+/* How data files should be bulk-extended with zeroes. */
+int			file_extend_method = DEFAULT_FILE_EXTEND_METHOD;
+
+/* At what size file_extend_method is used instead of plain write. */
+int			file_extend_method_threshold = 8;
+
 /* Which kinds of files should be opened with PG_O_DIRECT. */
 int			io_direct_flags;
 
