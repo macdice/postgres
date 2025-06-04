@@ -19,6 +19,7 @@
 #include "catalog/pg_collation.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "storage/fd.h"
 #include "utils/builtins.h"
 #include "utils/formatting.h"
 #include "utils/memutils.h"
@@ -655,6 +656,43 @@ strnxfrm_libc(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	return result;
 }
 
+#if defined(__GLIBC__)
+/*
+ * Read version string from user-supplied file into a palloc'd string with any
+ * trailing whitespace removed.  Return NULL if the file doesn't exist.
+ */
+static char *
+read_collversion_from_file(const char *path)
+{
+	char		buffer[TEXTBUFLEN];
+	ssize_t		size;
+	int			fd;
+
+	fd = OpenTransientFile(path, O_RDONLY);
+	if (fd < 0)
+	{
+		if (errno == ENOENT)
+			return NULL;
+		ereport(ERROR, errmsg("could not open file \"%s\": %m", path));
+	}
+	size = read(fd, buffer, sizeof(buffer) - 1);
+	if (size < 0)
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(ERROR, errmsg("could not read from file \"%s\": %m", path));
+	}
+	while (size > 0 && isspace((unsigned char) buffer[size - 1]))
+		size--;
+	buffer[size] = 0;
+	CloseTransientFile(fd);
+
+	return pstrdup(buffer);
+}
+#endif
+
 char *
 get_collation_actual_version_libc(const char *collcollate)
 {
@@ -665,8 +703,72 @@ get_collation_actual_version_libc(const char *collcollate)
 		pg_strcasecmp("POSIX", collcollate) != 0)
 	{
 #if defined(__GLIBC__)
-		/* Use the glibc version because we don't have anything better. */
-		collversion = pstrdup(gnu_get_libc_version());
+		char	   *locpath;
+
+		/*
+		 * If the user defined the environment variable LOCPATH (a glibc
+		 * extension) to override the search location for locale definitions,
+		 * perhaps pointing to definitions compiled from another distribution
+		 * or version of glibc as part of an upgrade strategy, provide a way
+		 * for the reported version string to be loaded from
+		 * $LOCPATH/{collcollate}/LC_COLLATE.version, ../version, or the same
+		 * names at top level in $LOCPATH.
+		 *
+		 * This convention is a PostgreSQL invention not known to glibc.
+		 * Neither glibc nor POSIX provides a way to store or query a version
+		 * string inside locale components themselves.
+		 */
+		if ((locpath = getenv("LOCPATH")))
+		{
+			char		collcollate_dir[LOCALE_NAME_BUFLEN];
+			char		pathname[MAXPGPATH];
+			char	   *p;
+
+			/* lower-case and digits only in codeset part, .UTF-8 -> .utf8 */
+			snprintf(collcollate_dir, sizeof(collcollate_dir), "%s",
+					 collcollate);
+			p = strchr(collcollate_dir, '.');
+			if (p)
+			{
+				++p;
+				while (*p)
+				{
+					if (!isalnum(*p))
+					{
+						memmove(p, p + 1, strlen(p));	/* counts terminator */
+						continue;
+					}
+					*p = tolower((unsigned char) *p);
+					++p;
+				}
+			}
+
+			snprintf(pathname, sizeof(pathname), "%s/%s/LC_COLLATE.version",
+					 locpath, collcollate_dir);
+			collversion = read_collversion_from_file(pathname);
+			if (collversion == NULL)
+			{
+				snprintf(pathname, sizeof(pathname), "%s/%s/version",
+						 locpath, collcollate_dir);
+				collversion = read_collversion_from_file(pathname);
+			}
+			if (collversion == NULL)
+			{
+				snprintf(pathname, sizeof(pathname), "%s/LC_COLLATE.version",
+						 locpath);
+				collversion = read_collversion_from_file(pathname);
+			}
+			if (collversion == NULL)
+			{
+				snprintf(pathname, sizeof(pathname), "%s/version",
+						 locpath);
+				collversion = read_collversion_from_file(pathname);
+			}
+		}
+
+		/* Use the glibc version if we don't have anything better. */
+		if (collversion == NULL)
+			collversion = pstrdup(gnu_get_libc_version());
 #elif defined(LC_VERSION_MASK)
 		locale_t	loc;
 
