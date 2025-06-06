@@ -30,22 +30,6 @@ pgwin32_putenv(const char *envval)
 	char	   *cp;
 	typedef int (_cdecl * PUTENVPROC) (const char *);
 	static const char *const modulenames[] = {
-		"msvcrt",				/* Visual Studio 6.0 / MinGW */
-		"msvcrtd",
-		"msvcr70",				/* Visual Studio 2002 */
-		"msvcr70d",
-		"msvcr71",				/* Visual Studio 2003 */
-		"msvcr71d",
-		"msvcr80",				/* Visual Studio 2005 */
-		"msvcr80d",
-		"msvcr90",				/* Visual Studio 2008 */
-		"msvcr90d",
-		"msvcr100",				/* Visual Studio 2010 */
-		"msvcr100d",
-		"msvcr110",				/* Visual Studio 2012 */
-		"msvcr110d",
-		"msvcr120",				/* Visual Studio 2013 */
-		"msvcr120d",
 		"ucrtbase",				/* Visual Studio 2015 and later */
 		"ucrtbased",
 		NULL

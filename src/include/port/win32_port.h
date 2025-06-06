@@ -16,6 +16,10 @@
 #ifndef PG_WIN32_PORT_H
 #define PG_WIN32_PORT_H
 
+#ifndef _UCRT
+#error "UCRT is required (MingGW MSVCRT environment is not supported)."
+#endif
+
 /*
  * Always build with SSPI support. Keep it as a #define in case
  * we want a switch to disable it sometime in the future.
