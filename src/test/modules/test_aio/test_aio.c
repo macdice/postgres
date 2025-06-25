@@ -808,3 +808,120 @@ inj_io_reopen_detach(PG_FUNCTION_ARGS)
 #endif
 	PG_RETURN_VOID();
 }
+
+PG_FUNCTION_INFO_V1(test_socket_hack_hack_hack);
+Datum
+test_socket_hack_hack_hack(PG_FUNCTION_ARGS)
+{
+	struct sockaddr_in server_addr = {0};
+	struct hostent *server;
+	int sock;
+	int received;
+
+	/* XXX dirty hack to get a bit of shared memory that I/O workers can see */
+#define BUFFER_SIZE 1024
+	bool found;
+	static char *buffer;
+	if (!buffer)
+		buffer = ShmemInitStruct("shmem hack space", BUFFER_SIZE, &found);
+
+
+	server = gethostbyname("cfbot.cputube.org");
+	if (server == NULL)
+		elog(ERROR, "could not look up host address");
+
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(80);
+	memcpy(&server_addr.sin_addr.s_addr, server->h_addr, server->h_length);
+
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (socket < 0)
+		elog(ERROR, "could not create socket: %m");
+
+	if (connect(sock, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0)
+	{
+		int save_errno = errno;
+		close(sock);
+		errno = save_errno;
+		elog(ERROR, "could not connect: %m");
+	}
+
+#define REQUEST "GET / HTTP/1.1\r\nServer: foo.com\r\n"
+	if (send(sock, REQUEST, lengthof(REQUEST), 0) != lengthof(REQUEST))
+	{
+		int save_errno = errno;
+		close(sock);
+		errno = save_errno;
+		elog(ERROR, "could not send: %m");
+	}
+
+#if 0
+	received = recv(sock, buffer, BUFFER_SIZE, 0);
+#else
+	{
+		fd_registry_handle sock_handle;
+		PgAioHandle *ioh;
+		PgAioReturn ioret;
+		PgAioWaitRef iow;
+		struct iovec *iov;
+		int iovcnt;
+
+		/* Make sure our socket can be accessed by an I/O workers. */
+		if (!fd_registry_insert(sock, &sock_handle))
+		{
+			close(sock);
+			elog(ERROR, "no more space in fd registry");
+		}
+
+		HOLD_INTERRUPTS();
+
+		/* Build and submit */
+		ioh = pgaio_io_acquire(CurrentResourceOwner, &ioret);
+		pgaio_io_set_target(ioh, PGAIO_TID_SOCKET);
+		pgaio_io_get_target_data(ioh)->socket = sock_handle;
+		pgaio_io_get_iovec(ioh, &iov);
+		iov[0].iov_base = buffer;
+		iov[0].iov_len = BUFFER_SIZE;
+		iovcnt = 1;
+		pgaio_io_get_wref(ioh, &iow);
+		pgaio_io_start_recv(ioh, sock, iovcnt);
+
+		/* Wait for completion */
+		pgaio_wref_wait(&iow);
+
+		RESUME_INTERRUPTS();
+
+		if (ioret.result.result < 0)
+		{
+			errno = -ioret.result.result;
+			received = -1;
+		}
+		else
+		{
+			received = ioret.result.result;
+		}
+
+		/*
+		 * Don't need this anymore.  XXX And generally it can leak, and needs
+		 * decent caching in front of it, and more problems, just trying basic
+		 * mechanics here...
+		 */
+		fd_registry_delete(&sock_handle);
+	}
+#endif
+
+	{
+		int save_errno = errno;
+		close(sock);
+		errno = save_errno;
+	}
+
+	if (received < 0)
+		elog(ERROR, "could not recv: %m");
+
+	buffer[20] = '\0';
+	elog(NOTICE, "received %d bytes: [%s...]", received, buffer);
+
+
+	PG_RETURN_VOID();
+}
