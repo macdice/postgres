@@ -1,0 +1,83 @@
+Some notes/thoughts while investigating how to implement real AIO for page
+servers using a custom smgr.
+
+Potential architectures by order of complexity:
+
+1.  Low complexity minimal kludge: just make all the network I/O purely
+synchronous.  This gives terrible performance but doesn't require much work: in
+smgrstartreadv() you just perform the whole I/O and don't return until the I/O
+is complete.  KK has been prototyping this.
+
+2.  Medium complexity: perform network I/O in a pool of page server worker
+processes (no AIO subsystem involvement).  smgrstartreadv() hands IOs to them,
+and they multiplex (1) wakeups telling them to convert IOs received via a
+submission queue into network requests, (2) responses received from the page
+server and converted into completions.  Regular backends wait only on the IO
+CV.  In many ways this mirrors the I/O worker pool (except that presumably the
+page server supports overlapping AKA pipelined requests and responses hence
+"multiplexing" rather than a dumb request/response loop?).
+
+Some thoughts:
+
+ * it can probably be done with only minimal tweaks to v18 (assuming it has
+   already been modified to allow custom smgr to be plugged in): at a minimum,
+   you just need to invent a way to suppress the ->wait_one() call on the IO
+   that smgrstartreadv(), so that pgaio_io_wait() falls to the regular CV wait
+   path (for example a new flag)
+
+ * "Submission" of such IOs is managed by the custom smgr using an entirely
+   parallel system.  In order to support batching (rather than immediate
+   one-by-one submission to the PS worker pool) you might want to hack things
+   slightly further to support that:
+
+ ** hook at batch submit time??
+ ** become a new io_method so you can intercept submit, perhaps on a per-IO
+    basis or ??
+
+ * All of this is offensive to Andres who would like to see the network
+   protocols done properly through the AIO subsystem.  Thomas suggested it
+   to KK as a minimum workable stepping stone because it allows progress on
+   asynchronous page server communication without having to build more
+   AIO infrastructure first, ie you can just take whatever client library
+   can talk to the page server (libpq?) and jam it into those workers as plain
+   straight-line low complexity code...
+
+3.  High complexity: perform all network I/O using the AIO subsystem.
+
+Some thoughts:
+
+ * first need AIO to support network I/O (send/recv), as planned but not yet
+   committed (this branch has a very minimal POC)
+ * for I/O workers to be able to run send/recv, we need shared memory buffers
+   and a portable mechanism for sockets to move between processes (originally
+   Thomas had speculated that we might as well wait for threads first, but of
+   course it is technically possible to do it, which this branch experiments
+   with)
+ * if a page server never replies, should we wait forever or do we need some
+   kind of cancellation, and how would that work?  (NFS parallels...)
+ * suppose there is some number of sockets connected to the page server:
+   perhaps one per backend, perhaps a configurable to pool coordinated by
+   a shared memory; in any case, it will sometimes be necessary to wait for
+   PGAIO_OP_RECV to complete on any socket, so the fd registry concept is
+   not only needed for I/O workers, it's also needed for the AIO deadlock-free
+   policy; this implies that the sockets' protocol state machine needs to be
+   in shared memory
+ ** obviously several subproblems there will go away with threads
+ * call the ioh passed to smgrstartreadv() the "smgr IO".  we'll need more
+   IOs for the network operation.  how will they be coordinated?
+ ** idea #1: we could invent pgaio_io_set_dependency(smgr_ioh,
+    network_io_wref), with two effects:
+ *** submitting submits the dependency (??)
+ *** waiting waits for the dependency; if the depedency has a completion
+     callback that advances the socket protocol state machine, it might
+     process IO completions on smgr_ioh so the wait terminates, or it might
+     need more network IO so it might call pgaio_io_set_dependency(smgr_ioh,
+     new_network_io_wref) so that the outer wait loop now waits for that one
+ *** this implies that an extension such as the page server smgr needs to
+     be able to install a completion callback on network IOs
+
+This is all just material for discussion, scoping out the problem space...
+
+Meta-thought: all of this is really about "which order should we do things in",
+and "dumb" architecture 2 is a position "we want to see decent page server
+performance without waiting behind so many other projects...".
