@@ -92,19 +92,20 @@ typedef enum PgAioOp
 	PGAIO_OP_READV,
 	PGAIO_OP_WRITEV,
 
+	PGAIO_OP_SEND,
+	PGAIO_OP_RECV,
+
 	/**
 	 * In the near term we'll need at least:
 	 * - fsync / fdatasync
 	 * - flush_range
 	 *
 	 * Eventually we'll additionally want at least:
-	 * - send
-	 * - recv
 	 * - accept
 	 **/
 } PgAioOp;
 
-#define PGAIO_OP_COUNT	(PGAIO_OP_WRITEV + 1)
+#define PGAIO_OP_COUNT	(PGAIO_OP_RECV + 1)
 
 
 /*
@@ -117,7 +118,8 @@ typedef enum PgAioTargetID
 {
 	/* intentionally the zero value, to help catch zeroed memory etc */
 	PGAIO_TID_INVALID = 0,
-	PGAIO_TID_SMGR,
+	PGAIO_TID_SOCKET,
+	PGAIO_TID_SMGR
 } PgAioTargetID;
 
 #define PGAIO_TID_COUNT (PGAIO_TID_SMGR + 1)
@@ -146,6 +148,18 @@ typedef union
 		uint16		iov_length;
 		uint64		offset;
 	}			write;
+
+	struct
+	{
+		int			fd;
+		uint16		iov_length;
+	}			recv;
+
+	struct
+	{
+		int			fd;
+		uint16		iov_length;
+	}			send;
 } PgAioOpData;
 
 
@@ -300,6 +314,9 @@ extern void pgaio_io_start_readv(PgAioHandle *ioh,
 								 int fd, int iovcnt, uint64 offset);
 extern void pgaio_io_start_writev(PgAioHandle *ioh,
 								  int fd, int iovcnt, uint64 offset);
+extern void pgaio_io_start_recv(PgAioHandle *ioh, int fd, int iovcnt);
+extern void pgaio_io_start_send(PgAioHandle *ioh, int fd, int iovcnt);
+
 
 /* functions in aio_target.c */
 extern void pgaio_io_set_target(PgAioHandle *ioh, PgAioTargetID targetid);

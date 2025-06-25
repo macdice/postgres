@@ -1075,6 +1075,8 @@ smgr_aio_reopen(PgAioHandle *ioh)
 	switch (pgaio_io_get_op(ioh))
 	{
 		case PGAIO_OP_INVALID:
+		case PGAIO_OP_RECV:
+		case PGAIO_OP_SEND:
 			pg_unreachable();
 			break;
 		case PGAIO_OP_READV:

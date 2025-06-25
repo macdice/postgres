@@ -191,6 +191,16 @@ retry:
 				values[6] =
 					Int64GetDatum(iov_byte_length(iov_copy, ioh_copy.op_data.write.iov_length));
 				break;
+			case PGAIO_OP_RECV:
+				nulls[5] = true;
+				values[6] =
+					Int64GetDatum(iov_byte_length(iov_copy, ioh_copy.op_data.recv.iov_length));
+				break;
+			case PGAIO_OP_SEND:
+				nulls[5] = true;
+				values[6] =
+					Int64GetDatum(iov_byte_length(iov_copy, ioh_copy.op_data.send.iov_length));
+				break;
 		}
 
 		/* column: IO's target */

@@ -19,6 +19,19 @@
 #include "storage/smgr.h"
 
 
+static void socket_aio_reopen(PgAioHandle *ioh);
+static char *socket_aio_describe_identity(const PgAioTargetData *sd);
+
+/*
+ * XXX where should this go?  putting here because it's a bit more fundamental
+ * than PGAIO_TID_SMGR (?).
+ */
+static const PgAioTargetInfo aio_socket_target_info = {
+	.name = "socket",
+	.reopen = socket_aio_reopen,
+	.describe_identity = socket_aio_describe_identity
+};
+
 /*
  * Registry for entities that can be the target of AIO.
  */
@@ -26,6 +39,7 @@ static const PgAioTargetInfo *pgaio_target_info[] = {
 	[PGAIO_TID_INVALID] = &(PgAioTargetInfo) {
 		.name = "invalid",
 	},
+	[PGAIO_TID_SOCKET] = &aio_socket_target_info,
 	[PGAIO_TID_SMGR] = &aio_smgr_target_info,
 };
 
@@ -119,4 +133,33 @@ pgaio_io_reopen(PgAioHandle *ioh)
 	Assert(ioh->op > PGAIO_OP_INVALID && ioh->op < PGAIO_OP_COUNT);
 
 	pgaio_target_info[ioh->target]->reopen(ioh);
+}
+
+static void
+socket_aio_reopen(PgAioHandle *ioh)
+{
+	PgAioTargetData *sd = pgaio_io_get_target_data(ioh);
+	PgAioOpData *od = pgaio_io_get_op_data(ioh);
+
+	/* XXX this leaks and has no caching!  unlike smgr */
+	switch (pgaio_io_get_op(ioh))
+	{
+		case PGAIO_OP_INVALID:
+		case PGAIO_OP_READV:
+		case PGAIO_OP_WRITEV:
+			pg_unreachable();
+			break;
+		case PGAIO_OP_RECV:
+			od->recv.fd = fd_registry_dup(&sd->socket);
+			break;
+		case PGAIO_OP_SEND:
+			od->send.fd = fd_registry_dup(&sd->socket);
+			break;
+	}
+}
+
+static char *
+socket_aio_describe_identity(const PgAioTargetData *sd)
+{
+	return psprintf("socket %d in pid %d", sd->socket.pid_fd, sd->socket.pid);
 }

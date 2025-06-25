@@ -100,6 +100,28 @@ pgaio_io_start_writev(PgAioHandle *ioh,
 	pgaio_io_stage(ioh, PGAIO_OP_WRITEV);
 }
 
+void
+pgaio_io_start_recv(PgAioHandle *ioh, int fd, int iovcnt)
+{
+	pgaio_io_before_start(ioh);
+
+	ioh->op_data.recv.fd = fd;
+	ioh->op_data.recv.iov_length = iovcnt;
+
+	pgaio_io_stage(ioh, PGAIO_OP_RECV);
+}
+
+void
+pgaio_io_start_send(PgAioHandle *ioh, int fd, int iovcnt)
+{
+	pgaio_io_before_start(ioh);
+
+	ioh->op_data.send.fd = fd;
+	ioh->op_data.send.iov_length = iovcnt;
+
+	pgaio_io_stage(ioh, PGAIO_OP_SEND);
+}
+
 
 
 /* --------------------------------------------------------------------------------
@@ -135,6 +157,18 @@ pgaio_io_perform_synchronously(PgAioHandle *ioh)
 			result = pg_pwritev(ioh->op_data.write.fd, iov,
 								ioh->op_data.write.iov_length,
 								ioh->op_data.write.offset);
+			pgstat_report_wait_end();
+			break;
+		case PGAIO_OP_RECV:
+			pgstat_report_wait_start(WAIT_EVENT_SOCKET_RECV);
+			result = readv(ioh->op_data.recv.fd, iov,
+						   ioh->op_data.recv.iov_length);
+			pgstat_report_wait_end();
+			break;
+		case PGAIO_OP_SEND:
+			pgstat_report_wait_start(WAIT_EVENT_SOCKET_SEND);
+			result = writev(ioh->op_data.send.fd, iov,
+							ioh->op_data.send.iov_length);
 			pgstat_report_wait_end();
 			break;
 		case PGAIO_OP_INVALID:
@@ -184,6 +218,10 @@ pgaio_io_get_op_name(PgAioHandle *ioh)
 			return "readv";
 		case PGAIO_OP_WRITEV:
 			return "writev";
+		case PGAIO_OP_RECV:
+			return "recv";
+		case PGAIO_OP_SEND:
+			return "send";
 	}
 
 	return NULL;				/* silence compiler */
@@ -204,6 +242,10 @@ pgaio_io_uses_fd(PgAioHandle *ioh, int fd)
 			return ioh->op_data.read.fd == fd;
 		case PGAIO_OP_WRITEV:
 			return ioh->op_data.write.fd == fd;
+		case PGAIO_OP_RECV:
+			return ioh->op_data.recv.fd == fd;
+		case PGAIO_OP_SEND:
+			return ioh->op_data.send.fd == fd;
 		case PGAIO_OP_INVALID:
 			return false;
 	}
@@ -228,6 +270,10 @@ pgaio_io_get_iovec_length(PgAioHandle *ioh, struct iovec **iov)
 			return ioh->op_data.read.iov_length;
 		case PGAIO_OP_WRITEV:
 			return ioh->op_data.write.iov_length;
+		case PGAIO_OP_RECV:
+			return ioh->op_data.recv.iov_length;
+		case PGAIO_OP_SEND:
+			return ioh->op_data.send.iov_length;
 		default:
 			pg_unreachable();
 			return 0;

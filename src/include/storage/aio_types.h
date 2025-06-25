@@ -17,6 +17,7 @@
 
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
+#include "utils/fd_registry.h"
 
 
 typedef struct PgAioHandle PgAioHandle;
@@ -69,6 +70,7 @@ typedef union PgAioTargetData
 		bool		is_temp:1;	/* proc can be inferred by owning AIO */
 		bool		skip_fsync:1;
 	}			smgr;
+	fd_registry_handle socket;
 } PgAioTargetData;
 
 

@@ -274,6 +274,8 @@ WAL_SUMMARY_WRITE	"Waiting for a write to a WAL summary file."
 WAL_SYNC	"Waiting for a WAL file to reach durable storage."
 WAL_SYNC_METHOD_ASSIGN	"Waiting for data to reach durable storage while assigning a new WAL sync method."
 WAL_WRITE	"Waiting for a write to a WAL file."
+SOCKET_RECV	"Waiting for a socket to receive data."
+SOCKET_SEND	"Waiting for a socket to send data."
 
 ABI_compatibility:
 
