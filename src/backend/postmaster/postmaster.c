@@ -118,6 +118,7 @@
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
 #include "utils/datetime.h"
+#include "utils/fd_registry.h"
 #include "utils/memutils.h"
 #include "utils/pidfile.h"
 #include "utils/timestamp.h"
@@ -1013,6 +1014,9 @@ PostmasterMain(int argc, char *argv[])
 	 * wake up from sleep on postmaster death.
 	 */
 	InitPostmasterDeathWatchHandle();
+
+	/* Initialize registry of file descriptors exchanged between processes. */
+	fd_registry_init();
 
 #ifdef WIN32
 

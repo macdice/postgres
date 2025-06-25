@@ -2,6 +2,7 @@
 
 backend_sources += files(
   'conffiles.c',
+  'fd_registry.c',
   'guc.c',
   'guc_funcs.c',
   'guc_tables.c',
