@@ -793,7 +793,7 @@ task:
 
   # disable -Dnls as the number of files it creates cause a noticable slowdown
   configure_script: |
-    %BASH% -c "meson setup -Ddebug=true -Doptimization=g -Dcassert=true -Dinjection_points=true -Db_pch=true -Dnls=disabled -DTAR=%TAR% build"
+    %BASH% -c "meson setup -Ddebug=true -Doptimization=g -Dcassert=true -Dinjection_points=true -Db_pch=true -Dnls=enabled -DTAR=%TAR% build"
 
   build_script: |
     %BASH% -c "ninja -C build ${MBUILD_TARGET}"
