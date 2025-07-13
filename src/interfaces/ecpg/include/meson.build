@@ -1,6 +1,6 @@
 # Copyright (c) 2022-2025, PostgreSQL Global Development Group
 
-ecpg_inc = include_directories('.')
+ecpg_inc = [libpq_inc, include_directories('.')]
 
 ecpg_conf_keys = [
   'SIZEOF_LONG',

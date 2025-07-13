@@ -35,7 +35,7 @@ pg_isolation_regress = executable('pg_isolation_regress',
   isolation_sources,
   c_args: pg_regress_cflags,
   include_directories: pg_regress_inc,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install_dir': dir_pgxs / 'src/test/isolation',
   },
@@ -52,7 +52,7 @@ endif
 isolationtester = executable('isolationtester',
   isolationtester_sources,
   include_directories: include_directories('.'),
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install_dir': dir_pgxs / 'src/test/isolation',
   },

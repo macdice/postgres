@@ -2,7 +2,7 @@
 
 # also used by isolationtester and ecpg tests
 pg_regress_c = files('pg_regress.c')
-pg_regress_inc = include_directories('.')
+pg_regress_inc = [libpq_inc, include_directories('.')]
 
 regress_sources = pg_regress_c + files(
   'pg_regress_main.c'
@@ -30,7 +30,7 @@ endif
 pg_regress = executable('pg_regress',
   regress_sources,
   c_args: pg_regress_cflags,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install_dir': dir_pgxs / 'src/test/regress',
   },
