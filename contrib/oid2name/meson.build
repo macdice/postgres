@@ -12,7 +12,7 @@ endif
 
 oid2name = executable('oid2name',
   oid2name_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args,
 )
 contrib_targets += oid2name

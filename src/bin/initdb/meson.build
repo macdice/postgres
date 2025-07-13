@@ -21,7 +21,7 @@ initdb = executable('initdb',
   # shared library from a different PG version.  Define
   # USE_PRIVATE_ENCODING_FUNCS to ensure that that happens.
   c_args: ['-DUSE_PRIVATE_ENCODING_FUNCS'],
-  dependencies: [frontend_code, libpq, icu, icu_i18n],
+  dependencies: [libpq, frontend_code, icu, icu_i18n],
   kwargs: default_bin_args,
 )
 bin_targets += initdb
