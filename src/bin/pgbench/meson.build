@@ -27,7 +27,7 @@ endif
 
 pgbench = executable('pgbench',
   pgbench_sources,
-  dependencies: [frontend_code, libpq, thread_dep],
+  dependencies: [libpq, frontend_code, thread_dep],
   include_directories: include_directories('.'),
   c_pch: pch_postgres_fe_h,
   c_args: host_system == 'windows' ? ['-DFD_SETSIZE=1024'] : [],

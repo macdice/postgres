@@ -12,7 +12,9 @@ endif
 
 test_oat_hooks = shared_module('test_oat_hooks',
   test_oat_hooks_sources,
-  kwargs: pg_test_mod_args,
+  kwargs: pg_test_mod_args + {
+	'dependencies': [libpq] + pg_test_mod_args['dependencies'],
+  }
 )
 test_install_libs += test_oat_hooks
 
