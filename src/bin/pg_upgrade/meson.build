@@ -28,7 +28,7 @@ endif
 pg_upgrade = executable('pg_upgrade',
   pg_upgrade_sources,
   c_pch: pch_postgres_fe_h,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args,
 )
 bin_targets += pg_upgrade

@@ -17,7 +17,7 @@ endif
 postgres_fdw = shared_module('postgres_fdw',
   postgres_fdw_sources,
   kwargs: contrib_mod_args + {
-    'dependencies': contrib_mod_args['dependencies'] + [libpq],
+    'dependencies': [libpq] + contrib_mod_args['dependencies'],
   },
 )
 contrib_targets += postgres_fdw
