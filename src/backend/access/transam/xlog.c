@@ -4159,11 +4159,29 @@ RemoveXlogFile(const struct dirent *segment_de,
 	else
 	{
 		/* No need for any more future segments, or recycling failed ... */
+		bool		backup_in_progress;
 		int			rc;
+		int			fd;
 
 		ereport(DEBUG2,
 				(errmsg_internal("removing write-ahead log file \"%s\"",
 								 segname)));
+
+		/*
+		 * Since the disk space won't be released until all backends that have
+		 * it open get around to closing it, we'll also truncate it explicitly
+		 * after unlinking.  Prepare to do that before removing the directory
+		 * entry.
+		 */
+		fd = BasicOpenFile(path, O_RDWR | PG_BINARY);
+		if (fd <= 0)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not open file \"%s\": %m",
+							path)));
+			return;
+		}
 
 #ifdef WIN32
 
@@ -4180,6 +4198,11 @@ RemoveXlogFile(const struct dirent *segment_de,
 		snprintf(newpath, MAXPGPATH, "%s.deleted", path);
 		if (rename(path, newpath) != 0)
 		{
+			int			save_errno = errno;
+
+			close(fd);
+			errno = save_errno;
+
 			ereport(LOG,
 					(errcode_for_file_access(),
 					 errmsg("could not rename file \"%s\": %m",
@@ -4193,8 +4216,35 @@ RemoveXlogFile(const struct dirent *segment_de,
 		if (rc != 0)
 		{
 			/* Message already logged by durable_unlink() */
+			close(fd);
 			return;
 		}
+
+		/*
+		 * Check if any backups are in progress now that the directory entry
+		 * is gone.  We can't change the size of a file that a backup might
+		 * still be reading from, but any backup started after the unlink
+		 * can't open the file.
+		 *
+		 * XXX a walsender without a replication slot might be streaming from
+		 * this file; it will probably fail soon anyway as it has fallen
+		 * behind the KeepLogSeg() horizon, but now there's new failure mode
+		 * because it'll hit the end of the odd-sized segment, and it'll fail
+		 * a little sooner
+		 *
+		 * XXX who else might have this file open with any expectation of
+		 * being able to read from it, and its size?
+		 */
+		WALInsertLockAcquireExclusive();
+		backup_in_progress = XLogCtl->Insert.runningBackups > 0;
+		WALInsertLockRelease();
+		if (!backup_in_progress && ftruncate(fd, 0) < 0)
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not truncate unlinked file \"%s\": %m",
+							path)));
+		close(fd);
+
 		CheckpointStats.ckpt_segs_removed++;
 	}
 
