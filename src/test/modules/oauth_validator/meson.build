@@ -60,7 +60,7 @@ endif
 
 oauth_hook_client = executable('oauth_hook_client',
   oauth_hook_client_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install': false,
   },

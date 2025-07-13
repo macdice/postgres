@@ -12,7 +12,7 @@ endif
 
 vacuumlo = executable('vacuumlo',
   vacuumlo_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args,
 )
 contrib_targets += vacuumlo

@@ -14,7 +14,7 @@ endif
 
 libpq_test_deps += executable('libpq_uri_regress',
   libpq_uri_regress_sources,
-  dependencies: [frontend_no_fe_utils_code, libpq],
+  dependencies: [libpq, frontend_no_fe_utils_code],
   kwargs: default_bin_args + {
     'install': false,
   }
@@ -33,7 +33,7 @@ endif
 
 libpq_test_deps += executable('libpq_testclient',
   libpq_testclient_sources,
-  dependencies: [frontend_no_fe_utils_code, libpq],
+  dependencies: [libpq, frontend_no_fe_utils_code],
   kwargs: default_bin_args + {
     'install': false,
   }
