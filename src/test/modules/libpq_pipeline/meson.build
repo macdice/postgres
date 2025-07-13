@@ -12,7 +12,7 @@ endif
 
 libpq_pipeline = executable('libpq_pipeline',
   libpq_pipeline_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install': false,
   },
