@@ -22,7 +22,7 @@ pg_dump_common_sources = files(
 pg_dump_common = static_library('libpgdump_common',
   pg_dump_common_sources,
   c_pch: pch_postgres_fe_h,
-  dependencies: [frontend_code, libpq, lz4, zlib, zstd],
+  dependencies: [libpq, frontend_code, lz4, zlib, zstd],
   kwargs: internal_lib_args,
 )
 
@@ -42,7 +42,7 @@ endif
 pg_dump = executable('pg_dump',
   pg_dump_sources,
   link_with: [pg_dump_common],
-  dependencies: [frontend_code, libpq, zlib],
+  dependencies: [libpq, frontend_code, zlib],
   kwargs: default_bin_args,
 )
 bin_targets += pg_dump
@@ -61,7 +61,7 @@ endif
 pg_dumpall = executable('pg_dumpall',
   pg_dumpall_sources,
   link_with: [pg_dump_common],
-  dependencies: [frontend_code, libpq, zlib],
+  dependencies: [libpq, frontend_code, zlib],
   kwargs: default_bin_args,
 )
 bin_targets += pg_dumpall
@@ -80,7 +80,7 @@ endif
 pg_restore = executable('pg_restore',
   pg_restore_sources,
   link_with: [pg_dump_common],
-  dependencies: [frontend_code, libpq, zlib],
+  dependencies: [libpq, frontend_code, zlib],
   kwargs: default_bin_args,
 )
 bin_targets += pg_restore

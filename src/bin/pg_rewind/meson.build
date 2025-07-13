@@ -21,7 +21,7 @@ endif
 
 pg_rewind = executable('pg_rewind',
   pg_rewind_sources,
-  dependencies: [frontend_code, libpq, lz4, zstd],
+  dependencies: [libpq, frontend_code, lz4, zstd],
   c_args: ['-DFRONTEND'], # needed for xlogreader et al
   kwargs: default_bin_args,
 )

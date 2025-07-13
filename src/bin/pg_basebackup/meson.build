@@ -7,7 +7,7 @@ common_sources = files(
   'walmethods.c',
 )
 
-pg_basebackup_deps = [frontend_code, libpq, lz4, zlib, zstd]
+pg_basebackup_deps = [libpq, frontend_code, lz4, zlib, zstd]
 pg_basebackup_common = static_library('libpg_basebackup_common',
   common_sources,
   dependencies: pg_basebackup_deps,
@@ -45,7 +45,7 @@ endif
 
 pg_createsubscriber = executable('pg_createsubscriber',
   pg_createsubscriber_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args,
 )
 bin_targets += pg_createsubscriber

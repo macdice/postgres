@@ -13,7 +13,7 @@ endif
 dblink = shared_module('dblink',
   dblink_sources,
   kwargs: contrib_mod_args + {
-    'dependencies': contrib_mod_args['dependencies'] + [libpq],
+    'dependencies': [libpq] + contrib_mod_args['dependencies'],
   },
 )
 contrib_targets += dblink
