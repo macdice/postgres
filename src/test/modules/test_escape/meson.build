@@ -10,7 +10,7 @@ endif
 
 test_escape = executable('test_escape',
   test_escape_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install': false,
   }

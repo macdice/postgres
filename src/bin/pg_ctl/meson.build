@@ -12,7 +12,7 @@ endif
 
 pg_ctl = executable('pg_ctl',
   pg_ctl_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args,
 )
 bin_targets += pg_ctl

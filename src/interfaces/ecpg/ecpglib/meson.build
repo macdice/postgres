@@ -30,7 +30,7 @@ ecpglib_st = static_library('libecpg',
   include_directories: ecpglib_inc,
   c_args: ecpglib_c_args,
   c_pch: pch_postgres_fe_h,
-  dependencies: [frontend_stlib_code, thread_dep, libpq],
+  dependencies: [libpq, frontend_stlib_code, thread_dep],
   link_with: [ecpg_pgtypes_st],
   kwargs: default_lib_args,
 )
@@ -41,7 +41,7 @@ ecpglib_so = shared_library('libecpg',
   include_directories: ecpglib_inc,
   c_args: ecpglib_c_args,
   c_pch: pch_postgres_fe_h,
-  dependencies: [frontend_shlib_code, libpq, thread_dep],
+  dependencies: [libpq, frontend_shlib_code, thread_dep],
   link_with: ecpg_pgtypes_so,
   soversion: host_system != 'windows' ? '6' : '',
   darwin_versions: ['6', '6.' + pg_version_major.to_string()],
@@ -58,7 +58,7 @@ pkgconfig.generate(
   url: pg_url,
   libraries: ecpglib_so,
   libraries_private: [frontend_stlib_code, thread_dep],
-  requires_private: ['libpgtypes', 'libpq'],
+  requires_private: ['libpq', 'libpgtypes'],
 )
 
 subdir('po', if_found: libintl)

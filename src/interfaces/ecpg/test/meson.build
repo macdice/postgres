@@ -20,7 +20,7 @@ pg_regress_ecpg = executable('pg_regress_ecpg',
   pg_regress_ecpg_sources,
   c_args: pg_regress_cflags,
   include_directories: [pg_regress_inc, include_directories('.')],
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install': false
   },
@@ -30,7 +30,7 @@ ecpg_test_dependencies += pg_regress_ecpg
 # create .c files and executables from .pgc files
 ecpg_test_exec_kw = {
   'c_args': cflags_no_missing_var_decls,
-  'dependencies': [frontend_code, libpq],
+  'dependencies': [libpq, frontend_code],
   'include_directories': [ecpg_inc],
   'link_with': [ecpglib_so, ecpg_compat_so, ecpg_pgtypes_so],
   'build_by_default': false,

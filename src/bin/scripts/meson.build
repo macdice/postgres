@@ -2,7 +2,7 @@
 
 scripts_common = static_library('libscripts_common',
   files('common.c'),
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: internal_lib_args,
 )
 
@@ -28,7 +28,7 @@ foreach binary : binaries
   binary = executable(binary,
     binary_sources,
     link_with: [scripts_common],
-    dependencies: [frontend_code, libpq],
+    dependencies: [libpq, frontend_code],
     kwargs: default_bin_args,
   )
   bin_targets += binary
@@ -36,7 +36,7 @@ endforeach
 
 vacuuming_common = static_library('libvacuuming_common',
   files('common.c', 'vacuuming.c'),
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: internal_lib_args,
 )
 
@@ -55,7 +55,7 @@ foreach binary : binaries
   binary = executable(binary,
     binary_sources,
     link_with: [vacuuming_common],
-    dependencies: [frontend_code, libpq],
+    dependencies: [libpq, frontend_code],
     kwargs: default_bin_args,
   )
   bin_targets += binary
