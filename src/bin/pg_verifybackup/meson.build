@@ -13,7 +13,7 @@ endif
 
 pg_verifybackup = executable('pg_verifybackup',
   pg_verifybackup_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args,
 )
 bin_targets += pg_verifybackup

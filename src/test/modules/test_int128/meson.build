@@ -12,7 +12,7 @@ endif
 
 test_int128 = executable('test_int128',
   test_int128_sources,
-  dependencies: [frontend_code, libpq],
+  dependencies: [libpq, frontend_code],
   kwargs: default_bin_args + {
     'install': false,
   },

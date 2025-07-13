@@ -18,6 +18,6 @@ foreach pgc_file : pgc_files
 
   ecpg_test_dependencies += executable(pgc_file,
     exe_input,
-    kwargs: ecpg_test_exec_kw + {'dependencies': [frontend_code, libpq, thread_dep,]},
+    kwargs: ecpg_test_exec_kw + {'dependencies': [libpq, frontend_code, thread_dep,]},
   )
 endforeach

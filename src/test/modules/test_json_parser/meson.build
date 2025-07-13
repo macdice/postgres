@@ -23,7 +23,7 @@ test_json_parser_incremental = executable('test_json_parser_incremental',
 # the shared-library flavor of jsonapi.
 test_json_parser_incremental_shlib = executable('test_json_parser_incremental_shlib',
   test_json_parser_incremental_sources,
-  dependencies: [frontend_shlib_code, libpq],
+  dependencies: [libpq, frontend_shlib_code],
   c_args: ['-DJSONAPI_SHLIB_ALLOC'],
   link_with: [common_excluded_shlib],
   kwargs: default_bin_args + {
