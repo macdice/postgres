@@ -2106,8 +2106,6 @@ regression_main(int argc, char *argv[],
 	int			option_index;
 	char		buf[MAXPGPATH * 4];
 
-	if (!pg_ensure_c_locale())
-		bail("could not allocate C locale: out of memory");
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_regress"));

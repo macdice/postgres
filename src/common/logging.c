@@ -96,6 +96,16 @@ pg_logging_init(const char *argv0)
 		color_terminal = enable_vt_processing();
 #endif
 
+	/*
+	 * XXX If this seems bizarre... perhaps our snprintf() should be broken up
+	 * into into a an _l variant, and frontend tools that should use the
+	 * non-l() version!  It's probably already unintentionally using the
+	 * user's LC_NUMERIC despite its intentions in master...
+	 */
+	if (!pg_ensure_c_locale())
+		pg_fatal("out of memory");
+
+
 	/* usually the default, but not on Windows */
 	setvbuf(stderr, NULL, _IONBF, 0);
 
