@@ -36,6 +36,7 @@ main(void)
 	numeric **numarr = (numeric **) calloc(1, sizeof(numeric));
 
 	ECPGdebug(1, stderr);
+	PGTYPESinitialize();
 
 	for (i = 0; nums[i]; i++)
 	{

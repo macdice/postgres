@@ -8,6 +8,7 @@
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
+#include "pgtypes.h"
 #include "sqlca.h"
 
 static pthread_mutex_t connections_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -264,7 +265,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	const char **conn_keywords;
 	const char **conn_values;
 
-	if (sqlca == NULL || !pg_ensure_c_locale())
+	if (sqlca == NULL || !pg_ensure_c_locale() || PGTYPESinitialize() < 0)
 	{
 		ecpg_raise(lineno, ECPG_OUT_OF_MEMORY,
 				   ECPG_SQLSTATE_ECPG_OUT_OF_MEMORY, NULL);

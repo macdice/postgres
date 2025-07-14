@@ -8,6 +8,7 @@ extern "C"
 {
 #endif
 
+extern int	PGTYPESinitialize(void);
 extern void PGTYPESchar_free(char *ptr);
 
 #ifdef __cplusplus

@@ -218,26 +218,25 @@ extern int	pg_fprintf(FILE *stream, const char *fmt,...) pg_attribute_printf(2, 
 extern int	pg_vprintf(const char *fmt, va_list args) pg_attribute_printf(1, 0);
 extern int	pg_printf(const char *fmt,...) pg_attribute_printf(1, 2);
 
-/*
- * A couple of systems offer a fast constant locale_t value representing the
- * "C" locale.  We use that if possible, but fall back to creating a singleton
- * object otherwise.  To check that it is available, call pg_ensure_c_locale()
- * and assume out of memory if it returns false.
- */
+/* Function that must be called before using PG_C_LOCALE macro. */
+extern bool pg_ensure_c_locale(void);
+extern bool pg_ensure_c_locale_called;
+
+/* Special locale_t value for the "C" locale. */
 #if defined(LC_C_LOCALE)
 /* NetBSD and macOS have a macro LC_C_LOCALE (actually NULL). */
-#define PG_C_LOCALE LC_C_LOCALE
-#define pg_ensure_c_locale() true
+#define PG_C_LOCALE_VALUE LC_C_LOCALE
 #elif defined(__FreeBSD__)
 /* FreeBSD also accepts NULL, but lacks the friendly named macro. */
-#define PG_C_LOCALE NULL
-#define pg_ensure_c_locale() true
+#define PG_C_LOCALE_VALUE NULL
 #else
-/* For others we have a thread-safe singleton constructor. */
-extern locale_t pg_get_c_locale(void);
-#define PG_C_LOCALE pg_get_c_locale()
-#define pg_ensure_c_locale() (PG_C_LOCALE != 0)
+/* Otherwise we have to allocate a locale per executable or shared library. */
+extern locale_t pg_c_locale;
+#define PG_C_LOCALE_VALUE  pg_c_locale
+#define PG_C_LOCALE_ALLOCATE
 #endif
+
+#define PG_C_LOCALE (AssertMacro(pg_ensure_c_locale_called), PG_C_LOCALE_VALUE)
 
 #if !defined(HAVE_STRTOD_L) && !defined(WIN32)
 /*

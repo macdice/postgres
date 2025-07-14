@@ -27,7 +27,7 @@ test_json_parser_incremental$(X): test_json_parser_incremental.o $(WIN32RES)
 	$(CC) $(CFLAGS) $^ $(PG_LIBS_INTERNAL) $(LDFLAGS) $(LDFLAGS_EX) $(PG_LIBS) $(LIBS) -o $@
 
 test_json_parser_incremental_shlib$(X): test_json_parser_incremental.o $(WIN32RES)
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -lpgcommon_excluded_shlib $(libpq_pgport_shlib) $(filter -lintl, $(LIBS)) -o $@
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -lpgcommon_excluded_shlib $(libpq_pgport_shlib) $(filter -lintl $(PTHREAD_LIBS) -pthread, $(LIBS)) -o $@
 
 test_json_parser_perf$(X): test_json_parser_perf.o $(WIN32RES)
 	$(CC) $(CFLAGS) $^ $(PG_LIBS_INTERNAL) $(LDFLAGS) $(LDFLAGS_EX) $(PG_LIBS) $(LIBS) -o $@

@@ -5,6 +5,21 @@
 #include "pgtypes.h"
 #include "pgtypeslib_extern.h"
 
+int
+PGTYPESinitialize(void)
+{
+	/*
+	 * Initialize PG_C_LOCALE for use in the pgtypes shared library.
+	 */
+	if (!pg_ensure_c_locale())
+	{
+		errno = ENOMEM;
+		return -1;
+	}
+
+	return 0;
+}
+
 /* Return value is zero-filled. */
 char *
 pgtypes_alloc(long size)

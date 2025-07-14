@@ -16,73 +16,74 @@
 
 #include "c.h"
 
+#ifdef PG_C_LOCALE_ALLOCATE
 #ifndef WIN32
 #include <pthread.h>
 #else
 #include <synchapi.h>
 #endif
+#endif
 
-/* A process-lifetime singleton, allocated on first need. */
-static locale_t c_locale;
+/* Assertion support. */
+bool		pg_ensure_c_locale_called;
+
+#ifdef PG_C_LOCALE_ALLOCATE
+locale_t	pg_c_locale;
 
 #ifndef WIN32
 static void
 init_c_locale_once(void)
 {
-	c_locale = newlocale(LC_ALL, "C", NULL);
+	pg_c_locale = newlocale(LC_ALL, "C", NULL);
 }
 #else
 static BOOL
 init_c_locale_once(PINIT_ONCE once, PVOID parameter, PVOID *context)
 {
-	c_locale = _create_locale(LC_ALL, "C");
+	pg_c_locale = _create_locale(LC_ALL, "C");
 	return true;
 }
 #endif
+#endif
 
 /*
- * Access a process-lifetime singleton locale_t object.  Use the macro
- * PG_C_LOCALE instead of calling this directly, as it can skip the function
- * call on some systems.
+ * Initialize pg_c_locale if required on this platform.  This should be called
+ * at a convenient time in program/library initialization before any use of the
+ * macro PG_C_LOCALE.  If it returns false, the caller should report an
+ * out-of-memory error.
+ *
+ * Does nothing at all on systems where PG_C_LOCALE is a constant (macOS,
+ * NetBSD, FreeBSD).  On some other libc implementations it cannot fail due to
+ * implementation of the "C" locale as a static object in libc (Glibc, Musl,
+ * Solaris), though we don't count on that.  On other systems it might fail due
+ * to low memory, and if pg_ensure_c_locale() hasn't been called then attempts
+ * to pass PG_C_LOCALE to libc functions will crash.
+ *
+ * On all platforms, PG_C_LOCALE contains an assertion that this function has
+ * been called.
  */
-locale_t
-pg_get_c_locale(void)
+bool
+pg_ensure_c_locale(void)
 {
-	/*
-	 * Fast path if already initialized.  This assumes that we can read a
-	 * locale_t (in practice, a pointer) without tearing in a multi-threaded
-	 * program.
-	 */
-	if (c_locale != (locale_t) 0)
-		return c_locale;
-
-	/* Make a locale_t.  It will live until process exit. */
-	{
+#ifdef PG_C_LOCALE_ALLOCATE
 #ifndef WIN32
-		static pthread_once_t once = PTHREAD_ONCE_INIT;
-
-		pthread_once(&once, init_c_locale_once);
+	static pthread_once_t once = PTHREAD_ONCE_INIT;
 #else
-		static INIT_ONCE once;
-		InitOnceExecuteOnce(&once, init_c_locale_once, NULL, NULL);
+	static INIT_ONCE once;
 #endif
-	}
 
-	/*
-	 * It's possible that the allocation of the locale failed due to low
-	 * memory, and then (locale_t) 0 will be returned.  Users of PG_C_LOCALE
-	 * should defend against that by checking pg_ensure_c_locale() at a
-	 * convenient time, so that they can treat it as a simple constant after
-	 * that.
-	 *
-	 * Note that macOS, NetBSD and FreeBSD don't reach this code at all (see
-	 * src/include/port.h, PG_C_LOCALE really is a constant).  Glibc, Musl and
-	 * Solaris (but not illumos) appear to have special cases for the "C"
-	 * locale that always return the same static object and thus cannot fail,
-	 * but that's not documented and we don't rely on it.  Other supported
-	 * systems might actually report failure in pg_ensure_c_locale() on low
-	 * memory, so users of PG_C_LOCALE must find a good place to check that.
-	 */
+#ifndef WIN32
+	pthread_once(&once, init_c_locale_once);
+#else
+	InitOnceExecuteOnce(&once, init_c_locale_once, NULL, NULL);
+#endif
 
-	return c_locale;
+	if (pg_c_locale != 0)
+		pg_ensure_c_locale_called = true;
+	return pg_c_locale != 0;
+#else
+	/* This platform doesn't need to do anything except support assertions. */
+	pg_ensure_c_locale_called = true;
+	return true;
+#endif
 }
