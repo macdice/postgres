@@ -17,10 +17,12 @@
 #include "c.h"
 
 #ifdef PG_C_LOCALE_ALLOCATE
+#ifdef FRONTEND
 #ifndef WIN32
 #include <pthread.h>
 #else
 #include <synchapi.h>
+#endif
 #endif
 #endif
 
@@ -32,13 +34,13 @@ locale_t	pg_c_locale;
 
 #ifndef WIN32
 static void
-init_c_locale_once(void)
+pg_c_locale_once(void)
 {
 	pg_c_locale = newlocale(LC_ALL, "C", NULL);
 }
 #else
 static BOOL
-init_c_locale_once(PINIT_ONCE once, PVOID parameter, PVOID *context)
+pg_c_locale_once(PINIT_ONCE once, PVOID parameter, PVOID *context)
 {
 	pg_c_locale = _create_locale(LC_ALL, "C");
 	return true;
@@ -66,22 +68,29 @@ bool
 pg_ensure_c_locale(void)
 {
 #ifdef PG_C_LOCALE_ALLOCATE
+#ifdef FRONTEND
 #ifndef WIN32
 	static pthread_once_t once = PTHREAD_ONCE_INIT;
+	pthread_once(&once, pg_c_locale_once);
 #else
 	static INIT_ONCE once;
+	InitOnceExecuteOnce(&once, pg_c_locale_once, NULL, NULL);
 #endif
-
+#else /* !FRONTEND */
+	if (pg_c_locale == 0)
+	{
 #ifndef WIN32
-	pthread_once(&once, init_c_locale_once);
+		pg_c_locale_once();
 #else
-	InitOnceExecuteOnce(&once, init_c_locale_once, NULL, NULL);
+		pg_c_locale_once(0, 0, 0);
+#endif
+	}
 #endif
 
 	if (pg_c_locale != 0)
 		pg_ensure_c_locale_called = true;
 	return pg_c_locale != 0;
-#else
+#else /* !PG_C_LOCALE_ALLOCATE */
 	/* This platform doesn't need to do anything except support assertions. */
 	pg_ensure_c_locale_called = true;
 	return true;
