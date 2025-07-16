@@ -5,6 +5,7 @@ backend_sources += files(
   'dsm.c',
   'dsm_impl.c',
   'dsm_registry.c',
+  'eventflag.c',
   'ipc.c',
   'ipci.c',
   'latch.c',

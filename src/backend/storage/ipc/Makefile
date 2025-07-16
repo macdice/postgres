@@ -13,6 +13,7 @@ OBJS = \
 	dsm.o \
 	dsm_impl.o \
 	dsm_registry.o \
+	eventflag.o \
 	ipc.o \
 	ipci.o \
 	latch.o \
