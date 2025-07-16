@@ -2775,6 +2775,15 @@ include_dir 'conf.d'
           </listitem>
           <listitem>
            <para>
+            <literal>posix_aio</literal> (execute asynchronous I/O using
+            POSIX AIO, requires a build with
+            <link linkend="configure-option-with-posix-aio"><option>--with-posix-aio</option></link> /
+            <link linkend="configure-with-posix-aio-meson"><option>-Dposix_aio=enabled</option></link>);
+            on systems other than FreeBSD, this is a developer-only feature
+           </para>
+          </listitem>
+          <listitem>
+           <para>
             <literal>sync</literal> (execute asynchronous-eligible I/O synchronously)
            </para>
           </listitem>

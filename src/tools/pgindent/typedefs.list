@@ -4065,6 +4065,7 @@ shm_toc_estimator
 shmem_request_hook_type
 shmem_startup_hook_type
 sig_atomic_t
+siginfo_t
 sigjmp_buf
 signedbitmapword
 sigset_t

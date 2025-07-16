@@ -27,6 +27,10 @@
 #define IOMETHOD_IO_URING_ENABLED
 #endif
 
+#if defined(USE_POSIX_AIO)
+#define IOMETHOD_POSIX_AIO_ENABLED
+#endif
+
 
 /* Enum for io_method GUC. */
 typedef enum IoMethod
@@ -35,6 +39,9 @@ typedef enum IoMethod
 	IOMETHOD_WORKER,
 #ifdef IOMETHOD_IO_URING_ENABLED
 	IOMETHOD_IO_URING,
+#endif
+#ifdef IOMETHOD_POSIX_AIO_ENABLED
+	IOMETHOD_POSIX_AIO,
 #endif
 }			IoMethod;
 

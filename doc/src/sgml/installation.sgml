@@ -1193,6 +1193,25 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
+      <varlistentry id="configure-option-with-posix-aio">
+       <term><option>--with-posix-aio</option></term>
+       <listitem>
+        <para>
+         Build with POSIX AIO, enabling <literal>io_method=posix_aio</literal>
+         support for asynchronous I/O.
+        </para>
+        <para>
+         On Unix-like systems other than FreeBSD, this is a developer-only
+         feature intended only as support for code maintenance.  Performance
+         on other systems may be limited due to lack of vectored I/O support,
+         and asynchronous operations may be emulated by libc with threads.
+         The built-in emulation provided by <literal>io_method=worker</literal>
+         should be preferred over libc-based emulation, if kernel-managed
+         asynchronous I/O is not available.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="configure-option-with-libxml">
        <term><option>--with-libxml</option></term>
        <listitem>
