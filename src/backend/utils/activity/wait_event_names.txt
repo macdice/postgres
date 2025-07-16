@@ -196,6 +196,9 @@ Section: ClassName - WaitEventIO
 AIO_IO_COMPLETION	"Waiting for another process to complete IO."
 AIO_IO_URING_SUBMIT	"Waiting for IO submission via io_uring."
 AIO_IO_URING_EXECUTION	"Waiting for IO execution via io_uring."
+AIO_POSIX_AIO_SUBMIT	"Waiting for IO submission via posix_aio."
+AIO_POSIX_AIO_EXECUTION	"Waiting for IO execution via posix_aio."
+AIO_POSIX_AIO_EXECUTION_IPC	"Waiting for IO execution started in another process via posix_aio."
 BASEBACKUP_READ	"Waiting for base backup to read from a file."
 BASEBACKUP_SYNC	"Waiting for data written by a base backup to reach durable storage."
 BASEBACKUP_WRITE	"Waiting for base backup to write to a file."
@@ -406,6 +409,7 @@ SubtransSLRU	"Waiting to access the sub-transaction SLRU cache."
 XactSLRU	"Waiting to access the transaction status SLRU cache."
 ParallelVacuumDSA	"Waiting for parallel vacuum dynamic shared memory allocation."
 AioUringCompletion	"Waiting for another process to complete IO via io_uring."
+AioPosixAioCompletion	"Waiting for another process to complete IO via posix_aio."
 
 # No "ABI_compatibility" region here as WaitEventLWLock has its own C code.
 

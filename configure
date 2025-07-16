@@ -718,6 +718,7 @@ LIBCURL_LIBS
 LIBCURL_CFLAGS
 with_libcurl
 with_uuid
+with_posix_aio
 LIBURING_LIBS
 LIBURING_CFLAGS
 with_liburing
@@ -875,6 +876,7 @@ with_systemd
 with_readline
 with_libedit_preferred
 with_liburing
+with_posix_aio
 with_uuid
 with_ossp_uuid
 with_libcurl
@@ -1594,6 +1596,7 @@ Optional Packages:
   --with-libedit-preferred
                           prefer BSD Libedit over GNU Readline
   --with-liburing         build with io_uring support, for asynchronous I/O
+  --with-posix-aio        build with POSIX AIO support, for asynchronous I/O
   --with-uuid=LIB         build contrib/uuid-ossp using LIB (bsd,e2fs,ossp)
   --with-ossp-uuid        obsolete spelling of --with-uuid=ossp
   --with-libcurl          build with libcurl support
@@ -8845,6 +8848,41 @@ $as_echo "yes" >&6; }
 
 fi
 fi
+
+#
+# POSIX AIO
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with POSIX AIO support" >&5
+$as_echo_n "checking whether to build with POSIX AIO support... " >&6; }
+
+
+
+# Check whether --with-posix-aio was given.
+if test "${with_posix_aio+set}" = set; then :
+  withval=$with_posix_aio;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_POSIX_AIO 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-posix-aio option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_posix_aio=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_posix_aio" >&5
+$as_echo "$with_posix_aio" >&6; }
+
 
 #
 # UUID library
