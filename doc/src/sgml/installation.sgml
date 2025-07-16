@@ -1193,6 +1193,22 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
+      <varlistentry id="configure-option-with-posix-aio">
+       <term><option>--with-posix-aio</option></term>
+       <listitem>
+        <para>
+         Build with POSIX AIO, enabling <literal>io_method=posix_aio</literal>
+         support for asynchronous I/O.
+        </para>
+        <para>
+         Supported on FreeBSD, and experimental on NetBSD and macOS.
+         It compiles on other Unix-like systems but is only intended
+         for developers maintaining the code, and shouldn't be used for
+         production.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="configure-option-with-libxml">
        <term><option>--with-libxml</option></term>
        <listitem>
@@ -2660,6 +2676,23 @@ ninja install
         To use a liburing installation that is in an unusual location, you
         can set <command>pkg-config</command>-related environment
         variables (see its documentation).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="configure-with-posix-aio-meson">
+      <term><option>-Dliburing={ auto | enabled | disabled }</option></term>
+      <listitem>
+       <para>
+        Build with liburing, enabling posix_aio support for asynchronous I/O.
+        Defaults to auto.
+       </para>
+
+       <para>
+        Supported on FreeBSD, and experimental on NetBSD and macOS.
+        It compiles on other Unix-like systems but is only intended
+        for developers maintaining the code, and shouldn't be used for
+        production.
        </para>
       </listitem>
      </varlistentry>

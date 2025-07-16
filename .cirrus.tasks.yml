@@ -140,6 +140,7 @@ task:
 # - Specifies configuration options that test reading/writing/copying of node trees
 # - Specifies debug_parallel_query=regress, to catch related issues during CI
 # - Also runs tests against a running postgres instance, see test_running_script
+# - Uses io_method=posix_aio
 task:
   name: FreeBSD - Meson
 
@@ -162,6 +163,7 @@ task:
       -c debug_write_read_parse_plan_trees=on
       -c debug_raw_expression_coverage_test=on
       -c debug_parallel_query=regress
+      -c io_method=posix_aio
     PG_TEST_PG_UPGRADE_MODE: --link
 
   <<: *freebsd_task_template
@@ -269,6 +271,7 @@ task:
         LC_ALL: "C"
         # -Duuid is not set for the NetBSD, see the comment below, above
         # configure_script, for more information.
+        PG_TEST_INITDB_EXTRA_OPTS: "-c io_method=posix_aio"
       setup_additional_packages_script: |
         #pkgin -y install ...
       <<: *netbsd_task_template
@@ -609,6 +612,7 @@ task:
 
     PG_TEST_PG_UPGRADE_MODE: --clone
     PG_TEST_PG_COMBINEBACKUP_MODE: --clone
+    PG_TEST_INITDB_EXTRA_OPTS: "-c io_method=posix_aio"
 
   <<: *macos_task_template
 

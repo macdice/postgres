@@ -1006,6 +1006,19 @@ endif
 
 
 ###############################################################
+# Library: posix_aio
+###############################################################
+
+posix_aioopt = get_option('posix_aio')
+posix_aio = not_found_dep
+if cc.has_header('aio.h')
+  cdata.set('USE_POSIX_AIO', 1)
+  posix_aio = declare_dependency()
+endif
+
+
+
+###############################################################
 # Library: libxml
 ###############################################################
 
