@@ -92,6 +92,42 @@ eventflag_wait_exclusive(EventFlag *flag, uint32 wait_event_info)
 }
 
 /*
+ * Without waiting, try to become the waiter for this event.  Return false if
+ * the event has already fired or there is already a waiter.
+ */
+bool
+eventflag_begin_wait_exclusive(EventFlag *flag)
+{
+	uint32		word = pg_atomic_read_u32(&flag->word);
+
+	for (;;)
+	{
+		/* Has it already fired or being waited on? */
+		if (word & (EVENTFLAG_FIRED | EVENTFLAG_WAITER))
+			return false;
+
+		/* Try to become the waiter. */
+		if (!pg_atomic_compare_exchange_u32(&flag->word,
+											&word,
+											EVENTFLAG_WAITER | MyProcNumber))
+			continue;
+		return true;
+	}
+	return false;
+}
+
+/*
+ * Check if the event has fired and been granted.
+ */
+bool
+eventflag_has_fired(EventFlag *flag)
+{
+	uint32		word = pg_atomic_read_u32(&flag->word);
+
+	return word & EVENTFLAG_FIRED;
+}
+
+/*
  * Fire an event, releasing any backend that is waiting in
  * eventflag_wait_exclusive().  Can be called in an asynchronous signal handler
  * or a Windows helper thread.

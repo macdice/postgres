@@ -66,8 +66,11 @@
 #include "storage/procnumber.h"
 #include "utils/wait_event.h"
 
-/* Realtime signal to use for completion notification. */
-#define PGAIO_POSIX_AIO_COMPLETION_SIGNO SIGRTMIN
+/* Realtime signal for completion notifications from the kernel. */
+#define PGAIO_POSIX_AIO_NOTIFICATION_SIGNO SIGRTMIN
+
+/* Regular signal for requests to enable the above from other backends. */
+#define PGAIO_POSIX_AIO_NOTIFICATION_CONTROL_SIGNO SIGIO
 
 /* Does this platform have vectored AIO operations? */
 #if defined(LIO_READV) && defined(LIO_WRITEV)
@@ -90,22 +93,36 @@ const IoMethodOps pgaio_posix_aio_ops = {
 	.wait_one = pgaio_posix_aio_wait_one,
 };
 
+typedef struct PgAioPosixAioBackend
+{
+	/* Number of backends waiting for an IO submitted by this backend. */
+	pg_atomic_uint32 waiters;
+} PgAioPosixAioBackend;
+
 static EventFlag *pgaio_posix_aio_eventflags;
+static PgAioPosixAioBackend *pgaio_posix_aio_backends;
+static PgAioPosixAioBackend *my_pgaio_posix_aio_backend;
 static struct aiocb *pgaio_posix_aio_aiocbs;
 static int	pgaio_posix_aio_naiocbs;
 
 static void pgaio_posix_aio_prepare_submit(PgAioHandle *ioh, struct aiocb *aiocb);
-static void pgaio_posix_aio_handler(int signo, siginfo_t *notification, void *context);
+static PgAioHandle *pgaio_posix_aio_process_notification(siginfo_t *notification);
+static void pgaio_posix_aio_notification_handler(int signo,
+												 siginfo_t *notification,
+												 void *context);
+static void pgaio_posix_aio_notification_control_handler(int signo);
 
 static size_t
 pgaio_posix_aio_shmem_size(void)
 {
-	/*
-	 * Matches pgaio_ctl->io_handle_count, not yet set.  (Perhaps the values
-	 * important for scaling should be passed as a function arguments?)
-	 */
-	return mul_size(sizeof(EventFlag),
-					mul_size(io_max_concurrency, MaxBackends + NUM_AUXILIARY_PROCS));
+	int io_handle_count;
+	int backends;
+
+	backends = MaxBackends + NUM_AUXILIARY_PROCS;
+	io_handle_count = io_max_concurrency * backends;
+
+	return add_size(mul_size(sizeof(PgAioPosixAioBackend), backends),
+					mul_size(sizeof(EventFlag), io_handle_count));
 }
 
 static void
@@ -113,10 +130,20 @@ pgaio_posix_aio_shmem_init(bool first_time)
 {
 	bool		found;
 
-	/* These per-handle flags will be initialized on use. */
+	/* Set up the per-backend waiter count. */
+	pgaio_posix_aio_backends = (PgAioPosixAioBackend *)
+		ShmemInitStruct("AioPosixAioBackend", pgaio_posix_aio_shmem_size(), &found);
+	if (!found)
+		for (int i = 0; i < MaxBackends + NUM_AUXILIARY_PROCS; i++)
+			pg_atomic_init_u32(&pgaio_posix_aio_backends[i].waiters, 0);
+	my_pgaio_posix_aio_backend = &pgaio_posix_aio_backends[MyProcNumber];
+
+	/* Allocate the per-IO EventFlag.  Initialized on use. */
 	pgaio_posix_aio_eventflags = (EventFlag *)
-		ShmemInitStruct("AioPosixAio", pgaio_posix_aio_shmem_size(), &found);
+		ShmemInitStruct("AioPosixAioEventFlag", pgaio_posix_aio_shmem_size(), &found);
 }
+
+static sigset_t pgaio_posix_aio_notification_sigset;
 
 static void
 pgaio_posix_aio_init_backend(void)
@@ -128,11 +155,28 @@ pgaio_posix_aio_init_backend(void)
 	pgaio_posix_aio_aiocbs = palloc(sizeof(struct aiocb) *
 									pgaio_posix_aio_naiocbs);
 
-	/* Install realtime signal handler for completion notifications. */
-	sa.sa_sigaction = pgaio_posix_aio_handler;
+	/* Realtime signal handler for asynchonous completion notifications. */
+	sa.sa_sigaction = pgaio_posix_aio_notification_handler;
 	sa.sa_flags = SA_RESTART | SA_SIGINFO;
-	if (sigaction(PGAIO_POSIX_AIO_COMPLETION_SIGNO, &sa, NULL) < 0)
+	if (sigaction(PGAIO_POSIX_AIO_NOTIFICATION_SIGNO, &sa, NULL) < 0)
 		elog(ERROR, "could not install I/O completion notification handler");
+
+	/* Regular signal handler for requests to unblock the above. */
+	sa.sa_handler = pgaio_posix_aio_notification_control_handler;
+	sa.sa_flags = SA_RESTART | SA_SIGINFO;
+	if (sigaction(PGAIO_POSIX_AIO_NOTIFICATION_CONTROL_SIGNO, &sa, NULL) < 0)
+		elog(ERROR, "could not install I/O completion notification control handler");
+
+	/*
+	 * The notification handler starts out blocked and notifications are
+	 * consumed synchronously with sigwaitinfo().  It will be unblocked while
+	 * other backends are actively waiting for I/Os submitted by this backend,
+	 * to guarantee progress at the cost of a bit of extra interrupt traffic.
+	 */
+	sigemptyset(&pgaio_posix_aio_notification_sigset);
+	sigaddset(&pgaio_posix_aio_notification_sigset,
+			  PGAIO_POSIX_AIO_NOTIFICATION_SIGNO);
+	sigprocmask(SIG_BLOCK, &pgaio_posix_aio_notification_sigset, NULL);
 }
 
 static struct aiocb *
@@ -250,13 +294,155 @@ pgaio_posix_aio_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 	return num_staged_ios;
 }
 
+static volatile sig_atomic_t pgaio_posix_aio_synchronous_notifications;
+
+static void
+pgaio_posix_aio_begin_synchronous_notifications(void)
+{
+	/*
+	 * After this store, the asynchronous handler can't be unblocked by
+	 * pgaio_posix_aio_notification_control_handler().
+	 */
+	pgaio_posix_aio_synchronous_notifications = true;
+
+	/*
+	 * If pgaio_posix_aio_notification_handler() was unblocked, block it.
+	 */
+	if (pg_atomic_read_u32(&my_pgaio_posix_aio_backend->waiters) > 0)
+		sigprocmask(SIG_BLOCK, &pgaio_posix_aio_notification_sigset, NULL);
+}
+
+static void
+pgaio_posix_aio_end_synchronous_notifications(void)
+{
+	/*
+	 * After this store, pgaio_posix_aio_notification_control_handler() is free
+	 * to unblock pgaio_posix_aio_synchronous_notifications().
+	 */
+	pgaio_posix_aio_synchronous_notifications = false;
+
+	/*
+	 * Unblock asynchronous notifications if there are any other backends
+	 * waiting for an IO subnitted by this backend.
+	 */
+	if (pg_atomic_read_u32(&my_pgaio_posix_aio_backend->waiters) > 0)
+{
+		sigprocmask(SIG_UNBLOCK, &pgaio_posix_aio_notification_sigset, NULL);
+fprintf(stderr, "ublocking per request\b");
+}
+}
+
+static void
+pgaio_posix_aio_notification_control_handler(int signo)
+{
+	/*
+	 * Block or unblock the asynchronous notificaiton handler depending on
+	 * whether any other backend is interested.  Deferrred if synchronous
+	 * processing is currently underway (see above).
+	 */
+	if (!pgaio_posix_aio_synchronous_notifications)
+	{
+		if (pg_atomic_read_u32(&my_pgaio_posix_aio_backend->waiters) > 0)
+			sigprocmask(SIG_UNBLOCK, &pgaio_posix_aio_notification_sigset, NULL);
+		else
+			sigprocmask(SIG_BLOCK, &pgaio_posix_aio_notification_sigset, NULL);
+	}
+}
+
+static void
+pgaio_posix_aio_begin_wait(PgAioHandle *ioh)
+{
+	int owner = pgaio_io_get_owner(ioh);
+
+	/*
+	 * If we're the first waiter, tell the submitter to start processing
+	 * completion notifications asynchronously.
+	 */
+	if (pg_atomic_fetch_add_u32(&pgaio_posix_aio_backends[owner].waiters, 1) == 0)
+		kill(SIGIO, GetPGProcByNumber(pgaio_io_get_owner(ioh))->pid);
+}
+
+static void
+pgaio_posix_aio_end_wait(PgAioHandle *ioh)
+{
+	int owner = pgaio_io_get_owner(ioh);
+
+	/*
+	 * If we were the last waiter, tell the submitter to stop asynchronous
+	 * completion notifications, so it can use the more efficient synchronous
+	 * notification path.
+	 */
+	if (pg_atomic_fetch_sub_u32(&pgaio_posix_aio_backends[owner].waiters, 1) == 0)
+		kill(SIGIO, GetPGProcByNumber(pgaio_io_get_owner(ioh))->pid);
+}
+
 static void
 pgaio_posix_aio_wait_one(PgAioHandle *ioh, uint64 ref_generation)
 {
+	EventFlag *event = pgaio_posix_aio_get_eventflag(ioh);
+
+	/*
+	 * In the common case of waiting for an IO that this backend submitted, try
+	 * to consume the completion notification synchronously.
+	 */
+	if (pgaio_io_get_owner(ioh) == MyProcNumber &&
+		eventflag_begin_wait_exclusive(event))
+	{
+		START_CRIT_SECTION();
+
+elog(LOG, "XXX i am the submitter and waiter");
+		pgaio_posix_aio_begin_synchronous_notifications();
+		if (eventflag_has_fired(event))
+		{
+			/*
+			 * Asynchronous notifications are blocked now, but a notification
+			 * has arrived concurrently, so process it immediately.
+			 */
+elog(LOG, "XXX has fired");
+			Assert(ioh->result != -EINPROGRESS);
+			pgaio_io_process_completion(ioh, ioh->result);
+		}
+		else
+		{
+			PgAioHandle *other_ioh;
+
+elog(LOG, "XXX has not fired, so i will wait synchronously");
+			/*
+			 * Consume completions synchronously until we find the one we're
+			 * waiting for.
+			 */
+			do
+			{
+				siginfo_t notification;
+
+				if (sigwaitinfo(&pgaio_posix_aio_notification_sigset, &notification) < 0)
+					elog(ERROR, "could not wait for queued signal: %m");
+				other_ioh = pgaio_posix_aio_process_notification(&notification);
+				if (!other_ioh)
+					continue;
+				Assert(ioh->result != -EINPROGRESS);
+				pgaio_io_process_completion(other_ioh, other_ioh->result);
+			} while (other_ioh != ioh);
+		}
+		pgaio_posix_aio_end_synchronous_notifications();
+
+		END_CRIT_SECTION();
+
+		return;
+	}
+
+	/*
+	 * Otherwise ioh was submitted by another backend already has an exclusive
+	 * waiter.
+	 */
 	START_CRIT_SECTION();
+
+	pgaio_posix_aio_begin_wait(ioh);
 	if (eventflag_wait_exclusive(pgaio_posix_aio_get_eventflag(ioh),
 								 WAIT_EVENT_AIO_POSIX_AIO_EXECUTION))
 	{
+		pgaio_posix_aio_end_wait(ioh);
+
 		/*
 		 * The event has fired, either before we got here or after a sleep,
 		 * and this backend has won the right to process completions.
@@ -272,6 +458,7 @@ pgaio_posix_aio_wait_one(PgAioHandle *ioh, uint64 ref_generation)
 		 * Another backend is dealing with it.  Use the standard condition
 		 * variable to wait for it to process completions.
 		 */
+		pgaio_posix_aio_end_wait(ioh);
 		while (!pgaio_io_was_recycled(ioh, ref_generation, &state) &&
 			   state == PGAIO_HS_SUBMITTED)
 			ConditionVariableSleep(&ioh->cv, WAIT_EVENT_AIO_IO_COMPLETION);
@@ -294,7 +481,7 @@ pgaio_posix_aio_prepare_submit(PgAioHandle *ioh, struct aiocb *aiocb)
 	/* Ask for a realtime signal carrying the ID as payload. */
 	memset(aiocb, 0, sizeof(*aiocb));
 	aiocb->aio_sigevent.sigev_notify = SIGEV_SIGNAL;
-	aiocb->aio_sigevent.sigev_signo = PGAIO_POSIX_AIO_COMPLETION_SIGNO;
+	aiocb->aio_sigevent.sigev_signo = PGAIO_POSIX_AIO_NOTIFICATION_SIGNO;
 	aiocb->aio_sigevent.sigev_value.sival_int = pgaio_io_get_id(ioh);
 
 	switch (ioh->op)
@@ -357,17 +544,16 @@ pgaio_posix_aio_prepare_submit(PgAioHandle *ioh, struct aiocb *aiocb)
 }
 
 /*
- * Handle an asynchronous completion notification from the kernel.
+ * Process a completion notification from the kernel.
  */
-static void
-pgaio_posix_aio_handler(int signo, siginfo_t *notification, void *context)
+static PgAioHandle *
+pgaio_posix_aio_process_notification(siginfo_t *notification)
 {
-	int			save_errno = errno;
 	int			result;
 	PgAioHandle *ioh;
 
 	if (notification->si_code != SI_ASYNCIO)
-		return;					/* unexpected signal source */
+		return NULL;
 
 	/* Find the referenced I/O handle. */
 	ioh = pgaio_posix_aio_get_io_by_id(notification->si_value.sival_int);
@@ -390,11 +576,30 @@ pgaio_posix_aio_handler(int signo, siginfo_t *notification, void *context)
 		result = -notification->si_errno;
 	ioh->result = result;
 
+	return ioh;
+}
+
+/*
+ * Handle an asynchronous completion notification from the kernel.
+ */
+static void
+pgaio_posix_aio_notification_handler(int signo, siginfo_t *notification,
+									 void *context)
+{
+	int			save_errno = errno;
+	PgAioHandle *ioh;
+
+	ioh = pgaio_posix_aio_process_notification(notification);
+
 	/*
 	 * If a backend is waiting for the result, wake it up.  Has full barrier
 	 * semantics, so the waiter sees ioh->result.
 	 */
-	eventflag_fire(pgaio_posix_aio_get_eventflag(ioh));
+	if (ioh)
+{
+fprintf(stderr, "XXX fire!\n");
+		eventflag_fire(pgaio_posix_aio_get_eventflag(ioh));
+}
 
 	errno = save_errno;
 }
