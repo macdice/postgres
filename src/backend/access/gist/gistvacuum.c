@@ -260,7 +260,7 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		 * InvalidBuffer, the read stream API won't invoke our callback again
 		 * until the stream has been reset.
 		 */
-		read_stream_reset(stream);
+		read_stream_reset(stream, READ_STREAM_RESET_CONTINUE);
 	}
 
 	read_stream_end(stream);

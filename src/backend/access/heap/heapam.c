@@ -667,7 +667,7 @@ heap_fetch_next_buffer(HeapScanDesc scan, ScanDirection dir)
 	if (unlikely(scan->rs_dir != dir))
 	{
 		scan->rs_prefetch_block = scan->rs_cblock;
-		read_stream_reset(scan->rs_read_stream);
+		read_stream_reset(scan->rs_read_stream, 0);
 	}
 
 	scan->rs_dir = dir;
@@ -1284,7 +1284,7 @@ heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 	 * in initscan().
 	 */
 	if (scan->rs_read_stream)
-		read_stream_reset(scan->rs_read_stream);
+		read_stream_reset(scan->rs_read_stream, 0);
 
 	/*
 	 * reinitialize scan descriptor

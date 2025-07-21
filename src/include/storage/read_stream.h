@@ -17,6 +17,8 @@
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
 
+/* Flags controlling stream initialization. */
+
 /* Default tuning, reasonable for many users. */
 #define READ_STREAM_DEFAULT 0x00
 
@@ -41,6 +43,16 @@
  * that, declaring ahead of time that we'll be reading all available buffers.
  */
 #define READ_STREAM_FULL 0x04
+
+/* Flags controlling read_stream_reset(). */
+
+/*
+ * If the callback reports end-of-stream or higher levels decide to abandon
+ * blocks that it generated speculatively, the stream can be reset and allowed
+ * to try to fetch blocks again without forgetting internal heuristics by
+ * passing this flag.
+ */
+#define READ_STREAM_RESET_CONTINUE 0x01
 
 /* ---
  * Opt-in to using AIO batchmode.
@@ -99,7 +111,7 @@ extern ReadStream *read_stream_begin_smgr_relation(int flags,
 												   ReadStreamBlockNumberCB callback,
 												   void *callback_private_data,
 												   size_t per_buffer_data_size);
-extern void read_stream_reset(ReadStream *stream);
+extern void read_stream_reset(ReadStream *stream, int flags);
 extern void read_stream_end(ReadStream *stream);
 
 #endif							/* READ_STREAM_H */

@@ -1011,9 +1011,13 @@ read_stream_next_block(ReadStream *stream, BufferAccessStrategy *strategy)
  * to be used again for different blocks.  This can be used to clear an
  * end-of-stream condition and start again, or to throw away blocks that were
  * speculatively read and read some different blocks instead.
+ *
+ * READ_STREAM_RESET_CONTINUE can be pass to flags to indicate that a stream
+ * was temporarily interrupted but internal look-ahead distance heuristics
+ * should not be reset, because a similar access pattern is expected.
  */
 void
-read_stream_reset(ReadStream *stream)
+read_stream_reset(ReadStream *stream, int flags)
 {
 	int16		index;
 	Buffer		buffer;
@@ -1050,8 +1054,9 @@ read_stream_reset(ReadStream *stream)
 	Assert(stream->pinned_buffers == 0);
 	Assert(stream->ios_in_progress == 0);
 
-	/* Start off assuming data is cached. */
-	stream->distance = 1;
+	/* Start off like a newly initialized stream, unless asked not to. */
+	if ((flags & READ_STREAM_RESET_CONTINUE) == 0)
+		stream->distance = 1;
 	stream->end_of_stream = false;
 }
 
@@ -1061,6 +1066,6 @@ read_stream_reset(ReadStream *stream)
 void
 read_stream_end(ReadStream *stream)
 {
-	read_stream_reset(stream);
+	read_stream_reset(stream, 0);
 	pfree(stream);
 }
