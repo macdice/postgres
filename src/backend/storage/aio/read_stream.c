@@ -123,6 +123,9 @@ struct ReadStream
 	BlockNumber seq_blocknum;
 	BlockNumber seq_until_processed;
 
+	/* Counter used for distance heuristics. */
+	uint64		blocks_since_last_io;
+
 	/* The read operation we are currently preparing. */
 	BlockNumber pending_read_blocknum;
 	int16		pending_read_nblocks;
@@ -198,6 +201,7 @@ read_stream_get_block(ReadStream *stream, void *per_buffer_data)
 		blocknum = stream->callback(stream,
 									stream->callback_private_data,
 									per_buffer_data);
+		stream->blocks_since_last_io++;
 	}
 
 	return blocknum;
@@ -343,22 +347,31 @@ read_stream_start_pending_read(ReadStream *stream)
 	/* Remember whether we need to wait before returning this buffer. */
 	if (!need_wait)
 	{
-		/* Look-ahead distance decays, no I/O necessary. */
-		if (stream->distance > 1)
+		/*
+		 * Look-ahead distance decays if we haven't had any cache misses in a
+		 * hypothetical window the size of the maximum possible look-ahead
+		 * distance.
+		 */
+		if (stream->distance > 1 &&
+			stream->blocks_since_last_io > stream->max_pinned_buffers)
 			stream->distance--;
 	}
 	else
 	{
-		/*
-		 * Remember to call WaitReadBuffers() before returning head buffer.
-		 * Look-ahead distance will be adjusted after waiting.
-		 */
+		/* Remember to call WaitReadBuffers() before returning head buffer. */
 		stream->ios[io_index].buffer_index = buffer_index;
 		if (++stream->next_io_index == stream->max_ios)
 			stream->next_io_index = 0;
 		Assert(stream->ios_in_progress < stream->max_ios);
 		stream->ios_in_progress++;
 		stream->seq_blocknum = stream->pending_read_blocknum + nblocks;
+
+		/* Look-ahead distance doubles. */
+		if (stream->distance > stream->max_pinned_buffers - stream->distance)
+			stream->distance = stream->max_pinned_buffers;
+		else
+			stream->distance += stream->distance;
+		stream->blocks_since_last_io = 0;
 	}
 
 	/*
@@ -897,7 +910,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
 		int16		io_index = stream->oldest_io_index;
-		int32		distance;	/* wider temporary value, clamped below */
 
 		/* Sanity check that we still agree on the buffers. */
 		Assert(stream->ios[io_index].op.buffers ==
@@ -909,11 +921,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->ios_in_progress--;
 		if (++stream->oldest_io_index == stream->max_ios)
 			stream->oldest_io_index = 0;
-
-		/* Look-ahead distance ramps up rapidly after we do I/O. */
-		distance = stream->distance * 2;
-		distance = Min(distance, stream->max_pinned_buffers);
-		stream->distance = distance;
 
 		/*
 		 * If we've reached the first block of a sequential region we're
@@ -1056,7 +1063,10 @@ read_stream_reset(ReadStream *stream, int flags)
 
 	/* Start off like a newly initialized stream, unless asked not to. */
 	if ((flags & READ_STREAM_RESET_CONTINUE) == 0)
+	{
+		stream->blocks_since_last_io = 0;
 		stream->distance = 1;
+	}
 	stream->end_of_stream = false;
 }
 
