@@ -82,6 +82,23 @@ static int	pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios);
 
 
 const IoMethodOps pgaio_worker_ops = {
+	/*
+	 * Though Windows doesn't really have vectored I/O for buffered files, the
+	 * loop-based emulation in pg_iovec.h is probably OK in a worker due to
+	 * kernel read-ahead.
+	 */
+	.have_vectored_file_io_buffered = true,
+#if HAVE_DECL_PREADV && HAVE_DECL_PWRITEV
+
+	/*
+	 * We don't yet implement true scatter/gather operations on Windows, and
+	 * until then it seems better to split operations up into chunks that can
+	 * be executed concurrently rather than serially by pg_iovec.h when
+	 * preadv() and pwrite() are missing.
+	 */
+	.have_vectored_file_io_direct = true,
+#endif
+
 	.shmem_size = pgaio_worker_shmem_size,
 	.shmem_init = pgaio_worker_shmem_init,
 

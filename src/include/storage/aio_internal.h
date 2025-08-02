@@ -256,6 +256,13 @@ typedef struct IoMethodOps
 	/* properties */
 
 	/*
+	 * Whether vectored I/O operations with iovcnt > 1 can be executed for
+	 * buffered I/O and direct I/O file descriptors.
+	 */
+	bool		have_vectored_file_io_buffered;
+	bool		have_vectored_file_io_direct;
+
+	/*
 	 * If an FD is about to be closed, do we need to wait for all in-flight
 	 * IOs referencing that FD?
 	 */

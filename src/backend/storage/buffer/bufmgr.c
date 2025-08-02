@@ -1268,6 +1268,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 {
 	int			actual_nblocks = *nblocks;
 	int			maxcombine = 0;
+	bool		vectorcombine = false;
 	bool		did_start_io;
 
 	Assert(*nblocks == 1 || allow_forwarding);
@@ -1373,6 +1374,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 			 */
 			if (i == 0 && actual_nblocks > 1)
 			{
+				vectorcombine = smgrvectorcombine(operation->smgr);
 				maxcombine = smgrmaxcombine(operation->smgr,
 											operation->forknum,
 											blockNum);
@@ -1382,6 +1384,20 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 						 blockNum, actual_nblocks, maxcombine);
 					actual_nblocks = maxcombine;
 				}
+			}
+
+			/*
+			 * If true vectored I/O is not available, check if we've cross
+			 * into a non-consecutive buffer and need to rewind, to avoid
+			 * forming a read that can't be executed efficiently.  If so, the
+			 * discontiguous pinned buffer is forwarded to the next call.
+			 */
+			if (i > 0 && !vectorcombine)
+			{
+				if (BufferIsLocal(buffers[i]) ?
+					-buffers[i] != -buffers[i - 1] + 1 :
+					buffers[i] != buffers[i - 1] + 1)
+					actual_nblocks = i;
 			}
 		}
 	}

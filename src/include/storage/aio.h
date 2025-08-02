@@ -274,6 +274,8 @@ struct PgAioHandleCallbacks
  */
 
 /* functions in aio.c */
+extern bool pgaio_have_vectored_file_io(bool direct);
+
 struct ResourceOwnerData;
 extern PgAioHandle *pgaio_io_acquire(struct ResourceOwnerData *resowner, PgAioReturn *ret);
 extern PgAioHandle *pgaio_io_acquire_nb(struct ResourceOwnerData *resowner, PgAioReturn *ret);

@@ -95,6 +95,7 @@ extern void smgrzeroextend(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum, int nblocks);
+extern bool smgrvectorcombine(SMgrRelation reln);
 extern uint32 smgrmaxcombine(SMgrRelation reln, ForkNumber forknum,
 							 BlockNumber blocknum);
 extern void smgrreadv(SMgrRelation reln, ForkNumber forknum,

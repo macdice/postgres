@@ -26,6 +26,11 @@ static int	pgaio_sync_submit(uint16 num_staged_ios, PgAioHandle **staged_ios);
 
 
 const IoMethodOps pgaio_sync_ops = {
+#if HAVE_DECL_PREADV && HAVE_DECL_PWRITEV
+	.have_vectored_file_io_buffered = true,
+	.have_vectored_file_io_direct = true,
+#endif
+
 	.needs_synchronous_execution = pgaio_sync_needs_synchronous_execution,
 	.submit = pgaio_sync_submit,
 };

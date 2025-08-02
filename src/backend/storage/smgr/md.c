@@ -816,6 +816,15 @@ buffers_to_iovec(struct iovec *iov, void **buffers, int nblocks)
 }
 
 /*
+ * mdvectorcombine() -- Report whether vectored operations are optimal.
+ */
+bool
+mdvectorcombine(SMgrRelation reln)
+{
+	return pgaio_have_vectored_file_io(io_direct_flags & IO_DIRECT_DATA);
+}
+
+/*
  * mdmaxcombine() -- Return the maximum number of total blocks that can be
  *				 combined with an IO starting at blocknum.
  */

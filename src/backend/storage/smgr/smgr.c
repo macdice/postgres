@@ -102,6 +102,7 @@ typedef struct f_smgr
 									BlockNumber blocknum, int nblocks, bool skipFsync);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber blocknum, int nblocks);
+	bool		(*smgr_vectorcombine) (SMgrRelation reln);
 	uint32		(*smgr_maxcombine) (SMgrRelation reln, ForkNumber forknum,
 									BlockNumber blocknum);
 	void		(*smgr_readv) (SMgrRelation reln, ForkNumber forknum,
@@ -138,6 +139,7 @@ static const f_smgr smgrsw[] = {
 		.smgr_extend = mdextend,
 		.smgr_zeroextend = mdzeroextend,
 		.smgr_prefetch = mdprefetch,
+		.smgr_vectorcombine = mdvectorcombine,
 		.smgr_maxcombine = mdmaxcombine,
 		.smgr_readv = mdreadv,
 		.smgr_startreadv = mdstartreadv,
@@ -682,6 +684,25 @@ smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 	HOLD_INTERRUPTS();
 	ret = smgrsw[reln->smgr_which].smgr_prefetch(reln, forknum, blocknum, nblocks);
+	RESUME_INTERRUPTS();
+
+	return ret;
+}
+
+/*
+ * smgrvectorcombine() - Report whether vectored reads/writes are supported.
+ *
+ * If false, then the vectored I/O functions can still be called with
+ * non-adjacent buffers, but may generate internal retries or looping, and the
+ * caller might prefer to avoid that and generate concurrent operations.
+ */
+bool
+smgrvectorcombine(SMgrRelation reln)
+{
+	bool		ret;
+
+	HOLD_INTERRUPTS();
+	ret = smgrsw[reln->smgr_which].smgr_vectorcombine(reln);
 	RESUME_INTERRUPTS();
 
 	return ret;

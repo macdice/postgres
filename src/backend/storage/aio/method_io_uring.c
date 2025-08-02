@@ -60,6 +60,9 @@ static void pgaio_uring_sq_from_io(PgAioHandle *ioh, struct io_uring_sqe *sqe);
 
 
 const IoMethodOps pgaio_uring_ops = {
+	.have_vectored_file_io_buffered = true,
+	.have_vectored_file_io_direct = true,
+
 	/*
 	 * While io_uring mostly is OK with FDs getting closed while the IO is in
 	 * flight, that is not true for IOs submitted with IOSQE_ASYNC.

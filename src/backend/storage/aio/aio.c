@@ -94,6 +94,23 @@ const IoMethodOps *pgaio_method_ops;
 
 
 /* --------------------------------------------------------------------------------
+ * Public Functions related to feature availability of features
+ * --------------------------------------------------------------------------------
+ */
+
+/*
+ * Can the current io_method perform file operations with iovcnt > 1?
+ */
+bool
+pgaio_have_vectored_file_io(bool direct)
+{
+	if (direct)
+		return pgaio_method_ops->have_vectored_file_io_direct;
+	else
+		return pgaio_method_ops->have_vectored_file_io_buffered;
+}
+
+/* --------------------------------------------------------------------------------
  * Public Functions related to PgAioHandle
  * --------------------------------------------------------------------------------
  */
