@@ -512,6 +512,21 @@ pgaio_io_prepare_submit(PgAioHandle *ioh)
 }
 
 /*
+ * Handle IO that will be performed synchronously by IO method.
+ *
+ * Should be called by IO methods falling back to synchronous execution as a
+ * graceful fallback strategy if system resources are exceeded.
+ */
+void
+pgaio_io_prepare_submit_synchronously(PgAioHandle *ioh)
+{
+	pg_read_barrier();
+	ioh->flags |= PGAIO_HF_SYNCHRONOUS;
+
+	pgaio_io_prepare_submit(ioh);
+}
+
+/*
  * Handle IO getting completed by a method.
  *
  * Should be called by IO methods / synchronous IO execution, just after the
