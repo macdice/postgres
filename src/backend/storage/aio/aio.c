@@ -607,6 +607,18 @@ pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation)
 				elog(ERROR, "IO in wrong state: %d", state);
 				break;
 
+				/* waiting for owner to submit */
+			case PGAIO_HS_DEFINED:
+			case PGAIO_HS_STAGED:
+				ConditionVariablePrepareToSleep(&ioh->cv);
+				while (!pgaio_io_was_recycled(ioh, ref_generation, &state) &&
+					   (state == PGAIO_HS_DEFINED ||
+						state == PGAIO_HS_STAGED))
+					ConditionVariableSleep(&pgaio_ctl->backend_state[ioh->owner_procno].submit_cv,
+										   WAIT_EVENT_AIO_IO_SUBMIT);
+				ConditionVariableCancelSleep();
+				continue;
+
 			case PGAIO_HS_SUBMITTED:
 
 				/*
@@ -621,9 +633,6 @@ pgaio_io_wait(PgAioHandle *ioh, uint64 ref_generation)
 				}
 				/* fallthrough */
 
-				/* waiting for owner to submit */
-			case PGAIO_HS_DEFINED:
-			case PGAIO_HS_STAGED:
 				/* waiting for reaper to complete */
 				/* fallthrough */
 			case PGAIO_HS_COMPLETED_IO:
@@ -1138,6 +1147,8 @@ pgaio_submit_staged(void)
 	Assert(total_submitted == did_submit);
 
 	pgaio_my_backend->num_staged_ios = 0;
+
+	ConditionVariableBroadcast(&pgaio_my_backend->submit_cv);
 
 	pgaio_debug(DEBUG4,
 				"aio: submitted %d IOs",

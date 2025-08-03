@@ -208,6 +208,9 @@ typedef struct PgAioBackend
 	uint16		num_staged_ios;
 	PgAioHandle *staged_ios[PGAIO_SUBMIT_BATCH_SIZE];
 
+	/* Other backends can wait for this backend's IOs to be submitted. */
+	ConditionVariable submit_cv;
+
 	/*
 	 * List of in-flight IOs. Also contains IOs that aren't strictly speaking
 	 * in-flight anymore, but have been waited-for and completed by another
