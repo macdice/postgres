@@ -96,10 +96,8 @@ struct ReadStream
 	int16		ios_in_progress;
 	int16		queue_size;
 	int16		max_pinned_buffers;
-	int16		forwarded_buffers;
 	int16		pinned_buffers;
 	int16		distance;
-	int16		initialized_buffers;
 	int			read_buffers_flags;
 	bool		sync_mode;		/* using io_method=sync */
 	bool		batch_mode;		/* READ_STREAM_USE_BATCHING */
@@ -126,6 +124,7 @@ struct ReadStream
 	/* The read operation we are currently preparing. */
 	BlockNumber pending_read_blocknum;
 	int16		pending_read_nblocks;
+	int			pending_read_npinned;
 
 	/* Space for buffers and optional per-buffer private data. */
 	size_t		per_buffer_data_size;
@@ -230,10 +229,8 @@ static bool
 read_stream_start_pending_read(ReadStream *stream)
 {
 	bool		need_wait;
-	int			requested_nblocks;
 	int			nblocks;
 	int			flags;
-	int			forwarded;
 	int16		io_index;
 	int16		overflow;
 	int16		buffer_index;
@@ -247,32 +244,11 @@ read_stream_start_pending_read(ReadStream *stream)
 	Assert(stream->pinned_buffers + stream->pending_read_nblocks <=
 		   stream->max_pinned_buffers);
 
-#ifdef USE_ASSERT_CHECKING
 	/* We had better not be overwriting an existing pinned buffer. */
 	if (stream->pinned_buffers > 0)
 		Assert(stream->next_buffer_index != stream->oldest_buffer_index);
 	else
 		Assert(stream->next_buffer_index == stream->oldest_buffer_index);
-
-	/*
-	 * Pinned buffers forwarded by a preceding StartReadBuffers() call that
-	 * had to split the operation should match the leading blocks of this
-	 * following StartReadBuffers() call.
-	 */
-	Assert(stream->forwarded_buffers <= stream->pending_read_nblocks);
-	for (int i = 0; i < stream->forwarded_buffers; ++i)
-		Assert(BufferGetBlockNumber(stream->buffers[stream->next_buffer_index + i]) ==
-			   stream->pending_read_blocknum + i);
-
-	/*
-	 * Check that we've cleared the queue/overflow entries corresponding to
-	 * the rest of the blocks covered by this read, unless it's the first go
-	 * around and we haven't even initialized them yet.
-	 */
-	for (int i = stream->forwarded_buffers; i < stream->pending_read_nblocks; ++i)
-		Assert(stream->next_buffer_index + i >= stream->initialized_buffers ||
-			   stream->buffers[stream->next_buffer_index + i] == InvalidBuffer);
-#endif
 
 	/* Do we need to issue read-ahead advice? */
 	flags = stream->read_buffers_flags;
@@ -314,9 +290,9 @@ read_stream_start_pending_read(ReadStream *stream)
 		buffer_limit = Min(GetAdditionalLocalPinLimit(), PG_INT16_MAX);
 	else
 		buffer_limit = Min(GetAdditionalPinLimit(), PG_INT16_MAX);
-	Assert(stream->forwarded_buffers <= stream->pending_read_nblocks);
+	Assert(stream->pending_read_npinned <= stream->pending_read_nblocks);
 
-	buffer_limit += stream->forwarded_buffers;
+	buffer_limit += stream->pending_read_npinned;
 	buffer_limit = Min(buffer_limit, PG_INT16_MAX);
 
 	if (buffer_limit == 0 && stream->pinned_buffers == 0)
@@ -343,20 +319,15 @@ read_stream_start_pending_read(ReadStream *stream)
 
 	/*
 	 * We say how many blocks we want to read, but it may be smaller on return
-	 * if the buffer manager decides to shorten the read.  Initialize buffers
-	 * to InvalidBuffer (= not a forwarded buffer) as input on first use only,
-	 * and keep the original nblocks number so we can check for forwarded
-	 * buffers as output, below.
+	 * if the buffer manager decides to shorten the read.
 	 */
 	buffer_index = stream->next_buffer_index;
 	io_index = stream->next_io_index;
-	while (stream->initialized_buffers < buffer_index + nblocks)
-		stream->buffers[stream->initialized_buffers++] = InvalidBuffer;
-	requested_nblocks = nblocks;
 	need_wait = StartReadBuffers(&stream->ios[io_index].op,
 								 &stream->buffers[buffer_index],
 								 stream->pending_read_blocknum,
 								 &nblocks,
+								 &stream->pending_read_npinned,
 								 flags);
 	stream->pinned_buffers += nblocks;
 
@@ -382,27 +353,14 @@ read_stream_start_pending_read(ReadStream *stream)
 	}
 
 	/*
-	 * How many pins were acquired but forwarded to the next call?  These need
-	 * to be passed to the next StartReadBuffers() call by leaving them
-	 * exactly where they are in the queue, or released if the stream ends
-	 * early.  We need the number for accounting purposes, since they are not
-	 * counted in stream->pinned_buffers but we already hold them.
-	 */
-	forwarded = 0;
-	while (nblocks + forwarded < requested_nblocks &&
-		   stream->buffers[buffer_index + nblocks + forwarded] != InvalidBuffer)
-		forwarded++;
-	stream->forwarded_buffers = forwarded;
-
-	/*
 	 * We gave a contiguous range of buffer space to StartReadBuffers(), but
 	 * we want it to wrap around at queue_size.  Copy overflowing buffers to
 	 * the front of the array where they'll be consumed, but also leave a copy
 	 * in the overflow zone which the I/O operation has a pointer to (it needs
-	 * a contiguous array).  Both copies will be cleared when the buffers are
-	 * handed to the consumer.
+	 * a contiguous array).
 	 */
-	overflow = (buffer_index + nblocks + forwarded) - stream->queue_size;
+	overflow = (buffer_index + nblocks + stream->pending_read_npinned) -
+		stream->queue_size;
 	if (overflow > 0)
 	{
 		Assert(overflow < stream->queue_size);	/* can't overlap */
@@ -421,6 +379,7 @@ read_stream_start_pending_read(ReadStream *stream)
 	/* Adjust the pending read to cover the remaining portion, if any. */
 	stream->pending_read_blocknum += nblocks;
 	stream->pending_read_nblocks -= nblocks;
+	Assert(stream->pending_read_nblocks >= stream->pending_read_npinned);
 
 	return true;
 }
@@ -807,12 +766,11 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 
 		/* Fast path assumptions. */
 		Assert(stream->ios_in_progress == 0);
-		Assert(stream->forwarded_buffers == 0);
 		Assert(stream->pinned_buffers == 1);
 		Assert(stream->distance == 1);
 		Assert(stream->pending_read_nblocks == 0);
+		Assert(stream->pending_read_npinned == 0);
 		Assert(stream->per_buffer_data_size == 0);
-		Assert(stream->initialized_buffers > stream->oldest_buffer_index);
 
 		/* We're going to return the buffer we pinned last time. */
 		oldest_buffer_index = stream->oldest_buffer_index;
@@ -865,7 +823,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			stream->distance = 0;
 			stream->oldest_buffer_index = stream->next_buffer_index;
 			stream->pinned_buffers = 0;
-			stream->buffers[oldest_buffer_index] = InvalidBuffer;
 		}
 
 		stream->fast_path = false;
@@ -941,16 +898,6 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			stream->seq_until_processed = InvalidBlockNumber;
 	}
 
-	/*
-	 * We must zap this queue entry, or else it would appear as a forwarded
-	 * buffer.  If it's potentially in the overflow zone (ie from a
-	 * multi-block I/O that wrapped around the queue), also zap the copy.
-	 */
-	stream->buffers[oldest_buffer_index] = InvalidBuffer;
-	if (oldest_buffer_index < stream->io_combine_limit - 1)
-		stream->buffers[stream->queue_size + oldest_buffer_index] =
-			InvalidBuffer;
-
 #if defined(CLOBBER_FREED_MEMORY) || defined(USE_VALGRIND)
 
 	/*
@@ -994,25 +941,12 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 #ifndef READ_STREAM_DISABLE_FAST_PATH
 	/* See if we can take the fast path for all-cached scans next time. */
 	if (stream->ios_in_progress == 0 &&
-		stream->forwarded_buffers == 0 &&
 		stream->pinned_buffers == 1 &&
 		stream->distance == 1 &&
 		stream->pending_read_nblocks == 0 &&
+		stream->pending_read_npinned == 0 &&
 		stream->per_buffer_data_size == 0)
 	{
-		/*
-		 * The fast path spins on one buffer entry repeatedly instead of
-		 * rotating through the whole queue and clearing the entries behind
-		 * it.  If the buffer it starts with happened to be forwarded between
-		 * StartReadBuffers() calls and also wrapped around the circular queue
-		 * partway through, then a copy also exists in the overflow zone, and
-		 * it won't clear it out as the regular path would.  Do that now, so
-		 * it doesn't need code for that.
-		 */
-		if (stream->oldest_buffer_index < stream->io_combine_limit - 1)
-			stream->buffers[stream->queue_size + stream->oldest_buffer_index] =
-				InvalidBuffer;
-
 		stream->fast_path = true;
 	}
 #endif
@@ -1059,22 +993,14 @@ read_stream_reset(ReadStream *stream)
 
 	/* Unpin any unused forwarded buffers. */
 	index = stream->next_buffer_index;
-	while (index < stream->initialized_buffers &&
-		   (buffer = stream->buffers[index]) != InvalidBuffer)
+	while (stream->pending_read_npinned > 0)
 	{
-		Assert(stream->forwarded_buffers > 0);
-		stream->forwarded_buffers--;
-		ReleaseBuffer(buffer);
-
-		stream->buffers[index] = InvalidBuffer;
-		if (index < stream->io_combine_limit - 1)
-			stream->buffers[stream->queue_size + index] = InvalidBuffer;
-
+		ReleaseBuffer(stream->buffers[index]);
+		stream->pending_read_npinned--;
 		if (++index == stream->queue_size)
 			index = 0;
 	}
 
-	Assert(stream->forwarded_buffers == 0);
 	Assert(stream->pinned_buffers == 0);
 	Assert(stream->ios_in_progress == 0);
 
