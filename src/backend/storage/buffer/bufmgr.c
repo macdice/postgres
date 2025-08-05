@@ -1263,14 +1263,18 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 					 Buffer *buffers,
 					 BlockNumber blockNum,
 					 int *nblocks,
+					 int *npinned,
 					 int flags,
 					 bool allow_forwarding)
 {
 	int			actual_nblocks = *nblocks;
+	int			actual_npinned = *npinned;
 	int			maxcombine = 0;
 	bool		did_start_io;
 
+	Assert(*npinned == 0 || allow_forwarding);
 	Assert(*nblocks == 1 || allow_forwarding);
+	Assert(*npinned <= *nblocks);
 	Assert(*nblocks > 0);
 	Assert(*nblocks <= MAX_IO_COMBINE_LIMIT);
 
@@ -1278,7 +1282,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 	{
 		bool		found;
 
-		if (allow_forwarding && buffers[i] != InvalidBuffer)
+		if (allow_forwarding && i < actual_npinned)
 		{
 			BufferDesc *bufHdr;
 
@@ -1323,6 +1327,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 										   blockNum + i,
 										   operation->strategy,
 										   &found);
+			actual_npinned++;
 		}
 
 		if (found)
@@ -1336,6 +1341,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 			if (i == 0)
 			{
 				*nblocks = 1;
+				*npinned = actual_npinned - 1;
 
 #ifdef USE_ASSERT_CHECKING
 
@@ -1459,22 +1465,30 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 
 	CheckReadBuffersOperation(operation, !did_start_io);
 
+	/* Pinned buffers not included in final nblocks, forwarded to next call. */
+	*npinned = actual_npinned - *nblocks;
+
 	return did_start_io;
 }
 
 /*
  * Begin reading a range of blocks beginning at blockNum and extending for
- * *nblocks.  *nblocks and the buffers array are in/out parameters.  On entry,
- * the buffers elements covered by *nblocks must hold either InvalidBuffer or
- * buffers forwarded by an earlier call to StartReadBuffers() that was split
- * and is now being continued.  On return, *nblocks holds the number of blocks
- * accepted by this operation.  If it is less than the original number then
- * this operation has been split, but buffer elements up to the original
- * requested size may hold forwarded buffers to be used for a continuing
- * operation.  The caller must either start a new I/O beginning at the block
- * immediately following the blocks accepted by this call and pass those
- * buffers back in, or release them if it chooses not to.  It shouldn't make
- * any other use of or assumptions about forwarded buffers.
+ * *nblocks.  *nblocks, *npinned and the buffers array are in/out parameters.
+ *
+ * On entry, *nblocks is the desired number of block to read.  On exit, it may
+ * be a smaller number if the operation was split.
+ *
+ * On entry, *npinned is the number of pinned buffers forwarded by an earlier
+ * operation that was split.  On exit, it is the number forwarded by this call,
+ * which should be passed to the following call when continuing to read the
+ * same sequence of blocks, along with the corresponding buffers.
+ *
+ * When buffers are forwarded, as reported by *npinned, the caller must either
+ * start a new I/O beginning at the block immediately following the blocks
+ * accepted by this call (*nblocks on exit) and pass those buffers back in head
+ * position, or release them if it chooses not to.  They are located in the
+ * buffers array beginning at index *nblocks (on exit).  It shouldn't make any
+ * other use of or assumptions about forwarded buffers.
  *
  * If false is returned, no I/O is necessary and the buffers covered by
  * *nblocks on exit are valid and ready to be accessed.  If true is returned,
@@ -1490,9 +1504,10 @@ StartReadBuffers(ReadBuffersOperation *operation,
 				 Buffer *buffers,
 				 BlockNumber blockNum,
 				 int *nblocks,
+				 int *npinned,
 				 int flags)
 {
-	return StartReadBuffersImpl(operation, buffers, blockNum, nblocks, flags,
+	return StartReadBuffersImpl(operation, buffers, blockNum, nblocks, npinned, flags,
 								true /* expect forwarded buffers */ );
 }
 
@@ -1511,9 +1526,10 @@ StartReadBuffer(ReadBuffersOperation *operation,
 				int flags)
 {
 	int			nblocks = 1;
+	int			npinned = 0;
 	bool		result;
 
-	result = StartReadBuffersImpl(operation, buffer, blocknum, &nblocks, flags,
+	result = StartReadBuffersImpl(operation, buffer, blocknum, &nblocks, &npinned, flags,
 								  false /* single block, no forwarding */ );
 	Assert(nblocks == 1);		/* single block can't be short */
 
