@@ -253,6 +253,25 @@ read_stream_start_pending_read(ReadStream *stream)
 	else
 		Assert(stream->next_buffer_index == stream->oldest_buffer_index);
 
+	/*
+	 * Pinned buffers forwarded by a preceding StartReadBuffers() call that
+	 * had to split the operation should match the leading blocks of this
+	 * following StartReadBuffers() call.
+	 */
+	Assert(stream->forwarded_buffers <= stream->pending_read_nblocks);
+	for (int i = 0; i < stream->forwarded_buffers; ++i)
+		Assert(BufferGetBlockNumber(stream->buffers[stream->next_buffer_index + i]) ==
+			   stream->pending_read_blocknum + i);
+
+	/*
+	 * Check that we've cleared the queue/overflow entry corresponding to the
+	 * rest of the blocks covered by this read in the last cycle, unless it's
+	 * the first go around and we haven't even initialized it yet.
+	 */
+	for (int i = stream->forwarded_buffers; i < stream->pending_read_nblocks; ++i)
+		Assert(stream->next_buffer_index + i >= stream->initialized_buffers ||
+			   stream->buffers[stream->next_buffer_index + i] == InvalidBuffer);
+
 	/* Do we need to issue read-ahead advice? */
 	flags = stream->read_buffers_flags;
 	if (stream->advice_enabled)
@@ -979,6 +998,19 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->pending_read_nblocks == 0 &&
 		stream->per_buffer_data_size == 0)
 	{
+		/*
+		 * The fast path spins on one buffer entry repeatedly instead of
+		 * rotating through the whole queue and clearing out queue entries
+		 * behind it.  If the buffer it starts with happened to be forwarded
+		 * between StartReadBuffers() calls and also wrapped around the
+		 * circular queue partway through, then a copy also exists in the
+		 * overflow zone, and it won't clear it out as the regular path would.
+		 * Do that now, so it doesn't need code for that.
+		 */
+		if (stream->oldest_buffer_index < stream->io_combine_limit - 1)
+			stream->buffers[stream->queue_size + stream->oldest_buffer_index] =
+				InvalidBuffer;
+
 		stream->fast_path = true;
 	}
 #endif
