@@ -709,6 +709,7 @@ read_buffers(PG_FUNCTION_ARGS)
 	Datum	   *buffers_datum;
 	bool	   *io_reqds;
 	int		   *nblocks_per_io;
+	int			npinned;
 
 	Assert(nblocks > 0);
 
@@ -723,6 +724,15 @@ read_buffers(PG_FUNCTION_ARGS)
 
 	rel = relation_open(relid, AccessShareLock);
 	smgr = RelationGetSmgr(rel);
+
+	/*
+	 * Pins might be forwarded between calls, if IOs are split after pins are
+	 * obtained.  Such buffers will be provided to the next call in the
+	 * buffers array, and their count will be carrier between calls in this
+	 * variable. (Only if we decided to give up the loop below would we need
+	 * to consult this, to unpin them.)
+	 */
+	npinned = 0;
 
 	/*
 	 * Do StartReadBuffers() until IO for all the required blocks has been
@@ -744,6 +754,7 @@ read_buffers(PG_FUNCTION_ARGS)
 										  &buffers[nblocks_done],
 										  startblock + nblocks_done,
 										  &nblocks_this_io,
+										  &npinned,
 										  0);
 		nblocks_per_io[nios] = nblocks_this_io;
 		nios++;

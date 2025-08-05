@@ -250,6 +250,7 @@ extern bool StartReadBuffers(ReadBuffersOperation *operation,
 							 Buffer *buffers,
 							 BlockNumber blockNum,
 							 int *nblocks,
+							 int *npinned,
 							 int flags);
 extern bool WaitReadBuffers(ReadBuffersOperation *operation);
 
