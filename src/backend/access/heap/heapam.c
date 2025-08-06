@@ -298,6 +298,7 @@ heap_scan_stream_read_next_serial(ReadStream *stream,
 														   scan->rs_prefetch_block,
 														   scan->rs_dir);
 
+elog(LOG, "asking for block %u", scan->rs_prefetch_block);
 	return scan->rs_prefetch_block;
 }
 
@@ -674,7 +675,10 @@ heap_fetch_next_buffer(HeapScanDesc scan, ScanDirection dir)
 
 	scan->rs_cbuf = read_stream_next_buffer(scan->rs_read_stream, NULL);
 	if (BufferIsValid(scan->rs_cbuf))
+	{
 		scan->rs_cblock = BufferGetBlockNumber(scan->rs_cbuf);
+elog(LOG, "XXX consumed %u", scan->rs_cblock);
+	}
 }
 
 /*
@@ -1095,6 +1099,11 @@ continue_page:
  * ----------------------------------------------------------------
  */
 
+static void
+my_peek(ReadStream *stream, void *callback_private_data, void *per_buffer_data, Buffer buffer)
+{
+	elog(LOG, "peek %u", BufferGetBlockNumber(buffer));
+}
 
 TableScanDesc
 heap_beginscan(Relation relation, Snapshot snapshot,
@@ -1222,6 +1231,7 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 														  cb,
 														  scan,
 														  0);
+read_stream_set_peek_callback(scan->rs_read_stream, my_peek);
 	}
 	else if (scan->rs_base.rs_flags & SO_TYPE_BITMAPSCAN)
 	{
