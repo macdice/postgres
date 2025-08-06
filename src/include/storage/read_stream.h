@@ -78,6 +78,12 @@ typedef BlockNumber (*ReadStreamBlockNumberCB) (ReadStream *stream,
 												void *callback_private_data,
 												void *per_buffer_data);
 
+/* Callback that has a chance to peek at buffers when they are ready. */
+typedef void (*ReadStreamPeekCB) (ReadStream *stream,
+								  void *callback_private_data,
+								  void *per_buffer_data,
+								  Buffer buffer);
+
 extern BlockNumber block_range_read_stream_cb(ReadStream *stream,
 											  void *callback_private_data,
 											  void *per_buffer_data);
@@ -99,6 +105,8 @@ extern ReadStream *read_stream_begin_smgr_relation(int flags,
 												   ReadStreamBlockNumberCB callback,
 												   void *callback_private_data,
 												   size_t per_buffer_data_size);
+extern void read_stream_set_peek_callback(ReadStream *stream,
+										  ReadStreamPeekCB peek_callback);
 extern void read_stream_reset(ReadStream *stream);
 extern void read_stream_end(ReadStream *stream);
 

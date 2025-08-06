@@ -114,9 +114,12 @@ struct ReadStream
 
 	/*
 	 * The callback that will tell us which block numbers to read, and an
-	 * opaque pointer that will be pass to it for its own purposes.
+	 * opaque pointer that will be pass to it for its own purposes.  Optional
+	 * peek_callback will have a chance to examine data in buffers some time
+	 * before they are returned.
 	 */
 	ReadStreamBlockNumberCB callback;
+	ReadStreamPeekCB peek_callback;
 	void	   *callback_private_data;
 
 	/* Next expected block, for detecting sequential access. */
@@ -140,6 +143,7 @@ struct ReadStream
 
 	/* Circular queue of buffers. */
 	int16		oldest_buffer_index;	/* Next pinned buffer to return */
+	int16		peek_buffer_index;	/* Next pinned buffer to peek at */
 	int16		next_buffer_index;	/* Index of next buffer to pin */
 	Buffer		buffers[FLEXIBLE_ARRAY_MEMBER];
 };
@@ -214,6 +218,26 @@ read_stream_unget_block(ReadStream *stream, BlockNumber blocknum)
 	Assert(stream->buffered_blocknum == InvalidBlockNumber);
 	Assert(blocknum != InvalidBlockNumber);
 	stream->buffered_blocknum = blocknum;
+}
+
+/*
+ * Pass as many pinned and valid buffers as we can to peek_callback.
+ */
+static void
+read_stream_peek(ReadStream *stream)
+{
+	while (stream->peek_buffer_index != stream->next_buffer_index &&
+		   !(stream->ios_in_progress > 0 &&
+			 stream->peek_buffer_index ==
+			 stream->ios[stream->oldest_io_index].buffer_index))
+	{
+		stream->peek_callback(stream,
+							  stream->callback_private_data,
+							  get_per_buffer_data(stream, stream->peek_buffer_index),
+							  stream->buffers[stream->peek_buffer_index]);
+		if (++stream->peek_buffer_index == stream->queue_size)
+			stream->peek_buffer_index = 0;
+	}
 }
 
 /*
@@ -428,6 +452,14 @@ read_stream_look_ahead(ReadStream *stream)
 			read_stream_start_pending_read(stream);
 			continue;
 		}
+
+		/*
+		 * New naviation information might be available if we got a cache hit
+		 * in a self-referential stream, so invoke peek_callback before every
+		 * block number callback.
+		 */
+		if (stream->peek_callback)
+			read_stream_peek(stream);
 
 		/*
 		 * See which block the callback wants next in the stream.  We need to
@@ -791,6 +823,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		Assert(stream->distance == 1);
 		Assert(stream->pending_read_nblocks == 0);
 		Assert(stream->per_buffer_data_size == 0);
+		Assert(stream->peek_callback == NULL);
 		Assert(stream->initialized_buffers > stream->oldest_buffer_index);
 
 		/* We're going to return the buffer we pinned last time. */
@@ -888,15 +921,24 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 	Assert(BufferIsValid(buffer));
 
 	/* Do we have to wait for an associated I/O first? */
-	if (stream->ios_in_progress > 0 &&
-		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
+	while (stream->ios_in_progress > 0)
 	{
 		int16		io_index = stream->oldest_io_index;
 		int32		distance;	/* wider temporary value, clamped below */
 
-		/* Sanity check that we still agree on the buffers. */
-		Assert(stream->ios[io_index].op.buffers ==
-			   &stream->buffers[oldest_buffer_index]);
+		/*
+		 * If the oldest IO covers the buffer we're returning, we have to wait
+		 * for it.  Otherwise, process as many as we can opportunistically
+		 * without stalling.
+		 *
+		 * XXX This works for io_method=worker because its IOs progress is
+		 * autonomous.  For io_method=io_uring it doesn't because this backend
+		 * has to drain the completion queue.  In theory you could check with
+		 * a cheap load if the cqe has data.
+		 */
+		if (stream->ios[stream->oldest_io_index].buffer_index != oldest_buffer_index &&
+			WaitReadBuffersMightStall(&stream->ios[io_index].op))
+			break;
 
 		WaitReadBuffers(&stream->ios[io_index].op);
 
@@ -919,6 +961,13 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			stream->ios[io_index].op.blocknum == stream->seq_until_processed)
 			stream->seq_until_processed = InvalidBlockNumber;
 	}
+
+	/*
+	 * Invoke peek_callback so it can see the oldest buffer, before we zap it.
+	 * XXX Could reorder things and not need this
+	 */
+	if (stream->peek_callback)
+		read_stream_peek(stream);
 
 	/*
 	 * We must zap this queue entry, or else it would appear as a forwarded
@@ -977,7 +1026,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->pinned_buffers == 1 &&
 		stream->distance == 1 &&
 		stream->pending_read_nblocks == 0 &&
-		stream->per_buffer_data_size == 0)
+		stream->per_buffer_data_size == 0 &&
+		stream->peek_callback == NULL)
 	{
 		stream->fast_path = true;
 	}
@@ -1056,4 +1106,14 @@ read_stream_end(ReadStream *stream)
 {
 	read_stream_reset(stream);
 	pfree(stream);
+}
+
+/*
+ * Install a callback that will have a chance to examine buffers as soon as
+ * possible.
+ */
+void
+read_stream_set_peek_callback(ReadStream *stream, ReadStreamPeekCB peek_callback)
+{
+	stream->peek_callback = peek_callback;
 }
