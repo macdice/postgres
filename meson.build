@@ -207,6 +207,7 @@ if host_system == 'cygwin'
   mod_link_with_dir = 'libdir'
 
 elif host_system == 'darwin'
+  sema_kind = 'unnamed_posix'	# emulated with mach semaphores
   dlsuffix = '.dylib'
   library_path_var = 'DYLD_LIBRARY_PATH'
 

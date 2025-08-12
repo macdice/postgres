@@ -26,7 +26,13 @@
 #include "postgres.h"
 
 #include <fcntl.h>
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/semaphore.h>
+#include <mach/task.h>
+#else
 #include <semaphore.h>
+#endif
 #include <signal.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -36,10 +42,94 @@
 #include "storage/pg_sema.h"
 #include "storage/shmem.h"
 
-
 /* see file header comment */
 #if defined(USE_NAMED_POSIX_SEMAPHORES) && defined(EXEC_BACKEND)
 #error cannot use named POSIX semaphores with EXEC_BACKEND
+#endif
+
+#ifdef __APPLE__
+/*
+ * Apple's sem_init() doesn't support pshared=1, but Mach semaphores work
+ * cross-process.
+ */
+typedef semaphore_t sem_t;
+
+static inline int
+convert_mach_error(kern_return_t rc)
+{
+	if (rc == KERN_SUCCESS)
+		return 0;
+
+	/*
+	 * XXX Is there a standard way to convert <mach/kern_return.h> values to
+	 * <errno.h> values?
+	 */
+	switch (rc)
+	{
+		case KERN_INVALID_ARGUMENT:
+			errno = EINVAL;
+			break;
+		case KERN_OPERATION_TIMED_OUT:
+			errno = EAGAIN;
+			break;
+		default:
+			fprintf(stderr, "[unknown mach kern_return_t value %d]\n", rc);
+			errno = EINVAL;
+	}
+	return -1;
+}
+
+static inline int
+sem_init(sem_t *semaphore, int pshared, int value)
+{
+	kern_return_t rc;
+
+	/*
+	 * XXX This doesn't work, because mach ports are not inherited by fork()
+	 * children.  You can work around that by sending each port to each child
+	 * explicitly around fork(), but that would be a lot of code and make our
+	 * backend launch even slower.
+	 */
+	rc = semaphore_create(mach_task_self(), semaphore, SYNC_POLICY_FIFO, value);
+	return convert_mach_error(rc);
+}
+
+static inline int
+sem_destroy(sem_t *semaphore)
+{
+	kern_return_t rc;
+
+	rc = semaphore_destroy(mach_task_self(), *semaphore);
+	return convert_mach_error(rc);
+}
+
+static inline int
+sem_post(sem_t *semaphore)
+{
+	kern_return_t rc;
+
+	rc = semaphore_signal(*semaphore);
+	return convert_mach_error(rc);
+}
+
+static inline int
+sem_wait(sem_t *semaphore)
+{
+	kern_return_t rc;
+
+	rc = semaphore_wait(*semaphore);
+	return convert_mach_error(rc);
+}
+
+static inline int
+sem_trywait(sem_t *semaphore)
+{
+	kern_return_t rc;
+	struct mach_timespec zero_timeout = {0};
+
+	rc = semaphore_timedwait(*semaphore, zero_timeout);
+	return convert_mach_error(rc);
+}
 #endif
 
 typedef union SemTPadded
