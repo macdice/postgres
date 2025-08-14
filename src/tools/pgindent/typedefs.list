@@ -2575,6 +2575,7 @@ ReturningClause
 ReturningExpr
 ReturningOption
 ReturningOptionKind
+ReverseRange
 RevmapContents
 RevokeRoleGrantAction
 RewriteMappingDataEntry
