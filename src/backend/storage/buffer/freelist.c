@@ -37,7 +37,8 @@ typedef struct
 	 * this isn't a concrete buffer - we only ever increase the value. So, to
 	 * get an actual buffer, it needs to be used modulo NBuffers.
 	 */
-	pg_atomic_uint32 nextVictimBuffer;
+	pg_atomic_uint64 ticks;
+	pg_atomic_uint64 ticks_base;
 
 	int			firstFreeBuffer;	/* Head of list of unused buffers */
 	int			lastFreeBuffer; /* Tail of list of unused buffers */
@@ -107,60 +108,24 @@ static void AddBufferToRing(BufferAccessStrategy strategy,
 static inline uint32
 ClockSweepTick(void)
 {
-	uint32		victim;
+	uint64		ticks_base = pg_atomic_read_u64(&StrategyControl->ticks_base);
+	uint64		ticks = pg_atomic_fetch_add_u64(&StrategyControl->ticks, 1);
+	uint64		hand = ticks - ticks_base;
 
 	/*
-	 * Atomically move hand ahead one buffer - if there's several processes
-	 * doing this, this can lead to buffers being returned slightly out of
-	 * apparent order.
+	 * Compensate for overshoot.  No loops most of the time, one for a few
+	 * unlucky overshooters, and in theory more if the system gets around the
+	 * whole clock before the base value advances.
 	 */
-	victim =
-		pg_atomic_fetch_add_u32(&StrategyControl->nextVictimBuffer, 1);
-
-	if (victim >= NBuffers)
+	while (hand >= NBuffers)
 	{
-		uint32		originalVictim = victim;
-
-		/* always wrap what we look up in BufferDescriptors */
-		victim = victim % NBuffers;
-
-		/*
-		 * If we're the one that just caused a wraparound, force
-		 * completePasses to be incremented while holding the spinlock. We
-		 * need the spinlock so StrategySyncStart() can return a consistent
-		 * value consisting of nextVictimBuffer and completePasses.
-		 */
-		if (victim == 0)
-		{
-			uint32		expected;
-			uint32		wrapped;
-			bool		success = false;
-
-			expected = originalVictim + 1;
-
-			while (!success)
-			{
-				/*
-				 * Acquire the spinlock while increasing completePasses. That
-				 * allows other readers to read nextVictimBuffer and
-				 * completePasses in a consistent manner which is required for
-				 * StrategySyncStart().  In theory delaying the increment
-				 * could lead to an overflow of nextVictimBuffers, but that's
-				 * highly unlikely and wouldn't be particularly harmful.
-				 */
-				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-
-				wrapped = expected % NBuffers;
-
-				success = pg_atomic_compare_exchange_u32(&StrategyControl->nextVictimBuffer,
-														 &expected, wrapped);
-				if (success)
-					StrategyControl->completePasses++;
-				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-			}
-		}
+		/* Base value advanced by backend that overshoots by one tick. */
+		if (hand == NBuffers)
+			pg_atomic_fetch_add_u64(&StrategyControl->ticks_base, NBuffers);
+		hand -= NBuffers;
 	}
-	return victim;
+
+	return hand;
 }
 
 /*
@@ -393,29 +358,20 @@ StrategyFreeBuffer(BufferDesc *buf)
 int
 StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 {
-	uint32		nextVictimBuffer;
+	uint64		ticks;
 	int			result;
 
-	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-	nextVictimBuffer = pg_atomic_read_u32(&StrategyControl->nextVictimBuffer);
-	result = nextVictimBuffer % NBuffers;
+	ticks = pg_atomic_read_u64(&StrategyControl->ticks);
+	result = ticks % NBuffers;
 
 	if (complete_passes)
-	{
-		*complete_passes = StrategyControl->completePasses;
-
-		/*
-		 * Additionally add the number of wraparounds that happened before
-		 * completePasses could be incremented. C.f. ClockSweepTick().
-		 */
-		*complete_passes += nextVictimBuffer / NBuffers;
-	}
+		*complete_passes = ticks / NBuffers;
 
 	if (num_buf_alloc)
 	{
 		*num_buf_alloc = pg_atomic_exchange_u32(&StrategyControl->numBufferAllocs, 0);
 	}
-	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+
 	return result;
 }
 
@@ -512,10 +468,10 @@ StrategyInitialize(bool init)
 		StrategyControl->lastFreeBuffer = NBuffers - 1;
 
 		/* Initialize the clock sweep pointer */
-		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
+		pg_atomic_init_u64(&StrategyControl->ticks, 0);
+		pg_atomic_init_u64(&StrategyControl->ticks_base, 0);
 
 		/* Clear statistics */
-		StrategyControl->completePasses = 0;
 		pg_atomic_init_u32(&StrategyControl->numBufferAllocs, 0);
 
 		/* No pending notification */
