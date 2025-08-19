@@ -1624,3 +1624,61 @@ tbm_iterate(TBMIterator *iterator, TBMIterateResult *tbmres)
 	else
 		return tbm_private_iterate(iterator->i.private_iterator, tbmres);
 }
+
+/*
+ * Check if a TID is or might be present in a TIDBitmap.
+ *
+ * TBM_SEARCH_NOT_FOUND means definitely not present.  TBM_SEARCH_EXACT means
+ * definitely present.  TBM_SEARCH_RECHECK means that it is present, but quals
+ * must be rechecked.  TBM_SEARCH_LOSSY means that at least one TID on the
+ * same block is present, but it is not known whether this TID is.
+ */
+int
+tbm_search(TIDBitmap *tbm, ItemPointer tid)
+{
+	BlockNumber pageno = ItemPointerGetBlockNumber(tid);
+	OffsetNumber off = ItemPointerGetOffsetNumber(tid);
+	const PagetableEntry *page;
+
+	if (tbm->status == TBM_EMPTY)
+		return TBM_SEARCH_NOT_FOUND;
+
+	if (tbm->status == TBM_ONE_PAGE)
+	{
+		page = &tbm->entry1;
+		Assert(!page->ischunk);
+		if (page->blockno == pageno &&
+			page->words[WORDNUM(off - 1)] & (bitmapword) 1 << BITNUM(off - 1))
+			return page->recheck ? TBM_SEARCH_RECHECK : TBM_SEARCH_EXACT;
+		return TBM_SEARCH_NOT_FOUND;	/* no hash table, end of search */
+	}
+
+	Assert(tbm->status == TBM_HASH);
+
+	if (tbm->npages > 0)
+	{
+		page = pagetable_lookup(tbm->pagetable, pageno);
+		if (page && !page->ischunk)
+		{
+			if (page->words[WORDNUM(off - 1)] & (bitmapword) 1 << BITNUM(off - 1))
+				return page->recheck ? TBM_SEARCH_RECHECK : TBM_SEARCH_EXACT;
+			return TBM_SEARCH_NOT_FOUND;	/* can't also be in lossy chunk */
+		}
+	}
+
+	if (tbm->nchunks > 0)
+	{
+		int			bitno = pageno % PAGES_PER_CHUNK;
+		BlockNumber chunk_pageno = pageno - bitno;
+
+		page = pagetable_lookup(tbm->pagetable, chunk_pageno);
+		if (page)
+		{
+			Assert(!page->ischunk);
+			if (page->words[WORDNUM(bitno)] & (bitmapword) 1 << BITNUM(bitno))
+				return TBM_SEARCH_LOSSY;
+		}
+	}
+
+	return TBM_SEARCH_NOT_FOUND;
+}

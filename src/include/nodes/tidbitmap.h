@@ -115,6 +115,13 @@ extern void tbm_end_iterate(TBMIterator *iterator);
 
 extern bool tbm_iterate(TBMIterator *iterator, TBMIterateResult *tbmres);
 
+#define TBM_SEARCH_NOT_FOUND 0
+#define TBM_SEARCH_EXACT 1
+#define TBM_SEARCH_RECHECK 2
+#define TBM_SEARCH_LOSSY 3
+
+extern int	tbm_search(TIDBitmap *tbm, ItemPointer tid);
+
 static inline bool
 tbm_exhausted(TBMIterator *iterator)
 {
