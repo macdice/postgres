@@ -22,12 +22,16 @@
 #endif
 
 #include "miscadmin.h"
+#include "port/atomics.h"
 #include "postmaster/postmaster.h"
 #include "replication/walsender.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
+#include "storage/proc.h"
+#include "storage/procnumber.h"
 #include "storage/shmem.h"
 #include "utils/memutils.h"
+
 
 
 /*
@@ -90,35 +94,11 @@ NON_EXEC_STATIC volatile PMSignalData *PMSignalState = NULL;
  */
 static int	num_child_flags;
 
-/*
- * Signal handler to be notified if postmaster dies.
- */
-#ifdef USE_POSTMASTER_DEATH_SIGNAL
-volatile sig_atomic_t postmaster_possibly_dead = false;
-
-static void
-postmaster_death_handler(SIGNAL_ARGS)
-{
-	postmaster_possibly_dead = true;
-}
-
-/*
- * The available signals depend on the OS.  SIGUSR1 and SIGUSR2 are already
- * used for other things, so choose another one.
- *
- * Currently, we assume that we can always find a signal to use.  That
- * seems like a reasonable assumption for all platforms that are modern
- * enough to have a parent-death signaling mechanism.
- */
-#if defined(SIGINFO)
-#define POSTMASTER_DEATH_SIGNAL SIGINFO
-#elif defined(SIGPWR)
-#define POSTMASTER_DEATH_SIGNAL SIGPWR
-#else
-#error "cannot find a signal to use for postmaster death"
+/* Can we ask the kernel to signal children on postmaster death? */
+#if (defined(HAVE_SYS_PRCTL_H) && defined(PR_SET_PDEATHSIG)) || \
+	(defined(HAVE_SYS_PROCCTL_H) && defined(PROC_PDEATHSIG_CTL))
+#define USE_POSTMASTER_DEATH_SIGNAL
 #endif
-
-#endif							/* USE_POSTMASTER_DEATH_SIGNAL */
 
 static void MarkPostmasterChildInactive(int code, Datum arg);
 
@@ -336,24 +316,11 @@ MarkPostmasterChildInactive(int code, Datum arg)
 
 
 /*
- * PostmasterIsAliveInternal - check whether postmaster process is still alive
- *
- * This is the slow path of PostmasterIsAlive(), where the caller has already
- * checked 'postmaster_possibly_dead'.  (On platforms that don't support
- * a signal for parent death, PostmasterIsAlive() is just an alias for this.)
+ * PostmasterIsAlive - check whether postmaster process is still alive
  */
 bool
-PostmasterIsAliveInternal(void)
+PostmasterIsAlive(void)
 {
-#ifdef USE_POSTMASTER_DEATH_SIGNAL
-	/*
-	 * Reset the flag before checking, so that we don't miss a signal if
-	 * postmaster dies right after the check.  If postmaster was indeed dead,
-	 * we'll re-arm it before returning to caller.
-	 */
-	postmaster_possibly_dead = false;
-#endif
-
 #ifndef WIN32
 	{
 		char		c;
@@ -374,10 +341,6 @@ PostmasterIsAliveInternal(void)
 			 * call.
 			 */
 
-#ifdef USE_POSTMASTER_DEATH_SIGNAL
-			postmaster_possibly_dead = true;
-#endif
-
 			if (rc < 0)
 				elog(FATAL, "read on postmaster death monitoring pipe failed: %m");
 			else if (rc > 0)
@@ -387,30 +350,19 @@ PostmasterIsAliveInternal(void)
 		}
 	}
 
-#else							/* WIN32 */
-	if (WaitForSingleObject(PostmasterHandle, 0) == WAIT_TIMEOUT)
-		return true;
-	else
-	{
-#ifdef USE_POSTMASTER_DEATH_SIGNAL
-		postmaster_possibly_dead = true;
-#endif
-		return false;
-	}
+#else							/* !WIN32 */
+	return WaitForSingleObject(PostmasterHandle, 0) == WAIT_TIMEOUT;
 #endif							/* WIN32 */
 }
 
 /*
- * PostmasterDeathSignalInit - request signal on postmaster death if possible
+ * PostmasterDeathSignalInit - request SIGQUIT on postmaster death if possible
  */
 void
 PostmasterDeathSignalInit(void)
 {
 #ifdef USE_POSTMASTER_DEATH_SIGNAL
-	int			signum = POSTMASTER_DEATH_SIGNAL;
-
-	/* Register our signal handler. */
-	pqsignal(signum, postmaster_death_handler);
+	int			signum = SIGQUIT;
 
 	/* Request a signal on parent exit. */
 #if defined(PR_SET_PDEATHSIG)
@@ -424,9 +376,37 @@ PostmasterDeathSignalInit(void)
 #endif
 
 	/*
-	 * Just in case the parent was gone already and we missed it, we'd better
-	 * check the slow way on the first call.
+	 * If the postmaster exited concurrently, this process might have been
+	 * re-parented to init or another reaper process already.  Close that race
+	 * with an explicit poll.
 	 */
-	postmaster_possibly_dead = true;
+	if (!PostmasterIsAlive())
+		ExitOnPostmasterDeath();
 #endif							/* USE_POSTMASTER_DEATH_SIGNAL */
+}
+
+/*
+ * Called when the postmaster is known to have exited.
+ */
+void
+ExitOnPostmasterDeath(void)
+{
+#ifndef USE_POSTMASTER_DEATH_SIGNAL
+
+	/*
+	 * Propagate knowledge of postmaster exit by sending SIGQUIT to all other
+	 * backends, on systems where the kernel won't do that.
+	 */
+	pg_memory_barrier();
+	for (ProcNumber p = 0; p < ProcGlobal->allProcCount; p++)
+	{
+		PGPROC	   *proc = GetPGProcByNumber(p);
+		pid_t		pid = proc->pid;
+
+		if (pid != 0 && pid != MyProcPid)
+			kill(pid, SIGQUIT);
+	}
+#endif
+
+	raise(SIGQUIT);
 }

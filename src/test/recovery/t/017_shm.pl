@@ -113,12 +113,12 @@ log_ipcs();
 
 my $regress_shlib = $ENV{REGRESS_SHLIB};
 $gnat->safe_psql('postgres', <<EOSQL);
-CREATE FUNCTION wait_pid(int)
+CREATE FUNCTION sleep_blocked(int)
    RETURNS void
    AS '$regress_shlib'
    LANGUAGE C STRICT;
 EOSQL
-my $slow_query = 'SELECT wait_pid(pg_backend_pid())';
+my $slow_query = "SELECT sleep_blocked(${PostgreSQL::Test::Utils::timeout_default})";
 my ($stdout, $stderr);
 my $slow_client = IPC::Run::start(
 	[
@@ -169,7 +169,7 @@ command_fails_like(
 log_ipcs();
 
 # cleanup slow backend
-PostgreSQL::Test::Utils::system_log('pg_ctl', 'kill', 'QUIT', $slow_pid);
+PostgreSQL::Test::Utils::system_log('pg_ctl', 'kill', 'KILL', $slow_pid);
 $slow_client->finish;    # client has detected backend termination
 log_ipcs();
 

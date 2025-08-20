@@ -35,17 +35,6 @@
 #include "utils/timeout.h"
 
 
-#ifndef USE_POSTMASTER_DEATH_SIGNAL
-/*
- * On systems that need to make a system call to find out if the postmaster has
- * gone away, we'll do so only every Nth call to ProcessStartupProcInterrupts().
- * This only affects how long it takes us to detect the condition while we're
- * busy replaying WAL.  Latch waits and similar which should react immediately
- * through the usual techniques.
- */
-#define POSTMASTER_POLL_RATE_LIMIT 1024
-#endif
-
 /*
  * Flags set by interrupt handlers for later service in the redo loop.
  */
@@ -153,10 +142,6 @@ StartupRereadConfig(void)
 void
 ProcessStartupProcInterrupts(void)
 {
-#ifdef POSTMASTER_POLL_RATE_LIMIT
-	static uint32 postmaster_poll_count = 0;
-#endif
-
 	/*
 	 * Process any requests or signals received recently.
 	 */
@@ -171,19 +156,6 @@ ProcessStartupProcInterrupts(void)
 	 */
 	if (shutdown_requested)
 		proc_exit(1);
-
-	/*
-	 * Emergency bailout if postmaster has died.  This is to avoid the
-	 * necessity for manual cleanup of all postmaster children.  Do this less
-	 * frequently on systems for which we don't have signals to make that
-	 * cheap.
-	 */
-	if (IsUnderPostmaster &&
-#ifdef POSTMASTER_POLL_RATE_LIMIT
-		postmaster_poll_count++ % POSTMASTER_POLL_RATE_LIMIT == 0 &&
-#endif
-		!PostmasterIsAlive())
-		exit(1);
 
 	/* Process barrier events */
 	if (ProcSignalBarrierPending)

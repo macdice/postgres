@@ -306,14 +306,14 @@ check_worker_status(worker_state *wstate)
 {
 	int			n;
 
-	/* If any workers (or the postmaster) have died, we have failed. */
+	/* If any workers have died, we have failed. */
 	for (n = 0; n < wstate->nworkers; ++n)
 	{
 		BgwHandleStatus status;
 		pid_t		pid;
 
 		status = GetBackgroundWorkerPid(wstate->handle[n], &pid);
-		if (status == BGWH_STOPPED || status == BGWH_POSTMASTER_DIED)
+		if (status == BGWH_STOPPED)
 			return false;
 	}
 

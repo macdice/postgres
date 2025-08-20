@@ -105,7 +105,6 @@ typedef enum BgwHandleStatus
 	BGWH_STARTED,				/* worker is running */
 	BGWH_NOT_YET_STARTED,		/* worker hasn't been started yet */
 	BGWH_STOPPED,				/* worker has exited */
-	BGWH_POSTMASTER_DIED,		/* postmaster died; worker status unclear */
 } BgwHandleStatus;
 
 struct BackgroundWorkerHandle;

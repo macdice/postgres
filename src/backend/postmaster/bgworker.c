@@ -1202,9 +1202,7 @@ GetBackgroundWorkerPid(BackgroundWorkerHandle *handle, pid_t *pidp)
  *
  * This is like GetBackgroundWorkerPid(), except that if the worker has not
  * yet started, we wait for it to do so; thus, BGWH_NOT_YET_STARTED is never
- * returned.  However, if the postmaster has died, we give up and return
- * BGWH_POSTMASTER_DIED, since it that case we know that startup will not
- * take place.
+ * returned.
  *
  * The caller *must* have set our PID as the worker's bgw_notify_pid,
  * else we will not be awoken promptly when the worker's state changes.
@@ -1213,7 +1211,6 @@ BgwHandleStatus
 WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pidp)
 {
 	BgwHandleStatus status;
-	int			rc;
 
 	for (;;)
 	{
@@ -1227,15 +1224,9 @@ WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pidp)
 		if (status != BGWH_NOT_YET_STARTED)
 			break;
 
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_POSTMASTER_DEATH, 0,
-					   WAIT_EVENT_BGWORKER_STARTUP);
-
-		if (rc & WL_POSTMASTER_DEATH)
-		{
-			status = BGWH_POSTMASTER_DIED;
-			break;
-		}
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+				  WAIT_EVENT_BGWORKER_STARTUP);
 
 		ResetLatch(MyLatch);
 	}
@@ -1247,9 +1238,7 @@ WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pidp)
  * Wait for a background worker to stop.
  *
  * If the worker hasn't yet started, or is running, we wait for it to stop
- * and then return BGWH_STOPPED.  However, if the postmaster has died, we give
- * up and return BGWH_POSTMASTER_DIED, because it's the postmaster that
- * notifies us when a worker's state changes.
+ * and then return BGWH_STOPPED.
  *
  * The caller *must* have set our PID as the worker's bgw_notify_pid,
  * else we will not be awoken promptly when the worker's state changes.
@@ -1258,7 +1247,6 @@ BgwHandleStatus
 WaitForBackgroundWorkerShutdown(BackgroundWorkerHandle *handle)
 {
 	BgwHandleStatus status;
-	int			rc;
 
 	for (;;)
 	{
@@ -1270,15 +1258,9 @@ WaitForBackgroundWorkerShutdown(BackgroundWorkerHandle *handle)
 		if (status == BGWH_STOPPED)
 			break;
 
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_POSTMASTER_DEATH, 0,
-					   WAIT_EVENT_BGWORKER_SHUTDOWN);
-
-		if (rc & WL_POSTMASTER_DEATH)
-		{
-			status = BGWH_POSTMASTER_DIED;
-			break;
-		}
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+				  WAIT_EVENT_BGWORKER_SHUTDOWN);
 
 		ResetLatch(MyLatch);
 	}

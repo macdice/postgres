@@ -353,16 +353,10 @@ pgarch_MainLoop(void)
 		 * PGARCH_AUTOWAKE_INTERVAL, or until postmaster dies.
 		 */
 		if (!time_to_stop)		/* Don't wait during last iteration */
-		{
-			int			rc;
-
-			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   PGARCH_AUTOWAKE_INTERVAL * 1000L,
-						   WAIT_EVENT_ARCHIVER_MAIN);
-			if (rc & WL_POSTMASTER_DEATH)
-				time_to_stop = true;
-		}
+			WaitLatch(MyLatch,
+					  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					  PGARCH_AUTOWAKE_INTERVAL * 1000L,
+					  WAIT_EVENT_ARCHIVER_MAIN);
 
 		/*
 		 * The archiver quits either when the postmaster dies (not expected)
@@ -403,12 +397,9 @@ pgarch_ArchiverCopyLoop(void)
 
 			/*
 			 * Do not initiate any more archive commands after receiving
-			 * SIGTERM, nor after the postmaster has died unexpectedly. The
-			 * first condition is to try to keep from having init SIGKILL the
-			 * command, and the second is to avoid conflicts with another
-			 * archiver spawned by a newer postmaster.
+			 * SIGTERM, to try to keep from having init SIGKILL the command.
 			 */
-			if (ShutdownRequestPending || !PostmasterIsAlive())
+			if (ShutdownRequestPending)
 				return;
 
 			/*

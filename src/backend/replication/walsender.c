@@ -3826,12 +3826,7 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 	else if (MyWalSnd->kind == REPLICATION_KIND_LOGICAL)
 		ConditionVariablePrepareToSleep(&WalSndCtl->wal_replay_cv);
 
-	if (WaitEventSetWait(FeBeWaitSet, timeout, &event, 1, wait_event) == 1 &&
-		(event.events & WL_POSTMASTER_DEATH))
-	{
-		ConditionVariableCancelSleep();
-		proc_exit(1);
-	}
+	WaitEventSetWait(FeBeWaitSet, timeout, &event, 1, wait_event);
 
 	ConditionVariableCancelSleep();
 }

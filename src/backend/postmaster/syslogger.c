@@ -330,14 +330,9 @@ SysLoggerMain(const void *startup_data, size_t startup_data_len)
 	/*
 	 * Set up a reusable WaitEventSet object we'll use to wait for our latch,
 	 * and (except on Windows) our socket.
-	 *
-	 * Unlike all other postmaster child processes, we'll ignore postmaster
-	 * death because we want to collect final log output from all backends and
-	 * then exit last.  We'll do that by running until we see EOF on the
-	 * syslog pipe, which implies that all other backends have exited
-	 * (including the postmaster).
 	 */
-	wes = CreateWaitEventSet(NULL, 2);
+	wes = CreateWaitEventSet(NULL, 3);
+	AddWaitEventToSet(wes, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET, NULL, NULL);
 	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
 #ifndef WIN32
 	AddWaitEventToSet(wes, WL_SOCKET_READABLE, syslogPipe[0], NULL, NULL);

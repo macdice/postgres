@@ -914,23 +914,10 @@ WaitForParallelWorkersToExit(ParallelContext *pcxt)
 	/* Wait until the workers actually die. */
 	for (i = 0; i < pcxt->nworkers_launched; ++i)
 	{
-		BgwHandleStatus status;
-
 		if (pcxt->worker == NULL || pcxt->worker[i].bgwhandle == NULL)
 			continue;
 
-		status = WaitForBackgroundWorkerShutdown(pcxt->worker[i].bgwhandle);
-
-		/*
-		 * If the postmaster kicked the bucket, we have no chance of cleaning
-		 * up safely -- we won't be able to tell when our workers are actually
-		 * dead.  This doesn't necessitate a PANIC since they will all abort
-		 * eventually, but we can't safely continue this session.
-		 */
-		if (status == BGWH_POSTMASTER_DIED)
-			ereport(FATAL,
-					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("postmaster exited during a parallel transaction")));
+		WaitForBackgroundWorkerShutdown(pcxt->worker[i].bgwhandle);
 
 		/* Release memory. */
 		pfree(pcxt->worker[i].bgwhandle);

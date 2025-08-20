@@ -18,6 +18,7 @@
 
 #include <math.h>
 #include <signal.h>
+#include <unistd.h>
 
 #include "access/detoast.h"
 #include "access/htup_details.h"
@@ -30,6 +31,7 @@
 #include "executor/executor.h"
 #include "executor/spi.h"
 #include "funcapi.h"
+#include "libpq/pqsignal.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/supportnodes.h"
@@ -488,6 +490,25 @@ wait_pid(PG_FUNCTION_ARGS)
 
 	if (errno != ESRCH)
 		elog(ERROR, "could not check PID %d liveness: %m", pid);
+
+	PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(sleep_blocked);
+
+/* Used by src/test/recovery/t/017_shm.pl to prevent exit after PM death */
+Datum
+sleep_blocked(PG_FUNCTION_ARGS)
+{
+	int			seconds = PG_GETARG_INT32(0);
+	sigset_t	save;
+	sigset_t	mask;
+
+	/* Await SIGKILL or timeout. */
+	sigfillset(&mask);
+	sigprocmask(SIG_BLOCK, &mask, &save);
+	sleep(seconds);
+	sigprocmask(SIG_SETMASK, &save, NULL);
 
 	PG_RETURN_VOID();
 }

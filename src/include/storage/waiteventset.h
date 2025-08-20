@@ -35,7 +35,6 @@
 #define WL_SOCKET_READABLE	 (1 << 1)
 #define WL_SOCKET_WRITEABLE  (1 << 2)
 #define WL_TIMEOUT			 (1 << 3)	/* not for WaitEventSetWait() */
-#define WL_POSTMASTER_DEATH  (1 << 4)
 #define WL_EXIT_ON_PM_DEATH	 (1 << 5)
 #ifdef WIN32
 #define WL_SOCKET_CONNECTED  (1 << 6)

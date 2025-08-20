@@ -2967,6 +2967,29 @@ quickdie(SIGNAL_ARGS)
 	error_context_stack = NULL;
 
 	/*
+	 * A signal might arrive from the kernel (see
+	 * PostmasterDeathSignalInit()), or from another backend that has detected
+	 * postmaster death (see ExitOnPostmasterDeath()).
+	 */
+	if (!PostmasterIsAlive())
+	{
+		ereport(WARNING_CLIENT_ONLY,
+				(errcode(ERRCODE_ADMIN_SHUTDOWN),
+				 errmsg("terminating connection because the postmaster has exited")));
+
+#ifdef HAVE_SETSID
+
+		/*
+		 * Propagate the signal to the rest of the session.  See
+		 * signal_child() in postmaster.c for motivation.
+		 */
+		kill(-MyProcPid, SIGQUIT);
+#endif
+
+		goto exit;
+	}
+
+	/*
 	 * When responding to a postmaster-issued signal, we send the message only
 	 * to the client; sending to the server log just creates log spam, plus
 	 * it's more code that we need to hope will work in a signal handler.
@@ -3001,6 +3024,8 @@ quickdie(SIGNAL_ARGS)
 					 errmsg("terminating connection due to immediate shutdown command")));
 			break;
 	}
+
+exit:
 
 	/*
 	 * We DO NOT want to run proc_exit() or atexit() callbacks -- we're here
