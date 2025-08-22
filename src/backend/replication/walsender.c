@@ -3786,6 +3786,8 @@ WalSndWakeup(bool physical, bool logical)
 static void
 WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 {
+	WaitEvent	event;
+
 	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, socket_events, NULL);
 
 	/*
@@ -3822,6 +3824,8 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 		ConditionVariablePrepareToSleep(&WalSndCtl->wal_flush_cv);
 	else if (MyWalSnd->kind == REPLICATION_KIND_LOGICAL)
 		ConditionVariablePrepareToSleep(&WalSndCtl->wal_replay_cv);
+
+	WaitEventSetWait(FeBeWaitSet, timeout, &event, 1, wait_event);
 
 	ConditionVariableCancelSleep();
 }
