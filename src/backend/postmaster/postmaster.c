@@ -585,11 +585,10 @@ static void
 become_job_root(void)
 {
 	HANDLE job;
-	JOBOBJECT_BASIC_LIMIT_INFORMATION info = {
-		.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-	};
+	JOBOBJECT_BASIC_LIMIT_INFORMATION info =
+		{.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
 
-	/* Job handle will be closed at exit, terminating subtree of processes. */
+	/* Job handle will be closed at exit terminating process tree. */
 	job = CreateJobObject(NULL, NULL);
 	if (!job)
 		elog(ERROR, "CreateJobObject() failed");
