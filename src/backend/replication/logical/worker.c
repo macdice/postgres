@@ -4116,7 +4116,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 
 		rc = WaitLatchOrSocket(MyLatch,
 							   WL_SOCKET_READABLE | WL_LATCH_SET |
-							   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							   WL_TIMEOUT,
 							   fd, wait_time,
 							   WAIT_EVENT_LOGICAL_APPLY_MAIN);
 

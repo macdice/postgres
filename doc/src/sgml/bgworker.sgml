@@ -227,10 +227,7 @@ typedef struct BackgroundWorker
    reinitializes the cluster due to a backend failure.  Backends which need
    to suspend execution only temporarily should use an interruptible sleep
    rather than exiting; this can be achieved by calling
-   <function>WaitLatch()</function>. Make sure the
-   <literal>WL_POSTMASTER_DEATH</literal> flag is set when calling that function, and
-   verify the return code for a prompt exit in the emergency case that
-   <command>postgres</command> itself has terminated.
+   <function>WaitLatch()</function>.
   </para>
 
   <para>
@@ -268,8 +265,7 @@ typedef struct BackgroundWorker
    background worker, or until the postmaster dies.  If the background worker
    is running, the return value will be <literal>BGWH_STARTED</literal>, and
    the PID will be written to the provided address.  Otherwise, the return
-   value will be <literal>BGWH_STOPPED</literal> or
-   <literal>BGWH_POSTMASTER_DIED</literal>.
+   value will be <literal>BGWH_STOPPED</literal>.
   </para>
 
   <para>
@@ -279,8 +275,7 @@ typedef struct BackgroundWorker
    <type>BackgroundWorkerHandle *</type> obtained at registration. This
    function will block until the background worker exits, or postmaster dies.
    When the background worker exits, the return value is
-   <literal>BGWH_STOPPED</literal>, if postmaster dies it will return
-   <literal>BGWH_POSTMASTER_DIED</literal>.
+   <literal>BGWH_STOPPED</literal>.
   </para>
 
   <para>

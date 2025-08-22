@@ -591,7 +591,7 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		}
 
 		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 WL_LATCH_SET | WL_TIMEOUT,
 						 cur_timeout * 1000L /* convert to ms */ ,
 						 WAIT_EVENT_CHECKPOINTER_MAIN);
 	}
@@ -639,7 +639,7 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 			break;
 
 		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
+						 WL_LATCH_SET,
 						 0,
 						 WAIT_EVENT_CHECKPOINTER_SHUTDOWN);
 	}
@@ -822,7 +822,7 @@ CheckpointWriteDelay(int flags, double progress)
 		 * Checkpointer and bgwriter are no longer related so take the Big
 		 * Sleep.
 		 */
-		WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_TIMEOUT,
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT,
 				  100,
 				  WAIT_EVENT_CHECKPOINT_WRITE_DELAY);
 		ResetLatch(MyLatch);

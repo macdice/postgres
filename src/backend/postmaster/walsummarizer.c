@@ -319,7 +319,7 @@ WalSummarizerMain(const void *startup_data, size_t startup_data_len)
 		 * beneficial, and it will clutter the logs.
 		 */
 		(void) WaitLatch(NULL,
-						 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 WL_TIMEOUT,
 						 10000,
 						 WAIT_EVENT_WAL_SUMMARIZER_ERROR);
 	}
@@ -1644,7 +1644,7 @@ summarizer_wait_for_wal(void)
 
 	/* OK, now sleep. */
 	(void) WaitLatch(MyLatch,
-					 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					 WL_LATCH_SET | WL_TIMEOUT,
 					 sleep_quanta * MS_PER_SLEEP_QUANTUM,
 					 WAIT_EVENT_WAL_SUMMARIZER_WAL);
 	ResetLatch(MyLatch);

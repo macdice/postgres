@@ -353,16 +353,10 @@ pgarch_MainLoop(void)
 		 * PGARCH_AUTOWAKE_INTERVAL, or until postmaster dies.
 		 */
 		if (!time_to_stop)		/* Don't wait during last iteration */
-		{
-			int			rc;
-
-			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   PGARCH_AUTOWAKE_INTERVAL * 1000L,
-						   WAIT_EVENT_ARCHIVER_MAIN);
-			if (rc & WL_POSTMASTER_DEATH)
-				time_to_stop = true;
-		}
+			WaitLatch(MyLatch,
+					  WL_LATCH_SET | WL_TIMEOUT,
+					  PGARCH_AUTOWAKE_INTERVAL * 1000L,
+					  WAIT_EVENT_ARCHIVER_MAIN);
 
 		/*
 		 * The archiver quits either when the postmaster dies (not expected)

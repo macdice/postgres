@@ -1274,7 +1274,7 @@ wait_for_slot_activity(bool some_slot_updated)
 	}
 
 	rc = WaitLatch(MyLatch,
-				   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				   WL_LATCH_SET | WL_TIMEOUT,
 				   sleep_ms,
 				   WAIT_EVENT_REPLICATION_SLOTSYNC_MAIN);
 
@@ -1610,7 +1610,7 @@ ShutDownSlotSync(void)
 
 		/* Wait a bit, we don't expect to have to wait long */
 		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					   WL_LATCH_SET | WL_TIMEOUT,
 					   10L, WAIT_EVENT_REPLICATION_SLOTSYNC_SHUTDOWN);
 
 		if (rc & WL_LATCH_SET)

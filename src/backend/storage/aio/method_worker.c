@@ -569,7 +569,7 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		}
 		else
 		{
-			WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, -1,
+			WaitLatch(MyLatch, WL_LATCH_SET, -1,
 					  WAIT_EVENT_IO_WORKER_MAIN);
 			ResetLatch(MyLatch);
 		}

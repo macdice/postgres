@@ -305,7 +305,7 @@ BackgroundWriterMain(const void *startup_data, size_t startup_data_len)
 		 * normal operation.
 		 */
 		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					   WL_LATCH_SET | WL_TIMEOUT,
 					   BgWriterDelay /* ms */ , WAIT_EVENT_BGWRITER_MAIN);
 
 		/*
@@ -332,7 +332,7 @@ BackgroundWriterMain(const void *startup_data, size_t startup_data_len)
 			StrategyNotifyBgWriter(MyProcNumber);
 			/* Sleep ... */
 			(void) WaitLatch(MyLatch,
-							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 WL_LATCH_SET | WL_TIMEOUT,
 							 BgWriterDelay * HIBERNATE_FACTOR,
 							 WAIT_EVENT_BGWRITER_HIBERNATE);
 			/* Reset the notification request in case we timed out */

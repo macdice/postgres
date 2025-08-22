@@ -1031,7 +1031,7 @@ ExecAppendAsyncRequest(AppendState *node, TupleTableSlot **result)
 static void
 ExecAppendAsyncEventWait(AppendState *node)
 {
-	int			nevents = node->as_nasyncplans + 2;
+	int			nevents = node->as_nasyncplans + 1;
 	long		timeout = node->as_syncdone ? -1 : 0;
 	WaitEvent	occurred_event[EVENT_BUFFER_SIZE];
 	int			noccurred;
@@ -1042,8 +1042,6 @@ ExecAppendAsyncEventWait(AppendState *node)
 
 	Assert(node->as_eventset == NULL);
 	node->as_eventset = CreateWaitEventSet(CurrentResourceOwner, nevents);
-	AddWaitEventToSet(node->as_eventset, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-					  NULL, NULL);
 
 	/* Give each waiting subplan a chance to add an event. */
 	i = -1;

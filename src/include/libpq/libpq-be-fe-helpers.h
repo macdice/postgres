@@ -200,7 +200,7 @@ libpqsrv_connect_internal(PGconn *conn, uint32 wait_event_info)
 				io_flag = WL_SOCKET_WRITEABLE;
 
 			rc = WaitLatchOrSocket(MyLatch,
-								   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | io_flag,
+								   WL_LATCH_SET | io_flag,
 								   PQsocket(conn),
 								   0,
 								   wait_event_info);
@@ -321,7 +321,7 @@ libpqsrv_get_result(PGconn *conn, uint32 wait_event_info)
 		int			rc;
 
 		rc = WaitLatchOrSocket(MyLatch,
-							   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET |
+							   WL_LATCH_SET |
 							   WL_SOCKET_READABLE,
 							   PQsocket(conn),
 							   0,
@@ -386,7 +386,7 @@ libpqsrv_cancel(PGconn *conn, TimestampTz endtime)
 			PostgresPollingStatusType pollres;
 			TimestampTz now;
 			long		cur_timeout;
-			int			waitEvents = WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH;
+			int			waitEvents = WL_LATCH_SET | WL_TIMEOUT;
 
 			pollres = PQcancelPoll(cancel_conn);
 			if (pollres == PGRES_POLLING_OK)

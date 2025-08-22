@@ -9514,7 +9514,7 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 			}
 
 			(void) WaitLatch(MyLatch,
-							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 WL_LATCH_SET | WL_TIMEOUT,
 							 1000L,
 							 WAIT_EVENT_BACKUP_WAIT_WAL_ARCHIVE);
 			ResetLatch(MyLatch);

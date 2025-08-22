@@ -600,7 +600,7 @@ AutoVacLauncherMain(const void *startup_data, size_t startup_data_len)
 		 * signal handlers will wake us by calling SetLatch).
 		 */
 		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 WL_LATCH_SET | WL_TIMEOUT,
 						 (nap.tv_sec * 1000L) + (nap.tv_usec / 1000L),
 						 WAIT_EVENT_AUTOVACUUM_MAIN);
 

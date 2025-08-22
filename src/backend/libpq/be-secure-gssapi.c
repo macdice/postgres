@@ -458,7 +458,7 @@ read_or_wait(Port *port, ssize_t len)
 		if (ret <= 0)
 		{
 			WaitLatchOrSocket(NULL,
-							  WL_SOCKET_READABLE | WL_EXIT_ON_PM_DEATH,
+							  WL_SOCKET_READABLE,
 							  port->sock, 0, WAIT_EVENT_GSS_OPEN_SERVER);
 
 			/*
@@ -679,7 +679,7 @@ secure_open_gssapi(Port *port)
 				if (ret <= 0)
 				{
 					WaitLatchOrSocket(NULL,
-									  WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH,
+									  WL_SOCKET_WRITEABLE,
 									  port->sock, 0, WAIT_EVENT_GSS_OPEN_SERVER);
 					continue;
 				}

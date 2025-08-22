@@ -7235,9 +7235,6 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 	/* We must have run out of tuples */
 	Assert(fsstate->next_tuple >= fsstate->num_tuples);
 
-	/* The core code would have registered postmaster death event */
-	Assert(GetNumRegisteredWaitEvents(set) >= 1);
-
 	/* Begin an asynchronous data fetch if not already done */
 	if (!pendingAreq)
 		fetch_more_data_begin(areq);
@@ -7250,11 +7247,10 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 		 * Append anymore; so we avoid processing it to begin a fetch for the
 		 * given request if possible.  If there are any child subplans of the
 		 * same parent that are ready for new requests, skip the given
-		 * request.  Likewise, if there are any configured events other than
-		 * the postmaster death event, skip it.  Otherwise, process the
+		 * request.  Likewise, if there are any configured events, skip it.
+		 * Otherwise, process the
 		 * in-process request, then begin a fetch to configure the event
-		 * below, because we might otherwise end up with no configured events
-		 * other than the postmaster death event.
+		 * below, because we might otherwise end up with no configured events.
 		 */
 		if (!bms_is_empty(requestor->as_needrequest))
 			return;
