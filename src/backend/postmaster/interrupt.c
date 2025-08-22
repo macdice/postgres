@@ -20,6 +20,7 @@
 #include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
+#include "storage/pmsignal.h"
 #include "storage/procsignal.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -51,6 +52,27 @@ ProcessMainLoopInterrupts(void)
 }
 
 /*
+ * Signal handler for SIGHUP, sent by the kernel if the postmaster exits first.
+ *
+ * SIG_DFL for SIGHUP would already terminate the process, but this extra
+ * check allows the handler to be called directly by other handlers that
+ * overload SIGHUP.  This also reserves a place for future cleanup work.
+ */
+void
+SignalHandlerForOrphanedProcessGroup(SIGNAL_ARGS)
+{
+	/*
+	 * XXX How do we know that exit (for the session leader process) sends
+	 * SIGHUP after it closes the stuff in its descriptor table?
+	 */
+	if (!PostmasterIsAlive())
+	{
+		fprintf(stderr, "orphan exiting\n");
+		_exit(2);
+	}
+}
+
+/*
  * Simple signal handler for triggering a configuration reload.
  *
  * Normally, this handler would be used for SIGHUP. The idea is that code
@@ -60,6 +82,8 @@ ProcessMainLoopInterrupts(void)
 void
 SignalHandlerForConfigReload(SIGNAL_ARGS)
 {
+	SignalHandlerForOrphanedProcessGroup(SIGHUP);
+
 	ConfigReloadPending = true;
 	SetLatch(MyLatch);
 }

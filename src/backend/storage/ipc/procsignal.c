@@ -771,15 +771,7 @@ SendCancelRequest(int backendPID, const uint8 *cancel_key, int cancel_key_len)
 						(errmsg_internal("processing cancel request: sending SIGINT to process %d",
 										 backendPID)));
 
-				/*
-				 * If we have setsid(), signal the backend's whole process
-				 * group
-				 */
-#ifdef HAVE_SETSID
-				kill(-backendPID, SIGINT);
-#else
 				kill(backendPID, SIGINT);
-#endif
 			}
 			else
 			{

@@ -18,6 +18,7 @@
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "postmaster/bgworker_internals.h"
+#include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
@@ -769,7 +770,7 @@ BackgroundWorkerMain(const void *startup_data, size_t startup_data_len)
 	}
 	pqsignal(SIGTERM, bgworker_die);
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
-	pqsignal(SIGHUP, SIG_IGN);
+	pqsignal(SIGHUP, SignalHandlerForOrphanedProcessGroup);
 
 	InitializeTimeouts();		/* establishes SIGALRM handler */
 

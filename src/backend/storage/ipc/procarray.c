@@ -3879,17 +3879,7 @@ TerminateOtherDBBackends(Oid databaseId)
 			PGPROC	   *proc = BackendPidGetProc(pid);
 
 			if (proc != NULL)
-			{
-				/*
-				 * If we have setsid(), signal the backend's whole process
-				 * group
-				 */
-#ifdef HAVE_SETSID
-				(void) kill(-pid, SIGTERM);
-#else
 				(void) kill(pid, SIGTERM);
-#endif
-			}
 		}
 	}
 }

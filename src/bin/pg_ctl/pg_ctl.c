@@ -472,7 +472,7 @@ start_postmaster(void)
 	 * group and make it a group leader, so that it doesn't get signaled along
 	 * with the current group that launched it.
 	 */
-#ifdef HAVE_SETSID
+#ifndef WIN32
 	if (setsid() < 0)
 	{
 		write_stderr(_("%s: could not start server due to setsid() failure: %m\n"),

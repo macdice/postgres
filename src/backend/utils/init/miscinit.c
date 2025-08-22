@@ -132,17 +132,6 @@ InitPostmasterChild(void)
 	InitializeLatchWaitSet();
 
 	/*
-	 * If possible, make this process a group leader, so that the postmaster
-	 * can signal any child processes too. Not all processes will have
-	 * children, but for consistency we make all postmaster child processes do
-	 * this.
-	 */
-#ifdef HAVE_SETSID
-	if (setsid() < 0)
-		elog(FATAL, "setsid() failed: %m");
-#endif
-
-	/*
 	 * Every postmaster child process is expected to respond promptly to
 	 * SIGQUIT at all times.  Therefore we centrally remove SIGQUIT from
 	 * BlockSig and install a suitable signal handler.  (Client-facing

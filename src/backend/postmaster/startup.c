@@ -25,6 +25,7 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "postmaster/auxprocess.h"
+#include "postmaster/interrupt.h"
 #include "postmaster/startup.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
@@ -100,6 +101,8 @@ StartupProcTriggerHandler(SIGNAL_ARGS)
 static void
 StartupProcSigHupHandler(SIGNAL_ARGS)
 {
+	SignalHandlerForOrphanedProcessGroup(SIGHUP);
+
 	got_SIGHUP = true;
 	WakeupRecovery();
 }

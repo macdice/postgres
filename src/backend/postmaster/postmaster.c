@@ -89,6 +89,10 @@
 #include <pthread.h>
 #endif
 
+#ifndef WIN32
+#include <sys/ioctl.h>
+#endif
+
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
@@ -486,6 +490,96 @@ int			postmaster_alive_fds[2] = {-1, -1};
 HANDLE		PostmasterHandle;
 #endif
 
+#ifndef WIN32
+
+/* Pseudo-terminal descriptors, used to generate SIGHUP. */
+static int	session_primary_pty_fd;
+static int	session_replica_pty_fd;
+
+static void
+become_session_leader(void)
+{
+	pid_t		temp_pid;
+	sigset_t	mask;
+	sigset_t	save_mask;
+	int			signo;
+
+	/*
+	 * The postmaster is typically a session leader already, because pg_ctl or
+	 * a similar launcher called setsid() before exec'ing.
+	 */
+	if (getsid(0) == getpid())
+		return;
+
+	/*
+	 * Jump through some hoops to be able to run a postmaster directly under a
+	 * shell, purely as a developer convenience.
+	 *
+	 * We need to call setsid() to create a new session and process group, but
+	 * existing process group leaders (getpid() == getpgrp()) aren't allowed to
+	 * do that, and that's how a shell normally starts each command.  As a
+	 * workaround, use a short-lived process to create a new process group, and
+	 * switch groups.  This is the reverse of the traditional double-fork
+	 * daemon launching trick, which would make the postmaster a child of init.
+	 */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGUSR1);
+	sigprocmask(SIG_BLOCK, &mask, &save_mask);
+	temp_pid = fork();
+	if (temp_pid < 0)
+		elog(FATAL, "fork failed: %m");
+
+	/* Temporary child process */
+	if (temp_pid == 0)
+	{
+		setpgid(0, 0);
+		kill(getppid(), SIGUSR1);
+		sigwait(&mask, &signo);
+		exit(0);
+	}
+
+	/* Synchronize, switch to new process group and clean up. */
+	while (sigwait(&mask, &signo) < 0)
+		;
+	setpgid(0, temp_pid);
+	kill(temp_pid, SIGUSR1);
+	while (waitpid(temp_pid, NULL, 0) != temp_pid)
+		;
+	sigprocmask(SIG_SETMASK, &save_mask, NULL);
+
+	/* Now the postmaster can become a session leader. */
+	if (setsid() < 0)
+		elog(ERROR, "setsid() failed: %m");
+}
+
+static void
+become_terminal_controller(void)
+{
+	/* Must already be session leader, just like a login shell. */
+	Assert(getsid(0) == getpid());
+
+	/*
+	 * Make a controlling terminal for the postmaster's session.  If the
+	 * postmaster exits, the terminal will be closed and the kernel will send
+	 * SIGHUP to the orphaned process group.  (This is how a process tree is
+	 * killed when an ssh session disconnects.)
+	 */
+	session_primary_pty_fd = posix_openpt(O_RDWR);
+	if (session_primary_pty_fd < 0)
+		elog(ERROR, "posix_openpty() failed: %m");
+	if (grantpt(session_primary_pty_fd) < 0)
+		elog(ERROR, "grantpt() failed: %m");
+	if (unlockpt(session_primary_pty_fd) < 0)
+		elog(ERROR, "unlockpt() failed: %m");
+	session_replica_pty_fd = open(ptsname(session_primary_pty_fd), O_RDWR);
+	if (session_replica_pty_fd < 0)
+		elog(ERROR, "could not open pseudo-terminal: %m");
+	if (ioctl(session_replica_pty_fd, TIOCSCTTY, 0) < 0)
+		elog(ERROR, "could not become controller of pseudo-terminal: %m");
+}
+
+#endif
+
 /*
  * Postmaster main entry point
  */
@@ -582,6 +676,12 @@ PostmasterMain(int argc, char *argv[])
 
 	/* Begin accepting signals. */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
+
+#ifndef WIN32
+	/* Arrange for SIGHUP to be sent to process tree on unexpected exit. */
+	become_session_leader();
+	become_terminal_controller();
+#endif
 
 	/*
 	 * Options setup
@@ -1862,6 +1962,14 @@ ClosePostmasterPorts(bool am_syslogger)
 	}
 
 #ifndef WIN32
+
+	/* Children don't need the postmaster's pseudo-terminal. */
+	if (close(session_primary_pty_fd) < 0)
+		elog(ERROR, "couldn't close primary end of pseudo-terminal: %m");
+#if 0
+	if (close(session_replica_pty_fd) < 0)
+		elog(ERROR, "couldn't close replica end of pseudo-terminal: %m");
+#endif
 
 	/*
 	 * Close the write end of postmaster death watch pipe. It's important to
@@ -3431,19 +3539,6 @@ pm_signame(int signal)
 
 /*
  * Send a signal to a postmaster child process
- *
- * On systems that have setsid(), each child process sets itself up as a
- * process group leader.  For signals that are generally interpreted in the
- * appropriate fashion, we signal the entire process group not just the
- * direct child process.  This allows us to, for example, SIGQUIT a blocked
- * archive_recovery script, or SIGINT a script being run by a backend via
- * system().
- *
- * There is a race condition for recently-forked children: they might not
- * have executed setsid() yet.  So we signal the child directly as well as
- * the group.  We assume such a child will handle the signal before trying
- * to spawn any grandchild processes.  We also assume that signaling the
- * child twice will not cause any problems.
  */
 static void
 signal_child(PMChild *pmchild, int signal)
@@ -3458,21 +3553,6 @@ signal_child(PMChild *pmchild, int signal)
 
 	if (kill(pid, signal) < 0)
 		elog(DEBUG3, "kill(%ld,%d) failed: %m", (long) pid, signal);
-#ifdef HAVE_SETSID
-	switch (signal)
-	{
-		case SIGINT:
-		case SIGTERM:
-		case SIGQUIT:
-		case SIGKILL:
-		case SIGABRT:
-			if (kill(-pid, signal) < 0)
-				elog(DEBUG3, "kill(%ld,%d) failed: %m", (long) (-pid), signal);
-			break;
-		default:
-			break;
-	}
-#endif
 }
 
 /*
