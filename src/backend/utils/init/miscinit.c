@@ -143,9 +143,6 @@ InitPostmasterChild(void)
 	sigdelset(&BlockSig, SIGQUIT);
 	sigprocmask(SIG_SETMASK, &BlockSig, NULL);
 
-	/* Request a signal if the postmaster dies, if possible. */
-	PostmasterDeathSignalInit();
-
 	/* Don't give the pipe to subprograms that we execute. */
 #ifndef WIN32
 	if (fcntl(postmaster_alive_fds[POSTMASTER_FD_WATCH], F_SETFD, FD_CLOEXEC) < 0)
