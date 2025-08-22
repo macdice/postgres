@@ -580,6 +580,29 @@ become_terminal_controller(void)
 
 #endif
 
+#ifdef WIN32
+static void
+become_job_owner(void)
+{
+	HANDLE job;
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {
+		.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+	};
+
+	/* A job handle that will kill all associated processes when closed. */
+	job = CreateJobObject(NULL, NULL);
+	if (!job)
+		elog(ERROR, "CreateJobObject() failed");
+	SetInformationJobObject(job,
+							JobObjectExtendedLimitInformation,
+							&info,
+							sizeof(info));
+
+	/* This process and all children it creates will be linked to it. */
+	AssignProcessToJobObject(hjob_kill_on_job_close, GetCurrentProcess());
+}
+#endif
+
 /*
  * Postmaster main entry point
  */
@@ -681,6 +704,11 @@ PostmasterMain(int argc, char *argv[])
 	/* Arrange for SIGHUP to be sent to process tree on unexpected exit. */
 	become_session_leader();
 	become_terminal_controller();
+#endif
+
+#ifndef WIN32
+	/* Arrange for process tree to be terminated on unexpected exit. */
+	become_job_owner();
 #endif
 
 	/*
