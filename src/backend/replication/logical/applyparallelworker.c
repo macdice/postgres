@@ -806,7 +806,7 @@ LogicalParallelApplyLoop(shm_mq_handle *mqh)
 
 				/* Wait for more work. */
 				rc = WaitLatch(MyLatch,
-							   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							   WL_LATCH_SET | WL_TIMEOUT,
 							   1000L,
 							   WAIT_EVENT_LOGICAL_PARALLEL_APPLY_MAIN);
 
@@ -1184,7 +1184,7 @@ pa_send_data(ParallelApplyWorkerInfo *winfo, Size nbytes, const void *data)
 
 		/* Wait before retrying. */
 		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					   WL_LATCH_SET | WL_TIMEOUT,
 					   SHM_SEND_RETRY_INTERVAL_MS,
 					   WAIT_EVENT_LOGICAL_APPLY_SEND_DATA);
 
@@ -1256,7 +1256,7 @@ pa_wait_for_xact_state(ParallelApplyWorkerInfo *winfo,
 
 		/* Wait to be signalled. */
 		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 WL_LATCH_SET | WL_TIMEOUT,
 						 10L,
 						 WAIT_EVENT_LOGICAL_PARALLEL_APPLY_STATE_CHANGE);
 

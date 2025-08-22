@@ -200,7 +200,7 @@ pg_wait_until_termination(int pid, int64 timeout)
 		CHECK_FOR_INTERRUPTS();
 
 		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 WL_LATCH_SET | WL_TIMEOUT,
 						 waittime,
 						 WAIT_EVENT_BACKEND_TERMINATION);
 

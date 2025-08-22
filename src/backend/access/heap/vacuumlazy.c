@@ -3251,7 +3251,7 @@ lazy_truncate_heap(LVRelState *vacrel)
 			}
 
 			(void) WaitLatch(MyLatch,
-							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 WL_LATCH_SET | WL_TIMEOUT,
 							 VACUUM_TRUNCATE_LOCK_WAIT_INTERVAL,
 							 WAIT_EVENT_VACUUM_TRUNCATE);
 			ResetLatch(MyLatch);

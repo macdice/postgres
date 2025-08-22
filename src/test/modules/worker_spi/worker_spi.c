@@ -218,7 +218,7 @@ worker_spi_main(Datum main_arg)
 		 * background process goes away immediately in an emergency.
 		 */
 		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 WL_LATCH_SET | WL_TIMEOUT,
 						 worker_spi_naptime * 1000L,
 						 worker_spi_wait_event_main);
 		ResetLatch(MyLatch);
@@ -478,11 +478,6 @@ worker_spi_launch(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
 				 errmsg("could not start background process"),
 				 errhint("More details may be available in the server log.")));
-	if (status == BGWH_POSTMASTER_DIED)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-				 errmsg("cannot start background processes without postmaster"),
-				 errhint("Kill all remaining database processes and restart the database.")));
 	Assert(status == BGWH_STARTED);
 
 	PG_RETURN_INT32(pid);

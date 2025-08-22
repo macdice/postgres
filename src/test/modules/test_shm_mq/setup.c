@@ -285,7 +285,7 @@ wait_for_workers_to_become_ready(worker_state *wstate,
 			we_bgworker_startup = WaitEventExtensionNew("TestShmMqBgWorkerStartup");
 
 		/* Wait to be signaled. */
-		(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+		(void) WaitLatch(MyLatch, WL_LATCH_SET, 0,
 						 we_bgworker_startup);
 
 		/* Reset the latch so we don't spin. */
@@ -313,7 +313,7 @@ check_worker_status(worker_state *wstate)
 		pid_t		pid;
 
 		status = GetBackgroundWorkerPid(wstate->handle[n], &pid);
-		if (status == BGWH_STOPPED || status == BGWH_POSTMASTER_DIED)
+		if (status == BGWH_STOPPED)
 			return false;
 	}
 

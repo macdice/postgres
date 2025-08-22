@@ -1687,7 +1687,7 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 			/* Sleep until there's something to do */
 			wc = WaitLatchOrSocket(MyLatch,
 								   WL_LATCH_SET | WL_SOCKET_READABLE |
-								   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+								   WL_TIMEOUT,
 								   PQsocket(conn),
 								   cur_timeout, pgfdw_we_cleanup_result);
 			ResetLatch(MyLatch);

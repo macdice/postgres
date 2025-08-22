@@ -147,10 +147,10 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 		INSTR_TIME_SET_CURRENT(start_time);
 		Assert(timeout >= 0 && timeout <= INT_MAX);
 		cur_timeout = timeout;
-		wait_events = WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH;
+		wait_events = WL_LATCH_SET | WL_TIMEOUT;
 	}
 	else
-		wait_events = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH;
+		wait_events = WL_LATCH_SET;
 
 	while (true)
 	{

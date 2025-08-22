@@ -516,7 +516,7 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 				 */
 				Assert(wait_fd != PGINVALID_SOCKET);
 				rc = WaitLatchOrSocket(MyLatch,
-									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
+									   WL_SOCKET_READABLE |
 									   WL_TIMEOUT | WL_LATCH_SET,
 									   wait_fd,
 									   nap,
@@ -703,7 +703,7 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 		}
 		SpinLockRelease(&walrcv->mutex);
 
-		(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+		(void) WaitLatch(MyLatch, WL_LATCH_SET, 0,
 						 WAIT_EVENT_WAL_RECEIVER_WAIT_START);
 	}
 

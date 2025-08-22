@@ -518,9 +518,9 @@ aloop:
 				 * StartupPacketTimeoutHandler() which directly exits.
 				 */
 				if (err == SSL_ERROR_WANT_READ)
-					waitfor = WL_SOCKET_READABLE | WL_EXIT_ON_PM_DEATH;
+					waitfor = WL_SOCKET_READABLE;
 				else
-					waitfor = WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH;
+					waitfor = WL_SOCKET_WRITEABLE;
 
 				(void) WaitLatchOrSocket(NULL, waitfor, port->sock, 0,
 										 WAIT_EVENT_SSL_OPEN_SERVER);

@@ -9,8 +9,7 @@
  * efficient than using WaitLatch or WaitLatchOrSocket.
  *
  * WaitEventSetWait includes a provision for timeouts (which should be avoided
- * when possible, as they incur extra overhead) and a provision for postmaster
- * child processes to wake up immediately on postmaster death.  See
+ * when possible, as they incur extra overhead). See
  * storage/ipc/waiteventset.c for detailed specifications for the exported
  * functions.
  *
@@ -35,8 +34,6 @@
 #define WL_SOCKET_READABLE	 (1 << 1)
 #define WL_SOCKET_WRITEABLE  (1 << 2)
 #define WL_TIMEOUT			 (1 << 3)	/* not for WaitEventSetWait() */
-#define WL_POSTMASTER_DEATH  (1 << 4)
-#define WL_EXIT_ON_PM_DEATH	 (1 << 5)
 #ifdef WIN32
 #define WL_SOCKET_CONNECTED  (1 << 6)
 #else

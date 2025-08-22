@@ -3068,7 +3068,7 @@ recoveryApplyDelay(XLogReaderState *record)
 		elog(DEBUG2, "recovery apply delay %ld milliseconds", msecs);
 
 		(void) WaitLatch(&XLogRecoveryCtl->recoveryWakeupLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 WL_LATCH_SET | WL_TIMEOUT,
 						 msecs,
 						 WAIT_EVENT_RECOVERY_APPLY_DELAY);
 	}
@@ -3726,8 +3726,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						KnownAssignedTransactionIdsIdleMaintenance();
 
 						(void) WaitLatch(&XLogRecoveryCtl->recoveryWakeupLatch,
-										 WL_LATCH_SET | WL_TIMEOUT |
-										 WL_EXIT_ON_PM_DEATH,
+										 WL_LATCH_SET | WL_TIMEOUT,
 										 wait_time,
 										 WAIT_EVENT_RECOVERY_RETRIEVE_RETRY_INTERVAL);
 						ResetLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
@@ -4001,7 +4000,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * immediately by the WAL receiver.
 					 */
 					(void) WaitLatch(&XLogRecoveryCtl->recoveryWakeupLatch,
-									 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
+									 WL_LATCH_SET,
 									 -1L,
 									 WAIT_EVENT_RECOVERY_WAL_STREAM);
 					ResetLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
