@@ -582,24 +582,22 @@ become_terminal_controller(void)
 
 #ifdef WIN32
 static void
-become_job_owner(void)
+become_job_root(void)
 {
 	HANDLE job;
-	JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {
+	JOBOBJECT_BASIC_LIMIT_INFORMATION info = {
 		.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 	};
 
-	/* A job handle that will kill all associated processes when closed. */
+	/* Job handle will be closed at exit, terminating subtree of processes. */
 	job = CreateJobObject(NULL, NULL);
 	if (!job)
 		elog(ERROR, "CreateJobObject() failed");
 	SetInformationJobObject(job,
-							JobObjectExtendedLimitInformation,
+							JobObjectBasicLimitInformation,
 							&info,
 							sizeof(info));
-
-	/* This process and all children it creates will be linked to it. */
-	AssignProcessToJobObject(hjob_kill_on_job_close, GetCurrentProcess());
+	AssignProcessToJobObject(job, GetCurrentProcess());
 }
 #endif
 
@@ -706,9 +704,9 @@ PostmasterMain(int argc, char *argv[])
 	become_terminal_controller();
 #endif
 
-#ifndef WIN32
+#ifdef WIN32
 	/* Arrange for process tree to be terminated on unexpected exit. */
-	become_job_owner();
+	become_job_root();
 #endif
 
 	/*
