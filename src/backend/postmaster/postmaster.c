@@ -499,53 +499,74 @@ static int	session_replica_pty_fd;
 static void
 become_session_leader(void)
 {
-	pid_t		temp_pid;
-	sigset_t	mask;
-	sigset_t	save_mask;
-	int			signo;
+	pid_t		postmaster_pid;;
 
 	/*
-	 * The postmaster is typically a session leader already, because pg_ctl or
-	 * a similar launcher called setsid() before exec'ing.
+	 * If started by pg_ctl, launchd or anything else that called setsid()
+	 * before loading this image, there is nothing to do.
 	 */
 	if (getsid(0) == getpid())
 		return;
 
 	/*
-	 * Jump through some hoops to be able to run a postmaster directly under a
-	 * shell, purely as a developer convenience.
-	 *
-	 * We need to call setsid() to create a new session and process group, but
-	 * existing process group leaders (getpid() == getpgrp()) aren't allowed to
-	 * do that, and that's how a shell normally starts each command.  As a
-	 * workaround, use a short-lived process to create a new process group, and
-	 * switch groups.  This is the reverse of the traditional double-fork
-	 * daemon launching trick, which would make the postmaster a child of init.
+	 * If started by systemd, a wrapper script, a debugger or probably anything
+	 * except a shell, then this process is not already a process group leader.
+	 * Create a new session and a new process group, becoming leader.
 	 */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGUSR1);
-	sigprocmask(SIG_BLOCK, &mask, &save_mask);
-	temp_pid = fork();
-	if (temp_pid < 0)
-		elog(FATAL, "fork failed: %m");
-
-	/* Temporary child process */
-	if (temp_pid == 0)
+	if (getpgid(0) != getpid())
 	{
-		setpgid(0, 0);
-		kill(getppid(), SIGUSR1);
-		sigwait(&mask, &signo);
-		exit(0);
+		if (setsid() < 0)
+			elog(ERROR, "setsid() failed: %m");
+		return;
 	}
 
-	/* Synchronize, switch to new process group and clean up. */
-	while (sigwait(&mask, &signo) < 0)
-		;
-	setpgid(0, temp_pid);
-	kill(temp_pid, SIGUSR1);
-	while (waitpid(temp_pid, NULL, 0) != temp_pid)
-		;
-	sigprocmask(SIG_SETMASK, &save_mask, NULL);
+	/*
+	 * It's not possible to create a new session directly from a process that
+	 * is already a process group leader.  This case is only expected when
+	 * postmaster is run directly in a shell.
+	 *
+	 * Create a parent wrapper process, with the postmaster as child.  That
+	 * allows the postmaster to start a new session as above.  The postmaster
+	 * won't receive any signals from the shell's controlling terminal, but we
+	 * can bridge that gap by forwarding signals from the wrapper.  This allows
+	 * ^C to work as developers might expect when running a postmaster directly
+	 * in the foreground.
+	 */
+	postmaster_pid = fork();
+	if (postmaster_pid < 0)
+		elog(ERROR, "fork() failed: %m");
+	if (postmaster_pid != 0)
+	{
+		sigset_t mask;
+
+		/* In the parent wrapper process. */
+		sigfillset(&mask);
+		sigprocmask(SIG_BLOCK, &mask, NULL);
+		for (;;)
+		{
+			int signo;
+
+			if (sigwait(&mask, &signo) < 0)
+			{
+				int save_errno = errno;
+				kill(postmaster_pid, SIGQUIT);
+				errno = save_errno;
+				elog(ERROR, "sigwait() failed: %m");
+			}
+
+			switch (signo)
+			{
+				case SIGCHLD:
+					/* XXX collect error */
+					exit(0);
+				case SIGHUP:
+					kill(postmaster_pid, SIGQUIT);
+					break;
+				default:
+					kill(postmaster_pid, signo);
+			}
+		}
+	}
 
 	/* Now the postmaster can become a session leader. */
 	if (setsid() < 0)
@@ -611,6 +632,11 @@ PostmasterMain(int argc, char *argv[])
 	char	   *userDoption = NULL;
 	bool		listen_addr_saved = false;
 	char	   *output_config_variable = NULL;
+
+#ifndef WIN32
+	become_session_leader();
+	become_terminal_controller();
+#endif
 
 	InitProcessGlobals();
 
