@@ -2888,6 +2888,7 @@ SubXactCallback
 SubXactCallbackItem
 SubXactEvent
 SubXactInfo
+Subprocess
 SubqueryScan
 SubqueryScanPath
 SubqueryScanState
