@@ -15,6 +15,7 @@ backend_sources += files(
   'rls.c',
   'sampling.c',
   'stack_depth.c',
+  'subprocess.c',
   'superuser.c',
   'timeout.c',
   'tzparser.c',

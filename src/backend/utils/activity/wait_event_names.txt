@@ -155,6 +155,7 @@ REPLICATION_ORIGIN_DROP	"Waiting for a replication origin to become inactive so 
 REPLICATION_SLOT_DROP	"Waiting for a replication slot to become inactive so it can be dropped."
 RESTORE_COMMAND	"Waiting for <xref linkend="guc-restore-command"/> to complete."
 SAFE_SNAPSHOT	"Waiting to obtain a valid snapshot for a <literal>READ ONLY DEFERRABLE</literal> transaction."
+SUBPROCESS_EXIT	"Waiting for a subprocess to exit."
 SYNC_REP	"Waiting for confirmation from a remote server during synchronous replication."
 WAL_BUFFER_INIT	"Waiting on WAL buffer to be initialized."
 WAL_RECEIVER_EXIT	"Waiting for the WAL receiver to exit."
