@@ -73,7 +73,7 @@ def compute_environment_vars():
     # REPO_CI_AUTOMATIC_TRIGGER_TASKS="task_name other_task" under "Repository
     # Settings" on Cirrus CI's website.
 
-    default_manual_trigger_tasks = ['mingw', 'netbsd', 'openbsd']
+    default_manual_trigger_tasks = ['mingw', 'netbsd', 'openbsd', 'vs2019']
 
     repo_ci_automatic_trigger_tasks = env.get('REPO_CI_AUTOMATIC_TRIGGER_TASKS', '')
     for task in default_manual_trigger_tasks:
@@ -103,6 +103,7 @@ def compute_environment_vars():
       'netbsd',
       'openbsd',
       'sanitycheck',
+      'vs2019',
       'windows',
     ]
     commit_message = env.get('CIRRUS_CHANGE_MESSAGE')

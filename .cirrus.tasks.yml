@@ -767,7 +767,6 @@ WINDOWS_ENVIRONMENT_BASE: &WINDOWS_ENVIRONMENT_BASE
 
 
 task:
-  name: Windows - Server 2022, VS 2019 - Meson & ninja
   << : *WINDOWS_ENVIRONMENT_BASE
 
   env:
@@ -790,10 +789,23 @@ task:
       -Dplperl=enabled
       -Dplpython=enabled
 
+  matrix:
+    - name: Windows - Server 2022, VS 2019 - Meson & ninja
+      env:
+        # Use VS 2019
+        PATH: C:\VS_2019\VC\Auxiliary\Build;${PATH}
+      trigger_type: $CI_TRIGGER_TYPE_VS2019
+      only_if: $CI_VS2019_ENABLED
+
+    # VS 2022 is the default VS installation
+    - name: Windows - Server 2022, VS 2022 - Meson & ninja
+      env:
+        PATH: C:\VS_2022\VC\Auxiliary\Build;${PATH}
+      only_if: $CI_WINDOWS_ENABLED
+
   <<: *windows_task_template
 
   depends_on: SanityCheck
-  only_if: $CI_WINDOWS_ENABLED
 
   setup_additional_packages_script: |
     REM choco install -y --no-progress ...
