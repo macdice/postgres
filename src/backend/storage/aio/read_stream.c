@@ -138,14 +138,14 @@ struct ReadStream
 	size_t		per_buffer_data_size;
 	void	   *per_buffer_data;
 
-	/* Queue of block ranges that need to be reversed before returning. */
+	/* Queue of block ranges that need to be streamed in reverse order. */
 	ReverseRange *reverse_ranges;
 	int16		reverse_ranges_size;
 	int16		reverse_ranges_count;
 	int16		oldest_reverse_range_index;
 	int16		next_reverse_range_index;
 
-	/* Cursor for blocks being returned from the queue in reverse order. */
+	/* Current range of blocks being streamed in reverse order. */
 	int16		reverse_buffer_nblocks;
 	int16		reverse_buffer_count;
 	int16		reverse_buffer_index;
@@ -369,6 +369,7 @@ read_stream_start_pending_read(ReadStream *stream)
 								 &nblocks,
 								 &stream->pending_read_npinned,
 								 flags);
+	elog(LOG, "read_stream_pending_read index = %d, output nblocks = %d", buffer_index, nblocks);
 	stream->pinned_buffers += nblocks;
 
 	/* Remember whether we need to wait before returning this buffer. */
@@ -415,6 +416,7 @@ read_stream_start_pending_read(ReadStream *stream)
 		buffer_index -= stream->queue_size;
 	Assert(buffer_index >= 0 && buffer_index < stream->queue_size);
 	stream->next_buffer_index = buffer_index;
+	elog(LOG, "after starting pending read, next_buffer_index = %d", buffer_index);
 
 	/* Adjust the pending read to cover the remaining portion, if any. */
 	stream->pending_read_blocknum += nblocks;
@@ -423,7 +425,7 @@ read_stream_start_pending_read(ReadStream *stream)
 
 	/*
 	 * If I/O combining was disabled while dealing with a reversed block
-	 * range, renable it as soon as the pending read is fully cleared.
+	 * range, renable it as soon as all associated IO is fully cleared.
 	 */
 	if (stream->pending_read_nblocks == 0)
 		stream->pending_read_combine = true;
@@ -479,22 +481,22 @@ read_stream_look_ahead(ReadStream *stream)
 		{
 			if (blocknum == stream->pending_read_blocknum + stream->pending_read_nblocks)
 			{
-				/* Append block number. */
 				if (stream->pending_read_nblocks == 1)
 					stream->pending_read_reverse = false;
 				if (!stream->pending_read_reverse)
 				{
+					/* Append block number. */
 					stream->pending_read_nblocks++;
 					continue;
 				}
 			}
-			else if (blocknum + 1 == stream->pending_read_blocknum)
+			else if (false && blocknum + 1 == stream->pending_read_blocknum)
 			{
-				/* Prepend block number. */
 				if (stream->pending_read_nblocks == 1)
 					stream->pending_read_reverse = true;
 				if (stream->pending_read_reverse)
 				{
+					/* Prepend block number.  Range will be reversed.*/
 					stream->pending_read_nblocks++;
 					stream->pending_read_blocknum--;
 					continue;
@@ -809,7 +811,12 @@ read_stream_begin_smgr_relation(int flags,
 }
 
 /*
- * Stream buffers in reverse.
+ * Stream one buffer in reverse order.  If begin_reverse_range is true, first
+ * wait for all buffers in the range described by the head of the
+ * reverse_ranges queue to be ready, and prepare the reverse stream state for
+ * this and subsequent calls.  If begin_reverse_range is false,
+ * stream->reverse_buffer_count must be non-zero, indicating that more buffers
+ * exist in a range being streams in reverse.
  */
 static Buffer
 read_stream_next_buffer_reverse(ReadStream *stream,
@@ -818,6 +825,7 @@ read_stream_next_buffer_reverse(ReadStream *stream,
 {
 	Buffer		buffer;
 
+	Assert(false);
 	if (begin_reverse_range)
 	{
 		int16		buffer_index;
@@ -825,6 +833,7 @@ read_stream_next_buffer_reverse(ReadStream *stream,
 
 		buffer_index = stream->reverse_ranges[stream->oldest_reverse_range_index].buffer_index;
 		nblocks = stream->reverse_ranges[stream->oldest_reverse_range_index].nblocks;
+		Assert(buffer_index == stream->oldest_buffer_index);
 
 		/* Wait for I/O for all buffers in the range to be finished. */
 		for (int i = 1; i < nblocks; ++i)
@@ -841,6 +850,8 @@ read_stream_next_buffer_reverse(ReadStream *stream,
 		stream->reverse_ranges_count--;
 	}
 
+	Assert(stream->reverse_buffer_count > 0);
+	
 	/* Stream one buffer. */
 	buffer = stream->buffers[stream->reverse_buffer_index];
 	if (per_buffer_data)
@@ -854,11 +865,11 @@ read_stream_next_buffer_reverse(ReadStream *stream,
 
 	/*
 	 * Adjust the pin count all at once when we've given the final reversed
-	 * buffer to the consumer.  This delay prevents next_buffer_index from
-	 * crashing into consume_buffer_index while we're streaming buffers
-	 * backwards.
+	 * buffer to the consumer.  This accounting delay prevents
+	 * next_buffer_index from crashing into oldest_buffer_index while we're
+	 * streaming buffers backwards.
 	 *
-	 * XXX seems kludgy, better way?
+	 * XXX slightly kludgy, better way?
 	 */
 	if (--stream->reverse_buffer_count == 0)
 		stream->pinned_buffers -= stream->reverse_buffer_nblocks;
@@ -963,21 +974,24 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 	if (unlikely(stream->reverse_buffer_count > 0))
 		return read_stream_next_buffer_reverse(stream, per_buffer_data, false);
 
-	/* Wait for the oldest buffer to be ready. */
+	/* Wait for the oldest buffer to be ready, starting IO if necessary. */
 	oldest_buffer_index = stream->oldest_buffer_index;
 	if (!read_stream_wait_oldest_buffer(stream))
-		return InvalidBuffer;
+	{
+		/* End of stream reached. */
+		Assert(stream->pinned_buffers == 0);
+		Assert(stream->distance == 0);
+		elog(LOG, "XXX end of stream");
+		return InvalidBlockNumber;
+	}
 
-	/*
-	 * Is it the start of a range that needs to be reversed?  If so, wait for
-	 * the whole range and begin streaming it in reverse order.
-	 */
+	/* Is it the head of a range that needs to be reversed? */
 	if (unlikely(stream->reverse_ranges_count > 0 &&
 				 stream->reverse_ranges[stream->oldest_reverse_range_index].buffer_index ==
 				 oldest_buffer_index))
 		return read_stream_next_buffer_reverse(stream, per_buffer_data, true);
 
-	/* Otherwise, we'll return it with its associated data. */
+	/* Return this buffer in regular order. */
 	buffer = stream->buffers[oldest_buffer_index];
 	if (per_buffer_data)
 		*per_buffer_data = get_per_buffer_data(stream, stream->oldest_buffer_index);
@@ -998,14 +1012,13 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->fast_path = true;
 	}
 #endif
-
+	elog(LOG, "consuming oldest index = %d, pinned = %d", oldest_buffer_index, stream->pinned_buffers);
 	return buffer;
 }
 
 /*
  * Make the buffer at oldest_buffer_index ready to be consumed, possibly
- * waiting for an IO and posisbly even starting one if necessary to make that
- * happen.  Also trigger lookahead.
+ * waiting for an IO and possibly starting one first.  Also trigger lookahead.
  */
 static bool
 read_stream_wait_oldest_buffer(ReadStream *stream)
@@ -1036,9 +1049,19 @@ read_stream_wait_oldest_buffer(ReadStream *stream)
 		}
 	}
 
-	oldest_buffer_index = stream->oldest_buffer_index;
-
+#if 0
+	/* Look ahead and check for end of stream. */
+	read_stream_look_ahead(stream);
+	if (stream->pinned_buffers == 0)
+	{
+		elog(LOG, "end of stream: stream->pending_read_nblocks = %d", stream->pending_read_nblocks);
+		return false;
+	}
+#endif
+	
 	/* Do we have to wait for an associated I/O first? */
+	oldest_buffer_index = stream->oldest_buffer_index;
+	Assert(oldest_buffer_index != stream->next_buffer_index);
 	if (stream->ios_in_progress > 0 &&
 		stream->ios[stream->oldest_io_index].buffer_index == oldest_buffer_index)
 	{
@@ -1075,8 +1098,8 @@ read_stream_wait_oldest_buffer(ReadStream *stream)
 	stream->oldest_buffer_index++;
 	if (stream->oldest_buffer_index == stream->queue_size)
 		stream->oldest_buffer_index = 0;
+	elog(LOG, "read_stream_wait_oldest_buffer advanced to %d", stream->oldest_buffer_index);
 
-	/* Prepare for the next call. */
 	read_stream_look_ahead(stream);
 
 	return true;
