@@ -156,6 +156,8 @@ REPLICATION_SLOT_DROP	"Waiting for a replication slot to become inactive so it c
 RESTORE_COMMAND	"Waiting for <xref linkend="guc-restore-command"/> to complete."
 SAFE_SNAPSHOT	"Waiting to obtain a valid snapshot for a <literal>READ ONLY DEFERRABLE</literal> transaction."
 SUBPROCESS_EXIT	"Waiting for a subprocess to exit."
+SUBPROCESS_READ	"Waiting to read data from a subprocess."
+SUBPROCESS_WRITE	"Waiting to write data to a subprocess."
 SYNC_REP	"Waiting for confirmation from a remote server during synchronous replication."
 WAL_RECEIVER_EXIT	"Waiting for the WAL receiver to exit."
 WAL_RECEIVER_WAIT_START	"Waiting for startup process to send initial data for streaming replication."

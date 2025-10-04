@@ -257,6 +257,11 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 			if (bytesread == 0)
 				cstate->raw_reached_eof = true;
 			break;
+		case COPY_PROGRAM:
+			bytesread = ReadSubprocess(cstate->copy_subproc, databuf, maxread);
+			if (bytesread == 0)
+				cstate->raw_reached_eof = true;
+			break;
 		case COPY_FRONTEND:
 			while (maxread > 0 && bytesread < minread && !cstate->raw_reached_eof)
 			{

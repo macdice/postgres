@@ -1832,7 +1832,6 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->defexprs = defexprs;
 	cstate->volatile_defexprs = volatile_defexprs;
 	cstate->num_defaults = num_defaults;
-	cstate->is_program = is_program;
 
 	if (data_source_cb)
 	{
@@ -1853,11 +1852,14 @@ BeginCopyFrom(ParseState *pstate,
 	{
 		cstate->filename = pstrdup(filename);
 
-		if (cstate->is_program)
+		if (is_program)
 		{
 			progress_vals[1] = PROGRESS_COPY_TYPE_PROGRAM;
-			cstate->copy_file = OpenPipeStream(cstate->filename, PG_BINARY_R);
-			if (cstate->copy_file == NULL)
+			cstate->copy_src = COPY_PROGRAM;
+			cstate->copy_subproc = OpenSubprocess(cstate->filename,
+												  SUBPROCESS_READ,
+												  NULL);
+			if (cstate->copy_subproc == NULL)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not execute command \"%s\": %m",
@@ -1917,7 +1919,7 @@ EndCopyFrom(CopyFromState cstate)
 	cstate->routine->CopyFromEnd(cstate);
 
 	/* No COPY FROM related resources except memory. */
-	if (cstate->is_program)
+	if (cstate->copy_src == COPY_PROGRAM)
 	{
 		ClosePipeFromProgram(cstate);
 	}
@@ -1944,13 +1946,13 @@ ClosePipeFromProgram(CopyFromState cstate)
 {
 	int			pclose_rc;
 
-	Assert(cstate->is_program);
+	Assert(cstate->copy_src == COPY_PROGRAM);
 
-	pclose_rc = ClosePipeStream(cstate->copy_file);
+	pclose_rc = WaitSubprocess(cstate->copy_subproc);
 	if (pclose_rc == -1)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not close pipe to external command: %m")));
+				 errmsg("could not wait for external command: %m")));
 	else if (pclose_rc != 0)
 	{
 		/*
@@ -1969,4 +1971,7 @@ ClosePipeFromProgram(CopyFromState cstate)
 						cstate->filename),
 				 errdetail_internal("%s", wait_result_to_str(pclose_rc))));
 	}
+	elog(LOG, "XXX will close");
+	CloseSubprocess(cstate->copy_subproc);
+	cstate->copy_subproc = NULL;
 }

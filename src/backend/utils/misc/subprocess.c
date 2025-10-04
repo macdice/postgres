@@ -4,8 +4,9 @@
  *
  * Synchronous read/write operations are provided as drop-in replacements for
  * fread()/fwrite().  In future work, completion-based interfaces could be
- * provided.  On Windows, completion-based I/O is used internally, as required
- * to multiplex with general latch events, but that is not exposed to callers.
+ * provided for more efficient asynchronous I/O.  On Windows, asynchronous I/O
+ * is used internally, as required to multiplex pipe I/O with latches, but
+ * that is not exposed to callers yet.
  */
 
 #include "postgres.h"
@@ -39,6 +40,9 @@
 #define HAVE_SUBPROCESS_TABLE
 #endif
 
+/* Size of buffer used for pipe I/O. */
+#define SUBPROCESS_BUFFER_NBLOCKS 8
+
 typedef enum SubprocessStatus
 {
 	SUBPROCESS_STATUS_RUNNING,
@@ -71,12 +75,11 @@ struct Subprocess
 
 	/*
 	 * To support an fread()/fwrite()-style buffered synchronous interface, we
-	 * need our own internal buffer to consolidate system calls.  I/O
-	 * alignment minimizes the number of VM pages the kernel must pin.
+	 * need our own internal buffer to consolidate system calls.
 	 */
 	size_t		buffer_index;
 	size_t		buffer_size;
-	PGIOAlignedBlock buffer[BLCKSZ * 8];
+	PGIOAlignedBlock buffer[BLCKSZ * SUBPROCESS_BUFFER_NBLOCKS];
 };
 
 #ifdef HAVE_SUBPROCESS_TABLE
@@ -102,6 +105,12 @@ ResOwnerReleaseSubprocess(Datum res)
 {
 	Subprocess *sp = (Subprocess *) DatumGetPointer(res);
 
+	/*
+	 * Suppress explicit resource owner management, since cleanup is in
+	 * progress and will handle that automatically.
+	 */
+	sp->resowner = NULL;
+
 	CloseSubprocess(sp);
 }
 
@@ -110,7 +119,7 @@ ResOwnerPrintSubprocess(Datum res)
 {
 	Subprocess *sp = (Subprocess *) DatumGetPointer(res);
 
-	return psprintf("Subprocess %d", sp->pid);
+	return psprintf("Subprocess pid %d", sp->pid);
 }
 
 static void
@@ -166,10 +175,17 @@ UnlockSubprocess(Subprocess *sp)
 static void
 SignalHandlerForSubprocessExit(SIGNAL_ARGS)
 {
+	fprintf(stderr, "SignalHandlerForSubprocessExit\n");
 	SubprocessExitPending = true;
+	InterruptPending = true;
 	SetLatch(MyLatch);
 }
 
+/*
+ * Just like system() and popen(), install a SIGCHLD handler but only while
+ * any subprocess is running.
+ *
+ */
 static void
 AdjustSubprocessExitHandler(bool adding)
 {
@@ -180,7 +196,12 @@ AdjustSubprocessExitHandler(bool adding)
 	 * useful.
 	 */
 	if (dlist_is_empty(&subprocess_table))
-		pqsignal(SIGCHLD, adding ? SignalHandlerForSubprocessExit : SIG_DFL);
+	{
+		if (adding)
+			pqsignal(SIGCHLD, SignalHandlerForSubprocessExit);
+		else
+			pqsignal(SIGCHLD, SIG_DFL);
+	}
 }
 #endif
 
@@ -198,12 +219,19 @@ ForgetSubprocess(Subprocess *sp)
 }
 
 /*
- * Wait for a subprocess to exit, and return its exit status.
+ * Wait for a subprocess to exit, and return its exit status.  Interrupts must
+ * not be held.
  */
 int
 WaitSubprocess(Subprocess *sp)
 {
 	int			exit_status;
+
+	Assert(InterruptHoldoffCount == 0);
+
+	/* Flush any buffered data first. */
+	if (sp->flags & SUBPROCESS_WRITE)
+		WriteSubprocess(sp, NULL, 0);
 
 	while (!GetSubprocessExitStatus(sp, &exit_status))
 	{
@@ -217,7 +245,10 @@ WaitSubprocess(Subprocess *sp)
 }
 
 /*
- * Run a subprocess using a shell command, in the style of system().
+ * Run a subprocess using a shell command, in the style of system().  Unlike
+ * system(), interrupts are processed, and the process receives SIGTERM if
+ * cancelled by an interrupt before the subprocess is reaped.  The environment
+ * may also be passed explicitly: see OpenSubprocess() for details.
  *
  * Returns the exit status of the shell.  An exit status of 127 means that the
  * execution of the shell failed, like system().
@@ -281,6 +312,8 @@ ProcessSubprocessExit(void)
 	pid_t		pid;
 	int			exit_status;
 
+	elog(LOG, "ProcessSubprocessExit");
+
 	/*
 	 * XXX:MT Serialize against concurrent changes to the subprocess table in
 	 * other threads.
@@ -288,6 +321,7 @@ ProcessSubprocessExit(void)
 	LockSubprocessTable();
 	while ((pid = waitpid(-1, &exit_status, WNOHANG)) > 0)
 	{
+		bool		found = false;
 		dlist_iter	iter;
 
 		dlist_foreach(iter, &subprocess_table)
@@ -299,6 +333,7 @@ ProcessSubprocessExit(void)
 			if (sp->pid == pid)
 			{
 				RecordSubprocessExitStatus(sp, exit_status);
+				found = true;
 				break;
 			}
 		}
@@ -307,29 +342,37 @@ ProcessSubprocessExit(void)
 		 * Unknown pids imply that forking is happening outside this module,
 		 * which is not allowed.
 		 */
-		elog(PANIC, "reaped pid %d but it is not a known subprocess", pid);
+		if (!found)
+			elog(PANIC, "reaped pid %d but it is not a known subprocess", pid);
 	}
 	UnlockSubprocessTable();
 #endif
 }
 
 /*
- * Start a subprocess using a shell command.  Like standard popen(), the shell
- * command is run with /bin/sh.
+ * Start a subprocess using a shell command.  Like standard system() and
+ * popen(), the shell command is run with /bin/sh.
  *
  * If flags is SUBPROCESS_WRITE or SUBPROCESS_READ, data may be streamed to or
  * from the subprocess.  Bidirectional pipes are not currently supported due to
  * the risk of buffer deadlock with the existing synchronous interfaces.
  *
  * If flags is 0, an asynchronous equivalent of system() is started.  See also
- * RunSubprocess().
+ * RunSubprocess() which handles opening, waiting and closing in one step.
  *
- * The subprocess is associated with the current resource owner.  When the
- * resource owner goes out of scope, it CloseSubprocess() must have been
- * called, unless and error was raised in which case it will be called
- * automatically.
+ * Environment variables may be passed explicitly as a NULL-terminated array
+ * of pointers to "NAME=VALUE" strings.  A NULL pointer selects the current
+ * environment without changes.  Since setenv() is generally not allowed in
+ * PostgreSQL code, new environment variables can be provided to the
+ * subprocess by copying the current environment (environ) and making any
+ * changes required.
  *
- * Returns NULL and sets errno if setup or execution of the shell failed.
+ * The subprocess is associated with the current resource owner.  Before the
+ * resource owner goes out of scope, CloseSubprocess() should normally be
+ * called.  If an error is raised, it will be closed automatically during
+ * cleanup.
+ *
+ * Returns NULL and sets errno if an error occurs while starting the shell.
  */
 Subprocess *
 OpenSubprocess(const char *shell_command, int flags, char *const envp[])
@@ -343,6 +386,7 @@ OpenSubprocess(const char *shell_command, int flags, char *const envp[])
 
 	ResourceOwnerEnlarge(CurrentResourceOwner);
 
+	/* We need memory that least as long as CurrentResourceOwner. */
 	sp = malloc(sizeof(*sp));
 	if (sp == NULL)
 		return NULL;
@@ -402,6 +446,15 @@ OpenSubprocess(const char *shell_command, int flags, char *const envp[])
 				goto fail;
 			have_pipe = true;
 
+			/*
+			 * Make the parent's end of the pipe non-blocking.
+			 *
+			 * XXX We could use POSIX 2024 pipe2() to skip two system calls
+			 * here, where available.
+			 */
+			if (!pg_set_noblock(pipe_fds[flags & SUBPROCESS_READ ? 1 : 0]))
+				goto fail;
+
 			/* Tell child what to do with pipe ends. */
 			if (flags & SUBPROCESS_READ)
 			{
@@ -438,6 +491,7 @@ OpenSubprocess(const char *shell_command, int flags, char *const envp[])
 		 */
 		if (posix_spawn(&sp->pid, path, &file_actions, &attr, argv, envp) < 0)
 			goto fail;
+		elog(LOG, "OpenSubprocess pid %d", sp->pid);
 
 		/* Clean up temporary arguments. */
 		posix_spawnattr_destroy(&attr);
@@ -450,9 +504,12 @@ OpenSubprocess(const char *shell_command, int flags, char *const envp[])
 			close(pipe_fds[flags & SUBPROCESS_READ ? 1 : 0]);
 			ReleaseExternalFD();
 		}
+
+		dlist_push_tail(&subprocess_table, &sp->subprocess_table_node);
 		break;
 
 fail:
+		elog(LOG, "fail!");
 		save_errno = errno;
 		if (have_attr)
 			posix_spawnattr_destroy(&attr);
@@ -520,6 +577,18 @@ GetSubprocessExitStatus(Subprocess *sp, int *exit_status)
 /*
  * Close a subprocess.  If the process hasn't finished running yet, it is
  * terminated and the exit status is lost.
+ *
+ * Unlike pclose(), control is returned without waiting for the subprocess to
+ * exit, if WaitSubprocess() hasn't been called.  Normally that only happens
+ * if the subprocess is closed during error cleanup.  The alternative would be
+ * for a process that refuses to exit to hold up cancellation, which would be
+ * complicated by the fact that error cleanup paths also hold interrupts,
+ * needed to handle SIGCHLD notification.
+ *
+ * To avoid accumulating lingering subprocesses that are no longer of interest
+ * after an error has been raised, we close any connected pipe and send
+ * SIGTERM.  In that case, the waitpid() step is deferred without blocking
+ * progress.
  */
 void
 CloseSubprocess(Subprocess *sp)
@@ -549,10 +618,10 @@ CloseSubprocess(Subprocess *sp)
 		}
 
 		/*
-		 * SIGQUIT is probably better than SIGKILL, because a program that
+		 * SIGTERM is probably better than SIGKILL, because a program that
 		 * itself created children might want to shut those down too.
 		 */
-		kill(sp->pid, SIGQUIT);
+		kill(sp->pid, SIGTERM);
 #else
 		/* Terminate the process and any children it has created. */
 		CloseHandle(sp->job_handle);
@@ -563,6 +632,10 @@ CloseSubprocess(Subprocess *sp)
 		/* Common case: freed immediately. */
 		ForgetSubprocess(sp);
 		unreferenced = true;
+		if (sp->resowner)
+			ResourceOwnerForget(sp->resowner,
+								PointerGetDatum(sp),
+								&subprocess_resowner_desc);
 	}
 	else
 	{
@@ -576,7 +649,100 @@ CloseSubprocess(Subprocess *sp)
 }
 
 ssize_t
-SubprocessRead(Subprocess *sp, void *buffer, size_t size)
+ReadSubprocess(Subprocess *sp, void *buffer, size_t size)
 {
+	ssize_t		nbytes;
+
+	Assert(sp->flags & SUBPROCESS_READ);
+
+	/* Do we already have some data buffered?  Just copy it out. */
+	if (sp->buffer_index < sp->buffer_size)
+	{
+		nbytes = Min(sp->buffer_size - sp->buffer_index, size);
+		memcpy(buffer, &sp->buffer[sp->buffer_index], nbytes);
+		sp->buffer_index += nbytes;
+		return nbytes;
+	}
+
+	/* Try to fill up sp->buffer as much as we can. */
+	sp->buffer_index = 0;
+	sp->buffer_size = 0;
+
+#ifndef WIN32
+retry:
+	/* Try to fill the whole buffer. */
+	nbytes = read(sp->pipe_fd, sp->buffer, sizeof(sp->buffer));
+
+	if (nbytes < 0)
+	{
+		/* Wait for data, but also process interrupts. */
+		if (errno == EAGAIN)
+		{
+			WaitLatchOrSocket(MyLatch,
+							  WL_LATCH_SET | WL_SOCKET_READABLE |
+							  WL_EXIT_ON_PM_DEATH,
+							  sp->pipe_fd,
+							  0,
+							  WAIT_EVENT_SUBPROCESS_READ);
+			ResetLatch(MyLatch);
+			CHECK_FOR_INTERRUPTS();
+			goto retry;
+		}
+		if (errno == EINTR)
+			goto retry;
+	}
+	else
+	{
+		/* Data or EOF received. */
+		sp->buffer_size = nbytes;
+		sp->buffer_index = 0;
+
+		/* Copy out as many bytes as requested, leaving the rest for later. */
+		if (size < nbytes)
+			nbytes = size;
+		memcpy(buffer, sp->buffer, nbytes);
+		sp->buffer_index += nbytes;
+	}
+#else
 	/* XXX TODO */
+#endif
+	return nbytes;
+}
+
+ssize_t
+WriteSubprocess(Subprocess *sp, void *buffer, size_t size)
+{
+	ssize_t		nbytes;
+
+#ifndef WIN32
+	do
+	{
+		nbytes = write(sp->pipe_fd, buffer, size);
+
+		if (nbytes == -1)
+		{
+			if (errno == EAGAIN)
+			{
+				WaitLatchOrSocket(MyLatch,
+								  WL_LATCH_SET | WL_SOCKET_READABLE |
+								  WL_EXIT_ON_PM_DEATH,
+								  sp->pipe_fd,
+								  0,
+								  WAIT_EVENT_SUBPROCESS_READ);
+				ResetLatch(MyLatch);
+				CHECK_FOR_INTERRUPTS();
+				continue;
+			}
+			else if (errno == EINTR)
+			{
+				continue;
+			}
+		}
+	}
+	while (0);
+#else
+	/* XXX TODO */
+#endif
+
+	return nbytes;
 }

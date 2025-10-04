@@ -17,6 +17,7 @@
 #include "commands/copy.h"
 #include "commands/trigger.h"
 #include "nodes/miscnodes.h"
+#include "utils/subprocess.h"
 
 /*
  * Represents the different source cases we need to worry about at
@@ -24,7 +25,8 @@
  */
 typedef enum CopySource
 {
-	COPY_FILE,					/* from file (or a piped program) */
+	COPY_FILE,					/* from file */
+	COPY_PROGRAM,				/* from piped program */
 	COPY_FRONTEND,				/* from frontend */
 	COPY_CALLBACK,				/* from callback function */
 } CopySource;
@@ -64,6 +66,7 @@ typedef struct CopyFromStateData
 	/* low-level state data */
 	CopySource	copy_src;		/* type of copy source */
 	FILE	   *copy_file;		/* used if copy_src == COPY_FILE */
+	Subprocess *copy_subproc;	/* used if copy_src == COPY_PROGRAM */
 	StringInfo	fe_msgbuf;		/* used if copy_src == COPY_FRONTEND */
 
 	EolType		eol_type;		/* EOL type of input */
@@ -75,7 +78,6 @@ typedef struct CopyFromStateData
 	Relation	rel;			/* relation to copy from */
 	List	   *attnumlist;		/* integer list of attnums to copy */
 	char	   *filename;		/* filename, or NULL for STDIN */
-	bool		is_program;		/* is 'filename' a program to popen? */
 	copy_data_source_cb data_source_cb; /* function for reading data */
 
 	CopyFormatOptions opts;

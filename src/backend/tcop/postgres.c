@@ -4257,10 +4257,15 @@ PostgresMain(const char *dbname, const char *username)
 
 		/*
 		 * Reset some signals that are accepted by postmaster but not by
-		 * backend
+		 * backend.
 		 */
-		pqsignal(SIGCHLD, SIG_DFL); /* system() requires this on some
-									 * platforms */
+
+		/*
+		 *
+		 * SIGCHLD is normally ignored, but modified by subprocess.c while
+		 * child processes are running on Unix platforms.
+		 */
+		pqsignal(SIGCHLD, SIG_DFL);
 	}
 
 	/* Early initialization */
