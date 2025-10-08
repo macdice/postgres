@@ -5,6 +5,13 @@
 #define SUBPROCESS_READ		1
 #define SUBPROCESS_WRITE	2
 
+/*
+ * Size of the internal buffer for pipe data.  This value is chosen to match
+ * RAW_BUF_SIZE in copyfrom_internals.h, allowing an optimization in
+ * ReadSubprocess().
+ */
+#define SUBPROCESS_BUFFER_SIZE (64 * 1024)
+
 struct Subprocess;
 typedef struct Subprocess Subprocess;
 
@@ -16,6 +23,10 @@ extern Subprocess *OpenSubprocess(const char *shell_command,
 								  int flags,
 								  char *const envp[]);
 extern ssize_t ReadSubprocess(Subprocess *sp, void *buffer, size_t size);
+extern ssize_t ReadSubprocessAtLeast(Subprocess *sp,
+									 void *buffer,
+									 size_t minsize,
+									 size_t maxsize);
 extern ssize_t WriteSubprocess(Subprocess *sp, void *buffer, size_t size);
 extern void CloseSubprocess(Subprocess *sp);
 

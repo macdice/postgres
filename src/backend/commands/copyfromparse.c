@@ -258,7 +258,14 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 				cstate->raw_reached_eof = true;
 			break;
 		case COPY_PROGRAM:
-			bytesread = ReadSubprocess(cstate->copy_subproc, databuf, maxread);
+			bytesread = ReadSubprocessAtLeast(cstate->copy_subproc,
+											  databuf,
+											  minread,
+											  maxread);
+			if (bytesread < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not read from COPY program: %m")));
 			if (bytesread == 0)
 				cstate->raw_reached_eof = true;
 			break;

@@ -40,9 +40,6 @@
 #define HAVE_SUBPROCESS_TABLE
 #endif
 
-/* Size of buffer used for pipe I/O. */
-#define SUBPROCESS_BUFFER_NBLOCKS 8
-
 typedef enum SubprocessStatus
 {
 	SUBPROCESS_STATUS_RUNNING,
@@ -79,7 +76,7 @@ struct Subprocess
 	 */
 	size_t		buffer_index;
 	size_t		buffer_size;
-	PGIOAlignedBlock buffer[BLCKSZ * SUBPROCESS_BUFFER_NBLOCKS];
+	PGIOAlignedBlock buffer[FLEXIBLE_ARRAY_MEMBER];
 };
 
 #ifdef HAVE_SUBPROCESS_TABLE
@@ -387,7 +384,8 @@ OpenSubprocess(const char *shell_command, int flags, char *const envp[])
 	ResourceOwnerEnlarge(CurrentResourceOwner);
 
 	/* We need memory that least as long as CurrentResourceOwner. */
-	sp = malloc(sizeof(*sp));
+	sp = malloc(offsetof(Subprocess, buffer) +
+				flags ? SUBPROCESS_BUFFER_SIZE : 0);
 	if (sp == NULL)
 		return NULL;
 
@@ -648,14 +646,57 @@ CloseSubprocess(Subprocess *sp)
 		free(sp);
 }
 
+/*
+ * Like ReadSubprocess(), but wait until a minimum number of bytes or EOF is
+ * received.
+ */
+ssize_t
+ReadSubprocessAtLeast(Subprocess *sp, void *buffer, size_t minsize, size_t maxsize)
+{
+	ssize_t		nbytes = 0;
+
+	Assert(minsize <= maxsize);
+
+	while (nbytes < minsize)
+	{
+		ssize_t		chunk_nbytes;
+
+		Assert(maxsize > 0);
+
+		chunk_nbytes = ReadSubprocess(sp, buffer, maxsize);
+		if (chunk_nbytes < 0)
+			return -1;	/* note: may discard data preceding error */
+		if (chunk_nbytes == 0)
+			break;
+
+		nbytes += chunk_nbytes;
+		if (chunk_nbytes == maxsize)
+			break;
+
+		buffer = (char *) buffer + chunk_nbytes;
+		maxsize -= chunk_nbytes;
+	}
+
+	return nbytes;
+}
+
+/*
+ * Read from a subprocess opened with SUBPROCESS_READ, blocking until data is
+ * available if necessary, but also processing interrupts, Interrupts might
+ * cause non-local exit by raising an error.  Returns -1 and sets errno on
+ * error.
+ */
 ssize_t
 ReadSubprocess(Subprocess *sp, void *buffer, size_t size)
 {
 	ssize_t		nbytes;
+#ifndef WIN32
+	bool		skip_internal_buffer;
+#endif
 
 	Assert(sp->flags & SUBPROCESS_READ);
 
-	/* Do we already have some data buffered?  Just copy it out. */
+	/* Do we already have some buffered data to copy out? */
 	if (sp->buffer_index < sp->buffer_size)
 	{
 		nbytes = Min(sp->buffer_size - sp->buffer_index, size);
@@ -664,48 +705,58 @@ ReadSubprocess(Subprocess *sp, void *buffer, size_t size)
 		return nbytes;
 	}
 
-	/* Try to fill up sp->buffer as much as we can. */
-	sp->buffer_index = 0;
-	sp->buffer_size = 0;
-
 #ifndef WIN32
+	/*
+	 * If the caller asked for is a large percentage of our internal buffer's
+	 * size (expected for COPY FROM, see SUBPROCESS_BUFFER_SIZE) then skip
+	 * useless double-buffering here and read directly into the caller's
+	 * buffer.  The internal buffer is only used to support small reads with
+	 * more efficient large system calls.
+	 */
+	skip_internal_buffer = size >= SUBPROCESS_BUFFER_SIZE / 2;
+
 retry:
-	/* Try to fill the whole buffer. */
-	nbytes = read(sp->pipe_fd, sp->buffer, sizeof(sp->buffer));
+	/* Read from pipe into the selected output buffer. */
+	nbytes = read(sp->pipe_fd,
+				  skip_internal_buffer ? buffer : sp->buffer,
+				  skip_internal_buffer ? size : SUBPROCESS_BUFFER_SIZE);
 
 	if (nbytes < 0)
 	{
-		/* Wait for data, but also process interrupts. */
 		if (errno == EAGAIN)
 		{
-			WaitLatchOrSocket(MyLatch,
-							  WL_LATCH_SET | WL_SOCKET_READABLE |
-							  WL_EXIT_ON_PM_DEATH,
-							  sp->pipe_fd,
-							  0,
-							  WAIT_EVENT_SUBPROCESS_READ);
-			ResetLatch(MyLatch);
-			CHECK_FOR_INTERRUPTS();
+			/* Wait for data in pipe, or latch to be set for interrupt. */
+			if (WaitLatchOrSocket(MyLatch,
+								  WL_LATCH_SET | WL_SOCKET_READABLE |
+								  WL_EXIT_ON_PM_DEATH,
+								  sp->pipe_fd,
+								  0,
+								  WAIT_EVENT_SUBPROCESS_READ) == WL_LATCH_SET)
+			{
+				ResetLatch(MyLatch);
+				CHECK_FOR_INTERRUPTS();
+			}
 			goto retry;
 		}
 		if (errno == EINTR)
 			goto retry;
-	}
-	else
-	{
-		/* Data or EOF received. */
-		sp->buffer_size = nbytes;
-		sp->buffer_index = 0;
 
-		/* Copy out as many bytes as requested, leaving the rest for later. */
-		if (size < nbytes)
+		/* Report failure to caller, which should check errno. */
+	}
+	else if (!skip_internal_buffer)
+	{
+		/* Copy requested bytes from buffer, leaving the rest for later. */		
+		sp->buffer_size = nbytes;
+		if (size < nbytes)		
 			nbytes = size;
 		memcpy(buffer, sp->buffer, nbytes);
-		sp->buffer_index += nbytes;
+		sp->buffer_index = nbytes;
 	}
 #else
 	/* XXX TODO */
 #endif
+	if (size != nbytes)
+		elog(LOG, "ReadSubprocess -- asked for %zu, returning %zu", size, nbytes);
 	return nbytes;
 }
 
