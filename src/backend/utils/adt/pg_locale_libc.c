@@ -722,7 +722,8 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	if (!result->collate_is_c)
 	{
 #ifdef WIN32
-		if (GetDatabaseEncoding() == PG_UTF8)
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			pg_get_encoding_from_locale(collate, true) != PG_UTF8)
 			result->collate = &collate_methods_libc_win32_utf8;
 		else
 #endif
@@ -975,8 +976,13 @@ get_collation_actual_version_libc(const char *collcollate)
 /*
  * strncoll_libc_win32_utf8
  *
- * Win32 does not have UTF-8. Convert UTF8 arguments to wide characters and
- * invoke wcscoll_l().
+ * Historical versions of Windows didn't have UTF-8 locales.  To support UTF-8
+ * databases, we allowed *any* locale to be used in UTF-8 databases (see
+ * check_locale_encoding()).  This function supports mismatched encodings by
+ * converting strings to wchar_t on the fly and calling wcscoll_l().
+ *
+ * This is not called for UTF-8 locales in UTF-8 databases, but is still needed
+ * as long as we tolerate mismatches.
  *
  * An input string length of -1 means that it's NUL-terminated.
  */
