@@ -130,29 +130,81 @@ static size_t strupper_libc_mb(char *dest, size_t destsize,
 							   const char *src, ssize_t srclen,
 							   pg_locale_t locale);
 
-/*
- * Generate a function that passes single-byte characters directly to <ctype.h>
- * functions, but only if they are in the ASCII range.  This is suitable for
- * PG_WCHAR_CUSTOM pg_wchar encoding (used with EUC_* encodings).  Values
- * outside ASCII have an unknown encoding, so we just return false.
- */
-#define DEFINE_WC_CTYPE_LIBC_ASCII(ctype) \
-static bool \
-wc_is##ctype##_libc_ascii(pg_wchar wc, pg_locale_t locale) \
-{ \
-   return is##ctype##_l((unsigned char) wc, locale->lt); \
+static wint_t
+pg_wchar_to_wchar_t(pg_wchar wc, pg_locale_t locale)
+{
+	wchar_t		out[MAX_CONVERSION_GROWTH + 1];
+	char		mb[MAX_CONVERSION_GROWTH + 1];
+	size_t		mb_len;
+	size_t		wchar_t_len;
+
+	/* pg_wchar -> multibyte using PostgreSQL pg_wchar encoding */
+	mb_len = pg_wchar2mb_with_len(&wc, mb, 1);
+
+	/* multibyte -> wchar_t using libc */
+	wchar_t_len = char2wchar(out, lengthof(out), mb, mb_len, locale->lt);
+
+	/* reject surrogates and combining characters */
+	if (wchar_t_len != 1)
+		return WEOF;
+
+	return out[0];
 }
 
-DEFINE_WC_CTYPE_LIBC_ASCII(digit);
-DEFINE_WC_CTYPE_LIBC_ASCII(alpha);
-DEFINE_WC_CTYPE_LIBC_ASCII(alnum);
-DEFINE_WC_CTYPE_LIBC_ASCII(upper);
-DEFINE_WC_CTYPE_LIBC_ASCII(lower);
-DEFINE_WC_CTYPE_LIBC_ASCII(graph);
-DEFINE_WC_CTYPE_LIBC_ASCII(print);
-DEFINE_WC_CTYPE_LIBC_ASCII(punct);
-DEFINE_WC_CTYPE_LIBC_ASCII(space);
-DEFINE_WC_CTYPE_LIBC_ASCII(xdigit);
+static pg_wchar
+wchar_t_to_pg_wchar(wchar_t wc, pg_locale_t locale)
+{
+	wchar_t		in[] = {wc, 0};
+	pg_wchar	out[MAX_CONVERSION_GROWTH + 1];
+	char		mb[MAX_CONVERSION_GROWTH + 1];
+	size_t		mb_len;
+	size_t		pg_wchar_len;
+
+	/* wchar_t -> multibyte using libc */
+	mb_len = wchar2char(mb, in, lengthof(mb), locale->lt);
+
+	/* multibyte -> pg_wchar using PostgreSQL pg_wchar encoding */
+	pg_wchar_len = pg_mb2wchar_with_len(mb, out, mb_len);
+
+	/* should be exactly one character */
+	if (pg_wchar_len != 1)
+		elog(ERROR, "unexpected number of output characters: %zu", pg_wchar_len);
+
+	return out[0];
+}
+
+/*
+ * Generate a function that handles the ASCII range with <ctype.h>, and
+ * otherwise converts pg_wchar to libc's wchar_t to be able to use <wctype.h>
+ * routines.  This extra conversion is only required when using encodings that
+ * declare a PG_WCHAR_CUSTOM encoding scheme (EUC encodings for CJK).
+ *
+ * XXX If wchar.c had a function that could identify pg_wchar values that
+ * definitely won't return true (eg the big kanji/hanzi ranges), then we could
+ * skip the expensive conversion but still give correct answers for other
+ * characters.
+ */
+#define DEFINE_WC_CTYPE_LIBC_CUSTOM(ctype) \
+static bool \
+wc_is##ctype##_libc_custom(pg_wchar wc, pg_locale_t locale) \
+{ \
+	wint_t wint; \
+	if (wc < 128) \
+		return is##ctype##_l(wc, locale->lt); \
+	wint = pg_wchar_to_wchar_t(wc, locale); \
+	return wint != WEOF && isw##ctype##_l(wint, locale->lt); \
+}
+
+DEFINE_WC_CTYPE_LIBC_CUSTOM(digit);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(alpha);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(alnum);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(upper);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(lower);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(graph);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(print);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(punct);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(space);
+DEFINE_WC_CTYPE_LIBC_CUSTOM(xdigit);
 
 static bool
 wc_isdigit_libc_sb(pg_wchar wc, pg_locale_t locale)
@@ -302,9 +354,19 @@ char_is_cased_libc(char ch, pg_locale_t locale)
 }
 
 static pg_wchar
-toupper_libc_ascii(pg_wchar wc, pg_locale_t locale)
+toupper_libc_custom(pg_wchar wc, pg_locale_t locale)
 {
-	return wc < 128 ? toupper_l((unsigned char) wc, locale->lt) : wc;
+	wint_t		wint;
+
+	/* force C behavior for ASCII characters, per comments above */
+	if (locale->is_default && wc <= (pg_wchar) 127)
+		return pg_ascii_toupper((unsigned char) wc);
+	if (wc <= 127)
+		return towupper_l((wint_t) wc, locale->lt);
+	wint = pg_wchar_to_wchar_t(wc, locale);
+	if ((wint = pg_wchar_to_wchar_t(wc, locale)) != WEOF)
+		return wchar_t_to_pg_wchar(towupper_l(wint, locale->lt), locale);
+	return wc;
 }
 
 static pg_wchar
@@ -336,9 +398,19 @@ toupper_libc_mb(pg_wchar wc, pg_locale_t locale)
 }
 
 static pg_wchar
-tolower_libc_ascii(pg_wchar wc, pg_locale_t locale)
+tolower_libc_custom(pg_wchar wc, pg_locale_t locale)
 {
-	return wc < 128 ? tolower_l((unsigned char) wc, locale->lt) : wc;
+	wint_t		wint;
+
+	/* force C behavior for ASCII characters, per comments above */
+	if (locale->is_default && wc <= (pg_wchar) 127)
+		return pg_ascii_tolower((unsigned char) wc);
+	if (wc <= 127)
+		return towlower_l((wint_t) wc, locale->lt);
+	wint = pg_wchar_to_wchar_t(wc, locale);
+	if ((wint = pg_wchar_to_wchar_t(wc, locale)) != WEOF)
+		return wchar_t_to_pg_wchar(towlower_l(wint, locale->lt), locale);
+	return wc;
 }
 
 static pg_wchar
@@ -412,31 +484,29 @@ static const struct ctype_methods ctype_methods_libc[] = {
 
 	/*
 	 * Custom pg_wchar format converted from non-UTF8 multibyte encodings use
-	 * multibyte semantics for case mapping, but ASCII-only semantics for
-	 * pattern matching, since libc doesn't understand custom encoding of
-	 * higher values.
-	 *
-	 * XXX We could convert to wchar_t to fix that, at considerable cost.
+	 * multibyte semantics for case mapping, and conversions to libc's wchar_t
+	 * except for the ASCII range that can be handled directly by ctype
+	 * functions.
 	 */
 	[PG_WCHAR_CUSTOM] = {
 		.strlower = strlower_libc_mb,
 		.strtitle = strtitle_libc_mb,
 		.strupper = strupper_libc_mb,
-		.wc_isdigit = wc_isdigit_libc_ascii,
-		.wc_isalpha = wc_isalpha_libc_ascii,
-		.wc_isalnum = wc_isalnum_libc_ascii,
-		.wc_isupper = wc_isupper_libc_ascii,
-		.wc_islower = wc_islower_libc_ascii,
-		.wc_isgraph = wc_isgraph_libc_ascii,
-		.wc_isprint = wc_isprint_libc_ascii,
-		.wc_ispunct = wc_ispunct_libc_ascii,
-		.wc_isspace = wc_isspace_libc_ascii,
-		.wc_isxdigit = wc_isxdigit_libc_ascii,
+		.wc_isdigit = wc_isdigit_libc_custom,
+		.wc_isalpha = wc_isalpha_libc_custom,
+		.wc_isalnum = wc_isalnum_libc_custom,
+		.wc_isupper = wc_isupper_libc_custom,
+		.wc_islower = wc_islower_libc_custom,
+		.wc_isgraph = wc_isgraph_libc_custom,
+		.wc_isprint = wc_isprint_libc_custom,
+		.wc_ispunct = wc_ispunct_libc_custom,
+		.wc_isspace = wc_isspace_libc_custom,
+		.wc_isxdigit = wc_isxdigit_libc_custom,
 		.char_is_cased = char_is_cased_libc,
 		.char_tolower = char_tolower_libc,
-		.wc_toupper = toupper_libc_ascii,
-		.wc_tolower = tolower_libc_ascii,
-		.max_chr = UCHAR_MAX,
+		.wc_toupper = toupper_libc_custom,
+		.wc_tolower = tolower_libc_custom,
+		.max_chr = 127,		/* values outside ASCII may be illegal to probe */
 	},
 };
 
