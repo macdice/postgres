@@ -43,20 +43,25 @@
  * the <ctype.h> functions since those will obey LC_CTYPE.  Note that these
  * collations don't give a fig about multibyte characters.
  *
- * 2. When working in UTF8 encoding, we use the <wctype.h> functions.
+ * 2. PG_WCHAR_UTF32 encoding scheme:
+ *
+ * When working in UTF8 encoding, we use the <wctype.h> functions.
  * This assumes that every platform uses Unicode codepoints directly
  * as the wchar_t representation of Unicode.  On some platforms
  * wchar_t is only 16 bits wide, so we have to punt for codepoints > 0xFFFF.
  *
- * 3. In all other encodings, we use the <ctype.h> functions for pg_wchar
+ * 3. PG_WCHAR_CHAR and PG_WCHAR_CUSTOM encoding schemes:
+ *
+ * In all other encodings, we use the <ctype.h> functions for pg_wchar
  * values up to 255, and punt for values above that.  This is 100% correct
- * only in single-byte encodings such as LATINn.  However, non-Unicode
- * multibyte encodings are mostly Far Eastern character sets for which the
- * properties being tested here aren't very relevant for higher code values
- * anyway.  The difficulty with using the <wctype.h> functions with
- * non-Unicode multibyte encodings is that we can have no certainty that
- * the platform's wchar_t representation matches what we do in pg_wchar
- * conversions.
+ * only in single-byte encodings such as LATINn (PG_WCHAR_CHAR).  However,
+ * non-Unicode multibyte encodings (PG_WCHAR_CUSTOM) are all Far Eastern
+ * character sets for which the properties being tested here aren't very
+ * relevant for higher code values anyway.  The difficulty with using the
+ * <wctype.h> functions with non-Unicode multibyte encodings is that we can
+ * have no certainty that the platform's wchar_t representation matches what we
+ * do in pg_wchar conversions.  (MULE is also declared PG_WCHAR_CUSTOM but is
+ * not available as a multi-byte encoding in any known libc.)
  *
  * As a special case, in the "default" collation, (2) and (3) force ASCII
  * letters to follow ASCII upcase/downcase rules, while in a non-default
@@ -331,70 +336,75 @@ tolower_libc_mb(pg_wchar wc, pg_locale_t locale)
 		return wc;
 }
 
-static const struct ctype_methods ctype_methods_libc_sb = {
-	.strlower = strlower_libc_sb,
-	.strtitle = strtitle_libc_sb,
-	.strupper = strupper_libc_sb,
-	.wc_isdigit = wc_isdigit_libc_sb,
-	.wc_isalpha = wc_isalpha_libc_sb,
-	.wc_isalnum = wc_isalnum_libc_sb,
-	.wc_isupper = wc_isupper_libc_sb,
-	.wc_islower = wc_islower_libc_sb,
-	.wc_isgraph = wc_isgraph_libc_sb,
-	.wc_isprint = wc_isprint_libc_sb,
-	.wc_ispunct = wc_ispunct_libc_sb,
-	.wc_isspace = wc_isspace_libc_sb,
-	.wc_isxdigit = wc_isxdigit_libc_sb,
-	.char_is_cased = char_is_cased_libc,
-	.char_tolower = char_tolower_libc,
-	.wc_toupper = toupper_libc_sb,
-	.wc_tolower = tolower_libc_sb,
-	.max_chr = UCHAR_MAX,
-};
+static const struct ctype_methods ctype_methods_libc[] = {
+	[PG_WCHAR_CHAR] = {
+		.strlower = strlower_libc_sb,
+		.strtitle = strtitle_libc_sb,
+		.strupper = strupper_libc_sb,
+		.wc_isdigit = wc_isdigit_libc_sb,
+		.wc_isalpha = wc_isalpha_libc_sb,
+		.wc_isalnum = wc_isalnum_libc_sb,
+		.wc_isupper = wc_isupper_libc_sb,
+		.wc_islower = wc_islower_libc_sb,
+		.wc_isgraph = wc_isgraph_libc_sb,
+		.wc_isprint = wc_isprint_libc_sb,
+		.wc_ispunct = wc_ispunct_libc_sb,
+		.wc_isspace = wc_isspace_libc_sb,
+		.wc_isxdigit = wc_isxdigit_libc_sb,
+		.char_is_cased = char_is_cased_libc,
+		.char_tolower = char_tolower_libc,
+		.wc_toupper = toupper_libc_sb,
+		.wc_tolower = tolower_libc_sb,
+		.max_chr = UCHAR_MAX,
+	},
+	[PG_WCHAR_UTF32] = {
+		.strlower = strlower_libc_mb,
+		.strtitle = strtitle_libc_mb,
+		.strupper = strupper_libc_mb,
+		.wc_isdigit = wc_isdigit_libc_mb,
+		.wc_isalpha = wc_isalpha_libc_mb,
+		.wc_isalnum = wc_isalnum_libc_mb,
+		.wc_isupper = wc_isupper_libc_mb,
+		.wc_islower = wc_islower_libc_mb,
+		.wc_isgraph = wc_isgraph_libc_mb,
+		.wc_isprint = wc_isprint_libc_mb,
+		.wc_ispunct = wc_ispunct_libc_mb,
+		.wc_isspace = wc_isspace_libc_mb,
+		.wc_isxdigit = wc_isxdigit_libc_mb,
+		.char_is_cased = char_is_cased_libc,
+		.char_tolower = char_tolower_libc,
+		.wc_toupper = toupper_libc_mb,
+		.wc_tolower = tolower_libc_mb,
+	},
 
-/*
- * Non-UTF8 multibyte encodings use multibyte semantics for case mapping, but
- * single-byte semantics for pattern matching.
- */
-static const struct ctype_methods ctype_methods_libc_other_mb = {
-	.strlower = strlower_libc_mb,
-	.strtitle = strtitle_libc_mb,
-	.strupper = strupper_libc_mb,
-	.wc_isdigit = wc_isdigit_libc_sb,
-	.wc_isalpha = wc_isalpha_libc_sb,
-	.wc_isalnum = wc_isalnum_libc_sb,
-	.wc_isupper = wc_isupper_libc_sb,
-	.wc_islower = wc_islower_libc_sb,
-	.wc_isgraph = wc_isgraph_libc_sb,
-	.wc_isprint = wc_isprint_libc_sb,
-	.wc_ispunct = wc_ispunct_libc_sb,
-	.wc_isspace = wc_isspace_libc_sb,
-	.wc_isxdigit = wc_isxdigit_libc_sb,
-	.char_is_cased = char_is_cased_libc,
-	.char_tolower = char_tolower_libc,
-	.wc_toupper = toupper_libc_sb,
-	.wc_tolower = tolower_libc_sb,
-	.max_chr = UCHAR_MAX,
-};
-
-static const struct ctype_methods ctype_methods_libc_utf8 = {
-	.strlower = strlower_libc_mb,
-	.strtitle = strtitle_libc_mb,
-	.strupper = strupper_libc_mb,
-	.wc_isdigit = wc_isdigit_libc_mb,
-	.wc_isalpha = wc_isalpha_libc_mb,
-	.wc_isalnum = wc_isalnum_libc_mb,
-	.wc_isupper = wc_isupper_libc_mb,
-	.wc_islower = wc_islower_libc_mb,
-	.wc_isgraph = wc_isgraph_libc_mb,
-	.wc_isprint = wc_isprint_libc_mb,
-	.wc_ispunct = wc_ispunct_libc_mb,
-	.wc_isspace = wc_isspace_libc_mb,
-	.wc_isxdigit = wc_isxdigit_libc_mb,
-	.char_is_cased = char_is_cased_libc,
-	.char_tolower = char_tolower_libc,
-	.wc_toupper = toupper_libc_mb,
-	.wc_tolower = tolower_libc_mb,
+	/*
+	 * Custom pg_wchar format converted from non-UTF8 multibyte encodings use
+	 * multibyte semantics for case mapping, but single-byte semantics for
+	 * pattern matching.
+	 *
+	 * XXX Therefore this gives incorrect results for pattern matching outside
+	 * the ASCII range.  Could be fixed.
+	 */
+	[PG_WCHAR_CUSTOM] = {
+		.strlower = strlower_libc_mb,
+		.strtitle = strtitle_libc_mb,
+		.strupper = strupper_libc_mb,
+		.wc_isdigit = wc_isdigit_libc_sb,
+		.wc_isalpha = wc_isalpha_libc_sb,
+		.wc_isalnum = wc_isalnum_libc_sb,
+		.wc_isupper = wc_isupper_libc_sb,
+		.wc_islower = wc_islower_libc_sb,
+		.wc_isgraph = wc_isgraph_libc_sb,
+		.wc_isprint = wc_isprint_libc_sb,
+		.wc_ispunct = wc_ispunct_libc_sb,
+		.wc_isspace = wc_isspace_libc_sb,
+		.wc_isxdigit = wc_isxdigit_libc_sb,
+		.char_is_cased = char_is_cased_libc,
+		.char_tolower = char_tolower_libc,
+		.wc_toupper = toupper_libc_sb,
+		.wc_tolower = tolower_libc_sb,
+		.max_chr = UCHAR_MAX,
+	},
 };
 
 static const struct collate_methods collate_methods_libc = {
@@ -763,14 +773,7 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 			result->collate = &collate_methods_libc;
 	}
 	if (!result->ctype_is_c)
-	{
-		if (GetDatabaseEncoding() == PG_UTF8)
-			result->ctype = &ctype_methods_libc_utf8;
-		else if (pg_database_encoding_max_length() > 1)
-			result->ctype = &ctype_methods_libc_other_mb;
-		else
-			result->ctype = &ctype_methods_libc_sb;
-	}
+		result->ctype = &ctype_methods_libc[pg_wchar_encoding_scheme(GetDatabaseEncoding())];
 
 	return result;
 }

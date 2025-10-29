@@ -28,6 +28,55 @@
 typedef unsigned int pg_wchar;
 
 /*
+ * Encoding schemes that pg_wchar might hold.
+ *
+ * Each multi-byte encoding has a corresponding wide encoding scheme,
+ * conceptually like wchar_t in C.  Conversions to and from char should be
+ * performed by pg_mb2wchar*() and pg_wchar2mb*() functions.  In all encoding
+ * schemes, values 0-127 represent ASCII.  For higher values, see below.
+ *
+ * Locale providers make use of the known properties of these encoding schemes
+ * to implement ctype/wctype functionality.
+ */
+typedef enum PgWcharEncodingScheme
+{
+	/*
+	 * 8-bit characters in the database encoding, zero-extended to pg_wchar
+	 * width.
+	 */
+	PG_WCHAR_CHAR,
+
+	/*
+	 * 32-bit Unicode code points.  PostgreSQL assumes that all libc
+	 * implementations use UTF-32 or at least UTF-16 if wchar_t is narrow for
+	 * locales that use UTF-8 encoding for char strings, so it has a special
+	 * case for this.
+	 */
+	PG_WCHAR_UTF32,
+
+	/*
+	 * For multi-byte database encodings other than UTF-8, the encoding is
+	 * unspecified outside the ASCII range.
+	 */
+	PG_WCHAR_CUSTOM,
+
+	/*
+	 * This scheme is not currently used by any of the supported encodings,
+	 * but is included here for completeness, providing terminology.  In a few
+	 * places, pg_wchar is used to transport wchar_t in whatever unknown
+	 * encoding libc uses for the database encoding.  This is second from last
+	 * so that lookup arrays don't have to waste an entry.
+	 */
+	PG_WCHAR_SYSTEM_WCHAR_T,
+
+	/*
+	 * pg_wchar conversion is not available for the database encoding.  This
+	 * is last so that lookup arrays don't have to waste an entry.
+	 */
+	PG_WCHAR_NONE,
+} PgWcharEncodingScheme;
+
+/*
  * Maximum byte length of multibyte characters in any backend encoding
  */
 #define MAX_MULTIBYTE_CHAR_LEN	4
@@ -391,6 +440,7 @@ typedef int (*mbstr_verifier) (const unsigned char *mbstr, int len);
 
 typedef struct
 {
+	PgWcharEncodingScheme encoding_scheme;	/* pg_wchar representation */
 	mb2wchar_with_len_converter mb2wchar_with_len;	/* convert a multibyte
 													 * string to a wchar */
 	wchar2mb_with_len_converter wchar2mb_with_len;	/* convert a wchar string
@@ -713,6 +763,7 @@ extern int	SetClientEncoding(int encoding);
 extern void InitializeClientEncoding(void);
 extern int	pg_get_client_encoding(void);
 extern const char *pg_get_client_encoding_name(void);
+extern PgWcharEncodingScheme pg_wchar_encoding_scheme(int encoding);
 
 extern void SetDatabaseEncoding(int encoding);
 extern int	GetDatabaseEncoding(void);
