@@ -352,7 +352,15 @@ regc_ctype_get_cache(regc_wc_probefunc probefunc, int cclasscode)
 			pg_regex_locale->ctype->max_chr <= MAX_SIMPLE_CHR)
 		{
 			max_chr = pg_regex_locale->ctype->max_chr;
-			pcc->cv.cclasscode = -1;
+
+			/*
+			 * XXX TODO: don't turn off locales just because pg_locale_libc.c
+			 * told us it's not cool to probe arbitrary pg_wchar values over
+			 * 127!  Without this, re-encoding fails at pg_wchar 0x80, which
+			 * can't be converted back to mb (the EUC pg_wchar encoding has
+			 * holes in it)
+			 */
+			//pcc->cv.cclasscode = -1;
 		}
 		else
 			max_chr = (pg_wchar) MAX_SIMPLE_CHR;
