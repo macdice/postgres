@@ -187,55 +187,64 @@ wc_isxdigit_libc_sb(pg_wchar wc, pg_locale_t locale)
 static bool
 wc_isdigit_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswdigit_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswdigit_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_isalpha_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswalpha_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswalpha_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_isalnum_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswalnum_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswalnum_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_isupper_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswupper_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswupper_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_islower_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswlower_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswlower_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_isgraph_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswgraph_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswgraph_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_isprint_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswprint_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswprint_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_ispunct_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswpunct_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswpunct_l((wint_t) wc, locale->lt);
 }
 
 static bool
 wc_isspace_libc_mb(pg_wchar wc, pg_locale_t locale)
 {
-	return iswspace_l((wint_t) wc, locale->lt);
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
+		iswspace_l((wint_t) wc, locale->lt);
 }
 
 static bool
