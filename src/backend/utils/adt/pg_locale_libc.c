@@ -273,93 +273,53 @@ char_is_cased_libc(char ch, pg_locale_t locale)
 		return isalpha_l((unsigned char) ch, locale->lt);
 }
 
-static pg_wchar
-toupper_libc_custom(pg_wchar wc, pg_locale_t locale)
-{
-	wint_t		wint;
-
-	/* force C behavior for ASCII characters, per comments above */
-	if (locale->is_default && wc <= (pg_wchar) 127)
-		return pg_ascii_toupper((unsigned char) wc);
-	if (wc <= 127)
-		return towupper_l((wint_t) wc, locale->lt);
-	wint = pg_wchar_to_wchar_t(wc, locale);
-	if ((wint = pg_wchar_to_wchar_t(wc, locale)) != WEOF)
-		return wchar_t_to_pg_wchar(towupper_l(wint, locale->lt), locale);
-	return wc;
+#define DEFINE_WC_CASE_LIBC_CUSTOM(case) \
+static pg_wchar \
+to##case##_libc_custom(pg_wchar wc, pg_locale_t locale) \
+{ \
+	wint_t		wint; \
+	if (locale->is_default && wc <= (pg_wchar) 127) \
+		return pg_ascii_to##case((unsigned char) wc); \
+	if (wc <= 127) \
+		return to##case##_l((wint_t) wc, locale->lt); \
+	wint = pg_wchar_to_wchar_t(wc, locale); \
+	if ((wint = pg_wchar_to_wchar_t(wc, locale)) != WEOF) \
+		return wchar_t_to_pg_wchar(to##case##_l(wint, locale->lt), locale); \
+	return wc; \
 }
 
-static pg_wchar
-toupper_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	Assert(GetDatabaseEncoding() != PG_UTF8);
+DEFINE_WC_CASE_LIBC_CUSTOM(upper);
+DEFINE_WC_CASE_LIBC_CUSTOM(lower);
 
-	/* force C behavior for ASCII characters, per comments above */
-	if (locale->is_default && wc <= (pg_wchar) 127)
-		return pg_ascii_toupper((unsigned char) wc);
-	if (wc <= (pg_wchar) UCHAR_MAX)
-		return toupper_l((unsigned char) wc, locale->lt);
-	else
-		return wc;
+#define DEFINE_WC_CASE_LIBC_SB(case) \
+static pg_wchar \
+to##case##_libc_sb(pg_wchar wc, pg_locale_t locale) \
+{ \
+	if (locale->is_default && wc <= (pg_wchar) 127) \
+		return pg_ascii_to##case((unsigned char) wc); \
+	if (wc <= (pg_wchar) UCHAR_MAX) \
+		return to##case##_l((unsigned char) wc, locale->lt); \
+	else \
+		return wc; \
 }
 
-static pg_wchar
-toupper_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	Assert(GetDatabaseEncoding() == PG_UTF8);
+DEFINE_WC_CASE_LIBC_SB(upper);
+DEFINE_WC_CASE_LIBC_SB(lower);
 
-	/* force C behavior for ASCII characters, per comments above */
-	if (locale->is_default && wc <= (pg_wchar) 127)
-		return pg_ascii_toupper((unsigned char) wc);
-	if (sizeof(wchar_t) >= 4 || wc <= (pg_wchar) 0xFFFF)
-		return towupper_l((wint_t) wc, locale->lt);
-	else
-		return wc;
+#define DEFINE_WC_CASE_LIBC_UTF32(case) \
+static pg_wchar \
+to##case##_libc_utf32(pg_wchar wc, pg_locale_t locale) \
+{ \
+	if (locale->is_default && wc <= (pg_wchar) 127) \
+		return pg_ascii_to##case((unsigned char) wc); \
+	if (sizeof(wchar_t) >= 4 || wc <= (pg_wchar) 0xFFFF) \
+		return tow##case##_l((wint_t) wc, locale->lt); \
+	else \
+		return wc; \
 }
 
-static pg_wchar
-tolower_libc_custom(pg_wchar wc, pg_locale_t locale)
-{
-	wint_t		wint;
-
-	/* force C behavior for ASCII characters, per comments above */
-	if (locale->is_default && wc <= (pg_wchar) 127)
-		return pg_ascii_tolower((unsigned char) wc);
-	if (wc <= 127)
-		return towlower_l((wint_t) wc, locale->lt);
-	wint = pg_wchar_to_wchar_t(wc, locale);
-	if ((wint = pg_wchar_to_wchar_t(wc, locale)) != WEOF)
-		return wchar_t_to_pg_wchar(towlower_l(wint, locale->lt), locale);
-	return wc;
-}
-
-static pg_wchar
-tolower_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	Assert(GetDatabaseEncoding() != PG_UTF8);
-
-	/* force C behavior for ASCII characters, per comments above */
-	if (locale->is_default && wc <= (pg_wchar) 127)
-		return pg_ascii_tolower((unsigned char) wc);
-	if (wc <= (pg_wchar) UCHAR_MAX)
-		return tolower_l((unsigned char) wc, locale->lt);
-	else
-		return wc;
-}
-
-static pg_wchar
-tolower_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	Assert(GetDatabaseEncoding() == PG_UTF8);
-
-	/* force C behavior for ASCII characters, per comments above */
-	if (locale->is_default && wc <= (pg_wchar) 127)
-		return pg_ascii_tolower((unsigned char) wc);
-	if (sizeof(wchar_t) >= 4 || wc <= (pg_wchar) 0xFFFF)
-		return towlower_l((wint_t) wc, locale->lt);
-	else
-		return wc;
-}
+DEFINE_WC_CASE_LIBC_UTF32(upper);
+DEFINE_WC_CASE_LIBC_UTF32(lower);
 
 static const struct ctype_methods ctype_methods_libc[] = {
 	[PG_WCHAR_CHAR] = {
