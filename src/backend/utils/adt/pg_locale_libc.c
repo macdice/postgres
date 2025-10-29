@@ -267,70 +267,70 @@ wc_isxdigit_libc_sb(pg_wchar wc, pg_locale_t locale)
 }
 
 static bool
-wc_isdigit_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isdigit_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswdigit_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_isalpha_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isalpha_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswalpha_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_isalnum_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isalnum_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswalnum_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_isupper_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isupper_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswupper_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_islower_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_islower_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswlower_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_isgraph_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isgraph_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswgraph_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_isprint_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isprint_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswprint_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_ispunct_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_ispunct_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswpunct_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_isspace_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isspace_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
 		iswspace_l((wint_t) wc, locale->lt);
 }
 
 static bool
-wc_isxdigit_libc_mb(pg_wchar wc, pg_locale_t locale)
+wc_isxdigit_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	return iswxdigit_l((wint_t) wc, locale->lt);
 }
@@ -384,7 +384,7 @@ toupper_libc_sb(pg_wchar wc, pg_locale_t locale)
 }
 
 static pg_wchar
-toupper_libc_mb(pg_wchar wc, pg_locale_t locale)
+toupper_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 
@@ -428,7 +428,7 @@ tolower_libc_sb(pg_wchar wc, pg_locale_t locale)
 }
 
 static pg_wchar
-tolower_libc_mb(pg_wchar wc, pg_locale_t locale)
+tolower_libc_utf32(pg_wchar wc, pg_locale_t locale)
 {
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 
@@ -466,20 +466,20 @@ static const struct ctype_methods ctype_methods_libc[] = {
 		.strlower = strlower_libc_mb,
 		.strtitle = strtitle_libc_mb,
 		.strupper = strupper_libc_mb,
-		.wc_isdigit = wc_isdigit_libc_mb,
-		.wc_isalpha = wc_isalpha_libc_mb,
-		.wc_isalnum = wc_isalnum_libc_mb,
-		.wc_isupper = wc_isupper_libc_mb,
-		.wc_islower = wc_islower_libc_mb,
-		.wc_isgraph = wc_isgraph_libc_mb,
-		.wc_isprint = wc_isprint_libc_mb,
-		.wc_ispunct = wc_ispunct_libc_mb,
-		.wc_isspace = wc_isspace_libc_mb,
-		.wc_isxdigit = wc_isxdigit_libc_mb,
+		.wc_isdigit = wc_isdigit_libc_utf32,
+		.wc_isalpha = wc_isalpha_libc_utf32,
+		.wc_isalnum = wc_isalnum_libc_utf32,
+		.wc_isupper = wc_isupper_libc_utf32,
+		.wc_islower = wc_islower_libc_utf32,
+		.wc_isgraph = wc_isgraph_libc_utf32,
+		.wc_isprint = wc_isprint_libc_utf32,
+		.wc_ispunct = wc_ispunct_libc_utf32,
+		.wc_isspace = wc_isspace_libc_utf32,
+		.wc_isxdigit = wc_isxdigit_libc_utf32,
 		.char_is_cased = char_is_cased_libc,
 		.char_tolower = char_tolower_libc,
-		.wc_toupper = toupper_libc_mb,
-		.wc_tolower = tolower_libc_mb,
+		.wc_toupper = toupper_libc_utf32,
+		.wc_tolower = tolower_libc_utf32,
 	},
 
 	/*
