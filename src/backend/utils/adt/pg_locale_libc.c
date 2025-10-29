@@ -206,134 +206,54 @@ DEFINE_WC_CTYPE_LIBC_CUSTOM(punct);
 DEFINE_WC_CTYPE_LIBC_CUSTOM(space);
 DEFINE_WC_CTYPE_LIBC_CUSTOM(xdigit);
 
-static bool
-wc_isdigit_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isdigit_l((unsigned char) wc, locale->lt);
+/*
+ * Generate a function that passes single-byte characters directly to <ctype.h>
+ * functions.  This is suitable for PG_WCHAR_CHAR encodings, where pg_wchar
+ * holds a one byte.
+ */
+#define DEFINE_WC_CTYPE_LIBC_SB(ctype) \
+static bool \
+wc_is##ctype##_libc_sb(pg_wchar wc, pg_locale_t locale) \
+{ \
+	return is##ctype##_l((unsigned char) wc, locale->lt); \
 }
 
-static bool
-wc_isalpha_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isalpha_l((unsigned char) wc, locale->lt);
+DEFINE_WC_CTYPE_LIBC_SB(digit);
+DEFINE_WC_CTYPE_LIBC_SB(alpha);
+DEFINE_WC_CTYPE_LIBC_SB(alnum);
+DEFINE_WC_CTYPE_LIBC_SB(upper);
+DEFINE_WC_CTYPE_LIBC_SB(lower);
+DEFINE_WC_CTYPE_LIBC_SB(graph);
+DEFINE_WC_CTYPE_LIBC_SB(print);
+DEFINE_WC_CTYPE_LIBC_SB(punct);
+DEFINE_WC_CTYPE_LIBC_SB(space);
+DEFINE_WC_CTYPE_LIBC_SB(xdigit);
+
+/*
+ * Generate a function that passes UTF-32 characters directly to <wctype.h>
+ * functions, This is suitable for PG_WCHAR_UTF32 encodings, with the
+ * assumption that any libc locale that uses UTF-8 as its char encoding must
+ * use UTF-32 or UTF-16 for its wchar_t encoding.  For the UTF-16 case, just
+ * return false for codepoints outside the BMP.
+ */
+#define DEFINE_WC_CTYPE_LIBC_UTF32(ctype) \
+static bool \
+wc_is##ctype##_libc_utf32(pg_wchar wc, pg_locale_t locale) \
+{ \
+	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) && \
+		isw##ctype##_l((wint_t) wc, locale->lt); \
 }
 
-static bool
-wc_isalnum_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isalnum_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_isupper_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isupper_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_islower_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return islower_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_isgraph_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isgraph_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_isprint_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isprint_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_ispunct_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return ispunct_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_isspace_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isspace_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_isxdigit_libc_sb(pg_wchar wc, pg_locale_t locale)
-{
-	return isxdigit_l((unsigned char) wc, locale->lt);
-}
-
-static bool
-wc_isdigit_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswdigit_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_isalpha_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswalpha_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_isalnum_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswalnum_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_isupper_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswupper_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_islower_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswlower_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_isgraph_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswgraph_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_isprint_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswprint_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_ispunct_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswpunct_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_isspace_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return (sizeof(wchar_t) >= 4 || wc <= 0xffff) &&
-		iswspace_l((wint_t) wc, locale->lt);
-}
-
-static bool
-wc_isxdigit_libc_utf32(pg_wchar wc, pg_locale_t locale)
-{
-	return iswxdigit_l((wint_t) wc, locale->lt);
-}
+DEFINE_WC_CTYPE_LIBC_UTF32(digit);
+DEFINE_WC_CTYPE_LIBC_UTF32(alpha);
+DEFINE_WC_CTYPE_LIBC_UTF32(alnum);
+DEFINE_WC_CTYPE_LIBC_UTF32(upper);
+DEFINE_WC_CTYPE_LIBC_UTF32(lower);
+DEFINE_WC_CTYPE_LIBC_UTF32(graph);
+DEFINE_WC_CTYPE_LIBC_UTF32(print);
+DEFINE_WC_CTYPE_LIBC_UTF32(punct);
+DEFINE_WC_CTYPE_LIBC_UTF32(space);
+DEFINE_WC_CTYPE_LIBC_UTF32(xdigit);
 
 static char
 char_tolower_libc(unsigned char ch, pg_locale_t locale)
