@@ -114,26 +114,6 @@ fi])# PGAC_TYPE_128BIT_INT
 
 
 
-# PGAC_C_STATIC_ASSERT
-# --------------------
-# Check if the C compiler understands _Static_assert(),
-# and define HAVE__STATIC_ASSERT if so.
-#
-# We actually check the syntax ({ _Static_assert(...) }), because we need
-# gcc-style compound expressions to be able to wrap the thing into macros.
-AC_DEFUN([PGAC_C_STATIC_ASSERT],
-[AC_CACHE_CHECK(for _Static_assert, pgac_cv__static_assert,
-[AC_LINK_IFELSE([AC_LANG_PROGRAM([],
-[({ _Static_assert(1, "foo"); })])],
-[pgac_cv__static_assert=yes],
-[pgac_cv__static_assert=no])])
-if test x"$pgac_cv__static_assert" = xyes ; then
-AC_DEFINE(HAVE__STATIC_ASSERT, 1,
-          [Define to 1 if your compiler understands _Static_assert.])
-fi])# PGAC_C_STATIC_ASSERT
-
-
-
 # PGAC_C_TYPEOF
 # -------------
 # Check if the C compiler understands typeof or a variant.  Define
