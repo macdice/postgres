@@ -89,16 +89,16 @@ populate_compact_attribute_internal(Form_pg_attribute src,
 	switch (src->attalign)
 	{
 		case TYPALIGN_INT:
-			dst->attalignby = ALIGNOF_INT;
+			dst->attalignby = alignof(int);
 			break;
 		case TYPALIGN_CHAR:
-			dst->attalignby = sizeof(char);
+			dst->attalignby = alignof(char);
 			break;
 		case TYPALIGN_DOUBLE:
-			dst->attalignby = ALIGNOF_DOUBLE;
+			dst->attalignby = alignof(double);
 			break;
 		case TYPALIGN_SHORT:
-			dst->attalignby = ALIGNOF_SHORT;
+			dst->attalignby = alignof(short);
 			break;
 		default:
 			dst->attalignby = 0;

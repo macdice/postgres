@@ -3,24 +3,6 @@
 /* Define if building universal (internal helper macro) */
 #undef AC_APPLE_UNIVERSAL_BUILD
 
-/* The normal alignment of `double', in bytes. */
-#undef ALIGNOF_DOUBLE
-
-/* The normal alignment of `int', in bytes. */
-#undef ALIGNOF_INT
-
-/* The normal alignment of `int64_t', in bytes. */
-#undef ALIGNOF_INT64_T
-
-/* The normal alignment of `long', in bytes. */
-#undef ALIGNOF_LONG
-
-/* The normal alignment of `PG_INT128_TYPE', in bytes. */
-#undef ALIGNOF_PG_INT128_TYPE
-
-/* The normal alignment of `short', in bytes. */
-#undef ALIGNOF_SHORT
-
 /* Size of a disk block --- this also limits the size of a tuple. You can set
    it bigger if you need bigger tuples (although TOAST should reduce the need
    to have large tuples, since fields can be spread across multiple tuples).
@@ -561,9 +543,6 @@
 
 /* Define to 1 if you have __get_cpuid_count. */
 #undef HAVE__GET_CPUID_COUNT
-
-/* Define as the maximum alignment requirement of any C data type. */
-#undef MAXIMUM_ALIGNOF
 
 /* Define bytes to use libc memset(). */
 #undef MEMSET_LOOP_LIMIT

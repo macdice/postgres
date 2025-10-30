@@ -4459,7 +4459,7 @@ ReadControlFile(void)
 				 errmsg("database files are incompatible with server"),
 		/* translator: %s is a variable name and %d is its value */
 				 errdetail("The database cluster was initialized with %s %d,"
-						   " but the server was compiled with %s %d.",
+						   " but the server was compiled with %s %zu.",
 						   "MAXALIGN", ControlFile->maxAlign,
 						   "MAXALIGN", MAXIMUM_ALIGNOF),
 				 errhint("It looks like you need to initdb.")));

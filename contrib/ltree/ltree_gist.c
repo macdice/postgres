@@ -728,7 +728,7 @@ ltree_gist_relopts_validator(void *parsed_options, relopt_value *vals,
 	if (options->siglen != INTALIGN(options->siglen))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("siglen value must be a multiple of %d", ALIGNOF_INT)));
+				 errmsg("siglen value must be a multiple of %zu", alignof(int))));
 }
 
 Datum

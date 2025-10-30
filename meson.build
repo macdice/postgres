@@ -1734,35 +1734,6 @@ if host_machine.endian() == 'big'
   cdata.set('WORDS_BIGENDIAN', 1)
 endif
 
-# Determine memory alignment requirements for the basic C data types.
-
-alignof_types = ['short', 'int', 'long', 'double']
-foreach t : alignof_types
-  align = cc.alignment(t, args: test_c_args)
-  cdata.set('ALIGNOF_@0@'.format(t.to_upper()), align)
-endforeach
-
-# Compute maximum alignment of any basic type.
-#
-# We require 'double' to have the strictest alignment among the basic types,
-# because otherwise the C ABI might impose 8-byte alignment on some of the
-# other C types that correspond to TYPALIGN_DOUBLE SQL types.  That could
-# cause a mismatch between the tuple layout and the C struct layout of a
-# catalog tuple.  We used to carefully order catalog columns such that any
-# fixed-width, attalign=4 columns were at offsets divisible by 8 regardless
-# of MAXIMUM_ALIGNOF to avoid that, but we no longer support any platforms
-# where TYPALIGN_DOUBLE != MAXIMUM_ALIGNOF.
-#
-# We assume without checking that int64_t's alignment is at least as strong
-# as long, char, short, or int.  Note that we intentionally do not consider
-# any types wider than 64 bits, as allowing MAXIMUM_ALIGNOF to exceed 8
-# would be too much of a penalty for disk and memory space.
-alignof_double = cdata.get('ALIGNOF_DOUBLE')
-if cc.alignment('int64_t', args: test_c_args, prefix: '#include <stdint.h>') > alignof_double
-  error('alignment of int64_t is greater than the alignment of double')
-endif
-cdata.set('MAXIMUM_ALIGNOF', alignof_double)
-
 cdata.set('SIZEOF_LONG', cc.sizeof('long', args: test_c_args))
 cdata.set('SIZEOF_LONG_LONG', cc.sizeof('long long', args: test_c_args))
 cdata.set('SIZEOF_VOID_P', cc.sizeof('void *', args: test_c_args))
@@ -1803,7 +1774,6 @@ if cc.links('''
   name: '__int128',
   args: test_c_args)
   cdata.set('PG_INT128_TYPE', '__int128')
-  cdata.set('ALIGNOF_PG_INT128_TYPE', cc.alignment('__int128', args: test_c_args))
 endif
 
 

@@ -768,6 +768,29 @@ typedef NameData *Name;
  */
 #define lengthof(array) (sizeof (array) / sizeof ((array)[0]))
 
+/*
+ * Compute maximum alignment of any basic type.
+ *
+ * We require 'double' to have the strictest alignment among the basic types,
+ * because otherwise the C ABI might impose 8-byte alignment on some of the
+ * other C types that correspond to TYPALIGN_DOUBLE SQL types.  That could
+ * cause a mismatch between the tuple layout and the C struct layout of a
+ * catalog tuple.  We used to carefully order catalog columns such that any
+ * fixed-width, attalign=4 columns were at offsets divisible by 8 regardless
+ * of MAXIMUM_ALIGNOF to avoid that, but we no longer support any platforms
+ * where alignof(double) != MAXIMUM_ALIGNOF.
+ *
+ * We assume without checking that int64_t's alignment is at least as strong
+ * as long, char, short, or int.  Note that we intentionally do not consider
+ * any types wider than 64 bits, as allowing MAXIMUM_ALIGNOF to exceed 8
+ * would be too much of a penalty for disk and memory space.
+ */
+
+static_assert(alignof(uint64_t) <= alignof(double),
+			  "alignment of int64_t is greater than the alignment of double");
+
+#define MAXIMUM_ALIGNOF			alignof(double)
+
 /* ----------------
  * Alignment macros: align a length or address appropriately for a given type.
  * The fooALIGN() macros round up to a multiple of the required alignment,
@@ -785,10 +808,10 @@ typedef NameData *Name;
 #define TYPEALIGN(ALIGNVAL,LEN)  \
 	(((uintptr_t) (LEN) + ((ALIGNVAL) - 1)) & ~((uintptr_t) ((ALIGNVAL) - 1)))
 
-#define SHORTALIGN(LEN)			TYPEALIGN(ALIGNOF_SHORT, (LEN))
-#define INTALIGN(LEN)			TYPEALIGN(ALIGNOF_INT, (LEN))
-#define LONGALIGN(LEN)			TYPEALIGN(ALIGNOF_LONG, (LEN))
-#define DOUBLEALIGN(LEN)		TYPEALIGN(ALIGNOF_DOUBLE, (LEN))
+#define SHORTALIGN(LEN)			TYPEALIGN(alignof(short), (LEN))
+#define INTALIGN(LEN)			TYPEALIGN(alignof(int), (LEN))
+#define LONGALIGN(LEN)			TYPEALIGN(alignof(long), (LEN))
+#define DOUBLEALIGN(LEN)		TYPEALIGN(alignof(double), (LEN))
 #define MAXALIGN(LEN)			TYPEALIGN(MAXIMUM_ALIGNOF, (LEN))
 /* MAXALIGN covers only built-in types, not buffers */
 #define BUFFERALIGN(LEN)		TYPEALIGN(ALIGNOF_BUFFER, (LEN))
@@ -797,10 +820,10 @@ typedef NameData *Name;
 #define TYPEALIGN_DOWN(ALIGNVAL,LEN)  \
 	(((uintptr_t) (LEN)) & ~((uintptr_t) ((ALIGNVAL) - 1)))
 
-#define SHORTALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_SHORT, (LEN))
-#define INTALIGN_DOWN(LEN)		TYPEALIGN_DOWN(ALIGNOF_INT, (LEN))
-#define LONGALIGN_DOWN(LEN)		TYPEALIGN_DOWN(ALIGNOF_LONG, (LEN))
-#define DOUBLEALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_DOUBLE, (LEN))
+#define SHORTALIGN_DOWN(LEN)	TYPEALIGN_DOWN(alignof(short), (LEN))
+#define INTALIGN_DOWN(LEN)		TYPEALIGN_DOWN(alignof(int), (LEN))
+#define LONGALIGN_DOWN(LEN)		TYPEALIGN_DOWN(alignof(long), (LEN))
+#define DOUBLEALIGN_DOWN(LEN)	TYPEALIGN_DOWN(alignof(double), (LEN))
 #define MAXALIGN_DOWN(LEN)		TYPEALIGN_DOWN(MAXIMUM_ALIGNOF, (LEN))
 #define BUFFERALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_BUFFER, (LEN))
 
@@ -1057,8 +1080,8 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
  * holding a page buffer, if that page might be accessed as a page.  Otherwise
  * the variable might be under-aligned, causing problems on alignment-picky
  * hardware.  We include both "double" and "int64" in the union to ensure that
- * the compiler knows the value must be MAXALIGN'ed (cf. configure's
- * computation of MAXIMUM_ALIGNOF).
+ * the compiler knows the value must be MAXALIGN'ed (cf. definition of
+ * MAXIMUM_ALIGNOF).
  */
 typedef union PGAlignedBlock
 {

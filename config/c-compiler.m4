@@ -41,8 +41,7 @@ ac_c_werror_flag=$ac_save_c_werror_flag
 # PGAC_TYPE_128BIT_INT
 # --------------------
 # Check if __int128 is a working 128 bit integer type, and if so
-# define PG_INT128_TYPE to that typename, and define ALIGNOF_PG_INT128_TYPE
-# as its alignment requirement.
+# define PG_INT128_TYPE to that typename.
 #
 # This currently only detects a GCC/clang extension, but support for other
 # environments may be added in the future.
@@ -77,7 +76,6 @@ if (d != a+1)
 [pgac_cv__128bit_int=no])])
 if test x"$pgac_cv__128bit_int" = yes ; then
   AC_DEFINE(PG_INT128_TYPE, __int128, [Define to the name of a signed 128-bit integer type.])
-  AC_CHECK_ALIGNOF(PG_INT128_TYPE)
 fi
 fi])# PGAC_TYPE_128BIT_INT
 

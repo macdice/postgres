@@ -1988,40 +1988,6 @@ AC_CHECK_SIZEOF([size_t])
 AC_CHECK_SIZEOF([long])
 AC_CHECK_SIZEOF([long long])
 
-# Determine memory alignment requirements for the basic C data types.
-
-AC_CHECK_ALIGNOF(short)
-AC_CHECK_ALIGNOF(int)
-AC_CHECK_ALIGNOF(long)
-AC_CHECK_ALIGNOF(int64_t)
-AC_CHECK_ALIGNOF(double)
-
-# Compute maximum alignment of any basic type.
-#
-# We require 'double' to have the strictest alignment among the basic types,
-# because otherwise the C ABI might impose 8-byte alignment on some of the
-# other C types that correspond to TYPALIGN_DOUBLE SQL types.  That could
-# cause a mismatch between the tuple layout and the C struct layout of a
-# catalog tuple.  We used to carefully order catalog columns such that any
-# fixed-width, attalign=4 columns were at offsets divisible by 8 regardless
-# of MAXIMUM_ALIGNOF to avoid that, but we no longer support any platforms
-# where TYPALIGN_DOUBLE != MAXIMUM_ALIGNOF.
-#
-# We assume without checking that long's alignment is at least as strong as
-# char, short, or int.  Note that we intentionally do not consider any types
-# wider than 64 bits, as allowing MAXIMUM_ALIGNOF to exceed 8 would be too
-# much of a penalty for disk and memory space.
-
-MAX_ALIGNOF=$ac_cv_alignof_double
-
-if test $ac_cv_alignof_long -gt $MAX_ALIGNOF ; then
-  AC_MSG_ERROR([alignment of 'long' is greater than the alignment of 'double'])
-fi
-if test $ac_cv_alignof_int64_t -gt $MAX_ALIGNOF ; then
-  AC_MSG_ERROR([alignment of 'int64_t' is greater than the alignment of 'double'])
-fi
-AC_DEFINE_UNQUOTED(MAXIMUM_ALIGNOF, $MAX_ALIGNOF, [Define as the maximum alignment requirement of any C data type.])
-
 # Some compilers offer a 128-bit integer scalar type.
 PGAC_TYPE_128BIT_INT
 
