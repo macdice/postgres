@@ -297,9 +297,9 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		shm_toc_estimate_keys(&pcxt->estimator, 12);
 
 		/* Estimate space need for error queues. */
-		StaticAssertStmt(BUFFERALIGN(PARALLEL_ERROR_QUEUE_SIZE) ==
+		StaticAssertStmt(MAXATOMICALIGN(PARALLEL_ERROR_QUEUE_SIZE) ==
 						 PARALLEL_ERROR_QUEUE_SIZE,
-						 "parallel error queue size not buffer-aligned");
+						 "parallel error queue size not aligned for atomics");
 		shm_toc_estimate_chunk(&pcxt->estimator,
 							   mul_size(PARALLEL_ERROR_QUEUE_SIZE,
 										pcxt->nworkers));

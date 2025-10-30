@@ -110,11 +110,11 @@ typedef struct BrinShared
 /*
  * Return pointer to a BrinShared's parallel table scan.
  *
- * c.f. shm_toc_allocate as to why BUFFERALIGN is used, rather than just
+ * c.f. shm_toc_allocate as to why MAXATOMICALIGN is used, rather than just
  * MAXALIGN.
  */
 #define ParallelTableScanFromBrinShared(shared) \
-	(ParallelTableScanDesc) ((char *) (shared) + BUFFERALIGN(sizeof(BrinShared)))
+	(ParallelTableScanDesc) ((char *) (shared) + MAXATOMICALIGN(sizeof(BrinShared)))
 
 /*
  * Status for leader in parallel index build.
@@ -2766,8 +2766,8 @@ _brin_parallel_merge(BrinBuildState *state)
 static Size
 _brin_parallel_estimate_shared(Relation heap, Snapshot snapshot)
 {
-	/* c.f. shm_toc_allocate as to why BUFFERALIGN is used */
-	return add_size(BUFFERALIGN(sizeof(BrinShared)),
+	/* c.f. shm_toc_allocate as to why MAXATOMICALIGN is used */
+	return add_size(MAXATOMICALIGN(sizeof(BrinShared)),
 					table_parallelscan_estimate(heap, snapshot));
 }
 

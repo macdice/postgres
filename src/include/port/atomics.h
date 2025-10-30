@@ -118,6 +118,16 @@
 
 
 /*
+ * Alignment macros for the largest supported atomic type size.  These are
+ * intended for code that allocates shared memory for unknown contents,
+ * possibly including atomics.  On some 32-bit platforms, atomics may have a
+ * stricter alignment than the basic types covered by MAXALIGN().
+ */
+#define MAXATOMICALIGN(LEN)      TYPEALIGN(alignof(pg_atomic_uint64), (LEN))
+#define MAXATOMICALIGN_DOWN(LEN) TYPEALIGN_DOWN(alignof(pg_atomic_uint64), (LEN))
+
+
+/*
  * pg_compiler_barrier - prevent the compiler from moving code across
  *
  * A compiler barrier need not (and preferably should not) emit any actual

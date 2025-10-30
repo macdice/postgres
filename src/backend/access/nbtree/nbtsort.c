@@ -156,11 +156,11 @@ typedef struct BTShared
 /*
  * Return pointer to a BTShared's parallel table scan.
  *
- * c.f. shm_toc_allocate as to why BUFFERALIGN is used, rather than just
+ * c.f. shm_toc_allocate as to why MAXATOMICALIGN is used, rather than just
  * MAXALIGN.
  */
 #define ParallelTableScanFromBTShared(shared) \
-	(ParallelTableScanDesc) ((char *) (shared) + BUFFERALIGN(sizeof(BTShared)))
+	(ParallelTableScanDesc) ((char *) (shared) + MAXATOMICALIGN(sizeof(BTShared)))
 
 /*
  * Status for leader in parallel index build.
@@ -1633,8 +1633,8 @@ _bt_end_parallel(BTLeader *btleader)
 static Size
 _bt_parallel_estimate_shared(Relation heap, Snapshot snapshot)
 {
-	/* c.f. shm_toc_allocate as to why BUFFERALIGN is used */
-	return add_size(BUFFERALIGN(sizeof(BTShared)),
+	/* c.f. shm_toc_allocate as to why MAXATOMICALIGN is used */
+	return add_size(MAXATOMICALIGN(sizeof(BTShared)),
 					table_parallelscan_estimate(heap, snapshot));
 }
 

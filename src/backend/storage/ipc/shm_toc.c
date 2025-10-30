@@ -47,9 +47,9 @@ shm_toc_create(uint64 magic, void *address, Size nbytes)
 
 	/*
 	 * The alignment code in shm_toc_allocate() assumes that the starting
-	 * value is buffer-aligned.
+	 * value is suitably aligned for atomics.
 	 */
-	toc->toc_total_bytes = BUFFERALIGN_DOWN(nbytes);
+	toc->toc_total_bytes = MAXATOMICALIGN_DOWN(nbytes);
 	toc->toc_allocated_bytes = 0;
 	toc->toc_nentry = 0;
 
@@ -94,12 +94,10 @@ shm_toc_allocate(shm_toc *toc, Size nbytes)
 	Size		toc_bytes;
 
 	/*
-	 * Make sure request is well-aligned.  XXX: MAXALIGN is not enough,
-	 * because atomic ops might need a wider alignment.  We don't have a
-	 * proper definition for the minimum to make atomic ops safe, but
-	 * BUFFERALIGN ought to be enough.
+	 * Make sure request is well-aligned.  MAXALIGN is not enough, because
+	 * atomic types might need a wider alignment on 32-bit systems.
 	 */
-	nbytes = BUFFERALIGN(nbytes);
+	nbytes = MAXATOMICALIGN(nbytes);
 
 	SpinLockAcquire(&toc->toc_mutex);
 
@@ -143,8 +141,9 @@ shm_toc_freespace(shm_toc *toc)
 	SpinLockRelease(&toc->toc_mutex);
 
 	toc_bytes = offsetof(shm_toc, toc_entry) + nentry * sizeof(shm_toc_entry);
-	Assert(allocated_bytes + BUFFERALIGN(toc_bytes) <= total_bytes);
-	return total_bytes - (allocated_bytes + BUFFERALIGN(toc_bytes));
+	toc_bytes = MAXATOMICALIGN(toc_bytes);
+	Assert(allocated_bytes + toc_bytes <= total_bytes);
+	return total_bytes - (allocated_bytes + toc_bytes);
 }
 
 /*
@@ -268,5 +267,5 @@ shm_toc_estimate(shm_toc_estimator *e)
 	sz = add_size(sz, mul_size(e->number_of_keys, sizeof(shm_toc_entry)));
 	sz = add_size(sz, e->space_for_chunks);
 
-	return BUFFERALIGN(sz);
+	return MAXATOMICALIGN(sz);
 }

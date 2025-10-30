@@ -101,14 +101,6 @@
 #define BITS_PER_BYTE		8
 
 /*
- * Preferred alignment for disk I/O buffers.  On some CPUs, copies between
- * user space and kernel space are significantly faster if the user buffer
- * is aligned on a larger-than-MAXALIGN boundary.  Ideally this should be
- * a platform-dependent value, but for now we just hard-wire it.
- */
-#define ALIGNOF_BUFFER	32
-
-/*
  * If EXEC_BACKEND is defined, the postmaster uses an alternative method for
  * starting subprocesses: Instead of simply using fork(), as is standard on
  * Unix platforms, it uses fork()+exec() or something equivalent on Windows,

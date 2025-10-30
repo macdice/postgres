@@ -217,7 +217,7 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
 
-	return BUFFERALIGN(sz) + BLCKSZ * nslots;
+	return MAXATOMICALIGN(sz) + BLCKSZ * nslots;
 }
 
 /*
@@ -307,7 +307,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 			offset += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));
 		}
 
-		ptr += BUFFERALIGN(offset);
+		ptr += MAXATOMICALIGN(offset);
 		for (int slotno = 0; slotno < nslots; slotno++)
 		{
 			LWLockInitialize(&shared->buffer_locks[slotno].lock,

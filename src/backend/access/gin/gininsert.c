@@ -98,11 +98,11 @@ typedef struct GinBuildShared
 /*
  * Return pointer to a GinBuildShared's parallel table scan.
  *
- * c.f. shm_toc_allocate as to why BUFFERALIGN is used, rather than just
+ * c.f. shm_toc_allocate as to why MAXATOMICALIGN is used, rather than just
  * MAXALIGN.
  */
 #define ParallelTableScanFromGinBuildShared(shared) \
-	(ParallelTableScanDesc) ((char *) (shared) + BUFFERALIGN(sizeof(GinBuildShared)))
+	(ParallelTableScanDesc) ((char *) (shared) + MAXATOMICALIGN(sizeof(GinBuildShared)))
 
 /*
  * Status for leader in parallel index build.
@@ -1778,8 +1778,8 @@ _gin_parallel_merge(GinBuildState *state)
 static Size
 _gin_parallel_estimate_shared(Relation heap, Snapshot snapshot)
 {
-	/* c.f. shm_toc_allocate as to why BUFFERALIGN is used */
-	return add_size(BUFFERALIGN(sizeof(GinBuildShared)),
+	/* c.f. shm_toc_allocate as to why MAXATOMICALIGN is used */
+	return add_size(MAXATOMICALIGN(sizeof(GinBuildShared)),
 					table_parallelscan_estimate(heap, snapshot));
 }
 

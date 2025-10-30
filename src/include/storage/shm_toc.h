@@ -49,7 +49,7 @@ typedef struct
 #define shm_toc_initialize_estimator(e) \
 	((e)->space_for_chunks = 0, (e)->number_of_keys = 0)
 #define shm_toc_estimate_chunk(e, sz) \
-	((e)->space_for_chunks = add_size((e)->space_for_chunks, BUFFERALIGN(sz)))
+	((e)->space_for_chunks = add_size((e)->space_for_chunks, MAXATOMICALIGN(sz)))
 #define shm_toc_estimate_keys(e, cnt) \
 	((e)->number_of_keys = add_size((e)->number_of_keys, cnt))
 

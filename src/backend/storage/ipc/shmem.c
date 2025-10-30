@@ -203,6 +203,9 @@ ShmemAllocRaw(Size size, Size *allocated_size)
 	size = CACHELINEALIGN(size);
 	*allocated_size = size;
 
+	/* Should therefore also be well aligned for atomics. */
+	Assert(MAXATOMICALIGN(size) == size);
+
 	Assert(ShmemSegHdr != NULL);
 
 	SpinLockAcquire(ShmemLock);
@@ -222,6 +225,7 @@ ShmemAllocRaw(Size size, Size *allocated_size)
 
 	/* note this assert is okay with newSpace == NULL */
 	Assert(newSpace == (void *) CACHELINEALIGN(newSpace));
+	Assert(newSpace == (void *) MAXATOMICALIGN(newSpace));
 
 	return newSpace;
 }

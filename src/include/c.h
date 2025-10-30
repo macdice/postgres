@@ -814,7 +814,6 @@ static_assert(alignof(uint64_t) <= alignof(double),
 #define DOUBLEALIGN(LEN)		TYPEALIGN(alignof(double), (LEN))
 #define MAXALIGN(LEN)			TYPEALIGN(MAXIMUM_ALIGNOF, (LEN))
 /* MAXALIGN covers only built-in types, not buffers */
-#define BUFFERALIGN(LEN)		TYPEALIGN(ALIGNOF_BUFFER, (LEN))
 #define CACHELINEALIGN(LEN)		TYPEALIGN(PG_CACHE_LINE_SIZE, (LEN))
 
 #define TYPEALIGN_DOWN(ALIGNVAL,LEN)  \
@@ -825,7 +824,6 @@ static_assert(alignof(uint64_t) <= alignof(double),
 #define LONGALIGN_DOWN(LEN)		TYPEALIGN_DOWN(alignof(long), (LEN))
 #define DOUBLEALIGN_DOWN(LEN)	TYPEALIGN_DOWN(alignof(double), (LEN))
 #define MAXALIGN_DOWN(LEN)		TYPEALIGN_DOWN(MAXIMUM_ALIGNOF, (LEN))
-#define BUFFERALIGN_DOWN(LEN)	TYPEALIGN_DOWN(ALIGNOF_BUFFER, (LEN))
 
 /*
  * The above macros will not work with types wider than uintptr_t, like with
