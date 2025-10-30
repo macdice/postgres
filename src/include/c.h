@@ -150,19 +150,16 @@
  * We can't use the standard name "noreturn" because some third-party code
  * uses __attribute__((noreturn)) in headers, which would get confused if
  * "noreturn" is defined to "_Noreturn", as is done by <stdnoreturn.h>.
+ * We can use it for C23 and C++ though, because there it's a keyword.
  *
  * In a declaration, function specifiers go before the function name.  The
- * common style is to put them before the return type.  (The MSVC fallback has
- * the same requirement.  The GCC fallback is more flexible.)
+ * common style is to put them before the return type.
  */
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-#define pg_noreturn _Noreturn
-#elif defined(__GNUC__)
-#define pg_noreturn __attribute__((noreturn))
-#elif defined(_MSC_VER)
-#define pg_noreturn __declspec(noreturn)
+#if defined(__cplusplus__) || \
+	(defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
+#define pg_noreturn noreturn
 #else
-#define pg_noreturn
+#define pg_noreturn _Noreturn
 #endif
 
 /*
