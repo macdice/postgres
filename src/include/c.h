@@ -61,6 +61,7 @@
 /* System header files that should be available everywhere in Postgres */
 #include <assert.h>
 #include <inttypes.h>
+#include <stdalign.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -230,23 +231,17 @@
 #define pg_attribute_printf(f,a)
 #endif
 
-/* GCC supports aligned and packed */
+/* GCC supports packed */
 #if defined(__GNUC__)
-#define pg_attribute_aligned(a) __attribute__((aligned(a)))
 #define pg_attribute_packed() __attribute__((packed))
-#elif defined(_MSC_VER)
-/*
- * MSVC supports aligned.
- *
- * Packing is also possible but only by wrapping the entire struct definition
- * which doesn't fit into our current macro declarations.
- */
-#define pg_attribute_aligned(a) __declspec(align(a))
 #else
 /*
- * NB: aligned and packed are not given default definitions because they
- * affect code functionality; they *must* be implemented by the compiler
- * if they are to be used.
+ * MSVC supports packing, but only by wrapping the entire struct definition
+ * which doesn't fit into our current macro declarations.
+ *
+ * NB: packed not given default definitions because it affect code
+ * functionality; they *must* be implemented by the compiler if they are to be
+ * used.
  */
 #endif
 
@@ -559,26 +554,15 @@ typedef uint32 bits32;			/* >= 32 bits */
  *		There currently is only limited support for such types.
  *		E.g. 128bit literals and snprintf are not supported; but math is.
  *		Also, because we exclude such types when choosing MAXIMUM_ALIGNOF,
- *		it must be possible to coerce the compiler to allocate them on no
- *		more than MAXALIGN boundaries.
+ *		palloc_aligned() must be used, and struct layout must be considered
+ *		carefully.
  */
 #if defined(PG_INT128_TYPE)
-#if defined(pg_attribute_aligned) || ALIGNOF_PG_INT128_TYPE <= MAXIMUM_ALIGNOF
 #define HAVE_INT128 1
 
-typedef PG_INT128_TYPE int128
-#if defined(pg_attribute_aligned)
-			pg_attribute_aligned(MAXIMUM_ALIGNOF)
-#endif
-		   ;
+typedef PG_INT128_TYPE int128;
+typedef unsigned PG_INT128_TYPE uint128;
 
-typedef unsigned PG_INT128_TYPE uint128
-#if defined(pg_attribute_aligned)
-			pg_attribute_aligned(MAXIMUM_ALIGNOF)
-#endif
-		   ;
-
-#endif
 #endif
 
 /* Historical names for limits in <stdint.h>. */
@@ -1093,9 +1077,7 @@ typedef union PGAlignedBlock
  */
 typedef union PGIOAlignedBlock
 {
-#ifdef pg_attribute_aligned
-	pg_attribute_aligned(PG_IO_ALIGN_SIZE)
-#endif
+	alignas(PG_IO_ALIGN_SIZE)
 	char		data[BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
@@ -1104,9 +1086,7 @@ typedef union PGIOAlignedBlock
 /* Same, but for an XLOG_BLCKSZ-sized buffer */
 typedef union PGAlignedXLogBlock
 {
-#ifdef pg_attribute_aligned
-	pg_attribute_aligned(PG_IO_ALIGN_SIZE)
-#endif
+	alignas(PG_IO_ALIGN_SIZE)
 	char		data[XLOG_BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;

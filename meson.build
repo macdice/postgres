@@ -1802,51 +1802,8 @@ if cc.links('''
   }''',
   name: '__int128',
   args: test_c_args)
-
-  buggy_int128 = false
-
-  # Use of non-default alignment with __int128 tickles bugs in some compilers.
-  # If not cross-compiling, we can test for bugs and disable use of __int128
-  # with buggy compilers.  If cross-compiling, hope for the best.
-  # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=83925
-  if not meson.is_cross_build()
-    r = cc.run('''
-    /* This must match the corresponding code in c.h: */
-    #if defined(__GNUC__)
-    #define pg_attribute_aligned(a) __attribute__((aligned(a)))
-    #elif defined(_MSC_VER)
-    #define pg_attribute_aligned(a) __declspec(align(a))
-    #endif
-    typedef __int128 int128a
-    #if defined(pg_attribute_aligned)
-    pg_attribute_aligned(8)
-    #endif
-    ;
-
-    int128a holder;
-    void pass_by_val(void *buffer, int128a par) { holder = par; }
-
-    int main(void)
-    {
-        long int i64 = 97656225L << 12;
-        int128a q;
-        pass_by_val(main, (int128a) i64);
-        q = (int128a) i64;
-        return q != holder;
-    }''',
-    name: '__int128 alignment bug',
-    args: test_c_args)
-    assert(r.compiled())
-    if r.returncode() != 0
-      buggy_int128 = true
-      message('__int128 support present but buggy and thus disabled')
-    endif
-  endif
-
-  if not buggy_int128
-    cdata.set('PG_INT128_TYPE', '__int128')
-    cdata.set('ALIGNOF_PG_INT128_TYPE', cc.alignment('__int128', args: test_c_args))
-  endif
+  cdata.set('PG_INT128_TYPE', '__int128')
+  cdata.set('ALIGNOF_PG_INT128_TYPE', cc.alignment('__int128', args: test_c_args))
 endif
 
 

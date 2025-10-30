@@ -35,14 +35,13 @@
  */
 typedef struct ItemPointerData
 {
-	BlockIdData ip_blkid;
-	OffsetNumber ip_posid;
+	alignas(2) BlockIdData ip_blkid;
+	alignas(2) OffsetNumber ip_posid;
 }
 
-/* If compiler understands packed and aligned pragmas, use those */
-#if defined(pg_attribute_packed) && defined(pg_attribute_aligned)
+/* If compiler understands packed pragma, use it */
+#if defined(pg_attribute_packed)
 			pg_attribute_packed()
-			pg_attribute_aligned(2)
 #endif
 ItemPointerData;
 

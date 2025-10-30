@@ -5392,14 +5392,18 @@ numeric_accum_inv(PG_FUNCTION_ARGS)
  *
  * For 64-bit inputs, sum(X) fits into 128-bit, so a 128-bit accumulator is
  * used for SUM(int8) and AVG(int8).
+ *
+ * Note that INT128 and thus this struct might have an alignment requirement
+ * greater than MAXIMUM_ALIGNOF, so palloc_aligned() must be used instead of
+ * palloc(), and the INT128 members must be in first position.
  */
 
 typedef struct Int128AggState
 {
-	bool		calcSumX2;		/* if true, calculate sumX2 */
-	int64		N;				/* count of processed numbers */
 	INT128		sumX;			/* sum of processed numbers */
 	INT128		sumX2;			/* sum of squares of processed numbers */
+	bool		calcSumX2;		/* if true, calculate sumX2 */
+	int64		N;				/* count of processed numbers */
 } Int128AggState;
 
 /*
@@ -5418,7 +5422,9 @@ makeInt128AggState(FunctionCallInfo fcinfo, bool calcSumX2)
 
 	old_context = MemoryContextSwitchTo(agg_context);
 
-	state = (Int128AggState *) palloc0(sizeof(Int128AggState));
+	state = (Int128AggState *) palloc_aligned(sizeof(Int128AggState),
+											  alignof(Int128AggState),
+											  MCXT_ALLOC_ZERO);
 	state->calcSumX2 = calcSumX2;
 
 	MemoryContextSwitchTo(old_context);

@@ -83,7 +83,7 @@ const IoMethodOps pgaio_uring_ops = {
  * Align the whole struct to a cacheline boundary, to prevent false sharing
  * between completion_lock and prior backend's io_uring_ring.
  */
-typedef struct pg_attribute_aligned (PG_CACHE_LINE_SIZE)
+typedef alignas(PG_CACHE_LINE_SIZE) struct
 PgAioUringContext
 {
 	/*
