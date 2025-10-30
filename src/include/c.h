@@ -929,26 +929,14 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
  * AssertVariableIsOfType() can be used as a statement.
  * AssertVariableIsOfTypeMacro() is intended for use in macros, eg
  *		#define foo(x) (AssertVariableIsOfTypeMacro(x, int), bar(x))
- *
- * If we don't have __builtin_types_compatible_p, we can still assert that
- * the types have the same size.  This is far from ideal (especially on 32-bit
- * platforms) but it provides at least some coverage.
  */
-#ifdef HAVE__BUILTIN_TYPES_COMPATIBLE_P
+#define pg_type_p(expr, type) _Generic((expr), type: 1, default: 0)
 #define AssertVariableIsOfType(varname, typename) \
-	StaticAssertStmt(__builtin_types_compatible_p(__typeof__(varname), typename), \
+	StaticAssertStmt(pg_type_p(varname, typename), \
 	CppAsString(varname) " does not have type " CppAsString(typename))
 #define AssertVariableIsOfTypeMacro(varname, typename) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof__(varname), typename), \
+	(StaticAssertExpr(pg_type_p(varname, typename), \
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
-#else							/* !HAVE__BUILTIN_TYPES_COMPATIBLE_P */
-#define AssertVariableIsOfType(varname, typename) \
-	StaticAssertStmt(sizeof(varname) == sizeof(typename), \
-	CppAsString(varname) " does not have type " CppAsString(typename))
-#define AssertVariableIsOfTypeMacro(varname, typename) \
-	(StaticAssertExpr(sizeof(varname) == sizeof(typename), \
-	 CppAsString(varname) " does not have type " CppAsString(typename)))
-#endif							/* HAVE__BUILTIN_TYPES_COMPATIBLE_P */
 
 
 /* ----------------------------------------------------------------
@@ -1195,20 +1183,15 @@ typedef union PGAlignedXLogBlock
 #if defined(__cplusplus)
 #define unconstify(underlying_type, expr) const_cast<underlying_type>(expr)
 #define unvolatize(underlying_type, expr) const_cast<underlying_type>(expr)
-#elif defined(HAVE__BUILTIN_TYPES_COMPATIBLE_P)
-#define unconstify(underlying_type, expr) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof(expr), const underlying_type), \
-					  "wrong cast"), \
-	 (underlying_type) (expr))
-#define unvolatize(underlying_type, expr) \
-	(StaticAssertExpr(__builtin_types_compatible_p(__typeof(expr), volatile underlying_type), \
-					  "wrong cast"), \
-	 (underlying_type) (expr))
 #else
 #define unconstify(underlying_type, expr) \
-	((underlying_type) (expr))
+	(StaticAssertExpr(pg_type_p((expr), const underlying_type), \
+					  "wrong cast"), \
+	 (underlying_type) (expr))
 #define unvolatize(underlying_type, expr) \
-	((underlying_type) (expr))
+	(StaticAssertExpr(pg_type_p((expr), volatile underlying_type), \
+					  "wrong cast"), \
+	 (underlying_type) (expr))
 #endif
 
 /* ----------------------------------------------------------------
