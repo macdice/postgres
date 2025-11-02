@@ -75,6 +75,9 @@ static FmgrInfo *ToClientConvProc = NULL;
  */
 static FmgrInfo *Utf8ToServerConvProc = NULL;
 
+/* And the other way. */
+static FmgrInfo *ServerToUtf8ConvProc = NULL;
+
 /*
  * These variables track the currently-selected encodings.
  */
@@ -310,6 +313,7 @@ InitializeClientEncoding(void)
 		current_server_encoding != PG_SQL_ASCII)
 	{
 		Oid			utf8_to_server_proc;
+		Oid			server_to_utf8_proc;
 
 		AssertCouldGetRelation();
 		utf8_to_server_proc =
@@ -326,6 +330,21 @@ InitializeClientEncoding(void)
 						  TopMemoryContext);
 			/* Set Utf8ToServerConvProc only after data is fully valid */
 			Utf8ToServerConvProc = finfo;
+		}
+
+		/* And the reverse conversion. */
+		server_to_utf8_proc =
+			FindDefaultConversionProc(current_server_encoding,
+									  PG_UTF8);
+		if (OidIsValid(server_to_utf8_proc))
+		{
+			FmgrInfo   *finfo;
+
+			finfo = (FmgrInfo *) MemoryContextAlloc(TopMemoryContext,
+													sizeof(FmgrInfo));
+			fmgr_info_cxt(server_to_utf8_proc, finfo,
+						  TopMemoryContext);
+			ServerToUtf8ConvProc = finfo;
 		}
 	}
 }
