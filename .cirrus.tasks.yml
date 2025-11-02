@@ -424,6 +424,8 @@ task:
     CCACHE_DIR: /tmp/ccache_dir
     DEBUGINFOD_URLS: "https://debuginfod.debian.net"
 
+    POISONED_HEADERS: /tmp/poisoned_headers
+
     # Enable a reasonable set of sanitizers. Use the linux task for that, as
     # it's one of the fastest tasks (without sanitizers). Also several of the
     # sanitizers work best on linux.
@@ -492,11 +494,24 @@ task:
     #apt-get update
     #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
 
+  # Detect mistakes that would allow unwanted headers from outside our tree be
+  # found with --with-includes or -Dextra_include_dirs.  That is primarily a
+  # risk on non-Linux systems that install packages under eg /usr/local that
+  # must be explicitly added to the header search path, but this is a
+  # convenient place to test both build systems.
+  setup_poisoned_headers_script: |
+    for header in "libpq-fe.h" "libpq/libpq-fe.h" ; do
+      mkdir -p "${POISONED_HEADERS}/$(dirname $header)"
+      echo '#error "external header hides in-tree header"' \
+      > "${POISONED_HEADERS}/$header"
+    done
+
   matrix:
     # SPECIAL:
     # - Uses address sanitizer, sanitizer failures are typically printed in
     #   the server log
     # - Configures postgres with a small segment size
+    # - Poisoned headers in search path
     - name: Linux - Debian Bookworm - Autoconf
 
       env:
@@ -517,6 +532,7 @@ task:
             --with-segsize-blocks=6 \
             --with-libnuma \
             --with-liburing \
+            --with-includes="${POISONED_HEADERS}" \
             \
             ${LINUX_CONFIGURE_FEATURES} \
             \
@@ -540,6 +556,7 @@ task:
     # - Test both 64bit and 32 bit builds
     # - uses io_method=io_uring
     # - Uses meson feature autodetection
+    # - Poisoned headers in search path
     - name: Linux - Debian Bookworm - Meson
 
       env:
@@ -552,6 +569,7 @@ task:
         su postgres <<-EOF
           meson setup \
             ${MESON_COMMON_PG_CONFIG_ARGS} \
+            -Dextra_include_dirs="${POISONED_HEADERS}" \
             --buildtype=debug \
             ${LINUX_MESON_FEATURES} -Dllvm=enabled \
             build
@@ -564,6 +582,7 @@ task:
           export CC='ccache gcc -m32'
           meson setup \
             ${MESON_COMMON_PG_CONFIG_ARGS} \
+            -Dextra_include_dirs="${POISONED_HEADERS}" \
             --buildtype=debug \
             --pkg-config-path /usr/lib/i386-linux-gnu/pkgconfig/ \
             -DPERL=perl5.36-i386-linux-gnu \
@@ -573,12 +592,14 @@ task:
 
       build_script: |
         su postgres <<-EOF
+          set -e
           ninja -C build -j${BUILD_JOBS} ${MBUILD_TARGET}
           ninja -C build -t missingdeps
         EOF
 
       build_32_script: |
         su postgres <<-EOF
+          set -e
           ninja -C build-32 -j${BUILD_JOBS} ${MBUILD_TARGET}
           ninja -C build -t missingdeps
         EOF
