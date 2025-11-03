@@ -232,7 +232,6 @@ task:
       meson setup \
         ${MESON_COMMON_PG_CONFIG_ARGS} \
         --buildtype=debug \
-        -Dextra_lib_dirs=/usr/local/lib -Dextra_include_dirs=/usr/local/include/ \
         ${MESON_COMMON_FEATURES} ${MESON_FEATURES} \
         build
     EOF
@@ -731,8 +730,6 @@ task:
     meson setup \
       ${MESON_COMMON_PG_CONFIG_ARGS} \
       --buildtype=debug \
-      -Dextra_include_dirs=/opt/local/include \
-      -Dextra_lib_dirs=/opt/local/lib \
       ${MESON_COMMON_FEATURES} ${MESON_FEATURES} \
       build
 
