@@ -154,14 +154,14 @@ endif
 pgport = {}
 pgport_variants = {
   '_srv': internal_lib_args + {
-    'dependencies': [backend_port_code],
+    'dependencies': [backend_port_code, libintl],
   },
   '': default_lib_args + {
-    'dependencies': [frontend_port_code],
+    'dependencies': [frontend_port_code, libintl],
   },
   '_shlib': default_lib_args + {
     'pic': true,
-    'dependencies': [frontend_port_code],
+    'dependencies': [frontend_port_code, libintl],
   },
 }
 

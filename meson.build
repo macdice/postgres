@@ -2973,6 +2973,7 @@ cdata.set_quoted('PG_VERSION_STR',
 
 nlsopt = get_option('nls')
 libintl = not_found_dep
+libintl_include_dirs = []
 
 if not nlsopt.disabled()
   # otherwise there'd be lots of
@@ -2982,7 +2983,7 @@ if not nlsopt.disabled()
 
   # meson 0.59 has this wrapped in dependency('intl')
   if (msgfmt.found() and
-      cc.check_header('libintl.h', required: nlsopt,
+      cc.check_header('libintl.h',
         args: test_c_args, include_directories: postgres_inc))
 
     # in libc
@@ -2990,13 +2991,34 @@ if not nlsopt.disabled()
       libintl = declare_dependency()
     else
       libintl = cc.find_library('intl',
-        has_headers: ['libintl.h'], required: nlsopt,
+        has_headers: ['libintl.h'],
         header_include_directories: postgres_inc,
         dirs: test_lib_d)
     endif
   endif
 
+  if (msgfmt.found() and not libintl.found())
+    # libintl doesn't provide libintl.pc, but since we found its companion
+    # binary msgfmt we have a solid clue where to look, assuming standard
+    # layout within the install prefix.
+    guess_libintl_prefix = fs.parent(fs.parent(msgfmt.full_path()))
+    guess_libintl_lib_d = guess_libintl_prefix / 'lib'
+    guess_libintl_include = guess_libintl_prefix / 'include'
+    guess_libintl_include_dirs = include_directories(guess_libintl_include)
+    libintl_lib = cc.find_library('intl',
+      has_headers: ['libintl.h'],
+      header_include_directories: guess_libintl_include_dirs,
+      dirs: guess_libintl_lib_d)
+    if libintl_lib.found()
+      libintl = declare_dependency(dependencies: libintl_lib,
+                                   include_directories: guess_libintl_include_dirs)
+      libintl_include_dirs += guess_libintl_include # needed for llvmjit_types.bc
+    endif
+  endif
+
   if libintl.found()
+    cc.check_header('libintl.h', required: nlsopt,
+      args: test_c_args, include_directories: postgres_inc, dependencies: libintl)
     i18n = import('i18n')
     cdata.set('ENABLE_NLS', 1)
   endif
@@ -3220,14 +3242,14 @@ subdir('config')
 frontend_port_code = declare_dependency(
   compile_args: ['-DFRONTEND'],
   include_directories: [postgres_inc],
-  dependencies: os_deps,
+  dependencies: [os_deps, libintl]
 )
 
 backend_port_code = declare_dependency(
   compile_args: ['-DBUILDING_DLL'],
   include_directories: [postgres_inc],
   sources: [errcodes], # errcodes.h is needed due to use of ereport
-  dependencies: os_deps,
+  dependencies: [os_deps, libintl]
 )
 
 subdir('src/port')
@@ -3236,14 +3258,14 @@ frontend_common_code = declare_dependency(
   compile_args: ['-DFRONTEND'],
   include_directories: [postgres_inc],
   sources: generated_headers_stamp,
-  dependencies: [os_deps, zlib, zstd, lz4],
+  dependencies: [os_deps, libintl, zlib, zstd, lz4],
 )
 
 backend_common_code = declare_dependency(
   compile_args: ['-DBUILDING_DLL'],
   include_directories: [postgres_inc],
   sources: generated_headers_stamp,
-  dependencies: [os_deps, zlib, zstd],
+  dependencies: [os_deps, libintl, zlib, zstd],
 )
 
 subdir('src/common')

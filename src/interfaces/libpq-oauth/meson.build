@@ -29,6 +29,7 @@ libpq_oauth_st = static_library('libpq-oauth',
     frontend_stlib_code,
     libpq_oauth_deps,
     ssl, # libpq-int.h includes OpenSSL headers
+    gssapi, # and gssapi
   ],
   kwargs: default_lib_args,
 )

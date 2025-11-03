@@ -32,7 +32,7 @@ endif
 llvmjit = shared_module('llvmjit',
   llvmjit_sources,
   kwargs: pg_mod_args + {
-    'dependencies': pg_mod_args['dependencies'] + [llvm],
+    'dependencies': pg_mod_args['dependencies'] + [llvm, libintl],
     'cpp_args': pg_mod_args['cpp_args'] + llvm.get_variable(configtool: 'cxxflags').split(),
   }
 )
@@ -69,6 +69,9 @@ bitcode_cflags += '-I@BUILD_ROOT@/src/include'
 bitcode_cflags += '-I@BUILD_ROOT@/src/backend/utils/misc'
 bitcode_cflags += '-I@SOURCE_ROOT@/src/include'
 
+foreach d : libintl_include_dirs
+  bitcode_cflags += ['-I' + d]
+endforeach
 
 # Note this is intentionally not installed to bitcodedir, as it's not for
 # inlining
