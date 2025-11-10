@@ -25,6 +25,8 @@
 #include "storage/proclist.h"
 #include "storage/spin.h"
 
+#include <limits.h>
+
 /* Initially, we are not prepared to sleep on any condition variable. */
 static ConditionVariable *cv_sleep_target = NULL;
 

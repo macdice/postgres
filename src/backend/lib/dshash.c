@@ -36,6 +36,8 @@
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
 
+#include <limits.h>
+
 /*
  * An item in the hash table.  This wraps the user's entry object in an
  * envelop that holds a pointer back to the bucket and a pointer to the next
