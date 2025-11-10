@@ -2019,16 +2019,6 @@ AC_DEFINE_UNQUOTED(MAXIMUM_ALIGNOF, $MAX_ALIGNOF, [Define as the maximum alignme
 # Some compilers offer a 128-bit integer scalar type.
 PGAC_TYPE_128BIT_INT
 
-# Check for various atomic operations now that we have checked how to declare
-# 64bit integers.
-PGAC_HAVE_GCC__SYNC_CHAR_TAS
-PGAC_HAVE_GCC__SYNC_INT32_TAS
-PGAC_HAVE_GCC__SYNC_INT32_CAS
-PGAC_HAVE_GCC__SYNC_INT64_CAS
-PGAC_HAVE_GCC__ATOMIC_INT32_CAS
-PGAC_HAVE_GCC__ATOMIC_INT64_CAS
-
-
 # Check for __get_cpuid() and __cpuid()
 AC_CACHE_CHECK([for __get_cpuid], [pgac_cv__get_cpuid],
 [AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <cpuid.h>],

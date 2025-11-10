@@ -2224,69 +2224,6 @@ if llvm.found()
 endif
 
 
-
-###############################################################
-# Atomics
-###############################################################
-
-atomic_checks = [
-  {'name': 'HAVE_GCC__SYNC_CHAR_TAS',
-   'desc': '__sync_lock_test_and_set(char)',
-   'test': '''
-char lock = 0;
-__sync_lock_test_and_set(&lock, 1);
-__sync_lock_release(&lock);'''},
-
-  {'name': 'HAVE_GCC__SYNC_INT32_TAS',
-   'desc': '__sync_lock_test_and_set(int32)',
-   'test': '''
-int lock = 0;
-__sync_lock_test_and_set(&lock, 1);
-__sync_lock_release(&lock);'''},
-
-  {'name': 'HAVE_GCC__SYNC_INT32_CAS',
-   'desc': '__sync_val_compare_and_swap(int32)',
-   'test': '''
-int val = 0;
-__sync_val_compare_and_swap(&val, 0, 37);'''},
-
-  {'name': 'HAVE_GCC__SYNC_INT64_CAS',
-   'desc': '__sync_val_compare_and_swap(int64)',
-   'test': '''
-int64_t val = 0;
-__sync_val_compare_and_swap(&val, 0, 37);'''},
-
-  {'name': 'HAVE_GCC__ATOMIC_INT32_CAS',
-   'desc': ' __atomic_compare_exchange_n(int32)',
-   'test': '''
-int val = 0;
-int expect = 0;
-__atomic_compare_exchange_n(&val, &expect, 37, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);'''},
-
-  {'name': 'HAVE_GCC__ATOMIC_INT64_CAS',
-   'desc': ' __atomic_compare_exchange_n(int64)',
-   'test': '''
-int64_t val = 0;
-int64_t expect = 0;
-__atomic_compare_exchange_n(&val, &expect, 37, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);'''},
-]
-
-foreach check : atomic_checks
-  test = '''
-#include <stdint.h>
-int main(void)
-{
-@0@
-}'''.format(check['test'])
-
-  cdata.set(check['name'],
-    cc.links(test,
-      name: check['desc'],
-      args: test_c_args) ? 1 : false
-  )
-endforeach
-
-
 ###############################################################
 # Check for the availability of XSAVE intrinsics.
 ###############################################################
