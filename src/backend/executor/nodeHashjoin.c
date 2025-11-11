@@ -560,8 +560,34 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					 * we are in a right-semijoin, but we'll avoid the branch
 					 * and just set it always.
 					 */
-					if (!HeapTupleHeaderHasMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple)))
-						HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
+					if (parallel && node->js.jointype == JOIN_RIGHT_SEMI)
+					{
+						/*
+						 * The earlier check for a match flag was relaxed and
+						 * might have seen an arbitrarily out-of-date value.
+						 * Now we use an atomic check, to make sure that
+						 * exactly one backend can set the match flag and emit
+						 * the tuple.  If we lose the race, we have wasted a
+						 * few cycles but must abandon it the tuple.
+						 */
+						if (HeapTupleHeaderTestAndSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple)))
+							continue;
+					}
+					else
+					{
+						/*
+						 * In serial joins there is no concurrency to worry
+						 * about, and in parallel joins other than
+						 * JOIN_RIGHT_SEMI, the match flags won't be consulted
+						 * until after synchronizing on a barrier and it
+						 * doesn't matter if multiple backends sometimes set
+						 * it concurrently, so we can be quite sloppy here. We
+						 * still avoid setting it if we can already see it's
+						 * set, just to avoid dirtying memory unnecessarily.
+						 */
+						if (!HeapTupleHeaderHasMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple)))
+							HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
+					}
 
 					/* In an antijoin, we never return a matched tuple */
 					if (node->js.jointype == JOIN_ANTI)

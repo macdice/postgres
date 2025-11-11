@@ -18,6 +18,7 @@
 #include "access/transam.h"
 #include "access/tupdesc.h"
 #include "access/tupmacs.h"
+#include "port/atomics.h"
 #include "storage/bufpage.h"
 #include "varatt.h"
 
@@ -717,6 +718,17 @@ static inline void
 HeapTupleHeaderSetMatch(MinimalTupleData *tup)
 {
 	tup->t_infomask2 |= HEAP_TUPLE_HAS_MATCH;
+}
+
+/*
+ * Atomically set the match flag and report whether it was already set.  False
+ * means that the caller was the first to set it.
+ */
+static inline bool
+HeapTupleHeaderTestAndSetMatch(MinimalTupleData *tup)
+{
+	return atomic_fetch_or(pg_atomic_cast(&tup->t_infomask2),
+						   HEAP_TUPLE_HAS_MATCH) & HEAP_TUPLE_HAS_MATCH;
 }
 
 static inline void

@@ -66,6 +66,8 @@ extern "C++"
 #define pg_atomic(T) _Atomic(T)
 #endif
 
+#include <stdalign.h>
+
 /* Assumptions about lock-free access. */
 StaticAssertDecl(ATOMIC_CHAR_LOCK_FREE >= 2, "need lock-free 8-bit atomics");
 StaticAssertDecl(ATOMIC_SHORT_LOCK_FREE >= 2, "need lock-free 16-bit atomics");
@@ -84,6 +86,51 @@ typedef pg_atomic(uint32)
 pg_atomic_uint32;
 typedef pg_atomic(uint64)
 pg_atomic_uint64;
+
+/* With care, it is safe to cast pointers to lock-free atomic types. */
+/*
+ * XXX Here's a nasty complication: the following assertions might be true in
+ * practice today (?), but would break down if we one day want to add uint64
+ * to the set, since i386 has alignof(uint64) == 4 but
+ * alignof(pg_atomic_uint64) == 8.  Maybe that'd be OK because we can't require
+ * lock-free 64-bit until we drop armv7, and we'd likely drop i386 at the same
+ * time, but...
+ *
+ * The alternatives seem to be:
+ *
+ * 1.  Make things like t_infomask2 actually pg_atomic_uint16 in the first
+ * place, and deal with the spreading consequences all over the tree, ie
+ * relaxed atomic accesses everywhere.  This is annoying because I strongly
+ * suspect the cast will work on any platform (even those that don't have
+ * native 16 bit atomics eg some RISC-V variants have that fact hidden from us
+ * by the compiler widening ops).
+ *
+ * 2.  Accept that only some sizes are possible, and callers might need an
+ * alternative strategy.  But this set is probably OK everywhere (this is
+ * pretty closely linked to our ancient assumption of 4-byte single copy
+ * atomicity in practice), so maybe it's OK to allow this and worry about
+ * 64-bit later if it actually comes up...
+ */
+#define PG_ATOMIC_CHECK_CASTABLE(type) \
+	StaticAssertDecl(sizeof(type) == sizeof(pg_atomic(type)), \
+					 #type " has bad size for pg_atomic_cast"); \
+	StaticAssertDecl(alignof(type) == alignof(pg_atomic(type)), \
+					 #type " has bad alignment for pg_atomic_cast");
+PG_ATOMIC_CHECK_CASTABLE(uint8);
+PG_ATOMIC_CHECK_CASTABLE(uint16);
+PG_ATOMIC_CHECK_CASTABLE(uint32);
+
+/* Cast T* -> pg_atomic(T)*, lock-free alignment-compatible types only. */
+#ifdef __cplusplus
+#define pg_atomic_cast(P) \
+	((pg_atomic(std::remove_pointer<decltype(P)>::type) *)(P))
+#else
+#define pg_atomic_cast(P) _Generic((P), \
+	uint32 *: (((pg_atomic(uint32) *) (P))), \
+	uint16 *: (((pg_atomic(uint16) *) (P))), \
+	uint8 *:  (((pg_atomic(uint8)  *) (P))) \
+)
+#endif
 
 /*
  * First a set of architecture specific files is included.
