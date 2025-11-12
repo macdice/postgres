@@ -5,7 +5,8 @@ PGFILEDESC = "test_aio - test code for AIO"
 MODULE_big = test_aio
 OBJS = \
 	$(WIN32RES) \
-	test_aio.o
+	test_aio.o \
+	test_read_stream.o
 
 EXTENSION = test_aio
 DATA = test_aio--1.0.sql

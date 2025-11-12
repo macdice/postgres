@@ -2,6 +2,7 @@
 
 test_aio_sources = files(
   'test_aio.c',
+  'test_read_stream.c',
 )
 
 if host_system == 'windows'
