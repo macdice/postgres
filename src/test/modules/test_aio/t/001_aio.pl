@@ -1489,6 +1489,35 @@ SELECT read_rel_block_ll('tbl_cs_fail', 3, nblocks=>1, zero_on_error=>true);),
 	$psql->quit();
 }
 
+# Read stream tests
+sub test_read_stream
+{
+	my $io_method = shift;
+	my $node = shift;
+	my ($ret, $output);
+
+	my $psql = $node->background_psql('postgres', on_error_stop => 0);
+
+	$psql->query_safe(
+		qq(
+CREATE TEMPORARY TABLE tmp_read_stream(data int not null);
+INSERT INTO tmp_read_stream SELECT generate_series(1, 10000);
+SELECT test_read_stream_resume('tmp_read_stream', 0);
+DROP TABLE tmp_read_stream;
+));
+
+	$psql->query_safe(
+		qq(
+CREATE TEMPORARY TABLE tmp_read_stream(data int not null);
+INSERT INTO tmp_read_stream SELECT generate_series(1, 10000);
+SELECT test_read_stream_yield('tmp_read_stream', 0);
+DROP TABLE tmp_read_stream;
+));
+
+	$psql->quit();
+}
+
+
 
 # Run all tests that are supported for all io_methods
 sub test_generic
@@ -1525,6 +1554,7 @@ CHECKPOINT;
 	test_checksum($io_method, $node);
 	test_ignore_checksum($io_method, $node);
 	test_checksum_createdb($io_method, $node);
+	test_read_stream($io_method, $node);
 
   SKIP:
 	{
