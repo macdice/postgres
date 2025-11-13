@@ -767,11 +767,12 @@ WINDOWS_ENVIRONMENT_BASE: &WINDOWS_ENVIRONMENT_BASE
 
 
 task:
-  name: Windows - Server 2022, VS 2019 - Meson & ninja
+  name: Windows - Server 2022, VS 2022 - Meson & ninja
   << : *WINDOWS_ENVIRONMENT_BASE
 
   env:
     TEST_JOBS: 8 # wild guess, data based value welcome
+    PATH: C:\VS_2022\VC\Auxiliary\Build;${PATH}
 
     # Cirrus defaults to SetErrorMode(SEM_NOGPFAULTERRORBOX | ...). That
     # prevents crash reporting from working unless binaries do SetErrorMode()
