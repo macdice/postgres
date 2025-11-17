@@ -386,7 +386,7 @@ task:
       ulimit -c unlimited
       # Otherwise tests will fail on OpenBSD, due to inability to start enough
       # processes.
-      ulimit -p 256
+      ulimit -p 250
       meson test $MTEST_ARGS --num-processes ${TEST_JOBS}
     EOF
 
