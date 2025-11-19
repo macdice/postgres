@@ -1,0 +1,17 @@
+-- directory paths and dlsuffix are passed to us in environment variables
+\getenv libdir PG_LIBDIR
+\getenv dlsuffix PG_DLSUFFIX
+\set regresslib :libdir '/regress' :dlsuffix
+CREATE FUNCTION test_translation()
+    RETURNS void
+    AS :'regresslib'
+    LANGUAGE C;
+SET lc_messages = 'es_ES';
+SELECT test_translation();
+NOTICE:  traducido PRId64 = 4242, PRId32 = -1234
+ test_translation 
+------------------
+ 
+(1 row)
+
+RESET lc_messages;

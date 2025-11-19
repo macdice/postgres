@@ -1028,3 +1028,21 @@ test_relpath(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
+/*
+ * Simple test to verify NLS support, particularly that the PRI* macros work.
+ */
+PG_FUNCTION_INFO_V1(test_translation);
+Datum
+test_translation(PG_FUNCTION_ARGS)
+{
+#ifdef ENABLE_NLS
+	ereport(NOTICE,
+			(errmsg("translated PRId64 = %" PRId64 ", PRId32 = %" PRId32,
+					(int64) 4242, (int32) -1234)));
+#else
+	elog(NOTICE, "NLS is not enabled");
+#endif
+
+	PG_RETURN_VOID();
+}

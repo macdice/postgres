@@ -31143,3 +31143,8 @@ msgstr "uso no estandar de escape en un literal de cadena"
 #, c-format
 msgid "Use the escape string syntax for escapes, e.g., E'\\r\\n'."
 msgstr "Use la sintaxis de escape para cadenas, por ej. E'\\r\\n'."
+
+#: regress.c:1041
+#, c-format
+msgid "translated PRId64 = %<PRId64>, PRId32 = %<PRId32>"
+msgstr "traducido PRId64 = %<PRId64>, PRId32 = %<PRId32>"
