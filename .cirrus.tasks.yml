@@ -772,6 +772,7 @@ task:
 
   env:
     TEST_JOBS: 8 # wild guess, data based value welcome
+    PG_DEPS: C:\PG_DEPS
 
     # Cirrus defaults to SetErrorMode(SEM_NOGPFAULTERRORBOX | ...). That
     # prevents crash reporting from working unless binaries do SetErrorMode()
@@ -806,7 +807,7 @@ task:
 
   configure_script: |
     vcvarsall x64
-    meson setup --backend ninja %MESON_COMMON_PG_CONFIG_ARGS% --buildtype debug -Db_pch=true -Dextra_lib_dirs=c:\openssl\1.1\lib -Dextra_include_dirs=c:\openssl\1.1\include -DTAR=%TAR% %MESON_FEATURES% build
+    meson setup --backend ninja %MESON_COMMON_PG_CONFIG_ARGS% --buildtype debug -Db_pch=true -DTAR=%TAR% -Duuid=ossp --cmake-prefix-path=%PG_DEPS% --pkg-config-path=%PG_DEPS%\lib\pkgconfig -Dextra_include_dirs=%PG_DEPS%\include -Dextra_lib_dirs=%PG_DEPS%\lib,%PG_DEPS%\lib\amd64 build
 
   build_script: |
     vcvarsall x64
