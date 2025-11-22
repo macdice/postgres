@@ -135,13 +135,10 @@ foreach f : replace_funcs_pos
 endforeach
 
 
-if (host_system == 'windows' or host_system == 'cygwin') and \
-  (cc.get_id() != 'msvc' or cc.version().version_compare('<14.0'))
-
-  # Cygwin and (apparently, based on test results) Mingw both
-  # have a broken strtof(), so substitute its implementation.
-  # That's not a perfect fix, since it doesn't avoid double-rounding,
-  # but we have no better options.
+if host_system == 'cygwin'
+  # Cygwin has a broken strtof(), so substitute its implementation.  That's not
+  # a perfect fix, since it doesn't avoid double-rounding, but we have no
+  # better options.
   pgport_sources += files('strtof.c')
   message('On @0@ with compiler @1@ @2@ we will use our strtof wrapper.'.format(
     host_system, cc.get_id(), cc.version()))

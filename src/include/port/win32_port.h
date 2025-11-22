@@ -569,20 +569,6 @@ typedef unsigned short mode_t;
 
 #endif							/* _MSC_VER */
 
-#if defined(__MINGW32__) || defined(__MINGW64__)
-/*
- * Mingw claims to have a strtof, and my reading of its source code suggests
- * that it ought to work (and not need this hack), but the regression test
- * results disagree with me; whether this is a version issue or not is not
- * clear. However, using our wrapper (and the misrounded-input variant file,
- * already required for supporting ancient systems) can't make things any
- * worse, except for a tiny performance loss when reading zeros.
- *
- * See also cygwin.h for another instance of this.
- */
-#define HAVE_BUGGY_STRTOF 1
-#endif
-
 /* in port/win32pread.c */
 extern ssize_t pg_pread(int fd, void *buf, size_t nbyte, pgoff_t offset);
 
