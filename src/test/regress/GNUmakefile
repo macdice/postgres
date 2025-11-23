@@ -74,8 +74,7 @@ $(OBJS): | submake-libpgport submake-generated-headers
 regress_data_files = \
 	$(wildcard $(srcdir)/sql/*.sql) \
 	$(wildcard $(srcdir)/expected/*.out) \
-	$(wildcard $(srcdir)/data/*.data) \
-	$(srcdir)/parallel_schedule $(srcdir)/resultmap
+	$(wildcard $(srcdir)/data/*.data)
 
 install-tests: all install install-lib installdirs-tests
 	$(MAKE) -C $(top_builddir)/contrib/spi install

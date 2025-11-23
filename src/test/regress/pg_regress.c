@@ -37,15 +37,6 @@
 #include "pg_regress.h"
 #include "portability/instr_time.h"
 
-/* for resultmap we need a list of pairs of strings */
-typedef struct _resultmap
-{
-	char	   *test;
-	char	   *type;
-	char	   *resultfile;
-	struct _resultmap *next;
-} _resultmap;
-
 /*
  * Values obtained from Makefile.
  */
@@ -131,8 +122,6 @@ static char sockself[MAXPGPATH];
 static char socklock[MAXPGPATH];
 static StringInfo failed_tests = NULL;
 static bool in_note = false;
-
-static _resultmap *resultmap = NULL;
 
 static PID_TYPE postmaster_pid = INVALID_PID;
 static bool postmaster_running = false;
@@ -531,192 +520,6 @@ make_temp_sockdir(void)
 }
 
 /*
- * Check whether string matches pattern
- *
- * In the original shell script, this function was implemented using expr(1),
- * which provides basic regular expressions restricted to match starting at
- * the string start (in conventional regex terms, there's an implicit "^"
- * at the start of the pattern --- but no implicit "$" at the end).
- *
- * For now, we only support "." and ".*" as non-literal metacharacters,
- * because that's all that anyone has found use for in resultmap.  This
- * code could be extended if more functionality is needed.
- */
-static bool
-string_matches_pattern(const char *str, const char *pattern)
-{
-	while (*str && *pattern)
-	{
-		if (*pattern == '.' && pattern[1] == '*')
-		{
-			pattern += 2;
-			/* Trailing .* matches everything. */
-			if (*pattern == '\0')
-				return true;
-
-			/*
-			 * Otherwise, scan for a text position at which we can match the
-			 * rest of the pattern.
-			 */
-			while (*str)
-			{
-				/*
-				 * Optimization to prevent most recursion: don't recurse
-				 * unless first pattern char might match this text char.
-				 */
-				if (*str == *pattern || *pattern == '.')
-				{
-					if (string_matches_pattern(str, pattern))
-						return true;
-				}
-
-				str++;
-			}
-
-			/*
-			 * End of text with no match.
-			 */
-			return false;
-		}
-		else if (*pattern != '.' && *str != *pattern)
-		{
-			/*
-			 * Not the single-character wildcard and no explicit match? Then
-			 * time to quit...
-			 */
-			return false;
-		}
-
-		str++;
-		pattern++;
-	}
-
-	if (*pattern == '\0')
-		return true;			/* end of pattern, so declare match */
-
-	/* End of input string.  Do we have matching pattern remaining? */
-	while (*pattern == '.' && pattern[1] == '*')
-		pattern += 2;
-	if (*pattern == '\0')
-		return true;			/* end of pattern, so declare match */
-
-	return false;
-}
-
-/*
- * Scan resultmap file to find which platform-specific expected files to use.
- *
- * The format of each line of the file is
- *		   testname/hostplatformpattern=substitutefile
- * where the hostplatformpattern is evaluated per the rules of expr(1),
- * namely, it is a standard regular expression with an implicit ^ at the start.
- * (We currently support only a very limited subset of regular expressions,
- * see string_matches_pattern() above.)  What hostplatformpattern will be
- * matched against is the config.guess output.  (In the shell-script version,
- * we also provided an indication of whether gcc or another compiler was in
- * use, but that facility isn't used anymore.)
- */
-static void
-load_resultmap(void)
-{
-	char		buf[MAXPGPATH];
-	FILE	   *f;
-
-	/* scan the file ... */
-	snprintf(buf, sizeof(buf), "%s/resultmap", inputdir);
-	f = fopen(buf, "r");
-	if (!f)
-	{
-		/* OK if it doesn't exist, else complain */
-		if (errno == ENOENT)
-			return;
-		bail("could not open file \"%s\" for reading: %m", buf);
-	}
-
-	while (fgets(buf, sizeof(buf), f))
-	{
-		char	   *platform;
-		char	   *file_type;
-		char	   *expected;
-		int			i;
-
-		/* strip trailing whitespace, especially the newline */
-		i = strlen(buf);
-		while (i > 0 && isspace((unsigned char) buf[i - 1]))
-			buf[--i] = '\0';
-
-		/* parse out the line fields */
-		file_type = strchr(buf, ':');
-		if (!file_type)
-		{
-			bail("incorrectly formatted resultmap entry: %s", buf);
-		}
-		*file_type++ = '\0';
-
-		platform = strchr(file_type, ':');
-		if (!platform)
-		{
-			bail("incorrectly formatted resultmap entry: %s", buf);
-		}
-		*platform++ = '\0';
-		expected = strchr(platform, '=');
-		if (!expected)
-		{
-			bail("incorrectly formatted resultmap entry: %s", buf);
-		}
-		*expected++ = '\0';
-
-		/*
-		 * if it's for current platform, save it in resultmap list. Note: by
-		 * adding at the front of the list, we ensure that in ambiguous cases,
-		 * the last match in the resultmap file is used. This mimics the
-		 * behavior of the old shell script.
-		 */
-		if (string_matches_pattern(host_platform, platform))
-		{
-			_resultmap *entry = pg_malloc(sizeof(_resultmap));
-
-			entry->test = pg_strdup(buf);
-			entry->type = pg_strdup(file_type);
-			entry->resultfile = pg_strdup(expected);
-			entry->next = resultmap;
-			resultmap = entry;
-		}
-	}
-	fclose(f);
-}
-
-/*
- * Check in resultmap if we should be looking at a different file
- */
-static
-const char *
-get_expectfile(const char *testname, const char *file)
-{
-	char	   *file_type;
-	_resultmap *rm;
-
-	/*
-	 * Determine the file type from the file name. This is just what is
-	 * following the last dot in the file name.
-	 */
-	if (!file || !(file_type = strrchr(file, '.')))
-		return NULL;
-
-	file_type++;
-
-	for (rm = resultmap; rm != NULL; rm = rm->next)
-	{
-		if (strcmp(testname, rm->test) == 0 && strcmp(file_type, rm->type) == 0)
-		{
-			return rm->resultfile;
-		}
-	}
-
-	return NULL;
-}
-
-/*
  * Prepare environment variables for running regression tests
  */
 static void
@@ -917,8 +720,6 @@ initialize_environment(void)
 		if (!pghost && !pgport)
 			note("using postmaster on Unix socket, default port");
 	}
-
-	load_resultmap();
 }
 
 #ifdef ENABLE_SSPI
@@ -1414,26 +1215,8 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 	int			best_line_count;
 	int			i;
 	int			l;
-	const char *platform_expectfile;
-
-	/*
-	 * We can pass either the resultsfile or the expectfile, they should have
-	 * the same type (filename.type) anyway.
-	 */
-	platform_expectfile = get_expectfile(testname, resultsfile);
 
 	strlcpy(expectfile, default_expectfile, sizeof(expectfile));
-	if (platform_expectfile)
-	{
-		/*
-		 * Replace everything after the last slash in expectfile with what the
-		 * platform_expectfile contains.
-		 */
-		char	   *p = strrchr(expectfile, '/');
-
-		if (p)
-			strcpy(++p, platform_expectfile);
-	}
 
 	/* Name to use for temporary diff file */
 	snprintf(diff, sizeof(diff), "%s.diff", resultsfile);
@@ -1487,33 +1270,6 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 			strlcpy(best_expect_file, alt_expectfile, sizeof(best_expect_file));
 		}
 		free(alt_expectfile);
-	}
-
-	/*
-	 * fall back on the canonical results file if we haven't tried it yet and
-	 * haven't found a complete match yet.
-	 */
-
-	if (platform_expectfile)
-	{
-		snprintf(cmd, sizeof(cmd),
-				 "diff %s \"%s\" \"%s\" > \"%s\"",
-				 basic_diff_opts, default_expectfile, resultsfile, diff);
-
-		if (run_diff(cmd, diff) == 0)
-		{
-			/* No diff = no changes = good */
-			unlink(diff);
-			return false;
-		}
-
-		l = file_line_count(diff);
-		if (l < best_line_count)
-		{
-			/* This diff was a better match than the last one */
-			best_line_count = l;
-			strlcpy(best_expect_file, default_expectfile, sizeof(best_expect_file));
-		}
 	}
 
 	/*

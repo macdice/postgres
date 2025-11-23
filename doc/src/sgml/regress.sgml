@@ -750,43 +750,13 @@ diff results/random.out expected/random.out
 
    <para>
     Since some of the tests inherently produce environment-dependent
-    results, we have provided ways to specify alternate <quote>expected</quote>
+    results, we have provided a way to specify alternate <quote>expected</quote>
     result files.  Each regression test can have several comparison files
-    showing possible results on different platforms.  There are two
-    independent mechanisms for determining which comparison file is used
-    for each test.
+    showing possible results on different platforms.
    </para>
 
    <para>
-    The first mechanism allows comparison files to be selected for
-    specific platforms.  There is a mapping file,
-    <filename>src/test/regress/resultmap</filename>, that defines
-    which comparison file to use for each platform.
-    To eliminate bogus test <quote>failures</quote> for a particular platform,
-    you first choose or make a variant result file, and then add a line to the
-    <filename>resultmap</filename> file.
-   </para>
-
-   <para>
-    Each line in the mapping file is of the form
-<synopsis>
-testname:output:platformpattern=comparisonfilename
-</synopsis>
-    The test name is just the name of the particular regression test
-    module. The output value indicates which output file to check. For the
-    standard regression tests, this is always <literal>out</literal>. The
-    value corresponds to the file extension of the output file.
-    The platform pattern is a pattern in the style of the Unix
-    tool <command>expr</command> (that is, a regular expression with an implicit
-    <literal>^</literal> anchor at the start).  It is matched against the
-    platform name as printed by <command>config.guess</command>.
-    The comparison file name is the base name of the substitute result
-    comparison file.
-   </para>
-
-   <para>
-    The second selection mechanism for variant comparison files is
-    much more automatic: it simply uses the <quote>best match</quote> among
+    The selection mechanism uses the <quote>best match</quote> among
     several supplied comparison files.  The regression test driver
     script considers both the standard comparison file for a test,
     <literal><replaceable>testname</replaceable>.out</literal>, and variant files named
@@ -794,10 +764,7 @@ testname:output:platformpattern=comparisonfilename
     (where the <replaceable>digit</replaceable> is any single digit
     <literal>0</literal>-<literal>9</literal>).  If any such file is an exact match,
     the test is considered to pass; otherwise, the one that generates
-    the shortest diff is used to create the failure report.  (If
-    <filename>resultmap</filename> includes an entry for the particular
-    test, then the base <replaceable>testname</replaceable> is the substitute
-    name given in <filename>resultmap</filename>.)
+    the shortest diff is used to create the failure report.
    </para>
 
    <para>
