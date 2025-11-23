@@ -135,17 +135,6 @@ foreach f : replace_funcs_pos
 endforeach
 
 
-if host_system == 'cygwin'
-  # Cygwin has a broken strtof(), so substitute its implementation.  That's not
-  # a perfect fix, since it doesn't avoid double-rounding, but we have no
-  # better options.
-  pgport_sources += files('strtof.c')
-  message('On @0@ with compiler @1@ @2@ we will use our strtof wrapper.'.format(
-    host_system, cc.get_id(), cc.version()))
-endif
-
-
-
 # Build pgport once for backend, once for use in frontend binaries, and once
 # for use in shared libraries
 pgport = {}

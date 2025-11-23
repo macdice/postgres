@@ -16192,20 +16192,6 @@ fi
 
 
 
-if test "$PORTNAME" = "cygwin"; then
-	# Cygwin has a broken strtof(), so substitute its implementation.  That's
-	# not a perfect fix, since it doesn't avoid double-rounding, but we have no
-	# better options.
-	case " $LIBOBJS " in
-  *" strtof.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS strtof.$ac_objext"
- ;;
-esac
-
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: On $host_os we will use our strtof wrapper." >&5
-$as_echo "$as_me: On $host_os we will use our strtof wrapper." >&6;}
-fi
-
 # Similarly, use system's getopt_long() only if system provides struct option.
 if test x"$ac_cv_type_struct_option" = xyes ; then
   ac_fn_c_check_func "$LINENO" "getopt_long" "ac_cv_func_getopt_long"

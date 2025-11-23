@@ -1850,14 +1850,6 @@ AC_REPLACE_FUNCS(m4_normalize([
 
 AC_REPLACE_FUNCS(pthread_barrier_wait)
 
-if test "$PORTNAME" = "cygwin"; then
-	# Cygwin has a broken strtof(), so substitute its implementation.  That's
-	# not a perfect fix, since it doesn't avoid double-rounding, but we have no
-	# better options.
-	AC_LIBOBJ([strtof])
-	AC_MSG_NOTICE([On $host_os we will use our strtof wrapper.])
-fi
-
 # Similarly, use system's getopt_long() only if system provides struct option.
 if test x"$ac_cv_type_struct_option" = xyes ; then
   AC_REPLACE_FUNCS([getopt_long])
