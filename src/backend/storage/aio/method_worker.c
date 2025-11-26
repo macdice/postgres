@@ -32,12 +32,15 @@
 
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
+#include "port/atomics.h"
 #include "port/pg_bitutils.h"
+#include "portability/instr_time.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/interrupt.h"
 #include "storage/aio.h"
 #include "storage/aio_internal.h"
 #include "storage/aio_subsys.h"
+#include "storage/condition_variable.h"
 #include "storage/io_worker.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -58,6 +61,7 @@
 
 typedef struct PgAioWorkerSubmissionQueue
 {
+	ConditionVariable space_cv;
 	uint32		size;
 	uint32		head;
 	uint32		tail;
@@ -84,6 +88,15 @@ StaticAssertDecl(PGAIO_WORKER_SET_BITS >= MAX_IO_WORKERS,
 
 typedef struct PgAioWorkerControl
 {
+	/* Developer-only simulation of slow storage. */
+	pg_atomic_uint64 limit_op_next_ns;
+	pg_atomic_uint64 limit_read_next_ns;
+	pg_atomic_uint64 limit_write_next_ns;
+	int			limit_op_ns;
+	int			limit_read_block_ns;
+	int			limit_write_block_ns;
+	bool		limit_enabled;
+
 	/* Seen by postmaster */
 	volatile bool grow;
 
@@ -120,8 +133,13 @@ int			io_max_workers = 32;
 int			io_worker_idle_timeout = 60000;
 int			io_worker_launch_interval = 100;
 
+/* Developer-only GUCs accessed with "debug_" prefixes. */
+int			io_worker_limit_iops = 0;
+int			io_worker_limit_read = 0;
+int			io_worker_limit_write = 0;
+int			io_worker_queue_size = 64;
+bool		io_worker_overflow_sync = true;
 
-static int	io_worker_queue_size = 64;
 static int	MyIoWorkerId = -1;
 static PgAioWorkerSubmissionQueue *io_worker_submission_queue;
 static PgAioWorkerControl *io_worker_control;
@@ -253,6 +271,7 @@ pgaio_worker_shmem_init(bool first_time)
 						&found);
 	if (!found)
 	{
+		ConditionVariableInit(&io_worker_submission_queue->space_cv);
 		io_worker_submission_queue->size = queue_size;
 		io_worker_submission_queue->head = 0;
 		io_worker_submission_queue->tail = 0;
@@ -269,6 +288,10 @@ pgaio_worker_shmem_init(bool first_time)
 		pgaio_worker_set_initialize(&io_worker_control->idle_worker_set);
 		for (int i = 0; i < MAX_IO_WORKERS; ++i)
 			io_worker_control->workers[i].proc_number = INVALID_PROC_NUMBER;
+
+		assign_debug_io_worker_limit_iops(io_worker_limit_iops, NULL);
+		assign_debug_io_worker_limit_read(io_worker_limit_read, NULL);
+		assign_debug_io_worker_limit_write(io_worker_limit_write, NULL);
 	}
 }
 
@@ -447,6 +470,18 @@ pgaio_worker_submit_internal(int num_staged_ios, PgAioHandle **staged_ios)
 		Assert(!pgaio_worker_needs_synchronous_execution(staged_ios[i]));
 		if (!pgaio_worker_submission_queue_insert(staged_ios[i]))
 		{
+			if (!io_worker_overflow_sync)
+			{
+				/* Wait for at least one IO to be drained and try again. */
+				ConditionVariablePrepareToSleep(&io_worker_submission_queue->space_cv);
+				LWLockRelease(AioWorkerSubmissionQueueLock);
+				ConditionVariableSleep(&io_worker_submission_queue->space_cv,
+									   WAIT_EVENT_AIO_WORKER_SUBMISSION);
+				LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+				ConditionVariableCancelSleep();
+				continue;
+			}
+
 			/*
 			 * We'll do it synchronously, but only after we've sent as many as
 			 * we can to workers, to maximize concurrency.
@@ -637,6 +672,82 @@ pgaio_worker_can_timeout(void)
 	return true;
 }
 
+static BlockNumber
+pgaio_worker_get_block_count(PgAioHandle *ioh)
+{
+	if (ioh->op == PGAIO_OP_READV ||
+		ioh->op == PGAIO_OP_WRITEV)
+	{
+		struct iovec *iov;
+		size_t		len = 0;
+		int			iovcnt;
+
+		iovcnt = pgaio_io_get_iovec_length(ioh, &iov);
+		for (int i = 0; i < iovcnt; ++i)
+			len += iov[i].iov_len;
+
+		return len / BLCKSZ;
+	}
+
+	return 0;
+}
+
+static void
+pgaio_worker_wait(pg_atomic_uint64 *next_ns_p,
+				  int delay_ns,
+				  uint32 wait_event_info)
+{
+	uint64		now_ns = INSTR_TIME_GET_NANOSEC(pg_clock_gettime_ns());
+	uint64		next_ns = pg_atomic_read_u64(next_ns_p);
+
+	for (;;)
+	{
+		if (next_ns >= now_ns)
+		{
+			/* Need to wait.  Delay the next op further. */
+			next_ns = pg_atomic_fetch_add_u64(next_ns_p, delay_ns);
+
+			/* Value shouldn't ever go down. */
+			Assert(next_ns >= now_ns);
+
+			/* Average rate maintained even with low-res sleep or EINTR. */
+			pgstat_report_wait_start(wait_event_info);
+			pg_usleep(((next_ns - now_ns) + 999) / 1000);
+			pgstat_report_wait_end();
+			break;
+		}
+		else
+		{
+			/* Don't need to wait.  New next_ns is relative to now. */
+			if (pg_atomic_compare_exchange_u64(next_ns_p,
+											   &next_ns,
+											   now_ns + delay_ns))
+				break;
+		}
+	}
+}
+
+static void
+pgaio_worker_limit_io(PgAioHandle *ioh)
+{
+	int			op_ns = io_worker_control->limit_op_ns;
+	int			read_block_ns = io_worker_control->limit_read_block_ns;
+	int			write_block_ns = io_worker_control->limit_write_block_ns;
+
+	if (op_ns)
+		pgaio_worker_wait(&io_worker_control->limit_op_next_ns,
+						  op_ns,
+						  WAIT_EVENT_AIO_WORKER_LIMIT_IOPS);
+	if (read_block_ns && ioh->op == PGAIO_OP_READV)
+		pgaio_worker_wait(&io_worker_control->limit_read_next_ns,
+						  pgaio_worker_get_block_count(ioh) * read_block_ns,
+						  WAIT_EVENT_AIO_WORKER_LIMIT_READ);
+	if (write_block_ns && ioh->op == PGAIO_OP_WRITEV)
+		pgaio_worker_wait(&io_worker_control->limit_write_next_ns,
+						  pgaio_worker_get_block_count(ioh) * write_block_ns,
+						  WAIT_EVENT_AIO_WORKER_LIMIT_WRITE);
+}
+
 void
 IoWorkerMain(const void *startup_data, size_t startup_data_len)
 {
@@ -771,6 +882,10 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		{
 			PgAioHandle *ioh = NULL;
 
+			/* If the queue was previously full, wake potential inserters. */
+			if (queue_depth == io_worker_submission_queue->size - 2)
+				ConditionVariableBroadcast(&io_worker_submission_queue->space_cv);
+
 			/* Cancel timeout and update wakeup:work ratio. */
 			idle_timeout_abs = 0;
 			if (++ios == PGAIO_WORKER_STATS_MAX)
@@ -838,6 +953,10 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 					pgaio_io_get_target_description(ioh));
 			set_ps_display(cmd);
 #endif
+
+			/* Simulate slow storage, if configured. */
+			if (io_worker_control->limit_enabled)
+				pgaio_worker_limit_io(ioh);
 
 			/*
 			 * We don't expect this to ever fail with ERROR or FATAL, no need
@@ -945,4 +1064,76 @@ bool
 pgaio_workers_enabled(void)
 {
 	return io_method == IOMETHOD_WORKER;
+}
+
+static void
+assign_debug_io_worker_limit(int *wait_ns, int per_second)
+{
+	/*
+	 * Deferred when called before io_method=worker is configured, and ignored
+	 * permanently otherwise.  The GUC variables will still be assigned, and
+	 * pgaio_worker_shmem_init() will call again.
+	 */
+	if (!io_worker_control)
+		return;
+
+	LWLockAcquire(AioWorkerControlLock, LW_EXCLUSIVE);
+	*wait_ns = per_second == 0 ? 0 : NS_PER_S / per_second;
+	io_worker_control->limit_enabled =
+		io_worker_control->limit_op_ns > 0 ||
+		io_worker_control->limit_read_block_ns > 0 ||
+		io_worker_control->limit_write_block_ns > 0;
+	LWLockRelease(AioWorkerControlLock);
+}
+
+void
+assign_debug_io_worker_limit_iops(int newval, void *extra)
+{
+	assign_debug_io_worker_limit(&io_worker_control->limit_op_ns, newval);
+}
+
+void
+assign_debug_io_worker_limit_read(int newval, void *extra)
+{
+	assign_debug_io_worker_limit(&io_worker_control->limit_read_block_ns, newval);
+}
+
+void
+assign_debug_io_worker_limit_write(int newval, void *extra)
+{
+	assign_debug_io_worker_limit(&io_worker_control->limit_write_block_ns, newval);
+}
+
+static const char *
+show_debug_io_worker_limit(const int *wait_ns)
+{
+	int			per_second;
+
+	/* Zero if io_method=worker is not configured. */
+	if (!io_worker_control)
+		return "0";
+
+	LWLockAcquire(AioWorkerControlLock, LW_SHARED);
+	per_second = *wait_ns == 0 ? 0 : NS_PER_S / *wait_ns;
+	LWLockRelease(AioWorkerControlLock);
+
+	return psprintf("%d", per_second);
+}
+
+const char *
+show_debug_io_worker_limit_iops(void)
+{
+	return show_debug_io_worker_limit(&io_worker_control->limit_op_ns);
+}
+
+const char *
+show_debug_io_worker_limit_read(void)
+{
+	return show_debug_io_worker_limit(&io_worker_control->limit_read_block_ns);
+}
+
+const char *
+show_debug_io_worker_limit_write(void)
+{
+	return show_debug_io_worker_limit(&io_worker_control->limit_write_block_ns);
 }

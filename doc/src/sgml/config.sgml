@@ -12375,6 +12375,133 @@ dynamic_library_path = '/usr/local/lib/postgresql:$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-debug-io-worker-limit-iops" xreflabel="debug_io_worker_limit_iops">
+      <term><varname>debug_io_worker_limit_iops</varname> (<type>int</type>)
+      <indexterm>
+        <primary><varname>debug_io_worker_limit_iops</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Artificially limits the number of IOs processed per second
+        across all I/O workers.  Zero (the default) means unlimited.
+        This setting can be used to simulate overloaded storage subsystems
+        and study system behavior.  Note that the rate applies even to IOs that
+        are handled by the kernel's cache, effectively simulating direct
+        I/O even when <xref linkend="guc-debug-io-direct"/> is not enabled.
+        I/O that doesn't make use of the AIO subsystem is not affected.
+       </para>
+       <para>
+        Only has an effect if <xref linkend="guc-io-method"/> is set to
+        <literal>worker</literal>.
+       </para>
+       <para>
+        This is intended for developer testing only.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-debug-io-worker-limit-read" xreflabel="debug_io_worker_limit_read">
+      <term><varname>debug_io_worker_limit_read</varname> (<type>int</type>)
+      <indexterm>
+        <primary><varname>debug_io_worker_limit_read</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Artificially limits the number of blocks that can be read per second
+        across all I/O workers.  Zero (the default) means unlimited.
+        This setting can be used to simulate overloaded storage subsystems
+        and study system behavior.  Note that the rate applies even to IOs that
+        are handled by the kernel's cache, effectively simulating direct I/O
+        even when <xref linkend="guc-debug-io-direct"/> is not enabled.
+        I/O that doesn't make use of the AIO subsystem is not affected.
+       </para>
+       <para>
+        Only has an effect if <xref linkend="guc-io-method"/> is set to
+        <literal>worker</literal>.
+       </para>
+       <para>
+        This is intended for developer testing only.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-debug-io-worker-limit-write" xreflabel="debug_io_worker_limit_write">
+      <term><varname>debug_io_worker_limit_write</varname> (<type>int</type>)
+      <indexterm>
+        <primary><varname>debug_io_worker_limit_write</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Artificially limits the number of blocks that can be written per second
+        across all I/O workers.  Zero (the default) means unlimited.
+        This setting can be used to simulate overloaded storage subsystems
+        and study system behavior.  Note that the rate applies even to IOs that
+        are handled by the kernel's cache, effectively simulating direct I/O
+        even when <xref linkend="guc-debug-io-direct"/> is not enabled.
+        I/O that doesn't make use of the AIO subsystem is not affected.
+       </para>
+       <para>
+        Only has an effect if <xref linkend="guc-io-method"/> is set to
+        <literal>worker</literal>.
+       </para>
+       <para>
+        This is intended for developer testing only.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-debug-io-worker-queue-size" xreflabel="debug_io_worker_queue_size">
+      <term><varname>debug_io_worker_queue_size</varname> (<type>integer</type>)
+      <indexterm>
+        <primary><varname>debug_io_worker_queue_size</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specify the size of the submission queue used to distribute work
+        to the I/O worker pool.
+        This parameter can only be set at server start.
+       </para>
+       <para>
+        Only has an effect if <xref linkend="guc-io-method"/> is set to
+        <literal>worker</literal>.
+       </para>
+       <para>
+        This is intended for developer testing only.  The default size is
+        adequate for normal use.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-debug-io-worker-overflow-sync" xreflabel="debug_io_worker_overflow_sync">
+      <term><varname>debug_io_worker_overflow_sync</varname> (<type>boolean</type>)
+      <indexterm>
+        <primary><varname>debug_io_worker_overflow_sync</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls the behavior when the I/O worker submission queue is full.
+        If set to true (the default), IOs are silently processed synchronously
+        instead.  If set to false, the submitting backend blocks waiting for
+        the submission queue to be drained enough to create space.  Both policies
+        create back-pressure when I/O subsystems are overloaded, but the
+        non-default setting is useful in combination with other simulation
+        settings as synchronous I/O bypasses the submission queue.
+       </para>
+       <para>
+        Only has an effect if <xref linkend="guc-io-method"/> is set to
+        <literal>worker</literal>.
+       </para>
+       <para>
+        This is intended for developer testing only.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-debug-parallel-query" xreflabel="debug_parallel_query">
       <term><varname>debug_parallel_query</varname> (<type>enum</type>)
       <indexterm>
