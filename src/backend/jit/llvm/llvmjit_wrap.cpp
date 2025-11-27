@@ -34,12 +34,6 @@ extern "C"
  * C-API extensions.
  */
 
-LLVMTypeRef
-LLVMGetFunctionType(LLVMValueRef r)
-{
-	return llvm::wrap(llvm::unwrap<llvm::Function>(r)->getFunctionType());
-}
-
 #ifdef USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(llvm::orc::ExecutionSession, LLVMOrcExecutionSessionRef)
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(llvm::orc::ObjectLayer, LLVMOrcObjectLayerRef);

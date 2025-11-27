@@ -351,7 +351,7 @@ slot_compile_deform(LLVMJitContext *context, TupleDesc desc,
 		v_params[2] = l_int32_const(lc, natts);
 		f = llvm_pg_func(mod, "slot_getmissingattrs");
 		l_call(b,
-			   LLVMGetFunctionType(f), f,
+			   LLVMGlobalGetValueType(f), f,
 			   v_params, lengthof(v_params), "");
 		LLVMBuildBr(b, b_find_start);
 	}

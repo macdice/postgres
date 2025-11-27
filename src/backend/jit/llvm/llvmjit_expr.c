@@ -418,7 +418,7 @@ llvm_compile_expr(ExprState *state)
 						params[0] = v_slot;
 
 						l_call(b,
-							   LLVMGetFunctionType(l_jit_deform),
+							   LLVMGlobalGetValueType(l_jit_deform),
 							   l_jit_deform,
 							   params, lengthof(params), "");
 					}
@@ -1208,7 +1208,7 @@ llvm_compile_expr(ExprState *state)
 					v_params[1] = l_ptr_const(op, l_ptr(StructExprEvalStep));
 					v_params[2] = v_econtext;
 					l_call(b,
-						   LLVMGetFunctionType(ExecEvalSubroutineTemplate),
+						   LLVMGlobalGetValueType(ExecEvalSubroutineTemplate),
 						   v_func,
 						   v_params, lengthof(v_params), "");
 
@@ -1236,7 +1236,7 @@ llvm_compile_expr(ExprState *state)
 					v_params[1] = l_ptr_const(op, l_ptr(StructExprEvalStep));
 					v_params[2] = v_econtext;
 					v_ret = l_call(b,
-								   LLVMGetFunctionType(ExecEvalBoolSubroutineTemplate),
+								   LLVMGlobalGetValueType(ExecEvalBoolSubroutineTemplate),
 								   v_func,
 								   v_params, lengthof(v_params), "");
 					v_ret = LLVMBuildZExt(b, v_ret, TypeStorageBool, "");
@@ -1263,7 +1263,7 @@ llvm_compile_expr(ExprState *state)
 					v_params[1] = l_ptr_const(op, l_ptr(StructExprEvalStep));
 					v_params[2] = v_econtext;
 					l_call(b,
-						   LLVMGetFunctionType(ExecEvalSubroutineTemplate),
+						   LLVMGlobalGetValueType(ExecEvalSubroutineTemplate),
 						   v_func,
 						   v_params, lengthof(v_params), "");
 
@@ -1430,7 +1430,7 @@ llvm_compile_expr(ExprState *state)
 								   l_funcnullp(b, v_fcinfo_out, 0));
 					/* and call output function (can never return NULL) */
 					v_output = l_call(b,
-									  LLVMGetFunctionType(v_fn_out),
+									  LLVMGlobalGetValueType(v_fn_out),
 									  v_fn_out, &v_fcinfo_out,
 									  1, "funccall_coerce_out");
 					LLVMBuildBr(b, b_input);
@@ -1487,7 +1487,7 @@ llvm_compile_expr(ExprState *state)
 					LLVMBuildStore(b, l_sbool_const(0), v_fcinfo_in_isnullp);
 					/* and call function */
 					v_retval = l_call(b,
-									  LLVMGetFunctionType(v_fn_in),
+									  LLVMGlobalGetValueType(v_fn_in),
 									  v_fn_in, &v_fcinfo_in, 1,
 									  "funccall_iocoerce_in");
 
@@ -2854,7 +2854,7 @@ llvm_compile_expr(ExprState *state)
 						v_fn = llvm_pg_func(mod, "ExecAggCopyTransValue");
 						v_newval =
 							l_call(b,
-								   LLVMGetFunctionType(v_fn),
+								   LLVMGlobalGetValueType(v_fn),
 								   v_fn,
 								   params, lengthof(params),
 								   "");
@@ -2893,7 +2893,7 @@ llvm_compile_expr(ExprState *state)
 					v_args[0] = l_ptr_const(aggstate, l_ptr(StructAggState));
 					v_args[1] = l_ptr_const(pertrans, l_ptr(StructAggStatePerTransData));
 
-					v_ret = l_call(b, LLVMGetFunctionType(v_fn), v_fn, v_args, 2, "");
+					v_ret = l_call(b, LLVMGlobalGetValueType(v_fn), v_fn, v_args, 2, "");
 					v_ret = LLVMBuildZExt(b, v_ret, TypeStorageBool, "");
 
 					LLVMBuildCondBr(b,
@@ -2917,7 +2917,7 @@ llvm_compile_expr(ExprState *state)
 					v_args[0] = l_ptr_const(aggstate, l_ptr(StructAggState));
 					v_args[1] = l_ptr_const(pertrans, l_ptr(StructAggStatePerTransData));
 
-					v_ret = l_call(b, LLVMGetFunctionType(v_fn), v_fn, v_args, 2, "");
+					v_ret = l_call(b, LLVMGlobalGetValueType(v_fn), v_fn, v_args, 2, "");
 					v_ret = LLVMBuildZExt(b, v_ret, TypeStorageBool, "");
 
 					LLVMBuildCondBr(b,
@@ -3025,7 +3025,7 @@ BuildV1Call(LLVMJitContext *context, LLVMBuilderRef b,
 									"v_fcinfo_isnull");
 	LLVMBuildStore(b, l_sbool_const(0), v_fcinfo_isnullp);
 
-	v_retval = l_call(b, LLVMGetFunctionType(AttributeTemplate), v_fn, &v_fcinfo, 1, "funccall");
+	v_retval = l_call(b, LLVMGlobalGetValueType(AttributeTemplate), v_fn, &v_fcinfo, 1, "funccall");
 
 	if (v_fcinfo_isnull)
 		*v_fcinfo_isnull = l_load(b, TypeStorageBool, v_fcinfo_isnullp, "");
@@ -3040,11 +3040,11 @@ BuildV1Call(LLVMJitContext *context, LLVMBuilderRef b,
 
 		params[0] = l_int64_const(lc, sizeof(NullableDatum) * fcinfo->nargs);
 		params[1] = l_ptr_const(fcinfo->args, l_ptr(LLVMInt8TypeInContext(lc)));
-		l_call(b, LLVMGetFunctionType(v_lifetime), v_lifetime, params, lengthof(params), "");
+		l_call(b, LLVMGlobalGetValueType(v_lifetime), v_lifetime, params, lengthof(params), "");
 
 		params[0] = l_int64_const(lc, sizeof(fcinfo->isnull));
 		params[1] = l_ptr_const(&fcinfo->isnull, l_ptr(LLVMInt8TypeInContext(lc)));
-		l_call(b, LLVMGetFunctionType(v_lifetime), v_lifetime, params, lengthof(params), "");
+		l_call(b, LLVMGlobalGetValueType(v_lifetime), v_lifetime, params, lengthof(params), "");
 	}
 
 	return v_retval;
@@ -3076,7 +3076,7 @@ build_EvalXFuncInt(LLVMBuilderRef b, LLVMModuleRef mod, const char *funcname,
 	for (int i = 0; i < nargs; i++)
 		params[argno++] = v_args[i];
 
-	v_ret = l_call(b, LLVMGetFunctionType(v_fn), v_fn, params, argno, "");
+	v_ret = l_call(b, LLVMGlobalGetValueType(v_fn), v_fn, params, argno, "");
 
 	pfree(params);
 

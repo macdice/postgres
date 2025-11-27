@@ -449,7 +449,7 @@ llvm_pg_var_func_type(const char *varname)
 	if (!v_srcvar)
 		elog(ERROR, "function %s not in llvmjit_types.c", varname);
 
-	typ = LLVMGetFunctionType(v_srcvar);
+	typ = LLVMGlobalGetValueType(v_srcvar);
 
 	return typ;
 }
@@ -479,7 +479,7 @@ llvm_pg_func(LLVMModuleRef mod, const char *funcname)
 
 	v_fn = LLVMAddFunction(mod,
 						   funcname,
-						   LLVMGetFunctionType(v_srcfn));
+						   LLVMGlobalGetValueType(v_srcfn));
 	llvm_copy_attributes(v_srcfn, v_fn);
 
 	return v_fn;
@@ -521,7 +521,7 @@ llvm_copy_attributes(LLVMValueRef v_from, LLVMValueRef v_to)
 	/* copy function attributes */
 	llvm_copy_attributes_at_index(v_from, v_to, LLVMAttributeFunctionIndex);
 
-	if (LLVMGetTypeKind(LLVMGetReturnType(LLVMGetFunctionType(v_to))) != LLVMVoidTypeKind)
+	if (LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(v_to))) != LLVMVoidTypeKind)
 	{
 		/* and the return value attributes */
 		llvm_copy_attributes_at_index(v_from, v_to, LLVMAttributeReturnIndex);
@@ -592,7 +592,7 @@ llvm_function_reference(LLVMJitContext *context,
 	if (v_fn != 0)
 		return v_fn;
 
-	v_fn = LLVMAddFunction(mod, funcname, LLVMGetFunctionType(AttributeTemplate));
+	v_fn = LLVMAddFunction(mod, funcname, LLVMGlobalGetValueType(AttributeTemplate));
 
 	return v_fn;
 }
@@ -960,7 +960,7 @@ load_return_type(LLVMModuleRef mod, const char *name)
 	if (!value)
 		elog(ERROR, "function %s is unknown", name);
 
-	typ = LLVMGetReturnType(LLVMGetFunctionType(value));
+	typ = LLVMGetReturnType(LLVMGlobalGetValueType(value));
 
 	return typ;
 }

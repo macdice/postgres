@@ -139,7 +139,6 @@ extern LLVMValueRef slot_compile_deform(struct LLVMJitContext *context, TupleDes
  * Error handling related functions.
  ****************************************************************************
  */
-extern LLVMTypeRef LLVMGetFunctionType(LLVMValueRef r);
 #ifdef USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
 extern LLVMOrcObjectLayerRef LLVMOrcCreateRTDyldObjectLinkingLayerWithSafeSectionMemoryManager(LLVMOrcExecutionSessionRef ES);
 #endif
