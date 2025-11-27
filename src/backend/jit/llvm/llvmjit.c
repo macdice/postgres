@@ -521,7 +521,7 @@ llvm_copy_attributes(LLVMValueRef v_from, LLVMValueRef v_to)
 	/* copy function attributes */
 	llvm_copy_attributes_at_index(v_from, v_to, LLVMAttributeFunctionIndex);
 
-	if (LLVMGetTypeKind(LLVMGetFunctionReturnType(v_to)) != LLVMVoidTypeKind)
+	if (LLVMGetTypeKind(LLVMGetReturnType(LLVMGetFunctionType(v_to))) != LLVMVoidTypeKind)
 	{
 		/* and the return value attributes */
 		llvm_copy_attributes_at_index(v_from, v_to, LLVMAttributeReturnIndex);
@@ -960,7 +960,7 @@ load_return_type(LLVMModuleRef mod, const char *name)
 	if (!value)
 		elog(ERROR, "function %s is unknown", name);
 
-	typ = LLVMGetFunctionReturnType(value); /* in llvmjit_wrap.cpp */
+	typ = LLVMGetReturnType(LLVMGetFunctionType(value));
 
 	return typ;
 }
