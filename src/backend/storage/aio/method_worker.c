@@ -86,6 +86,12 @@ typedef uint64 PgAioWorkerSet;
 StaticAssertDecl(PGAIO_WORKER_SET_BITS >= MAX_IO_WORKERS,
 				 "PgAioWorkerSet too small");
 
+typedef struct PgAioWorkerDepthStats
+{
+	PgAioWorkerSet jj
+//	uint8		busy_target;
+} PgAioWorkerDepthStats;
+
 typedef struct PgAioWorkerControl
 {
 	/* Developer-only simulation of slow storage. */
@@ -100,15 +106,15 @@ typedef struct PgAioWorkerControl
 	/* Seen by postmaster */
 	volatile bool grow;
 
-	/* Protected by AioWorkerSubmissionQueueLock. */
-	PgAioWorkerSet idle_worker_set;
-
 	/* Protected by AioWorkerControlLock. */
 	PgAioWorkerSet worker_set;
-	int			nworkers;
+	int			nworkers;	/* XXX not needed? */
+	PgAioWorkerSlot workers[MAX_IO_WORKERS];
 
-	/* Protected by AioWorkerControlLock. */
-	PgAioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
+	/* Protected by AioWorkerSubmissionQueueLock. */
+	PgAioWorkerSet idle_worker_set;
+	uint32 depth_at_wakeup[MAX_IO_WORKERS];
+	PgAioWorkerDepthStats depth_curve[FLEXIBLE_ARRAY_MEMBER];
 } PgAioWorkerControl;
 
 static size_t pgaio_worker_shmem_size(void);
@@ -230,30 +236,33 @@ pgaio_worker_set_count(PgAioWorkerSet *set)
 }
 #endif
 
-static size_t
-pgaio_worker_queue_shmem_size(int *queue_size)
+static int
+pgaio_worker_queue_size(void)
 {
 	/* Round size up to next power of two so we can make a mask. */
-	*queue_size = pg_nextpower2_32(io_worker_queue_size);
+	return pg_nextpower2_32(io_worker_queue_size);
+}
 
+static size_t
+pgaio_worker_queue_shmem_size(void)
+{
 	return offsetof(PgAioWorkerSubmissionQueue, sqes) +
-		sizeof(int) * *queue_size;
+		sizeof(uint32) * pgaio_worker_queue_size();
 }
 
 static size_t
 pgaio_worker_control_shmem_size(void)
 {
-	return offsetof(PgAioWorkerControl, workers) +
-		sizeof(PgAioWorkerSlot) * MAX_IO_WORKERS;
+	return offsetof(PgAioWorkerControl, depth_busy_curve) +
+		sizeof(uint16) * pgaio_worker_queue_size();
 }
 
 static size_t
 pgaio_worker_shmem_size(void)
 {
 	size_t		sz;
-	int			queue_size;
 
-	sz = pgaio_worker_queue_shmem_size(&queue_size);
+	sz = pgaio_worker_queue_shmem_size();
 	sz = add_size(sz, pgaio_worker_control_shmem_size());
 
 	return sz;
@@ -263,11 +272,11 @@ static void
 pgaio_worker_shmem_init(bool first_time)
 {
 	bool		found;
-	int			queue_size;
+	int			queue_size = pgaio_worker_queue_size();
 
 	io_worker_submission_queue =
 		ShmemInitStruct("AioWorkerSubmissionQueue",
-						pgaio_worker_queue_shmem_size(&queue_size),
+						pgaio_worker_queue_shmem_size(),
 						&found);
 	if (!found)
 	{
@@ -288,6 +297,8 @@ pgaio_worker_shmem_init(bool first_time)
 		pgaio_worker_set_initialize(&io_worker_control->idle_worker_set);
 		for (int i = 0; i < MAX_IO_WORKERS; ++i)
 			io_worker_control->workers[i].proc_number = INVALID_PROC_NUMBER;
+		for (int i = 0; i < queue_size; ++i)
+			io_worker_control->depth_busy_curve[i] = i;
 
 		assign_debug_io_worker_limit_iops(io_worker_limit_iops, NULL);
 		assign_debug_io_worker_limit_read(io_worker_limit_read, NULL);
@@ -345,24 +356,71 @@ pgaio_worker_test_and_clear_grow(void)
 	return result;
 }
 
-static int
-pgaio_worker_choose_idle(int minimum_worker)
+static void
+pgaio_worker_compute_busy_target(void)
 {
-	PgAioWorkerSet worker_set;
-	int			worker;
+	int			busy_target;
 
 	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
 
-	worker_set = io_worker_control->idle_worker_set;
-	pgaio_worker_set_remove_less_than(&worker_set, minimum_worker);
-	if (pgaio_worker_set_is_empty(&worker_set))
-		return -1;
+	busy_target = io_worker_control->depth_curve[queue_depth].busy_target;
+	if (excessivebusy_target > 1 &&
+		busy_target == MyIoWorkerId + 1 &&
+	
+}
 
-	/* Find the lowest numbered idle worker and mark it not idle. */
-	worker = pgaio_worker_set_get_lowest(&worker_set);
-	pgaio_worker_set_remove(&io_worker_control->idle_worker_set, worker);
+#define PGAIO_WORKER_NONE -1
+#define PGAIO_WORKER_GROW INT_MAX
 
-	return worker;
+/*
+ * Choose an idle worker to wake up.  Returns a worker ID, PGAIO_WORKER_NONE if
+ * statistics indicated that enough are running already, or PGAIO_WORKER_GROW
+ * if a new worker is needed.
+ */
+static int
+pgaio_worker_compute_wakeup(void)
+{
+	PgAioWorkerSet worker_set;
+	int			worker;
+	int			
+
+	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+
+	busy_target = io_worker_control->depth_curve[queue_depth].busy_target;
+
+	if (pgaio_worker_set_count(&io_worker_control->busy_worker_set) < busy_target)
+	{
+		/* If there are no idle workers, start one if possible. */
+		if (pgaio_worker_set_is_empty(&io_worker_control->idle_worker_set))
+			return PGAIO_WORKER_GROW;
+
+		/* Select the lowest idle worker to wake up. */
+		worker = pgaio_worker_set_pop_lowest(&io_worker_control->idle_worker_set);
+
+		/*
+		 * Tell the worker what the queue depth was when we made this decision,
+		 * so that it can provide feedback about spurious wakeups due to work
+		 * stealing.
+		 */
+		io_worker_control->wakeup_depth[worker] = queue_depth;
+
+		return worker;
+	}
+
+	return PGAIO_WORKER_NONE;
+}
+
+static void
+pgaio_worker_apply_busy_adjustment(int pool_change)
+{
+	Assert(!LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock);
+
+	if (adjustment == PGAIO_WORKER_NONE)
+		;
+	else if (adjustment == PGAIO_WORKER_GROW)
+		pgaio_worker_grow(true);
+	else
+		pgaio_worker_wake(pool_change);
 }
 
 /*
@@ -459,7 +517,7 @@ static void
 pgaio_worker_submit_internal(int num_staged_ios, PgAioHandle **staged_ios)
 {
 	PgAioHandle *synchronous_ios[PGAIO_SUBMIT_BATCH_SIZE];
-	int			worker = -1;
+	int			busy_adjustment;
 	int			nsync = 0;
 
 	Assert(num_staged_ios <= PGAIO_SUBMIT_BATCH_SIZE);
@@ -488,23 +546,12 @@ pgaio_worker_submit_internal(int num_staged_ios, PgAioHandle **staged_ios)
 			 */
 			synchronous_ios[nsync++] = staged_ios[i];
 		}
-		else if (worker == -1)
-		{
-			/* Choose an idle worker to wake up if we haven't already. */
-			worker = pgaio_worker_choose_idle(0);
-			pgaio_debug_io(DEBUG4, staged_ios[i],
-						   "choosing worker %d",
-						   worker);
-		}
 	}
+	busy_adjustment =
+		pgaio_worker_compute_busy_adjustment(pgaio_worker_submission_queue_depth());
 	LWLockRelease(AioWorkerSubmissionQueueLock);
 
-	/*
-	 * If we didn't find a worker to wake up, the existing workers will
-	 * determine whether the pool is too small.
-	 */
-	if (worker != -1)
-		pgaio_worker_wake(worker);
+	pgaio_worker_apply_busy_adjustment(adjustment);
 
 	/* Run whatever is left synchronously. */
 	for (int i = 0; i < nsync; ++i)
@@ -563,6 +610,7 @@ pgaio_worker_die(int code, Datum arg)
 	PgAioWorkerSet notify_set;
 
 	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+	pgaio_worker_set_remove(&io_worker_control->busy, MyIoWorkerId);
 	pgaio_worker_set_remove(&io_worker_control->idle_worker_set, MyIoWorkerId);
 	LWLockRelease(AioWorkerSubmissionQueueLock);
 
@@ -748,6 +796,38 @@ pgaio_worker_limit_io(PgAioHandle *ioh)
 						  WAIT_EVENT_AIO_WORKER_LIMIT_WRITE);
 }
 
+static inline void
+pgaio_worker_mark_idle(int worker)
+{
+	Assert(!pgaio_worker_set_contains(&io_worker_control->idle_worker_set, worker));
+	Assert(pgaio_worker_set_contains(&io_worker_control->busy_worker_set, worker));
+	pgaio_worker_set_remove(&io_worker_control->busy_worker_set, worker);
+	pgaio_worker_set_insert(&io_worker_control->idle_worker_set, worker);
+}
+
+static inline void
+pgaio_worker_assert_idle(int worker)
+{
+	Assert(pgaio_worker_set_contains(&io_worker_control->idle_worker_set, worker));
+	Assert(!pgaio_worker_set_contains(&io_worker_control->busy_worker_set, worker));
+}
+
+static inline void
+pgaio_worker_mark_busy(int worker)
+{
+	Assert(pgaio_worker_set_contains(&io_worker_control->idle_worker_set, worker));
+	Assert(!pgaio_worker_set_contains(&io_worker_control->busy_worker_set, worker));
+	pgaio_worker_set_remove(&io_worker_control->idle_worker_set, worker);
+	pgaio_worker_set_insert(&io_worker_control->busy_worker_set, worker);
+}
+
+static inline void
+pgaio_worker_assert_busy(int worker)
+{
+	Assert(!pgaio_worker_set_contains(&io_worker_control->idle_worker_set, worker));
+	Assert(pgaio_worker_set_contains(&io_worker_control->busy_worker_set, worker));
+}
+
 void
 IoWorkerMain(const void *startup_data, size_t startup_data_len)
 {
@@ -758,8 +838,9 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 	ErrorContextCallback errcallback = {0};
 	volatile int error_errno = 0;
 	char		cmd[128];
-	int			ios = 0;
-	int			wakeups = 0;
+	bool		wakeup_received = false;
+	int			ratio_spurious = 0;
+	int			ratio_opportunistic = 0;
 
 	MyBackendType = B_IO_WORKER;
 	AuxiliaryProcessMainCommon();
@@ -828,9 +909,9 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 	while (!ShutdownRequestPending)
 	{
 		uint32		io_index;
-		int			worker = -1;
-		int			queue_depth = 0;
-		bool		grow = false;
+		int			highest_busy_worker = -1;
+		int			adjustment = PGAIO_WORKER_ADJUST_NONE;
+		uint32		pool_change_depth = 0;
 
 		/*
 		 * Try to get a job to do.
@@ -839,44 +920,47 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		 * to ensure that we don't see an outdated data in the handle.
 		 */
 		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+		if (wakeup_received)
+			wakeup_depth = pgaio_worker_consume_wakeup_depth();
 		if ((io_index = pgaio_worker_submission_queue_consume()) == -1)
 		{
-			/* Nothing to do.  Mark self idle. */
-			pgaio_worker_set_insert(&io_worker_control->idle_worker_set,
-									MyIoWorkerId);
+			if (wakeup_received)
+				pgaio_worker_mark_idle(MyIoWorkerId);
+			else
+				pgaio_worker_assert_busy(MyIoWorkerId);
 		}
 		else
 		{
-			/* Got one.  Clear idle flag. */
-			pgaio_worker_set_remove(&io_worker_control->idle_worker_set,
-									MyIoWorkerId);
-
-			/*
-			 * See if we should wake up a higher numbered peer.  Only do this
-			 * if this worker is itself not receiving spurious wakeups.  This
-			 * heuristic discovers the useful wakeup propagation chain length.
-			 */
-			if (wakeups <= ios)
-			{
-				queue_depth = pgaio_worker_submission_queue_depth();
-				worker = pgaio_worker_choose_idle(MyIoWorkerId + 1);
-
-				/*
-				 * If there were no idle higher numbered peers and there are
-				 * more than enough IOs queued for me and all lower numbered
-				 * peers, then try to start a new worker.
-				 */
-				if (worker == -1 && queue_depth > MyIoWorkerId)
-					grow = true;
-			}
+			if (wakeup_received)
+				pgaio_worker_mark_busy(MyIoWorkerId);
+			else
+				pgaio_worker_assert_busy(MyIoWorkerId);
 		}
+		wakeup = pgaio_worker_compute_wakeup(io_index, wakeup_depth);
 		LWLockRelease(AioWorkerSubmissionQueueLock);
 
-		/* Propagate wakeups. */
-		if (worker != -1)
-			pgaio_worker_wake(worker);
-		else if (grow)
-			pgaio_worker_grow(true);
+		/* Update statistics, and decide if we want to change busy_target. */
+		if (busy_change_depth)
+		{
+			if (io_index == -1)
+			{
+		}
+		else
+		{
+			/* We found work without being woken up. */
+			if (ratio_ios == PGAIO_WORKER_STATS_MAX)
+			{
+				if (ratio_wakeups == 0 &&
+					busy_change == PGAIO_WORKER_BUSY_CHANGE_NONE &&
+					highest_busy_worker == 
+				{
+					/* We 
+				}
+			}
+		}
+
+		/* Communicate any adjustment in desired number of busy workers. */
+		pgaio_worker_perform_wakeup(wakeup);
 
 		if (io_index != -1)
 		{
@@ -886,12 +970,25 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			if (queue_depth == io_worker_submission_queue->size - 2)
 				ConditionVariableBroadcast(&io_worker_submission_queue->space_cv);
 
-			/* Cancel timeout and update wakeup:work ratio. */
+			/* Cancel timeout. */
 			idle_timeout_abs = 0;
-			if (++ios == PGAIO_WORKER_STATS_MAX)
+
+			/* Is this an opportunistic extra work cycle? */
+			if (!wakeup_received)
 			{
-				ios /= 2;
-				wakeups /= 2;
+				if (ratio_opportunistic == PGAIO_WORKER_STATS_MAX)
+				{
+					if (ratio_spurious == 0)
+					{
+						/* We're being fully saturated with opportunistic work. */
+					}
+					ratio_spurious /= 2;
+					ratio_opportunistic /= 2;
+				}
+				else
+				{
+					ratio_spurious++;
+				}
 			}
 
 			ioh = &pgaio_ctl->io_handles[io_index];
