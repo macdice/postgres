@@ -1716,7 +1716,7 @@ hash_agg_entry_size(int numTrans, Size tupleWidth, Size transitionSpace)
 	 * power-of-two allocations.
 	 */
 	if (transitionSpace > 0)
-		transitionChunkSize = CHUNKHDRSZ + pg_nextpower2_size_t(transitionSpace);
+		transitionChunkSize = CHUNKHDRSZ + pg_nextpower2(transitionSpace);
 	else
 		transitionChunkSize = 0;
 
@@ -2032,7 +2032,7 @@ hash_create_memory(AggState *aggstate)
 	 * Like CreateWorkExprContext(), use smaller sizings for smaller work_mem,
 	 * to avoid large jumps in memory usage.
 	 */
-	maxBlockSize = pg_prevpower2_size_t(work_mem * (Size) 1024 / 16);
+	maxBlockSize = pg_prevpower2(work_mem * (Size) 1024 / 16);
 
 	/* But no bigger than ALLOCSET_DEFAULT_MAXSIZE */
 	maxBlockSize = Min(maxBlockSize, ALLOCSET_DEFAULT_MAXSIZE);

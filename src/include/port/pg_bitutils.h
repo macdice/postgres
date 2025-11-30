@@ -430,16 +430,18 @@ pg_rotate_left32(uint32 word, int n)
 	return (word << n) | (word >> (32 - n));
 }
 
-/* size_t variants of the above, as required */
+/* generic variants of the above, as required */
 
-#if SIZEOF_SIZE_T == 4
-#define pg_leftmost_one_pos_size_t pg_leftmost_one_pos32
-#define pg_nextpower2_size_t pg_nextpower2_32
-#define pg_prevpower2_size_t pg_prevpower2_32
-#else
-#define pg_leftmost_one_pos_size_t pg_leftmost_one_pos64
-#define pg_nextpower2_size_t pg_nextpower2_64
-#define pg_prevpower2_size_t pg_prevpower2_64
+#ifndef __cplusplus__
+#define pg_leftmost_one_pos(value) _Generic((value) \
+	uint64: pg_leftmost_one_pos_64(value), \
+	uint32: pg_leftmost_one_pos_32(value))
+#define pg_nextpower2(value) _Generic((value) \
+	uint64: pg_nextpower2_64(value), \
+	uint32: pg_nextpower2_32(value))
+#define pg_prevpower2(value) _Generic((value) \
+	uint64: pg_prevpower2_64(value), \
+	uint32: pg_prevpower2_32(value))
 #endif
 
 #endif							/* PG_BITUTILS_H */

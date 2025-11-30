@@ -503,7 +503,7 @@ GenerationAllocFromNewBlock(MemoryContext context, Size size, int flags,
 
 	/* round the size up to the next power of 2 */
 	if (blksize < required_size)
-		blksize = pg_nextpower2_size_t(required_size);
+		blksize = pg_nextpower2(required_size);
 
 	block = (GenerationBlock *) malloc(blksize);
 

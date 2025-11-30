@@ -123,7 +123,7 @@ contiguous_pages_to_segment_bin(size_t n)
 	if (n == 0)
 		bin = 0;
 	else
-		bin = pg_leftmost_one_pos_size_t(n) + 1;
+		bin = pg_leftmost_one_pos(n) + 1;
 
 	return Min(bin, DSA_NUM_SEGMENT_BINS - 1);
 }

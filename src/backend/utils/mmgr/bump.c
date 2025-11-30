@@ -471,7 +471,7 @@ BumpAllocFromNewBlock(MemoryContext context, Size size, int flags,
 	required_size = chunk_size + Bump_CHUNKHDRSZ + Bump_BLOCKHDRSZ;
 	/* round the size up to the next power of 2 */
 	if (blksize < required_size)
-		blksize = pg_nextpower2_size_t(required_size);
+		blksize = pg_nextpower2(required_size);
 
 	block = (BumpBlock *) malloc(blksize);
 

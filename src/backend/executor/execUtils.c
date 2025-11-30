@@ -323,7 +323,7 @@ CreateWorkExprContext(EState *estate)
 {
 	Size		maxBlockSize = ALLOCSET_DEFAULT_MAXSIZE;
 
-	maxBlockSize = pg_prevpower2_size_t(work_mem * (Size) 1024 / 16);
+	maxBlockSize = pg_prevpower2(work_mem * (Size) 1024 / 16);
 
 	/* But no bigger than ALLOCSET_DEFAULT_MAXSIZE */
 	maxBlockSize = Min(maxBlockSize, ALLOCSET_DEFAULT_MAXSIZE);

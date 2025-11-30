@@ -750,7 +750,7 @@ shm_mq_receive(shm_mq_handle *mqh, Size *nbytesp, void **datap, bool nowait)
 			 * Increase size to the next power of 2 that's >= nbytes, but
 			 * limit to MaxAllocSize.
 			 */
-			newbuflen = pg_nextpower2_size_t(nbytes);
+			newbuflen = pg_nextpower2(nbytes);
 			newbuflen = Min(newbuflen, MaxAllocSize);
 
 			if (mqh->mqh_buffer != NULL)

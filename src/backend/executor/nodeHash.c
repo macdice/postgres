@@ -772,7 +772,7 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 	max_pointers = hash_table_bytes / sizeof(HashJoinTuple);
 	max_pointers = Min(max_pointers, MaxAllocSize / sizeof(HashJoinTuple));
 	/* If max_pointers isn't a power of 2, must round it down to one */
-	max_pointers = pg_prevpower2_size_t(max_pointers);
+	max_pointers = pg_prevpower2(max_pointers);
 
 	/* Also ensure we avoid integer overflow in nbatch and nbuckets */
 	/* (this step is redundant given the current value of MaxAllocSize) */
@@ -822,9 +822,9 @@ ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
 		 */
 		bucket_size = (tupsize * NTUP_PER_BUCKET + sizeof(HashJoinTuple));
 		if (hash_table_bytes <= bucket_size)
-			sbuckets = 1;		/* avoid pg_nextpower2_size_t(0) */
+			sbuckets = 1;		/* avoid pg_nextpower2(0) */
 		else
-			sbuckets = pg_nextpower2_size_t(hash_table_bytes / bucket_size);
+			sbuckets = pg_nextpower2(hash_table_bytes / bucket_size);
 		sbuckets = Min(sbuckets, max_pointers);
 		nbuckets = (int) sbuckets;
 		nbuckets = pg_nextpower2_32(nbuckets);
