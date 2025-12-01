@@ -86,11 +86,11 @@ typedef uint64 PgAioWorkerSet;
 StaticAssertDecl(PGAIO_WORKER_SET_BITS >= MAX_IO_WORKERS,
 				 "PgAioWorkerSet too small");
 
-typedef struct PgAioWorkerDepthStats
+typedef struct PgAioWorkerMessage
 {
-	PgAioWorkerSet jj
-//	uint8		busy_target;
-} PgAioWorkerDepthStats;
+	uint32		depth;			/* queue depth when wakeup sent */
+	PgaAioWorkerSet busy_set;	/* busy set when wakeup sent */
+} PgAIoWorkerMessage;
 
 typedef struct PgAioWorkerControl
 {
@@ -114,7 +114,7 @@ typedef struct PgAioWorkerControl
 	/* Protected by AioWorkerSubmissionQueueLock. */
 	PgAioWorkerSet idle_worker_set;
 	uint32 depth_at_wakeup[MAX_IO_WORKERS];
-	PgAioWorkerDepthStats depth_curve[FLEXIBLE_ARRAY_MEMBER];
+	pg_atomic_uint32 depth_curve[FLEXIBLE_ARRAY_MEMBER];
 } PgAioWorkerControl;
 
 static size_t pgaio_worker_shmem_size(void);
@@ -920,8 +920,6 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		 * to ensure that we don't see an outdated data in the handle.
 		 */
 		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-		if (wakeup_received)
-			wakeup_depth = pgaio_worker_consume_wakeup_depth();
 		if ((io_index = pgaio_worker_submission_queue_consume()) == -1)
 		{
 			if (wakeup_received)
@@ -936,31 +934,10 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			else
 				pgaio_worker_assert_busy(MyIoWorkerId);
 		}
-		wakeup = pgaio_worker_compute_wakeup(io_index, wakeup_depth);
+		queue_depth = pgaio_worker_submission_queue_depth();
+		if (woken)
+			pqaio_worker_consume_message(&message);
 		LWLockRelease(AioWorkerSubmissionQueueLock);
-
-		/* Update statistics, and decide if we want to change busy_target. */
-		if (busy_change_depth)
-		{
-			if (io_index == -1)
-			{
-		}
-		else
-		{
-			/* We found work without being woken up. */
-			if (ratio_ios == PGAIO_WORKER_STATS_MAX)
-			{
-				if (ratio_wakeups == 0 &&
-					busy_change == PGAIO_WORKER_BUSY_CHANGE_NONE &&
-					highest_busy_worker == 
-				{
-					/* We 
-				}
-			}
-		}
-
-		/* Communicate any adjustment in desired number of busy workers. */
-		pgaio_worker_perform_wakeup(wakeup);
 
 		if (io_index != -1)
 		{
@@ -974,8 +951,9 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			idle_timeout_abs = 0;
 
 			/* Is this an opportunistic extra work cycle? */
-			if (!wakeup_received)
+			if (!woken)
 			{
+				if (f
 				if (ratio_opportunistic == PGAIO_WORKER_STATS_MAX)
 				{
 					if (ratio_spurious == 0)
