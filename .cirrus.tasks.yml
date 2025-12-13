@@ -885,6 +885,7 @@ task:
         CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
+      time make -C src/test -s -j${BUILD_JOBS}
 
   # gcc, cassert on, dtrace off
   always:
@@ -896,6 +897,7 @@ task:
         CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
+      time make -C src/test -s -j${BUILD_JOBS}
 
   # clang, cassert off, dtrace off
   always:
@@ -906,6 +908,7 @@ task:
         CC="ccache clang" CXX="ccache clang++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
+      time make -C src/test -s -j${BUILD_JOBS}
 
   # clang, cassert on, dtrace on
   always:
@@ -918,6 +921,7 @@ task:
         CC="ccache clang" CXX="ccache clang++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
+      time make -C src/test -s -j${BUILD_JOBS}
 
   # cross-compile to windows
   always:
@@ -930,6 +934,7 @@ task:
         CXX="ccache x86_64-w64-mingw32ucrt-g++"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
+      time make -C src/test -s -j${BUILD_JOBS}
 
   ###
   # Verify docs can be built
