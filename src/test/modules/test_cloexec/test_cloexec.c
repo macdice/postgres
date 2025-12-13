@@ -80,16 +80,15 @@ run_parent_tests(const char *testfile1, const char *testfile2)
 				fd2;
 	HANDLE		h1,
 				h2;
-	char		cmdline[1024];
-	STARTUPINFO si;
-	PROCESS_INFORMATION pi;
+	char		exe_path[MAXPGPATH];
+	char		cmdline[MAXPGPATH + 100];
+	STARTUPINFO si = {.cb = sizeof(si)};
+	PROCESS_INFORMATION pi = {0};
 	DWORD		exit_code;
 
 	printf("Parent: Opening test files...\n");
 
-	/*
-	 * Open first file WITH O_CLOEXEC - should NOT be inherited
-	 */
+	/* Open first file WITH O_CLOEXEC - should NOT be inherited */
 	fd1 = open(testfile1, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
 	if (fd1 < 0)
 	{
@@ -97,9 +96,7 @@ run_parent_tests(const char *testfile1, const char *testfile2)
 		exit(1);
 	}
 
-	/*
-	 * Open second file WITHOUT O_CLOEXEC - should be inherited
-	 */
+	/* Open second file WITHOUT O_CLOEXEC - should be inherited */
 	fd2 = open(testfile2, O_RDWR | O_CREAT | O_TRUNC, 0600);
 	if (fd2 < 0)
 	{
@@ -124,28 +121,11 @@ run_parent_tests(const char *testfile1, const char *testfile2)
 	printf("Parent: fd2=%d (no O_CLOEXEC) -> HANDLE=%p\n", fd2, h2);
 
 	/*
-	 * Spawn child process with bInheritHandles=TRUE, passing handle values as
-	 * hex strings
-	 */
-	snprintf(cmdline, sizeof(cmdline), "\"%s\" %p %p",
-			 GetCommandLine(), h1, h2);
-
-	/*
 	 * Find the actual executable path by removing any arguments from
-	 * GetCommandLine().
+	 * GetCommandLine(), and add our new arguments.
 	 */
-	{
-		char		exe_path[MAX_PATH];
-		char	   *space_pos;
-
-		GetModuleFileName(NULL, exe_path, sizeof(exe_path));
-		snprintf(cmdline, sizeof(cmdline), "\"%s\" %p %p",
-				 exe_path, h1, h2);
-	}
-
-	memset(&si, 0, sizeof(si));
-	si.cb = sizeof(si);
-	memset(&pi, 0, sizeof(pi));
+	GetModuleFileName(NULL, exe_path, sizeof(exe_path));
+	snprintf(cmdline, sizeof(cmdline), "\"%s\" %p %p", exe_path, h1, h2);
 
 	printf("Parent: Spawning child process...\n");
 	printf("Parent: Command line: %s\n", cmdline);
@@ -182,7 +162,9 @@ run_parent_tests(const char *testfile1, const char *testfile2)
 	printf("Parent: Child exit code: %lu\n", exit_code);
 
 	if (exit_code == 0)
+	{
 		printf("Parent: SUCCESS - O_CLOEXEC behavior verified\n");
+	}
 	else
 	{
 		printf("Parent: FAILURE - O_CLOEXEC not working correctly\n");
