@@ -24,21 +24,22 @@
 #include "common/file_utils.h"
 #include "port.h"
 
+#ifdef WIN32
 static void run_parent_tests(const char *testfile1, const char *testfile2);
 static void run_child_tests(const char *handle1_str, const char *handle2_str);
 static bool try_write_to_handle(HANDLE h, const char *label);
+#endif
 
 int
 main(int argc, char *argv[])
 {
-	char		testfile1[MAXPGPATH];
-	char		testfile2[MAXPGPATH];
-
-	/* Windows-only test */
 #ifndef WIN32
+	/* Windows-only test */
 	fprintf(stderr, "This test only runs on Windows\n");
 	return 0;
-#endif
+#else
+	char		testfile1[MAXPGPATH];
+	char		testfile2[MAXPGPATH];
 
 	if (argc == 3)
 	{
@@ -68,12 +69,13 @@ main(int argc, char *argv[])
 		fprintf(stderr, "Usage: %s [handle1_hex handle2_hex]\n", argv[0]);
 		return 1;
 	}
+#endif
 }
 
+#ifdef WIN32
 static void
 run_parent_tests(const char *testfile1, const char *testfile2)
 {
-#ifdef WIN32
 	int			fd1,
 				fd2;
 	HANDLE		h1,
@@ -186,13 +188,11 @@ run_parent_tests(const char *testfile1, const char *testfile2)
 		printf("Parent: FAILURE - O_CLOEXEC not working correctly\n");
 		exit(1);
 	}
-#endif
 }
 
 static void
 run_child_tests(const char *handle1_str, const char *handle2_str)
 {
-#ifdef WIN32
 	HANDLE		h1,
 				h2;
 	bool		h1_worked,
@@ -232,13 +232,11 @@ run_child_tests(const char *handle1_str, const char *handle2_str)
 		printf("Child: Test FAILED - O_CLOEXEC not working correctly\n");
 		exit(1);
 	}
-#endif
 }
 
 static bool
 try_write_to_handle(HANDLE h, const char *label)
 {
-#ifdef WIN32
 	const char *test_data = "test\n";
 	DWORD		bytes_written;
 	BOOL		result;
@@ -256,7 +254,6 @@ try_write_to_handle(HANDLE h, const char *label)
 			   label, GetLastError());
 		return false;
 	}
-#else
 	return false;
-#endif
 }
+#endif
