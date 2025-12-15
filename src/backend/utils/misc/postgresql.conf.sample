@@ -179,6 +179,7 @@
                                         # in kilobytes, or -1 for no limit
 
 #file_copy_method = copy                # copy, clone (if supported by OS)
+#file_extend_method_threshold = 8       # size up to which write_zeros is used
 #file_extend_method = posix_fallocate   # the default is the first option supported
                                         # by the operating system:
                                         #   posix_fallocate (most Unix-like systems)

@@ -2442,7 +2442,26 @@ include_dir 'conf.d'
          </listitem>
         </itemizedlist>
         The <literal>write_zeros</literal> method is always used when data
-        files are extended by 8 blocks or fewer.
+        files are extended by <literal>file_extend_method_threshold</literal>
+        or fewer blocks.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-file-extend-method-threshold" xreflabel="file_extend_method_threshold">
+      <term><varname>file_extend_method_threshold</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>file_extend_method_threshold</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        <literal>posix_fallocate</literal> is known to interfere with
+        delayed allocation heuristics on some file systems, when the extension
+        size is small.  This setting specifies the size up to which
+        <literal>write_zeros</literal> is used, overriding the
+        <literal>file_extend_method</literal> setting.  The default is 8
+        blocks.
        </para>
       </listitem>
      </varlistentry>

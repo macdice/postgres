@@ -66,12 +66,20 @@ enum FileExtendMethod
 /* Default to the first available file_extend_method. */
 #define DEFAULT_FILE_EXTEND_METHOD 0
 
+/*
+ * Values 4-8 were experimentally determined to avoid interference between
+ * posix_fallocate() and delayed allocation on common Linux file systems, but
+ * other systems might vary.
+ */
+#define DEFAULT_FILE_EXTEND_METHOD_THRESHOLD 8
+
 /* GUC parameter */
 extern PGDLLIMPORT int max_files_per_process;
 extern PGDLLIMPORT bool data_sync_retry;
 extern PGDLLIMPORT int recovery_init_sync_method;
 extern PGDLLIMPORT int io_direct_flags;
 extern PGDLLIMPORT int file_extend_method;
+extern PGDLLIMPORT int file_extend_method_threshold;
 
 /*
  * This is private to fd.c, but exported for save/restore_backend_variables()

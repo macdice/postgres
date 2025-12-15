@@ -1046,6 +1046,14 @@
   options => 'file_extend_method_options',
 },
 
+{ name => 'file_extend_method_threshold', type => 'int', context => 'PGC_SIGHUP', group => 'RESOURCES_DISK',
+  short_desc => 'Specifies the extension size above which file_extend_method is used.',
+  variable => 'file_extend_method_threshold',
+  boot_val => 'DEFAULT_FILE_EXTEND_METHOD_THRESHOLD',
+  min => '1',
+  max => 'INT_MAX',
+},
+
 { name => 'from_collapse_limit', type => 'int', context => 'PGC_USERSET', group => 'QUERY_TUNING_OTHER',
   short_desc => 'Sets the FROM-list size beyond which subqueries are not collapsed.',
   long_desc => 'The planner will merge subqueries into upper queries if the resulting FROM list would have no more than this many items.',
