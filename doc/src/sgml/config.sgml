@@ -2440,6 +2440,26 @@ include_dir 'conf.d'
             function <function>posix_fallocate</function>.
           </para>
          </listitem>
+         <listitem>
+          <para>
+           <literal>ftruncate</literal> (Unix) extends files without
+           allocating space.  Out-of-space errors are deferred until PostgreSQL
+           writes data out later, potentially preventing checkpoints from
+           completing, so it is not recommended for tradition "overwrite"
+           file systems.  It is provided as an option for copy-on-write file
+           systems where <literal>posix_fallocate</literal> and
+           <literal>write_zeros</literal> can't reserve space eagerly, and
+           <literal>ftruncate</literal> might be more efficient.
+          </para>
+         </listitem>
+         <listitem>
+          <para>
+           <literal>chsize</literal> (Windows) allocates space and reports
+           out-of-space errors immediately on NTFS (like
+           <literal>posix_fallocate</literal>), but defers allocation on
+           ReFS (like <literal>fallocate_ftruncate</literal>).
+          </para>
+         </listitem>
         </itemizedlist>
         The <literal>write_zeros</literal> method is always used when data
         files are extended by <literal>file_extend_method_threshold</literal>

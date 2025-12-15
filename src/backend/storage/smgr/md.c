@@ -595,7 +595,12 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		 * If available and useful, use posix_fallocate() (via
 		 * FileFallocate()) to extend the relation. That's often more
 		 * efficient than using write(), as it commonly won't cause the kernel
-		 * to allocate page cache space for the extended pages.
+		 * to allocate page cache space for the extended pages. COW
+		 * filesystems can't really reserve disk space for future writeback
+		 * (possibly moving the ENOSPC error into the checkpointer), but
+		 * ftruncate() can still still be used to defer the kernel cache
+		 * overheads until then.  Note that on Windows, ftruncate() is really
+		 * _chsize_s(), which *does* allocate blocks, at least on NTFS.
 		 *
 		 * However, we don't use FileFallocate() for small extensions, as it
 		 * defeats delayed allocation on some filesystems.
@@ -605,25 +610,28 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		{
 			int			ret = 0;
 
+			if (file_extend_method == FILE_EXTEND_METHOD_FTRUNCATE)
+				ret = FileTruncate(v->mdfd_vfd,
+								   seekpos + (pgoff_t) BLCKSZ * numblocks,
+								   WAIT_EVENT_DATA_FILE_EXTEND);
 #ifdef HAVE_POSIX_FALLOCATE
-			if (file_extend_method == FILE_EXTEND_METHOD_POSIX_FALLOCATE)
-			{
+			else if (file_extend_method == FILE_EXTEND_METHOD_POSIX_FALLOCATE)
 				ret = FileFallocate(v->mdfd_vfd,
 									seekpos, (pgoff_t) BLCKSZ * numblocks,
 									WAIT_EVENT_DATA_FILE_EXTEND);
-			}
-			else
 #endif
-			{
+			else
 				elog(ERROR, "unsupported file_extend_method: %d",
 					 file_extend_method);
-			}
+
 			if (ret != 0)
 			{
 				ereport(ERROR,
 						errcode_for_file_access(),
-						errmsg("could not extend file \"%s\" with FileFallocate(): %m",
-							   FilePathName(v->mdfd_vfd)),
+						errmsg("could not extend file \"%s\" with %s(): %m",
+							   FilePathName(v->mdfd_vfd),
+							   file_extend_method == FILE_EXTEND_METHOD_FTRUNCATE ?
+							   "FileTruncate" : "FileFallocate"),
 						errhint("Check free disk space."));
 			}
 		}

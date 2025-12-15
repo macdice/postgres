@@ -497,6 +497,7 @@ static const struct config_enum_entry file_extend_method_options[] = {
 	{"posix_fallocate", FILE_EXTEND_METHOD_POSIX_FALLOCATE, false},
 #endif
 	{"write_zeros", FILE_EXTEND_METHOD_WRITE_ZEROS, false},
+	{FILE_EXTEND_METHOD_FTRUNCATE_NAME, FILE_EXTEND_METHOD_FTRUNCATE, false},
 	{NULL, 0, false}
 };
 

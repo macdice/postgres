@@ -61,10 +61,35 @@ enum FileExtendMethod
 	FILE_EXTEND_METHOD_POSIX_FALLOCATE,
 #endif
 	FILE_EXTEND_METHOD_WRITE_ZEROS,
+	FILE_EXTEND_METHOD_FTRUNCATE,
 };
 
 /* Default to the first available file_extend_method. */
 #define DEFAULT_FILE_EXTEND_METHOD 0
+
+#ifdef WIN32
+
+ /*
+  * Even though file_extend_method=chsize uses the same code path as
+  * file_extend_method=ftruncate, our ftruncate() macro for Windows expands to
+  * _chsize_s(), whose filesystem-dependent behavior might not match
+  * ftruncate() in a relevant way:
+  *
+  * 1.  NTFS allocates physical blocks so that overwriting them later can't
+  * fail with ENOSPC.  It would be confusing and misleading to label it
+  * "ftruncate", as it sounds like a recipe for sparse files.
+  *
+  * 2.  ReFS doesn't, being a COW system, and nor is allocation in the
+  * function's contract, so it would also be also be misleading to label it
+  * "posix_fallocate".
+  *
+  * We don't know what the file system does, and Unix terminology would only
+  * obfuscate matters, so we expose the name of the real OS function.
+  */
+#define FILE_EXTEND_METHOD_FTRUNCATE_NAME "chsize"
+#else
+#define FILE_EXTEND_METHOD_FTRUNCATE_NAME "ftruncate"
+#endif
 
 /*
  * Values 4-8 were experimentally determined to avoid interference between

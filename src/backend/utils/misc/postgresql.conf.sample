@@ -184,6 +184,8 @@
                                         # by the operating system:
                                         #   posix_fallocate (most Unix-like systems)
                                         #   write_zeros
+                                        #   ftruncate (Unix)
+                                        #   chsize (Windows)
 
 #max_notify_queue_pages = 1048576       # limits the number of SLRU pages allocated
                                         # for NOTIFY / LISTEN queue
