@@ -970,6 +970,14 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 	}
 #endif
 
+	/*
+	 * Predict that the caller will soon access the buffer after this one.   We
+	 * don't know which bits of the page it will look at or when, but the first
+	 * cache line is very likely so we can give the CPU a hint.
+	 */
+	if (stream->pinned_buffers > 0)
+		pg_prefetch_mem(BufferGetBlock(stream->buffers[stream->oldest_buffer_index]));
+
 	return buffer;
 }
 
