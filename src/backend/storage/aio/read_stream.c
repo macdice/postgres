@@ -715,6 +715,12 @@ read_stream_begin_impl(int flags,
 		stream->distance = 1;
 
 	/*
+	 * Provide a non-zero value just in case someone calls read_stream_resume()
+	 * without pausing first.
+	 */
+	stream->resume_distance = stream->distance;
+
+	/*
 	 * Since we always access the same relation, we can initialize parts of
 	 * the ReadBuffersOperation objects and leave them that way, to avoid
 	 * wasting CPU cycles writing to them for each read.
