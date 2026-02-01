@@ -1798,6 +1798,15 @@ hash_initial_lookup(HTAB *hashp, uint32 hashvalue, HASHBUCKET **bucketptr)
 	return bucket;
 }
 
+void
+hash_search_prefetch(HTAB *hashp, uint32 hashvalue)
+{
+	HASHBUCKET *bucketptr;
+
+	hash_initial_lookup(hashp, hashvalue, &bucketptr);
+	pg_prefetch_mem(bucketptr);
+}
+
 /* complain when we have detected a corrupted hashtable */
 static void
 hash_corrupted(HTAB *hashp)

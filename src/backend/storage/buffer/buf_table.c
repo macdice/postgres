@@ -77,7 +77,17 @@ InitBufTable(int size)
 uint32
 BufTableHashCode(BufferTag *tagPtr)
 {
-	return get_hash_value(SharedBufHash, tagPtr);
+	uint32 hash_value;
+
+	hash_value = get_hash_value(SharedBufHash, tagPtr);
+
+	/*
+	 * The caller will obtain the partion lock next.  While that is happening,
+	 * try to bring the bucket header into L1.
+	 */
+	hash_search_prefetch(SharedBufHash, hash_value);
+
+	return hash_value;
 }
 
 /*

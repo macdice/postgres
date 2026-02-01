@@ -136,6 +136,7 @@ extern void hash_stats(const char *caller, HTAB *hashp);
 extern void *hash_search(HTAB *hashp, const void *keyPtr, HASHACTION action,
 						 bool *foundPtr);
 extern uint32 get_hash_value(HTAB *hashp, const void *keyPtr);
+extern void hash_search_prefetch(HTAB *hashp, uint32 hashvalue);
 extern void *hash_search_with_hash_value(HTAB *hashp, const void *keyPtr,
 										 uint32 hashvalue, HASHACTION action,
 										 bool *foundPtr);
