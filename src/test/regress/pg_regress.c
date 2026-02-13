@@ -2297,6 +2297,7 @@ regression_main(int argc, char *argv[],
 		const char *values[4];
 		PGPing		rv;
 		const char *initdb_extra_opts_env;
+		const char *wrap;
 
 		/*
 		 * Prepare the temp instance
@@ -2309,6 +2310,13 @@ regression_main(int argc, char *argv[],
 				bail("could not remove temp instance \"%s\"", temp_instance);
 			}
 		}
+
+		/*
+		 * Wrap initdb and postgres in an optional launch program if requested,
+		 * to allow debugging/tracing tools to be injected above them (eg
+		 * valgrind).
+		 */
+		wrap = getenv("PG_TEST_WRAP_INITDB");
 
 		/* make the temp instance top directory */
 		make_directory(temp_instance);
@@ -2337,7 +2345,9 @@ regression_main(int argc, char *argv[],
 			note("initializing database system by running initdb");
 
 			appendStringInfo(&cmd,
-							 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync",
+							 "%s%s\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync",
+							 wrap ? wrap : "",
+							 wrap ? " " : "",
 							 bindir ? bindir : "",
 							 bindir ? "/" : "",
 							 temp_instance);
@@ -2483,9 +2493,11 @@ regression_main(int argc, char *argv[],
 		 * Start the temp postmaster
 		 */
 		snprintf(buf, sizeof(buf),
-				 "\"%s%spostgres\" -D \"%s/data\" -F%s "
+				 "%s%s\"%s%spostgres\" -D \"%s/data\" -F%s "
 				 "-c \"listen_addresses=%s\" -k \"%s\" "
 				 "> \"%s/log/postmaster.log\" 2>&1",
+				 wrap ? wrap : "",
+				 wrap ? " " : "",
 				 bindir ? bindir : "",
 				 bindir ? "/" : "",
 				 temp_instance, debug ? " -d 5" : "",
