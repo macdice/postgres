@@ -40,7 +40,8 @@ SELECT reverse(good) FROM regress_encoding;
 
 -- invalid short mb character = error
 SELECT length(truncated) FROM regress_encoding;
-SELECT substring(truncated, 1, 1) FROM regress_encoding;
+SELECT substring(truncated, 1, 3) FROM regress_encoding;
+SELECT substring(truncated, 1, 4) FROM regress_encoding;
 SELECT reverse(truncated) FROM regress_encoding;
 -- invalid short mb character = silently dropped
 SELECT regexp_replace(truncated, '^caf(.)$', '\1') FROM regress_encoding;
@@ -51,12 +52,11 @@ SELECT regexp_replace(truncated, '^caf(.)$', '\1') FROM regress_encoding;
 
 -- NUL = terminator
 SELECT length(with_nul) FROM regress_encoding;
-SELECT substring(with_nul, 3, 1) FROM regress_encoding;
-SELECT substring(with_nul, 4, 1) FROM regress_encoding;
-SELECT substring(with_nul, 5, 1) FROM regress_encoding;
-SELECT convert_to(substring(with_nul, 5, 1), 'UTF8') FROM regress_encoding;
 SELECT regexp_replace(with_nul, '^caf(.)$', '\1') FROM regress_encoding;
 -- NUL = character
+SELECT substring(with_nul, 3, 1) FROM regress_encoding;
+SELECT substring(with_nul, 4, 1) FROM regress_encoding;
+SELECT substring(with_nul, 5, 1) = test_bytea_to_text('\x00') FROM regress_encoding;
 SELECT with_nul, reverse(with_nul), reverse(reverse(with_nul)) FROM regress_encoding;
 
 -- If a corrupted string contains NUL in the tail bytes of a multibyte
@@ -212,7 +212,23 @@ INSERT INTO encoding_tests VALUES
 SELECT COUNT(test_encoding(encoding, description, input)) > 0
 FROM encoding_tests;
 
+-- substring fetches a slice of a toasted value; unused tail of that slice is
+-- an incomplete char (bug #19406)
+CREATE TABLE toast_3b_utf8 (c text);
+INSERT INTO toast_3b_utf8 VALUES (repeat(U&'\2026', 4000));
+SELECT SUBSTRING(c FROM 1 FOR 1) FROM toast_3b_utf8;
+SELECT SUBSTRING(c FROM 4001 FOR 1) FROM toast_3b_utf8;
+-- diagnose incomplete char iff within the substring
+UPDATE toast_3b_utf8 SET c = c || test_bytea_to_text('\xe280');
+SELECT SUBSTRING(c FROM 4000 FOR 1) FROM toast_3b_utf8;
+SELECT SUBSTRING(c FROM 4001 FOR 1) FROM toast_3b_utf8;
+-- substring needing last byte of its slice_size
+ALTER TABLE toast_3b_utf8 RENAME TO toast_4b_utf8;
+UPDATE toast_4b_utf8 SET c = repeat(U&'\+01F680', 3000);
+SELECT SUBSTRING(c FROM 3000 FOR 1) FROM toast_4b_utf8;
+
 DROP TABLE encoding_tests;
+DROP TABLE toast_4b_utf8;
 DROP FUNCTION test_encoding;
 DROP FUNCTION test_text_to_wchars;
 DROP FUNCTION test_mblen_func;

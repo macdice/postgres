@@ -586,7 +586,7 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 	int32		S = start;		/* start position */
 	int32		S1;				/* adjusted start position */
 	int32		L1;				/* adjusted substring length */
-	int32		E;				/* end position */
+	int32		E;				/* end position, exclusive */
 
 	/*
 	 * SQL99 says S can be zero or negative (which we don't document), but we
@@ -644,34 +644,27 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		 * detoasting, so we'll grab a conservatively large slice now and go
 		 * back later to do the right thing
 		 */
-		int32		slice_start;
 		int32		slice_size;
-		int32		slice_strlen;
-		int32		slice_len;
+		const char *slice_end;
 		text	   *slice;
-		int32		E1;
 		int32		i;
 		char	   *p;
 		char	   *s;
 		text	   *ret;
 
-		/*
-		 * We need to start at position zero because there is no way to know
-		 * in advance which byte offset corresponds to the supplied start
-		 * position.
-		 */
-		slice_start = 0;
-
-		if (length_not_specified)	/* special case - get length to end of
-									 * string */
-			slice_size = L1 = -1;
+		if (length_not_specified)	/* special case - get whole string */
+		{
+			slice_size = -1;
+			E = PG_INT32_MAX;
+		}
 		else if (length < 0)
 		{
 			/* SQL99 says to throw an error for E < S, i.e., negative length */
 			ereport(ERROR,
 					(errcode(ERRCODE_SUBSTRING_ERROR),
 					 errmsg("negative substring length not allowed")));
-			slice_size = L1 = -1;	/* silence stupider compilers */
+			slice_size = -1;	/* silence stupider compilers */
+			E = PG_INT32_MAX;
 		}
 		else if (pg_add_s32_overflow(S, length, &E))
 		{
@@ -679,30 +672,17 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 			 * L could be large enough for S + L to overflow, in which case
 			 * the substring must run to end of string.
 			 */
-			slice_size = L1 = -1;
+			slice_size = -1;
+			E = PG_INT32_MAX;
 		}
 		else
 		{
 			/*
-			 * A zero or negative value for the end position can happen if the
-			 * start was negative or one. SQL99 says to return a zero-length
-			 * string.
+			 * Total slice size in bytes can't be any longer than the end
+			 * position (made zero-based) times the encoding max length. If
+			 * that overflows, we can just use -1.
 			 */
-			if (E < 1)
-				return cstring_to_text("");
-
-			/*
-			 * if E is past the end of the string, the tuple toaster will
-			 * truncate the length for us
-			 */
-			L1 = E - S1;
-
-			/*
-			 * Total slice size in bytes can't be any longer than the start
-			 * position plus substring length times the encoding max length.
-			 * If that overflows, we can just use -1.
-			 */
-			if (pg_mul_s32_overflow(E, eml, &slice_size))
+			if (pg_mul_s32_overflow(E - 1, eml, &slice_size))
 				slice_size = -1;
 		}
 
@@ -712,63 +692,34 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		 */
 		if (VARATT_IS_COMPRESSED(DatumGetPointer(str)) ||
 			VARATT_IS_EXTERNAL(DatumGetPointer(str)))
-			slice = DatumGetTextPSlice(str, slice_start, slice_size);
+			slice = DatumGetTextPSlice(str, 0, slice_size);
 		else
 			slice = (text *) DatumGetPointer(str);
 
-		/* see if we got back an empty string */
-		slice_len = VARSIZE_ANY_EXHDR(slice);
-		if (slice_len == 0)
-		{
-			if (slice != (text *) DatumGetPointer(str))
-				pfree(slice);
-			return cstring_to_text("");
-		}
-
-		/* Now we can get the actual length of the slice in MB characters */
-		slice_strlen = pg_mbstrlen_with_len(VARDATA_ANY(slice),
-											slice_len);
-
-		/*
-		 * Check that the start position wasn't > slice_strlen. If so, SQL99
-		 * says to return a zero-length string.
-		 */
-		if (S1 > slice_strlen)
-		{
-			if (slice != (text *) DatumGetPointer(str))
-				pfree(slice);
-			return cstring_to_text("");
-		}
-
-		/*
-		 * Adjust L1 and E1 now that we know the slice string length. Again
-		 * remember that S1 is one based, and slice_start is zero based.
-		 */
-		if (L1 > -1)
-			E1 = Min(S1 + L1, slice_start + 1 + slice_strlen);
-		else
-			E1 = slice_start + 1 + slice_strlen;
-
-		/*
-		 * Find the start position in the slice; remember S1 is not zero based
-		 */
 		p = VARDATA_ANY(slice);
-		for (i = 0; i < S1 - 1; i++)
-			p += pg_mblen_unbounded(p);
+		slice_end = p + VARSIZE_ANY_EXHDR(slice);
+
+		/*
+		 * Find the start position in the slice; remember S1 is not zero
+		 * based. If we run out of input first, we'll return an empty string.
+		 */
+		for (i = 1; i < S1 && p < slice_end; i++)
+			p += pg_mblen_range(p, slice_end);
 
 		/* hang onto a pointer to our start position */
 		s = p;
 
 		/*
 		 * Count the actual bytes used by the substring of the requested
-		 * length.
+		 * length, again giving up if we run out of input.
 		 */
-		for (i = S1; i < E1; i++)
-			p += pg_mblen_unbounded(p);
+		for (i = S1; i < E && p < slice_end; i++)
+			p += pg_mblen_range(p, slice_end);
 
 		ret = (text *) palloc(VARHDRSZ + (p - s));
 		SET_VARSIZE(ret, VARHDRSZ + (p - s));
-		memcpy(VARDATA(ret), s, (p - s));
+		if (s < p)
+			memcpy(VARDATA(ret), s, (p - s));
 
 		if (slice != (text *) DatumGetPointer(str))
 			pfree(slice);
