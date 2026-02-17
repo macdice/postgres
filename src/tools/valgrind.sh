@@ -66,17 +66,22 @@ options are provided explicitly:
   --error-exitcode=128
   --quiet
 
-If the default --log-file is used, the directory "valgrind-logs" is created in
-the current working directory.  If the default --suppressions is used,
-"valgrind.supp" is expected to be located in the same directory as this script.
+If this implicit default --log-file option is used, the directory
+"valgrind-logs" is created in the current working directory.  If this implicit
+default --suppressions is used, "valgrind.supp" is expected to be located in
+the same directory as this script.
 
-Examples, assuming a build directory inside the top-level source tree (example
-chosen to demonstrate that it may be a relative path):
+The script may be invoked via relative or absolute path directly in the source
+tree, or installed in a new location, but in that last case the valgrind.supp
+file should be placed in the same directory, or --suppressions=... should be
+provided explicitly.
 
-  ../src/tools/valgrind.sh -b meson test
-  ../src/tools/valgrind.sh -e=postgres meson test
-  ../src/tools/valgrind.sh -b --leak-check=full meson test
-  ../src/tools/valgrind.sh -b --exit-on-first-error=yes meson test
+Examples of use:
+
+  valgrind.sh -e=postgres meson test
+  valgrind.sh -b meson test
+  valgrind.sh -b --leak-check=full meson test
+  valgrind.sh -b --exit-on-first-error=yes make world-check
 EOF
   exit 1
 }
