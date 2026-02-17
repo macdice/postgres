@@ -530,6 +530,7 @@ typedef uint32 (*utf_local_conversion_func) (uint32 code);
 
 /*
  * Some handy functions for Unicode-specific tests.
+ * XXX Move these to unicode.h?
  */
 static inline bool
 is_valid_unicode_codepoint(char32_t c)
@@ -553,6 +554,21 @@ static inline char32_t
 surrogate_pair_to_codepoint(char16_t first, char16_t second)
 {
 	return ((first & 0x3FF) << 10) + 0x10000 + (second & 0x3FF);
+}
+
+static inline bool
+codepoint_has_surrogate_pair(char32_t c)
+{
+	return c >= 0x10000;
+}
+
+static inline void
+codepoint_to_surrogate_pair(char16_t *first, char16_t *second, char32_t c)
+{
+	Assert(codepoint_has_surrogate_pair(c));
+	c -= 0x10000;
+	*first = (c >> 10) + 0xD800;
+	*second = (c & 0x3FF) + 0xDC00;
 }
 
 /*
@@ -630,6 +646,24 @@ unicode_utf8len(char32_t c)
 		return 3;
 	else
 		return 4;
+}
+
+/*
+ * Number of bytes in a UTF8 sequence, based on the first byte.
+ */
+static inline int
+utf8_len_from_lead_byte(unsigned char c)
+{
+	if ((c & 0x80) == 0)
+		return 1;
+	else if ((c & 0xe0) == 0xc0)
+		return 2;
+	else if ((c & 0xf0) == 0xe0)
+		return 3;
+	else if ((c & 0xf8) == 0xf0)
+		return 4;
+	else
+		return 1;
 }
 
 /*

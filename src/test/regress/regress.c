@@ -1131,6 +1131,22 @@ test_text_to_bytea(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(PG_GETARG_TEXT_PP(0));
 }
 
+/* Convert bytea to utf16 without validation. */
+PG_FUNCTION_INFO_V1(test_bytea_to_utf16);
+Datum
+test_bytea_to_utf16(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_UTF16_P(PG_GETARG_BYTEA_PP(0));
+}
+
+/* And the reverse. */
+PG_FUNCTION_INFO_V1(test_utf16_to_bytea);
+Datum
+test_utf16_to_bytea(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BYTEA_P(PG_GETARG_UTF16_PP(0));
+}
+
 /* Corruption tests in C. */
 PG_FUNCTION_INFO_V1(test_mblen_func);
 Datum

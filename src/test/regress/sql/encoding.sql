@@ -11,7 +11,11 @@ SELECT getdatabaseencoding() <> 'UTF8' AS skip_test \gset
 
 CREATE FUNCTION test_bytea_to_text(bytea) RETURNS text
     AS :'regresslib' LANGUAGE C STRICT;
+CREATE FUNCTION test_bytea_to_utf16(bytea) RETURNS utf16
+    AS :'regresslib' LANGUAGE C STRICT;
 CREATE FUNCTION test_text_to_bytea(text) RETURNS bytea
+    AS :'regresslib' LANGUAGE C STRICT;
+CREATE FUNCTION test_utf16_to_bytea(text) RETURNS bytea
     AS :'regresslib' LANGUAGE C STRICT;
 CREATE FUNCTION test_mblen_func(text, text, text, int) RETURNS int
     AS :'regresslib' LANGUAGE C STRICT;
@@ -228,6 +232,16 @@ ALTER TABLE toast_3b_utf8 RENAME TO toast_4b_utf8;
 UPDATE toast_4b_utf8 SET c = repeat(U&'\+01F680', 3000);
 SELECT SUBSTRING(c FROM 3000 FOR 1) FROM toast_4b_utf8;
 
+-- storage format of UTF-16 is big-endian even on little-endian system
+SELECT test_bytea_to_utf16('\x0041') = 'A';
+-- odd number of bytes (corrupted storage), trailing byte ignored
+SELECT test_bytea_to_utf16('\x004100') = 'A';
+SELECT test_bytea_to_utf16('\x004100');
+-- incomplete surrogate pair
+SELECT test_bytea_to_utf16('\xd83d');
+-- bad second codepoint in surrogate pair
+SELECT test_bytea_to_utf16('\xd83dbeef');
+
 DROP TABLE encoding_tests;
 DROP TABLE toast_4b_utf8;
 DROP FUNCTION test_encoding;
@@ -236,7 +250,9 @@ DROP FUNCTION test_text_to_wchars;
 DROP FUNCTION test_valid_server_encoding;
 DROP FUNCTION test_mblen_func;
 DROP FUNCTION test_bytea_to_text;
+DROP FUNCTION test_bytea_to_utf16;
 DROP FUNCTION test_text_to_bytea;
+DROP FUNCTION test_utf16_to_bytea;
 
 
 -- substring slow path: multi-byte escape char vs. multi-byte pattern char.

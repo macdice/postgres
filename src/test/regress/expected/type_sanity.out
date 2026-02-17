@@ -751,6 +751,7 @@ CREATE TABLE tab_core_types AS SELECT
   'abc'::varchar,
   'name'::name,
   'txt'::text,
+  'utf16'::utf16,
   true::bool,
   E'\\xDEADBEEF'::bytea,
   B'10001'::bit,

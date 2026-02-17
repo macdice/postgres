@@ -3565,6 +3565,7 @@ cb_cleanup_dir
 cb_options
 cb_tablespace
 cb_tablespace_mapping
+char16_iterator
 char16_t
 char32_t
 check_agg_arguments_context
@@ -3869,6 +3870,7 @@ mbcharacter_incrementer
 mbdisplaylen_converter
 mblen_converter
 mbstr_verifier
+mb_iterator
 memoize_hash
 memoize_iterator
 metastring
@@ -4190,6 +4192,7 @@ ssize_t
 standard_qp_extra
 stemmer_module
 stmtCacheEntry
+storage_char16_t
 storeInfo
 storeRes_func
 stream_stop_callback
@@ -4265,6 +4268,7 @@ unicodeStyleRowFormat
 unicode_linestyle
 unit_conversion
 unlogged_relation_entry
+utf16
 utf_local_conversion_func
 uuidKEY
 uuid_rc_t

@@ -29,6 +29,7 @@
 #include "funcapi.h"
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
+#include "mb/unicode_strings.h"
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
 #include "parser/scansup.h"
@@ -39,6 +40,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/stack_buffer.h"
 #include "utils/sortsupport.h"
 #include "utils/varlena.h"
 
@@ -4717,7 +4719,7 @@ text_reverse(PG_FUNCTION_ARGS)
 	text	   *str = PG_GETARG_TEXT_PP(0);
 	const char *p = VARDATA_ANY(str);
 	int			len = VARSIZE_ANY_EXHDR(str);
-	const char *endp = p + len;
+	mb_iterator iter = MB_ITERATOR_INIT_LOCAL(p, len);
 	text	   *result;
 	char	   *dst;
 
@@ -4728,22 +4730,16 @@ text_reverse(PG_FUNCTION_ARGS)
 	if (pg_database_encoding_max_length() > 1)
 	{
 		/* multibyte version */
-		while (p < endp)
-		{
-			int			sz;
-
-			sz = pg_mblen_range(p, endp);
-			dst -= sz;
-			memcpy(dst, p, sz);
-			p += sz;
-		}
+		while (mb_iterator_has_more(&iter))
+			dst -= mb_iterator_store_before(&iter, dst);
 	}
 	else
 	{
 		/* single byte version */
-		while (p < endp)
-			*(--dst) = *p++;
+		while (mb_iterator_has_more(&iter))
+			dst -= mb_iterator_store_before__sb(&iter, dst);
 	}
+	Assert(dst = VARDATA_ANY(result));
 
 	PG_RETURN_TEXT_P(result);
 }
@@ -5798,3 +5794,451 @@ invalid_pair:
 			 errmsg("invalid Unicode surrogate pair")));
 	PG_RETURN_NULL();			/* keep compiler quiet */
 }
+
+/*
+ * UTF-16 strings.  These provide more compact storage of some languages that
+ * would otherwise require 3-byte UTF8 seuences for their core character set.
+ * They are never directly exposed to clients without converted to database
+ * encoding..
+ */
+
+/*
+ * Allocate a new utf16 with space for up to max_utf16_size char16_t
+ * codepoints.  When converting from database encoding, multiply source bytes
+ * by MAX_UTF16_CODEPOINTS_PER_MBLEN.
+ */
+static inline utf16 *
+utf16_new(size_t max_utf16_size)
+{
+	utf16	   *result = palloc(VARHDRSZ + max_utf16_size * sizeof(char16_t));
+
+	SET_VARSIZE(result, VARHDRSZ + sizeof(char16_t) * max_utf16_size);
+	return result;
+}
+
+static inline storage_char16_t *
+utf16_data(utf16 *value)
+{
+	return (storage_char16_t *) VARDATA_ANY(value);
+}
+
+/*
+ * Return number of char16_t characters in a utf16.
+ */
+static inline size_t
+utf16_size(const utf16 *value)
+{
+	return VARSIZE_ANY_EXHDR(value) / sizeof(storage_char16_t);
+}
+
+/*
+ * Convenience macro for initializing char16_iterator directly from a utf16
+ * varlena object.
+ */
+#define CHAR16_ITERATOR_INIT_WITH_UTF16(o) \
+	CHAR16_ITERATOR_INIT(utf16_data(o), utf16_size(o))
+
+/*
+ * Set number of char16_t characters in a utf16, if it differs from the
+ * estimate given to utf16_new().  It can't be set larger.
+ */
+static inline void
+utf16_set_size(utf16 *value, size_t size)
+{
+	size_t		varsize = VARHDRSZ + sizeof(storage_char16_t) * size;
+
+	Assert(varsize <= VARSIZE(value));
+	SET_VARSIZE(value, varsize);
+}
+
+/*
+ * Construct a new utf16 from database encoding.
+ */
+static inline utf16 *
+utf16_new_from_local(const char *src, size_t src_size)
+{
+	utf16	   *result;
+	storage_char16_t *dst;
+	size_t		dst_size;
+
+	result = utf16_new(mb_to_char16_max_size(src_size));
+	dst = utf16_data(result);
+	dst_size = local_to_char16(dst, src, src_size);
+	utf16_set_size(result, dst_size);
+
+	return result;
+}
+
+Datum
+utf16_length(PG_FUNCTION_ARGS)
+{
+	utf16	   *u = PG_GETARG_UTF16_PP(0);
+	char16_iterator iter = CHAR16_ITERATOR_INIT_WITH_UTF16(u);
+	int32		result = 0;
+
+	while (char16_iterator_has_more(&iter))
+	{
+		result++;
+		char16_iterator_advance(&iter);
+	}
+
+	PG_RETURN_INT32(result);
+}
+
+Datum
+utf16_octet_length(PG_FUNCTION_ARGS)
+{
+	Datum		str = PG_GETARG_DATUM(0);
+
+	PG_RETURN_INT32((toast_raw_datum_size(str) - VARHDRSZ));
+}
+
+Datum
+utf16out(PG_FUNCTION_ARGS)
+{
+	utf16	   *value = PG_GETARG_UTF16_PP(0);
+	const storage_char16_t *src = utf16_data(value);
+	size_t		src_size = utf16_size(value);
+	char	   *dst_cstr;
+
+	dst_cstr = palloc(char16_to_mb_max_size(src_size) + 1);
+	char16_to_local_cstr(dst_cstr, src, src_size);
+
+	PG_RETURN_CSTRING(dst_cstr);
+}
+
+Datum
+utf16in(PG_FUNCTION_ARGS)
+{
+	const char *src_cstr = PG_GETARG_CSTRING(0);
+	size_t		src_size = strlen(src_cstr);
+	utf16	   *result;
+
+	result = utf16_new_from_local(src_cstr, src_size);
+
+	PG_RETURN_UTF16_P(result);
+}
+
+Datum
+utf16recv(PG_FUNCTION_ARGS)
+{
+	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+	char	   *src;
+	int			src_size;
+	utf16	   *result;
+
+	src = pq_getmsgtext(buf, buf->len - buf->cursor, &src_size);
+	result = utf16_new_from_local(src, src_size);
+	pfree(src);
+
+	PG_RETURN_UTF16_P(result);
+}
+
+Datum
+utf16send(PG_FUNCTION_ARGS)
+{
+	utf16	   *value = PG_GETARG_UTF16_PP(0);
+	StringInfoData buf;
+	const storage_char16_t *src = utf16_data(value);
+	size_t		src_size = utf16_size(value);
+	char	   *dst;
+	size_t		dst_size;
+
+	DECLARE_STACK_BUFFER();
+
+	dst = stack_buffer_alloc(char16_to_mb_max_size(src_size));
+	dst_size = char16_to_local(dst, src, src_size);
+
+	pq_begintypsend(&buf);
+	pq_sendtext(&buf, dst, dst_size);
+
+	stack_buffer_free(dst);
+
+	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+}
+
+/* Codepoint order comparison. */
+static int
+char16_cmp(const storage_char16_t *data1, size_t size1,
+		   const storage_char16_t *data2, size_t size2)
+{
+	int			result = char16_cmp1(data1, data2, Min(size1, size2));
+
+	if (result == 0)
+		result = size1 < size2 ? -1 : size1 > size2 ? 1 : 0;
+	return result;
+}
+
+/*
+ * XXX It might be nice to use _Generic for type selection instead of funky
+ * name-pasting macros where you have to state the typenames explicitly, but
+ * utf16 and text are not distinct C types.
+ */
+
+/* Get an fmgr argument of type T. */
+#define GEN_GET_ARG__text								PG_GETARG_TEXT_PP
+#define GEN_GET_ARG__NameData 							PG_GETARG_NAME
+#define GEN_GET_ARG__utf16 								PG_GETARG_UTF16_PP
+#define GEN_GET_ARG(T, n) CppConcat2(GEN_GET_ARG__, T)(n)
+
+/* Get the character type for type T. */
+#define GEN_TYPEOF_CHAR__text							char
+#define GEN_TYPEOF_CHAR__NameData						char
+#define GEN_TYPEOF_CHAR__utf16							storage_char16_t
+#define GEN_TYPEOF_CHAR(T) CppConcat2(GEN_TYPEOF_CHAR__, T)
+
+/* Get a pointer to the basic characters from type T. */
+#define GEN_GET_DATA__text(v) 							VARDATA_ANY(v)
+#define GEN_GET_DATA__NameData(v)						NameStr(*(v))
+#define GEN_GET_DATA__utf16(v) 							utf16_data(v)
+#define GEN_GET_DATA(T, v) CppConcat2(GEN_GET_DATA__, T)(v)
+
+/* Get size in basic characters from T. */
+#define GEN_GET_SIZE__text(v) VARSIZE_ANY_EXHDR(v)
+#define GEN_GET_SIZE__NameData(v) strnlen(NameStr(*(v)), NAMEDATALEN)
+#define GEN_GET_SIZE__utf16(v) utf16_size(v)
+#define GEN_GET_SIZE(T, v) CppConcat2(GEN_GET_SIZE__, T)(v)
+
+/* Name mangling convention for pairs of character types. */
+#define GEN_FNAME__char__char							local
+#define GEN_FNAME__storage_char16_t__storage_char16_t	char16
+#define GEN_FNAME__char__storage_char16_t				local_char16
+#define GEN_FNAME__storage_char16_t__char				char16_local
+
+/* Name mangling convention for pairs of types. */
+#define GEN_FNAME__text__text							text
+#define GEN_FNAME__text__NameData						textname
+#define GEN_FNAME__text__utf16 							textutf16
+#define GEN_FNAME__NameData__text 						nametext
+#define GEN_FNAME__NameData__NameData					name
+#define GEN_FNAME__NameData__utf16						nameutf16
+#define GEN_FNAME__utf16__text							utf16text
+#define GEN_FNAME__utf16__NameData						utf16name
+#define GEN_FNAME__utf16__utf16							utf16
+
+/* Make function name for overload T1, T2 (prefix, suffix style). */
+#define GEN_FNAME_P(prefix, T1, T2)										\
+	CppConcat2(prefix, CppConcat2(GEN_FNAME__, T1##__##T2))
+#define GEN_FNAME_S(T1, T2, suffix)										\
+	CppConcat2(CppConcat2(GEN_FNAME__, T1##__##T2), suffix)
+
+/* Call function overloaded for T1, T2 (prefix, suffix style). */
+#define GEN_CALL_OVERLOAD_P(prefix, T1, T2, ...)						\
+	GEN_FNAME_P(prefix, T1, T2)(__VA_ARGS__)
+#define GEN_CALL_OVERLOAD_S(T1, T2, suffix, ...)						\
+	GEN_FNAME_S(T1, T2, suffix)(__VA_ARGS__)
+
+#define GEN_STRNCOLL(T1, T2)											\
+static int																\
+GEN_FNAME_S(T1, T2, _strncoll) (const T1 *data1, size_t size1,			\
+								const T2 *data2, size_t size2,			\
+								Oid collid)								\
+{																		\
+	pg_locale_t mylocale;												\
+	int			result;													\
+	check_collation_set(collid);										\
+	mylocale = pg_newlocale_from_collation(collid);						\
+	if (mylocale->collate_is_c)											\
+	{																	\
+		/* Codepoint order determines result. */						\
+		result = GEN_CALL_OVERLOAD_S(T1, T2, _cmp,						\
+									 data1, size1, data2, size2);		\
+	}																	\
+	else																\
+	{																	\
+		/* Locale determines results. */								\
+		result = GEN_CALL_OVERLOAD_P(pg_strncoll_, T1, T2,				\
+									 data1, size1, data2, size2,		\
+									 mylocale);							\
+		/* Codepoint order tie-breaker for derministic locales. */		\
+		if (result == 0 && mylocale->deterministic)						\
+			result = GEN_CALL_OVERLOAD_S(T1, T2, _cmp,					\
+										 data1, size1, data2, size2);	\
+	}																	\
+	return result;														\
+}
+
+/* Dispatch to correct overload of XXX_strncoll(). */
+#define GEN_CMP(T1, T2)													\
+Datum																	\
+GEN_FNAME_S(T1, T2, cmp)(PG_FUNCTION_ARGS)								\
+{																		\
+	T1 *arg1 = GEN_GET_ARG(T1, 0);										\
+	T2 *arg2 = GEN_GET_ARG(T2, 1);										\
+	Oid collid = PG_GET_COLLATION();									\
+	int result = GEN_CALL_OVERLOAD_S(GEN_TYPEOF_CHAR(T1),				\
+									 GEN_TYPEOF_CHAR(T2),				\
+									 _strncoll,							\
+									 GEN_GET_DATA(T1, arg1),			\
+									 GEN_GET_SIZE(T1, arg1),			\
+									 GEN_GET_DATA(T2, arg2),			\
+									 GEN_GET_SIZE(T2, arg2),			\
+									 collid);							\
+	PG_FREE_IF_COPY(arg1, 0);											\
+	PG_FREE_IF_COPY(arg2, 1);											\
+	PG_RETURN_INT32(result);											\
+}
+
+/* General case: dispatch to correct overload of XXX_strncoll(). */
+#define GEN_REL(T1, T2, suffix, op)										\
+Datum																	\
+GEN_FNAME_S(T1, T2, suffix)(PG_FUNCTION_ARGS)							\
+{																		\
+	T1 *arg1 = GEN_GET_ARG(T1, 0);										\
+	T2 *arg2 = GEN_GET_ARG(T2, 1);										\
+	Oid collid = PG_GET_COLLATION();									\
+	int result = GEN_CALL_OVERLOAD_S(GEN_TYPEOF_CHAR(T1),				\
+									 GEN_TYPEOF_CHAR(T2),				\
+									 _strncoll,							\
+									 GEN_GET_DATA(T1, arg1),			\
+									 GEN_GET_SIZE(T1, arg1),			\
+									 GEN_GET_DATA(T2, arg2),			\
+									 GEN_GET_SIZE(T2, arg2),			\
+									 collid);							\
+	PG_FREE_IF_COPY(arg1, 0);											\
+	PG_FREE_IF_COPY(arg2, 1);											\
+	PG_RETURN_BOOL(result op 0);										\
+}
+
+/*
+ * Special case for == and != and deterministic locales: bit level compare,
+ * skipping the locale system.  Otherwise, same as the above.
+ */
+#define GEN_EQ(T1, T2, suffix, op)										\
+Datum																	\
+GEN_FNAME_S(T1, T2, suffix)(PG_FUNCTION_ARGS)							\
+{																		\
+	Oid			collid = PG_GET_COLLATION();							\
+	pg_locale_t mylocale = 0;											\
+	static_assert(sizeof(GEN_TYPEOF_CHAR(T1)) !=						\
+				  sizeof(GEN_TYPEOF_CHAR(T2)),							\
+				  "should use optimized version for same char type");	\
+	check_collation_set(collid);										\
+	mylocale = pg_newlocale_from_collation(collid);						\
+	if (mylocale->deterministic)										\
+	{																	\
+		/* Codepoint order then length determine result. */				\
+		T1 *arg1 = GEN_GET_ARG(T1, 0);									\
+		T2 *arg2 = GEN_GET_ARG(T2, 1);									\
+		int result = GEN_CALL_OVERLOAD_S(GEN_TYPEOF_CHAR(T1),			\
+										 GEN_TYPEOF_CHAR(T2),			\
+										 _cmp,							\
+										 GEN_GET_DATA(T1, arg1),		\
+										 GEN_GET_SIZE(T1, arg1),		\
+										 GEN_GET_DATA(T2, arg2),		\
+										 GEN_GET_SIZE(T2, arg2));		\
+		PG_FREE_IF_COPY(arg1, 0);										\
+		PG_FREE_IF_COPY(arg2, 1);										\
+		PG_RETURN_BOOL(result op 0);									\
+	}																	\
+	else																\
+	{																	\
+		/* Locale determines result. */									\
+		T1 *arg1 = GEN_GET_ARG(T1, 0);									\
+		T2 *arg2 = GEN_GET_ARG(T2, 1);									\
+		int result = GEN_CALL_OVERLOAD_S(GEN_TYPEOF_CHAR(T1),			\
+										 GEN_TYPEOF_CHAR(T2),			\
+										 _strncoll,						\
+										 GEN_GET_DATA(T1, arg1),		\
+										 GEN_GET_SIZE(T1, arg1),		\
+										 GEN_GET_DATA(T2, arg2),		\
+										 GEN_GET_SIZE(T2, arg2),		\
+										 collid);						\
+		PG_FREE_IF_COPY(arg1, 0);										\
+		PG_FREE_IF_COPY(arg2, 1);										\
+		PG_RETURN_BOOL(result op 0);									\
+	}																	\
+}
+
+/*
+ * Special case for == and != and deterministic locales when the basic char
+ * type is the same: we can cheaply check the size first to determine that
+ * strings are NOT equal.
+ */
+#define GEN_EQ_SAME_CHAR(T1, T2, suffix, op)							\
+Datum																	\
+GEN_FNAME_S(T1, T2, suffix)(PG_FUNCTION_ARGS)							\
+{																		\
+	Oid			collid = PG_GET_COLLATION();							\
+	pg_locale_t mylocale = 0;											\
+	static_assert(sizeof(GEN_TYPEOF_CHAR(T1)) ==						\
+				  sizeof(GEN_TYPEOF_CHAR(T2)),							\
+				  "optimization requires same char");					\
+	check_collation_set(collid);										\
+	mylocale = pg_newlocale_from_collation(collid);						\
+	if (mylocale->deterministic)										\
+	{																	\
+		/* Optimization for same basic character type. */				\
+		if (toast_raw_datum_size(PG_GETARG_DATUM(0)) !=					\
+			toast_raw_datum_size(PG_GETARG_DATUM(1)))					\
+		{																\
+			/* Different size: fast result without detoasting. */		\
+			PG_RETURN_BOOL(false op true);								\
+		}																\
+		else															\
+		{																\
+			/* Same size: codepoint equality determines result. */		\
+			T1 *arg1 = PG_GETARG_UTF16_PP(0);							\
+			T2 *arg2 = PG_GETARG_UTF16_PP(1);							\
+			int result = GEN_CALL_OVERLOAD_S(GEN_TYPEOF_CHAR(T1),		\
+											 GEN_TYPEOF_CHAR(T2),		\
+											 _cmp1,						\
+											 GEN_GET_DATA(T1, arg1),	\
+											 GEN_GET_DATA(T2, arg2),	\
+											 GEN_GET_SIZE(T1, arg1));	\
+			Assert(GEN_GET_SIZE(T1, arg1) == GEN_GET_SIZE(T2, arg2));	\
+			PG_FREE_IF_COPY(arg1, 0);									\
+			PG_FREE_IF_COPY(arg2, 1);									\
+			PG_RETURN_BOOL(result op 0);								\
+		}																\
+	}																	\
+	else																\
+	{																	\
+		/* Locale determines result. */									\
+		T1 *arg1 = GEN_GET_ARG(T1, 0);									\
+		T2 *arg2 = GEN_GET_ARG(T2, 1);									\
+		int result = GEN_CALL_OVERLOAD_S(GEN_TYPEOF_CHAR(T1),			\
+										 GEN_TYPEOF_CHAR(T2),			\
+										 _strncoll,						\
+										 GEN_GET_DATA(T1, arg1),		\
+										 GEN_GET_SIZE(T1, arg1),		\
+										 GEN_GET_DATA(T2, arg2),		\
+										 GEN_GET_SIZE(T2, arg2),		\
+										 collid);						\
+		PG_FREE_IF_COPY(arg1, 0);										\
+		PG_FREE_IF_COPY(arg2, 1);										\
+		PG_RETURN_BOOL(result op 0);									\
+	}																	\
+}
+
+/* Make the workhorse character-based collation functions. */
+GEN_STRNCOLL(storage_char16_t, storage_char16_t);
+GEN_STRNCOLL(storage_char16_t, char);
+GEN_STRNCOLL(char, storage_char16_t);
+
+/* Make the registered procedures with non-detoasting optimization. */
+#define GEN_RELS_SAME_CHAR(T1, T2)										\
+	GEN_CMP(T1, T2);													\
+	GEN_EQ_SAME_CHAR(T1, T2, eq, ==);									\
+	GEN_EQ_SAME_CHAR(T1, T2, ne, !=);									\
+	GEN_REL(T1, T2, lt, <);												\
+	GEN_REL(T1, T2, le, <=);											\
+	GEN_REL(T1, T2, ge, >=);											\
+	GEN_REL(T1, T2, gt, >);
+
+/* Make the registered precedures without non-detoasting optimization. */
+#define GEN_RELS_DIFF_CHAR(T1, T2)										\
+	GEN_CMP(T1, T2);													\
+	GEN_EQ(T1, T2, eq, ==);												\
+	GEN_EQ(T1, T2, ne, !=);												\
+	GEN_REL(T1, T2, lt, <);												\
+	GEN_REL(T1, T2, le, <=);											\
+	GEN_REL(T1, T2, ge, >=);											\
+	GEN_REL(T1, T2, gt, >);
+
+/* For now, generate only type permutations with utf16 on one side. */
+GEN_RELS_DIFF_CHAR(utf16, text);
+GEN_RELS_DIFF_CHAR(utf16, NameData);
+GEN_RELS_DIFF_CHAR(text, utf16);
+GEN_RELS_DIFF_CHAR(NameData, utf16);
+GEN_RELS_SAME_CHAR(utf16, utf16);

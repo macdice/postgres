@@ -452,6 +452,8 @@
  *		Convert the argument to a string, after one round of macro expansion.
  * CppConcat
  *		Concatenate two arguments together, using the C preprocessor.
+ * CppConcat2
+ *		Concatenate two arguments together, and apply macro expansion.
  *
  * Note: There used to be support here for pre-ANSI C compilers that didn't
  * support # and ##.  Nowadays, these macros are just for clarity and/or
@@ -460,6 +462,7 @@
 #define CppAsString(identifier) #identifier
 #define CppAsString2(x)			CppAsString(x)
 #define CppConcat(x, y)			x##y
+#define CppConcat2(x, y)		CppConcat(x, y)
 
 /*
  * VA_ARGS_NARGS
@@ -750,6 +753,7 @@ typedef struct varlena
  */
 typedef varlena bytea;
 typedef varlena text;
+typedef varlena utf16;
 typedef varlena BpChar;			/* blank-padded char, ie SQL char(n) */
 typedef varlena VarChar;		/* var-length char, ie SQL varchar(n) */
 
@@ -1462,6 +1466,7 @@ typedef uint16_t char16_t;
 typedef uint32_t char32_t;
 #endif
 #endif
+
 
 /* IWYU pragma: end_exports */
 
