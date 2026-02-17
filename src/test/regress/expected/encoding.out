@@ -8,7 +8,11 @@ SELECT getdatabaseencoding() <> 'UTF8' AS skip_test \gset
 \set regresslib :libdir '/regress' :dlsuffix
 CREATE FUNCTION test_bytea_to_text(bytea) RETURNS text
     AS :'regresslib' LANGUAGE C STRICT;
+CREATE FUNCTION test_bytea_to_utf16(bytea) RETURNS utf16
+    AS :'regresslib' LANGUAGE C STRICT;
 CREATE FUNCTION test_text_to_bytea(text) RETURNS bytea
+    AS :'regresslib' LANGUAGE C STRICT;
+CREATE FUNCTION test_utf16_to_bytea(text) RETURNS bytea
     AS :'regresslib' LANGUAGE C STRICT;
 CREATE FUNCTION test_mblen_func(text, text, text, int) RETURNS int
     AS :'regresslib' LANGUAGE C STRICT;
@@ -401,6 +405,32 @@ SELECT SUBSTRING(c FROM 3000 FOR 1) FROM toast_4b_utf8;
  🚀
 (1 row)
 
+-- storage format of UTF-16 is big-endian even on little-endian system
+SELECT test_bytea_to_utf16('\x0041') = 'A';
+ ?column? 
+----------
+ t
+(1 row)
+
+-- odd number of bytes (corrupted storage), trailing byte ignored
+SELECT test_bytea_to_utf16('\x004100') = 'A';
+ ?column? 
+----------
+ f
+(1 row)
+
+SELECT test_bytea_to_utf16('\x004100');
+ test_bytea_to_utf16 
+---------------------
+ A
+(1 row)
+
+-- incomplete surrogate pair
+SELECT test_bytea_to_utf16('\xd83d');
+ERROR:  invalid UTF-16 sequence 0xd83d
+-- bad second codepoint in surrogate pair
+SELECT test_bytea_to_utf16('\xd83dbeef');
+ERROR:  invalid UTF-16 sequence 0xd83d 0xbeef
 DROP TABLE encoding_tests;
 DROP TABLE toast_4b_utf8;
 DROP FUNCTION test_encoding;
@@ -409,7 +439,9 @@ DROP FUNCTION test_text_to_wchars;
 DROP FUNCTION test_valid_server_encoding;
 DROP FUNCTION test_mblen_func;
 DROP FUNCTION test_bytea_to_text;
+DROP FUNCTION test_bytea_to_utf16;
 DROP FUNCTION test_text_to_bytea;
+DROP FUNCTION test_utf16_to_bytea;
 -- substring slow path: multi-byte escape char vs. multi-byte pattern char.
 SELECT SUBSTRING('a' SIMILAR U&'\00AC' ESCAPE U&'\00A7');
  substring 

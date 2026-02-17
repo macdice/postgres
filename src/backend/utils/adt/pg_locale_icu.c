@@ -77,6 +77,12 @@ static size_t downcase_ident_icu(char *dst, size_t dstsize, const char *src,
 static int	strncoll_icu(const char *arg1, ssize_t len1,
 						 const char *arg2, ssize_t len2,
 						 pg_locale_t locale);
+static int	strncoll_char16_icu(const storage_char16_t *arg1, size_t len1,
+								const storage_char16_t *arg2, size_t len2,
+								pg_locale_t locale);
+static int	strncoll_char16_utf8_icu(const storage_char16_t *arg1, size_t len1,
+									 const char *arg2, size_t len2,
+									 pg_locale_t locale);
 static size_t strnxfrm_icu(char *dest, size_t destsize,
 						   const char *src, ssize_t srclen,
 						   pg_locale_t locale);
@@ -165,6 +171,8 @@ static const struct collate_methods collate_methods_icu_utf8 = {
 #else
 	.strncoll = strncoll_icu,
 #endif
+	.strncoll_char16 = strncoll_char16_icu,
+	.strncoll_char16_local = strncoll_char16_utf8_icu,
 	.strnxfrm = strnxfrm_icu,
 	.strnxfrm_prefix = strnxfrm_prefix_icu_utf8,
 	.strxfrm_is_safe = true,
@@ -1058,6 +1066,51 @@ strncoll_icu(const char *arg1, ssize_t len1,
 
 	if (buf != sbuf)
 		pfree(buf);
+
+	return result;
+}
+
+static int
+strncoll_char16_icu(const storage_char16_t *data1, size_t size1,
+					const storage_char16_t *data2, size_t size2,
+					pg_locale_t locale)
+{
+	UCharIterator iter1;
+	UCharIterator iter2;
+	UErrorCode	status;
+	int			result;
+
+	UITER_SET_STORAGE_CHAR_T(&iter1, data1, size1);
+	UITER_SET_STORAGE_CHAR_T(&iter2, data2, size2);
+
+	status = U_ZERO_ERROR;
+	result = ucol_strcollIter(locale->icu.ucol, &iter1, &iter2, &status);
+	if (U_FAILURE(status))
+		ereport(ERROR,
+				(errmsg("collation failed: %s", u_errorName(status))));
+
+	return result;
+}
+
+static int
+strncoll_char16_utf8_icu(const storage_char16_t *data1, size_t size1,
+						 const char *data2, size_t size2,
+						 pg_locale_t locale)
+{
+	UCharIterator iter1;
+	UCharIterator iter2;
+	UErrorCode	status;
+	int			result;
+
+	/* Iterators for unaligned big-endian UTF-16 and UTF-8. */
+	UITER_SET_STORAGE_CHAR_T(&iter1, data1, size1);
+	uiter_setUTF8(&iter2, data2, size2);
+
+	status = U_ZERO_ERROR;
+	result = ucol_strcollIter(locale->icu.ucol, &iter1, &iter2, &status);
+	if (U_FAILURE(status))
+		ereport(ERROR,
+				(errmsg("collation failed: %s", u_errorName(status))));
 
 	return result;
 }

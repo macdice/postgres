@@ -291,6 +291,7 @@ extern varlena *pg_detoast_datum_packed(varlena *datum);
 /* DatumGetFoo macros for varlena types will typically look like this: */
 #define DatumGetByteaPP(X)			((bytea *) PG_DETOAST_DATUM_PACKED(X))
 #define DatumGetTextPP(X)			((text *) PG_DETOAST_DATUM_PACKED(X))
+#define DatumGetUtf16PP(X)			((utf16 *) PG_DETOAST_DATUM_PACKED(X))
 #define DatumGetBpCharPP(X)			((BpChar *) PG_DETOAST_DATUM_PACKED(X))
 #define DatumGetVarCharPP(X)		((VarChar *) PG_DETOAST_DATUM_PACKED(X))
 #define DatumGetHeapTupleHeader(X)	((HeapTupleHeader) PG_DETOAST_DATUM(X))
@@ -308,6 +309,7 @@ extern varlena *pg_detoast_datum_packed(varlena *datum);
 /* GETARG macros for varlena types will typically look like this: */
 #define PG_GETARG_BYTEA_PP(n)		DatumGetByteaPP(PG_GETARG_DATUM(n))
 #define PG_GETARG_TEXT_PP(n)		DatumGetTextPP(PG_GETARG_DATUM(n))
+#define PG_GETARG_UTF16_PP(n)		DatumGetUtf16PP(PG_GETARG_DATUM(n))
 #define PG_GETARG_BPCHAR_PP(n)		DatumGetBpCharPP(PG_GETARG_DATUM(n))
 #define PG_GETARG_VARCHAR_PP(n)		DatumGetVarCharPP(PG_GETARG_DATUM(n))
 #define PG_GETARG_HEAPTUPLEHEADER(n)	DatumGetHeapTupleHeader(PG_GETARG_DATUM(n))
@@ -372,6 +374,7 @@ extern varlena *pg_detoast_datum_packed(varlena *datum);
 /* RETURN macros for other pass-by-ref types will typically look like this: */
 #define PG_RETURN_BYTEA_P(x)   PG_RETURN_POINTER(x)
 #define PG_RETURN_TEXT_P(x)    PG_RETURN_POINTER(x)
+#define PG_RETURN_UTF16_P(x)   PG_RETURN_POINTER(x)
 #define PG_RETURN_BPCHAR_P(x)  PG_RETURN_POINTER(x)
 #define PG_RETURN_VARCHAR_P(x) PG_RETURN_POINTER(x)
 #define PG_RETURN_HEAPTUPLEHEADER(x)  return HeapTupleHeaderGetDatum(x)

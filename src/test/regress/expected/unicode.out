@@ -105,3 +105,137 @@ ORDER BY num;
 
 SELECT is_normalized('abc', 'def');  -- run-time error
 ERROR:  invalid normalization form: def
+-- Interesting thresholds for UTF-8 and UTF-16 encoding
+WITH octet_length_thresholds(t, description) AS (VALUES
+  (U&'\+000001', 'First 1-byte UTF-8 sequence supported by PostgreSQL'),
+  (U&'\+00007F', 'Final 1-byte UTF-8 sequence'),
+  (U&'\+000080', 'First 2-byte UTF-8 sequence'),
+  (U&'\+0007FF', 'Final 2-byte UTF-8 sequence'),
+  (U&'\+000800', 'First 3-byte UTF-8 sequence'),
+  (U&'\+00FFFF', 'Final 3-byte UTF-8 sequence (end of BMP)'),
+  (U&'\+010000', 'First 4-byte UTF-8 sequence, UTF-16 pair'),
+  (U&'\+10FFFF', 'Final valid codepoint'))
+SELECT to_hex(ascii(t)),
+       description,
+       octet_length(t::text) AS utf8_octets,
+       octet_length(t::utf16) AS utf16_octets,
+       length(t::text) AS utf8_length,
+       length(t::utf16) AS utf16_length
+FROM octet_length_thresholds;
+ to_hex |                     description                     | utf8_octets | utf16_octets | utf8_length | utf16_length 
+--------+-----------------------------------------------------+-------------+--------------+-------------+--------------
+ 1      | First 1-byte UTF-8 sequence supported by PostgreSQL |           1 |            2 |           1 |            1
+ 7f     | Final 1-byte UTF-8 sequence                         |           1 |            2 |           1 |            1
+ 80     | First 2-byte UTF-8 sequence                         |           2 |            2 |           1 |            1
+ 7ff    | Final 2-byte UTF-8 sequence                         |           2 |            2 |           1 |            1
+ 800    | First 3-byte UTF-8 sequence                         |           3 |            2 |           1 |            1
+ ffff   | Final 3-byte UTF-8 sequence (end of BMP)            |           3 |            2 |           1 |            1
+ 10000  | First 4-byte UTF-8 sequence, UTF-16 pair            |           4 |            4 |           1 |            1
+ 10ffff | Final valid codepoint                               |           4 |            4 |           1 |            1
+(8 rows)
+
+-- Out of range codepoints
+SELECT U&'\+000000';
+ERROR:  invalid Unicode escape value
+LINE 1: SELECT U&'\+000000';
+                  ^
+SELECT U&'\+110000';
+ERROR:  invalid Unicode escape value
+LINE 1: SELECT U&'\+110000';
+                  ^
+CREATE FUNCTION check_text_op(left_string text,
+                              left_type text,
+                              right_string text,
+                              right_type text,
+                              op text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS
+$$
+DECLARE
+  format text;
+  text_e text;
+  text_i int;
+  text_b boolean;
+  test_e text;
+  test_i int;
+  test_b boolean;
+BEGIN
+  -- all cross-type results against text, text
+  IF op = 'cmp' THEN
+    format := '%s%scmp(''%s''::%s, ''%s''::%s)';
+    text_e := format(format, 'bttext', '', left_string, 'text', right_string, 'text');
+    EXECUTE format('SELECT sign(%s)', text_e) INTO text_i;
+    test_e := format(format, left_type, CASE WHEN left_type = right_type THEN '' ELSE right_type END, left_string, left_type, right_string, right_type);
+    EXECUTE format('SELECT sign(%s)', test_e) INTO test_i;
+    IF test_i <> text_i THEN
+      RAISE NOTICE '% -> %, but % -> %', text_e, text_i, test_e, test_i;
+    END IF;
+  ELSE
+    format := '''%s''::%s %s ''%s''::%s';
+    text_e := format(format, left_string, 'text', op, right_string, 'text');
+    EXECUTE format('SELECT %s', text_e) INTO text_b;
+    test_e := format(format, left_string, left_type, op, right_string, right_type);
+    EXECUTE format('SELECT %s', test_e) INTO test_b;
+    IF test_b <> text_b THEN
+      RAISE NOTICE '% -> %, but % -> %', text_e, text_b, test_e, test_b;
+    END IF;
+  END IF;
+  RETURN true;
+END;
+$$;
+WITH strings (s) AS (VALUES ('a'), ('aa'), ('aaa')),
+     ops (o)     AS (VALUES ('<'), ('<='), ('='), ('<>'), ('>='), ('>'), ('cmp')),
+     types (t)   AS (VALUES ('text'), ('name'), ('utf16'))
+SELECT count(check_text_op(left_string.s,
+                           left_type.t,
+                           right_string.s,
+                           right_type.t,
+                           op.o))
+FROM       strings left_string
+CROSS JOIN strings right_string
+CROSS JOIN types   left_type
+CROSS JOIN types   right_type
+CROSS JOIN ops     op
+WHERE left_type.t = 'utf16' OR right_type.t = 'utf16';
+ count 
+-------
+   315
+(1 row)
+
+WITH examples(language, string) AS
+(VALUES
+  ('English',  'In a hole in the ground there lived a hobbit.'),
+  ('Spanish',  'En un agujero en el suelo, vivía un hobbit.'),
+  ('Russian',  'В норе под землей жил-был хоббит.'),
+  ('Arabic',   'كان يعيش هوبيت في حفرة في الأرض.'),
+  ('Hebrew',   'בתוך חור באדמה חי הוביט.'),
+  ('Greek',    'Σε μια τρύπα στο έδαφος ζούσε ένα χόμπιτ.'),
+  ('Korean',   '땅속 어느 구멍에 한 호빗이 살고 있었다.'),
+  ('Hindi',    'जमीन में बने एक गड्ढे में एक हॉबिट रहता था।'),
+  ('Tamil',    'அந்த நிலத்தில் ஒரு துளையில் ஒரு ஹாபிட் வசித்து வந்தது.'),
+  ('Chinese',  '在地下一个洞里，住着一个霍比特人。'),
+  ('Japanese', '穴のなかに、ひとりのホビットが暮らしていた。'))
+SELECT language,
+       octet_length(string::text) || '→' || octet_length(string::utf16) AS octets,
+       to_char(ROUND(100 *
+                     ((octet_length(string::utf16)::float /
+                      (octet_length(string::text)::float) - 1.0))),
+               'S999%') AS delta,
+       string
+FROM examples;
+ language | octets  | delta |                     string                      
+----------+---------+-------+-------------------------------------------------
+ English  | 45→90   | +100% | In a hole in the ground there lived a hobbit.
+ Spanish  | 44→86   |  +95% | En un agujero en el suelo, vivía un hobbit.
+ Russian  | 59→66   |  +12% | В норе под землей жил-был хоббит.
+ Arabic   | 57→64   |  +12% | كان يعيش هوبيت في حفرة في الأرض.
+ Hebrew   | 43→48   |  +12% | בתוך חור באדמה חי הוביט.
+ Greek    | 74→82   |  +11% | Σε μια τρύπα στο έδαφος ζούσε ένα χόμπιτ.
+ Korean   | 55→46   |  -16% | 땅속 어느 구멍에 한 호빗이 살고 있었다.
+ Hindi    | 111→86  |  -23% | जमीन में बने एक गड्ढे में एक हॉबिट रहता था।
+ Tamil    | 146→108 |  -26% | அந்த நிலத்தில் ஒரு துளையில் ஒரு ஹாபிட் வசித்து வந்தது.
+ Chinese  | 51→34   |  -33% | 在地下一个洞里，住着一个霍比特人。
+ Japanese | 66→44   |  -33% | 穴のなかに、ひとりのホビットが暮らしていた。
+(11 rows)
+

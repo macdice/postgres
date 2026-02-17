@@ -42,6 +42,7 @@
 #include "common/hashfn.h"
 #include "common/string.h"
 #include "mb/pg_wchar.h"
+#include "mb/unicode_strings.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/guc_hooks.h"
@@ -50,6 +51,7 @@
 #include "utils/pg_locale.h"
 #include "utils/pg_locale_c.h"
 #include "utils/relcache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 
 #ifdef WIN32
@@ -1405,6 +1407,107 @@ pg_strncoll(const char *arg1, ssize_t len1, const char *arg2, ssize_t len2,
 			pg_locale_t locale)
 {
 	return locale->collate->strncoll(arg1, len1, arg2, len2, locale);
+}
+
+/*
+ * For providers without UTF-16 support, convert both strings to database
+ * encoding with NUL-terminator.
+ */
+static int
+pg_strncoll_char16_convert(const storage_char16_t *data1, size_t size1,
+						   const storage_char16_t *data2, size_t size2,
+						   pg_locale_t locale)
+{
+	char	   *cstr1;
+	char	   *cstr2;
+	int			result;
+
+	DECLARE_PG_STACK();
+
+	cstr1 = pg_stack_alloc(char16_to_mb_max_size(size1) + 1);
+	char16_to_local_cstr(cstr1, data1, size1);
+
+	cstr2 = pg_stack_alloc(char16_to_mb_max_size(size2) + 1);
+	char16_to_local_cstr(cstr2, data2, size2);
+
+	result = pg_strncoll(cstr1, -1, cstr2, -1, locale);
+
+	pg_stack_free(cstr1);
+	pg_stack_free(cstr2);
+
+	return result;
+}
+
+/*
+ * Collate two UTF-16 strings.
+ */
+int
+pg_strncoll_char16(const storage_char16_t *data1, size_t size1,
+				   const storage_char16_t *data2, size_t size2,
+				   pg_locale_t locale)
+{
+	if (locale->collate->strncoll_char16)
+		return locale->collate->strncoll_char16(data1, size1,
+												data2, size2,
+												locale);
+
+	return pg_strncoll_char16_convert(data1, size1, data2, size2, locale);
+}
+
+/*
+ * For providers without UTF-16 support, convert one string to database
+ * encoding with NUL-terminator.
+ */
+static int
+pg_strncoll_char16_local_convert(const storage_char16_t *data1, size_t size1,
+								 const char *data2, size_t size2,
+								 pg_locale_t locale)
+{
+	char	   *cstr1;
+	int			result;
+
+	DECLARE_PG_STACK();
+
+	cstr1 = pg_stack_alloc(char16_to_mb_max_size(size1) + 1);
+	char16_to_local_cstr(cstr1, data1, size1);
+
+	result = pg_strncoll(cstr1, -1, data2, size2, locale);
+
+	pg_stack_free(cstr1);
+
+	return result;
+}
+
+/*
+ * Compare a UTF-16 string and a database encoding string.
+ */
+int
+pg_strncoll_char16_local(const storage_char16_t *data1, size_t size1,
+						 const char *data2, size_t size2,
+						 pg_locale_t locale)
+{
+	if (locale->collate->strncoll_char16_local)
+		return locale->collate->strncoll_char16_local(data1, size2,
+													  data2, size2,
+													  locale);
+
+	return pg_strncoll_char16_local_convert(data1, size1, data2, size2,
+											locale);
+}
+
+/*
+ * Compare a UTF-16 string and a database encoding string.
+ */
+int
+pg_strncoll_local_char16(const char *data1, size_t size1,
+						 const storage_char16_t *data2, size_t size2,
+						 pg_locale_t locale)
+{
+	/* No seperate implementation for now. */
+	int			result = pg_strncoll_char16_local(data2, size2, data1, size1, locale);
+
+	INVERT_COMPARE_RESULT(result);
+	return result;
 }
 
 /*

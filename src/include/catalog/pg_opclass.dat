@@ -127,6 +127,8 @@
   opcintype => 'text' },
 { opcmethod => 'hash', opcname => 'text_ops', opcfamily => 'hash/text_ops',
   opcintype => 'text' },
+{ opcmethod => 'btree', opcname => 'utf16_ops', opcfamily => 'btree/text_ops',
+  opcintype => 'utf16' },
 { opcmethod => 'btree', opcname => 'time_ops', opcfamily => 'btree/time_ops',
   opcintype => 'time' },
 { opcmethod => 'hash', opcname => 'time_ops', opcfamily => 'hash/time_ops',

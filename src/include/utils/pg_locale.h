@@ -13,6 +13,7 @@
 #define _PG_LOCALE_
 
 #include "mb/pg_wchar.h"
+#include "mb/unicode_types.h"
 
 /* use for libc locale names */
 #define LOCALE_NAME_BUFLEN 128
@@ -66,6 +67,16 @@ struct collate_methods
 	int			(*strncoll) (const char *arg1, ssize_t len1,
 							 const char *arg2, ssize_t len2,
 							 pg_locale_t locale);
+
+	/* optional */
+	int			(*strncoll_char16) (const storage_char16_t *arg1, size_t len1,
+									const storage_char16_t *arg2, size_t len2,
+									pg_locale_t locale);
+
+	/* optional */
+	int			(*strncoll_char16_local) (const storage_char16_t *arg1, size_t len1,
+										  const char *arg2, size_t len2,
+										  pg_locale_t locale);
 
 	/* required */
 	size_t		(*strnxfrm) (char *dest, size_t destsize,
@@ -188,6 +199,15 @@ extern size_t pg_downcase_ident(char *dst, size_t dstsize,
 extern int	pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale);
 extern int	pg_strncoll(const char *arg1, ssize_t len1,
 						const char *arg2, ssize_t len2, pg_locale_t locale);
+extern int	pg_strncoll_char16(const storage_char16_t *data1, size_t size1,
+							   const storage_char16_t *data2, size_t size2,
+							   pg_locale_t locale);
+extern int	pg_strncoll_char16_local(const storage_char16_t *data1, size_t size1,
+									 const char *data2, size_t size2,
+									 pg_locale_t locale);
+extern int	pg_strncoll_local_char16(const char *data1, size_t size1,
+									 const storage_char16_t *data2, size_t size2,
+									 pg_locale_t locale);
 extern bool pg_strxfrm_enabled(pg_locale_t locale);
 extern size_t pg_strxfrm(char *dest, const char *src, size_t destsize,
 						 pg_locale_t locale);
