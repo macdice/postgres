@@ -1,0 +1,5 @@
+comment = 'broken_strcoll'
+default_version = '1.0'
+module_pathname = '$libdir/broken_strcoll'
+relocatable = true
+#trusted = true
