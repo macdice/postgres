@@ -1,0 +1,11 @@
+\getenv libdir PG_LIBDIR
+\getenv dlsuffix PG_DLSUFFIX
+
+\set regresslib :libdir '/regress' :dlsuffix
+
+CREATE FUNCTION test_pg_stack_alloc() RETURNS void
+    AS :'regresslib' LANGUAGE C STRICT;
+
+SELECT test_pg_stack_alloc();
+
+DROP FUNCTION test_pg_stack_alloc();
