@@ -2060,7 +2060,9 @@ builtins = [
   'clz',
   'ctz',
   'constant_p',
+  'alloca_with_align',
   'frame_address',
+  'stack_address',
   'unreachable',
 ]
 

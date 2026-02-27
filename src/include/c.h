@@ -883,6 +883,16 @@ typedef NameData *Name;
 /* we don't currently need wider versions of the other ALIGN macros */
 #define MAXALIGN64(LEN)			TYPEALIGN64(MAXIMUM_ALIGNOF, (LEN))
 
+/*
+ * MAXIMUM_ALIGNOF is respected by palloc() and similar.  The C standard
+ * defines max_align_t as a type to be used for similar purposes, but Visual
+ * Studio forgot to define it in <stddef.h>.  Supply the definition Clang uses
+ * on that platform, for use in contexts that refer to the standard library or
+ * compiler's behavior rather than PostgreSQL's.
+ */
+#ifdef _MSC_VER
+typedef double max_align_t;
+#endif
 
 /* ----------------------------------------------------------------
  *				Section 6:	assertions
