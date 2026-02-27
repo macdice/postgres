@@ -27,6 +27,7 @@
 #include "catalog/pg_type.h"
 #include "commands/sequence.h"
 #include "commands/trigger.h"
+#include "common/int.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
 #include "executor/spi.h"
@@ -45,6 +46,7 @@
 #include "utils/builtins.h"
 #include "utils/geo_decls.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/typcache.h"
 
@@ -1381,6 +1383,55 @@ test_translation(PG_FUNCTION_ARGS)
 			errmsg("translated PRIXMAX = %" PRIXMAX, (uintmax_t) 123456789012));
 	ereport(NOTICE,
 			errmsg("translated PRIXPTR = %" PRIXPTR, (uintptr_t) 9999));
+
+	PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(test_pg_stack_alloc);
+Datum
+test_pg_stack_alloc(PG_FUNCTION_ARGS)
+{
+	char	   *p;
+	char	   *p2 PG_USED_FOR_ASSERTS_ONLY;
+
+	/* Need extra space to run under ASAN. */
+	DECLARE_PG_STACK_SIZE(1024 * 8);
+
+	/* Too big for the stack. */
+	p = pg_stack_alloc(10000);
+	Assert(!pg_stack_ptr_p(p));
+	pg_stack_free(p);
+
+	/* Acceptable size. */
+	p = pg_stack_alloc(10);
+	Assert(pg_stack_ptr_p(p));
+
+	/* Addresses should move downwards. */
+	p2 = pg_stack_alloc(10);
+	Assert(pg_stack_ptr_p(p));
+	Assert(p2 < p);
+
+	/* A zero-sized allocation is identifiable as a stack address. */
+	p = pg_stack_alloc(0);
+	Assert(pg_stack_ptr_p(p));
+
+	/* Test a range of alignments. */
+#define TEST_ALIGN MAXIMUM_ALIGNOF
+	for (int i = 1; i <= TEST_ALIGN * 8; i *= 2)
+	{
+		/* Allocate and check alignment is as requested, when we use palloc(). */
+		p = pg_stack_alloc_aligned(1024 * 8, i);
+
+		Assert(!pg_stack_ptr_p(p));
+		Assert(pg_stack_ptr_is_aligned_p(p, i));
+		pg_stack_free(p);
+
+		/* Allocate and check alignment is as requested. */
+		p = pg_stack_alloc_aligned(i, i);
+
+		Assert(pg_stack_ptr_p(p));
+		Assert(pg_stack_ptr_is_aligned_p(p, i));
+	}
 
 	PG_RETURN_VOID();
 }
