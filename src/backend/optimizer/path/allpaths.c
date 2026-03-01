@@ -48,6 +48,7 @@
 #include "port/pg_bitutils.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/selfuncs.h"
 
 
@@ -1031,6 +1032,8 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	int			nattrs;
 	ListCell   *l;
 
+	DECLARE_PG_STACK();
+
 	/* Guard against stack overflow due to overly deep inheritance tree. */
 	check_stack_depth();
 
@@ -1075,7 +1078,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	parent_rows = 0;
 	parent_size = 0;
 	nattrs = rel->max_attr - rel->min_attr + 1;
-	parent_attrsizes = (double *) palloc0(nattrs * sizeof(double));
+	parent_attrsizes = pg_stack_alloc0_array(double, nattrs);
 
 	foreach(l, root->append_rel_list)
 	{
@@ -1306,7 +1309,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		set_dummy_rel_pathlist(rel);
 	}
 
-	pfree(parent_attrsizes);
+	pg_stack_free(parent_attrsizes);
 }
 
 /*

@@ -33,6 +33,7 @@
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/selfuncs.h"
 
 
@@ -1281,6 +1282,8 @@ group_similar_or_args(PlannerInfo *root, RelOptInfo *rel, RestrictInfo *rinfo)
 	List	   *result = NIL;
 	Index		relid = rel->relid;
 
+	DECLARE_PG_STACK();
+
 	Assert(IsA(rinfo->orclause, BoolExpr));
 	orargs = ((BoolExpr *) rinfo->orclause)->args;
 	n = list_length(orargs);
@@ -1291,7 +1294,7 @@ group_similar_or_args(PlannerInfo *root, RelOptInfo *rel, RestrictInfo *rinfo)
 	 * which will be used to sort these arguments at the next step.
 	 */
 	i = -1;
-	matches = palloc_array(OrArgIndexMatch, n);
+	matches = pg_stack_alloc_array(OrArgIndexMatch, n);
 	foreach(lc, orargs)
 	{
 		Node	   *arg = lfirst(lc);
@@ -1421,7 +1424,7 @@ group_similar_or_args(PlannerInfo *root, RelOptInfo *rel, RestrictInfo *rinfo)
 	 */
 	if (!matched)
 	{
-		pfree(matches);
+		pg_stack_free(matches);
 		return orargs;
 	}
 
@@ -1526,7 +1529,7 @@ group_similar_or_args(PlannerInfo *root, RelOptInfo *rel, RestrictInfo *rinfo)
 			group_start = i;
 		}
 	}
-	pfree(matches);
+	pg_stack_free(matches);
 	return result;
 }
 
@@ -1794,6 +1797,8 @@ choose_bitmap_and(PlannerInfo *root, RelOptInfo *rel, List *paths)
 				j;
 	ListCell   *l;
 
+	DECLARE_PG_STACK();
+
 	Assert(npaths > 0);			/* else caller error */
 	if (npaths == 1)
 		return (Path *) linitial(paths);	/* easy case */
@@ -1853,7 +1858,7 @@ choose_bitmap_and(PlannerInfo *root, RelOptInfo *rel, List *paths)
 	 * same set of clauses; keep only the cheapest-to-scan of any such groups.
 	 * The surviving paths are put into an array for qsort'ing.
 	 */
-	pathinfoarray = palloc_array(PathClauseUsage *, npaths);
+	pathinfoarray = pg_stack_alloc_array(PathClauseUsage *, npaths);
 	clauselist = NIL;
 	npaths = 0;
 	foreach(l, paths)
@@ -1979,6 +1984,7 @@ choose_bitmap_and(PlannerInfo *root, RelOptInfo *rel, List *paths)
 		/* some easy cleanup (we don't try real hard though) */
 		list_free(qualsofar);
 	}
+	pg_stack_free(pathinfoarray);
 
 	if (list_length(bestpaths) == 1)
 		return (Path *) linitial(bestpaths);	/* no need for AND */

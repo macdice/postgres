@@ -61,6 +61,7 @@
 #include "utils/acl.h"
 #include "utils/backend_status.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
 
@@ -3020,6 +3021,8 @@ extract_rollup_sets(List *groupingSets)
 	ListCell   *lc1 = list_head(groupingSets);
 	ListCell   *lc;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Start by stripping out empty sets.  The algorithm doesn't require this,
 	 * but the planner currently needs all empty sets to be returned in the
@@ -3053,10 +3056,10 @@ extract_rollup_sets(List *groupingSets)
 	 * to leave 0 free for the NIL node in the graph algorithm.
 	 *----------
 	 */
-	orig_sets = palloc0((num_sets_raw + 1) * sizeof(List *));
-	set_masks = palloc0((num_sets_raw + 1) * sizeof(Bitmapset *));
-	adjacency = palloc0((num_sets_raw + 1) * sizeof(short *));
-	adjacency_buf = palloc((num_sets_raw + 1) * sizeof(short));
+	orig_sets = pg_stack_alloc0_array(List *, num_sets_raw + 1);
+	set_masks = pg_stack_alloc0_array(Bitmapset *, num_sets_raw + 1);
+	adjacency = pg_stack_alloc0_array(short *, num_sets_raw + 1);
+	adjacency_buf = pg_stack_alloc_array(short, num_sets_raw + 1);
 
 	j_size = 0;
 	j = 0;
@@ -3141,7 +3144,7 @@ extract_rollup_sets(List *groupingSets)
 	 * pair_vu[v] = u (both will be true, but we check both so that we can do
 	 * it in one pass)
 	 */
-	chains = palloc0((num_sets + 1) * sizeof(int));
+	chains = pg_stack_alloc0_array(int, num_sets + 1);
 
 	for (i = 1; i <= num_sets; ++i)
 	{
@@ -3157,7 +3160,7 @@ extract_rollup_sets(List *groupingSets)
 	}
 
 	/* build result lists. */
-	results = palloc0((num_chains + 1) * sizeof(List *));
+	results = pg_stack_alloc0_array(List *, (num_chains + 1));
 
 	for (i = 1; i <= num_sets; ++i)
 	{
@@ -3183,17 +3186,17 @@ extract_rollup_sets(List *groupingSets)
 	 * tied up a nontrivial amount of memory.)
 	 */
 	BipartiteMatchFree(state);
-	pfree(results);
-	pfree(chains);
+	pg_stack_free(results);
+	pg_stack_free(chains);
 	for (i = 1; i <= num_sets; ++i)
 		if (adjacency[i])
 			pfree(adjacency[i]);
-	pfree(adjacency);
-	pfree(adjacency_buf);
-	pfree(orig_sets);
+	pg_stack_free(adjacency);
+	pg_stack_free(adjacency_buf);
+	pg_stack_free(orig_sets);
 	for (i = 1; i <= num_sets; ++i)
 		bms_free(set_masks[i]);
-	pfree(set_masks);
+	pg_stack_free(set_masks);
 
 	return result;
 }
@@ -6033,8 +6036,12 @@ select_active_windows(PlannerInfo *root, WindowFuncLists *wflists)
 	List	   *result = NIL;
 	ListCell   *lc;
 	int			nActive = 0;
-	WindowClauseSortData *actives = palloc_array(WindowClauseSortData,
-												 list_length(windowClause));
+	WindowClauseSortData *actives;
+
+	DECLARE_PG_STACK();
+
+	actives = pg_stack_alloc_array(WindowClauseSortData,
+								   list_length(windowClause));
 
 	/* First, construct an array of the active windows */
 	foreach(lc, windowClause)
@@ -6093,7 +6100,7 @@ select_active_windows(PlannerInfo *root, WindowFuncLists *wflists)
 	for (int i = 0; i < nActive; i++)
 		result = lappend(result, actives[i].wc);
 
-	pfree(actives);
+	pg_stack_free(actives);
 
 	return result;
 }

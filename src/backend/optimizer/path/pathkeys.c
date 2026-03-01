@@ -27,6 +27,7 @@
 #include "partitioning/partbounds.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 
 /* Consider reordering of GROUP BY keys? */
 bool		enable_group_by_reordering = true;
@@ -1668,6 +1669,8 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 	ListCell   *lc;
 	int			j;
 
+	DECLARE_PG_STACK();
+
 	/* Might have no mergeclauses */
 	if (nClauses == 0)
 		return NIL;
@@ -1676,8 +1679,8 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 	 * Make arrays of the ECs used by the mergeclauses (dropping any
 	 * duplicates) and their "popularity" scores.
 	 */
-	ecs = (EquivalenceClass **) palloc(nClauses * sizeof(EquivalenceClass *));
-	scores = (int *) palloc(nClauses * sizeof(int));
+	ecs = pg_stack_alloc_array(EquivalenceClass *, nClauses);
+	scores = pg_stack_alloc_array(int, nClauses);
 	necs = 0;
 
 	foreach(lc, mergeclauses)
@@ -1784,8 +1787,8 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 			pathkeys = list_copy_head(root->query_pathkeys, matches);
 
 			/* we have all of the join pathkeys, so nothing more to do */
-			pfree(ecs);
-			pfree(scores);
+			pg_stack_free(ecs);
+			pg_stack_free(scores);
 
 			return pathkeys;
 		}
@@ -1827,8 +1830,8 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 		pathkeys = lappend(pathkeys, pathkey);
 	}
 
-	pfree(ecs);
-	pfree(scores);
+	pg_stack_free(ecs);
+	pg_stack_free(scores);
 
 	return pathkeys;
 }

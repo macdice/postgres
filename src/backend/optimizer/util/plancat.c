@@ -50,6 +50,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
@@ -1788,9 +1789,11 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 			{
 				char	   *exprsString;
 
-				exprsString = TextDatumGetCString(datum);
+				DECLARE_PG_STACK();
+
+				exprsString = pg_stack_text_datum_to_cstring(datum);
 				exprs = (List *) stringToNode(exprsString);
-				pfree(exprsString);
+				pg_stack_free(exprsString);
 
 				/*
 				 * Modify the copies we obtain from the relcache to have the

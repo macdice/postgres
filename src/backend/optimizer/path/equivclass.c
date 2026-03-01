@@ -32,6 +32,7 @@
 #include "optimizer/restrictinfo.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 
 
 static EquivalenceMember *make_eq_member(EquivalenceClass *ec,
@@ -1373,6 +1374,8 @@ generate_base_implied_equalities_no_const(PlannerInfo *root,
 	EquivalenceMember **prev_ems;
 	ListCell   *lc;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * We scan the EC members once and track the last-seen member for each
 	 * base relation.  When we see another member of the same base relation,
@@ -1381,8 +1384,8 @@ generate_base_implied_equalities_no_const(PlannerInfo *root,
 	 * ordering would succeed.  XXX FIXME: use a UNION-FIND algorithm similar
 	 * to the way we build merged ECs.  (Use a list-of-lists for each rel.)
 	 */
-	prev_ems = (EquivalenceMember **)
-		palloc0(root->simple_rel_array_size * sizeof(EquivalenceMember *));
+	prev_ems = pg_stack_alloc0_array(EquivalenceMember *,
+									 root->simple_rel_array_size);
 
 	/* We don't expect any children yet */
 	Assert(ec->ec_childmembers == NULL);
@@ -1444,7 +1447,7 @@ generate_base_implied_equalities_no_const(PlannerInfo *root,
 		prev_ems[relid] = cur_em;
 	}
 
-	pfree(prev_ems);
+	pg_stack_free(prev_ems);
 
 	/*
 	 * We also have to make sure that all the Vars used in the member clauses
