@@ -45,6 +45,7 @@
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/sampling.h"
 #include "utils/selfuncs.h"
@@ -7507,6 +7508,8 @@ make_tuple_from_result_row(PGresult *res,
 	ListCell   *lc;
 	int			j;
 
+	DECLARE_PG_STACK();
+
 	Assert(row < PQntuples(res));
 
 	/*
@@ -7528,8 +7531,8 @@ make_tuple_from_result_row(PGresult *res,
 		tupdesc = fsstate->ss.ss_ScanTupleSlot->tts_tupleDescriptor;
 	}
 
-	values = (Datum *) palloc0(tupdesc->natts * sizeof(Datum));
-	nulls = (bool *) palloc(tupdesc->natts * sizeof(bool));
+	values = pg_stack_alloc0_array(Datum, tupdesc->natts);
+	nulls = pg_stack_alloc_array(bool, tupdesc->natts);
 	/* Initialize to nulls for any columns not present in result */
 	memset(nulls, true, tupdesc->natts * sizeof(bool));
 
@@ -7631,6 +7634,8 @@ make_tuple_from_result_row(PGresult *res,
 	HeapTupleHeaderSetCmin(tuple->t_data, InvalidTransactionId);
 
 	/* Clean up */
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 	MemoryContextReset(temp_context);
 
 	return tuple;

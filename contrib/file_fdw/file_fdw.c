@@ -38,6 +38,7 @@
 #include "optimizer/restrictinfo.h"
 #include "utils/acl.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/sampling.h"
 #include "utils/varlena.h"
@@ -1202,12 +1203,14 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 	MemoryContext oldcontext = CurrentMemoryContext;
 	MemoryContext tupcontext;
 
+	DECLARE_PG_STACK();
+
 	Assert(onerel);
 	Assert(targrows > 0);
 
 	tupDesc = RelationGetDescr(onerel);
-	values = (Datum *) palloc(tupDesc->natts * sizeof(Datum));
-	nulls = (bool *) palloc(tupDesc->natts * sizeof(bool));
+	values = pg_stack_alloc_array(Datum, tupDesc->natts);
+	nulls = pg_stack_alloc_array(bool, tupDesc->natts);
 
 	/* Fetch options of foreign table */
 	fileGetOptions(RelationGetRelid(onerel), &filename, &is_program, &options);
@@ -1324,8 +1327,8 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 
 	EndCopyFrom(cstate);
 
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 
 	/*
 	 * Emit some interesting relation info
