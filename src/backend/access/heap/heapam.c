@@ -52,6 +52,7 @@
 #include "utils/datum.h"
 #include "utils/injection_point.h"
 #include "utils/inval.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 
@@ -8768,11 +8769,13 @@ bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
 	int			ncopied = 0;
 	int			nblocksfavorable = 0;
 
+	DECLARE_PG_STACK();
+
 	Assert(delstate->bottomup);
 	Assert(delstate->ndeltids > 0);
 
 	/* Calculate per-heap-block count of TIDs */
-	blockgroups = palloc_array(IndexDeleteCounts, delstate->ndeltids);
+	blockgroups = pg_stack_alloc_array(IndexDeleteCounts, delstate->ndeltids);
 	for (int i = 0; i < delstate->ndeltids; i++)
 	{
 		TM_IndexDelete *ideltid = &delstate->deltids[i];
@@ -8845,7 +8848,8 @@ bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
 	/* Sort groups and rearrange caller's deltids array */
 	qsort(blockgroups, nblockgroups, sizeof(IndexDeleteCounts),
 		  bottomup_sort_and_shrink_cmp);
-	reordereddeltids = palloc(delstate->ndeltids * sizeof(TM_IndexDelete));
+	reordereddeltids = pg_stack_alloc_array(TM_IndexDelete,
+											delstate->ndeltids);
 
 	nblockgroups = Min(BOTTOMUP_MAX_NBLOCKS, nblockgroups);
 	/* Determine number of favorable blocks at the start of final deltids */
@@ -8867,8 +8871,8 @@ bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
 		   sizeof(TM_IndexDelete) * ncopied);
 	delstate->ndeltids = ncopied;
 
-	pfree(reordereddeltids);
-	pfree(blockgroups);
+	pg_stack_free(reordereddeltids);
+	pg_stack_free(blockgroups);
 
 	return nblocksfavorable;
 }

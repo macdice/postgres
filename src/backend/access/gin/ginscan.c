@@ -20,6 +20,7 @@
 #include "pgstat.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/pg_stack_alloc.h"
 
 
 IndexScanDesc
@@ -420,10 +421,12 @@ ginNewScanKey(IndexScanDesc scan)
 		int			iNormalKey;
 		int			iExcludeOnly;
 
+		DECLARE_PG_STACK();
+
 		/* We'd better have made at least one normal key */
 		Assert(numExcludeOnly < so->nkeys);
 		/* Make a temporary array to hold the re-ordered scan keys */
-		tmpkeys = (GinScanKey) palloc(so->nkeys * sizeof(GinScanKeyData));
+		tmpkeys = pg_stack_alloc_array(GinScanKeyData, so->nkeys);
 		/* Re-order the keys ... */
 		iNormalKey = 0;
 		iExcludeOnly = so->nkeys - numExcludeOnly;
@@ -446,7 +449,7 @@ ginNewScanKey(IndexScanDesc scan)
 		Assert(iExcludeOnly == so->nkeys);
 		/* ... and copy them back to so->keys[] */
 		memcpy(so->keys, tmpkeys, so->nkeys * sizeof(GinScanKeyData));
-		pfree(tmpkeys);
+		pg_stack_free(tmpkeys);
 	}
 
 	/*

@@ -40,6 +40,7 @@
 #include "access/tupmacs.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 
 
 /*
@@ -117,14 +118,16 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 	int			nuntoasted = 0;
 #endif
 
+	DECLARE_PG_STACK();
+
 	Assert(brdesc->bd_totalstored > 0);
 
-	values = palloc_array(Datum, brdesc->bd_totalstored);
-	nulls = palloc0_array(bool, brdesc->bd_totalstored);
-	phony_nullbitmap = palloc_array(bits8, BITMAPLEN(brdesc->bd_totalstored));
+	values = pg_stack_alloc_array(Datum, brdesc->bd_totalstored);
+	nulls = pg_stack_alloc0_array(bool, brdesc->bd_totalstored);
+	phony_nullbitmap = pg_stack_alloc_array(bits8, BITMAPLEN(brdesc->bd_totalstored));
 
 #ifdef TOAST_INDEX_HACK
-	untoasted_values = palloc_array(Datum, brdesc->bd_totalstored);
+	untoasted_values = pg_stack_alloc_array(Datum, brdesc->bd_totalstored);
 #endif
 
 	/*
@@ -307,13 +310,15 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 					phony_nullbitmap);
 
 	/* done with these */
-	pfree(values);
-	pfree(nulls);
-	pfree(phony_nullbitmap);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
+	pg_stack_free(phony_nullbitmap);
 
 #ifdef TOAST_INDEX_HACK
 	for (i = 0; i < nuntoasted; i++)
 		pfree(DatumGetPointer(untoasted_values[i]));
+
+	pg_stack_free(untoasted_values);
 #endif
 
 	/*

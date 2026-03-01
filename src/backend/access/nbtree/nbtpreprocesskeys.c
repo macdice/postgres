@@ -22,6 +22,7 @@
 #include "utils/array.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 
 typedef struct BTScanKeyPreproc
@@ -1557,6 +1558,8 @@ _bt_unmark_keys(IndexScanDesc scan, int *keyDataMap)
 				haveReqForward,
 				haveReqBackward;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Do an initial pass over so->keyData[] that determines which keys to
 	 * keep as required.  We expect so->keyData[] to still be in attribute
@@ -1568,7 +1571,7 @@ _bt_unmark_keys(IndexScanDesc scan, int *keyDataMap)
 	 * Any requiredness markings that we might leave on later keys/attributes
 	 * are predicated on there being required = keys on all prior columns.
 	 */
-	unmarkikey = palloc0(so->numberOfKeys * sizeof(bool));
+	unmarkikey = pg_stack_alloc0_array(bool, so->numberOfKeys);
 	nunmark = 0;
 
 	/* Set things up for first key's attribute */
@@ -1653,14 +1656,14 @@ _bt_unmark_keys(IndexScanDesc scan, int *keyDataMap)
 	 * Next, allocate temp arrays: one for required keys that'll remain
 	 * required, the other for all remaining keys
 	 */
-	unmarkKeys = palloc(nunmark * sizeof(ScanKeyData));
-	keepKeys = palloc((so->numberOfKeys - nunmark) * sizeof(ScanKeyData));
+	unmarkKeys = pg_stack_alloc_array(ScanKeyData, nunmark);
+	keepKeys = pg_stack_alloc_array(ScanKeyData, so->numberOfKeys - nunmark);
 	nunmarked = 0;
 	nkept = 0;
 	if (so->numArrayKeys)
 	{
-		unmarkOrderProcs = palloc(nunmark * sizeof(FmgrInfo));
-		keepOrderProcs = palloc((so->numberOfKeys - nunmark) * sizeof(FmgrInfo));
+		unmarkOrderProcs = pg_stack_alloc_array(FmgrInfo, nunmark);
+		keepOrderProcs = pg_stack_alloc_array(FmgrInfo, so->numberOfKeys - nunmark);
 	}
 
 	/*
@@ -1751,9 +1754,9 @@ _bt_unmark_keys(IndexScanDesc scan, int *keyDataMap)
 	memcpy(so->keyData + nkept, unmarkKeys, sizeof(ScanKeyData) * nunmarked);
 
 	/* Done with temp arrays */
-	pfree(unmarkikey);
-	pfree(keepKeys);
-	pfree(unmarkKeys);
+	pg_stack_free(unmarkikey);
+	pg_stack_free(keepKeys);
+	pg_stack_free(unmarkKeys);
 
 	/*
 	 * Now copy so->orderProcs[] temp entries needed by scans with = array
@@ -1781,8 +1784,8 @@ _bt_unmark_keys(IndexScanDesc scan, int *keyDataMap)
 			  _bt_reorder_array_cmp);
 
 		/* Done with temp arrays */
-		pfree(unmarkOrderProcs);
-		pfree(keepOrderProcs);
+		pg_stack_free(unmarkOrderProcs);
+		pg_stack_free(keepOrderProcs);
 	}
 }
 
