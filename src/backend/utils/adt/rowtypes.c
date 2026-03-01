@@ -25,6 +25,7 @@
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/typcache.h"
 
 
@@ -89,6 +90,8 @@ record_in(PG_FUNCTION_ARGS)
 	bool	   *nulls;
 	StringInfoData buf;
 
+	DECLARE_PG_STACK();
+
 	check_stack_depth();		/* recurses for record-type columns */
 
 	/*
@@ -140,8 +143,8 @@ record_in(PG_FUNCTION_ARGS)
 		my_extra->ncolumns = ncolumns;
 	}
 
-	values = palloc_array(Datum, ncolumns);
-	nulls = palloc_array(bool, ncolumns);
+	values = pg_stack_alloc_array(Datum, ncolumns);
+	nulls = pg_stack_alloc_array(bool, ncolumns);
 
 	/*
 	 * Scan the string.  We use "buf" to accumulate the de-quoted data for
@@ -310,8 +313,8 @@ record_in(PG_FUNCTION_ARGS)
 
 	heap_freetuple(tuple);
 	pfree(buf.data);
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 	ReleaseTupleDesc(tupdesc);
 
 	PG_RETURN_HEAPTUPLEHEADER(result);
@@ -340,6 +343,8 @@ record_out(PG_FUNCTION_ARGS)
 	Datum	   *values;
 	bool	   *nulls;
 	StringInfoData buf;
+
+	DECLARE_PG_STACK();
 
 	check_stack_depth();		/* recurses for record-type columns */
 
@@ -383,8 +388,8 @@ record_out(PG_FUNCTION_ARGS)
 		my_extra->ncolumns = ncolumns;
 	}
 
-	values = palloc_array(Datum, ncolumns);
-	nulls = palloc_array(bool, ncolumns);
+	values = pg_stack_alloc_array(Datum, ncolumns);
+	nulls = pg_stack_alloc_array(bool, ncolumns);
 
 	/* Break down the tuple into fields */
 	heap_deform_tuple(&tuple, tupdesc, values, nulls);
@@ -466,8 +471,8 @@ record_out(PG_FUNCTION_ARGS)
 
 	appendStringInfoChar(&buf, ')');
 
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 	ReleaseTupleDesc(tupdesc);
 
 	PG_RETURN_CSTRING(buf.data);
@@ -492,6 +497,8 @@ record_recv(PG_FUNCTION_ARGS)
 	int			i;
 	Datum	   *values;
 	bool	   *nulls;
+
+	DECLARE_PG_STACK();
 
 	check_stack_depth();		/* recurses for record-type columns */
 
@@ -539,8 +546,8 @@ record_recv(PG_FUNCTION_ARGS)
 		my_extra->ncolumns = ncolumns;
 	}
 
-	values = palloc_array(Datum, ncolumns);
-	nulls = palloc_array(bool, ncolumns);
+	values = pg_stack_alloc_array(Datum, ncolumns);
+	nulls = pg_stack_alloc_array(bool, ncolumns);
 
 	/* Fetch number of columns user thinks it has */
 	usercols = pq_getmsgint(buf, 4);
@@ -673,8 +680,8 @@ record_recv(PG_FUNCTION_ARGS)
 	memcpy(result, tuple->t_data, tuple->t_len);
 
 	heap_freetuple(tuple);
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 	ReleaseTupleDesc(tupdesc);
 
 	PG_RETURN_HEAPTUPLEHEADER(result);
@@ -698,6 +705,8 @@ record_send(PG_FUNCTION_ARGS)
 	Datum	   *values;
 	bool	   *nulls;
 	StringInfoData buf;
+
+	DECLARE_PG_STACK();
 
 	check_stack_depth();		/* recurses for record-type columns */
 
@@ -741,8 +750,8 @@ record_send(PG_FUNCTION_ARGS)
 		my_extra->ncolumns = ncolumns;
 	}
 
-	values = palloc_array(Datum, ncolumns);
-	nulls = palloc_array(bool, ncolumns);
+	values = pg_stack_alloc_array(Datum, ncolumns);
+	nulls = pg_stack_alloc_array(bool, ncolumns);
 
 	/* Break down the tuple into fields */
 	heap_deform_tuple(&tuple, tupdesc, values, nulls);
@@ -800,8 +809,8 @@ record_send(PG_FUNCTION_ARGS)
 					 VARSIZE(outputbytes) - VARHDRSZ);
 	}
 
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 	ReleaseTupleDesc(tupdesc);
 
 	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
@@ -844,6 +853,8 @@ record_cmp(FunctionCallInfo fcinfo)
 	int			i1;
 	int			i2;
 	int			j;
+
+	DECLARE_PG_STACK();
 
 	check_stack_depth();		/* recurses for record-type columns */
 
@@ -901,11 +912,11 @@ record_cmp(FunctionCallInfo fcinfo)
 	}
 
 	/* Break down the tuples into fields */
-	values1 = (Datum *) palloc(ncolumns1 * sizeof(Datum));
-	nulls1 = (bool *) palloc(ncolumns1 * sizeof(bool));
+	values1 = pg_stack_alloc_array(Datum, ncolumns1);
+	nulls1 = pg_stack_alloc_array(bool, ncolumns1);
 	heap_deform_tuple(&tuple1, tupdesc1, values1, nulls1);
-	values2 = (Datum *) palloc(ncolumns2 * sizeof(Datum));
-	nulls2 = (bool *) palloc(ncolumns2 * sizeof(bool));
+	values2 = pg_stack_alloc_array(Datum, ncolumns2);
+	nulls2 = pg_stack_alloc_array(bool, ncolumns2);
 	heap_deform_tuple(&tuple2, tupdesc2, values2, nulls2);
 
 	/*
@@ -1040,10 +1051,10 @@ record_cmp(FunctionCallInfo fcinfo)
 					 errmsg("cannot compare record types with different numbers of columns")));
 	}
 
-	pfree(values1);
-	pfree(nulls1);
-	pfree(values2);
-	pfree(nulls2);
+	pg_stack_free(values1);
+	pg_stack_free(nulls1);
+	pg_stack_free(values2);
+	pg_stack_free(nulls2);
 	ReleaseTupleDesc(tupdesc1);
 	ReleaseTupleDesc(tupdesc2);
 
@@ -1088,6 +1099,8 @@ record_eq(PG_FUNCTION_ARGS)
 	int			i1;
 	int			i2;
 	int			j;
+
+	DECLARE_PG_STACK();
 
 	check_stack_depth();		/* recurses for record-type columns */
 
@@ -1145,11 +1158,11 @@ record_eq(PG_FUNCTION_ARGS)
 	}
 
 	/* Break down the tuples into fields */
-	values1 = (Datum *) palloc(ncolumns1 * sizeof(Datum));
-	nulls1 = (bool *) palloc(ncolumns1 * sizeof(bool));
+	values1 = pg_stack_alloc_array(Datum, ncolumns1);
+	nulls1 = pg_stack_alloc_array(bool, ncolumns1);
 	heap_deform_tuple(&tuple1, tupdesc1, values1, nulls1);
-	values2 = (Datum *) palloc(ncolumns2 * sizeof(Datum));
-	nulls2 = (bool *) palloc(ncolumns2 * sizeof(bool));
+	values2 = pg_stack_alloc_array(Datum, ncolumns2);
+	nulls2 = pg_stack_alloc_array(bool, ncolumns2);
 	heap_deform_tuple(&tuple2, tupdesc2, values2, nulls2);
 
 	/*
@@ -1265,10 +1278,10 @@ record_eq(PG_FUNCTION_ARGS)
 					 errmsg("cannot compare record types with different numbers of columns")));
 	}
 
-	pfree(values1);
-	pfree(nulls1);
-	pfree(values2);
-	pfree(nulls2);
+	pg_stack_free(values1);
+	pg_stack_free(nulls1);
+	pg_stack_free(values2);
+	pg_stack_free(nulls2);
 	ReleaseTupleDesc(tupdesc1);
 	ReleaseTupleDesc(tupdesc2);
 
@@ -1371,6 +1384,8 @@ record_image_cmp(FunctionCallInfo fcinfo)
 	int			i2;
 	int			j;
 
+	DECLARE_PG_STACK();
+
 	/* Extract type info from the tuples */
 	tupType1 = HeapTupleHeaderGetTypeId(record1);
 	tupTypmod1 = HeapTupleHeaderGetTypMod(record1);
@@ -1425,11 +1440,11 @@ record_image_cmp(FunctionCallInfo fcinfo)
 	}
 
 	/* Break down the tuples into fields */
-	values1 = (Datum *) palloc(ncolumns1 * sizeof(Datum));
-	nulls1 = (bool *) palloc(ncolumns1 * sizeof(bool));
+	values1 = pg_stack_alloc_array(Datum, ncolumns1);
+	nulls1 = pg_stack_alloc_array(bool, ncolumns1);
 	heap_deform_tuple(&tuple1, tupdesc1, values1, nulls1);
-	values2 = (Datum *) palloc(ncolumns2 * sizeof(Datum));
-	nulls2 = (bool *) palloc(ncolumns2 * sizeof(bool));
+	values2 = pg_stack_alloc_array(Datum, ncolumns2);
+	nulls2 = pg_stack_alloc_array(bool, ncolumns2);
 	heap_deform_tuple(&tuple2, tupdesc2, values2, nulls2);
 
 	/*
@@ -1568,10 +1583,10 @@ record_image_cmp(FunctionCallInfo fcinfo)
 					 errmsg("cannot compare record types with different numbers of columns")));
 	}
 
-	pfree(values1);
-	pfree(nulls1);
-	pfree(values2);
-	pfree(nulls2);
+	pg_stack_free(values1);
+	pg_stack_free(nulls1);
+	pg_stack_free(values2);
+	pg_stack_free(nulls2);
 	ReleaseTupleDesc(tupdesc1);
 	ReleaseTupleDesc(tupdesc2);
 
@@ -1616,6 +1631,8 @@ record_image_eq(PG_FUNCTION_ARGS)
 	int			i1;
 	int			i2;
 	int			j;
+
+	DECLARE_PG_STACK();
 
 	/* Extract type info from the tuples */
 	tupType1 = HeapTupleHeaderGetTypeId(record1);
@@ -1671,11 +1688,11 @@ record_image_eq(PG_FUNCTION_ARGS)
 	}
 
 	/* Break down the tuples into fields */
-	values1 = (Datum *) palloc(ncolumns1 * sizeof(Datum));
-	nulls1 = (bool *) palloc(ncolumns1 * sizeof(bool));
+	values1 = pg_stack_alloc_array(Datum, ncolumns1);
+	nulls1 = pg_stack_alloc_array(bool, ncolumns1);
 	heap_deform_tuple(&tuple1, tupdesc1, values1, nulls1);
-	values2 = (Datum *) palloc(ncolumns2 * sizeof(Datum));
-	nulls2 = (bool *) palloc(ncolumns2 * sizeof(bool));
+	values2 = pg_stack_alloc_array(Datum, ncolumns2);
+	nulls2 = pg_stack_alloc_array(bool, ncolumns2);
 	heap_deform_tuple(&tuple2, tupdesc2, values2, nulls2);
 
 	/*
@@ -1753,10 +1770,10 @@ record_image_eq(PG_FUNCTION_ARGS)
 					 errmsg("cannot compare record types with different numbers of columns")));
 	}
 
-	pfree(values1);
-	pfree(nulls1);
-	pfree(values2);
-	pfree(nulls2);
+	pg_stack_free(values1);
+	pg_stack_free(nulls1);
+	pg_stack_free(values2);
+	pg_stack_free(nulls2);
 	ReleaseTupleDesc(tupdesc1);
 	ReleaseTupleDesc(tupdesc2);
 
@@ -1822,6 +1839,8 @@ hash_record(PG_FUNCTION_ARGS)
 	Datum	   *values;
 	bool	   *nulls;
 
+	DECLARE_PG_STACK();
+
 	check_stack_depth();		/* recurses for record-type columns */
 
 	/* Extract type info from tuple */
@@ -1863,8 +1882,8 @@ hash_record(PG_FUNCTION_ARGS)
 	}
 
 	/* Break down the tuple into fields */
-	values = palloc_array(Datum, ncolumns);
-	nulls = palloc_array(bool, ncolumns);
+	values = pg_stack_alloc_array(Datum, ncolumns);
+	nulls = pg_stack_alloc_array(bool, ncolumns);
 	heap_deform_tuple(&tuple, tupdesc, values, nulls);
 
 	for (int i = 0; i < ncolumns; i++)
@@ -1918,8 +1937,8 @@ hash_record(PG_FUNCTION_ARGS)
 		result = (result << 5) - result + element_hash;
 	}
 
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 	ReleaseTupleDesc(tupdesc);
 
 	/* Avoid leaking memory when handed toasted input. */
@@ -1942,6 +1961,8 @@ hash_record_extended(PG_FUNCTION_ARGS)
 	RecordCompareData *my_extra;
 	Datum	   *values;
 	bool	   *nulls;
+
+	DECLARE_PG_STACK();
 
 	check_stack_depth();		/* recurses for record-type columns */
 
@@ -1984,8 +2005,8 @@ hash_record_extended(PG_FUNCTION_ARGS)
 	}
 
 	/* Break down the tuple into fields */
-	values = palloc_array(Datum, ncolumns);
-	nulls = palloc_array(bool, ncolumns);
+	values = pg_stack_alloc_array(Datum, ncolumns);
+	nulls = pg_stack_alloc_array(bool, ncolumns);
 	heap_deform_tuple(&tuple, tupdesc, values, nulls);
 
 	for (int i = 0; i < ncolumns; i++)
@@ -2041,8 +2062,8 @@ hash_record_extended(PG_FUNCTION_ARGS)
 		result = (result << 5) - result + element_hash;
 	}
 
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 	ReleaseTupleDesc(tupdesc);
 
 	/* Avoid leaking memory when handed toasted input. */

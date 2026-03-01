@@ -48,6 +48,7 @@
 #include "utils/datum.h"
 #include "utils/expandeddatum.h"
 #include "utils/fmgrprotos.h"
+#include "utils/pg_stack_alloc.h"
 
 
 /*-------------------------------------------------------------------------
@@ -464,6 +465,8 @@ datumSerialize(Datum value, bool isnull, bool typByVal, int typLen,
 	ExpandedObjectHeader *eoh = NULL;
 	int			header;
 
+	DECLARE_PG_STACK();
+
 	/* Write header word. */
 	if (isnull)
 		header = -2;
@@ -496,13 +499,13 @@ datumSerialize(Datum value, bool isnull, bool typByVal, int typLen,
 			 * EOH_flatten_into expects the target address to be maxaligned,
 			 * so we can't store directly to *start_address.
 			 */
-			tmp = (char *) palloc(header);
+			tmp = (char *) pg_stack_alloc(header);
 			EOH_flatten_into(eoh, tmp, header);
 			memcpy(*start_address, tmp, header);
 			*start_address += header;
 
 			/* be tidy. */
-			pfree(tmp);
+			pg_stack_free(tmp);
 		}
 		else
 		{

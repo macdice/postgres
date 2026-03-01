@@ -51,6 +51,7 @@
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/selfuncs.h"
 #include "utils/varlena.h"
 
@@ -994,12 +995,14 @@ like_fixed_prefix(Const *patt_const, Const **prefix_const,
 	int			pos,
 				match_pos;
 
+	DECLARE_PG_STACK();
+
 	/* the right-hand const is type text or bytea */
 	Assert(typeid == BYTEAOID || typeid == TEXTOID);
 
 	if (typeid != BYTEAOID)
 	{
-		patt = TextDatumGetCString(patt_const->constvalue);
+		patt = pg_stack_text_datum_to_cstring(patt_const->constvalue);
 		pattlen = strlen(patt);
 	}
 	else
@@ -1007,12 +1010,12 @@ like_fixed_prefix(Const *patt_const, Const **prefix_const,
 		bytea	   *bstr = DatumGetByteaPP(patt_const->constvalue);
 
 		pattlen = VARSIZE_ANY_EXHDR(bstr);
-		patt = (char *) palloc(pattlen);
+		patt = (char *) pg_stack_alloc(pattlen);
 		memcpy(patt, VARDATA_ANY(bstr), pattlen);
 		Assert(bstr == DatumGetPointer(patt_const->constvalue));
 	}
 
-	match = palloc(pattlen + 1);
+	match = pg_stack_alloc(pattlen + 1);
 	match_pos = 0;
 	for (pos = 0; pos < pattlen; pos++)
 	{
@@ -1042,8 +1045,8 @@ like_fixed_prefix(Const *patt_const, Const **prefix_const,
 	if (rest_selec != NULL)
 		*rest_selec = like_selectivity(&patt[pos], pattlen - pos, false);
 
-	pfree(patt);
-	pfree(match);
+	pg_stack_free(patt);
+	pg_stack_free(match);
 
 	/* in LIKE, an empty pattern is an exact match! */
 	if (pos == pattlen)
@@ -1075,6 +1078,8 @@ like_fixed_prefix_ci(Const *patt_const, Oid collation, Const **prefix_const,
 	int			match_mblen;
 	pg_locale_t locale = 0;
 
+	DECLARE_PG_STACK();
+
 	/* the right-hand const is type text or bytea */
 	Assert(typeid == BYTEAOID || typeid == TEXTOID);
 
@@ -1097,10 +1102,10 @@ like_fixed_prefix_ci(Const *patt_const, Oid collation, Const **prefix_const,
 
 	locale = pg_newlocale_from_collation(collation);
 
-	wpatt = palloc((nbytes + 1) * sizeof(pg_wchar));
+	wpatt = pg_stack_alloc_array(pg_wchar, nbytes + 1);
 	wpattlen = pg_mb2wchar_with_len(VARDATA_ANY(val), wpatt, nbytes);
 
-	wmatch = palloc((nbytes + 1) * sizeof(pg_wchar));
+	wmatch = pg_stack_alloc_array(pg_wchar, nbytes + 1);
 	for (wpos = 0; wpos < wpattlen; wpos++)
 	{
 		/* % and _ are wildcard characters in LIKE */
@@ -1128,13 +1133,13 @@ like_fixed_prefix_ci(Const *patt_const, Oid collation, Const **prefix_const,
 
 	wmatch[wmatch_pos] = '\0';
 
-	match = palloc(pg_database_encoding_max_length() * wmatch_pos + 1);
+	match = pg_stack_alloc(pg_database_encoding_max_length() * wmatch_pos + 1);
 	match_mblen = pg_wchar2mb_with_len(wmatch, match, wmatch_pos);
 	match[match_mblen] = '\0';
-	pfree(wmatch);
+	pg_stack_free(wmatch);
 
 	*prefix_const = string_to_const(match, TEXTOID);
-	pfree(match);
+	pg_stack_free(match);
 
 	if (rest_selec != NULL)
 	{
@@ -1142,14 +1147,14 @@ like_fixed_prefix_ci(Const *patt_const, Oid collation, Const **prefix_const,
 		char	   *rest;
 		int			rest_mblen;
 
-		rest = palloc(pg_database_encoding_max_length() * wrestlen + 1);
+		rest = pg_stack_alloc(pg_database_encoding_max_length() * wrestlen + 1);
 		rest_mblen = pg_wchar2mb_with_len(&wpatt[wmatch_pos], rest, wrestlen);
 
 		*rest_selec = like_selectivity(rest, rest_mblen, true);
-		pfree(rest);
+		pg_stack_free(rest);
 	}
 
-	pfree(wpatt);
+	pg_stack_free(wpatt);
 
 	/* in LIKE, an empty pattern is an exact match! */
 	if (wpos == wpattlen)
@@ -1168,6 +1173,8 @@ regex_fixed_prefix(Const *patt_const, bool case_insensitive, Oid collation,
 	Oid			typeid = patt_const->consttype;
 	char	   *prefix;
 	bool		exact;
+
+	DECLARE_PG_STACK();
 
 	/*
 	 * Should be unnecessary, there are no bytea regex operators defined. As
@@ -1190,12 +1197,12 @@ regex_fixed_prefix(Const *patt_const, bool case_insensitive, Oid collation,
 
 		if (rest_selec != NULL)
 		{
-			char	   *patt = TextDatumGetCString(patt_const->constvalue);
+			char	   *patt = pg_stack_text_datum_to_cstring(patt_const->constvalue);
 
 			*rest_selec = regex_selectivity(patt, strlen(patt),
 											case_insensitive,
 											0);
-			pfree(patt);
+			pg_stack_free(patt);
 		}
 
 		return Pattern_Prefix_None;
@@ -1212,12 +1219,12 @@ regex_fixed_prefix(Const *patt_const, bool case_insensitive, Oid collation,
 		}
 		else
 		{
-			char	   *patt = TextDatumGetCString(patt_const->constvalue);
+			char	   *patt = pg_stack_text_datum_to_cstring(patt_const->constvalue);
 
 			*rest_selec = regex_selectivity(patt, strlen(patt),
 											case_insensitive,
 											strlen(prefix));
-			pfree(patt);
+			pg_stack_free(patt);
 		}
 	}
 
@@ -1619,6 +1626,8 @@ make_greater_string(const Const *str_const, FmgrInfo *ltproc, Oid collation)
 	char	   *cmptxt = NULL;
 	mbcharacter_incrementer charinc;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Get a modifiable copy of the prefix string in C-string format, and set
 	 * up the string we will compare to as a Datum.  In C locale this can just
@@ -1630,7 +1639,7 @@ make_greater_string(const Const *str_const, FmgrInfo *ltproc, Oid collation)
 		bytea	   *bstr = DatumGetByteaPP(str_const->constvalue);
 
 		len = VARSIZE_ANY_EXHDR(bstr);
-		workstr = (char *) palloc(len);
+		workstr = (char *) pg_stack_alloc(len);
 		memcpy(workstr, VARDATA_ANY(bstr), len);
 		Assert(bstr == DatumGetPointer(str_const->constvalue));
 		cmpstr = str_const->constvalue;
@@ -1641,7 +1650,7 @@ make_greater_string(const Const *str_const, FmgrInfo *ltproc, Oid collation)
 			workstr = DatumGetCString(DirectFunctionCall1(nameout,
 														  str_const->constvalue));
 		else
-			workstr = TextDatumGetCString(str_const->constvalue);
+			workstr = pg_stack_text_datum_to_cstring(str_const->constvalue);
 		len = strlen(workstr);
 		if (len == 0 || pg_newlocale_from_collation(collation)->collate_is_c)
 			cmpstr = str_const->constvalue;
@@ -1669,7 +1678,7 @@ make_greater_string(const Const *str_const, FmgrInfo *ltproc, Oid collation)
 			/* And build the string to compare to */
 			if (datatype == NAMEOID)
 			{
-				cmptxt = palloc(len + 2);
+				cmptxt = pg_stack_alloc(len + 2);
 				memcpy(cmptxt, workstr, len);
 				cmptxt[len] = suffixchar;
 				cmptxt[len + 1] = '\0';
@@ -1677,7 +1686,7 @@ make_greater_string(const Const *str_const, FmgrInfo *ltproc, Oid collation)
 			}
 			else
 			{
-				cmptxt = palloc(VARHDRSZ + len + 1);
+				cmptxt = pg_stack_alloc(VARHDRSZ + len + 1);
 				SET_VARSIZE(cmptxt, VARHDRSZ + len + 1);
 				memcpy(VARDATA(cmptxt), workstr, len);
 				*(VARDATA(cmptxt) + len) = suffixchar;
@@ -1729,8 +1738,8 @@ make_greater_string(const Const *str_const, FmgrInfo *ltproc, Oid collation)
 			{
 				/* Successfully made a string larger than cmpstr */
 				if (cmptxt)
-					pfree(cmptxt);
-				pfree(workstr);
+					pg_stack_free(cmptxt);
+				pg_stack_free(workstr);
 				return workstr_const;
 			}
 
@@ -1749,8 +1758,8 @@ make_greater_string(const Const *str_const, FmgrInfo *ltproc, Oid collation)
 
 	/* Failed... */
 	if (cmptxt)
-		pfree(cmptxt);
-	pfree(workstr);
+		pg_stack_free(cmptxt);
+	pg_stack_free(workstr);
 
 	return NULL;
 }

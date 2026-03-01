@@ -69,6 +69,7 @@
 #include "utils/hsearch.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
@@ -1306,6 +1307,8 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	char	   *str;
 	char	   *sep;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Fetch the pg_index tuple by the Oid of the index
 	 */
@@ -1366,9 +1369,9 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 
 		exprsDatum = SysCacheGetAttrNotNull(INDEXRELID, ht_idx,
 											Anum_pg_index_indexprs);
-		exprsString = TextDatumGetCString(exprsDatum);
+		exprsString = pg_stack_text_datum_to_cstring(exprsDatum);
 		indexprs = (List *) stringToNode(exprsString);
-		pfree(exprsString);
+		pg_stack_free(exprsString);
 	}
 	else
 		indexprs = NIL;
@@ -1562,9 +1565,9 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 			/* Convert text string to node tree */
 			predDatum = SysCacheGetAttrNotNull(INDEXRELID, ht_idx,
 											   Anum_pg_index_indpred);
-			predString = TextDatumGetCString(predDatum);
+			predString = pg_stack_text_datum_to_cstring(predDatum);
 			node = (Node *) stringToNode(predString);
-			pfree(predString);
+			pg_stack_free(predString);
 
 			/* Deparse */
 			str = deparse_expression_pretty(node, context, false, false,
@@ -1998,6 +2001,8 @@ pg_get_statisticsobj_worker(Oid statextid, bool columns_only, bool missing_ok)
 	bool		has_exprs;
 	int			ncolumns;
 
+	DECLARE_PG_STACK();
+
 	statexttup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statextid));
 
 	if (!HeapTupleIsValid(statexttup))
@@ -2024,9 +2029,9 @@ pg_get_statisticsobj_worker(Oid statextid, bool columns_only, bool missing_ok)
 
 		exprsDatum = SysCacheGetAttrNotNull(STATEXTOID, statexttup,
 											Anum_pg_statistic_ext_stxexprs);
-		exprsString = TextDatumGetCString(exprsDatum);
+		exprsString = pg_stack_text_datum_to_cstring(exprsDatum);
 		exprs = (List *) stringToNode(exprsString);
-		pfree(exprsString);
+		pg_stack_free(exprsString);
 	}
 	else
 		exprs = NIL;
@@ -2175,6 +2180,8 @@ pg_get_statisticsobjdef_expressions(PG_FUNCTION_ARGS)
 	char	   *tmp;
 	ArrayBuildState *astate = NULL;
 
+	DECLARE_PG_STACK();
+
 	statexttup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statextid));
 
 	if (!HeapTupleIsValid(statexttup))
@@ -2197,9 +2204,9 @@ pg_get_statisticsobjdef_expressions(PG_FUNCTION_ARGS)
 	 */
 	datum = SysCacheGetAttrNotNull(STATEXTOID, statexttup,
 								   Anum_pg_statistic_ext_stxexprs);
-	tmp = TextDatumGetCString(datum);
+	tmp = pg_stack_text_datum_to_cstring(datum);
 	exprs = (List *) stringToNode(tmp);
-	pfree(tmp);
+	pg_stack_free(tmp);
 
 	context = deparse_context_for(get_relation_name(statextrec->stxrelid),
 								  statextrec->stxrelid);
@@ -2277,6 +2284,8 @@ pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 	char	   *str;
 	char	   *sep;
 
+	DECLARE_PG_STACK();
+
 	tuple = SearchSysCache1(PARTRELID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 	{
@@ -2311,14 +2320,14 @@ pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 
 		exprsDatum = SysCacheGetAttrNotNull(PARTRELID, tuple,
 											Anum_pg_partitioned_table_partexprs);
-		exprsString = TextDatumGetCString(exprsDatum);
+		exprsString = pg_stack_text_datum_to_cstring(exprsDatum);
 		partexprs = (List *) stringToNode(exprsString);
 
 		if (!IsA(partexprs, List))
 			elog(ERROR, "unexpected node type found in partexprs: %d",
 				 (int) nodeTag(partexprs));
 
-		pfree(exprsString);
+		pg_stack_free(exprsString);
 	}
 	else
 		partexprs = NIL;
@@ -3044,13 +3053,15 @@ pg_get_expr_worker(text *expr, Oid relid, int prettyFlags)
 	Relation	rel = NULL;
 	char	   *str;
 
+	DECLARE_PG_STACK();
+
 	/* Convert input pg_node_tree (really TEXT) object to C string */
-	exprstr = text_to_cstring(expr);
+	exprstr = pg_stack_text_to_cstring(expr);
 
 	/* Convert expression to node tree */
 	node = (Node *) stringToNode(exprstr);
 
-	pfree(exprstr);
+	pg_stack_free(exprstr);
 
 	/*
 	 * Throw error if the input is a querytree rather than an expression tree.
@@ -3642,6 +3653,8 @@ print_function_arguments(StringInfo buf, HeapTuple proctup,
 	ListCell   *nextargdefault = NULL;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	numargs = get_func_arg_info(proctup,
 								&argtypes, &argnames, &argmodes);
 
@@ -3658,9 +3671,9 @@ print_function_arguments(StringInfo buf, HeapTuple proctup,
 		{
 			char	   *str;
 
-			str = TextDatumGetCString(proargdefaults);
+			str = pg_stack_text_datum_to_cstring(proargdefaults);
 			argdefaults = castNode(List, stringToNode(str));
-			pfree(str);
+			pg_stack_free(str);
 			nextargdefault = list_head(argdefaults);
 			/* nlackdefaults counts only *input* arguments lacking defaults */
 			nlackdefaults = proc->pronargs - list_length(argdefaults);
@@ -3833,6 +3846,8 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 	bool		isnull;
 	int			nth_default;
 
+	DECLARE_PG_STACK();
+
 	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		PG_RETURN_NULL();
@@ -3858,9 +3873,9 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 	}
 
-	str = TextDatumGetCString(proargdefaults);
+	str = pg_stack_text_datum_to_cstring(proargdefaults);
 	argdefaults = castNode(List, stringToNode(str));
-	pfree(str);
+	pg_stack_free(str);
 
 	proc = (Form_pg_proc) GETSTRUCT(proctup);
 

@@ -42,6 +42,7 @@
 #include "utils/guc.h"
 #include "utils/numeric.h"
 #include "utils/pg_lsn.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/sortsupport.h"
 
 /* ----------
@@ -6755,6 +6756,8 @@ set_var_from_str(const char *str, const char *cp,
 	int			offset;
 	NumericDigit *digits;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * We first parse the string to extract decimal digits and determine the
 	 * correct decimal weight.  Then convert to NBASE representation.
@@ -6781,7 +6784,7 @@ set_var_from_str(const char *str, const char *cp,
 	if (!isdigit((unsigned char) *cp))
 		goto invalid_syntax;
 
-	decdigits = (unsigned char *) palloc(strlen(cp) + DEC_DIGITS * 2);
+	decdigits = (unsigned char *) pg_stack_alloc(strlen(cp) + DEC_DIGITS * 2);
 
 	/* leading padding for digit alignment later */
 	memset(decdigits, 0, DEC_DIGITS);
@@ -6915,7 +6918,7 @@ set_var_from_str(const char *str, const char *cp,
 		i += DEC_DIGITS;
 	}
 
-	pfree(decdigits);
+	pg_stack_free(decdigits);
 
 	/* Strip any leading/trailing zeroes, and normalize weight if zero */
 	strip_var(dest);
@@ -8901,6 +8904,8 @@ div_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result,
 	NumericDigit *res_digits;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * First of all division by zero check; we must not be handed an
 	 * unnormalized divisor.
@@ -9050,8 +9055,8 @@ div_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result,
 	 * zero and not counted in div_ndigitpairs, so that the main loop below
 	 * can safely read and write the (qi+1)'th digit in the approximate case.
 	 */
-	dividend = (int64 *) palloc((div_ndigitpairs + 1) * sizeof(int64) +
-								var2ndigitpairs * sizeof(int32));
+	dividend = (int64 *) pg_stack_alloc((div_ndigitpairs + 1) * sizeof(int64) +
+										var2ndigitpairs * sizeof(int32));
 	divisor = (int32 *) (dividend + div_ndigitpairs + 1);
 
 	/* load var1 into dividend[0 .. var1ndigitpairs-1], zeroing the rest */
@@ -9389,7 +9394,7 @@ div_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result,
 	}
 	Assert(carry == 0);
 
-	pfree(dividend);
+	pg_stack_free(dividend);
 
 	/*
 	 * Finally, round or truncate the result to the requested precision.
