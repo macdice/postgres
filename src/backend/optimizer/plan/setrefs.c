@@ -28,6 +28,7 @@
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteManip.h"
 #include "tcop/utility.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 
 
@@ -166,7 +167,15 @@ static void set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset);
 static void set_param_references(PlannerInfo *root, Plan *plan);
 static Node *convert_combining_aggrefs(Node *node, void *context);
 static void set_dummy_tlist_references(Plan *plan, int rtoffset);
-static indexed_tlist *build_tlist_index(List *tlist);
+static size_t tlist_index_size(List *tlist);
+static indexed_tlist *fill_tlist_index(indexed_tlist *itlist, List *tlist);
+#define build_tlist_index(tlist) \
+	fill_tlist_index(pg_stack_alloc(tlist_index_size(tlist)), (tlist))
+#define build_tlist_index_other_vars(tlist, ignore_rel) \
+	fill_tlist_index_other_vars(pg_stack_alloc(tlist_index_size(tlist)), \
+								(tlist), (ignore_rel))
+#define free_tlist_index(itlist) \
+	pg_stack_free(itlist)
 static Var *search_indexed_tlist_for_var(Var *var,
 										 indexed_tlist *itlist,
 										 int newvarno,
@@ -642,6 +651,8 @@ static Plan *
 set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 {
 	ListCell   *l;
+
+	DECLARE_PG_STACK();
 
 	if (plan == NULL)
 		return NULL;
@@ -1182,7 +1193,7 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 									  linitial_int(splan->resultRelations),
 									  rtoffset, NRM_EQUAL, NUM_EXEC_QUAL(plan));
 
-					pfree(itlist);
+					free_tlist_index(itlist);
 
 					splan->exclRelTlist =
 						fix_scan_list(root, splan->exclRelTlist, rtoffset, 1);
@@ -1383,6 +1394,8 @@ set_indexonlyscan_references(PlannerInfo *root,
 	List	   *stripped_indextlist;
 	ListCell   *lc;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Vars in the plan node's targetlist, qual, and recheckqual must only
 	 * reference columns that the index AM can actually return.  To ensure
@@ -1436,7 +1449,7 @@ set_indexonlyscan_references(PlannerInfo *root,
 	plan->indextlist = fix_scan_list(root, plan->indextlist,
 									 rtoffset, NUM_EXEC_TLIST((Plan *) plan));
 
-	pfree(index_itlist);
+	free_tlist_index(index_itlist);
 
 	return (Plan *) plan;
 }
@@ -1643,6 +1656,8 @@ set_foreignscan_references(PlannerInfo *root,
 						   ForeignScan *fscan,
 						   int rtoffset)
 {
+	DECLARE_PG_STACK();
+
 	/* Adjust scanrelid if it's valid */
 	if (fscan->scan.scanrelid > 0)
 		fscan->scan.scanrelid += rtoffset;
@@ -1687,7 +1702,7 @@ set_foreignscan_references(PlannerInfo *root,
 						   rtoffset,
 						   NRM_EQUAL,
 						   NUM_EXEC_QUAL((Plan *) fscan));
-		pfree(itlist);
+		free_tlist_index(itlist);
 		/* fdw_scan_tlist itself just needs fix_scan_list() adjustments */
 		fscan->fdw_scan_tlist =
 			fix_scan_list(root, fscan->fdw_scan_tlist,
@@ -1732,6 +1747,8 @@ set_customscan_references(PlannerInfo *root,
 {
 	ListCell   *lc;
 
+	DECLARE_PG_STACK();
+
 	/* Adjust scanrelid if it's valid */
 	if (cscan->scan.scanrelid > 0)
 		cscan->scan.scanrelid += rtoffset;
@@ -1765,7 +1782,7 @@ set_customscan_references(PlannerInfo *root,
 						   rtoffset,
 						   NRM_EQUAL,
 						   NUM_EXEC_QUAL((Plan *) cscan));
-		pfree(itlist);
+		free_tlist_index(itlist);
 		/* custom_scan_tlist itself just needs fix_scan_list() adjustments */
 		cscan->custom_scan_tlist =
 			fix_scan_list(root, cscan->custom_scan_tlist,
@@ -2028,6 +2045,8 @@ set_hash_references(PlannerInfo *root, Plan *plan, int rtoffset)
 	Plan	   *outer_plan = plan->lefttree;
 	indexed_tlist *outer_itlist;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Hash's hashkeys are used when feeding tuples into the hashtable,
 	 * therefore have them reference Hash's outer plan (which itself is the
@@ -2042,6 +2061,7 @@ set_hash_references(PlannerInfo *root, Plan *plan, int rtoffset)
 					   rtoffset,
 					   NRM_EQUAL,
 					   NUM_EXEC_QUAL(plan));
+	free_tlist_index(outer_itlist);
 
 	/* Hash doesn't project */
 	set_dummy_tlist_references(plan, rtoffset);
@@ -2408,6 +2428,8 @@ set_join_references(PlannerInfo *root, Join *join, int rtoffset)
 	indexed_tlist *outer_itlist;
 	indexed_tlist *inner_itlist;
 
+	DECLARE_PG_STACK();
+
 	outer_itlist = build_tlist_index(outer_plan->targetlist);
 	inner_itlist = build_tlist_index(inner_plan->targetlist);
 
@@ -2527,8 +2549,8 @@ set_join_references(PlannerInfo *root, Join *join, int rtoffset)
 									(join->jointype == JOIN_INNER ? NRM_EQUAL : NRM_SUPERSET),
 									NUM_EXEC_QUAL((Plan *) join));
 
-	pfree(outer_itlist);
-	pfree(inner_itlist);
+	free_tlist_index(outer_itlist);
+	free_tlist_index(inner_itlist);
 }
 
 /*
@@ -2556,6 +2578,8 @@ set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset)
 	indexed_tlist *subplan_itlist;
 	List	   *output_targetlist;
 	ListCell   *l;
+
+	DECLARE_PG_STACK();
 
 	subplan_itlist = build_tlist_index(subplan->targetlist);
 
@@ -2627,7 +2651,7 @@ set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset)
 					   NRM_EQUAL,
 					   NUM_EXEC_QUAL(plan));
 
-	pfree(subplan_itlist);
+	free_tlist_index(subplan_itlist);
 }
 
 /*
@@ -2815,7 +2839,19 @@ set_dummy_tlist_references(Plan *plan, int rtoffset)
 
 
 /*
- * build_tlist_index --- build an index data structure for a child tlist
+ * tlist_index_size --- compute memory required to an indexed_tlist.
+ */
+static size_t
+tlist_index_size(List *tlist)
+{
+	/* Require data structure with enough slots for all tlist entries */
+	return offsetof(indexed_tlist, vars) +
+		list_length(tlist) * sizeof(tlist_vinfo);
+}
+
+
+/*
+ * fill_tlist_index --- build an index data structure for a child tlist
  *
  * In most cases, subplan tlists will be "flat" tlists with only Vars,
  * so we try to optimize that case by extracting information about Vars
@@ -2825,19 +2861,15 @@ set_dummy_tlist_references(Plan *plan, int rtoffset)
  *
  * The result of this function is an indexed_tlist struct to pass to
  * search_indexed_tlist_for_var() and siblings.
- * When done, the indexed_tlist may be freed with a single pfree().
+ *
+ * The macro build_tlist_index() can be used to allocate memory in a stack
+ * buffer.  When done, the indexed_tlist may be freed with free_tlist_index().
  */
 static indexed_tlist *
-build_tlist_index(List *tlist)
+fill_tlist_index(indexed_tlist *itlist, List *tlist)
 {
-	indexed_tlist *itlist;
 	tlist_vinfo *vinfo;
 	ListCell   *l;
-
-	/* Create data structure with enough slots for all tlist entries */
-	itlist = (indexed_tlist *)
-		palloc(offsetof(indexed_tlist, vars) +
-			   list_length(tlist) * sizeof(tlist_vinfo));
 
 	itlist->tlist = tlist;
 	itlist->has_ph_vars = false;
@@ -2871,24 +2903,18 @@ build_tlist_index(List *tlist)
 }
 
 /*
- * build_tlist_index_other_vars --- build a restricted tlist index
+ * fill_tlist_index_other_vars --- build a restricted tlist index
  *
- * This is like build_tlist_index, but we only index tlist entries that
+ * This is like fill_tlist_index, but we only index tlist entries that
  * are Vars belonging to some rel other than the one specified.  We will set
  * has_ph_vars (allowing PlaceHolderVars to be matched), but not has_non_vars
  * (so nothing other than Vars and PlaceHolderVars can be matched).
  */
 static indexed_tlist *
-build_tlist_index_other_vars(List *tlist, int ignore_rel)
+fill_tlist_index_other_vars(indexed_tlist *itlist, List *tlist, int ignore_rel)
 {
-	indexed_tlist *itlist;
 	tlist_vinfo *vinfo;
 	ListCell   *l;
-
-	/* Create data structure with enough slots for all tlist entries */
-	itlist = (indexed_tlist *)
-		palloc(offsetof(indexed_tlist, vars) +
-			   list_length(tlist) * sizeof(tlist_vinfo));
 
 	itlist->tlist = tlist;
 	itlist->has_ph_vars = false;
@@ -3476,6 +3502,8 @@ set_returning_clause_references(PlannerInfo *root,
 {
 	indexed_tlist *itlist;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * We can perform the desired Var fixup by abusing the fix_join_expr
 	 * machinery that formerly handled inner indexscan fixup.  We search the
@@ -3501,7 +3529,7 @@ set_returning_clause_references(PlannerInfo *root,
 						  NRM_EQUAL,
 						  NUM_EXEC_TLIST(topplan));
 
-	pfree(itlist);
+	free_tlist_index(itlist);
 
 	return rlist;
 }
@@ -3570,11 +3598,13 @@ set_windowagg_runcondition_references(PlannerInfo *root,
 	List	   *newlist;
 	indexed_tlist *itlist;
 
+	DECLARE_PG_STACK();
+
 	itlist = build_tlist_index(plan->targetlist);
 
 	newlist = fix_windowagg_condition_expr(root, runcondition, itlist);
 
-	pfree(itlist);
+	free_tlist_index(itlist);
 
 	return newlist;
 }
