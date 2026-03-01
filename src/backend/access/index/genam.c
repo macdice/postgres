@@ -32,6 +32,7 @@
 #include "utils/acl.h"
 #include "utils/injection_point.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/ruleutils.h"
@@ -303,6 +304,8 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 	Page		ipage = BufferGetPage(ibuf);
 	IndexTuple	itup;
 
+	DECLARE_PG_STACK();
+
 	Assert(nitems > 0);
 
 	delstate.irel = irel;
@@ -310,8 +313,8 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 	delstate.bottomup = false;
 	delstate.bottomupfreespace = 0;
 	delstate.ndeltids = 0;
-	delstate.deltids = palloc_array(TM_IndexDelete, nitems);
-	delstate.status = palloc_array(TM_IndexStatus, nitems);
+	delstate.deltids = pg_stack_alloc_array(TM_IndexDelete, nitems);
+	delstate.status = pg_stack_alloc_array(TM_IndexStatus, nitems);
 
 	/* identify what the index tuples about to be deleted point to */
 	for (int i = 0; i < nitems; i++)
@@ -340,8 +343,8 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 	/* assert tableam agrees that all items are deletable */
 	Assert(delstate.ndeltids == nitems);
 
-	pfree(delstate.deltids);
-	pfree(delstate.status);
+	pg_stack_free(delstate.deltids);
+	pg_stack_free(delstate.status);
 
 	return snapshotConflictHorizon;
 }
@@ -433,7 +436,9 @@ systable_beginscan(Relation heapRelation,
 		int			i;
 		ScanKey		idxkey;
 
-		idxkey = palloc_array(ScanKeyData, nkeys);
+		DECLARE_PG_STACK();
+
+		idxkey = pg_stack_alloc_array(ScanKeyData, nkeys);
 
 		/* Convert attribute numbers to be index column numbers. */
 		for (i = 0; i < nkeys; i++)
@@ -459,7 +464,7 @@ systable_beginscan(Relation heapRelation,
 		index_rescan(sysscan->iscan, idxkey, nkeys, NULL, 0);
 		sysscan->scan = NULL;
 
-		pfree(idxkey);
+		pg_stack_free(idxkey);
 	}
 	else
 	{
@@ -656,6 +661,8 @@ systable_beginscan_ordered(Relation heapRelation,
 	int			i;
 	ScanKey		idxkey;
 
+	DECLARE_PG_STACK();
+
 	/* REINDEX can probably be a hard error here ... */
 	if (ReindexIsProcessingIndex(RelationGetRelid(indexRelation)))
 		ereport(ERROR,
@@ -686,7 +693,7 @@ systable_beginscan_ordered(Relation heapRelation,
 		sysscan->snapshot = NULL;
 	}
 
-	idxkey = palloc_array(ScanKeyData, nkeys);
+	idxkey = pg_stack_alloc_array(ScanKeyData, nkeys);
 
 	/* Convert attribute numbers to be index column numbers. */
 	for (i = 0; i < nkeys; i++)
@@ -720,7 +727,7 @@ systable_beginscan_ordered(Relation heapRelation,
 	index_rescan(sysscan->iscan, idxkey, nkeys, NULL, 0);
 	sysscan->scan = NULL;
 
-	pfree(idxkey);
+	pg_stack_free(idxkey);
 
 	return sysscan;
 }

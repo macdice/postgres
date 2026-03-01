@@ -31,6 +31,7 @@
 #include "utils/float.h"
 #include "utils/fmgrprotos.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_stack_alloc.h"
 #include "varatt.h"
 
 /*
@@ -295,9 +296,10 @@ hashtext(PG_FUNCTION_ARGS)
 		const char *keydata = VARDATA_ANY(key);
 		size_t		keylen = VARSIZE_ANY_EXHDR(key);
 
+		DECLARE_PG_STACK();
 
 		bsize = pg_strnxfrm(NULL, 0, keydata, keylen, mylocale);
-		buf = palloc(bsize + 1);
+		buf = pg_stack_alloc(bsize + 1);
 
 		rsize = pg_strnxfrm(buf, bsize + 1, keydata, keylen, mylocale);
 
@@ -312,7 +314,7 @@ hashtext(PG_FUNCTION_ARGS)
 		 */
 		result = hash_any((uint8_t *) buf, bsize + 1);
 
-		pfree(buf);
+		pg_stack_free(buf);
 	}
 
 	/* Avoid leaking memory for toasted inputs */
@@ -351,8 +353,10 @@ hashtextextended(PG_FUNCTION_ARGS)
 		const char *keydata = VARDATA_ANY(key);
 		size_t		keylen = VARSIZE_ANY_EXHDR(key);
 
+		DECLARE_PG_STACK();
+
 		bsize = pg_strnxfrm(NULL, 0, keydata, keylen, mylocale);
-		buf = palloc(bsize + 1);
+		buf = pg_stack_alloc(bsize + 1);
 
 		rsize = pg_strnxfrm(buf, bsize + 1, keydata, keylen, mylocale);
 
@@ -368,7 +372,7 @@ hashtextextended(PG_FUNCTION_ARGS)
 		result = hash_any_extended((uint8_t *) buf, bsize + 1,
 								   PG_GETARG_INT64(1));
 
-		pfree(buf);
+		pg_stack_free(buf);
 	}
 
 	PG_FREE_IF_COPY(key, 0);

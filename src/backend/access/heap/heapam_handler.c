@@ -44,6 +44,7 @@
 #include "storage/procarray.h"
 #include "storage/smgr.h"
 #include "utils/builtins.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 
 static void reform_and_rewrite_tuple(HeapTuple tuple,
@@ -714,6 +715,8 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	BufferHeapTupleTableSlot *hslot;
 	BlockNumber prev_cblock = InvalidBlockNumber;
 
+	DECLARE_PG_STACK();
+
 	/* Remember if it's a system catalog */
 	is_system_catalog = IsSystemRelation(OldHeap);
 
@@ -725,8 +728,8 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 	/* Preallocate values/isnull arrays */
 	natts = newTupDesc->natts;
-	values = palloc_array(Datum, natts);
-	isnull = palloc_array(bool, natts);
+	values = pg_stack_alloc_array(Datum, natts);
+	isnull = pg_stack_alloc_array(bool, natts);
 
 	/* Initialize the rewrite operation */
 	rwstate = begin_heap_rewrite(OldHeap, NewHeap, OldestXmin, *xid_cutoff,
@@ -1010,8 +1013,8 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	end_heap_rewrite(rwstate);
 
 	/* Clean up */
-	pfree(values);
-	pfree(isnull);
+	pg_stack_free(values);
+	pg_stack_free(isnull);
 }
 
 /*

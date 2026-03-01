@@ -65,6 +65,7 @@
 #include "utils/expandeddatum.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 
 
 /*
@@ -1138,6 +1139,8 @@ heap_modify_tuple(HeapTuple tuple,
 	bool	   *isnull;
 	HeapTuple	newTuple;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * allocate and fill values and isnull arrays from either the tuple or the
 	 * repl information, as appropriate.
@@ -1149,8 +1152,8 @@ heap_modify_tuple(HeapTuple tuple,
 	 * O(N^2) if there are many non-replaced columns, so it seems better to
 	 * err on the side of linear cost.
 	 */
-	values = palloc_array(Datum, numberOfAttributes);
-	isnull = palloc_array(bool, numberOfAttributes);
+	values = pg_stack_alloc_array(Datum, numberOfAttributes);
+	isnull = pg_stack_alloc_array(bool, numberOfAttributes);
 
 	heap_deform_tuple(tuple, tupleDesc, values, isnull);
 
@@ -1168,8 +1171,8 @@ heap_modify_tuple(HeapTuple tuple,
 	 */
 	newTuple = heap_form_tuple(tupleDesc, values, isnull);
 
-	pfree(values);
-	pfree(isnull);
+	pg_stack_free(values);
+	pg_stack_free(isnull);
 
 	/*
 	 * copy the identification info of the old tuple: t_ctid, t_self
@@ -1207,12 +1210,14 @@ heap_modify_tuple_by_cols(HeapTuple tuple,
 	HeapTuple	newTuple;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * allocate and fill values and isnull arrays from the tuple, then replace
 	 * selected columns from the input arrays.
 	 */
-	values = palloc_array(Datum, numberOfAttributes);
-	isnull = palloc_array(bool, numberOfAttributes);
+	values = pg_stack_alloc_array(Datum, numberOfAttributes);
+	isnull = pg_stack_alloc_array(bool, numberOfAttributes);
 
 	heap_deform_tuple(tuple, tupleDesc, values, isnull);
 
@@ -1231,8 +1236,8 @@ heap_modify_tuple_by_cols(HeapTuple tuple,
 	 */
 	newTuple = heap_form_tuple(tupleDesc, values, isnull);
 
-	pfree(values);
-	pfree(isnull);
+	pg_stack_free(values);
+	pg_stack_free(isnull);
 
 	/*
 	 * copy the identification info of the old tuple: t_ctid, t_self

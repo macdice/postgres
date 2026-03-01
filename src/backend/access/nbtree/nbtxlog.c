@@ -21,6 +21,7 @@
 #include "access/xlogutils.h"
 #include "storage/standby.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 
 static MemoryContext opCtx;		/* working memory for operations */
 
@@ -551,13 +552,15 @@ btree_xlog_updates(Page page, OffsetNumber *updatedoffsets,
 	ItemId		itemid;
 	Size		itemsz;
 
+	DECLARE_PG_STACK();
+
 	for (int i = 0; i < nupdated; i++)
 	{
 		itemid = PageGetItemId(page, updatedoffsets[i]);
 		origtuple = (IndexTuple) PageGetItem(page, itemid);
 
-		vacposting = palloc(offsetof(BTVacuumPostingData, deletetids) +
-							updates->ndeletedtids * sizeof(uint16));
+		vacposting = pg_stack_alloc(offsetof(BTVacuumPostingData, deletetids) +
+									updates->ndeletedtids * sizeof(uint16));
 		vacposting->updatedoffset = updatedoffsets[i];
 		vacposting->itup = origtuple;
 		vacposting->ndeletedtids = updates->ndeletedtids;
@@ -573,7 +576,7 @@ btree_xlog_updates(Page page, OffsetNumber *updatedoffsets,
 			elog(PANIC, "failed to update partially dead item");
 
 		pfree(vacposting->itup);
-		pfree(vacposting);
+		pg_stack_free(vacposting);
 
 		/* advance to next xl_btree_update from array */
 		updates = (xl_btree_update *)
