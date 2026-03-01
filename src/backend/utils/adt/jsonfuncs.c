@@ -37,6 +37,7 @@
 #include "utils/jsonfuncs.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
@@ -1681,7 +1682,11 @@ jsonb_set_element(Jsonb *jb, const Datum *path, int path_len,
 {
 	JsonbInState state = {0};
 	JsonbIterator *it;
-	bool	   *path_nulls = palloc0_array(bool, path_len);
+	bool	   *path_nulls;
+
+	DECLARE_PG_STACK();
+
+	path_nulls = pg_stack_alloc0_array(bool, path_len);
 
 	if (newval->type == jbvArray && newval->val.array.rawScalar)
 		*newval = newval->val.array.elems[0];
@@ -1692,7 +1697,7 @@ jsonb_set_element(Jsonb *jb, const Datum *path, int path_len,
 			JB_PATH_CREATE | JB_PATH_FILL_GAPS |
 			JB_PATH_CONSISTENT_POSITION);
 
-	pfree(path_nulls);
+	pg_stack_free(path_nulls);
 
 	PG_RETURN_JSONB_P(JsonbValueToJsonb(state.result));
 }
@@ -2921,6 +2926,8 @@ populate_array(ArrayIOData *aio,
 	int		   *lbs;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	ctx.aio = aio;
 	ctx.mcxt = mcxt;
 	ctx.acxt = CurrentMemoryContext;
@@ -2955,7 +2962,7 @@ populate_array(ArrayIOData *aio,
 
 	Assert(ctx.ndims > 0);
 
-	lbs = palloc_array(int, ctx.ndims);
+	lbs = pg_stack_alloc_array(int, ctx.ndims);
 
 	for (i = 0; i < ctx.ndims; i++)
 		lbs[i] = 1;
@@ -2965,7 +2972,7 @@ populate_array(ArrayIOData *aio,
 
 	pfree(ctx.dims);
 	pfree(ctx.sizes);
-	pfree(lbs);
+	pg_stack_free(lbs);
 
 	*isnull = false;
 	return result;
@@ -3125,6 +3132,9 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 	Datum		res;
 	char	   *str = NULL;
 	const char *json = NULL;
+	bool		str_stack = false;
+
+	DECLARE_PG_STACK();
 
 	if (jsv->is_json)
 	{
@@ -3149,9 +3159,8 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 		else if (len >= 0)
 		{
 			/* create a NUL-terminated version */
-			str = palloc(len + 1);
-			memcpy(str, json, len);
-			str[len] = '\0';
+			str = pg_stack_strndup(json, len);
+			str_stack = true;
 		}
 		else
 		{
@@ -3164,7 +3173,10 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 		JsonbValue *jbv = jsv->val.jsonb;
 
 		if (jbv->type == jbvString && omit_quotes)
-			str = pnstrdup(jbv->val.string.val, jbv->val.string.len);
+		{
+			str = pg_stack_strndup(jbv->val.string.val, jbv->val.string.len);
+			str_stack = true;
+		}
 		else if (typid == JSONBOID)
 		{
 			Jsonb	   *jsonb = JsonbValueToJsonb(jbv); /* directly use jsonb */
@@ -3183,9 +3195,15 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 			str = JsonbToCString(NULL, &jsonb->root, VARSIZE(jsonb));
 		}
 		else if (jbv->type == jbvString)	/* quotes are stripped */
-			str = pnstrdup(jbv->val.string.val, jbv->val.string.len);
+		{
+			str = pg_stack_strndup(jbv->val.string.val, jbv->val.string.len);
+			str_stack = true;
+		}
 		else if (jbv->type == jbvBool)
-			str = pstrdup(jbv->val.boolean ? "true" : "false");
+		{
+			str = pg_stack_strdup(jbv->val.boolean ? "true" : "false");
+			str_stack = true;
+		}
 		else if (jbv->type == jbvNumeric)
 			str = DatumGetCString(DirectFunctionCall1(numeric_out,
 													  PointerGetDatum(jbv->val.numeric)));
@@ -3204,7 +3222,9 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 	}
 
 	/* free temporary buffer */
-	if (str != json)
+	if (str_stack)
+		pg_stack_free(str);
+	else if (str != json)
 		pfree(str);
 
 	return res;
@@ -3528,6 +3548,8 @@ populate_record(TupleDesc tupdesc,
 	int			ncolumns = tupdesc->natts;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * if the input json is empty, we can only skip the rest if we were passed
 	 * in a non-null record, since otherwise there may be issues with domain
@@ -3552,8 +3574,8 @@ populate_record(TupleDesc tupdesc,
 		record->ncolumns = ncolumns;
 	}
 
-	values = (Datum *) palloc(ncolumns * sizeof(Datum));
-	nulls = (bool *) palloc(ncolumns * sizeof(bool));
+	values = pg_stack_alloc_array(Datum, ncolumns);
+	nulls = pg_stack_alloc_array(bool, ncolumns);
 
 	if (defaultval)
 	{
@@ -3618,8 +3640,8 @@ populate_record(TupleDesc tupdesc,
 
 	res = heap_form_tuple(tupdesc, values, nulls);
 
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 
 	return res->t_data;
 }

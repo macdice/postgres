@@ -34,6 +34,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/selfuncs.h"
 #include "utils/typcache.h"
 
@@ -1051,6 +1052,8 @@ array_out(PG_FUNCTION_ARGS)
 	array_iter	iter;
 	ArrayMetaState *my_extra;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * We arrange to look up info about element type, including its output
 	 * conversion proc, only once per series of calls, assuming the element
@@ -1112,8 +1115,8 @@ array_out(PG_FUNCTION_ARGS)
 	 * any overhead such as escaping backslashes), and detect whether each
 	 * item needs double quotes.
 	 */
-	values = (char **) palloc(nitems * sizeof(char *));
-	needquotes = (bool *) palloc(nitems * sizeof(bool));
+	values = pg_stack_alloc_array(char *, nitems);
+	needquotes = pg_stack_alloc_array(bool, nitems);
 	overall_length = 0;
 
 	array_iter_setup(&iter, v, typlen, typbyval, typalign);
@@ -1257,8 +1260,8 @@ array_out(PG_FUNCTION_ARGS)
 	/* Assert that we calculated the string length accurately */
 	Assert(overall_length == (p - retval + 1));
 
-	pfree(values);
-	pfree(needquotes);
+	pg_stack_free(values);
+	pg_stack_free(needquotes);
 
 	PG_RETURN_CSTRING(retval);
 }
@@ -3232,6 +3235,8 @@ array_map(Datum arrayd,
 	Datum	   *transform_source = exprstate->innermost_caseval;
 	bool	   *transform_source_isnull = exprstate->innermost_casenull;
 
+	DECLARE_PG_STACK();
+
 	inpType = AARR_ELEMTYPE(v);
 	ndim = AARR_NDIM(v);
 	dim = AARR_DIMS(v);
@@ -3278,8 +3283,8 @@ array_map(Datum arrayd,
 	typalignby = typalign_to_alignby(typalign);
 
 	/* Allocate temporary arrays for new values */
-	values = (Datum *) palloc(nitems * sizeof(Datum));
-	nulls = (bool *) palloc(nitems * sizeof(bool));
+	values = pg_stack_alloc_array(Datum, nitems);
+	nulls = pg_stack_alloc_array(bool, nitems);
 
 	/* Loop over source data */
 	array_iter_setup(&iter, v, inp_typlen, inp_typbyval, inp_typalign);
@@ -3340,8 +3345,8 @@ array_map(Datum arrayd,
 	/*
 	 * Note: do not risk trying to pfree the results of the called expression
 	 */
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 
 	return PointerGetDatum(result);
 }
@@ -6424,6 +6429,8 @@ array_replace_internal(ArrayType *array,
 	bool		changed = false;
 	TypeCacheEntry *typentry;
 
+	DECLARE_PG_STACK();
+
 	element_type = ARR_ELEMTYPE(array);
 	ndim = ARR_NDIM(array);
 	dim = ARR_DIMS(array);
@@ -6482,8 +6489,8 @@ array_replace_internal(ArrayType *array,
 							 collation, NULL, NULL);
 
 	/* Allocate temporary arrays for new values */
-	values = (Datum *) palloc(nitems * sizeof(Datum));
-	nulls = (bool *) palloc(nitems * sizeof(bool));
+	values = pg_stack_alloc_array(Datum, nitems);
+	nulls = pg_stack_alloc_array(bool, nitems);
 
 	/* Loop over source data */
 	arraydataptr = ARR_DATA_PTR(array);
@@ -6599,16 +6606,16 @@ array_replace_internal(ArrayType *array,
 	 */
 	if (!changed)
 	{
-		pfree(values);
-		pfree(nulls);
+		pg_stack_free(values);
+		pg_stack_free(nulls);
 		return array;
 	}
 
 	/* If all elements were removed return an empty array */
 	if (nresult == 0)
 	{
-		pfree(values);
-		pfree(nulls);
+		pg_stack_free(values);
+		pg_stack_free(nulls);
 		return construct_empty_array(element_type);
 	}
 
@@ -6643,8 +6650,8 @@ array_replace_internal(ArrayType *array,
 				 typlen, typbyval, typalign,
 				 false);
 
-	pfree(values);
-	pfree(nulls);
+	pg_stack_free(values);
+	pg_stack_free(nulls);
 
 	return result;
 }

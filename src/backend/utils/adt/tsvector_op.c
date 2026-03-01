@@ -29,6 +29,7 @@
 #include "tsearch/ts_utils.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/regproc.h"
 #include "utils/rel.h"
 
@@ -2537,6 +2538,8 @@ ts_process_call(FuncCallContext *funcctx)
 	TSVectorStat *st;
 	StatEntry  *entry;
 
+	DECLARE_PG_STACK();
+
 	st = (TSVectorStat *) funcctx->user_fctx;
 
 	entry = walkStatEntryTree(st);
@@ -2549,9 +2552,8 @@ ts_process_call(FuncCallContext *funcctx)
 		char		nentry[16];
 		HeapTuple	tuple;
 
-		values[0] = palloc(entry->lenlexeme + 1);
-		memcpy(values[0], entry->lexeme, entry->lenlexeme);
-		(values[0])[entry->lenlexeme] = '\0';
+		values[0] = pg_stack_strdup_with_len(entry->lexeme,
+											 entry->lenlexeme);
 		sprintf(ndoc, "%d", entry->ndoc);
 		values[1] = ndoc;
 		sprintf(nentry, "%d", entry->nentry);
@@ -2560,7 +2562,7 @@ ts_process_call(FuncCallContext *funcctx)
 		tuple = BuildTupleFromCStrings(funcctx->attinmeta, values);
 		result = HeapTupleGetDatum(tuple);
 
-		pfree(values[0]);
+		pg_stack_free(values[0]);
 
 		/* mark entry as already visited */
 		entry->ndoc = 0;
