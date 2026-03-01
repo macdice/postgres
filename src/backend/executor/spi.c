@@ -29,6 +29,7 @@
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
@@ -1113,6 +1114,8 @@ SPI_modifytuple(Relation rel, HeapTuple tuple, int natts, int *attnum,
 	bool	   *n;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	if (rel == NULL || tuple == NULL || natts < 0 || attnum == NULL || Values == NULL)
 	{
 		SPI_result = SPI_ERROR_ARGUMENT;
@@ -1130,8 +1133,8 @@ SPI_modifytuple(Relation rel, HeapTuple tuple, int natts, int *attnum,
 	SPI_result = 0;
 
 	numberOfAttributes = rel->rd_att->natts;
-	v = palloc_array(Datum, numberOfAttributes);
-	n = palloc_array(bool, numberOfAttributes);
+	v = pg_stack_alloc_array(Datum, numberOfAttributes);
+	n = pg_stack_alloc_array(bool, numberOfAttributes);
 
 	/* fetch old values and nulls */
 	heap_deform_tuple(tuple, rel->rd_att, v, n);
@@ -1163,8 +1166,8 @@ SPI_modifytuple(Relation rel, HeapTuple tuple, int natts, int *attnum,
 		SPI_result = SPI_ERROR_NOATTRIBUTE;
 	}
 
-	pfree(v);
-	pfree(n);
+	pg_stack_free(v);
+	pg_stack_free(n);
 
 	MemoryContextSwitchTo(oldcxt);
 

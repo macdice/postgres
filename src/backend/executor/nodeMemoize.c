@@ -74,6 +74,7 @@
 #include "miscadmin.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 
 /* States of the ExecMemoize state machine */
 #define MEMO_CACHE_LOOKUP			1	/* Attempt to perform a cache lookup */
@@ -958,6 +959,8 @@ ExecInitMemoize(Memoize *node, EState *estate, int eflags)
 	int			nkeys;
 	Oid		   *eqfuncoids;
 
+	DECLARE_PG_STACK();
+
 	/* check for unsupported flags */
 	Assert(!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK)));
 
@@ -1006,7 +1009,7 @@ ExecInitMemoize(Memoize *node, EState *estate, int eflags)
 											 * data */
 	mstate->hashfunctions = (FmgrInfo *) palloc(nkeys * sizeof(FmgrInfo));
 
-	eqfuncoids = palloc(nkeys * sizeof(Oid));
+	eqfuncoids = pg_stack_alloc_array(Oid, nkeys);
 
 	for (i = 0; i < nkeys; i++)
 	{
@@ -1033,7 +1036,7 @@ ExecInitMemoize(Memoize *node, EState *estate, int eflags)
 												   node->param_exprs,
 												   (PlanState *) mstate);
 
-	pfree(eqfuncoids);
+	pg_stack_free(eqfuncoids);
 	mstate->mem_used = 0;
 
 	/* Limit the total memory consumed by the cache to this */

@@ -170,6 +170,7 @@
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/sharedtuplestore.h"
 #include "utils/wait_event.h"
 
@@ -826,6 +827,7 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 		ListCell   *lc;
 		int			nkeys;
 
+		DECLARE_PG_STACK();
 
 		hjstate->hj_HashTupleSlot = slot;
 
@@ -840,9 +842,9 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 		 */
 		nkeys = list_length(node->hashoperators);
 
-		outer_hashfuncid = palloc_array(Oid, nkeys);
-		inner_hashfuncid = palloc_array(Oid, nkeys);
-		hash_strict = palloc_array(bool, nkeys);
+		outer_hashfuncid = pg_stack_alloc_array(Oid, nkeys);
+		inner_hashfuncid = pg_stack_alloc_array(Oid, nkeys);
+		hash_strict = pg_stack_alloc_array(bool, nkeys);
 
 		/*
 		 * Determine the hash function for each side of the join for the given
@@ -905,9 +907,9 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 		}
 
 		/* no need to keep these */
-		pfree(outer_hashfuncid);
-		pfree(inner_hashfuncid);
-		pfree(hash_strict);
+		pg_stack_free(outer_hashfuncid);
+		pg_stack_free(inner_hashfuncid);
+		pg_stack_free(hash_strict);
 	}
 
 	/*
