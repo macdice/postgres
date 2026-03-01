@@ -54,6 +54,7 @@
 #include "partitioning/partprune.h"
 #include "utils/array.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 
 
 /*
@@ -233,6 +234,8 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	ListCell   *lc;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Scan the subpaths to see which ones are scans of partition child
 	 * relations, and identify their parent partitioned rels.  (Note: we must
@@ -246,7 +249,8 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	 * that zero can represent an un-filled array entry.
 	 */
 	allpartrelids = NIL;
-	relid_subplan_map = palloc0_array(int, root->simple_rel_array_size);
+	relid_subplan_map = pg_stack_alloc0_array(int,
+												  root->simple_rel_array_size);
 
 	i = 1;
 	foreach(lc, subpaths)
@@ -327,7 +331,7 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		}
 	}
 
-	pfree(relid_subplan_map);
+	pg_stack_free(relid_subplan_map);
 
 	/*
 	 * If none of the partition hierarchies had any useful run-time pruning
@@ -457,6 +461,8 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	int			rti;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Examine each partitioned rel, constructing a temporary array to map
 	 * from planner relids to index of the partitioned rel, and building a
@@ -465,7 +471,8 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	 * In this phase we discover whether runtime pruning is needed at all; if
 	 * not, we can avoid doing further work.
 	 */
-	relid_subpart_map = palloc0_array(int, root->simple_rel_array_size);
+	relid_subpart_map = pg_stack_alloc0_array(int,
+												  root->simple_rel_array_size);
 
 	i = 1;
 	rti = -1;
@@ -624,7 +631,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	if (!doruntimeprune)
 	{
 		/* No run-time pruning required. */
-		pfree(relid_subpart_map);
+		pg_stack_free(relid_subpart_map);
 		return NIL;
 	}
 
@@ -719,7 +726,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		pinfo->leafpart_rti_map = leafpart_rti_map;
 	}
 
-	pfree(relid_subpart_map);
+	pg_stack_free(relid_subpart_map);
 
 	*matchedsubplans = subplansfound;
 

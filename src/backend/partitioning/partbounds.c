@@ -37,6 +37,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
@@ -354,13 +355,15 @@ create_hash_bounds(PartitionBoundSpec **boundspecs, int nparts,
 	int			greatest_modulus;
 	Datum	   *boundDatums;
 
+	DECLARE_PG_STACK();
+
 	boundinfo = palloc0_object(PartitionBoundInfoData);
 	boundinfo->strategy = key->strategy;
 	/* No special hash partitions. */
 	boundinfo->null_index = -1;
 	boundinfo->default_index = -1;
 
-	hbounds = palloc_array(PartitionHashBound, nparts);
+	hbounds = pg_stack_alloc_array(PartitionHashBound, nparts);
 
 	/* Convert from node to the internal representation */
 	for (i = 0; i < nparts; i++)
@@ -422,7 +425,7 @@ create_hash_bounds(PartitionBoundSpec **boundspecs, int nparts,
 
 		(*mapping)[hbounds[i].index] = i;
 	}
-	pfree(hbounds);
+	pg_stack_free(hbounds);
 
 	return boundinfo;
 }
@@ -471,6 +474,8 @@ create_list_bounds(PartitionBoundSpec **boundspecs, int nparts,
 	int			null_index = -1;
 	Datum	   *boundDatums;
 
+	DECLARE_PG_STACK();
+
 	boundinfo = palloc0_object(PartitionBoundInfoData);
 	boundinfo->strategy = key->strategy;
 	/* Will be set correctly below. */
@@ -479,7 +484,7 @@ create_list_bounds(PartitionBoundSpec **boundspecs, int nparts,
 
 	ndatums = get_non_null_list_datum_count(boundspecs, nparts);
 	all_values = (PartitionListValue *)
-		palloc(ndatums * sizeof(PartitionListValue));
+		pg_stack_alloc_array(PartitionListValue, ndatums);
 
 	/* Create a unified list of non-null values across all partitions. */
 	for (j = 0, i = 0; i < nparts; i++)
@@ -566,7 +571,7 @@ create_list_bounds(PartitionBoundSpec **boundspecs, int nparts,
 		boundinfo->indexes[i] = (*mapping)[orig_index];
 	}
 
-	pfree(all_values);
+	pg_stack_free(all_values);
 
 	/*
 	 * Set the canonical value for null_index, if any.
@@ -688,6 +693,8 @@ create_range_bounds(PartitionBoundSpec **boundspecs, int nparts,
 	Datum	   *boundDatums;
 	PartitionRangeDatumKind *boundKinds;
 
+	DECLARE_PG_STACK();
+
 	boundinfo = palloc0_object(PartitionBoundInfoData);
 	boundinfo->strategy = key->strategy;
 	/* There is no special null-accepting range partition. */
@@ -695,7 +702,7 @@ create_range_bounds(PartitionBoundSpec **boundspecs, int nparts,
 	/* Will be set correctly below. */
 	boundinfo->default_index = -1;
 
-	all_bounds = palloc0_array(PartitionRangeBound *, 2 * nparts);
+	all_bounds = pg_stack_alloc0_array(PartitionRangeBound *, 2 * nparts);
 
 	/* Create a unified list of range bounds across all the partitions. */
 	ndatums = 0;
@@ -735,8 +742,7 @@ create_range_bounds(PartitionBoundSpec **boundspecs, int nparts,
 			  key);
 
 	/* Save distinct bounds from all_bounds into rbounds. */
-	rbounds = (PartitionRangeBound **)
-		palloc(ndatums * sizeof(PartitionRangeBound *));
+	rbounds = pg_stack_alloc_array(PartitionRangeBound *, ndatums);
 	k = 0;
 	prev = NULL;
 	for (i = 0; i < ndatums; i++)
@@ -785,7 +791,7 @@ create_range_bounds(PartitionBoundSpec **boundspecs, int nparts,
 		prev = cur;
 	}
 
-	pfree(all_bounds);
+	pg_stack_free(all_bounds);
 
 	/* Update ndatums to hold the count of distinct datums. */
 	ndatums = k;
@@ -858,7 +864,7 @@ create_range_bounds(PartitionBoundSpec **boundspecs, int nparts,
 		}
 	}
 
-	pfree(rbounds);
+	pg_stack_free(rbounds);
 
 	/* Set the canonical value for default_index, if any. */
 	if (default_index != -1)
@@ -2384,9 +2390,11 @@ fix_merged_indexes(PartitionMap *outer_map, PartitionMap *inner_map,
 	int			i;
 	ListCell   *lc;
 
+	DECLARE_PG_STACK();
+
 	Assert(nmerged > 0);
 
-	new_indexes = palloc_array(int, nmerged);
+	new_indexes = pg_stack_alloc_array(int, nmerged);
 	for (i = 0; i < nmerged; i++)
 		new_indexes[i] = -1;
 
@@ -2419,7 +2427,7 @@ fix_merged_indexes(PartitionMap *outer_map, PartitionMap *inner_map,
 			lfirst_int(lc) = new_indexes[merged_index];
 	}
 
-	pfree(new_indexes);
+	pg_stack_free(new_indexes);
 }
 
 /*
@@ -2442,12 +2450,14 @@ generate_matching_part_pairs(RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 	int			max_nparts;
 	int			i;
 
+	DECLARE_PG_STACK();
+
 	Assert(nmerged > 0);
 	Assert(*outer_parts == NIL);
 	Assert(*inner_parts == NIL);
 
-	outer_indexes = palloc_array(int, nmerged);
-	inner_indexes = palloc_array(int, nmerged);
+	outer_indexes = pg_stack_alloc_array(int, nmerged);
+	inner_indexes = pg_stack_alloc_array(int, nmerged);
 	for (i = 0; i < nmerged; i++)
 		outer_indexes[i] = inner_indexes[i] = -1;
 
@@ -2500,8 +2510,8 @@ generate_matching_part_pairs(RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 							   inner_rel->part_rels[inner_index] : NULL);
 	}
 
-	pfree(outer_indexes);
-	pfree(inner_indexes);
+	pg_stack_free(outer_indexes);
+	pg_stack_free(inner_indexes);
 }
 
 /*
@@ -5104,6 +5114,8 @@ calculate_partition_bound_for_merge(Relation parent,
 	PartitionKey key = RelationGetPartitionKey(parent);
 	PartitionBoundSpec *bound;
 
+	DECLARE_PG_STACK();
+
 	Assert(!spec->is_default);
 
 	switch (key->strategy)
@@ -5115,7 +5127,7 @@ calculate_partition_bound_for_merge(Relation parent,
 				int			nparts = list_length(partOids);
 				List	   *bounds = NIL;
 
-				lower_bounds = palloc0_array(PartitionRangeBound *, nparts);
+				lower_bounds = pg_stack_alloc0_array(PartitionRangeBound *, nparts);
 
 				/*
 				 * Create an array of lower bounds and a list of
@@ -5164,7 +5176,7 @@ calculate_partition_bound_for_merge(Relation parent,
 				spec->upperdatums =
 					((PartitionBoundSpec *) list_nth(bounds, lower_bounds[nparts - 1]->index))->upperdatums;
 
-				pfree(lower_bounds);
+				pg_stack_free(lower_bounds);
 				list_free(bounds);
 				break;
 			}
@@ -5741,6 +5753,8 @@ check_partitions_for_split(Relation parent,
 	 */
 	int			nparts = 0;
 
+	DECLARE_PG_STACK();
+
 	key = RelationGetPartitionKey(parent);
 	strategy = get_partition_strategy(key);
 
@@ -5754,7 +5768,7 @@ check_partitions_for_split(Relation parent,
 	 * Make an array new_parts with new partitions except the DEFAULT
 	 * partition.
 	 */
-	new_parts = palloc0_array(SinglePartitionSpec *, list_length(partlist));
+	new_parts = pg_stack_alloc0_array(SinglePartitionSpec *, list_length(partlist));
 
 	/* isSplitPartDefault flag: is split partition a DEFAULT partition? */
 	isSplitPartDefault = (defaultPartOid == splitPartOid);
@@ -5784,7 +5798,7 @@ check_partitions_for_split(Relation parent,
 		 * all partitions in ascending order of their bounds (we compare the
 		 * lower bound only).
 		 */
-		lower_bounds = palloc0_array(PartitionRangeBound *, nparts);
+		lower_bounds = pg_stack_alloc0_array(PartitionRangeBound *, nparts);
 
 		/* Create an array of lower bounds. */
 		for (i = 0; i < nparts; i++)
@@ -5799,12 +5813,12 @@ check_partitions_for_split(Relation parent,
 
 		/* Reorder the array of partitions. */
 		tmp_new_parts = new_parts;
-		new_parts = palloc0_array(SinglePartitionSpec *, nparts);
+		new_parts = pg_stack_alloc0_array(SinglePartitionSpec *, nparts);
 		for (i = 0; i < nparts; i++)
 			new_parts[i] = tmp_new_parts[lower_bounds[i]->index];
 
-		pfree(tmp_new_parts);
-		pfree(lower_bounds);
+		pg_stack_free(tmp_new_parts);
+		pg_stack_free(lower_bounds);
 	}
 
 	for (i = 0; i < nparts; i++)
@@ -5871,5 +5885,5 @@ check_partitions_for_split(Relation parent,
 												  new_parts, nparts, pstate);
 	}
 
-	pfree(new_parts);
+	pg_stack_free(new_parts);
 }
