@@ -111,6 +111,7 @@
 #include "utils/builtins.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/relfilenumbermap.h"
 #include "utils/wait_event.h"
@@ -5088,6 +5089,8 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	HeapTuple	newtup;
 	Size		old_size;
 
+	DECLARE_PG_STACK();
+
 	/* no toast tuples changed */
 	if (txn->toast_hash == NULL)
 		return;
@@ -5118,10 +5121,9 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 	toast_desc = RelationGetDescr(toast_rel);
 
-	/* should we allocate from stack instead? */
-	attrs = palloc0_array(Datum, desc->natts);
-	isnull = palloc0_array(bool, desc->natts);
-	free = palloc0_array(bool, desc->natts);
+	attrs = pg_stack_alloc0_array(Datum, desc->natts);
+	isnull = pg_stack_alloc0_array(bool, desc->natts);
+	free = pg_stack_alloc0_array(bool, desc->natts);
 
 	newtup = change->data.tp.newtuple;
 
@@ -5243,9 +5245,9 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		if (free[natt])
 			pfree(DatumGetPointer(attrs[natt]));
 	}
-	pfree(attrs);
-	pfree(free);
-	pfree(isnull);
+	pg_stack_free(attrs);
+	pg_stack_free(free);
+	pg_stack_free(isnull);
 
 	MemoryContextSwitchTo(oldcontext);
 
