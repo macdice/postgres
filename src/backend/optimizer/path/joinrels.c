@@ -23,6 +23,7 @@
 #include "optimizer/planner.h"
 #include "partitioning/partbounds.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 
 
 static void make_rels_by_clause_joins(PlannerInfo *root,
@@ -1619,6 +1620,9 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	ListCell   *lcr1 = NULL;
 	ListCell   *lcr2 = NULL;
 	int			cnt_parts;
+	AppendRelInfoBuffer appinfos_buffer = {0};
+
+	DECLARE_PG_STACK();
 
 	/* Guard against stack overflow due to overly deep partition hierarchy. */
 	check_stack_depth();
@@ -1774,8 +1778,10 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 
 		/* Find the AppendRelInfo structures */
 		child_relids = bms_union(child_rel1->relids, child_rel2->relids);
-		appinfos = find_appinfos_by_relids(root, child_relids,
-										   &nappinfos);
+		appinfos = find_appinfos_by_relids_with_buffer(&appinfos_buffer,
+													   root,
+													   child_relids,
+													   &nappinfos);
 
 		/*
 		 * Construct restrictions applicable to the child join from those
@@ -1820,10 +1826,10 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		 * are only needed within the loop.  Free these local objects eagerly
 		 * at the end of each iteration.
 		 */
-		pfree(appinfos);
 		bms_free(child_relids);
 		free_child_join_sjinfo(child_sjinfo, parent_sjinfo);
 	}
+	free_appinfos_buffer(&appinfos_buffer);
 }
 
 /*
@@ -1843,6 +1849,8 @@ build_child_join_sjinfo(PlannerInfo *root, SpecialJoinInfo *parent_sjinfo,
 	int			left_nappinfos;
 	AppendRelInfo **right_appinfos;
 	int			right_nappinfos;
+
+	DECLARE_PG_STACK();
 
 	/* Dummy SpecialJoinInfos can be created without any translation. */
 	if (parent_sjinfo->jointype == JOIN_INNER)
@@ -1874,8 +1882,8 @@ build_child_join_sjinfo(PlannerInfo *root, SpecialJoinInfo *parent_sjinfo,
 															 right_nappinfos,
 															 right_appinfos);
 
-	pfree(left_appinfos);
-	pfree(right_appinfos);
+	free_appinfos(left_appinfos);
+	free_appinfos(right_appinfos);
 
 	return sjinfo;
 }

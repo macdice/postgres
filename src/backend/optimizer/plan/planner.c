@@ -7966,6 +7966,8 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	PathTarget *scanjoin_target;
 	ListCell   *lc;
 
+	DECLARE_PG_STACK();
+
 	/* This recurses, so be paranoid. */
 	check_stack_depth();
 
@@ -8111,6 +8113,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	{
 		List	   *live_children = NIL;
 		int			i;
+		AppendRelInfoBuffer appinfos_buffer = {0};
 
 		/* Adjust each partition. */
 		i = -1;
@@ -8128,8 +8131,10 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 				continue;
 
 			/* Translate scan/join targets for this child. */
-			appinfos = find_appinfos_by_relids(root, child_rel->relids,
-											   &nappinfos);
+			appinfos = find_appinfos_by_relids_with_buffer(&appinfos_buffer,
+														   root,
+														   child_rel->relids,
+														   &nappinfos);
 			foreach(lc, scanjoin_targets)
 			{
 				PathTarget *target = lfirst_node(PathTarget, lc);
@@ -8142,7 +8147,6 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 				child_scanjoin_targets = lappend(child_scanjoin_targets,
 												 target);
 			}
-			pfree(appinfos);
 
 			/* Recursion does the real work. */
 			apply_scanjoin_target_to_paths(root, child_rel,
@@ -8155,6 +8159,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 			if (!IS_DUMMY_REL(child_rel))
 				live_children = lappend(live_children, child_rel);
 		}
+		free_appinfos_buffer(&appinfos_buffer);
 
 		/* Build new paths for this relation by appending child paths. */
 		add_paths_to_append_rel(root, rel, live_children);
@@ -8210,6 +8215,9 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 	PathTarget *target = grouped_rel->reltarget;
 	bool		partial_grouping_valid = true;
 	int			i;
+	AppendRelInfoBuffer appinfos_buffer = {0};
+
+	DECLARE_PG_STACK();
 
 	Assert(patype != PARTITIONWISE_AGGREGATE_NONE);
 	Assert(patype != PARTITIONWISE_AGGREGATE_PARTIAL ||
@@ -8241,8 +8249,10 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 		 */
 		memcpy(&child_extra, extra, sizeof(child_extra));
 
-		appinfos = find_appinfos_by_relids(root, child_input_rel->relids,
-										   &nappinfos);
+		appinfos = find_appinfos_by_relids_with_buffer(&appinfos_buffer,
+													   root,
+													   child_input_rel->relids,
+													   &nappinfos);
 
 		child_target->exprs = (List *)
 			adjust_appendrel_attrs(root,
@@ -8296,9 +8306,8 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 			grouped_live_children = lappend(grouped_live_children,
 											child_grouped_rel);
 		}
-
-		pfree(appinfos);
 	}
+	free_appinfos_buffer(&appinfos_buffer);
 
 	/*
 	 * Try to create append paths for partially grouped children. For full

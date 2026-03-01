@@ -127,6 +127,7 @@ Append
 AppendPath
 AppendPathInput
 AppendRelInfo
+AppendRelInfoBuffer
 AppendState
 ApplyErrorCallbackArg
 ApplyExecutionData

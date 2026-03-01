@@ -460,6 +460,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	ListCell   *lc;
 	int			rti;
 	int			i;
+	AppendRelInfoBuffer appinfos_buffer = {0};
 
 	DECLARE_PG_STACK();
 
@@ -517,16 +518,17 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 			if (!bms_equal(parentrel->relids, subpart->relids))
 			{
 				int			nappinfos;
-				AppendRelInfo **appinfos = find_appinfos_by_relids(root,
-																   subpart->relids,
-																   &nappinfos);
+				AppendRelInfo **appinfos;
+
+				appinfos = find_appinfos_by_relids_with_buffer(&appinfos_buffer,
+															   root,
+															   subpart->relids,
+															   &nappinfos);
 
 				prunequal = (List *) adjust_appendrel_attrs(root, (Node *)
 															prunequal,
 															nappinfos,
 															appinfos);
-
-				pfree(appinfos);
 			}
 
 			partprunequal = prunequal;
@@ -544,6 +546,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 												  subpart,
 												  targetpart);
 		}
+		free_appinfos_buffer(&appinfos_buffer);
 
 		/*
 		 * Convert pruning qual to pruning steps.  We may need to do this

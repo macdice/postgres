@@ -24,6 +24,7 @@
 #include "optimizer/planmain.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
@@ -600,6 +601,8 @@ adjust_appendrel_attrs_multilevel(PlannerInfo *root, Node *node,
 	AppendRelInfo **appinfos;
 	int			nappinfos;
 
+	DECLARE_PG_STACK();
+
 	/* Recurse if immediate parent is not the top parent. */
 	if (childrel->parent != parentrel)
 	{
@@ -612,11 +615,12 @@ adjust_appendrel_attrs_multilevel(PlannerInfo *root, Node *node,
 	}
 
 	/* Now translate for this child. */
-	appinfos = find_appinfos_by_relids(root, childrel->relids, &nappinfos);
+	appinfos = find_appinfos_by_relids(root, childrel->relids,
+									   &nappinfos);
 
 	node = adjust_appendrel_attrs(root, node, nappinfos, appinfos);
 
-	pfree(appinfos);
+	free_appinfos(appinfos);
 
 	return node;
 }
@@ -667,6 +671,8 @@ adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 	AppendRelInfo **appinfos;
 	int			nappinfos;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * If the given relids set doesn't contain any of the parent relids, it
 	 * will remain unchanged.
@@ -686,11 +692,13 @@ adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 	}
 
 	/* Now translate for this child. */
-	appinfos = find_appinfos_by_relids(root, childrel->relids, &nappinfos);
+	appinfos = find_appinfos_by_relids(root,
+									   childrel->relids,
+									   &nappinfos);
 
 	relids = adjust_child_relids(relids, nappinfos, appinfos);
 
-	pfree(appinfos);
+	free_appinfos(appinfos);
 
 	return relids;
 }
@@ -801,18 +809,18 @@ get_translated_update_targetlist(PlannerInfo *root, Index relid,
  * include outer-join RT indexes in addition to baserels.  We silently
  * ignore the outer joins.
  *
- * The AppendRelInfos are returned in an array, which can be pfree'd by the
- * caller. *nappinfos is set to the number of entries in the array.
+ * A caller-supplied output array must have enough space for
+ * bms_num_members(relids) AppendRelInfo pointer.  The destination address is
+ * returned.
  */
 AppendRelInfo **
-find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
+find_appinfos_by_relids_in_place(AppendRelInfo **appinfos,
+								 PlannerInfo *root,
+								 Relids relids,
+								 int *nappinfos)
 {
-	AppendRelInfo **appinfos;
 	int			cnt = 0;
 	int			i;
-
-	/* Allocate an array that's certainly big enough */
-	appinfos = palloc_array(AppendRelInfo *, bms_num_members(relids));
 
 	i = -1;
 	while ((i = bms_next_member(relids, i)) >= 0)
@@ -830,10 +838,10 @@ find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
 
 		appinfos[cnt++] = appinfo;
 	}
+
 	*nappinfos = cnt;
 	return appinfos;
 }
-
 
 /*****************************************************************************
  *
