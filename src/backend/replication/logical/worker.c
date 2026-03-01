@@ -294,6 +294,7 @@
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 #include "utils/usercontext.h"
 #include "utils/wait_event.h"
@@ -972,14 +973,16 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 	ExprState **defexprs;
 	ExprContext *econtext;
 
+	DECLARE_PG_STACK();
+
 	econtext = GetPerTupleExprContext(estate);
 
 	/* We got all the data via replication, no need to evaluate anything. */
 	if (num_phys_attrs == rel->remoterel.natts)
 		return;
 
-	defmap = palloc_array(int, num_phys_attrs);
-	defexprs = palloc_array(ExprState *, num_phys_attrs);
+	defmap = pg_stack_alloc_array(int, num_phys_attrs);
+	defexprs = pg_stack_alloc_array(ExprState *, num_phys_attrs);
 
 	Assert(rel->attrmap->maplen == num_phys_attrs);
 	for (attnum = 0; attnum < num_phys_attrs; attnum++)
@@ -1010,6 +1013,9 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 	for (i = 0; i < num_defaults; i++)
 		slot->tts_values[defmap[i]] =
 			ExecEvalExpr(defexprs[i], econtext, &slot->tts_isnull[defmap[i]]);
+
+	pg_stack_free(defmap);
+	pg_stack_free(defexprs);
 }
 
 /*
