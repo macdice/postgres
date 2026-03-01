@@ -51,6 +51,7 @@
 #include "utils/expandeddatum.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/regproc.h"
 #include "utils/syscache.h"
 #include "windowapi.h"
@@ -3163,11 +3164,13 @@ GetAggInitVal(Datum textInitVal, Oid transtype)
 	char	   *strInitVal;
 	Datum		initVal;
 
+	DECLARE_PG_STACK();
+
 	getTypeInputInfo(transtype, &typinput, &typioparam);
-	strInitVal = TextDatumGetCString(textInitVal);
+	strInitVal = pg_stack_text_datum_to_cstring(textInitVal);
 	initVal = OidInputFunctionCall(typinput, strInitVal,
 								   typioparam, -1);
-	pfree(strInitVal);
+	pg_stack_free(strInitVal);
 	return initVal;
 }
 

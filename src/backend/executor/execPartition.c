@@ -31,6 +31,7 @@
 #include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rls.h"
 #include "utils/ruleutils.h"
 
@@ -2518,6 +2519,8 @@ InitExecPartitionPruneContexts(PartitionPruneState *prunestate,
 	int			newidx;
 	bool		fix_subplan_map = false;
 
+	DECLARE_PG_STACK();
+
 	Assert(prunestate->do_exec_prune);
 	Assert(parent_plan != NULL);
 	estate = parent_plan->state;
@@ -2535,7 +2538,7 @@ InitExecPartitionPruneContexts(PartitionPruneState *prunestate,
 		 * indexes to new ones.  For convenience of initialization, we use
 		 * 1-based indexes in this array and leave pruned items as 0.
 		 */
-		new_subplan_indexes = palloc0_array(int, n_total_subplans);
+		new_subplan_indexes = pg_stack_alloc0_array(int, n_total_subplans);
 		newidx = 1;
 		i = -1;
 		while ((i = bms_next_member(initially_valid_subplans, i)) >= 0)
@@ -2645,7 +2648,7 @@ InitExecPartitionPruneContexts(PartitionPruneState *prunestate,
 		bms_free(prunestate->other_subplans);
 		prunestate->other_subplans = new_other_subplans;
 
-		pfree(new_subplan_indexes);
+		pg_stack_free(new_subplan_indexes);
 	}
 }
 

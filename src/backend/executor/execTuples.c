@@ -68,6 +68,7 @@
 #include "utils/builtins.h"
 #include "utils/expandeddatum.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/typcache.h"
 
 static TupleDesc ExecTypeFromTLInternal(List *targetList,
@@ -2330,8 +2331,10 @@ BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values)
 	int			i;
 	HeapTuple	tuple;
 
-	dvalues = (Datum *) palloc(natts * sizeof(Datum));
-	nulls = (bool *) palloc(natts * sizeof(bool));
+	DECLARE_PG_STACK();
+
+	dvalues = pg_stack_alloc_array(Datum, natts);
+	nulls = pg_stack_alloc_array(bool, natts);
 
 	/*
 	 * Call the "in" function for each non-dropped attribute, even for nulls,
@@ -2368,8 +2371,8 @@ BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values)
 	 * Release locally palloc'd space.  XXX would probably be good to pfree
 	 * values of pass-by-reference datums, as well.
 	 */
-	pfree(dvalues);
-	pfree(nulls);
+	pg_stack_free(dvalues);
+	pg_stack_free(nulls);
 
 	return tuple;
 }

@@ -273,6 +273,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 #include "utils/tuplesort.h"
 
@@ -4347,10 +4348,12 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 	{
 		Oid		   *ops;
 
+		DECLARE_PG_STACK();
+
 		Assert(numArguments > 0);
 		Assert(list_length(aggref->aggdistinct) == numDistinctCols);
 
-		ops = palloc(numDistinctCols * sizeof(Oid));
+		ops = pg_stack_alloc_array(Oid, numDistinctCols);
 
 		i = 0;
 		foreach(lc, aggref->aggdistinct)
@@ -4367,7 +4370,7 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 									   ops,
 									   pertrans->sortCollations,
 									   &aggstate->ss.ps);
-		pfree(ops);
+		pg_stack_free(ops);
 	}
 
 	pertrans->sortstates = palloc0_array(Tuplesortstate *, numGroupingSets);
@@ -4382,11 +4385,13 @@ GetAggInitVal(Datum textInitVal, Oid transtype)
 	char	   *strInitVal;
 	Datum		initVal;
 
+	DECLARE_PG_STACK();
+
 	getTypeInputInfo(transtype, &typinput, &typioparam);
-	strInitVal = TextDatumGetCString(textInitVal);
+	strInitVal = pg_stack_text_datum_to_cstring(textInitVal);
 	initVal = OidInputFunctionCall(typinput, strInitVal,
 								   typioparam, -1);
-	pfree(strInitVal);
+	pg_stack_free(strInitVal);
 	return initVal;
 }
 
