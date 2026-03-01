@@ -37,6 +37,7 @@
 #include "optimizer/prep.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_coerce.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/selfuncs.h"
 
 
@@ -1628,13 +1629,15 @@ generate_append_tlist(List *colTypes, List *colCollations,
 	ListCell   *tlistl;
 	int32	   *colTypmods;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * First extract typmods to use.
 	 *
 	 * If the inputs all agree on type and typmod of a particular column, use
 	 * that typmod; else use -1.
 	 */
-	colTypmods = palloc_array(int32, list_length(colTypes));
+	colTypmods = pg_stack_alloc_array(int32, list_length(colTypes));
 
 	foreach(tlistl, input_tlists)
 	{
@@ -1705,7 +1708,7 @@ generate_append_tlist(List *colTypes, List *colCollations,
 		tlist = lappend(tlist, tle);
 	}
 
-	pfree(colTypmods);
+	pg_stack_free(colTypmods);
 
 	return tlist;
 }

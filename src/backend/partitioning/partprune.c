@@ -250,7 +250,7 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	 */
 	allpartrelids = NIL;
 	relid_subplan_map = pg_stack_alloc0_array(int,
-												  root->simple_rel_array_size);
+											  root->simple_rel_array_size);
 
 	i = 1;
 	foreach(lc, subpaths)
@@ -472,7 +472,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	 * not, we can avoid doing further work.
 	 */
 	relid_subpart_map = pg_stack_alloc0_array(int,
-												  root->simple_rel_array_size);
+											  root->simple_rel_array_size);
 
 	i = 1;
 	rti = -1;

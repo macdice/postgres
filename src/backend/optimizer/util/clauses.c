@@ -59,6 +59,7 @@
 #include "utils/jsonpath.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
@@ -5069,11 +5070,13 @@ fetch_function_defaults(HeapTuple func_tuple)
 	Datum		proargdefaults;
 	char	   *str;
 
+	DECLARE_PG_STACK();
+
 	proargdefaults = SysCacheGetAttrNotNull(PROCOID, func_tuple,
 											Anum_pg_proc_proargdefaults);
-	str = TextDatumGetCString(proargdefaults);
+	str = pg_stack_text_datum_to_cstring(proargdefaults);
 	defaults = castNode(List, stringToNode(str));
-	pfree(str);
+	pg_stack_free(str);
 	return defaults;
 }
 
@@ -6273,10 +6276,12 @@ make_SAOP_expr(Oid oper, Node *leftexpr, Oid coltype, Oid arraycollid,
 		int			dims[1] = {list_length(exprs)};
 		int			lbs[1] = {1};
 
+		DECLARE_PG_STACK();
+
 		get_typlenbyvalalign(coltype, &typlen, &typbyval, &typalign);
 
-		elems = palloc_array(Datum, list_length(exprs));
-		nulls = palloc_array(bool, list_length(exprs));
+		elems = pg_stack_alloc_array(Datum, list_length(exprs));
+		nulls = pg_stack_alloc_array(bool, list_length(exprs));
 		foreach_node(Const, value, exprs)
 		{
 			elems[i] = value->constvalue;
@@ -6289,8 +6294,8 @@ make_SAOP_expr(Oid oper, Node *leftexpr, Oid coltype, Oid arraycollid,
 									   -1, PointerGetDatum(arrayConst),
 									   false, false);
 
-		pfree(elems);
-		pfree(nulls);
+		pg_stack_free(elems);
+		pg_stack_free(nulls);
 		list_free(exprs);
 	}
 

@@ -34,6 +34,7 @@
 #include "parser/parse_agg.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 
 /*
  * Utility structure.  A sorting procedure is needed to simplify the search
@@ -2314,6 +2315,8 @@ remove_self_joins_recurse(PlannerInfo *root, List *joinlist, Relids toRemove)
 	int			j;
 	int			numRels;
 
+	DECLARE_PG_STACK();
+
 	/* Collect indexes of base relations of the join tree */
 	foreach(jl, joinlist)
 	{
@@ -2363,7 +2366,7 @@ remove_self_joins_recurse(PlannerInfo *root, List *joinlist, Relids toRemove)
 	 * In order to find relations with the same oid we first build an array of
 	 * candidates and then sort it by oid.
 	 */
-	candidates = palloc_array(SelfJoinCandidate, numRels);
+	candidates = pg_stack_alloc_array(SelfJoinCandidate, numRels);
 	i = -1;
 	j = 0;
 	while ((i = bms_next_member(relids, i)) >= 0)
@@ -2430,6 +2433,8 @@ remove_self_joins_recurse(PlannerInfo *root, List *joinlist, Relids toRemove)
 	}
 
 	Assert(bms_is_empty(relids));
+
+	pg_stack_free(candidates);
 
 	return toRemove;
 }
