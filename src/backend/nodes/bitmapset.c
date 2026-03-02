@@ -50,6 +50,132 @@
 #define BITMAPSET_SIZE(nwords)	\
 	(offsetof(Bitmapset, words) + (nwords) * sizeof(bitmapword))
 
+
+/*
+ * Sets that fit in one word with a small overhead are encoded in an
+ * "immediate" form with pass-by-value semantics.  Immediate values carry a
+ * special tag in the lower NOTE_PTR_TAG_MASK_WIDTH bits, which must be zero
+ * for a real pointer due to alignment rules.  This allows us to avoid a lot
+ * of small allocations when manipulating sets in the planner.
+ */
+
+/* The highest word value that be converted to an immediate value. */
+#define BITMAPSET_IMMEDIATE_MAX_WORD \
+	((~(bitmapword) 0) >> NODE_PTR_TAG_MASK_WIDTH)
+/* The highest bitnum that can be set in an immediate value. */
+#define BITMAPSET_IMMEDIATE_MAX_BITNO \
+	((sizeof(bitmapword) * 8) - NODE_PTR_TAG_MASK_WIDTH - 1)
+
+/* Temporary container used to "box" immediate values on the stack. */
+typedef union BitmapsetBoxed
+{
+	Bitmapset	bms;
+	char		buffer[offsetof(Bitmapset, words) + sizeof(bitmapword)];
+} BitmapsetBoxed;
+
+/*
+ * Check if a bitmapset is in 'immediate' form.  This means it's not really a
+ * pointer, it's single word.
+ */
+static bool
+bms_is_immediate(const Bitmapset *a)
+{
+	return (((uintptr_t) a) & NODE_PTR_TAG_MASK) == NODE_PTR_T_Bitmapset;
+}
+
+static bitmapword
+bms_immediate_to_word(const Bitmapset *a)
+{
+	return ((bitmapword) a) >> NODE_PTR_TAG_MASK_WIDTH;
+}
+
+static bool
+bms_word_fits_in_immediate(bitmapword aw)
+{
+	return aw <= BITMAPSET_IMMEDIATE_MAX_WORD;
+}
+
+static bool
+bms_is_one_word(const Bitmapset *a)
+{
+	return bms_is_immediate(a) || a->nwords == 1;
+}
+
+static Bitmapset *
+bms_word_to_immediate(bitmapword aw)
+{
+	Assert(bms_word_fits_in_immediate(aw));
+
+	if (aw == 0)
+		return NULL;
+
+	aw <<= NODE_PTR_TAG_MASK_WIDTH;
+	aw |= NODE_PTR_T_Bitmapset;
+	return (Bitmapset *) aw;
+}
+
+static Bitmapset *
+bms_make_from_one_word(bitmapword aw)
+{
+	if (likely(bms_word_fits_in_immediate(aw)))
+		return bms_word_to_immediate(aw);
+	else
+	{
+		Bitmapset  *result = (Bitmapset *) palloc(BITMAPSET_SIZE(1));
+
+		result->type = T_Bitmapset;
+		result->nwords = 1;
+		result->words[0] = aw;
+		return result;
+	}
+}
+
+static bitmapword
+bms_first_word(const Bitmapset *a)
+{
+	Assert(a != NULL);
+	return bms_is_immediate(a) ? bms_immediate_to_word(a) : a->words[0];
+}
+
+/*
+ * Convert immediate format to boxed format in a temporary object on the
+ * stack.  In most interesting codepaths there is a direct handling of
+ * immediate values, but in a few places this trick is used to harmonize the
+ * immediate/non-immediate code.
+ */
+static Bitmapset *
+bms_box(BitmapsetBoxed *box, const Bitmapset *a)
+{
+	box->bms.type = T_Bitmapset;
+	box->bms.nwords = 1;
+	box->bms.words[0] = bms_immediate_to_word(a);
+	return &box->bms;
+}
+
+/*
+ * Whenever returning a Bitmapset that might have had some bits cleared, this
+ * should be used to check if it can be converted to immediate format.  It's
+ * important to do this because several codepaths assume that non-immedate
+ * Bitmapsets must have a member > BITMAPSET_IMMEDIATE_MAX_BITNO.
+ */
+static Bitmapset *
+bms_unbox_and_free_if_possible(Bitmapset *a)
+{
+	Assert(a == NULL || !bms_is_immediate(a));
+	if (a &&
+		a->nwords == 1 &&
+		bms_word_fits_in_immediate(a->words[0]))
+	{
+		Bitmapset  *result = bms_word_to_immediate(a->words[0]);
+
+		pfree(a);
+		return result;
+	}
+	return a;
+}
+
+
+
 /*----------
  * This is a well-known cute trick for isolating the rightmost one-bit
  * in a word.  It assumes two's complement arithmetic.  Consider any
@@ -81,6 +207,10 @@ bms_is_valid_set(const Bitmapset *a)
 	/* NULL is the correct representation of an empty set */
 	if (a == NULL)
 		return true;
+
+	/* Tagged immediate values must have at least one other bit set. */
+	if (bms_is_immediate(a))
+		return bms_immediate_to_word(a) != 0;
 
 	/* check the node tag is set correctly.  pfree'd pointer, maybe? */
 	if (!IsA(a, Bitmapset))
@@ -115,6 +245,7 @@ bms_copy_and_free(Bitmapset *a)
 }
 #endif
 
+
 /*
  * bms_copy - make a palloc'd copy of a bitmapset
  */
@@ -128,6 +259,8 @@ bms_copy(const Bitmapset *a)
 
 	if (a == NULL)
 		return NULL;
+	if (bms_is_immediate(a))
+		return unconstify(Bitmapset *, a);
 
 	size = BITMAPSET_SIZE(a->nwords);
 	result = (Bitmapset *) palloc(size);
@@ -154,6 +287,12 @@ bms_equal(const Bitmapset *a, const Bitmapset *b)
 		return false;
 	}
 	else if (b == NULL)
+		return false;
+
+	/* immediate values have equal pseudo-pointers */
+	if (bms_is_immediate(a))
+		return a == b;
+	else if (bms_is_immediate(b))
 		return false;
 
 	/* can't be equal if the word counts don't match */
@@ -193,6 +332,22 @@ bms_compare(const Bitmapset *a, const Bitmapset *b)
 	else if (b == NULL)
 		return +1;
 
+	/* handle immediate values */
+	if (bms_is_immediate(a))
+	{
+		if (bms_is_immediate(b))
+		{
+			bitmapword	aw = bms_immediate_to_word(a);
+			bitmapword	bw = bms_immediate_to_word(b);
+
+			return aw < bw ? -1 : aw == bw ? 0 : +1;
+		}
+		else
+			return -1;
+	}
+	else if (bms_is_immediate(b))
+		return +1;
+
 	/* the set with the most words must be greater */
 	if (a->nwords != b->nwords)
 		return (a->nwords > b->nwords) ? +1 : -1;
@@ -218,11 +373,18 @@ bms_make_singleton(int x)
 	Bitmapset  *result;
 	int			wordnum,
 				bitnum;
+	bitmapword	word;
 
 	if (x < 0)
 		elog(ERROR, "negative bitmapset member not allowed");
+
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
+	word = (bitmapword) 1 << bitnum;
+
+	if (wordnum == 0 && bms_word_fits_in_immediate(word))
+		return bms_word_to_immediate(word);
+
 	result = (Bitmapset *) palloc0(BITMAPSET_SIZE(wordnum + 1));
 	result->type = T_Bitmapset;
 	result->nwords = wordnum + 1;
@@ -233,12 +395,12 @@ bms_make_singleton(int x)
 /*
  * bms_free - free a bitmapset
  *
- * Same as pfree except for allowing NULL input
+ * Same as pfree except for allowing NULL and immediate inputs
  */
 void
 bms_free(Bitmapset *a)
 {
-	if (a)
+	if (a && !bms_is_immediate(a))
 		pfree(a);
 }
 
@@ -263,6 +425,26 @@ bms_union(const Bitmapset *a, const Bitmapset *b)
 		return bms_copy(b);
 	if (b == NULL)
 		return bms_copy(a);
+
+	/* Handle immediates. */
+	if (bms_is_immediate(a))
+	{
+		if (bms_is_one_word(b))
+			return bms_make_from_one_word(bms_immediate_to_word(a) |
+										  bms_first_word(b));
+		/* b is bigger */
+		result = bms_copy(b);
+		result->words[0] |= bms_immediate_to_word(a);
+		return result;
+	}
+	else if (bms_is_immediate(b))
+	{
+		/* a is bigger */
+		result = bms_copy(a);
+		result->words[0] |= bms_immediate_to_word(b);
+		return result;
+	}
+
 	/* Identify shorter and longer input; copy the longer one */
 	if (a->nwords <= b->nwords)
 	{
@@ -304,6 +486,15 @@ bms_intersect(const Bitmapset *a, const Bitmapset *b)
 	if (a == NULL || b == NULL)
 		return NULL;
 
+	/* Handle immediate values. */
+	if (bms_is_immediate(a) || bms_is_immediate(b))
+	{
+		bitmapword	aw = bms_first_word(a);
+		bitmapword	bw = bms_first_word(b);
+
+		return bms_make_from_one_word(aw & bw);
+	}
+
 	/* Identify shorter and longer input; copy the shorter one */
 	if (a->nwords <= b->nwords)
 	{
@@ -329,13 +520,13 @@ bms_intersect(const Bitmapset *a, const Bitmapset *b)
 	/* If we computed an empty result, we must return NULL */
 	if (lastnonzero == -1)
 	{
-		pfree(result);
+		bms_free(result);
 		return NULL;
 	}
 
 	/* get rid of trailing zero words */
 	result->nwords = lastnonzero + 1;
-	return result;
+	return bms_unbox_and_free_if_possible(result);
 }
 
 /*
@@ -347,6 +538,7 @@ bms_difference(const Bitmapset *a, const Bitmapset *b)
 {
 	Bitmapset  *result;
 	int			i;
+	BitmapsetBoxed b_tmp;
 
 	Assert(bms_is_valid_set(a));
 	Assert(bms_is_valid_set(b));
@@ -356,6 +548,17 @@ bms_difference(const Bitmapset *a, const Bitmapset *b)
 		return NULL;
 	if (b == NULL)
 		return bms_copy(a);
+
+	/* Handle immediate values, or fall back to boxing b. */
+	if (bms_is_immediate(a))
+	{
+		bitmapword	aw = bms_immediate_to_word(a);
+		bitmapword	bw = bms_first_word(b);
+
+		return bms_make_from_one_word(aw & ~bw);
+	}
+	else if (bms_is_immediate(b))
+		b = bms_box(&b_tmp, b);
 
 	/*
 	 * In Postgres' usage, an empty result is a very common case, so it's
@@ -402,7 +605,7 @@ bms_difference(const Bitmapset *a, const Bitmapset *b)
 	Assert(result->nwords != 0);
 
 	/* Need not check for empty result, since we handled that case above */
-	return result;
+	return bms_unbox_and_free_if_possible(result);
 }
 
 /*
@@ -421,6 +624,19 @@ bms_is_subset(const Bitmapset *a, const Bitmapset *b)
 		return true;			/* empty set is a subset of anything */
 	if (b == NULL)
 		return false;
+
+	/* Handle immediate values. */
+	if (bms_is_immediate(a))
+	{
+		bitmapword	aw = bms_immediate_to_word(a);
+		bitmapword	bw = bms_first_word(b);
+
+		return (aw & ~bw) == 0;
+	}
+	else if (bms_is_immediate(b))
+	{
+		return false;			/* a must have a higher member */
+	}
 
 	/* 'a' can't be a subset of 'b' if it contains more words */
 	if (a->nwords > b->nwords)
@@ -447,6 +663,8 @@ bms_subset_compare(const Bitmapset *a, const Bitmapset *b)
 	BMS_Comparison result;
 	int			shortlen;
 	int			i;
+	BitmapsetBoxed a_tmp;
+	BitmapsetBoxed b_tmp;
 
 	Assert(bms_is_valid_set(a));
 	Assert(bms_is_valid_set(b));
@@ -460,6 +678,12 @@ bms_subset_compare(const Bitmapset *a, const Bitmapset *b)
 	}
 	if (b == NULL)
 		return BMS_SUBSET2;
+
+	/* Handle immediate values. */
+	if (bms_is_immediate(a))
+		a = bms_box(&a_tmp, a);
+	if (bms_is_immediate(b))
+		b = bms_box(&b_tmp, b);
 
 	/* Check common words */
 	result = BMS_EQUAL;			/* status so far */
@@ -520,6 +744,10 @@ bms_is_member(int x, const Bitmapset *a)
 	if (a == NULL)
 		return false;
 
+	if (bms_is_immediate(a))
+		return x <= BITMAPSET_IMMEDIATE_MAX_BITNO &&
+			(bms_immediate_to_word(a) & ((bitmapword) 1 << x));
+
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
 	if (wordnum >= a->nwords)
@@ -542,12 +770,16 @@ bms_member_index(Bitmapset *a, int x)
 	int			wordnum;
 	int			result = 0;
 	bitmapword	mask;
+	BitmapsetBoxed a_tmp;
 
 	Assert(bms_is_valid_set(a));
 
 	/* return -1 if not a member of the bitmap */
 	if (!bms_is_member(x, a))
 		return -1;
+
+	if (bms_is_immediate(a))
+		a = bms_box(&a_tmp, a);
 
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
@@ -583,6 +815,10 @@ bms_overlap(const Bitmapset *a, const Bitmapset *b)
 	/* Handle cases where either input is NULL */
 	if (a == NULL || b == NULL)
 		return false;
+
+	if (bms_is_immediate(a) || bms_is_immediate(b))
+		return bms_first_word(a) & bms_first_word(b);
+
 	/* Check words in common */
 	shortlen = Min(a->nwords, b->nwords);
 	i = 0;
@@ -603,11 +839,15 @@ bms_overlap_list(const Bitmapset *a, const List *b)
 	ListCell   *lc;
 	int			wordnum,
 				bitnum;
+	BitmapsetBoxed a_tmp;
 
 	Assert(bms_is_valid_set(a));
 
 	if (a == NULL || b == NIL)
 		return false;
+
+	if (bms_is_immediate(a))
+		a = bms_box(&a_tmp, a);
 
 	foreach(lc, b)
 	{
@@ -643,6 +883,12 @@ bms_nonempty_difference(const Bitmapset *a, const Bitmapset *b)
 		return false;
 	if (b == NULL)
 		return true;
+
+	if (bms_is_immediate(a))
+		return bms_immediate_to_word(a) & ~bms_first_word(b);
+	else if (bms_is_immediate(b))
+		return true;			/* a is bigger */
+
 	/* if 'a' has more words then it must contain additional members */
 	if (a->nwords > b->nwords)
 		return true;
@@ -667,11 +913,15 @@ bms_singleton_member(const Bitmapset *a)
 	int			result = -1;
 	int			nwords;
 	int			wordnum;
+	BitmapsetBoxed a_tmp;
 
 	Assert(bms_is_valid_set(a));
 
 	if (a == NULL)
 		elog(ERROR, "bitmapset is empty");
+
+	if (bms_is_immediate(a))
+		a = bms_box(&a_tmp, a);
 
 	nwords = a->nwords;
 	wordnum = 0;
@@ -710,11 +960,15 @@ bms_get_singleton_member(const Bitmapset *a, int *member)
 	int			result = -1;
 	int			nwords;
 	int			wordnum;
+	BitmapsetBoxed a_tmp;
 
 	Assert(bms_is_valid_set(a));
 
 	if (a == NULL)
 		return false;
+
+	if (bms_is_immediate(a))
+		a = bms_box(&a_tmp, a);
 
 	nwords = a->nwords;
 	wordnum = 0;
@@ -748,9 +1002,8 @@ bms_num_members(const Bitmapset *a)
 	if (a == NULL)
 		return 0;
 
-	/* fast-path for common case */
-	if (a->nwords == 1)
-		return bmw_popcount(a->words[0]);
+	if (bms_is_immediate(a))
+		return bmw_popcount(bms_immediate_to_word(a));
 
 	return pg_popcount((const char *) a->words,
 					   a->nwords * sizeof(bitmapword));
@@ -772,6 +1025,18 @@ bms_membership(const Bitmapset *a)
 
 	if (a == NULL)
 		return BMS_EMPTY_SET;
+
+	if (bms_is_immediate(a))
+	{
+		int			n = bmw_popcount(bms_immediate_to_word(a));
+
+		if (n == 0)
+			return BMS_EMPTY_SET;
+		else if (n == 1)
+			return BMS_SINGLETON;
+		else
+			return BMS_MULTIPLE;
+	}
 
 	nwords = a->nwords;
 	wordnum = 0;
@@ -807,6 +1072,18 @@ bms_add_member(Bitmapset *a, int x)
 		elog(ERROR, "negative bitmapset member not allowed");
 	if (a == NULL)
 		return bms_make_singleton(x);
+
+	if (bms_is_immediate(a))
+	{
+		bitmapword	aw = bms_immediate_to_word(a);
+
+		if (x <= BITMAPSET_IMMEDIATE_MAX_BITNO)
+			return bms_word_to_immediate(aw | ((bitmapword) 1 << x));
+
+		a = bms_make_singleton(x);
+		a->words[0] |= aw;
+		return a;
+	}
 
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
@@ -861,6 +1138,18 @@ bms_del_member(Bitmapset *a, int x)
 	if (a == NULL)
 		return NULL;
 
+	if (bms_is_immediate(a))
+	{
+		if (x <= BITMAPSET_IMMEDIATE_MAX_BITNO)
+		{
+			bitmapword	aw = bms_immediate_to_word(a);
+
+			aw &= ~((bitmapword) 1 << x);
+			a = bms_word_to_immediate(aw);
+		}
+		return a;
+	}
+
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
 
@@ -891,7 +1180,7 @@ bms_del_member(Bitmapset *a, int x)
 		pfree(a);
 		return NULL;
 	}
-	return a;
+	return bms_unbox_and_free_if_possible(a);
 }
 
 /*
@@ -919,6 +1208,11 @@ bms_add_members(Bitmapset *a, const Bitmapset *b)
 
 		return a;
 	}
+
+	/* If the left input is immediate, call bms_union instead. */
+	if (bms_is_immediate(a) || bms_is_immediate(b))
+		return bms_union(a, b);
+
 	/* Identify shorter and longer input; copy the longer one if needed */
 	if (a->nwords < b->nwords)
 	{
@@ -938,13 +1232,13 @@ bms_add_members(Bitmapset *a, const Bitmapset *b)
 		result->words[i] |= other->words[i];
 	} while (++i < otherlen);
 	if (result != a)
-		pfree(a);
+		bms_free(a);
 #ifdef REALLOCATE_BITMAPSETS
 	else
 		result = bms_copy_and_free(result);
 #endif
 
-	return result;
+	return bms_unbox_and_free_if_possible(result);
 }
 
 /*
@@ -964,8 +1258,16 @@ bms_replace_members(Bitmapset *a, const Bitmapset *b)
 		return bms_copy(b);
 	if (b == NULL)
 	{
-		pfree(a);
+		bms_free(a);
 		return NULL;
+	}
+
+	if (bms_is_immediate(a))
+		return bms_copy(b);
+	else if (bms_is_immediate(b))
+	{
+		bms_free(a);
+		return unconstify(Bitmapset *, b);
 	}
 
 	if (a->nwords < b->nwords)
@@ -1029,6 +1331,26 @@ bms_add_range(Bitmapset *a, int lower, int upper)
 		a = (Bitmapset *) palloc0(BITMAPSET_SIZE(uwordnum + 1));
 		a->type = T_Bitmapset;
 		a->nwords = uwordnum + 1;
+	}
+	else if (bms_is_immediate(a))
+	{
+		bitmapword	aw = bms_immediate_to_word(a);
+
+		if (upper <= BITMAPSET_IMMEDIATE_MAX_BITNO)
+		{
+			/* Immediate result. */
+			for (int i = lower; i <= upper; ++i)
+				aw |= ((bitmapword) 1 << i);
+			return bms_word_to_immediate(aw);
+		}
+		else
+		{
+			/* Need more space. */
+			a = (Bitmapset *) palloc0(BITMAPSET_SIZE(uwordnum + 1));
+			a->type = T_Bitmapset;
+			a->nwords = uwordnum + 1;
+			a->words[0] = aw;
+		}
 	}
 	else if (uwordnum >= a->nwords)
 	{
@@ -1104,8 +1426,18 @@ bms_int_members(Bitmapset *a, const Bitmapset *b)
 		return NULL;
 	if (b == NULL)
 	{
-		pfree(a);
+		bms_free(a);
 		return NULL;
+	}
+
+	/* If either is immediate, result is immediate or NULL. */
+	if (bms_is_immediate(a) || bms_is_immediate(b))
+	{
+		bitmapword	aw = bms_first_word(a);
+		bitmapword	bw = bms_first_word(b);
+
+		bms_free(a);
+		return bms_make_from_one_word(aw & bw);
 	}
 
 	/* Intersect b into a; we need never copy */
@@ -1123,7 +1455,7 @@ bms_int_members(Bitmapset *a, const Bitmapset *b)
 	/* If we computed an empty result, we must return NULL */
 	if (lastnonzero == -1)
 	{
-		pfree(a);
+		bms_free(a);
 		return NULL;
 	}
 
@@ -1145,6 +1477,7 @@ Bitmapset *
 bms_del_members(Bitmapset *a, const Bitmapset *b)
 {
 	int			i;
+	BitmapsetBoxed b_tmp;
 
 	Assert(bms_is_valid_set(a));
 	Assert(bms_is_valid_set(b));
@@ -1160,6 +1493,17 @@ bms_del_members(Bitmapset *a, const Bitmapset *b)
 
 		return a;
 	}
+
+	/* Handle immediate values, or box. */
+	if (bms_is_immediate(a))
+	{
+		bitmapword	aw = bms_immediate_to_word(a);
+		bitmapword	bw = bms_first_word(b);
+
+		return bms_make_from_one_word(aw & ~bw);
+	}
+	else if (bms_is_immediate(b))
+		b = bms_box(&b_tmp, b);
 
 	/* Remove b's bits from a; we need never copy */
 	if (a->nwords > b->nwords)
@@ -1192,7 +1536,7 @@ bms_del_members(Bitmapset *a, const Bitmapset *b)
 		/* check if 'a' has become empty */
 		if (lastnonzero == -1)
 		{
-			pfree(a);
+			bms_free(a);
 			return NULL;
 		}
 
@@ -1204,7 +1548,7 @@ bms_del_members(Bitmapset *a, const Bitmapset *b)
 	a = bms_copy_and_free(a);
 #endif
 
-	return a;
+	return bms_unbox_and_free_if_possible(a);
 }
 
 /*
@@ -1238,6 +1582,25 @@ bms_join(Bitmapset *a, Bitmapset *b)
 
 		return a;
 	}
+	if (a == b)
+		return a;				/* pure paranoia */
+
+	/* Handle immediates. */
+	if (bms_is_immediate(a))
+	{
+		if (bms_is_one_word(b))
+			return bms_make_from_one_word(bms_immediate_to_word(a) |
+										  bms_first_word(b));
+		result = b;
+		result->words[0] |= bms_immediate_to_word(a);
+		return result;
+	}
+	else if (bms_is_immediate(b))
+	{
+		result = a;
+		result->words[0] |= bms_immediate_to_word(b);
+		return result;
+	}
 
 	/* Identify shorter and longer input; use longer one as result */
 	if (a->nwords < b->nwords)
@@ -1257,8 +1620,6 @@ bms_join(Bitmapset *a, Bitmapset *b)
 	{
 		result->words[i] |= other->words[i];
 	} while (++i < otherlen);
-	if (other != result)		/* pure paranoia */
-		pfree(other);
 
 #ifdef REALLOCATE_BITMAPSETS
 	result = bms_copy_and_free(result);
@@ -1296,9 +1657,18 @@ bms_next_member(const Bitmapset *a, int prevbit)
 
 	if (a == NULL)
 		return -2;
-	nwords = a->nwords;
+
 	prevbit++;
 	mask = (~(bitmapword) 0) << BITNUM(prevbit);
+
+	if (bms_is_immediate(a))
+	{
+		bitmapword	w = bms_immediate_to_word(a) & mask;
+
+		return w == 0 ? -2 : bmw_rightmost_one_pos(w);
+	}
+
+	nwords = a->nwords;
 	for (int wordnum = WORDNUM(prevbit); wordnum < nwords; wordnum++)
 	{
 		bitmapword	w = a->words[wordnum];
@@ -1351,6 +1721,7 @@ bms_prev_member(const Bitmapset *a, int prevbit)
 {
 	int			ushiftbits;
 	bitmapword	mask;
+	BitmapsetBoxed a_tmp;
 
 	Assert(bms_is_valid_set(a));
 
@@ -1360,6 +1731,9 @@ bms_prev_member(const Bitmapset *a, int prevbit)
 	 */
 	if (a == NULL || prevbit == 0)
 		return -2;
+
+	if (bms_is_immediate(a))
+		a = bms_box(&a_tmp, a);
 
 	/* Validate callers didn't give us something out of range */
 	Assert(prevbit <= a->nwords * BITS_PER_BITMAPWORD);
@@ -1401,10 +1775,14 @@ bms_prev_member(const Bitmapset *a, int prevbit)
 uint32
 bms_hash_value(const Bitmapset *a)
 {
+	BitmapsetBoxed a_tmp;
+
 	Assert(bms_is_valid_set(a));
 
 	if (a == NULL)
 		return 0;				/* All empty sets hash to 0 */
+	if (bms_is_immediate(a))
+		a = bms_box(&a_tmp, a);
 	return DatumGetUInt32(hash_any((const unsigned char *) a->words,
 								   a->nwords * sizeof(bitmapword)));
 }

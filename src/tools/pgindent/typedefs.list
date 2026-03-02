@@ -285,6 +285,7 @@ BitmapOr
 BitmapOrPath
 BitmapOrState
 Bitmapset
+BitmapsetBoxed
 Block
 BlockId
 BlockIdData

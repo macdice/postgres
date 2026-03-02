@@ -136,7 +136,29 @@ typedef struct Node
 	NodeTag		type;
 } Node;
 
-#define nodeTag(nodeptr)		(((const Node*)(nodeptr))->type)
+/*
+ * The least significant bit(s) of a pointer to a Node should never be set,
+ * due to the rules of alignment.  We can therefore mark immediate values that
+ * are meaningful to a given node type, with a scheme to map them back to a
+ * NodeTag value to find its functions.  For now there is only one node type
+ * doing this, so a single bit suffices.
+ */
+#define NODE_PTR_TAG_MASK 0x1
+#define NODE_PTR_TAG_MASK_WIDTH 1
+#define NODE_PTR_T_Bitmapset 1
+
+static inline NodeTag
+nodeTag(const void *nodePtr)
+{
+	uintptr_t	p = (uintptr_t) nodePtr;
+	int			ptr_tag = p & NODE_PTR_TAG_MASK;
+
+	/* XXX hard-coded for now */
+	if (ptr_tag == NODE_PTR_T_Bitmapset)
+		return T_Bitmapset;
+
+	return ((const Node *) nodePtr)->type;
+}
 
 /*
  * newNode -
