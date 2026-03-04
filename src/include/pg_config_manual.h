@@ -223,6 +223,12 @@
 #define PG_IO_ALIGN_SIZE		4096
 
 /*
+ * Assumed direction of the stack, -1 or +1.  Historically this varied, but all
+ * modern systems have stacks that grow downward.
+ */
+#define PG_STACK_DIRECTION		-1
+
+/*
  *------------------------------------------------------------------------
  * The following symbols are for enabling debugging code, not for
  * controlling user-visible features or resource limits.

@@ -118,9 +118,15 @@ stack_is_too_deep(void)
 
 	/*
 	 * Take abs value, since stacks grow up on some machines, down on others
+	 * (historical).
 	 */
-	if (stack_depth < 0)
-		stack_depth = -stack_depth;
+	stack_depth *= -(PG_STACK_DIRECTION);
+
+	/*
+	 * If this assertion fails, either PG_STACK_DIRECTION is wrong or this
+	 * system doesn't have a traditional stack as we expect.
+	 */
+	Assert(stack_depth >= 0);
 
 	/*
 	 * Trouble?
