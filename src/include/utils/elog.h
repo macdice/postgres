@@ -316,6 +316,20 @@ typedef struct ErrorContextCallback
 extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 
 
+/* Support for testing if a macro is inside a PG_TRY/... block. */
+
+#define pg_declare_lexical_scope_tag(name)			\
+	extern char lexical_scope_tag_##name pg_attribute_unused()
+#define pg_set_lexical_scope_tag(name)				\
+	typedef int lexical_scope_tag_##name pg_attribute_unused()
+#define pg_in_lexical_scope_p(name)				\
+	(sizeof(lexical_scope_tag_##name) == sizeof(int))
+
+pg_declare_lexical_scope_tag(PG_TRY);
+pg_declare_lexical_scope_tag(PG_CATCH);
+pg_declare_lexical_scope_tag(PG_FINALLY);
+
+
 /*----------
  * API for catching ereport(ERROR) exits.  Use these macros like so:
  *
@@ -391,12 +405,14 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 		bool _do_rethrow##__VA_ARGS__ = false; \
 		if (sigsetjmp(_local_sigjmp_buf##__VA_ARGS__, 0) == 0) \
 		{ \
+			pg_set_lexical_scope_tag(PG_TRY); \
 			PG_exception_stack = &_local_sigjmp_buf##__VA_ARGS__
 
 #define PG_CATCH(...)	\
 		} \
 		else \
 		{ \
+			pg_set_lexical_scope_tag(PG_CATCH); \
 			PG_exception_stack = _save_exception_stack##__VA_ARGS__; \
 			error_context_stack = _save_context_stack##__VA_ARGS__
 
@@ -405,6 +421,7 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 		else \
 			_do_rethrow##__VA_ARGS__ = true; \
 		{ \
+			pg_set_lexical_scope_tag(PG_FINALLY); \
 			PG_exception_stack = _save_exception_stack##__VA_ARGS__; \
 			error_context_stack = _save_context_stack##__VA_ARGS__
 
