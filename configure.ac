@@ -577,6 +577,19 @@ if test "$GCC" = yes -a "$ICC" = no; then
   PGAC_PROG_CXX_CFLAGS_OPT([-Wcast-function-type])
   PGAC_PROG_CC_CFLAGS_OPT([-Wshadow=compatible-local])
   PGAC_PROG_CXX_CFLAGS_OPT([-Wshadow=compatible-local])
+  # We also want to make the usage of the above options available to macros.
+  NOT_THE_CFLAGS=""
+  PGAC_PROG_VARCC_VARFLAGS_OPT(CC, NOT_THE_CFLAGS, [-Wshadow=compatible-local])
+  if test -n "$NOT_THE_CFLAGS"; then
+    AC_DEFINE([WARNING_CC_SHADOW_COMPATIBLE_LOCAL], 1,
+              [Define to 1 if your C compiler understands -Wshadow=compatible-local])
+  fi
+  NOT_THE_CFLAGS=""
+  PGAC_PROG_VARCXX_VARFLAGS_OPT(CXX, NOT_THE_CFLAGS, [-Wshadow=compatible-local])
+  if test -n "$NOT_THE_CFLAGS"; then
+    AC_DEFINE([WARNING_CXX_SHADOW_COMPATIBLE_LOCAL], 1,
+              [Define to 1 if your C++ compiler understands -Wshadow=compatible-local])
+  fi
   # This was included in -Wall/-Wformat in older GCC versions
   PGAC_PROG_CC_CFLAGS_OPT([-Wformat-security])
   PGAC_PROG_CXX_CFLAGS_OPT([-Wformat-security])
