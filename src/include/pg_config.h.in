@@ -762,6 +762,12 @@
 /* Define to 1 to build with ZSTD support. (--with-zstd) */
 #undef USE_ZSTD
 
+/* Define to 1 if your C compiler understands -Wshadow=compatible-local */
+#undef WARNING_CC_SHADOW_COMPATIBLE_LOCAL
+
+/* Define to 1 if your C++ compiler understands -Wshadow=compatible-local */
+#undef WARNING_CXX_SHADOW_COMPATIBLE_LOCAL
+
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */
 #if defined AC_APPLE_UNIVERSAL_BUILD

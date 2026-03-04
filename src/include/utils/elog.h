@@ -316,6 +316,39 @@ typedef struct ErrorContextCallback
 extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 
 
+/* Support for testing if a macro is inside a PG_TRY/... block. */
+typedef char pg_lexical_scope_false_type;
+typedef int pg_lexical_scope_true_type;
+
+/* Declare a tag as a variable in global scope.  It has no storage. */
+#define pg_declare_lexical_scope_tag(name)			\
+	extern pg_lexical_scope_false_type \
+	lexical_scope_tag_##name pg_attribute_unused()
+
+/*
+ * Declare a tag as a local typedef that hides the name of the variable,
+ * within the current lexical scope.
+ *
+ * On its own, "shadowing" a variable name with a type name doesn't trigger
+ * GCC's -Wshadow=compatible-local warning, but we want to be able to handle
+ * nested PG_TRY blocks using the same tag name.  Disable the warning locally,
+ * if it's enabled.
+ */
+#define pg_set_lexical_scope_tag(name)									\
+	pg_begin_ignore_shadow_warning()									\
+	typedef pg_lexical_scope_true_type									\
+		lexical_scope_tag_##name pg_attribute_unused();					\
+	pg_end_ignore_shadow_warning()
+
+/* Test whether we are inside a lexical scope that has "set" the tag. */
+#define pg_in_lexical_scope_p(name)				\
+	(sizeof(lexical_scope_tag_##name) == sizeof(pg_lexical_scope_true_type))
+
+pg_declare_lexical_scope_tag(PG_TRY);
+pg_declare_lexical_scope_tag(PG_CATCH);
+pg_declare_lexical_scope_tag(PG_FINALLY);
+
+
 /*----------
  * API for catching ereport(ERROR) exits.  Use these macros like so:
  *
@@ -391,12 +424,14 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 		bool _do_rethrow##__VA_ARGS__ = false; \
 		if (sigsetjmp(_local_sigjmp_buf##__VA_ARGS__, 0) == 0) \
 		{ \
+			pg_set_lexical_scope_tag(PG_TRY); \
 			PG_exception_stack = &_local_sigjmp_buf##__VA_ARGS__
 
 #define PG_CATCH(...)	\
 		} \
 		else \
 		{ \
+			pg_set_lexical_scope_tag(PG_CATCH); \
 			PG_exception_stack = _save_exception_stack##__VA_ARGS__; \
 			error_context_stack = _save_context_stack##__VA_ARGS__
 
@@ -405,6 +440,7 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 		else \
 			_do_rethrow##__VA_ARGS__ = true; \
 		{ \
+			pg_set_lexical_scope_tag(PG_FINALLY); \
 			PG_exception_stack = _save_exception_stack##__VA_ARGS__; \
 			error_context_stack = _save_context_stack##__VA_ARGS__
 

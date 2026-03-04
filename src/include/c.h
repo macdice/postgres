@@ -561,6 +561,33 @@ typedef void (*pg_funcptr_t) (void);
 #define HAVE_PRAGMA_GCC_SYSTEM_HEADER	1
 #endif
 
+/*
+ * Sometimes it is useful to be able to disable GCC's shadow warnings for a
+ * specific declaration.
+ *
+ * -Wdeclaration-after-statement is also temporarily suppressed, because the
+ * pragma itself is treated as a statement while the purpose of these macros
+ * is to wrap a declaration.
+ */
+#if !defined(__clang__) && \
+	((defined(__cplusplus) && defined(WARNING_CXX_SHADOW_COMPATIBLE_LOCAL)) || \
+	 (!defined(__cplusplus) && defined(WARNING_CC_SHADOW_COMPATIBLE_LOCAL)))
+#if !defined(__cplusplus)
+#define pg_pragma_ignore_declaration_after_statement \
+	_Pragma("GCC diagnostic ignored \"-Wdeclaration-after-statement\"");
+#else
+#define pg_pragma_ignore_declaration_after_statement
+#endif
+#define pg_begin_ignore_shadow_warning()								\
+	_Pragma("GCC diagnostic push");										\
+	_Pragma("GCC diagnostic ignored \"-Wshadow=compatible-local\"");	\
+	pg_pragma_ignore_declaration_after_statement
+#define pg_end_ignore_shadow_warning()			\
+	_Pragma("GCC diagnostic pop")
+#else
+#define pg_begin_ignore_shadow_warning()
+#define pg_end_ignore_shadow_warning()
+#endif
 
 /* ----------------------------------------------------------------
  *				Section 2:	bool, true, false

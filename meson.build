@@ -2208,6 +2208,15 @@ if have_cxx
   cxxflags_warn += cxx.get_supported_arguments(common_warning_flags)
 endif
 
+# Advertise whether -Wshadow=compatible-local is active, so that it can be
+# disabled in cases where that is expected.
+if cc.has_argument('-Wshadow=compatible-local')
+  cdata.set('WARNING_CC_SHADOW_COMPATIBLE_LOCAL', 1)
+endif
+if have_cxx and cxx.has_argument('-Wshadow=compatible-local')
+  cdata.set('WARNING_CXX_SHADOW_COMPATIBLE_LOCAL', 1)
+endif
+
 # To require fallthrough attribute annotations, use
 # -Wimplicit-fallthrough=5 with gcc and -Wimplicit-fallthrough with
 # clang.  The latter is also accepted on gcc but does not enforce
