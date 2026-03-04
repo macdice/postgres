@@ -223,6 +223,14 @@
 #define PG_IO_ALIGN_SIZE		4096
 
 /*
+ * Historical systems had stacks that grew upwards in address space, but none
+ * of them remain.  Our stack depth-checking code no longer wastes cycles
+ * considering that possibility at runtime.  It assumes (but also asserts)
+ * that the stack grows in the direction defined here: -1 or +1.
+ */
+#define PG_STACK_DIRECTION -1
+
+/*
  *------------------------------------------------------------------------
  * The following symbols are for enabling debugging code, not for
  * controlling user-visible features or resource limits.
