@@ -60,12 +60,6 @@
 #define		PGLOCALE_SUPPORT_ERROR(provider) \
 	elog(ERROR, "unsupported collprovider for %s: %c", __func__, provider)
 
-/*
- * This should be large enough that most strings will fit, but small enough
- * that we feel comfortable putting it on the stack
- */
-#define		TEXTBUFLEN			1024
-
 #define		MAX_L10N_DATA		80
 
 /* pg_locale_builtin.c */

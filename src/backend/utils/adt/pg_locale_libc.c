@@ -23,6 +23,7 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 
 #ifdef __GLIBC__
@@ -71,14 +72,6 @@
  *
  * NB: the coding here assumes pg_wchar is an unsigned type.
  */
-
-/*
- * Size of stack buffer to use for string transformations, used to avoid heap
- * allocations in typical cases. This should be large enough that most strings
- * will fit, but small enough that we feel comfortable putting it on the
- * stack.
- */
-#define		TEXTBUFLEN			1024
 
 extern pg_locale_t create_pg_locale_libc(Oid collid, MemoryContext context);
 
@@ -502,6 +495,8 @@ strlower_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	size_t		curr_char;
 	size_t		max_size;
 
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
+
 	if (srclen < 0)
 		srclen = strlen(src);
 
@@ -512,7 +507,7 @@ strlower_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 				 errmsg("out of memory")));
 
 	/* Output workspace cannot have more codes than input bytes */
-	workspace = palloc_array(wchar_t, srclen + 1);
+	workspace = pg_stack_alloc_array(wchar_t, srclen + 1);
 
 	char2wchar(workspace, srclen + 1, src, srclen, loc);
 
@@ -523,7 +518,7 @@ strlower_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	 * Make result large enough; case change might change number of bytes
 	 */
 	max_size = curr_char * pg_database_encoding_max_length();
-	result = palloc(max_size + 1);
+	result = pg_stack_alloc(max_size + 1);
 
 	result_size = wchar2char(result, workspace, max_size + 1, loc);
 
@@ -533,8 +528,8 @@ strlower_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 		dest[result_size] = '\0';
 	}
 
-	pfree(workspace);
-	pfree(result);
+	pg_stack_free(workspace);
+	pg_stack_free(result);
 
 	return result_size;
 }
@@ -607,6 +602,8 @@ strtitle_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	size_t		curr_char;
 	size_t		max_size;
 
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
+
 	if (srclen < 0)
 		srclen = strlen(src);
 
@@ -617,7 +614,7 @@ strtitle_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 				 errmsg("out of memory")));
 
 	/* Output workspace cannot have more codes than input bytes */
-	workspace = palloc_array(wchar_t, srclen + 1);
+	workspace = pg_stack_alloc_array(wchar_t, srclen + 1);
 
 	char2wchar(workspace, srclen + 1, src, srclen, loc);
 
@@ -634,7 +631,7 @@ strtitle_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	 * Make result large enough; case change might change number of bytes
 	 */
 	max_size = curr_char * pg_database_encoding_max_length();
-	result = palloc(max_size + 1);
+	result = pg_stack_alloc(max_size + 1);
 
 	result_size = wchar2char(result, workspace, max_size + 1, loc);
 
@@ -644,8 +641,8 @@ strtitle_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 		dest[result_size] = '\0';
 	}
 
-	pfree(workspace);
-	pfree(result);
+	pg_stack_free(workspace);
+	pg_stack_free(result);
 
 	return result_size;
 }
@@ -700,6 +697,8 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	size_t		curr_char;
 	size_t		max_size;
 
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
+
 	if (srclen < 0)
 		srclen = strlen(src);
 
@@ -710,7 +709,7 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 				 errmsg("out of memory")));
 
 	/* Output workspace cannot have more codes than input bytes */
-	workspace = palloc_array(wchar_t, srclen + 1);
+	workspace = pg_stack_alloc_array(wchar_t, srclen + 1);
 
 	char2wchar(workspace, srclen + 1, src, srclen, loc);
 
@@ -721,7 +720,7 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	 * Make result large enough; case change might change number of bytes
 	 */
 	max_size = curr_char * pg_database_encoding_max_length();
-	result = palloc(max_size + 1);
+	result = pg_stack_alloc(max_size + 1);
 
 	result_size = wchar2char(result, workspace, max_size + 1, loc);
 
@@ -731,8 +730,8 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, ssize_t srclen,
 		dest[result_size] = '\0';
 	}
 
-	pfree(workspace);
-	pfree(result);
+	pg_stack_free(workspace);
+	pg_stack_free(result);
 
 	return result_size;
 }
@@ -896,48 +895,25 @@ int
 strncoll_libc(const char *arg1, ssize_t len1, const char *arg2, ssize_t len2,
 			  pg_locale_t locale)
 {
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
-	size_t		bufsize1 = (len1 == -1) ? 0 : len1 + 1;
-	size_t		bufsize2 = (len2 == -1) ? 0 : len2 + 1;
-	const char *arg1n;
-	const char *arg2n;
+	char	   *cstr1 = NULL;
+	char	   *cstr2 = NULL;
 	int			result;
 
-	if (bufsize1 + bufsize2 > TEXTBUFLEN)
-		buf = palloc(bufsize1 + bufsize2);
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
 
 	/* nul-terminate arguments if necessary */
-	if (len1 == -1)
-	{
-		arg1n = arg1;
-	}
-	else
-	{
-		char	   *buf1 = buf;
+	if (len1 != -1)
+		arg1 = cstr1 = pg_stack_strdup_with_len(arg1, len1);
 
-		memcpy(buf1, arg1, len1);
-		buf1[len1] = '\0';
-		arg1n = buf1;
-	}
+	if (len2 != -1)
+		arg2 = cstr2 = pg_stack_strdup_with_len(arg2, len2);
 
-	if (len2 == -1)
-	{
-		arg2n = arg2;
-	}
-	else
-	{
-		char	   *buf2 = buf + bufsize1;
+	result = strcoll_l(arg1, arg2, locale->lt);
 
-		memcpy(buf2, arg2, len2);
-		buf2[len2] = '\0';
-		arg2n = buf2;
-	}
-
-	result = strcoll_l(arg1n, arg2n, locale->lt);
-
-	if (buf != sbuf)
-		pfree(buf);
+	if (cstr1)
+		pg_stack_free(cstr1);
+	if (cstr2)
+		pg_stack_free(cstr2);
 
 	return result;
 }
@@ -953,25 +929,17 @@ size_t
 strnxfrm_libc(char *dest, size_t destsize, const char *src, ssize_t srclen,
 			  pg_locale_t locale)
 {
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
-	size_t		bufsize = srclen + 1;
+	char	   *cstr;
 	size_t		result;
+
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
 
 	if (srclen == -1)
 		return strxfrm_l(dest, src, destsize, locale->lt);
 
-	if (bufsize > TEXTBUFLEN)
-		buf = palloc(bufsize);
-
-	/* nul-terminate argument */
-	memcpy(buf, src, srclen);
-	buf[srclen] = '\0';
-
-	result = strxfrm_l(dest, buf, destsize, locale->lt);
-
-	if (buf != sbuf)
-		pfree(buf);
+	cstr = pg_stack_strdup_with_len(src, srclen);
+	result = strxfrm_l(dest, cstr, destsize, locale->lt);
+	pg_stack_free(cstr);
 
 	/* if dest is defined, it should be nul-terminated */
 	Assert(result >= destsize || dest[result] == '\0');
@@ -1057,14 +1025,12 @@ static int
 strncoll_libc_win32_utf8(const char *arg1, ssize_t len1, const char *arg2,
 						 ssize_t len2, pg_locale_t locale)
 {
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
-	char	   *a1p,
-			   *a2p;
-	int			a1len;
-	int			a2len;
+	wchar_t    *w1p;
+	wchar_t    *w2p;
 	int			r;
 	int			result;
+
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
 
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 
@@ -1073,50 +1039,42 @@ strncoll_libc_win32_utf8(const char *arg1, ssize_t len1, const char *arg2,
 	if (len2 == -1)
 		len2 = strlen(arg2);
 
-	a1len = len1 * 2 + 2;
-	a2len = len2 * 2 + 2;
-
-	if (a1len + a2len > TEXTBUFLEN)
-		buf = palloc(a1len + a2len);
-
-	a1p = buf;
-	a2p = buf + a1len;
+	w1p = pg_stack_alloc_array(wchar_t, len1 + 1);
+	w2p = pg_stack_alloc_array(wchar_t, len2 + 1);
 
 	/* API does not work for zero-length input */
 	if (len1 == 0)
 		r = 0;
 	else
 	{
-		r = MultiByteToWideChar(CP_UTF8, 0, arg1, len1,
-								(LPWSTR) a1p, a1len / 2);
+		r = MultiByteToWideChar(CP_UTF8, 0, arg1, len1, w1p, len1);
 		if (!r)
 			ereport(ERROR,
 					(errmsg("could not convert string to UTF-16: error code %lu",
 							GetLastError())));
 	}
-	((LPWSTR) a1p)[r] = 0;
+	w1p[r] = 0;
 
 	if (len2 == 0)
 		r = 0;
 	else
 	{
-		r = MultiByteToWideChar(CP_UTF8, 0, arg2, len2,
-								(LPWSTR) a2p, a2len / 2);
+		r = MultiByteToWideChar(CP_UTF8, 0, arg2, len2, w2p, len2);
 		if (!r)
 			ereport(ERROR,
 					(errmsg("could not convert string to UTF-16: error code %lu",
 							GetLastError())));
 	}
-	((LPWSTR) a2p)[r] = 0;
+	w2p[r] = 0;
 
 	errno = 0;
-	result = wcscoll_l((LPWSTR) a1p, (LPWSTR) a2p, locale->lt);
+	result = wcscoll_l(w1p, w2p, locale->lt);
 	if (result == 2147483647)	/* _NLSCMPERROR; missing from mingw headers */
 		ereport(ERROR,
 				(errmsg("could not compare Unicode strings: %m")));
 
-	if (buf != sbuf)
-		pfree(buf);
+	pg_stack_free(w1p);
+	pg_stack_free(w2p);
 
 	return result;
 }
@@ -1289,8 +1247,12 @@ char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 	else
 #endif							/* WIN32 */
 	{
+		char	   *str;
+
+		DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
+
 		/* mbstowcs requires ending '\0' */
-		char	   *str = pnstrdup(from, fromlen);
+		str = pg_stack_strdup_with_len(from, fromlen);
 
 		if (loc == (locale_t) 0)
 		{
@@ -1303,7 +1265,7 @@ char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 			result = mbstowcs_l(to, str, tolen, loc);
 		}
 
-		pfree(str);
+		pg_stack_free(str);
 	}
 
 	if (result == -1)
