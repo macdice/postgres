@@ -39,15 +39,8 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
-
-/*
- * Size of stack buffer to use for string transformations, used to avoid heap
- * allocations in typical cases. This should be large enough that most strings
- * will fit, but small enough that we feel comfortable putting it on the
- * stack.
- */
-#define		TEXTBUFLEN			1024
 
 extern pg_locale_t create_pg_locale_icu(Oid collid, MemoryContext context);
 
@@ -755,23 +748,17 @@ size_t
 strnxfrm_icu(char *dest, size_t destsize, const char *src, ssize_t srclen,
 			 pg_locale_t locale)
 {
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
 	UChar	   *uchar;
 	int32_t		ulen;
-	size_t		uchar_bsize;
 	Size		result_bsize;
+
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
 
 	init_icu_converter();
 
 	ulen = uchar_length(icu_converter, src, srclen);
 
-	uchar_bsize = (ulen + 1) * sizeof(UChar);
-
-	if (uchar_bsize > TEXTBUFLEN)
-		buf = palloc(uchar_bsize);
-
-	uchar = (UChar *) buf;
+	uchar = pg_stack_alloc_array(UChar, ulen + 1);
 
 	ulen = uchar_convert(icu_converter, uchar, ulen + 1, src, srclen);
 
@@ -786,8 +773,7 @@ strnxfrm_icu(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	Assert(result_bsize > 0);
 	result_bsize--;
 
-	if (buf != sbuf)
-		pfree(buf);
+	pg_stack_free(uchar);
 
 	/* if dest is defined, it should be nul-terminated */
 	Assert(result_bsize >= destsize || dest[result_bsize] == '\0');
@@ -1020,15 +1006,13 @@ static int
 strncoll_icu(const char *arg1, ssize_t len1,
 			 const char *arg2, ssize_t len2, pg_locale_t locale)
 {
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
 	int32_t		ulen1;
 	int32_t		ulen2;
-	size_t		bufsize1;
-	size_t		bufsize2;
 	UChar	   *uchar1,
 			   *uchar2;
 	int			result;
+
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
 
 	/* if encoding is UTF8, use more efficient strncoll_icu_utf8 */
 #ifdef HAVE_UCOL_STRCOLLUTF8
@@ -1040,14 +1024,8 @@ strncoll_icu(const char *arg1, ssize_t len1,
 	ulen1 = uchar_length(icu_converter, arg1, len1);
 	ulen2 = uchar_length(icu_converter, arg2, len2);
 
-	bufsize1 = (ulen1 + 1) * sizeof(UChar);
-	bufsize2 = (ulen2 + 1) * sizeof(UChar);
-
-	if (bufsize1 + bufsize2 > TEXTBUFLEN)
-		buf = palloc(bufsize1 + bufsize2);
-
-	uchar1 = (UChar *) buf;
-	uchar2 = (UChar *) (buf + bufsize1);
+	uchar1 = pg_stack_alloc_array(UChar, ulen1 + 1);
+	uchar2 = pg_stack_alloc_array(UChar, ulen2 + 1);
 
 	ulen1 = uchar_convert(icu_converter, uchar1, ulen1 + 1, arg1, len1);
 	ulen2 = uchar_convert(icu_converter, uchar2, ulen2 + 1, arg2, len2);
@@ -1056,8 +1034,8 @@ strncoll_icu(const char *arg1, ssize_t len1,
 						  uchar1, ulen1,
 						  uchar2, ulen2);
 
-	if (buf != sbuf)
-		pfree(buf);
+	pg_stack_free(uchar1);
+	pg_stack_free(uchar2);
 
 	return result;
 }
@@ -1068,15 +1046,14 @@ strnxfrm_prefix_icu(char *dest, size_t destsize,
 					const char *src, ssize_t srclen,
 					pg_locale_t locale)
 {
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
 	UCharIterator iter;
 	uint32_t	state[2];
 	UErrorCode	status;
 	int32_t		ulen = -1;
 	UChar	   *uchar = NULL;
-	size_t		uchar_bsize;
 	Size		result_bsize;
+
+	DECLARE_PG_STACK_SIZE(LOCALE_STACK_SIZE);
 
 	/* if encoding is UTF8, use more efficient strnxfrm_prefix_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);
@@ -1085,12 +1062,7 @@ strnxfrm_prefix_icu(char *dest, size_t destsize,
 
 	ulen = uchar_length(icu_converter, src, srclen);
 
-	uchar_bsize = (ulen + 1) * sizeof(UChar);
-
-	if (uchar_bsize > TEXTBUFLEN)
-		buf = palloc(uchar_bsize);
-
-	uchar = (UChar *) buf;
+	uchar = pg_stack_alloc_array(UChar, ulen + 1);
 
 	ulen = uchar_convert(icu_converter, uchar, ulen + 1, src, srclen);
 
@@ -1108,8 +1080,7 @@ strnxfrm_prefix_icu(char *dest, size_t destsize,
 				(errmsg("sort key generation failed: %s",
 						u_errorName(status))));
 
-	if (buf != sbuf)
-		pfree(buf);
+	pg_stack_free(uchar);
 
 	return result_bsize;
 }

@@ -18,6 +18,13 @@
 #define LOCALE_NAME_BUFLEN 128
 
 /*
+ * The default limit for DECLARE_PG_STACK() is very low when using its
+ * PG_STACK_USE_ARRAY fallback code (rare).  The code in this module requests a
+ * custom size for historical reasons.
+ */
+#define LOCALE_STACK_SIZE 1024
+
+/*
  * Maximum number of bytes needed to map a single codepoint. Useful for
  * mapping and processing a single input codepoint at a time with a
  * statically-allocated buffer.
