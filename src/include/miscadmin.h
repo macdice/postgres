@@ -293,15 +293,65 @@ extern PGDLLIMPORT bool VacuumCostActive;
 
 extern PGDLLIMPORT int max_stack_depth;
 
+extern PGDLLIMPORT const void *stack_base_ptr;
+extern PGDLLIMPORT const void *stack_soft_limit_ptr;
+extern PGDLLIMPORT const void *stack_hard_limit_ptr;
+
 /* Required daylight between max_stack_depth and the kernel limit, in bytes */
 #define STACK_DEPTH_SLOP (512 * 1024)
+
+/* Check if stack pointer p1 is deeper than p2. */
+static inline bool
+stack_ptr_deeper_p(const void *p1, const void *p2)
+{
+	const char *c1 = (const char *) p1;
+	const char *c2 = (const char *) p2;
+
+	if (PG_STACK_DIRECTION < 0)
+		return c1 < c2;
+	else
+		return c1 > c2;
+}
+
+/* Check if the stack has exceeded the configured hard limit. */
+static inline bool
+stack_is_too_deep(void)
+{
+#if defined(HAVE__BUILTIN_STACK_ADDRESS) &&								\
+	(!defined(__clang__) || __clang_major__ >= 22)
+	const char *sp = (const char *) __builtin_stack_address();
+#else
+	char		c;
+	const char *sp = &c;
+#endif
+
+	return stack_ptr_deeper_p(sp, stack_hard_limit_ptr);
+}
+
+extern void report_stack_is_too_deep(void);
+
+/*
+ * check_stack_depth/stack_is_too_deep: check for excessively deep recursion
+ *
+ * This should be called someplace in any recursive routine that might possibly
+ * recurse deep enough to overflow the stack.  Most Unixen treat stack
+ * overflow as an unrecoverable SIGSEGV, so we want to error out ourselves
+ * before hitting the hardware limit.
+ *
+ * check_stack_depth() just throws an error summarily.  stack_is_too_deep()
+ * can be used by code that wants to handle the error condition itself.
+ */
+static inline void
+check_stack_depth(void)
+{
+	if (unlikely(stack_is_too_deep()))
+		report_stack_is_too_deep();
+}
 
 typedef char *pg_stack_base_t;
 
 extern pg_stack_base_t set_stack_base(void);
 extern void restore_stack_base(pg_stack_base_t base);
-extern void check_stack_depth(void);
-extern bool stack_is_too_deep(void);
 extern ssize_t get_stack_depth_rlimit(void);
 
 /* in tcop/utility.c */

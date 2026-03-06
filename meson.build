@@ -2049,6 +2049,7 @@ builtins = [
   'ctz',
   'constant_p',
   'frame_address',
+  'stack_address',
   'unreachable',
 ]
 

@@ -25,15 +25,28 @@
 /* GUC variable for maximum stack depth (measured in kilobytes) */
 int			max_stack_depth = 100;
 
-/* max_stack_depth converted to bytes for speed of checking */
-static ssize_t max_stack_depth_bytes = 100 * (ssize_t) 1024;
-
 /*
- * Stack base pointer -- initialized by set_stack_base(), which
- * should be called from main().
+ * Thresholds -- initialized by set_stack_base().  These have external linkage
+ * so they can be used by inlined code.
  */
-static char *stack_base_ptr = NULL;
+const void *stack_base_ptr = NULL;
+const void *stack_soft_limit_ptr = NULL;
+const void *stack_hard_limit_ptr = NULL;
 
+
+static void
+compute_limit_ptrs(int kb)
+{
+	ssize_t		bytes = kb * (ssize_t) 1024;
+
+	/* Advertise a soft limit halfway through the allowed size. */
+	stack_soft_limit_ptr = (const char *) stack_base_ptr +
+		(bytes / 2) * PG_STACK_DIRECTION;
+
+	/* This is the size at which check_stack_depth() will fail. */
+	stack_hard_limit_ptr = (const char *) stack_base_ptr +
+		bytes * PG_STACK_DIRECTION;
+}
 
 /*
  * set_stack_base: set up reference point for stack depth checking
@@ -48,7 +61,7 @@ set_stack_base(void)
 #endif
 	pg_stack_base_t old;
 
-	old = stack_base_ptr;
+	old = (pg_stack_base_t) stack_base_ptr;
 
 	/*
 	 * Set up reference point for stack depth checking.  On recent gcc we use
@@ -60,6 +73,8 @@ set_stack_base(void)
 #else
 	stack_base_ptr = &stack_base;
 #endif
+
+	compute_limit_ptrs(max_stack_depth);
 
 	return old;
 }
@@ -76,72 +91,10 @@ set_stack_base(void)
 void
 restore_stack_base(pg_stack_base_t base)
 {
-	stack_base_ptr = base;
+	stack_base_ptr = (const void *) base;
+
+	compute_limit_ptrs(max_stack_depth);
 }
-
-
-/*
- * check_stack_depth/stack_is_too_deep: check for excessively deep recursion
- *
- * This should be called someplace in any recursive routine that might possibly
- * recurse deep enough to overflow the stack.  Most Unixen treat stack
- * overflow as an unrecoverable SIGSEGV, so we want to error out ourselves
- * before hitting the hardware limit.
- *
- * check_stack_depth() just throws an error summarily.  stack_is_too_deep()
- * can be used by code that wants to handle the error condition itself.
- */
-void
-check_stack_depth(void)
-{
-	if (stack_is_too_deep())
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_STATEMENT_TOO_COMPLEX),
-				 errmsg("stack depth limit exceeded"),
-				 errhint("Increase the configuration parameter \"max_stack_depth\" (currently %dkB), "
-						 "after ensuring the platform's stack depth limit is adequate.",
-						 max_stack_depth)));
-	}
-}
-
-bool
-stack_is_too_deep(void)
-{
-	char		stack_top_loc;
-	ssize_t		stack_depth;
-
-	/*
-	 * Compute distance from reference point to my local variables
-	 */
-	stack_depth = (ssize_t) (stack_base_ptr - &stack_top_loc);
-
-	/*
-	 * Take abs value, since stacks grow up on some machines, down on others
-	 * (historical).
-	 */
-	stack_depth *= -(PG_STACK_DIRECTION);
-
-	/*
-	 * If this assertion fails, either PG_STACK_DIRECTION is wrong or this
-	 * system doesn't have a traditional stack as we expect.
-	 */
-	Assert(stack_depth >= 0);
-
-	/*
-	 * Trouble?
-	 *
-	 * The test on stack_base_ptr prevents us from erroring out if called
-	 * before that's been set.  Logically it should be done first, but putting
-	 * it last avoids wasting cycles during normal cases.
-	 */
-	if (stack_depth > max_stack_depth_bytes &&
-		stack_base_ptr != NULL)
-		return true;
-
-	return false;
-}
-
 
 /* GUC check hook for max_stack_depth */
 bool
@@ -160,13 +113,25 @@ check_max_stack_depth(int *newval, void **extra, GucSource source)
 	return true;
 }
 
+/*
+ * Out-of-line part of check_stack_depth().
+ */
+void
+report_stack_is_too_deep(void)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_STATEMENT_TOO_COMPLEX),
+			 errmsg("stack depth limit exceeded"),
+			 errhint("Increase the configuration parameter \"max_stack_depth\" (currently %dkB), "
+					 "after ensuring the platform's stack depth limit is adequate.",
+					 max_stack_depth)));
+}
+
 /* GUC assign hook for max_stack_depth */
 void
 assign_max_stack_depth(int newval, void *extra)
 {
-	ssize_t		newval_bytes = newval * (ssize_t) 1024;
-
-	max_stack_depth_bytes = newval_bytes;
+	compute_limit_ptrs(newval);
 }
 
 /*
