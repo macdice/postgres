@@ -85,28 +85,45 @@ pg_nodiscard extern void *repalloc_extended(void *pointer,
 pg_nodiscard extern void *repalloc0(void *pointer, Size oldsize, Size size);
 extern void pfree(void *pointer);
 
+#ifndef FRONTEND
 /*
  * Variants with easier notation and more type safety
  */
 
 /*
- * Allocate space for one object of type "type"
+ * Allocate space for one object of type "T"
  */
-#define palloc_object(type) ((type *) palloc(sizeof(type)))
-#define palloc0_object(type) ((type *) palloc0(sizeof(type)))
+#define palloc_object(T) palloc_array(T, 1)
+#define palloc0_object(T) palloc0_array(T, 1)
 
 /*
- * Allocate space for "count" objects of type "type"
+ * Allocate space for "n" objects of type "T"
  */
-#define palloc_array(type, count) ((type *) palloc(sizeof(type) * (count)))
-#define palloc0_array(type, count) ((type *) palloc0(sizeof(type) * (count)))
+#define palloc_array(T, n)												\
+	((T *)																\
+	 (alignof(T) > MAXIMUM_ALIGNOF ?									\
+	  palloc_aligned(sizeof(T) * (n), alignof(T), 0) :					\
+	  palloc(sizeof(T) * (n))))
+#define palloc0_array(T, n)												\
+	((T *)																\
+	 (alignof(T) > MAXIMUM_ALIGNOF ?									\
+	  palloc_aligned(sizeof(T) * (n), alignof(T), MCXT_ALLOC_ZERO) :	\
+	  palloc0(sizeof(T) * (n))))
 
 /*
- * Change size of allocation pointed to by "pointer" to have space for "count"
- * objects of type "type"
+ * Change size of allocation pointed to by "pointer" to have space for "n"
+ * objects of type "T"
  */
-#define repalloc_array(pointer, type, count) ((type *) repalloc(pointer, sizeof(type) * (count)))
-#define repalloc0_array(pointer, type, oldcount, count) ((type *) repalloc0(pointer, sizeof(type) * (oldcount), sizeof(type) * (count)))
+#define repalloc_array(pointer, T, n)									\
+	(StaticAssertExpr(alignof(T) <= MAXIMUM_ALIGNOF,					\
+					  "strict-aligning repalloc_array unimplemented"),	\
+	 ((T *) repalloc(pointer, sizeof(T) * (n))))
+#define repalloc0_array(pointer, T, old_n, n)							\
+	(StaticAssertExpr(alignof(T) <= MAXIMUM_ALIGNOF,					\
+					  "strict-aligning repalloc0_array unimplemented"),	\
+	 ((T *) repalloc0(pointer, sizeof(T) * (old_n), sizeof(T) * (n))))
+
+#endif
 
 /* Higher-limit allocators. */
 extern void *MemoryContextAllocHuge(MemoryContext context, Size size);

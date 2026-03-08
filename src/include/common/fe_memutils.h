@@ -72,11 +72,14 @@ extern void *palloc_extended(Size size, int flags);
 extern void *repalloc(void *pointer, Size size);
 extern void pfree(void *pointer);
 
+#ifdef FRONTEND
+/* The frontend implementation don't support strict alignment. */
 #define palloc_object(type) ((type *) palloc(sizeof(type)))
 #define palloc0_object(type) ((type *) palloc0(sizeof(type)))
 #define palloc_array(type, count) ((type *) palloc(sizeof(type) * (count)))
 #define palloc0_array(type, count) ((type *) palloc0(sizeof(type) * (count)))
 #define repalloc_array(pointer, type, count) ((type *) repalloc(pointer, sizeof(type) * (count)))
+#endif
 
 /* sprintf into a palloc'd buffer --- these are in psprintf.c */
 extern char *psprintf(const char *fmt,...) pg_attribute_printf(1, 2);
