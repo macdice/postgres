@@ -86,8 +86,10 @@ pg_nodiscard extern void *repalloc0(void *pointer, Size oldsize, Size size);
 extern void pfree(void *pointer);
 
 #ifndef FRONTEND
+
 /*
- * Variants with easier notation and more type safety
+ * Variants with easier notation and more type safety, backend version that
+ * support T with strict alignment.
  */
 
 /*
@@ -110,6 +112,37 @@ extern void pfree(void *pointer);
 	  palloc_aligned(sizeof(T) * (n), alignof(T), MCXT_ALLOC_ZERO) :	\
 	  palloc0(sizeof(T) * (n))))
 
+#define sizeof_flexible(T, FA, n)							\
+	(offsetof(T, FA) + sizeof(((T *) 0)->FA[0]) * (n))
+
+/*
+ * Allocate space for one object of type "T" including its flexible array
+ * member "FA" with space for "n" elements.
+ */
+#define palloc_flexible_object(T, FA, n)								\
+	((T *)																\
+	 (alignof(T) > MAXIMUM_ALIGNOF ?									\
+	  palloc_aligned(sizeof_flexible(T, FA, (n)), alignof(T), 0) :		\
+	  palloc(sizeof_flexible(T, FA, (n)))))
+/* Variant that zeroes the object but not the flexible array. */
+#define palloc0_flexible_object(T, FA, n)								\
+	((T *)																\
+	 (memset((alignof(T) > MAXIMUM_ALIGNOF ?							\
+			  palloc_aligned(sizeof_flexible(T, FA, (n)),				\
+							 alignof(T),								\
+							 0) :										\
+			  palloc(sizeof_flexible(T, FA, (n)))),						\
+			 0,															\
+			 offsetof(T, FA))))
+/* Variant that also zeroes the flexible array. */
+#define palloc00_flexible_object(T, FA, n)								\
+	((T *)																\
+	 (alignof(T) > MAXIMUM_ALIGNOF ?									\
+	  palloc_aligned(sizeof_flexible(T, FA, (n)),						\
+					 alignof(T),										\
+					 MCXT_ALLOC_ZERO) :									\
+	  palloc0(sizeof_flexible(T, FA, (n)))))
+
 /*
  * Change size of allocation pointed to by "pointer" to have space for "n"
  * objects of type "T"
@@ -122,6 +155,15 @@ extern void pfree(void *pointer);
 	(StaticAssertExpr(alignof(T) <= MAXIMUM_ALIGNOF,					\
 					  "strict-aligning repalloc0_array unimplemented"),	\
 	 ((T *) repalloc0(pointer, sizeof(T) * (old_n), sizeof(T) * (n))))
+
+/*
+ * Change size of flexible object pointed to by "pointer" to have a flexible
+ * array FA of size "n".
+ */
+#define repalloc_flexible_object(T, FA, pointer, n)						\
+	(StaticAssertExpr(alignof(T) <= MAXIMUM_ALIGNOF,					\
+					  "strict-aligning repalloc_flexible_object unimplemented"), \
+	 ((T *) repalloc((pointer), sizeof_flexible(T, FA, (n)))))
 
 #endif
 

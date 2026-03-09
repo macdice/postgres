@@ -390,8 +390,7 @@ statext_dependencies_build(StatsBuildData *data)
 			if (degree == 0.0)
 				continue;
 
-			d = (MVDependency *) palloc0(offsetof(MVDependency, attributes)
-										 + k * sizeof(AttrNumber));
+			d = palloc0_flexible_object(MVDependency, attributes, k);
 
 			/* copy the dependency (and keep the indexes into stxkeys) */
 			d->degree = degree;
@@ -410,9 +409,10 @@ statext_dependencies_build(StatsBuildData *data)
 			}
 
 			dependencies->ndeps++;
-			dependencies = (MVDependencies *) repalloc(dependencies,
-													   offsetof(MVDependencies, deps)
-													   + dependencies->ndeps * sizeof(MVDependency *));
+			dependencies = repalloc_flexible_object(MVDependencies,
+													deps,
+													dependencies,
+													dependencies->ndeps);
 
 			dependencies->deps[dependencies->ndeps - 1] = d;
 		}
@@ -536,8 +536,10 @@ statext_dependencies_deserialize(bytea *data)
 			 VARSIZE_ANY_EXHDR(data), min_expected_size);
 
 	/* allocate space for the MCV items */
-	dependencies = repalloc(dependencies, offsetof(MVDependencies, deps)
-							+ (dependencies->ndeps * sizeof(MVDependency *)));
+	dependencies = repalloc_flexible_object(MVDependencies,
+											deps,
+											dependencies,
+											dependencies->ndeps);
 
 	for (i = 0; i < dependencies->ndeps; i++)
 	{
@@ -557,8 +559,7 @@ statext_dependencies_deserialize(bytea *data)
 		Assert((k >= 2) && (k <= STATS_MAX_DIMENSIONS));
 
 		/* now that we know the number of attributes, allocate the dependency */
-		d = (MVDependency *) palloc0(offsetof(MVDependency, attributes)
-									 + (k * sizeof(AttrNumber)));
+		d = palloc0_flexible_object(MVDependency, attributes, k);
 
 		d->degree = degree;
 		d->nattributes = k;

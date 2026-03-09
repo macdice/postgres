@@ -564,9 +564,9 @@ GetAccessStrategyWithSize(BufferAccessStrategyType btype, int ring_size_kb)
 	Assert(ring_buffers > 0);
 
 	/* Allocate the object and initialize all elements to zeroes */
-	strategy = (BufferAccessStrategy)
-		palloc0(offsetof(BufferAccessStrategyData, buffers) +
-				ring_buffers * sizeof(Buffer));
+	strategy = palloc00_flexible_object(BufferAccessStrategyData,
+										buffers,
+										ring_buffers);
 
 	/* Set fields that don't start out zero */
 	strategy->btype = btype;

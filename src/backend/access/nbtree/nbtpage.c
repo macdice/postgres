@@ -1637,8 +1637,9 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 			/* Exact match for deletable deltids entry -- ptid gets deleted */
 			if (vacposting == NULL)
 			{
-				vacposting = palloc(offsetof(BTVacuumPostingData, deletetids) +
-									nitem * sizeof(uint16));
+				vacposting = palloc_flexible_object(BTVacuumPostingData,
+													deletetids,
+													nitem);
 				vacposting->itup = itup;
 				vacposting->updatedoffset = idxoffnum;
 				vacposting->ndeletedtids = 0;

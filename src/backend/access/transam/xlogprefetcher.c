@@ -210,7 +210,7 @@ lrq_alloc(uint32 max_distance,
 	Assert(max_distance >= max_inflight);
 
 	size = max_distance + 1;	/* full ring buffer has a gap */
-	lrq = palloc(offsetof(LsnReadQueue, queue) + sizeof(lrq->queue[0]) * size);
+	lrq = palloc_flexible_object(LsnReadQueue, queue, size);
 	lrq->lrq_private = lrq_private;
 	lrq->max_inflight = max_inflight;
 	lrq->size = size;

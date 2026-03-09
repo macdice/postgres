@@ -1308,8 +1308,10 @@ ExecInitPartitionDispatchInfo(EState *estate,
 		rel = proute->partition_root;
 	partdesc = PartitionDirectoryLookup(estate->es_partition_directory, rel);
 
-	pd = (PartitionDispatch) palloc(offsetof(PartitionDispatchData, indexes) +
-									partdesc->nparts * sizeof(int));
+	pd = palloc_flexible_object(PartitionDispatchData,
+								indexes,
+								partdesc->nparts);
+
 	pd->reldesc = rel;
 	pd->key = RelationGetPartitionKey(rel);
 	pd->keystate = NIL;
@@ -2166,9 +2168,9 @@ CreatePartitionPruneState(EState *estate, PartitionPruneInfo *pruneinfo,
 	/*
 	 * Allocate the data structure
 	 */
-	prunestate = (PartitionPruneState *)
-		palloc(offsetof(PartitionPruneState, partprunedata) +
-			   sizeof(PartitionPruningData *) * n_part_hierarchies);
+	prunestate = palloc_flexible_object(PartitionPruneState,
+										partprunedata,
+										n_part_hierarchies);
 
 	/* Save ExprContext for use during InitExecPartitionPruneContexts(). */
 	prunestate->econtext = econtext;
@@ -2199,9 +2201,9 @@ CreatePartitionPruneState(EState *estate, PartitionPruneInfo *pruneinfo,
 		ListCell   *lc2;
 		int			j;
 
-		prunedata = (PartitionPruningData *)
-			palloc(offsetof(PartitionPruningData, partrelprunedata) +
-				   npartrelpruneinfos * sizeof(PartitionedRelPruningData));
+		prunedata = palloc_flexible_object(PartitionPruningData,
+										   partrelprunedata,
+										   npartrelpruneinfos);
 		prunestate->partprunedata[i] = prunedata;
 		prunedata->num_partrelprunedata = npartrelpruneinfos;
 
