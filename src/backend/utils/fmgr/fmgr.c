@@ -32,6 +32,7 @@
 #include "utils/fmgrtab.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 
 /*
@@ -154,6 +155,8 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 	Datum		prosrcdatum;
 	char	   *prosrc;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * fn_oid *must* be filled in last.  Some code assumes that if fn_oid is
 	 * valid, the whole struct is valid.  Some FmgrInfo struct's do survive
@@ -229,14 +232,14 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 			 */
 			prosrcdatum = SysCacheGetAttrNotNull(PROCOID, procedureTuple,
 												 Anum_pg_proc_prosrc);
-			prosrc = TextDatumGetCString(prosrcdatum);
+			prosrc = pg_stack_text_datum_to_cstring(prosrcdatum);
 			fbp = fmgr_lookupByName(prosrc);
 			if (fbp == NULL)
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_FUNCTION),
 						 errmsg("internal function \"%s\" is not in internal lookup table",
 								prosrc)));
-			pfree(prosrc);
+			pg_stack_free(prosrc);
 			/* Should we check that nargs, strict, retset match the table? */
 			finfo->fn_addr = fbp->func;
 			/* note this policy is also assumed in fast path above */
@@ -370,6 +373,8 @@ fmgr_info_C_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple)
 				   *probinstring;
 		void	   *libraryhandle;
 
+		DECLARE_PG_STACK();
+
 		/*
 		 * Get prosrc and probin strings (link symbol and library filename).
 		 * While in general these columns might be null, that's not allowed
@@ -377,11 +382,11 @@ fmgr_info_C_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple)
 		 */
 		prosrcattr = SysCacheGetAttrNotNull(PROCOID, procedureTuple,
 											Anum_pg_proc_prosrc);
-		prosrcstring = TextDatumGetCString(prosrcattr);
+		prosrcstring = pg_stack_text_datum_to_cstring(prosrcattr);
 
 		probinattr = SysCacheGetAttrNotNull(PROCOID, procedureTuple,
 											Anum_pg_proc_probin);
-		probinstring = TextDatumGetCString(probinattr);
+		probinstring = pg_stack_text_datum_to_cstring(probinattr);
 
 		/* Look up the function itself */
 		user_fn = load_external_function(probinstring, prosrcstring, true,
@@ -393,8 +398,8 @@ fmgr_info_C_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple)
 		/* Cache the addresses for later calls */
 		record_C_func(procedureTuple, user_fn, inforec);
 
-		pfree(prosrcstring);
-		pfree(probinstring);
+		pg_stack_free(prosrcstring);
+		pg_stack_free(probinstring);
 	}
 
 	switch (inforec->api_version)
