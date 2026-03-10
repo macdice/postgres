@@ -32,6 +32,7 @@
 #include "parser/parse_type.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 
 
@@ -1759,15 +1760,17 @@ func_get_detail(List *funcname,
 			char	   *str;
 			List	   *defaults;
 
+			DECLARE_PG_STACK();
+
 			/* shouldn't happen, FuncnameGetCandidates messed up */
 			if (best_candidate->ndargs > pform->pronargdefaults)
 				elog(ERROR, "not enough default arguments");
 
 			proargdefaults = SysCacheGetAttrNotNull(PROCOID, ftup,
 													Anum_pg_proc_proargdefaults);
-			str = TextDatumGetCString(proargdefaults);
+			str = pg_stack_text_datum_to_cstring(proargdefaults);
 			defaults = castNode(List, stringToNode(str));
-			pfree(str);
+			pg_stack_free(str);
 
 			/* Delete any unused defaults from the returned list */
 			if (best_candidate->argnumbers != NULL)
