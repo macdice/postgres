@@ -67,6 +67,7 @@
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
@@ -640,6 +641,8 @@ AssignTransactionId(TransactionState s)
 	ResourceOwner currentOwner;
 	bool		log_unknown_top = false;
 
+	DECLARE_PG_STACK();
+
 	/* Assert that caller didn't screw up */
 	Assert(!FullTransactionIdIsValid(s->fullTransactionId));
 	Assert(s->state == TRANS_INPROGRESS);
@@ -665,7 +668,7 @@ AssignTransactionId(TransactionState s)
 		TransactionState *parents;
 		size_t		parentOffset = 0;
 
-		parents = palloc_array(TransactionState, s->nestingLevel);
+		parents = pg_stack_alloc_array(TransactionState, s->nestingLevel);
 		while (p != NULL && !FullTransactionIdIsValid(p->fullTransactionId))
 		{
 			parents[parentOffset++] = p;
@@ -679,7 +682,7 @@ AssignTransactionId(TransactionState s)
 		while (parentOffset != 0)
 			AssignTransactionId(parents[--parentOffset]);
 
-		pfree(parents);
+		pg_stack_free(parents);
 	}
 
 	/*
@@ -5568,6 +5571,8 @@ SerializeTransactionState(Size maxsize, char *start_address)
 	TransactionId *workspace;
 	SerializedTransactionState *result;
 
+	DECLARE_PG_STACK();
+
 	result = (SerializedTransactionState *) start_address;
 
 	result->xactIsoLevel = XactIsoLevel;
@@ -5604,7 +5609,7 @@ SerializeTransactionState(Size maxsize, char *start_address)
 		   <= maxsize);
 
 	/* Copy them to our scratch space. */
-	workspace = palloc(nxids * sizeof(TransactionId));
+	workspace = pg_stack_alloc_array(TransactionId, nxids);
 	for (s = CurrentTransactionState; s != NULL; s = s->parent)
 	{
 		if (FullTransactionIdIsValid(s->fullTransactionId))
@@ -5623,6 +5628,8 @@ SerializeTransactionState(Size maxsize, char *start_address)
 	result->nParallelCurrentXids = nxids;
 	memcpy(&result->parallelCurrentXids[0], workspace,
 		   nxids * sizeof(TransactionId));
+
+	pg_stack_free(workspace);
 }
 
 /*
