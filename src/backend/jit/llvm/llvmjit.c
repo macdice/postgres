@@ -40,6 +40,7 @@
 #include "portability/instr_time.h"
 #include "storage/ipc.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/resowner.h"
 
 #define LLVMJIT_LLVM_CONTEXT_REUSE_MAX 100
@@ -495,18 +496,20 @@ llvm_copy_attributes_at_index(LLVMValueRef v_from, LLVMValueRef v_to, uint32 ind
 	int			num_attributes;
 	LLVMAttributeRef *attrs;
 
+	DECLARE_PG_STACK();
+
 	num_attributes = LLVMGetAttributeCountAtIndex(v_from, index);
 
 	if (num_attributes == 0)
 		return;
 
-	attrs = palloc_array(LLVMAttributeRef, num_attributes);
+	attrs = pg_stack_alloc_array(LLVMAttributeRef, num_attributes);
 	LLVMGetAttributesAtIndex(v_from, index, attrs);
 
 	for (int attno = 0; attno < num_attributes; attno++)
 		LLVMAddAttributeAtIndex(v_to, index, attrs[attno]);
 
-	pfree(attrs);
+	pg_stack_free(attrs);
 }
 
 /*
@@ -1126,13 +1129,17 @@ llvm_resolve_symbols(LLVMOrcDefinitionGeneratorRef GeneratorObj, void *Ctx,
 					 LLVMOrcJITDylibRef JD, LLVMOrcJITDylibLookupFlags JDLookupFlags,
 					 LLVMOrcCLookupSet LookupSet, size_t LookupSetSize)
 {
-#if LLVM_VERSION_MAJOR > 14
-	LLVMOrcCSymbolMapPairs symbols = palloc0_array(LLVMOrcCSymbolMapPair, LookupSetSize);
-#else
-	LLVMOrcCSymbolMapPairs symbols = palloc0_array(LLVMJITCSymbolMapPair, LookupSetSize);
-#endif
 	LLVMErrorRef error;
 	LLVMOrcMaterializationUnitRef mu;
+	LLVMOrcCSymbolMapPairs symbols;
+
+	DECLARE_PG_STACK();
+
+#if LLVM_VERSION_MAJOR > 14
+	symbols = pg_stack_alloc0_array(LLVMOrcCSymbolMapPair, LookupSetSize);
+#else
+	symbols = pg_stack_alloc0_array(LLVMJITCSymbolMapPair, LookupSetSize);
+#endif
 
 	for (int i = 0; i < LookupSetSize; i++)
 	{
@@ -1149,7 +1156,7 @@ llvm_resolve_symbols(LLVMOrcDefinitionGeneratorRef GeneratorObj, void *Ctx,
 	if (error != LLVMErrorSuccess)
 		LLVMOrcDisposeMaterializationUnit(mu);
 
-	pfree(symbols);
+	pg_stack_free(symbols);
 
 	return error;
 }
