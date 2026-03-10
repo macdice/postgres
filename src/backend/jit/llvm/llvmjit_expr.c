@@ -41,6 +41,7 @@
 #include "utils/fmgrtab.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/timestamp.h"
 #include "utils/typcache.h"
 #include "utils/xml.h"
@@ -3063,12 +3064,14 @@ build_EvalXFuncInt(LLVMBuilderRef b, LLVMModuleRef mod, const char *funcname,
 	int			argno = 0;
 	LLVMValueRef v_ret;
 
+	DECLARE_PG_STACK();
+
 	/* cheap pre-check as llvm just asserts out */
 	if (LLVMCountParams(v_fn) != (nargs + 2))
 		elog(ERROR, "parameter mismatch: %s expects %d passed %d",
 			 funcname, LLVMCountParams(v_fn), nargs + 2);
 
-	params = palloc_array(LLVMValueRef, (2 + nargs));
+	params = pg_stack_alloc_array(LLVMValueRef, (2 + nargs));
 
 	params[argno++] = v_state;
 	params[argno++] = l_ptr_const(op, l_ptr(StructExprEvalStep));
@@ -3078,7 +3081,7 @@ build_EvalXFuncInt(LLVMBuilderRef b, LLVMModuleRef mod, const char *funcname,
 
 	v_ret = l_call(b, LLVMGetFunctionType(v_fn), v_fn, params, argno, "");
 
-	pfree(params);
+	pg_stack_free(params);
 
 	return v_ret;
 }
