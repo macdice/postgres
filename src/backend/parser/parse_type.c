@@ -24,6 +24,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/syscache.h"
 
 static int32 typenameTypeMod(ParseState *pstate, const TypeName *typeName,
@@ -339,6 +340,8 @@ typenameTypeMod(ParseState *pstate, const TypeName *typeName, Type typ)
 	ArrayType  *arrtypmod;
 	ParseCallbackState pcbstate;
 
+	DECLARE_PG_STACK();
+
 	/* Return prespecified typmod if no typmod expressions */
 	if (typeName->typmods == NIL)
 		return typeName->typemod;
@@ -369,7 +372,7 @@ typenameTypeMod(ParseState *pstate, const TypeName *typeName, Type typ)
 	 * Currently, we allow simple numeric constants, string literals, and
 	 * identifiers; possibly this list could be extended.
 	 */
-	datums = palloc_array(Datum, list_length(typeName->typmods));
+	datums = pg_stack_alloc_array(Datum, list_length(typeName->typmods));
 	n = 0;
 	foreach(l, typeName->typmods)
 	{
@@ -421,7 +424,7 @@ typenameTypeMod(ParseState *pstate, const TypeName *typeName, Type typ)
 
 	cancel_parser_errposition_callback(&pcbstate);
 
-	pfree(datums);
+	pg_stack_free(datums);
 	pfree(arrtypmod);
 
 	return result;

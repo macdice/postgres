@@ -46,6 +46,7 @@
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_stack_alloc.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
@@ -697,6 +698,8 @@ transformRangeTableFunc(ParseState *pstate, RangeTableFunc *rtf)
 	char	  **names;
 	int			colno;
 
+	DECLARE_PG_STACK();
+
 	/*
 	 * Currently we only support XMLTABLE here.  See transformJsonTable() for
 	 * JSON_TABLE support.
@@ -737,7 +740,7 @@ transformRangeTableFunc(ParseState *pstate, RangeTableFunc *rtf)
 	tf->ordinalitycol = -1;
 
 	/* Process column specs */
-	names = palloc_array(char *, list_length(rtf->columns));
+	names = pg_stack_alloc_array(char *, list_length(rtf->columns));
 
 	colno = 0;
 	foreach(col, rtf->columns)
@@ -829,7 +832,7 @@ transformRangeTableFunc(ParseState *pstate, RangeTableFunc *rtf)
 
 		colno++;
 	}
-	pfree(names);
+	pg_stack_free(names);
 
 	/* Namespaces, if any, also need to be transformed */
 	if (rtf->namespaces != NIL)
