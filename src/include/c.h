@@ -117,6 +117,16 @@ extern "C++"
 #endif
 
 /*
+ * Clang and GCC 10+ can test for a builtin's presence.  This can be useful
+ * for builtins that might be present for CC but not CXX or CLANG.
+ */
+#ifdef __has_builtin
+#define pg_has_builtin(x) __has_builtin(x)
+#else
+#define pg_has_builtin(x) 0
+#endif
+
+/*
  * Attribute macros
  *
  * GCC: https://gcc.gnu.org/onlinedocs/gcc/Function-Attributes.html
