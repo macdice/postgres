@@ -573,6 +573,7 @@ typedef void (*pg_funcptr_t) (void);
 #if !defined(__cplusplus)
 #define pg_pragma_ignore_declaration_after_statement \
 	_Pragma("GCC diagnostic ignored \"-Wdeclaration-after-statement\"");
+#else
 #define pg_pragma_ignore_declaration_after_statement
 #endif
 #define pg_begin_ignore_shadow_warning()								\
