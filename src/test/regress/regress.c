@@ -1431,21 +1431,14 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 #endif
 
 	/*
-	 * Zero-sized allocation doesn't move the stack pointer, and returns the
-	 * same address every time.  Historical implementations of alloca() gave
-	 * strange special meanings to alloca(0), so this test asserts that we
-	 * don't have to defend against zero-sized allocations in our code.
+	 * Historical implementations of alloca() had special meanings for
+	 * alloca(0), and it is possible that an implementation could return NULL
+	 * or some other value that isn't on the stack.  Test that the result is
+	 * still recognized as a stack pointer, so that we don't pass it to
+	 * pfree().
 	 */
 	sp = pg_stack_sp;
 	p = pg_stack_alloc(0);
-	p2 = pg_stack_alloc(0);
-	Assert(p == p2);
-	Assert(sp == pg_stack_sp);
-
-	/*
-	 * Additionally check that it gives an address on the stack (and not, say,
-	 * NULL).
-	 */
 	Assert(pg_stack_addr_p(p));
 
 #ifdef PG_STACK_USE_ALLOCA
