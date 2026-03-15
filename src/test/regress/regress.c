@@ -1394,6 +1394,7 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	char	   *p;
 	char	   *p2 PG_USED_FOR_ASSERTS_ONLY;
 	const char *sp PG_USED_FOR_ASSERTS_ONLY;
+	bool raised_error PG_USED_FOR_ASSERTS_ONLY;
 
 	DECLARE_PG_STACK_SIZE(1024);
 
@@ -1442,18 +1443,48 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	Assert(pg_stack_addr_p(p));
 
 #ifdef PG_STACK_USE_ALLOCA
-	/* We defend against arithmetic overflow. */
+	/* Overflow defenses in limit computations. */
 	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp, (size_t) -1, 1024));
 	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp, (size_t) -1, 8));
 	Assert(!pg_stack_alloca_would_overflow_p(pg_stack_sp,
-											 PG_STACK_MAX_ALLOC_SIZE,
+											 MaxAllocSize,
 											 1024));
 	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp,
-											PG_STACK_MAX_ALLOC_SIZE + 1,
+											MaxAllocSize + 1,
 											1024));
 	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp,
 											(size_t) pg_stack_sp - PG_STACK_DIRECTION,
 											8));
+
+	/* Overflow safety in pg_stack_alloc_array(T, n). */
+	Assert(pg_stack_T_mul_n_cannot_overflow_p(1, sizeof(size_t)));
+	Assert(!pg_stack_T_mul_n_cannot_overflow_p(2, sizeof(size_t)));
+	Assert(pg_stack_T_mul_n_cannot_overflow_p(2, sizeof(size_t) / 2));
+	Assert(!pg_stack_T_mul_n_cannot_overflow_p(2, sizeof(size_t)));
+	Assert(!pg_stack_T_mul_n_overflows_p(1, SIZE_MAX));
+	Assert(pg_stack_T_mul_n_overflows_p(2, SIZE_MAX / 2 + 1));
+	Assert(!pg_stack_T_mul_n_overflows_p(2, SIZE_MAX / 2));
+
+	/* When sizeof_T == 1, always returns n. */
+	Assert(pg_stack_T_mul_n(1, sizeof(uint32), SIZE_MAX) == SIZE_MAX);
+	Assert(pg_stack_T_mul_n(1, sizeof(uint64), SIZE_MAX) == SIZE_MAX);
+
+	/* The largest successful value of size_t n. */
+	Assert(pg_stack_T_mul_n(2, sizeof(size_t), SIZE_MAX / 2) == SIZE_MAX - 1);
+
+	/* Exceed value by one for size_t n. */
+	raised_error = false;
+	PG_TRY();
+	{
+		pg_stack_T_mul_n(2, sizeof(size_t), SIZE_MAX / 2 + 1);
+	}
+	PG_CATCH();
+	{
+		raised_error = true;
+	}
+	PG_END_TRY();
+	Assert(raised_error);
+
 #endif
 
 	/*
@@ -1551,6 +1582,10 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 				 * shouldn't affect pg_stack_alloca_would_fit_p(), assuming
 				 * that pg_stack_limit is default-aligned.
 				 */
+				if ((uintptr_t) p !=
+					   TYPEALIGN_DOWN(ALIGNOF_ALLOCA, estimated_sp))
+					elog(PANIC, "i = %d, p = %p, estimated_sp = %p, sp = %p",
+						 i, p, estimated_sp, sp);
 				Assert((uintptr_t) p ==
 					   TYPEALIGN_DOWN(ALIGNOF_ALLOCA, estimated_sp));
 			}

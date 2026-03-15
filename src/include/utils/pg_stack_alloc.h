@@ -32,6 +32,7 @@
 #define PG_STACK_ALLOC_H
 
 #include "utils/elog.h"
+#include "utils/memutils.h"					/* for MaxAllocSize */
 #include "utils/palloc.h"
 #include "miscadmin.h"
 
@@ -56,7 +57,7 @@
  */
 #define PG_STACK_USE_ALLOCA
 #elif defined(_MSC_VER)
-#include <malloc.h> */
+#include <malloc.h>
 #define PG_STACK_USE_ALLOCA
 #else
 /* Fall back to using an array on the stack. */
@@ -64,9 +65,10 @@
 #endif
 #endif
 
-/* Sanity check values used when checking for overflow. */
+/* Values used to defend against overflow. */
 #define PG_STACK_MAX_ALIGN 4096
-#define PG_STACK_MAX_ALLOC_SIZE (1024 * 1024)
+#define PG_STACK_TOO_BIG_FOR_PALLOC (MaxAllocSize + 1 + 0xdeadbeef)
+
 
 /*-------------------------------------------------------------------------
  *
@@ -113,20 +115,27 @@
 #define pg_stack_alloc0_aligned(size, align)							\
 	(pg_stack_sanity_checks(align),										\
 	 pg_stack_let_size = (size),										\
-	 memset(pg_stack_alloc_aligned_impl(pg_stack_let_size,				\
-											(align)),					\
+	 memset(pg_stack_alloc_aligned_impl(pg_stack_let_size, (align)),	\
 			0,															\
 			pg_stack_let_size))
 
 /* As above, but for a given type T. */
 #define pg_stack_alloc_object(T)										\
 	pg_stack_alloc_array(T, 1)
-#define pg_stack_alloc_array(T, n)										\
-	((T *) pg_stack_alloc_aligned((n) * sizeof(T), alignof(T)))
 #define pg_stack_alloc0_object(T)										\
 	pg_stack_alloc0_array(T, 1)
+
+/* As above, but for an array of objects of size T. */
+#define pg_stack_alloc_array(T, n)										\
+	(pg_stack_sanity_checks(alignof(T)), 								\
+	 StaticAssertExpr(sizeof(n) <= sizeof(size_t), "n too wide"), 		\
+	 pg_stack_let_size = pg_stack_T_mul_n(sizeof(T), sizeof(n), (n)),	\
+	 pg_stack_alloc_aligned_impl(pg_stack_let_size, alignof(T)))
 #define pg_stack_alloc0_array(T, n)										\
-	((T *) pg_stack_alloc0_aligned((n) * sizeof(T), alignof(T)))
+	(pg_stack_sanity_checks(alignof(T)), 								\
+	 StaticAssertExpr(sizeof(n) <= sizeof(size_t), "n too wide"), 		\
+	 pg_stack_let_size = pg_stack_T_mul_n(sizeof(T), sizeof(n), (n)),	\
+	 pg_stack_alloc0_aligned(pg_stack_let_size, (alignof(T))))
 
 /* Copy a string. */
 #define pg_stack_strdup(cstr)											\
@@ -162,13 +171,6 @@
 	}																	\
 	while (0)
 
-/* For assertions. */
-static inline bool
-pg_stack_is_aligned_p(const void *p, size_t align)
-{
-	return (uintptr_t) p % align == 0;
-}
-
 
 /*-------------------------------------------------------------------------
  *
@@ -192,6 +194,21 @@ pg_stack_is_aligned_p(const void *p, size_t align)
 	 StaticAssertExpr(!pg_in_lexical_scope_p(PG_FINALLY),				\
 					  "pg_stack API not allowed in PG_FINALLY"))
 
+/* For assertions. */
+static inline bool
+pg_stack_is_aligned_p(const void *p, size_t align)
+{
+	return (uintptr_t) p % align == 0;
+}
+
+/* For assertions. */
+static inline size_t
+pg_stack_max_for_uint_size(size_t size)
+{
+	Assert(size <= sizeof(size_t));
+	return SIZE_MAX >> ((sizeof(size_t) * CHAR_BIT) - size * CHAR_BIT);
+}
+
 /* Post-allocation part of pg_stack_strdup_with_len(). */
 static inline char *
 pg_stack_strdup_with_len_impl(char *dst, const char *data, size_t size)
@@ -199,6 +216,66 @@ pg_stack_strdup_with_len_impl(char *dst, const char *data, size_t size)
 	memcpy(dst, data, size);
 	dst[size] = 0;
 	return dst;
+}
+
+/* Is it impossible for sizeof(T) * maximum possible n to overflow size_t? */
+static inline bool
+pg_stack_T_mul_n_cannot_overflow_p(size_t sizeof_T, size_t sizeof_n)
+{
+	/*
+	 * We already checked that n is not wider than size_t, so multiplying by
+	 * one is safe.
+	 */
+	if (sizeof_T == 1)
+		return true;
+
+	/* Can't overflow if both factors fit in the lower half of size_t. */
+	if (sizeof_n <= sizeof(size_t) / 2 &&
+		(sizeof_T <= pg_stack_max_for_uint_size(sizeof(size_t) / 2)))
+		return true;
+
+	return false;
+}
+
+/* Would sizeof(T) * n overflow? */
+static inline bool
+pg_stack_T_mul_n_overflows_p(size_t sizeof_T, size_t n)
+{
+	return n > SIZE_MAX / sizeof_T;
+}
+
+/* Compute sizeof(T) * n or raise an error if that would overflow size_t. */
+static inline size_t
+pg_stack_T_mul_n(size_t sizeof_T, size_t sizeof_n, size_t n)
+{
+	size_t		result;
+
+	/*
+	 * These functions are split up so that we can sanity-check them
+	 * individually on 32-bit CI.  For the common case of a 32-bit expression
+	 * for n and a 64-bit size_t, this should reduce to simple multiplication.
+	 * 32-bit systems can only skip the runtime test for 1-byte T, 16-bit n or
+	 * constexpr n < UINT16_MAX.
+	 */
+	if (pg_stack_T_mul_n_cannot_overflow_p(sizeof_T, sizeof_n) ||
+		!pg_stack_T_mul_n_overflows_p(sizeof_T, n))
+	{
+		result = sizeof_T * n;
+	}
+	else
+	{
+		elog(ERROR, "pg_stack_alloc: %zu * %zu would overflow size_t",
+			 sizeof_T, n);
+	}
+
+	/*
+	 * Explain this is terms that GCC's -Werror=stringop-overflow understands,
+	 * so it doesn't warn when passing the value to memset().
+	 */
+	pg_assume(result == n ||
+			  result <= pg_stack_max_for_uint_size(sizeof_n));
+
+	return result;
 }
 
 /*
@@ -560,10 +637,10 @@ pg_stack_alloca_would_overflow_p(const char *sp, size_t size, size_t align)
 	}
 
 	/*
-	 * Otherwise we have to consider padding, and we can't let that
-	 * computation overflow.  Reject large sizes.
+	 * Otherwise we have to consider padding, and we can't let that computation
+	 * overflow.  Reject large sizes here and let palloc() throw.
 	 */
-	if (size > PG_STACK_MAX_ALLOC_SIZE)
+	if (size > MaxAllocSize)
 		return true;
 
 	if (PG_STACK_DIRECTION < 0)
