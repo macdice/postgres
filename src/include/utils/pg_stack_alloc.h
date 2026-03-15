@@ -43,31 +43,29 @@
 /* #define PG_STACK_USE_PALLOC_LOG "/tmp/pg_stack_alloc.csv" */
 /* #define PG_STACK_USE_ARRAY */
 
-/* Choose which implementation to use, if not defined manually. */
-#if !defined(PG_STACK_USE_ARRAY) &&				\
-	!defined(PG_STACK_USE_ALLOC) &&				\
-	!defined(PG_STACK_USE_PALLOC) &&			\
-	!defined(PG_STACK_USE_PALLOC_LOG)
+/* Spelling and alignment of alloca(). */
 #ifdef HAVE__BUILTIN_ALLOCA
-/*
- * Use GCC/Clang builtin directly instead of alloca().  This avoids the need
- * to find out which header to include on each system, and removes the
- * possibility of encountering another implementation with unknown
- * characteristics.
- */
+#define pg_stack_alloca(size) __builtin_alloca(size)
+#define	ALIGNOF_ALLOCA __BIGGEST_ALIGNMENT__
 #define PG_STACK_USE_ALLOCA
 #elif defined(_MSC_VER)
 #include <malloc.h>
+#define pg_stack_alloca(size) alloca(size)
+#define ALIGNOF_ALLOCA 16
+#define PG_STACK_USE_ALLOCA
+#endif
+
+/* Choose which implementation to use, if not already defined manually. */
+#if !defined(PG_STACK_USE_ARRAY) &&									\
+	!defined(PG_STACK_USE_ALLOC) &&									\
+	!defined(PG_STACK_USE_PALLOC) &&								\
+	!defined(PG_STACK_USE_PALLOC_LOG)
+#if PG_STACK_DIRECTION < 0 && defined(pg_stack_alloca)
 #define PG_STACK_USE_ALLOCA
 #else
-/* Fall back to using an array on the stack. */
 #define PG_STACK_USE_ARRAY
 #endif
 #endif
-
-/* Values used to defend against overflow. */
-#define PG_STACK_MAX_ALIGN 4096
-#define PG_STACK_TOO_BIG_FOR_PALLOC (MaxAllocSize + 1 + 0xdeadbeef)
 
 
 /*-------------------------------------------------------------------------
@@ -76,6 +74,8 @@
  *
  *-------------------------------------------------------------------------
  */
+
+#define PG_STACK_MAX_ALIGN 4096
 
 /*
  * Declare a stack allocator with a default size limit.  If using the
@@ -194,6 +194,10 @@
 	 StaticAssertExpr(!pg_in_lexical_scope_p(PG_FINALLY),				\
 					  "pg_stack API not allowed in PG_FINALLY"))
 
+#define pg_stack_addr_p(ptr)											\
+	((char *) (ptr) >= pg_stack_addr_low() &&							\
+	 (char *) (ptr) <= pg_stack_addr_high())
+
 /* For assertions. */
 static inline bool
 pg_stack_is_aligned_p(const void *p, size_t align)
@@ -222,10 +226,7 @@ pg_stack_strdup_with_len_impl(char *dst, const char *data, size_t size)
 static inline bool
 pg_stack_T_mul_n_cannot_overflow_p(size_t sizeof_T, size_t sizeof_n)
 {
-	/*
-	 * We already checked that n is not wider than size_t, so multiplying by
-	 * one is safe.
-	 */
+	/* See static assertion that n is not wider than size_t. */
 	if (sizeof_T == 1)
 		return true;
 
@@ -252,21 +253,17 @@ pg_stack_T_mul_n(size_t sizeof_T, size_t sizeof_n, size_t n)
 
 	/*
 	 * These functions are split up so that we can sanity-check them
-	 * individually on 32-bit CI.  For the common case of a 32-bit expression
-	 * for n and a 64-bit size_t, this should reduce to simple multiplication.
-	 * 32-bit systems can only skip the runtime test for 1-byte T, 16-bit n or
-	 * constexpr n < UINT16_MAX.
+	 * individually on 32-bit CI.  For the common case of sizeof(n) == 4 and
+	 * sizeof(size_t) == 8, this should reduce to simple multiplication.
+	 * 32-bit systems can only skip the runtime test for sizeof(T) == 1,
+	 * sizeof(n) == 2 or constexpr n <= UINT16_MAX.
 	 */
 	if (pg_stack_T_mul_n_cannot_overflow_p(sizeof_T, sizeof_n) ||
 		!pg_stack_T_mul_n_overflows_p(sizeof_T, n))
-	{
 		result = sizeof_T * n;
-	}
 	else
-	{
 		elog(ERROR, "pg_stack_alloc: %zu * %zu would overflow size_t",
 			 sizeof_T, n);
-	}
 
 	/*
 	 * Explain this is terms that GCC's -Werror=stringop-overflow understands,
@@ -296,7 +293,8 @@ pg_stack_T_mul_n(size_t sizeof_T, size_t sizeof_n, size_t n)
  *
  * 1. DECLARE_PG_STACK_IMPL(size)
  * 2. pg_stack_alloc_aligned(size, align)
- * 3. pg_stack_addr_p(ptr)
+ * 3. pg_stack_addr_low()
+ * 4. pg_stack_addr_high()
  *
  *-------------------------------------------------------------------------
  */
@@ -313,7 +311,8 @@ pg_stack_T_mul_n(size_t sizeof_T, size_t sizeof_n, size_t n)
 #define DECLARE_PG_STACK_IMPL(size)
 #define pg_stack_alloc_aligned_impl(size, align)	\
 	pg_stack_palloc_aligned((size), (align))
-#define pg_stack_addr_p(ptr) false
+#define pg_stack_addr_low() NULL
+#define pg_stack_addr_high() NULL
 #endif
 
 /*
@@ -336,7 +335,8 @@ pg_stack_T_mul_n(size_t sizeof_T, size_t sizeof_n, size_t n)
 			 ((const char *) stack_base_ptr -							\
 			  (const char *) __builtin_stack_address())),				\
 	 pg_stack_palloc_aligned((size), (align)))
-#define pg_stack_addr_p(ptr) false
+#define pg_stack_addr_low() NULL
+#define pg_stack_addr_high() NULL
 static inline void
 pg_stack_close_log(FILE **f)
 {
@@ -369,9 +369,8 @@ pg_stack_close_log(FILE **f)
 	 pg_stack_sp :														\
 	 pg_stack_palloc_aligned(size, align))
 
-#define pg_stack_addr_p(ptr)											\
-	((char *) (ptr) >= &pg_stack_array[0] &&							\
-	 (char *) (ptr) <= &pg_stack_array[sizeof(pg_stack_array)])
+#define pg_stack_addr_low()	 (&pg_stack_array[0])
+#define pg_stack_addr_high() (&pg_stack_array[sizeof(pg_stack_array)])
 
 
 static inline bool
@@ -411,8 +410,8 @@ pg_stack_alloc_aligned_from_array(const char *array,
 #define DECLARE_PG_STACK_IMPL(size)										\
 	pg_stack_declare_impl												\
 	const char *pg_stack_limit =										\
-		pg_stack_least_deep((const char *) stack_soft_limit_ptr,		\
-							pg_stack_sp + (size) * PG_STACK_DIRECTION)
+		Max((const char *) stack_soft_limit_ptr,						\
+			 pg_stack_sp - (size))
 
 #define pg_stack_alloc_aligned_impl(size, align)						\
 	(likely(pg_stack_alloca_would_fit_p(pg_stack_sp,					\
@@ -421,75 +420,23 @@ pg_stack_alloc_aligned_from_array(const char *array,
 	 pg_stack_alloca_aligned((size), (align)) :							\
 	 pg_stack_palloc_aligned((size), (align)))
 
-#define pg_stack_addr_p(ptr)											\
-	(!stack_ptr_deeper_p((ptr), pg_stack_sp) &&							\
-	 !stack_ptr_deeper_p(pg_stack_base, (ptr)))
+#define pg_stack_addr_low()	 pg_stack_sp
+#define pg_stack_addr_high() pg_stack_base
 
-/* Optional compiler features. */
 
-/* Can we access the current stack frame pointer to use as a bound? */
+/* Extra compiler features we can use to skip some work. */
+
 #ifdef HAVE__BUILTIN_FRAME_ADDRESS
 #define pg_stack_base ((const char *) __builtin_frame_address(0))
 #endif
 
-/*
- * Can we read the stack pointer to use as a bound?
- *
- * This is an old GCC feature, but is new to Clang 22.  We don't use a typical
- * configure check, because that would confuse Clang < 22 while compiling
- * bitcode.
- *
- * XXX This way of detecting the feature won't work on GCC < 10.
- */
-#if pg_has_builtin(__builtin_stack_address)
+#if pg_has_builtin(__builtin_stack_addressXXXX)
 #define pg_stack_sp ((const char *) __builtin_stack_address())
 #elif 0
-/*
- * XXX This is probably too dangerous/undocumented, but __builtin_alloca(0)
- * effectively gives you the stack pointer.  A reasonable implementation
- * might also return NULL when asked to allocate zero bytes, so we probably
- * can't actually do this.
- */
-#define pg_stack_sp ((const char *) __builtin_alloca(0))
+/* XXX MSVC, Clang? */
+#define pg_stack_sp ((const char *) pg_stack_alloca(0))
 #endif
 
-/*
- * How to call alloca() on this system, and the alignment it promises.
- *
- * Its alignment must surely be at least alignof(max_align_t) to be useful for
- * C, but in practice it is bigger.  We want the true value if we can get it,
- * because otherwise our estimations would allow us to go past pg_stack_limit
- * by a few bytes.  That'd be acceptable in practice, but we have the
- * information for our 3 supported alloca() implementations, so we might as
- * well use it.  More importantly, also allows us to write tests that confirm
- * our model of alloca()'s behavior, to discover any future surprises.
- *
- * If we set ALIGNOF_ALLOCA higher than its true value, then our assertions
- * would fail.  In non-assertion builds, we would under-align and overrun our
- * padding for over-aligned allocations, so cite authoritative sources for
- * these values.
- */
-#ifdef HAVE__BUILTIN_ALLOCA
-/*
- * GCC: https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html
- *
- * Clang: doesn't document __BIGGEST_ALIGNMENT__, but its CGBuiltin.cpp says
- * that alloca must conform to __BIGGEST_ALIGNMENT__ with the explicit goal of
- * GCC- compatibility since Clang 4.0 (llvm-project commit 1878da43).
- *
- * XXX It is tempting to use __builtin_alloca_with_align(), but GCC documents
- * strange scoping (block not function) for that variant.
- */
-#define pg_stack_alloca(size) __builtin_alloca(size)
-#define	ALIGNOF_ALLOCA __BIGGEST_ALIGNMENT__
-#elif defined(_MSC_VER)
-/* https://learn.microsoft.com/en-us/cpp/build/stack-usage?view=msvc-170 */
-#define pg_stack_alloca(size) alloca(size)
-#define ALIGNOF_ALLOCA 16
-#endif
-
-static_assert(ALIGNOF_ALLOCA >= MAXIMUM_ALIGNOF,
-			  "ALIGNOF_ALLOCA not strict enough");
 
 /* Implementation. */
 
@@ -518,21 +465,14 @@ static_assert(ALIGNOF_ALLOCA >= MAXIMUM_ALIGNOF,
  * it'll have the true stack pointer.
  */
 #define pg_stack_declare_impl											\
-	alignas(ALIGNOF_ALLOCA) char *pg_stack_sp =	(char *) &pg_stack_sp;
+	char *pg_stack_sp =	pg_stack_alloca(0);
 /*
- * In the common case of default alignment on stack-grows-down systems, this
- * collapses to just remembering and returning the result of alloca().  For
- * stricter alignment, we need to capture the raw result but return it
- * realigned.  For stack-grows-up systems, we also need to capture a pointer
- * *past* this allocation, but return this allocation.
+ * Remember alloca()'s result as the lower bound of the stack, and return it,
+ * realigned if requested.
  */
 #define pg_stack_alloca_aligned(size, align)							\
-	(pg_stack_sp = ((char *) pg_stack_alloca(pg_stack_pad((size),		\
-														  (align))) +	\
-					pg_stack_delta_if_grows_up((size), (align))),		\
-	 pg_stack_realign(pg_stack_sp -										\
-					  pg_stack_delta_if_grows_up((size), (align)),		\
-					  (align)))
+	(pg_stack_sp = pg_stack_alloca(pg_stack_pad((size), (align))),		\
+	 pg_stack_realign(pg_stack_sp, (align)))
 #endif
 
 #if !defined(pg_stack_base)
@@ -548,120 +488,62 @@ static_assert(ALIGNOF_ALLOCA >= MAXIMUM_ALIGNOF,
 #define pg_stack_base ((const char *) stack_base_ptr)
 #endif
 
-/*
- * Adjust size to include the maximum amount of padding that could possibly be
- * needed.
- */
+/* Add padding for pg_stack_realign(). */
 static inline size_t
 pg_stack_pad(size_t size, size_t align)
 {
-	/*
-	 * Special case for downward stacks with default alignment: don't add
-	 * padding, because it shouldn't affect the result of
-	 * pg_stack_alloca_would_fit_p(), assuming default-aligned pg_stack_limit.
-	 *
-	 * For stack-grows-up systems, this function is also reached while
-	 * computing pg_stack_sp from alloca()'s result, so skip that
-	 * optimization.
-	 */
-	if (PG_STACK_DIRECTION < 0 && align <= ALIGNOF_ALLOCA)
+	if (align <= ALIGNOF_ALLOCA)
 		return size;
 
-	/* Default alignment.  pg_stack_realign() will not realign the pointer. */
-	if (align <= ALIGNOF_ALLOCA)
-		return TYPEALIGN(ALIGNOF_ALLOCA, size);
-
-	/*
-	 * Reserve extra space for pg_stack_realign().  In practice, the stack
-	 * pointer might already be aligned or nearly aligned, but it would be
-	 * unsafe to assume we know how exactly how alloca() is implemented when
-	 * reserving padding space, or we might get it wrong and overrun the
-	 * allocation.
-	 */
 	return TYPEALIGN(align, size + align - ALIGNOF_ALLOCA);
 }
 
-/*
- * Expected distance between alloca()'s result and the stack pointer.  Only
- * needed when we can't read the stack pointer directly.
- */
-static inline size_t
-pg_stack_delta_if_grows_up(size_t size, size_t align)
-{
-	if (PG_STACK_DIRECTION < 0)
-		return 0;
-	else
-		return TYPEALIGN(ALIGNOF_ALLOCA, pg_stack_pad(size, align));
-}
-
-/* Which stack pointer is less deep? */
-static inline const char *
-pg_stack_least_deep(const void *p1, const void *p2)
-{
-	return stack_ptr_deeper_p(p1, p2) ? p2 : p1;
-}
-
-/* Apply strict-alignment adjustment to alloca()'s result, if necessary. */
+/* Relign alloca()'s result if necessary. */
 static inline void *
 pg_stack_realign(void *ptr, size_t align)
 {
-	/* alloca() result is aligned according to its documentation. */
 	Assert(pg_stack_is_aligned_p(ptr, ALIGNOF_ALLOCA));
 
-	/* Only realign if stricter.  pg_stack_pad() allowed for this. */
-	return align <= ALIGNOF_ALLOCA ? ptr : (void *) TYPEALIGN(align, ptr);
+	if (align  <= ALIGNOF_ALLOCA)
+		return ptr;
+
+	return (void *) TYPEALIGN(align, ptr);
 }
 
 /*
  * Estimate the new stack pointer after a proposed alloca(), for the purpose
  * of comparing it with pg_stack_limit.
+ *
+ * This assumes that alloca() doesn't move the stack pointer down any further
+ * than it needs to for ALIGNOF_ALLOCA, but at least GCC seems to move it one
+ * ALIGNOF_ALLOCA step further than it needs to.  That's OK for our purposes,
+ * it just means that our memory limit is slightly fuzzy.  You can't overrun it
+ * by much.
  */
 static inline const char *
 pg_stack_estimate_sp(const char *sp, size_t size, size_t align)
 {
-	return sp + pg_stack_pad(size, align) * PG_STACK_DIRECTION;
+	Assert((uintptr_t) sp >= pg_stack_pad(size, align));
+
+	return sp - pg_stack_pad(size, align);
 }
 
 /* Would we overflow pg_stack_estimate_sp()'s arithmetic? */
 static inline bool
 pg_stack_alloca_would_overflow_p(const char *sp, size_t size, size_t align)
 {
-	/*
-	 * Stack-grows-down, regular alignment: save a few instructions, because
-	 * pg_stack_pad() doesn't bother to add padding in that case.
-	 */
-	if (PG_STACK_DIRECTION < 0 && align <= ALIGNOF_ALLOCA)
+	if (align <= ALIGNOF_ALLOCA)
 	{
 		Assert(pg_stack_pad(size, align) == size);
 		return size > (uintptr_t) sp;
 	}
 
-	/*
-	 * Otherwise we have to consider padding, and we can't let that computation
-	 * overflow.  Reject large sizes here and let palloc() throw.
-	 */
+	/* Don't let pg_stack_pad() overflow. */
 	if (size > MaxAllocSize)
 		return true;
 
-	if (PG_STACK_DIRECTION < 0)
-	{
-		/*
-		 * pg_stack_estimate_sp() computes sp - size_padded, and we can't let
-		 * that go below zero or it'd underflow the pointer type.  It also
-		 * applies TYPEALIGN_DOWN to the result, but that can't underflow.
-		 */
-		return pg_stack_pad(size, align) > (uintptr_t) sp;
-	}
-	else
-	{
-		/*
-		 * pg_stack_estimate_sp() computes sp + size_padded, but also aligns
-		 * up, which could overflow the pointer type.  We expect sp to be
-		 * aligned correctly already on stack-grows-up systems.
-		 */
-		Assert(pg_stack_is_aligned_p(sp, ALIGNOF_ALLOCA));
-		return pg_stack_pad(size, align) + align > UINTPTR_MAX - (uintptr_t) sp;
-	}
+	/* Don't let pg_stack_estimate_sp() underflow. */
+	return pg_stack_pad(size, align) > (uintptr_t) sp;
 }
 
 /* Would a proposed alloca() call exceed our limit? */
@@ -670,7 +552,7 @@ pg_stack_alloca_would_fit_p(const char *sp, const char *limit,
 							size_t size, size_t align)
 {
 	return !pg_stack_alloca_would_overflow_p(sp, size, align) &&
-		!stack_ptr_deeper_p(pg_stack_estimate_sp(sp, size, align), limit);
+		pg_stack_estimate_sp(sp, size, align) >= limit;
 }
 
 #endif
