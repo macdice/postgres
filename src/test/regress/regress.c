@@ -1393,26 +1393,13 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 {
 	char	   *p;
 	char	   *p2 PG_USED_FOR_ASSERTS_ONLY;
-	const char *sp PG_USED_FOR_ASSERTS_ONLY;
 	bool raised_error PG_USED_FOR_ASSERTS_ONLY;
 
 	DECLARE_PG_STACK_SIZE(1024);
 
-	/*
-	 * This test has two goals:
-	 *
-	 * 1.  Test that pg_stack_alloc() works correctly as far as its own basic
-	 * logic goes.
-	 *
-	 * 2.  Test various behaviors of the underlying alloca() implementations
-	 * that it relies on.  We don't really need to model them 100% accurately,
-	 * but we'd like to find out if their behavior changes or there is
-	 * something fundamentally wrong in our assumptions.
-	 */
-
 	/* Too big for the stack. */
 #ifdef PG_STACK_USE_ALLOCA
-	Assert(!pg_stack_alloca_would_fit_p(pg_stack_sp, pg_stack_limit, 10000, 8));
+	Assert(!pg_stack_alloca_would_fit_p(pg_stack_lower_bound(), pg_stack_limit, 10000, 8));
 #endif
 	p = pg_stack_alloc(10000);
 	Assert(!pg_stack_addr_p(p));
@@ -1422,38 +1409,34 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	p = pg_stack_alloc(10);
 	Assert(pg_stack_addr_p(p));
 
-	/* The stack had better grow in the expected direction. */
+	/* Addresses should move downwards, whether from array or supported alloca(). */
 	p2 = pg_stack_alloc(10);
 	Assert(pg_stack_addr_p(p));
-#ifdef PG_STACK_USE_ALLOCA
-	Assert(stack_ptr_deeper_p(p2, p));	/* uses PG_STACK_DIRECTION */
-#elif defined(PG_STACK_USE_ARRAY)
-	Assert(p2 < p);				/* array always grows down */
-#endif
+	Assert(p2 < p);
 
 	/*
 	 * Historical implementations of alloca() had special meanings for
 	 * alloca(0), and it is possible that an implementation could return NULL
 	 * or some other value that isn't on the stack.  Test that the result is
 	 * still recognized as a stack pointer, so that we don't pass it to
-	 * pfree().
+	 * pfree().  If this weren't true, we'd have to handle zero-sized
+	 * allocations specially.
 	 */
-	sp = pg_stack_sp;
 	p = pg_stack_alloc(0);
 	Assert(pg_stack_addr_p(p));
 
 #ifdef PG_STACK_USE_ALLOCA
 	/* Overflow defenses in limit computations. */
-	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp, (size_t) -1, 1024));
-	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp, (size_t) -1, 8));
-	Assert(!pg_stack_alloca_would_overflow_p(pg_stack_sp,
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(), (size_t) -1, 1024));
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(), (size_t) -1, 8));
+	Assert(!pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(),
 											 MaxAllocSize,
 											 1024));
-	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp,
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(),
 											MaxAllocSize + 1,
 											1024));
-	Assert(pg_stack_alloca_would_overflow_p(pg_stack_sp,
-											(size_t) pg_stack_sp - PG_STACK_DIRECTION,
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(),
+											(size_t) pg_stack_lower_bound() + 1,
 											8));
 
 	/* Overflow safety in pg_stack_alloc_array(T, n). */
@@ -1487,15 +1470,7 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 
 #endif
 
-	/*
-	 * Test a range of allocations with different alignments, below and above
-	 * alloca()'s documented alignment.  We treat stricter alignment
-	 * differently, because we don't want to waste cycles when alignment
-	 * padding isn't necessary.
-	 *
-	 * When testing PG_STACK_USE_ARRAY, there is much less to test, but we can
-	 * still assert that alignment works correctly.
-	 */
+	/* Test a range of alignments. */
 #ifdef PG_STACK_USE_ALLOCA
 #define TEST_ALIGN ALIGNOF_ALLOCA
 #else
@@ -1504,101 +1479,67 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	for (int i = 1; i <= TEST_ALIGN * 8; i *= 2)
 	{
 #ifdef PG_STACK_USE_ALLOCA
-		const char *estimated_sp PG_USED_FOR_ASSERTS_ONLY;
+		const char *estimate PG_USED_FOR_ASSERTS_ONLY;
+		const char *lower PG_USED_FOR_ASSERTS_ONLY;
+
+		/* Estimate what alloca() will return. */
+		estimate = pg_stack_estimate_alloca(pg_stack_lower_bound(), i, i);
+
+		/* Capture lower bound before alloca(). */
+		lower = pg_stack_lower_bound();
 
 		/*
-		 * Does the documented ALIGNOF_ALLOCA value, or our emulation of it,
-		 * always match the observed alignment of the stack pointer?
+		 * We expect it to be ALIGNOF_ALLOCA-aligned at all times.  It's
+		 * theoretically possible that an implementation could expose strange
+		 * alignment at intermediate times, and if so we'd like to know about
+		 * that at least for curiosity, though it probably wouldn't matter
+		 * much.
 		 */
-		sp = pg_stack_sp;
-		Assert(pg_stack_is_aligned_p(sp, ALIGNOF_ALLOCA));
-
-		/* Predict the new stack pointer after a proposed alloca(). */
-		estimated_sp = pg_stack_estimate_sp(pg_stack_sp, i, i);
-		Assert(stack_ptr_deeper_p(estimated_sp, sp));
-		Assert(pg_abs_s64(sp - estimated_sp) >= i);
+		Assert(pg_stack_ptr_is_aligned_p(lower, ALIGNOF_ALLOCA));
 #endif
 
-		/* Do the alloca(). */
+		/* Allocate and check alignment is as requested. */
 		p = pg_stack_alloc_aligned(i, i);
 		Assert(pg_stack_addr_p(p));
-		Assert(pg_stack_is_aligned_p(p, i));
-
-		/* Be paranoid about compiler optimizing out unused alloca() result. */
-		*p = 0;
-		Assert(strlen(p) == 0);
+		Assert(pg_stack_ptr_is_aligned_p(p, i));
 
 #ifdef PG_STACK_USE_ALLOCA
 		if (i > ALIGNOF_ALLOCA)
 		{
+			/* p realigned upward by pg_stack_realign(). */
+			Assert(p >= pg_stack_lower_bound());
+			Assert(p - pg_stack_lower_bound() <= align - ALIGNOF_ALLOCA);
+
 			/*
-			 * Stricter alignment version, where we have to think about
-			 * padding.
+			 * The address actually returned by alloca() should be the new
+			 * pg_stack_lower_bound().
+			 *
+			 * GCC sometimes over-allocates by exactly ALIGNOF_ALLOCA for no
+			 * apparent good reason, so tolerate that while checking if our
+			 * estimate was correct.  If it can be more wrong than that, we'd
+			 * like to know so we can try to improve our guesses...
 			 */
+			Assert(estimate == pg_stack_lower_bound() ||
+				   estimate == pg_stack_lower_bound() + ALIGNOF_ALLOCA);
 
-			/* Aligned as requested. */
-			Assert(pg_stack_is_aligned_p(p, i));
-
-			/* Estimate should match reality. */
-			Assert(pg_stack_sp == estimated_sp);
-
-			if (PG_STACK_DIRECTION < 0)
-			{
-				/*
-				 * Stack-grows-down: The stack pointer is the pointer returned
-				 * by alloca(), and p is the pointer returned by
-				 * pg_stack_alloc(), which should have been realigned as
-				 * requested.
-				 */
-				Assert((uintptr_t) p == TYPEALIGN(i, pg_stack_sp));
-			}
-			else
-			{
-				/*
-				 * Stack-grows-up: The stack pointer is the location of the
-				 * *next* alloca().
-				 */
-				Assert(p < pg_stack_sp);
-				Assert(pg_stack_sp - p >= i);
-				Assert((uintptr_t) pg_stack_sp == TYPEALIGN(ALIGNOF_ALLOCA, p + i));
-				/* Previous value should match p, if we align it correctly. */
-				Assert(TYPEALIGN(i, sp) == (uintptr_t) p);
-			}
+			/* p should be pg_stack_lower_bound(), realigned upwards. */
+			Assert((uintptr_t) p == TYPEALIGN(i, pg_stack_lower_bound()));
 		}
 		else
 		{
-			if (PG_STACK_DIRECTION < 0)
-			{
-				/*
-				 * The current stack pointer is the most recent alloca() on a
-				 * stack-grows-down system.
-				 */
-				Assert(p == pg_stack_sp);
+			/* No realignment, so p should be exactly pg_stack_lower_bound(). */
+			Assert(p == pg_stack_lower_bound());
 
-				/*
-				 * For default-aligned allocation on stack-grows-down systems,
-				 * we take a shortcut: we don't waste cycles estimating small
-				 * amounts of alignment fuzz (see pg_stack_pad()).  That
-				 * shouldn't affect pg_stack_alloca_would_fit_p(), assuming
-				 * that pg_stack_limit is default-aligned.
-				 */
-				if ((uintptr_t) p !=
-					   TYPEALIGN_DOWN(ALIGNOF_ALLOCA, estimated_sp))
-					elog(PANIC, "i = %d, p = %p, estimated_sp = %p, sp = %p",
-						 i, p, estimated_sp, sp);
-				Assert((uintptr_t) p ==
-					   TYPEALIGN_DOWN(ALIGNOF_ALLOCA, estimated_sp));
-			}
-			else
-			{
-				/*
-				 * The OLD stack pointer, realigned, matches this alloca() on
-				 * a stack-grows-up system, and our estimates are aligned (no
-				 * shortcut in pg_stack_pad()).
-				 */
-				Assert((uintptr_t) p == TYPEALIGN(i, sp));
-				Assert(estimated_sp == pg_stack_sp);
-			}
+			/*
+			 * We don't waste energy aligning default-aligned estimates, so fix
+			 * that here first...
+			 */
+			estimate = (const char *) TYPEALIGN_DOWN(ALIGNOF_ALLOCA,
+													 estimate);
+
+			/* See note above about GCC. */
+			Assert(estimate == pg_stack_lower_bound() ||
+				   estimate == pg_stack_lower_bound() + ALIGNOF_ALLOCA);
 		}
 #endif
 	}

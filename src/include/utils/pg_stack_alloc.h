@@ -415,18 +415,18 @@ pg_stack_alloc_aligned_from_array(const char *array,
 #define DECLARE_PG_STACK_IMPL(size)										\
 	const char *pg_stack_limit =										\
 		Max((const char *) stack_soft_limit_ptr,						\
-			 pg_stack_lower() - (size))
+			 pg_stack_lower_bound() - (size))
 
 #define pg_stack_alloc_aligned_impl(size, align)						\
-	(likely(pg_stack_alloca_would_fit_p(pg_stack_lower(),				\
+	(likely(pg_stack_alloca_would_fit_p(pg_stack_lower_bound(),			\
 										pg_stack_limit,					\
 										(size), (align))) ?				\
 	 pg_stack_alloca_aligned((size), (align)) :							\
 	 pg_stack_palloc_aligned((size), (align)))
 
 #define pg_stack_addr_p(ptr)											\
-	((char *) (ptr) >= pg_stack_lower() &&								\
-	 (char *) (ptr) <= pg_stack_upper())
+	((char *) (ptr) >= pg_stack_lower_bound() &&						\
+	 (char *) (ptr) <= pg_stack_upper_bound())
 
 
 /* Compiler-specific ways to identify addresses in the stack. */
@@ -434,20 +434,20 @@ pg_stack_alloc_aligned_from_array(const char *array,
 /* Upper bound of stack addresses. */
 #ifdef HAVE__BUILTIN_FRAME_ADDRESS
 /* Read the frame base pointer. */
-#define pg_stack_upper() ((const char *) __builtin_frame_address(0))
+#define pg_stack_upper_bound() ((const char *) __builtin_frame_address(0))
 #else
 /* An address in a stack frame far far away. */
-#define pg_stack_upper() ((const char *) stack_base_ptr)
+#define pg_stack_upper_bound() ((const char *) stack_base_ptr)
 #endif
 
 /* Lower bound of stack addresses. */
 #if defined(__GNUC__) &&												\
 	(!defined(__clang__) || pg_has_builtin(__builtin_stack_address))
 /* GCC: stack pointer moves with alloca(0), so prefer builtin. */
-#define pg_stack_lower() ((const char *) __builtin_stack_address())
+#define pg_stack_lower_bound() ((const char *) __builtin_stack_address())
 #else
 /* Clang and MSVC: stack pointer returned but not moved for alloca(0). */
-#define pg_stack_lower() ((const char *) pg_stack_alloca(0))
+#define pg_stack_lower_bound() ((const char *) pg_stack_alloca(0))
 #endif
 
 
@@ -508,7 +508,7 @@ pg_stack_alloca_would_overflow_p(const char *lower, size_t size, size_t align)
 
 /*
  * Estimate result of a proposed alloca(), which would become the new
- * pg_stack_lower().  The only permitted use of this pointer is to check if
+ * pg_stack_lower_bound().  The only permitted use of this pointer is to check if
  * it'd be below pg_stack_limit.
  */
 static inline const char *
@@ -522,12 +522,6 @@ pg_stack_estimate_alloca(const char *lower, size_t size, size_t align)
 	 * could affect the result of x < pg_stack_limit.  The latter is usually
 	 * ALIGNOF_ALLOCA-aligned itself, so it'd be a waste of cycles in
 	 * estimation and require overflow checking.
-	 *
-	 * XXX GCC (but not Clang) sometimes overallocates by ALIGNOF_ALLOCA (16)
-	 * for no apparent good reason, so it exceeds our esimate and thus our
-	 * limit by that much.  That doesn't seem to be worth worrying about, but
-	 * it means we can't have a test that asserts that our estimations are
-	 * perfect.
 	 */
 
 	return lower - pg_stack_pad(size, align);
