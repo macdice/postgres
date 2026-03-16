@@ -2042,6 +2042,7 @@ endif
 # Check if various builtins exist. Some builtins are tested separately,
 # because we want to test something more complicated than the generic case.
 builtins = [
+  'alloca',
   'bswap16',
   'bswap32',
   'bswap64',

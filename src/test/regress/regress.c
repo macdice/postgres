@@ -1399,6 +1399,9 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	DECLARE_PG_STACK_SIZE(1024 * 8);
 
 	/* Too big for the stack. */
+#ifdef PG_STACK_USE_ALLOCA
+	Assert(!pg_stack_alloca_would_fit_p(pg_stack_lower_bound(), pg_stack_limit, 10000, 8));
+#endif
 	p = pg_stack_alloc(10000);
 	Assert(!pg_stack_ptr_p(p));
 	pg_stack_free(p);
@@ -1445,10 +1448,33 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 	Assert(raised_error);
 
+#ifdef PG_STACK_USE_ALLOCA
+	/* Overflow defenses in limit computations. */
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(), (size_t) -1, 1024));
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(), (size_t) -1, 8));
+	Assert(!pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(),
+											 MaxAllocSize,
+											 1024));
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(),
+											MaxAllocSize + 1,
+											1024));
+	Assert(pg_stack_alloca_would_overflow_p(pg_stack_lower_bound(),
+											(size_t) pg_stack_lower_bound() + 1,
+											8));
+#endif
+
 	/* Test a range of alignments. */
+#ifdef PG_STACK_USE_ALLOCA
+#define TEST_ALIGN ALIGNOF_ALLOCA
+#else
 #define TEST_ALIGN MAXIMUM_ALIGNOF
+#endif
 	for (int i = 1; i <= TEST_ALIGN * 8; i *= 2)
 	{
+#ifdef PG_STACK_USE_ALLOCA
+		const char *estimate PG_USED_FOR_ASSERTS_ONLY;
+#endif
+
 		/* Allocate and check alignment is as requested, when we use palloc(). */
 		p = pg_stack_alloc_aligned(1024 * 8, i);
 
@@ -1456,11 +1482,63 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 		Assert(pg_stack_ptr_is_aligned_p(p, i));
 		pg_stack_free(p);
 
+#ifdef PG_STACK_USE_ALLOCA
+		/* Lower bound should be ALIGNOF_ALLOCA-aligned at all times. */
+		Assert(pg_stack_ptr_is_aligned_p(pg_stack_lower_bound(),
+										 ALIGNOF_ALLOCA));
+
+		/* Estimate what alloca() will return. */
+		estimate = pg_stack_estimate_alloca(pg_stack_lower_bound(), i, i);
+
+		/* Basic sanity checks on the estimates. */
+		if (i > ALIGNOF_ALLOCA)
+		{
+			size_t		size PG_USED_FOR_ASSERTS_ONLY = i;
+			size_t		align PG_USED_FOR_ASSERTS_ONLY = i;
+			size_t		padding PG_USED_FOR_ASSERTS_ONLY = align - ALIGNOF_ALLOCA;
+
+			Assert(pg_stack_ptr_is_aligned_p(estimate, ALIGNOF_ALLOCA));
+			Assert(estimate == pg_stack_lower_bound() - size - padding);
+		}
+		else
+		{
+			size_t		size PG_USED_FOR_ASSERTS_ONLY = i;
+
+			Assert(estimate == pg_stack_lower_bound() - size);
+		}
+#endif
+
 		/* Allocate and check alignment is as requested. */
 		p = pg_stack_alloc_aligned(i, i);
 
 		Assert(pg_stack_ptr_p(p));
 		Assert(pg_stack_ptr_is_aligned_p(p, i));
+
+#ifdef PG_STACK_COMPARE_ALLOCA_ESTIMATE
+
+		/*
+		 * Check alloca()'s observed behavior against our estimate.
+		 *
+		 * Estimates aren't expected to match perfectly, and this would fail
+		 * on CI because -fsanitize=address changes the results.  There may be
+		 * any number of minor details we get wrong on some system or other.
+		 * It passes in regular builds, and is useful for investigating
+		 * implementation details.
+		 */
+		if (i > ALIGNOF_ALLOCA)
+		{
+			/* Estimate is for the lower bound, and p is realigned. */
+			Assert(estimate == pg_stack_lower_bound());
+			Assert(p == (const char *) TYPEALIGN(i, estimate));
+		}
+		else
+		{
+			/* We don't bother to align default-alignment estimates. */
+			estimate = (const char *) TYPEALIGN_DOWN(ALIGNOF_ALLOCA, estimate);
+			Assert(p == (const char *) TYPEALIGN_DOWN(ALIGNOF_ALLOCA, estimate));
+			Assert(p == pg_stack_lower_bound());
+		}
+#endif
 	}
 
 	PG_RETURN_VOID();

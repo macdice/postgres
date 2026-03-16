@@ -514,6 +514,9 @@
 /* Define to 1 if you have XSAVE intrinsics. */
 #undef HAVE_XSAVE_INTRINSICS
 
+/* Define to 1 if your compiler understands __builtin_alloca. */
+#undef HAVE__BUILTIN_ALLOCA
+
 /* Define to 1 if your compiler understands __builtin_bswap16. */
 #undef HAVE__BUILTIN_BSWAP16
 

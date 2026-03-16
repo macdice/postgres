@@ -3,15 +3,19 @@
  * pg_stack_alloc.h
  *		Allocator for objects that don't escape the current function.
  *
- * A palloc()-like interface for allocating memory on the stack.  The initial
- * implementation uses an array declared statically.
+ * A palloc()-like interface to alloca(), for allocating memory on the stack.
+ * Raw alloca() is usually considered dangerous because of its inherent stack
+ * overflow risk, but this interface imposes limits on stack size and falls
+ * back to regular palloc() when they would be exceeded.
+ *
+ * GCC, Clang and MSVC are supported, as long as PG_STACK_DIRECTION is
+ * downwards (all modern systems).  A simple array-based emulation
+ * is provided for systems that can't use that.
  *
  * Once stack space is exhausted, allocations silently fall back to using
  * palloc().  Memory should therefore still be freed explicitly with
  * pg_stack_free() or MemoryContext-level cleanup.  It is a no-op in the
  * common case that pfree() doesn't need to be called.
- *
- * XXX A space-limited version of alloca() could be added.
  *
  * XXX It might be possible to use something like "defer" or equivalent
  * compiler extensions to clean up palloc()'d memory automatically, in future
@@ -28,6 +32,7 @@
 #define PG_STACK_ALLOC_H
 
 #include "utils/elog.h"
+#include "utils/memutils.h"		/* for MaxAllocSize */
 #include "utils/palloc.h"
 #include "miscadmin.h"
 
@@ -36,12 +41,34 @@
 
 
 /* #define PG_STACK_USE_PALLOC_LOG "/tmp/pg_stack_alloc.csv" */
+/* #define PG_STACK_USE_ARRAY */
+
+/* Spelling and alignment of alloca() on this system. */
+#ifdef HAVE__BUILTIN_ALLOCA
+/*
+ * Using the builtin avoids the need to figure out which header to include on
+ * each platform, and ensures we get GCC/Clang's documented behavior and not
+ * some other alloca() implementation technique with unknown characteristics.
+ */
+#define pg_stack_alloca(size) __builtin_alloca(size)
+#define	ALIGNOF_ALLOCA __BIGGEST_ALIGNMENT__
+#elif defined(_MSC_VER)
+#include <malloc.h>
+#define pg_stack_alloca(size) alloca(size)
+/* https://learn.microsoft.com/en-us/cpp/build/stack-usage?view=msvc-170 */
+#define ALIGNOF_ALLOCA 16
+#endif
 
 /* Choose which implementation to use, if not already defined manually. */
 #if !defined(PG_STACK_USE_ARRAY) &&									\
+	!defined(PG_STACK_USE_ALLOC) &&									\
 	!defined(PG_STACK_USE_PALLOC) &&								\
 	!defined(PG_STACK_USE_PALLOC_LOG)
+#if PG_STACK_DIRECTION < 0 && defined(pg_stack_alloca)
+#define PG_STACK_USE_ALLOCA
+#else
 #define PG_STACK_USE_ARRAY
+#endif
 #endif
 
 
@@ -56,8 +83,13 @@
 #define PG_STACK_MAX_ALIGN 4096
 
 /* Declare a stack allocator with a default size limit. */
+#ifdef PG_STACK_USE_ARRAY
 #define DECLARE_PG_STACK()												\
 	DECLARE_PG_STACK_SIZE(128)
+#else
+#define DECLARE_PG_STACK()												\
+	DECLARE_PG_STACK_SIZE(1024)
+#endif
 
 /*
  * As above, but with a caller-supplied limit on stack usage.  The default
@@ -155,7 +187,13 @@
  */
 #define pg_stack_sanity_checks(align)									\
 	(AssertMacro((align) > 0 && (align) <= PG_STACK_MAX_ALIGN),			\
-	 AssertMacro(((align) & ((align) - 1)) == 0 /* power-of-two? */))
+	 AssertMacro(((align) & ((align) - 1)) == 0 /* power-of-two? */),	\
+	 StaticAssertExpr(!pg_in_lexical_scope_p(PG_TRY),					\
+					  "pg_stack API not allowed in PG_TRY"),			\
+	 StaticAssertExpr(!pg_in_lexical_scope_p(PG_CATCH),					\
+					  "pg_stack API not allowed in PG_CATCH"),			\
+	 StaticAssertExpr(!pg_in_lexical_scope_p(PG_FINALLY),				\
+					  "pg_stack API not allowed in PG_FINALLY"))
 
 /* For assertions. */
 static inline bool
@@ -354,6 +392,194 @@ pg_stack_alloc_aligned_from_array(char *array,
 		}
 	}
 	return false;
+}
+
+#endif
+
+
+/*-------------------------------------------------------------------------
+ *
+ * alloca()-based implementation.
+ *
+ *-------------------------------------------------------------------------
+ */
+#ifdef PG_STACK_USE_ALLOCA
+
+/* Required interface macros. */
+
+#define DECLARE_PG_STACK_IMPL(size)										\
+	pg_stack_impl_decl													\
+	const char *pg_stack_limit =										\
+		pg_stack_compute_limit(pg_stack_lower_bound(), (size))
+
+#define pg_stack_alloc_aligned_impl(size, align)						\
+	(likely(pg_stack_alloca_would_fit_p(pg_stack_lower_bound(),			\
+										pg_stack_limit,					\
+										(size), (align))) ?				\
+	 pg_stack_alloca_aligned((size), (align)) :							\
+	 pg_stack_palloc_aligned((size), (align)))
+
+#define pg_stack_ptr_p(ptr)												\
+	((char *) (ptr) >= pg_stack_lower_bound() &&						\
+	 (char *) (ptr) <= pg_stack_upper_bound())
+
+
+/* Compiler-specific ways to inspect the stack's bounds. */
+
+/* The stack pointer. */
+#if defined(HAVE__BUILTIN_STACK_ADDRESS) &&								\
+	(!defined(__clang__) || __clang_major__ >= 22)
+/* Prefer builtin if available. */
+#define pg_stack_lower_bound() ((const char *) __builtin_stack_address())
+#else
+/*
+ * Calling alloca(0) effectively reads the stack pointer on GCC/Clang/MSVC,
+ * but not reliably enough for pg_stack_lower_bound()'s purposes due to
+ * optimizations.  It seems good enough for the initial value that determines
+ * pg_stack_limit though, and better than taking a local variable's address,
+ * which would be less accurate and hard to get past static analyzers.
+ * Instead we'll maintain a reliable lower bound in pg_stack_lower_bound_var.
+ *
+ * XXX I've only actually seen it break on Apple Clang, where if you're
+ * unlucky you can see a stack pointer ~16 bytes higher than a recent alloca()
+ * result, and then pg_stack_ptr_p() is confused and we send it pfree().
+ */
+#define pg_stack_lower_bound_init() ((const char *) pg_stack_alloca(0))
+#endif
+
+/* Upper bound of stack addresses, inclusive. */
+#ifdef HAVE__BUILTIN_FRAME_ADDRESS
+#define pg_stack_upper_bound() ((const char *) __builtin_frame_address(0))
+#endif
+
+
+/* Replacement implementations of pg_stack_{upper,lower}_bound(). */
+
+/* The base address from stack_depth.c will do if we don't have a builtin. */
+#ifndef pg_stack_upper_bound
+#define pg_stack_upper_bound() ((const char *) stack_base_ptr)
+#endif
+
+#ifdef pg_stack_lower_bound
+/* Assert that all alloca() results are bounded by the builtin. */
+#define pg_stack_impl_decl												\
+	char *pg_stack_let_ptr;
+#define pg_stack_track(ptr)												\
+	(pg_stack_let_ptr = (ptr),			/* needed for sequencing */		\
+	 AssertMacro(pg_stack_lower_bound() <= pg_stack_let_ptr),			\
+	 pg_stack_let_ptr)
+#else
+/* Remember the lowest address ever returned by alloca(). */
+#define pg_stack_impl_decl												\
+	const char *pg_stack_lower_bound_var = pg_stack_lower_bound_init();
+#define pg_stack_lower_bound() pg_stack_lower_bound_var
+#define pg_stack_track(ptr)												\
+	pg_stack_set_lower_bound(&pg_stack_lower_bound_var, (ptr))
+static inline void *
+pg_stack_set_lower_bound(const char **lower_bound, void *ptr)
+{
+	/*
+	 * Don't assume that alloca()'s result is lower each time.  That is
+	 * usually true, but not always.
+	 */
+	if ((const char *) ptr < *lower_bound)
+		*lower_bound = (const char *) ptr;
+	return ptr;
+}
+#endif
+
+
+/* Implementation code. */
+
+/* Choose a limit address. */
+static inline const char *
+pg_stack_compute_limit(const char *sp, size_t size)
+{
+	const char *limit = sp - size;
+
+	/* stack_depth.c's soft limit overrides the requested size if closer. */
+	if ((const char *) stack_soft_limit_ptr > limit)
+		limit = (const char *) stack_soft_limit_ptr;
+
+	return limit;
+}
+
+/*
+ * Call alloca(), adjusting for align > ALIGN_ALLOCA if necessary, and
+ * tracking the lower bound if necessary.
+ */
+#define pg_stack_alloca_aligned(size, align)							\
+	pg_stack_realign(													\
+		pg_stack_track(pg_stack_alloca(pg_stack_pad((size),	(align)))), \
+		(align))
+
+/* Reserve padding space for pg_stack_realign() if stricter than default. */
+static inline size_t
+pg_stack_pad(size_t size, size_t align)
+{
+	if (align <= ALIGNOF_ALLOCA)
+		return size;
+
+	return (align - ALIGNOF_ALLOCA) + TYPEALIGN(ALIGNOF_ALLOCA, size);
+}
+
+/* Realign alloca()'s result if stricter than default. */
+static inline void *
+pg_stack_realign(void *ptr, size_t align)
+{
+	Assert(pg_stack_ptr_is_aligned_p(ptr, ALIGNOF_ALLOCA));
+
+	if (align <= ALIGNOF_ALLOCA)
+		return ptr;
+
+	return (void *) TYPEALIGN(align, ptr);
+}
+
+/* Would we overflow pg_stack_estimate_alloca()'s arithmetic? */
+static inline bool
+pg_stack_alloca_would_overflow_p(const char *lower, size_t size, size_t align)
+{
+	if (align <= ALIGNOF_ALLOCA)
+	{
+		/*
+		 * pg_stack_pad() doesn't bother to align its result to ALIGNOF_ALLOCA
+		 * unless requested alignment is stricter and the padding could affect
+		 * the result of x < pg_stack_limit.  The latter is usually
+		 * ALIGNOF_ALLOCA-aligned itself, so it'd be a waste of cycles here
+		 * and in pg_stack_estimate_alloca().
+		 */
+		Assert(pg_stack_pad(size, align) == size);
+		return size > (uintptr_t) lower;
+	}
+
+	/* Don't let pg_stack_pad() overflow. */
+	if (size > MaxAllocSize)
+		return true;
+
+	/* Don't let pg_stack_estimate_alloca() underflow. */
+	return pg_stack_pad(size, align) > (uintptr_t) lower;
+}
+
+/*
+ * Estimate result of a proposed alloca(), which would become the new
+ * pg_stack_lower_bound().  The only permitted use of this pointer is to check
+ * if it'd be below pg_stack_limit.
+ */
+static inline const char *
+pg_stack_estimate_alloca(const char *lower, size_t size, size_t align)
+{
+	Assert(!pg_stack_alloca_would_overflow_p(lower, size, align));
+
+	return lower - pg_stack_pad(size, align);
+}
+
+/* Would a proposed alloca() call exceed our limit? */
+static inline bool
+pg_stack_alloca_would_fit_p(const char *lower, const char *limit,
+							size_t size, size_t align)
+{
+	return !pg_stack_alloca_would_overflow_p(lower, size, align) &&
+		pg_stack_estimate_alloca(lower, size, align) >= limit;
 }
 
 #endif
