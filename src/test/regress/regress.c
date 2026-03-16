@@ -1393,6 +1393,7 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 {
 	char	   *p;
 	char	   *p2 PG_USED_FOR_ASSERTS_ONLY;
+	bool		raised_error PG_USED_FOR_ASSERTS_ONLY;
 
 	/* Need extra space to run under ASAN. */
 	DECLARE_PG_STACK_SIZE(1024 * 8);
@@ -1414,6 +1415,35 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	/* A zero-sized allocation is identifiable as a stack address. */
 	p = pg_stack_alloc(0);
 	Assert(pg_stack_ptr_p(p));
+
+	/* Overflow safety in pg_stack_alloc_array(T, n). */
+	Assert(pg_stack_T_mul_n_cannot_overflow_p(1, sizeof(size_t)));
+	Assert(!pg_stack_T_mul_n_cannot_overflow_p(2, sizeof(size_t)));
+	Assert(pg_stack_T_mul_n_cannot_overflow_p(2, sizeof(size_t) / 2));
+	Assert(!pg_stack_T_mul_n_cannot_overflow_p(2, sizeof(size_t)));
+	Assert(!pg_stack_T_mul_n_overflows_p(1, SIZE_MAX));
+	Assert(pg_stack_T_mul_n_overflows_p(2, SIZE_MAX / 2 + 1));
+	Assert(!pg_stack_T_mul_n_overflows_p(2, SIZE_MAX / 2));
+
+	/* When sizeof_T == 1, always returns n. */
+	Assert(pg_stack_T_mul_n(1, sizeof(uint32), SIZE_MAX) == SIZE_MAX);
+	Assert(pg_stack_T_mul_n(1, sizeof(uint64), SIZE_MAX) == SIZE_MAX);
+
+	/* The largest successful value of size_t n. */
+	Assert(pg_stack_T_mul_n(2, sizeof(size_t), SIZE_MAX / 2) == SIZE_MAX - 1);
+
+	/* Exceed value by one for size_t n. */
+	raised_error = false;
+	PG_TRY();
+	{
+		pg_stack_T_mul_n(2, sizeof(size_t), SIZE_MAX / 2 + 1);
+	}
+	PG_CATCH();
+	{
+		raised_error = true;
+	}
+	PG_END_TRY();
+	Assert(raised_error);
 
 	/* Test a range of alignments. */
 #define TEST_ALIGN MAXIMUM_ALIGNOF

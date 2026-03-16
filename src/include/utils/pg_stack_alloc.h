@@ -181,12 +181,58 @@ pg_stack_strdup_with_len_impl(char *dst, const char *data, size_t size)
 	return dst;
 }
 
-/* Compute sizeof(T) * n. */
+/* Is it impossible for sizeof(T) * maximum possible n to overflow size_t? */
+static inline bool
+pg_stack_T_mul_n_cannot_overflow_p(size_t sizeof_T, size_t sizeof_n)
+{
+	/* See static assertion that n is not wider than size_t. */
+	if (sizeof_T == 1)
+		return true;
+
+	/* Can't overflow if both factors fit in the lower half of size_t. */
+	if (sizeof_n <= sizeof(size_t) / 2 &&
+		(sizeof_T <= pg_stack_max_for_uint_size(sizeof(size_t) / 2)))
+		return true;
+
+	return false;
+}
+
+/* Would sizeof(T) * n overflow? */
+static inline bool
+pg_stack_T_mul_n_overflows_p(size_t sizeof_T, size_t n)
+{
+	return n > SIZE_MAX / sizeof_T;
+}
+
+/* Compute sizeof(T) * n or raise an error if that would overflow size_t. */
 static inline size_t
 pg_stack_T_mul_n(size_t sizeof_T, size_t sizeof_n, size_t n)
 {
-	/* XXX Could overflow, which might allow the stack to be corrupted. */
-	return sizeof_T * n;
+	size_t		result;
+
+	/*
+	 * These functions are split up so that we can sanity-check them
+	 * individually on 32-bit CI.  For the common case of sizeof(n) == 4 and
+	 * sizeof(size_t) == 8, this should reduce to simple multiplication.
+	 * 32-bit systems can only skip the runtime test for sizeof(T) == 1,
+	 * sizeof(n) == 2 or constexpr n <= UINT16_MAX.
+	 */
+	if (pg_stack_T_mul_n_cannot_overflow_p(sizeof_T, sizeof_n) ||
+		!pg_stack_T_mul_n_overflows_p(sizeof_T, n))
+		result = sizeof_T * n;
+	else
+		elog(ERROR, "pg_stack_alloc: %zu * %zu would overflow size_t",
+			 sizeof_T, n);
+
+	/*
+	 * Explain this theory in terms that GCC's -Werror=stringop-overflow
+	 * understands, so it doesn't complain when the return value is passed to
+	 * memset().  This also serves as an assertion.
+	 */
+	pg_assume(result == n ||
+			  result <= pg_stack_max_for_uint_size(sizeof_n));
+
+	return result;
 }
 
 /*
