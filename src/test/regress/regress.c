@@ -1409,6 +1409,7 @@ test_pg_stack_alloc(PG_FUNCTION_ARGS)
 	/* Acceptable size. */
 	p = pg_stack_alloc(10);
 	Assert(pg_stack_ptr_p(p));
+	pg_stack_free(p);
 
 	/* Addresses should move downwards. */
 	p2 = pg_stack_alloc(10);

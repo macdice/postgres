@@ -36,6 +36,10 @@
 #include "utils/palloc.h"
 #include "miscadmin.h"
 
+#ifdef __SANITIZE_ADDRESS__
+#include <sanitizer/asan_interface.h>
+#endif
+
 #include <limits.h>
 #include <unistd.h>
 
@@ -166,6 +170,8 @@
 		void *pg_stack_let_ptr = (ptr);									\
 		Assert(pg_stack_ptr_p(pg_stack_let_ptr) ||						\
 			   pg_stack_maybe_pfree);									\
+		if (pg_stack_ptr_p(pg_stack_let_ptr))							\
+			pg_stack_debug_free(pg_stack_let_ptr);						\
 		if (unlikely(pg_stack_maybe_pfree) &&							\
 			!pg_stack_ptr_p(pg_stack_let_ptr))							\
 			pfree(pg_stack_let_ptr);									\
@@ -408,6 +414,7 @@ pg_stack_alloc_aligned_from_array(char *array,
 /* Required interface macros. */
 
 #define DECLARE_PG_STACK_IMPL(size)										\
+	pg_stack_debug_decl													\
 	pg_stack_impl_decl													\
 	const char *pg_stack_limit =										\
 		pg_stack_compute_limit(pg_stack_lower_bound(), (size))
@@ -509,9 +516,12 @@ pg_stack_compute_limit(const char *sp, size_t size)
  * tracking the lower bound if necessary.
  */
 #define pg_stack_alloca_aligned(size, align)							\
-	pg_stack_realign(													\
-		pg_stack_track(pg_stack_alloca(pg_stack_pad((size),	(align)))), \
-		(align))
+	pg_stack_debug_alloc(												\
+		pg_stack_realign(												\
+			pg_stack_track(												\
+				pg_stack_alloca(pg_stack_pad((size), (align)))),		\
+			(align)),													\
+		(size))
 
 /* Reserve padding space for pg_stack_realign() if stricter than default. */
 static inline size_t
@@ -582,6 +592,118 @@ pg_stack_alloca_would_fit_p(const char *lower, const char *limit,
 		pg_stack_estimate_alloca(lower, size, align) >= limit;
 }
 
+/* Debugging support for PG_STACK_USE_ALLOCA. */
+
+#if defined(USE_ASSERT_CHECKING) ||										\
+	defined(CLOBBER_FREED_MEMORY) ||									\
+	defined(__SANITIZE_ADDRESS__)
+
+#define PG_STACK_DEBUG_NIL INT32_MAX
+
+/*
+ * Entries in a list of not-yet-freed allocations.  Since these are also
+ * allocated with alloca(), relative pointers are used to squeeze it down to
+ * 16 bytes rather than 32 (considering typical ALIGNOF_ALLOCA).
+ */
+typedef struct pg_stack_debug_node
+{
+	void	   *ptr;
+	uint32		size;
+	int32		next;
+} pg_stack_debug_node;
+
+#define pg_stack_debug_decl												\
+	pg_stack_debug_node *pg_stack_debug_head = NULL;					\
+
+/* Called with alloca() result already realigned if required. */
+#define pg_stack_debug_alloc(ptr, size)									\
+	pg_stack_debug_link(&pg_stack_debug_head,							\
+						alloca(sizeof(pg_stack_debug_node)),			\
+						(ptr),											\
+						(size))
+
+/* Called by pg_stack_free(). */
+#define pg_stack_debug_free(ptr)										\
+	pg_stack_debug_unlink(&pg_stack_debug_head, (ptr))
+
+/* Get pointer to the next node. */
+static inline pg_stack_debug_node *
+pg_stack_debug_get_next(const pg_stack_debug_node *node)
+{
+	if (node->next == PG_STACK_DEBUG_NIL)
+		return NULL;
+	else
+		return (pg_stack_debug_node *) ((char *) node + node->next);
+}
+
+/* Set pointer to the next node. */
+static inline void
+pg_stack_debug_set_next(pg_stack_debug_node *node,
+						const pg_stack_debug_node *next)
+{
+	if (next == NULL)
+		node->next = PG_STACK_DEBUG_NIL;
+	else
+		node->next = (const char *) next - (const char *) node;
+}
+
+/* Populate and insert a new entry. */
+static inline void *
+pg_stack_debug_link(pg_stack_debug_node **head,
+					pg_stack_debug_node *node,
+					void *ptr,
+					size_t size)
+{
+	node->ptr = ptr;
+	node->size = size;
+	pg_stack_debug_set_next(node, *head);
+	*head = node;
+	return ptr;
+}
+
+/* Search for an entry and clobber/poison it. */
+static inline void
+pg_stack_debug_unlink(pg_stack_debug_node **head, void *ptr)
+{
+	pg_stack_debug_node *prev = NULL;
+	pg_stack_debug_node *node = *head;
+
+	while (node)
+	{
+		if (node->ptr == ptr)
+		{
+#ifdef CLOBBER_FREED_MEMORY
+			memset(ptr, 0x7f, node->size);
+#endif
+#ifdef __SANITIZE_ADDRESS__
+			ASAN_POISON_MEMORY_REGION(node->ptr, node->size);
+#endif
+			if (prev)
+				pg_stack_debug_set_next(prev,
+										pg_stack_debug_get_next(node));
+			else
+				*head = pg_stack_debug_get_next(node);
+			return;
+		}
+		prev = node;
+		node = pg_stack_debug_get_next(node);
+	}
+	Assert(false && "pg_stack_free() of unknown pointer");
+}
+
+#else
+
+/* No debug support needed. */
+#define pg_stack_debug_decl
+#define pg_stack_debug_alloc(ptr, size) (ptr)
+
+#endif
+
+#endif
+
+/* Define if not already defined. */
+#ifndef pg_stack_debug_free
+#define pg_stack_debug_free(ptr)
 #endif
 
 #endif

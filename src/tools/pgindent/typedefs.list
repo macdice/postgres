@@ -3983,6 +3983,7 @@ pg_sha512_ctx
 pg_snapshot
 pg_special_case
 pg_stack_base_t
+pg_stack_debug_node
 pg_ternary
 pg_time_t
 pg_time_usec_t
