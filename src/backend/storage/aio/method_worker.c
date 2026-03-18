@@ -59,13 +59,27 @@
 /* Debugging only: show activity and statistics in ps command line. */
 /* #define PGAIO_WORKER_SHOW_PS_INFO */
 
+typedef struct PgAioWorkerSQE
+{
+	int			id;
+
+	/*
+	 * These correspond to queue->prod_tail and queue->cons_tail in some well
+	 * known multi-producer multi-consumer CAS-based ring buffer
+	 * implementations.  We store them on every entry instead.  We don't need
+	 * linearizability, and we don't want to spin.
+	 */
+	pg_atomic_uint64 prod_tail;
+	pg_atomic_uint64 cons_tail;
+}			PgAioWorkerSQE;
+
 typedef struct PgAioWorkerSubmissionQueue
 {
 	ConditionVariable space_cv;
 	uint32		size;
-	uint32		head;
-	uint32		tail;
-	int			sqes[FLEXIBLE_ARRAY_MEMBER];
+				alignas(PG_CACHE_LINE_SIZE) pg_atomic_uint64 prod_head;
+				alignas(PG_CACHE_LINE_SIZE) pg_atomic_uint64 cons_head;
+				alignas(PG_CACHE_LINE_SIZE) PgAioWorkerSQE sqes[FLEXIBLE_ARRAY_MEMBER];
 } PgAioWorkerSubmissionQueue;
 
 typedef struct PgAioWorkerSlot
@@ -80,6 +94,7 @@ typedef struct PgAioWorkerSlot
  * high, so we might want to consider multiple pools instead of widening this.
  */
 typedef uint64 PgAioWorkerSet;
+typedef pg_atomic_uint64 PgAioWorkerSetAtomic;
 
 #define PGAIO_WORKER_SET_BITS (sizeof(PgAioWorkerSet) * CHAR_BIT)
 
@@ -100,8 +115,7 @@ typedef struct PgAioWorkerControl
 	/* Seen by postmaster */
 	volatile bool grow;
 
-	/* Protected by AioWorkerSubmissionQueueLock. */
-	PgAioWorkerSet idle_worker_set;
+	PgAioWorkerSetAtomic idle_worker_set;
 
 	/* Protected by AioWorkerControlLock. */
 	PgAioWorkerSet worker_set;
@@ -230,6 +244,32 @@ pgaio_worker_set_count(PgAioWorkerSet *set)
 }
 #endif
 
+static PgAioWorkerSet
+pgaio_worker_set_read_atomic(PgAioWorkerSetAtomic * set)
+{
+	return pg_atomic_read_u64(set);
+}
+
+static bool
+pgaio_worker_set_remove_atomic(PgAioWorkerSetAtomic * set, int worker)
+{
+	PgAioWorkerSet old;
+
+	old = pg_atomic_fetch_and_u64(set, ~(pgaio_worker_set_singleton(worker)));
+
+	return old & pgaio_worker_set_singleton(worker);
+}
+
+static bool
+pgaio_worker_set_insert_atomic(PgAioWorkerSetAtomic * set, int worker)
+{
+	PgAioWorkerSet old;
+
+	old = pg_atomic_fetch_or_u64(set, pgaio_worker_set_singleton(worker));
+
+	return !(old & pgaio_worker_set_singleton(worker));
+}
+
 static size_t
 pgaio_worker_queue_shmem_size(int *queue_size)
 {
@@ -271,10 +311,17 @@ pgaio_worker_shmem_init(bool first_time)
 						&found);
 	if (!found)
 	{
-		ConditionVariableInit(&io_worker_submission_queue->space_cv);
-		io_worker_submission_queue->size = queue_size;
-		io_worker_submission_queue->head = 0;
-		io_worker_submission_queue->tail = 0;
+		PgAioWorkerSubmissionQueue *queue = io_worker_submission_queue;
+
+		ConditionVariableInit(&queue->space_cv);
+		queue->size = queue_size;
+		pg_atomic_init_u64(&queue->prod_head, queue_size);
+		pg_atomic_init_u64(&queue->cons_head, queue_size);
+		for (int i = 0; i < queue_size; ++i)
+		{
+			pg_atomic_init_u64(&queue->sqes[i].prod_tail, 0);
+			pg_atomic_init_u64(&queue->sqes[i].cons_tail, i);
+		}
 	}
 
 	io_worker_control =
@@ -285,7 +332,7 @@ pgaio_worker_shmem_init(bool first_time)
 	{
 		io_worker_control->grow = false;
 		pgaio_worker_set_initialize(&io_worker_control->worker_set);
-		pgaio_worker_set_initialize(&io_worker_control->idle_worker_set);
+		pg_atomic_init_u64(&io_worker_control->idle_worker_set, 0);
 		for (int i = 0; i < MAX_IO_WORKERS; ++i)
 			io_worker_control->workers[i].proc_number = INVALID_PROC_NUMBER;
 
@@ -351,16 +398,17 @@ pgaio_worker_choose_idle(int minimum_worker)
 	PgAioWorkerSet worker_set;
 	int			worker;
 
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+	do
+	{
+		worker_set = pgaio_worker_set_read_atomic(&io_worker_control->idle_worker_set);
+		pgaio_worker_set_remove_less_than(&worker_set, minimum_worker);
 
-	worker_set = io_worker_control->idle_worker_set;
-	pgaio_worker_set_remove_less_than(&worker_set, minimum_worker);
-	if (pgaio_worker_set_is_empty(&worker_set))
-		return -1;
+		if (worker_set == 0)
+			return -1;
 
-	/* Find the lowest numbered idle worker and mark it not idle. */
-	worker = pgaio_worker_set_get_lowest(&worker_set);
-	pgaio_worker_set_remove(&io_worker_control->idle_worker_set, worker);
+		worker = pgaio_worker_set_get_lowest(&worker_set);
+	} while (!pgaio_worker_set_remove_atomic(&io_worker_control->idle_worker_set,
+											 worker));
 
 	return worker;
 }
@@ -386,64 +434,143 @@ pgaio_worker_wake(int worker)
 		SetLatch(&GetPGProcByNumber(proc_number)->procLatch);
 }
 
-static bool
-pgaio_worker_submission_queue_insert(PgAioHandle *ioh)
+/*
+ * Insert up to n handles into a submission queue, and return the number that
+ * were inserted.
+ */
+static int
+pgaio_worker_enqueue(PgAioWorkerSubmissionQueue *queue,
+					 uint16 num_staged_ios,
+					 PgAioHandle **staged_ios)
 {
-	PgAioWorkerSubmissionQueue *queue;
-	uint32		new_head;
+	uint64		prod_head;
+	uint32		mask;
+	int			reserved;
+	int			cas_loops = 0;
 
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+	mask = queue->size - 1;
 
-	queue = io_worker_submission_queue;
-	new_head = (queue->head + 1) & (queue->size - 1);
-	if (new_head == queue->tail)
+	prod_head = pg_atomic_read_u64(&queue->prod_head);
+
+	do
 	{
-		pgaio_debug(DEBUG3, "io queue is full, at %u elements",
-					io_worker_submission_queue->size);
-		return false;			/* full */
+		/* Rescue bulk-insertions if they keep failing. */
+		cas_loops++;
+		if (unlikely(num_staged_ios > 1 && cas_loops > 2))
+			goto enqueue_one_at_a_time;
+
+		/* Collect free entries. */
+		reserved = 0;
+		while (reserved < num_staged_ios)
+		{
+			int			index;
+			uint64		cons_tail;
+
+			/* Previous generation contents not yet consumed? */
+			index = (prod_head + reserved) & mask;
+			cons_tail = pg_atomic_read_u64(&queue->sqes[index].cons_tail);
+			if (cons_tail < prod_head - queue->size)
+			{
+				elog(LOG, "enqueue giving up! %zu < %zu", cons_tail, prod_head - queue->size);
+				break;
+			}
+
+			reserved++;
+		}
+
+		/* Totally full? */
+		if (reserved == 0)
+			return 0;
+	}
+	while (!pg_atomic_compare_exchange_u64(&queue->prod_head,
+										   &prod_head,
+										   prod_head + reserved));
+
+	elog(LOG, "enqueued prod_head %zu", prod_head);
+	/* Write the IDs out. */
+	for (int i = 0; i < reserved; ++i)
+		queue->sqes[(prod_head + i) & mask].id =
+			staged_ios[i] - pgaio_ctl->io_handles;
+
+	pg_write_barrier();
+
+	/*
+	 * Mark them finished.
+	 *
+	 * (Typical implementations would wait for a single prod_tail variable to
+	 * reach prod_head before advancing it to prod_head + reserved, ie for
+	 * concurrent enqueue() calls that started before this one to finish first
+	 * too.  We don't need that kind of linearizability, and we certainly
+	 * don't want a chain of spinning backends just because someone gets
+	 * descheduled at a bad time.)
+	 */
+	for (int i = 0; i < reserved; ++i)
+	{
+		elog(LOG, "sqes[%zu].prod_tail = %zu", prod_head + i, prod_head + i);
+		pg_atomic_write_u64(&queue->sqes[(prod_head + i) & mask].prod_tail,
+							prod_head + i);
 	}
 
-	queue->sqes[queue->head] = pgaio_io_get_id(ioh);
-	queue->head = new_head;
+	return reserved;
 
-	return true;
+enqueue_one_at_a_time:
+	for (int i = 0; i < num_staged_ios; ++i)
+		if (pgaio_worker_enqueue(queue, 1, &staged_ios[i]) == 0)
+			return i;
+	return num_staged_ios;
 }
 
+static PgAioHandle *
+pgaio_worker_dequeue(PgAioWorkerSubmissionQueue *queue)
+{
+	uint64		cons_head;
+	uint32		id;
+	int			index;
+	bool		was_full;
+
+	do
+	{
+		cons_head = pg_atomic_read_u64(&queue->cons_head);
+		index = cons_head & (queue->size - 1);
+
+		/*
+		 * If enqueue() is still in progress, treat queue as empty.  Due to
+		 * out of order enqueue() completion, that might not be true 100% of
+		 * the time, but we recover.
+		 */
+		if (pg_atomic_read_u64(&queue->sqes[index].prod_tail) < cons_head)
+			return NULL;
+	}
+	while (!pg_atomic_compare_exchange_u64(&queue->cons_head,
+										   &cons_head,
+										   cons_head + 1));
+
+	id = queue->sqes[index].id;
+
+	/* Are we transitioning from entirely full to having one free entry? */
+	was_full = pg_atomic_read_u64(&queue->sqes[(cons_head + 2) &
+											   (queue->size - 1)].prod_tail) ==
+		cons_head + 2;
+
+	/* Release this entry. */
+	pg_atomic_write_u64(&queue->sqes[index].cons_tail, cons_head);
+
+	if (was_full)
+		ConditionVariableBroadcast(&queue->space_cv);
+
+	return &pgaio_ctl->io_handles[id];
+}
+
+/*
+ * Inconsistent snapshot of queue depth, used to trigger pool growth.
+ */
 static int
-pgaio_worker_submission_queue_consume(void)
+pgaio_worker_approx_queue_depth(PgAioWorkerSubmissionQueue *queue)
 {
-	PgAioWorkerSubmissionQueue *queue;
-	int			result;
+	uint64		prod_head = pg_atomic_read_u64(&queue->prod_head);
+	uint64		cons_head = pg_atomic_read_u64(&queue->cons_head);
 
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
-
-	queue = io_worker_submission_queue;
-	if (queue->tail == queue->head)
-		return -1;				/* empty */
-
-	result = queue->sqes[queue->tail];
-	queue->tail = (queue->tail + 1) & (queue->size - 1);
-
-	return result;
-}
-
-static uint32
-pgaio_worker_submission_queue_depth(void)
-{
-	uint32		head;
-	uint32		tail;
-
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
-
-	head = io_worker_submission_queue->head;
-	tail = io_worker_submission_queue->tail;
-
-	if (tail > head)
-		head += io_worker_submission_queue->size;
-
-	Assert(head >= tail);
-
-	return head - tail;
+	return prod_head > cons_head ? prod_head - cons_head : 0;
 }
 
 static bool
@@ -458,98 +585,57 @@ pgaio_worker_needs_synchronous_execution(PgAioHandle *ioh)
 static int
 pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 {
-	PgAioHandle **synchronous_ios = NULL;
-	int			nsync = 0;
+	int			enqueued;
+	int			remaining;
 	int			worker = -1;
 
 	Assert(num_staged_ios <= PGAIO_SUBMIT_BATCH_SIZE);
 
 	for (int i = 0; i < num_staged_ios; i++)
+	{
 		pgaio_io_prepare_submit(staged_ios[i]);
-
-	/* If synchronous fallback is not enabled, we have to wait for the lock. */
-	if (!io_worker_overflow_sync)
-		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-
-	/*
-	 * If synchronous fallback is enabled, we also follow that path if we
-	 * can't acquire the submission lock immediate.
-	 */
-	if (!io_worker_overflow_sync ||
-		LWLockConditionalAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE))
-	{
-		for (int i = 0; i < num_staged_ios; ++i)
-		{
-			Assert(!pgaio_worker_needs_synchronous_execution(staged_ios[i]));
-			if (!pgaio_worker_submission_queue_insert(staged_ios[i]))
-			{
-				if (!io_worker_overflow_sync)
-				{
-					/* Wait for at least one IO to be drained and try again. */
-					ConditionVariablePrepareToSleep(&io_worker_submission_queue->space_cv);
-					LWLockRelease(AioWorkerSubmissionQueueLock);
-					ConditionVariableSleep(&io_worker_submission_queue->space_cv,
-										   WAIT_EVENT_AIO_WORKER_SUBMISSION);
-					LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-					ConditionVariableCancelSleep();
-					continue;
-				}
-
-				/*
-				 * Do the rest synchronously. If the queue is full, give up
-				 * and do the rest synchronously. We're holding an exclusive
-				 * lock on the queue so nothing can consume entries.
-				 */
-				synchronous_ios = &staged_ios[i];
-				nsync = (num_staged_ios - i);
-
-				break;
-			}
-		}
-
-		if (worker == -1)
-		{
-			/* Choose an idle worker to wake up if we haven't already. */
-			worker = pgaio_worker_choose_idle(0);
-		}
-		LWLockRelease(AioWorkerSubmissionQueueLock);
+		Assert(!pgaio_worker_needs_synchronous_execution(staged_ios[i]));
 	}
-	else
+
+	remaining = num_staged_ios;
+	for (;;)
 	{
-		/* do everything synchronously, no wakeup needed */
-		synchronous_ios = staged_ios;
-		nsync = num_staged_ios;
+		enqueued = pgaio_worker_enqueue(io_worker_submission_queue,
+										remaining,
+										staged_ios);
+		remaining -= enqueued;
+		staged_ios += enqueued;
+		if (remaining == 0 || io_worker_overflow_sync)
+			break;
+
+		/* Wait for at least one IO to be drained and try again. */
+		ConditionVariableSleep(&io_worker_submission_queue->space_cv,
+							   WAIT_EVENT_AIO_WORKER_SUBMISSION);
 	}
 
 	/*
-	 * If we didn't find a worker to wake up, the existing workers will
+	 * If we don't find a worker to wake up, the existing workers will
 	 * determine whether the pool is too small.
 	 */
-	if (worker != -1)
+	if ((worker = pgaio_worker_choose_idle(0)) != -1)
 		pgaio_worker_wake(worker);
 
 	/* Run whatever is left synchronously. */
-	while (nsync > 0)
+	while (remaining > 0)
 	{
-		pgaio_io_perform_synchronously(*synchronous_ios++);
-		nsync--;
+		pgaio_io_perform_synchronously(*staged_ios++);
+		remaining -= 1;
 
 		/* Between synchronous operations, try to enqueue again. */
-		if (nsync > 0)
+		if (remaining > 0)
 		{
-			worker = -1;
-			if (LWLockConditionalAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE))
-			{
-				while (pgaio_worker_submission_queue_insert(*synchronous_ios))
-				{
-					synchronous_ios++;
-					nsync--;
-					if (worker == -1)
-						worker = pgaio_worker_choose_idle(0);
-				}
-				LWLockRelease(AioWorkerSubmissionQueueLock);
-			}
-			if (worker != -1)
+			enqueued = pgaio_worker_enqueue(io_worker_submission_queue,
+											remaining,
+											staged_ios);
+			staged_ios += enqueued;
+			remaining -= enqueued;
+			if (enqueued > 0 &&
+				(worker = pgaio_worker_choose_idle(0)) != -1)
 				pgaio_worker_wake(worker);
 		}
 	}
@@ -566,9 +652,8 @@ pgaio_worker_die(int code, Datum arg)
 {
 	PgAioWorkerSet notify_set;
 
-	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-	pgaio_worker_set_remove(&io_worker_control->idle_worker_set, MyIoWorkerId);
-	LWLockRelease(AioWorkerSubmissionQueueLock);
+	pgaio_worker_set_remove_atomic(&io_worker_control->idle_worker_set,
+								   MyIoWorkerId);
 
 	LWLockAcquire(AioWorkerControlLock, LW_EXCLUSIVE);
 	Assert(io_worker_control->workers[MyIoWorkerId].proc_number == MyProcNumber);
@@ -830,29 +915,24 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 
 	while (!ShutdownRequestPending)
 	{
-		uint32		io_index;
-		int			worker = -1;
-		int			queue_depth = 0;
-		bool		grow = false;
+		PgAioHandle *ioh;
 
-		/*
-		 * Try to get a job to do.
-		 *
-		 * The lwlock acquisition also provides the necessary memory barrier
-		 * to ensure that we don't see an outdated data in the handle.
-		 */
-		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-		if ((io_index = pgaio_worker_submission_queue_consume()) == -1)
+		/* Try to get a job to do. */
+		ioh = pgaio_worker_dequeue(io_worker_submission_queue);
+
+		if (ioh == NULL)
 		{
+			elog(LOG, "nothing");
 			/* Nothing to do.  Mark self idle. */
-			pgaio_worker_set_insert(&io_worker_control->idle_worker_set,
-									MyIoWorkerId);
+			pgaio_worker_set_insert_atomic(&io_worker_control->idle_worker_set,
+										   MyIoWorkerId);
 		}
 		else
 		{
-			/* Got one.  Clear idle flag. */
-			pgaio_worker_set_remove(&io_worker_control->idle_worker_set,
-									MyIoWorkerId);
+			elog(LOG, "something");
+			/* Got one.  Clear idle flag. XXX */
+			pgaio_worker_set_remove_atomic(&io_worker_control->idle_worker_set,
+										   MyIoWorkerId);
 
 			/*
 			 * See if we should wake up a higher numbered peer.  Only do this
@@ -861,34 +941,25 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			 */
 			if (wakeups <= ios)
 			{
-				queue_depth = pgaio_worker_submission_queue_depth();
-				worker = pgaio_worker_choose_idle(MyIoWorkerId + 1);
+				int			worker = pgaio_worker_choose_idle(MyIoWorkerId + 1);
+
+				elog(LOG, "wakesup:ios %d:%d", wakeups, ios);
 
 				/*
 				 * If there were no idle higher numbered peers and there are
 				 * more than enough IOs queued for me and all lower numbered
 				 * peers, then try to start a new worker.
 				 */
-				if (worker == -1 && queue_depth > MyIoWorkerId)
-					grow = true;
+				if (worker != -1)
+					pgaio_worker_wake(worker);
+				else if (pgaio_worker_approx_queue_depth(io_worker_submission_queue) >
+						 MyIoWorkerId)
+					pgaio_worker_grow(true);
 			}
 		}
-		LWLockRelease(AioWorkerSubmissionQueueLock);
 
-		/* Propagate wakeups. */
-		if (worker != -1)
-			pgaio_worker_wake(worker);
-		else if (grow)
-			pgaio_worker_grow(true);
-
-		if (io_index != -1)
+		if (ioh)
 		{
-			PgAioHandle *ioh = NULL;
-
-			/* If the queue was previously full, wake potential inserters. */
-			if (queue_depth == io_worker_submission_queue->size - 2)
-				ConditionVariableBroadcast(&io_worker_submission_queue->space_cv);
-
 			/* Cancel timeout and update wakeup:work ratio. */
 			idle_timeout_abs = 0;
 			if (++ios == PGAIO_WORKER_STATS_MAX)
@@ -897,7 +968,6 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 				wakeups /= 2;
 			}
 
-			ioh = &pgaio_ctl->io_handles[io_index];
 			error_ioh = ioh;
 			errcallback.arg = ioh;
 
