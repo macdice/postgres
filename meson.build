@@ -679,6 +679,14 @@ test_lib_d = postgres_lib_d
 test_c_args = cppflags + cflags
 
 
+###############################################################
+# Library: non-portable pthread extensions
+###############################################################
+
+if cc.check_header('pthread_np.h')
+  cdata.set('HAVE_PTHREAD_NP_H', 1)
+endif
+
 
 ###############################################################
 # Library: bsd-auth
@@ -3095,6 +3103,7 @@ func_checks = [
   ['clock_gettime', {'dependencies': [rt_dep], 'define': false}],
   ['copyfile'],
   ['copy_file_range'],
+  ['cpuset_getaffinity'],
   # gcc/clang's sanitizer helper library provides dlopen but not dlsym, thus
   # when enabling asan the dlopen check doesn't notice that -ldl is actually
   # required. Just checking for dlsym() ought to suffice.
@@ -3119,7 +3128,9 @@ func_checks = [
   ['posix_fallocate'],
   ['ppoll'],
   ['pthread_barrier_wait', {'dependencies': [thread_dep]}],
+  ['pthread_getaffinity_np', {'dependencies': [thread_dep]}],
   ['pthread_is_threaded_np', {'dependencies': [thread_dep]}],
+  ['sched_getaffinity'],
   ['sched_getcpu'],
   ['sem_init', {'dependencies': [rt_dep, thread_dep], 'skip': sema_kind != 'unnamed_posix', 'define': false}],
   ['setproctitle', {'dependencies': [util_dep]}],

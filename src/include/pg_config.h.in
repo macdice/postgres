@@ -66,6 +66,9 @@
 /* Define to 1 if you have the `copy_file_range' function. */
 #undef HAVE_COPY_FILE_RANGE
 
+/* Define to 1 if you have the `cpuset_getaffinity' function. */
+#undef HAVE_CPUSET_GETAFFINITY
+
 /* Define to 1 if you have the <crtdefs.h> header file. */
 #undef HAVE_CRTDEFS_H
 
@@ -318,6 +321,9 @@
 /* Define to 1 if you have the `pthread_is_threaded_np' function. */
 #undef HAVE_PTHREAD_IS_THREADED_NP
 
+/* Define to 1 if you have the <pthread_np.h> header file. */
+#undef HAVE_PTHREAD_NP_H
+
 /* Have PTHREAD_PRIO_INHERIT. */
 #undef HAVE_PTHREAD_PRIO_INHERIT
 
@@ -353,6 +359,9 @@
 
 /* Define to 1 if you have the `rl_variable_bind' function. */
 #undef HAVE_RL_VARIABLE_BIND
+
+/* Define to 1 if you have the `sched_getaffinity' function. */
+#undef HAVE_SCHED_GETAFFINITY
 
 /* Define to 1 if you have the `sched_getcpu' function. */
 #undef HAVE_SCHED_GETCPU

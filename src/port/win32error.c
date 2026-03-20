@@ -25,6 +25,9 @@ static const struct
 
 {
 	{
+		ERROR_INSUFFICIENT_BUFFER, ENOBUFS
+	},
+	{
 		ERROR_INVALID_FUNCTION, EINVAL
 	},
 	{
