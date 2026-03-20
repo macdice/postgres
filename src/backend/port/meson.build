@@ -2,6 +2,7 @@
 
 backend_sources += files(
   'atomics.c',
+  'pg_cpuset.c'
 )
 
 

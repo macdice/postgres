@@ -1850,7 +1850,9 @@ AC_CHECK_FUNCS(m4_normalize([
 	posix_fallocate
 	ppoll
 	pthread_is_threaded_np
+	sched_getaffinity
 	sched_getcpu
+	sched_setaffinity
 	setproctitle
 	setproctitle_fast
 	strsignal

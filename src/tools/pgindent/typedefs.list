@@ -3961,6 +3961,11 @@ pg_conn_host
 pg_conn_host_type
 pg_conv_map
 pg_cpu_t
+pg_cpuset_iterator
+pg_cpuset_t
+pg_cpuset_table
+pg_cpuset_table_index_t
+pg_cpuset_table_map_hash_t
 pg_crc32
 pg_crc32c
 pg_cryptohash_ctx
