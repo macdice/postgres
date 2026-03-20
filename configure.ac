@@ -1383,6 +1383,7 @@ AC_SEARCH_LIBS(shmget, cygipc)
 AC_SEARCH_LIBS(backtrace_symbols, execinfo)
 
 AC_SEARCH_LIBS(pthread_barrier_wait, pthread)
+AC_SEARCH_LIBS(pthread_getaffinity_np, pthread)
 
 if test "$with_readline" = yes; then
   PGAC_CHECK_READLINE
@@ -1552,6 +1553,7 @@ AC_CHECK_HEADERS(m4_normalize([
 	execinfo.h
 	getopt.h
 	ifaddrs.h
+	pthread_np.h
 	sys/epoll.h
 	sys/event.h
 	sys/personality.h
@@ -1833,6 +1835,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	backtrace_symbols
 	copyfile
 	copy_file_range
+	cpuset_getaffinity
 	elf_aux_info
 	explicit_memset
 	getauxval
@@ -1846,6 +1849,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	posix_fallocate
 	ppoll
 	pthread_is_threaded_np
+	sched_getaffinity
 	sched_getcpu
 	setproctitle
 	setproctitle_fast
