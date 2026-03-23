@@ -26,6 +26,8 @@
 /* Native representation of CPU sets.  Not currently exposed. */
 #if defined(HAVE_SCHED_GETAFFINITY)
 typedef cpu_set_t pg_cpuset_t;
+#elif defined(HAVE_CPUSET_GETAFFINITY)
+typedef cpuset_t pg_cpuset_t;
 #else
 typedef void pg_cpuset_t;
 #endif
@@ -34,7 +36,7 @@ typedef void pg_cpuset_t;
  * De facto compatible cpu_set_t manipulation macros are found in many OSes
  * and APIs (<sched.h>, <pthread.h> extensions, Linux, *BSD, ...).
  */
-#if defined(HAVE_SCHED_GETAFFINITY)
+#if defined(HAVE_SCHED_GETAFFINITY) || defined(HAVE_CPUSET_GETAFFINITY)
 #define HAVE_CPU_SET_MACROS
 #endif
 
@@ -183,6 +185,18 @@ pg_cpuset_get_affinity(void)
 
 	pfree(result);
 	return NULL;
+#elif defined(HAVE_CPUSET_GETAFFINITY)
+	pg_cpuset_t *result = palloc_object(pg_cpuset_t);
+
+	if (cpuset_getaffinity(CPU_LEVEL_WHICH,
+						   CPU_WHICH_PID,
+						   getpid(),
+						   sizeof(*result),
+						   result) == 0)
+		return result;
+
+	pfree(result);
+	return NULL;
 #else
 	errno = ENOSYS;
 	return NULL;
@@ -196,6 +210,13 @@ pg_cpuset_set_affinity(const pg_cpuset_t *set)
 
 #if defined(HAVE_SCHED_SETAFFINITY)
 	if (sched_setaffinity(getpid(), sizeof(*set), set) == 0)
+		result = 0;
+#elif defined(HAVE_CPUSET_SETAFFINITY)
+	if (cpuset_setaffinity(CPU_LEVEL_WHICH,
+						   CPU_WHICH_PID,
+						   getpid(),
+						   sizeof(*set),
+						   set) == 0)
 		result = 0;
 #else
 	errno = ENOSYS;

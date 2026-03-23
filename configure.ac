@@ -1835,6 +1835,8 @@ AC_CHECK_FUNCS(m4_normalize([
 	backtrace_symbols
 	copyfile
 	copy_file_range
+	cpuset_getaffinity
+	cpuset_setaffinity
 	elf_aux_info
 	explicit_memset
 	getauxval
