@@ -165,6 +165,9 @@
 /* Define to 1 if you have the `getauxval' function. */
 #undef HAVE_GETAUXVAL
 
+/* Define to 1 if you have the `getcpuid' function. */
+#undef HAVE_GETCPUID
+
 /* Define to 1 if you have the `getifaddrs' function. */
 #undef HAVE_GETIFADDRS
 
@@ -353,6 +356,9 @@
 
 /* Define to 1 if you have the `rl_variable_bind' function. */
 #undef HAVE_RL_VARIABLE_BIND
+
+/* Define to 1 if you have the `sched_getcpu' function. */
+#undef HAVE_SCHED_GETCPU
 
 /* Define to 1 if you have the <security/pam_appl.h> header file. */
 #undef HAVE_SECURITY_PAM_APPL_H

@@ -3960,6 +3960,7 @@ pg_compress_specification
 pg_conn_host
 pg_conn_host_type
 pg_conv_map
+pg_cpu_t
 pg_crc32
 pg_crc32c
 pg_cryptohash_ctx

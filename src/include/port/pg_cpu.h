@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pg_cpu.h
- *	  Runtime CPU feature detection
+ *	  Identification of CPUs and runtime feature checks.
  *
  * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -12,6 +12,52 @@
  */
 #ifndef PG_CPU_H
 #define PG_CPU_H
+
+#ifdef HAVE_SCHED_GETCPU
+#include <sched.h>
+#endif
+#ifdef HAVE_GETCPUID
+#include <sys/processor.h>
+#endif
+#ifdef WIN32
+#include <windows.h>
+#endif
+
+/* Type used to identify logical processors in system APIs. */
+#ifndef WIN32
+typedef int pg_cpu_t;
+#define PG_CPU_FORMAT "%d"
+#define PG_CPU_FORMAT_ARG(x) x
+#else
+/*
+ * Prefer the the two-part CPU identifier format that supports more than 64
+ * logical CPUs.
+ */
+typedef PROCESSOR_NUMBER pg_cpu_t;
+#define PG_CPU_FORMAT "%d:%d"
+#define PG_CPU_FORMAT_ARG(x) (x).Group, (x).Number
+#endif
+
+/*
+ * Return the CPU that the caller is running on as of this very instant.
+ * Returns 0 if we don't have support on this system.  This can't fail.
+ */
+static inline pg_cpu_t
+pg_cpu_current(void)
+{
+#if defined(HAVE_SCHED_GETCPU)
+	return sched_getcpu();		/* Linux, FreeBSD */
+#elif defined(GETCPUID)
+	return getcpuid();			/* Solaris, illumos */
+#elif defined(WIN32)
+	pg_cpu_t	cpu;
+
+	GetCurrentProcessorNumberEx(&cpu);
+	return cpu;
+#else
+	return 0;
+#endif
+}
 
 #if defined(USE_SSE2) || defined(__i386__)
 
