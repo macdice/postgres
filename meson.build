@@ -3120,6 +3120,7 @@ func_checks = [
   ['ppoll'],
   ['pthread_barrier_wait', {'dependencies': [thread_dep]}],
   ['pthread_is_threaded_np', {'dependencies': [thread_dep]}],
+  ['sched_getcpu'],
   ['sem_init', {'dependencies': [rt_dep, thread_dep], 'skip': sema_kind != 'unnamed_posix', 'define': false}],
   ['setproctitle', {'dependencies': [util_dep]}],
   ['setproctitle_fast'],
