@@ -168,6 +168,9 @@
 /* Define to 1 if you have the `getauxval' function. */
 #undef HAVE_GETAUXVAL
 
+/* Define to 1 if you have the `getcpu' function. */
+#undef HAVE_GETCPU
+
 /* Define to 1 if you have the `getifaddrs' function. */
 #undef HAVE_GETIFADDRS
 

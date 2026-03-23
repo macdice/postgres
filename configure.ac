@@ -1839,6 +1839,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	elf_aux_info
 	explicit_memset
 	getauxval
+	getcpu
 	getifaddrs
 	getpeerucred
 	inet_pton
