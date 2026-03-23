@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "miscadmin.h"
+#include "port/pg_bitutils.h"
 #include "port/pg_numa.h"
 
 /*
@@ -118,6 +119,172 @@ pg_numa_get_max_node(void)
 	return numa_max_node();
 }
 
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	return numa_node_of_cpu(cpu);
+}
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset)
+{
+	struct bitmask *mask;
+	int			possible_cpus;
+
+	pg_cpuset_initialize(cpuset);
+
+	if (numa_available() < 0)
+		return 0;
+
+	possible_cpus = numa_num_possible_cpus();
+	mask = numa_allocate_cpumask();
+	if (mask == NULL)
+		return -1;
+	if (numa_node_to_cpus(node, mask) < 0)
+	{
+		numa_free_cpumask(mask);
+		return -1;
+	}
+	for (int i = 0; i < possible_cpus; ++i)
+		if (numa_bitmask_isbitset(mask, i))
+			pg_cpuset_add(cpuset, i);
+	numa_free_cpumask(mask);
+
+	return 0;
+}
+
+#elif defined(__FreeBSD__)
+
+#include <sys/sysctl.h>
+
+int
+pg_numa_init(void)
+{
+	return -1;
+}
+
+int
+pg_numa_query_pages(int pid, unsigned long count, void **pages, int *status)
+{
+	return 0;
+}
+
+int
+pg_numa_get_max_node(void)
+{
+	int			ndomains;
+	size_t		size = sizeof(ndomains);
+
+	if (sysctlbyname("vm.ndomains", &ndomains, &size, NULL, 0) < 0)
+		return 0;
+
+	return ndomains > 0 ? ndomains - 1 : 0;
+}
+
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	return 0;
+}
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset)
+{
+	pg_cpuset_initialize(cpuset);
+	for (int i = 0;; ++i)
+	{
+		char		name[80];
+		int			domain;
+		size_t		size = sizeof(domain);
+
+		snprintf(name, sizeof(name), "dev.cpu.%d.%%domain", i);
+		size = sizeof(int);
+		if (sysctlbyname(name, &domain, &size, NULL, 0) < 0)
+		{
+			if (errno != ENOENT)
+				return -1;
+			break;
+		}
+		if (node == domain)
+			pg_cpuset_add(cpuset, i);
+	}
+	return 0;
+}
+
+#elif defined(WIN32)
+
+#include <windows.h>
+
+int
+pg_numa_init(void)
+{
+	return -1;
+}
+
+int
+pg_numa_query_pages(int pid, unsigned long count, void **pages, int *status)
+{
+	return 0;
+}
+
+int
+pg_numa_get_max_node(void)
+{
+	ULONG		node;
+
+	return GetNumaHighestNodeNumber(&node) ? node : 0;
+}
+
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	USHORT		node;
+
+	return GetNumaProcessorNodeEx(&cpu, &node) ? node : 0;
+}
+
+typedef BOOL (WINAPI * GetNumaNodeProcessorMask2_t) (USHORT,
+													 PGROUP_AFFINITY,
+													 USHORT,
+													 PUSHORT);
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset)
+{
+	HMODULE		kernel32;
+	void	   *func;
+	GetNumaNodeProcessorMask2_t GetNumaNodeProcessorMask2_func;
+
+	/*
+	 * There is a newer function that works with systems that have more than
+	 * 64 CPUs per NUMA node, available since Windows Server 2022/Windows 11.
+	 * MinGW doesn't seem to know about it, so let's grovel it out of
+	 * kernel32.dll and provide a fallback.
+	 */
+	kernel32 = GetModuleHandle(TEXT("kernel32.dll"));
+	if (kernel32 && (func = GetProcAddress(kernel32, "GetNumaNodeProcessorMask2")))
+	{
+		GetNumaNodeProcessorMask2_func = (GetNumaNodeProcessorMask2_t) func;
+
+		if (GetNumaNodeProcessorMask2_func(node,
+										   &cpuset->masks[0],
+										   lengthof(cpuset->masks),
+										   &cpuset->count))
+			return 0;
+		_dosmaperr(GetLastError());
+		return -1;
+	}
+	else
+	{
+		/* The old version can only handle 64 CPUs per NUMA node. */
+		cpuset->count = 1;
+		if (GetNumaNodeProcessorMaskEx(node, &cpuset->masks[0]))
+			return 0;
+		_dosmaperr(GetLastError());
+		return -1;
+	}
+}
+
 #else
 
 /* Empty wrappers */
@@ -136,6 +303,18 @@ pg_numa_query_pages(int pid, unsigned long count, void **pages, int *status)
 
 int
 pg_numa_get_max_node(void)
+{
+	return 0;
+}
+
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	return 0;
+}
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset)
 {
 	return 0;
 }
