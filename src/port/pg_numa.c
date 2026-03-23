@@ -118,6 +118,40 @@ pg_numa_get_max_node(void)
 	return numa_max_node();
 }
 
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	return numa_node_of_cpu(cpu);
+}
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpu_t *cpus, int max_cpus)
+{
+	int			ncpus;
+	int			possible_cpus;
+	struct bitmask *mask;
+
+	if (numa_available() < 0)
+		return 0;
+
+	possible_cpus = numa_num_possible_cpus();
+	mask = numa_allocate_cpumask();
+	if (mask == NULL)
+		return -1;
+	if (numa_node_to_cpus(node, mask) < 0)
+	{
+		numa_free_cpumask(mask);
+		return -1;
+	}
+	ncpus = 0;
+	for (int i = 0; i < possible_cpus && ncpus < max_cpus; ++i)
+		if (numa_bitmask_isbitset(mask, i))
+			cpus[ncpus++] = i;
+	numa_free_cpumask(mask);
+
+	return ncpus;
+}
+
 #else
 
 /* Empty wrappers */
@@ -136,6 +170,18 @@ pg_numa_query_pages(int pid, unsigned long count, void **pages, int *status)
 
 int
 pg_numa_get_max_node(void)
+{
+	return 0;
+}
+
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	return 0;
+}
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpu_t *cpus, int max_cpus)
 {
 	return 0;
 }
