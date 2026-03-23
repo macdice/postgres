@@ -17,10 +17,13 @@
 #ifdef HAVE_GETCPU
 #include <sched.h>
 #endif
+#ifdef WIN32
+#include <windows.h>
+#endif
 
 #include "port/pg_cpu.h"
 
-#if defined(USE_LIBNUMA)
+#if defined(USE_LIBNUMA) || defined(WIN32)
 #define PG_NUMA_HAVE_WORKING_GET_NODE_FOR_CPU
 #endif
 
@@ -64,6 +67,12 @@ pg_numa_get_current_node(void)
 	/* The only specified error is EFAULT. */
 	getcpu(NULL, &node);
 	return node;
+#elif defined(WIN32)
+#define PG_NUMA_HAVE_WORKING_GET_CURRENT_NODE
+	pg_cpu_t	cpu = pg_cpu_current();
+	USHORT		node;
+
+	return GetNumaProcessorNodeEx(&cpu, &node) ? node : 0;
 #else
 	return 0;
 #endif

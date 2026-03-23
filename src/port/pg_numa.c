@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "miscadmin.h"
+#include "port/pg_bitutils.h"
 #include "port/pg_numa.h"
 
 /*
@@ -204,6 +205,112 @@ pg_numa_get_cpus_for_node(int node, pg_cpu_t *cpus, int max_cpus)
 		if (node == domain)
 			cpus[ncpus++] = i;
 	}
+	return ncpus;
+}
+
+#elif defined(WIN32)
+
+#include <windows.h>
+
+int
+pg_numa_init(void)
+{
+	return -1;
+}
+
+int
+pg_numa_query_pages(int pid, unsigned long count, void **pages, int *status)
+{
+	return 0;
+}
+
+int
+pg_numa_get_max_node(void)
+{
+	ULONG		node;
+
+	return GetNumaHighestNodeNumber(&node) ? node : 0;
+}
+
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	USHORT		node;
+
+	return GetNumaProcessorNodeEx(&cpu, &node) ? node : 0;
+}
+
+typedef BOOL (WINAPI * GetNumaNodeProcessorMask2_t) (USHORT,
+													 PGROUP_AFFINITY,
+													 USHORT,
+													 PUSHORT);
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpu_t *cpus, int max_cpus)
+{
+	GROUP_AFFINITY masks[1024];
+	USHORT		count;
+	int			max_masks;
+	int			ncpus;
+	HMODULE		kernel32;
+	void	   *func;
+	GetNumaNodeProcessorMask2_t GetNumaNodeProcessorMask2_func;
+
+	/*
+	 * There is a newer function that works with large NUMA systems, available
+	 * since Windows Server 2022/Windows 11.  MinGW doesn't seem to know about
+	 * it, so let's grovel it out of kernel32.dll and provide a fallback.
+	 */
+	kernel32 = GetModuleHandle(TEXT("kernel32.dll"));
+	if (kernel32 && (func = GetProcAddress(kernel32, "GetNumaNodeProcessorMask2")))
+	{
+		GetNumaNodeProcessorMask2_func = (GetNumaNodeProcessorMask2_t) func;
+
+		/*
+		 * This version allows multiple processor groups per NUMA node, so you
+		 * can exceed the old limit of 64 processors per node.
+		 */
+		if ((max_masks = GetMaximumProcessorGroupCount()) == 0)
+		{
+			_dosmaperr(GetLastError());
+			return -1;
+		}
+		/* You'd need 65K CPUs in a node to exceed this array... */
+		max_masks = Min(lengthof(masks), max_masks);
+		if (!GetNumaNodeProcessorMask2_func(node,
+											masks,
+											max_masks,
+											&count))
+		{
+			_dosmaperr(GetLastError());
+			return -1;
+		}
+	}
+	else
+	{
+		/* This version can only handle one processor group per NUMA node. */
+		if (!GetNumaNodeProcessorMaskEx(node, &masks[0]))
+		{
+			_dosmaperr(GetLastError());
+			return -1;
+		}
+		count = 1;
+	}
+
+	/* Decode masks to output array. */
+	ncpus = 0;
+	for (int i = 0; i < count && ncpus < max_cpus; ++i)
+	{
+		while (masks[i].Mask != 0 && ncpus < max_cpus)
+		{
+			int			processor = pg_rightmost_one_pos64(masks[i].Mask);
+			pg_cpu_t	cpu = {masks[i].Group, processor};
+
+			cpus[ncpus++] = cpu;
+			masks[i].Mask &= (1 << processor);
+		}
+	}
+
 	return ncpus;
 }
 
