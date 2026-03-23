@@ -152,6 +152,61 @@ pg_numa_get_cpus_for_node(int node, pg_cpu_t *cpus, int max_cpus)
 	return ncpus;
 }
 
+#elif defined(__FreeBSD__)
+
+#include <sys/sysctl.h>
+
+int
+pg_numa_init(void)
+{
+	return -1;
+}
+
+int
+pg_numa_query_pages(int pid, unsigned long count, void **pages, int *status)
+{
+	return 0;
+}
+
+int
+pg_numa_get_max_node(void)
+{
+	int			ndomains;
+	size_t		size = sizeof(ndomains);
+
+	if (sysctlbyname("vm.ndomains", &ndomains, &size, NULL, 0) < 0)
+		return 0;
+
+	return ndomains > 0 ? ndomains - 1 : 0;
+}
+
+int
+pg_numa_get_node_for_cpu(pg_cpu_t cpu)
+{
+	return 0;
+}
+
+int
+pg_numa_get_cpus_for_node(int node, pg_cpu_t *cpus, int max_cpus)
+{
+	int			ncpus = 0;
+
+	for (int i = 0; ncpus < max_cpus; ++i)
+	{
+		char		name[80];
+		int			domain;
+		size_t		size = sizeof(domain);
+
+		snprintf(name, sizeof(name), "dev.cpu.%d.%%domain", i);
+		size = sizeof(int);
+		if (sysctlbyname(name, &domain, &size, NULL, 0) < 0)
+			break;
+		if (node == domain)
+			cpus[ncpus++] = i;
+	}
+	return ncpus;
+}
+
 #else
 
 /* Empty wrappers */
