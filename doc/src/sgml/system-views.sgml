@@ -1049,6 +1049,17 @@ AND c1.path[c2.level] = c2.path[c2.level];
       </para></entry>
      </row>
 
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>affinity_set</structfield> <type>int4</type>
+      </para>
+      <para>
+       A grouping of CPUs used by PostgreSQL.  Typically these match
+       NUMA nodes.  The <varname>cpu_affinity</varname> setting allows other
+       configurations.
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

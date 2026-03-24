@@ -1337,8 +1337,9 @@ pg_config| SELECT name,
    FROM pg_config() pg_config(name, setting);
 pg_cpus| SELECT cpu,
     pgroup,
-    numa_node
-   FROM pg_get_cpus() pg_get_cpus(cpu, pgroup, numa_node);
+    numa_node,
+    affinity_set
+   FROM pg_get_cpus() pg_get_cpus(cpu, pgroup, numa_node, affinity_set);
 pg_cursors| SELECT name,
     statement,
     is_holdable,

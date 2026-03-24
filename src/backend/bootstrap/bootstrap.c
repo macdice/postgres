@@ -35,6 +35,7 @@
 #include "pg_getopt.h"
 #include "postmaster/postmaster.h"
 #include "storage/bufpage.h"
+#include "storage/cpu_affinity.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -353,6 +354,9 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	 */
 	checkDataDir();
 	ChangeToDataDir();
+
+	/* Not relevant, but must be initialized. */
+	cpu_affinity_initialize();
 
 	CreateDataDirLockFile(false);
 

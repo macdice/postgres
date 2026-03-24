@@ -20,6 +20,7 @@
 #include "funcapi.h"
 #include "port/pg_cpuset.h"
 #include "port/pg_numa.h"
+#include "storage/cpu_affinity.h"
 #include "utils/builtins.h"
 #include "utils/tuplestore.h"
 
@@ -27,7 +28,7 @@ Datum
 pg_get_cpus(PG_FUNCTION_ARGS)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	int num_numa_nodes;
+	int			num_numa_nodes;
 
 	num_numa_nodes = pg_numa_get_max_node() + 1;
 
@@ -54,7 +55,8 @@ pg_get_cpus(PG_FUNCTION_ARGS)
 		while (pg_cpuset_iterator_has_next(&iter))
 		{
 			pg_cpu_t	cpu = pg_cpuset_iterator_next(&iter);
-#define PG_GET_CPUS_COLS	3
+			int			affinity_set = cpu_affinity_get_cpu_set_for_cpu(cpu);
+#define PG_GET_CPUS_COLS	4
 			Datum		values[PG_GET_CPUS_COLS];
 			bool		nulls[PG_GET_CPUS_COLS];
 
@@ -66,6 +68,9 @@ pg_get_cpus(PG_FUNCTION_ARGS)
 
 			values[2] = Int32GetDatum(node);
 			nulls[2] = false;
+
+			values[3] = Int32GetDatum(affinity_set);
+			nulls[3] = affinity_set < 0;
 
 			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		}

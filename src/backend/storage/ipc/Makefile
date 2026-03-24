@@ -10,6 +10,7 @@ include $(top_builddir)/src/Makefile.global
 
 OBJS = \
 	barrier.o \
+	cpu_affinity.o \
 	cpu_funcs.o \
 	cpu_table.o \
 	dsm.o \

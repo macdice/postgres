@@ -1741,6 +1741,50 @@ include_dir 'conf.d'
    <sect1 id="runtime-config-resource">
     <title>Resource Consumption</title>
 
+    <sect2 id="runtime-config-resource-cpu">
+     <title>CPU</title>
+
+     <variablelist>
+     <varlistentry id="guc-cpu-affinity" xreflabel="cpu_affinity">
+      <term><varname>cpu_affinity</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>cpu_affinity</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls the number of subsets of available CPUs that have dedicated
+        partitions of certain resources.
+       </para>
+       <para>
+        The default is 1, meaning one set of CPUs per NUMA node, or on non-NUMA
+        systems, no partitioning.  Resource partitioning and affinity can be
+        disabled on NUMA systems by setting it to 0.  It can also be set to
+        a number between 2 and 8 to create sub-node partitions, even on non-NUMA
+        systems.
+       </para>
+       <para>
+        CPU sets can be seen in the <link linkend="view-pg-cpus">pg_cpus</link>
+        view, and they affect the behavior of the following subsystems:
+       </para>
+       <itemizedlist>
+        <listitem>
+        <para>
+         XXX WRITE ME
+        </para>
+        </listitem>
+       </itemizedlist>
+       <para>
+        Values above 1 currently require Linux, FreeBSD or Windows.
+       </para>
+       <para>
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     </variablelist>
+    </sect2>
+
     <sect2 id="runtime-config-resource-memory">
      <title>Memory</title>
 

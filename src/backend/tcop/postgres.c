@@ -62,6 +62,7 @@
 #include "replication/walsender.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
+#include "storage/cpu_affinity.h"
 #include "storage/ipc.h"
 #include "storage/fd.h"
 #include "storage/pmsignal.h"
@@ -4137,6 +4138,9 @@ PostgresSingleUserMain(int argc, char *argv[],
 	 */
 	checkDataDir();
 	ChangeToDataDir();
+
+	/* Not relevant for single-user mode, but must be initialized. */
+	cpu_affinity_initialize();
 
 	/*
 	 * Create lockfile for data directory.

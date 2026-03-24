@@ -110,6 +110,7 @@
 #include "replication/slotsync.h"
 #include "replication/walsender.h"
 #include "storage/aio_subsys.h"
+#include "storage/cpu_affinity.h"
 #include "storage/fd.h"
 #include "storage/io_worker.h"
 #include "storage/ipc.h"
@@ -895,6 +896,12 @@ PostmasterMain(int argc, char *argv[])
 		ereport(DEBUG3, errmsg_internal("%s", si.data));
 		pfree(si.data);
 	}
+
+	/*
+	 * Initalize CPU affinity early so that subsystems and extensions know how
+	 * many CPU sets there are while reserving shared memory.
+	 */
+	cpu_affinity_initialize();
 
 	/*
 	 * Create lockfile for data directory.

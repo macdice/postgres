@@ -47,6 +47,7 @@
 #include "postmaster/walwriter.h"
 #include "replication/slotsync.h"
 #include "replication/walreceiver.h"
+#include "storage/cpu_affinity.h"
 #include "storage/dsm.h"
 #include "storage/io_worker.h"
 #include "storage/pg_shmem.h"
@@ -89,6 +90,7 @@ typedef int InheritableSocket;
 typedef struct
 {
 	char		DataDir[MAXPGPATH];
+	cpu_table	cpu_affinity_table;
 #ifndef WIN32
 	unsigned long UsedShmemSegID;
 #else
@@ -717,6 +719,7 @@ save_backend_variables(BackendParameters *param,
 
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
 
+	param->cpu_affinity_table = cpu_affinity_table;
 	param->MyPMChildSlot = child_slot;
 
 #ifdef WIN32
@@ -976,6 +979,7 @@ restore_backend_variables(BackendParameters *param)
 
 	SetDataDir(param->DataDir);
 
+	cpu_affinity_table = param->cpu_affinity_table;
 	MyPMChildSlot = param->MyPMChildSlot;
 
 #ifdef WIN32

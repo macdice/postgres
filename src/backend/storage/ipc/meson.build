@@ -2,6 +2,7 @@
 
 backend_sources += files(
   'barrier.c',
+  'cpu_affinity.c',
   'cpu_funcs.c',
   'cpu_table.c',
   'dsm.c',
