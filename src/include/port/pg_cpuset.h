@@ -174,7 +174,11 @@ static_assert(sizeof(pg_cpuset_table_map_hash_t) * CHAR_BIT >=
 static inline pg_cpuset_table_map_hash_t
 pg_cpuset_table_map_hash_cpu(const pg_cpuset_table *table, pg_cpu_t cpu)
 {
+#ifdef WIN32
+	int			value = (cpu.Group <<6) |cpu.Number;
+#else
 	int			value = cpu;
+#endif
 
 	return ((value & PG_CPUSET_TABLE_MAP_HASH_CPU1_MASK) |
 			((value >> table->map_shift) & PG_CPUSET_TABLE_MAP_HASH_CPU2_MASK));

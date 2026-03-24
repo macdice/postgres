@@ -13,6 +13,10 @@
  */
 #include "postgres.h"
 
+#ifdef WIN32
+#include <windows.h>
+#endif
+
 #include <unistd.h>
 
 #include "lib/stringinfo.h"
@@ -28,6 +32,12 @@
 typedef cpu_set_t pg_cpuset_t;
 #elif defined(HAVE_CPUSET_GETAFFINITY)
 typedef cpuset_t pg_cpuset_t;
+#elif defined(WIN32)
+typedef struct pg_cpuset_t
+{
+	int			count;
+	GROUP_AFFINITY masks[FLEXIBLE_ARRAY_MEMBER];
+} pg_cpuset_t;
 #else
 typedef void pg_cpuset_t;
 #endif
@@ -45,6 +55,15 @@ pg_cpuset_add(pg_cpuset_t *cpuset, pg_cpu_t cpu)
 {
 #ifdef HAVE_CPU_SET_MACROS
 	CPU_SET(cpu, cpuset);
+#elif defined(WIN32)
+	/*
+	 * We only need to sets that we made, not ones that came from the OS, so
+	 * we can assume that they are indexed by group.
+	 */
+	if (cpu.Group >=cpuset->count ||
+		cpuset->masks[cpu.Group].Group !=cpu.Group)
+		elog(ERROR, "could not find group %d in expected position in CPU set", cpu.Group);
+	cpuset->masks[cpu.Group].Mask |= 1 << cpu.Number;
 #endif
 }
 
@@ -53,6 +72,15 @@ pg_cpuset_remove(pg_cpuset_t *cpuset, pg_cpu_t cpu)
 {
 #ifdef HAVE_CPU_SET_MACROS
 	CPU_CLR(cpu, cpuset);
+#elif defined(WIN32)
+	for (int i = 0; i < cpuset->count; ++i)
+	{
+		if (cpuset->masks[i].Group == cpu.Group)
+		{
+			cpuset->masks[i].Mask &= 1 << cpu.Number;
+			break;
+		}
+	}
 #endif
 }
 
@@ -61,6 +89,21 @@ pg_cpuset_and(pg_cpuset_t *a, const pg_cpuset_t *b)
 {
 #ifdef HAVE_CPU_SET_MACROS
 	CPU_AND(a, a, b);
+#elif defined(WIN32)
+	for (int i = 0; i < a->count; ++i)
+	{
+		uint64		mask = 0;
+
+		/* Find same group if it's there... */
+		for (int j = 0; j < b->count; ++j)
+		{
+			if (a->masks[i].Group !=b->masks[j].Group)
+				continue;
+			mask = b->masks[j].Mask;
+			break;
+		}
+		a->masks[i].Mask &= mask;
+	}
 #endif
 }
 
@@ -69,6 +112,12 @@ pg_cpuset_count(const pg_cpuset_t *cpuset)
 {
 #ifdef HAVE_CPU_SET_MACROS
 	return CPU_COUNT(cpuset);
+#elif defined(WIN32)
+	int			result = 0;
+
+	for (int i = 0; i < cpuset->count; ++i)
+		result += pg_popcount64(cpuset->masks[i].Mask);
+	return result;
 #else
 	return 0;
 #endif
@@ -79,6 +128,11 @@ pg_cpuset_is_empty(const pg_cpuset_t *cpuset)
 {
 #ifdef HAVE_CPU_SET_MACROS
 	return CPU_COUNT(cpuset) == 0;
+#elif defined(WIN32)
+	for (int i = 0; i < cpuset->count; ++i)
+		if (cpuset->masks[i].Mask != 0)
+			return false;
+	return true;
 #else
 	return true;
 #endif
@@ -91,6 +145,25 @@ pg_cpuset_make(const pg_cpu_t *cpus, int n)
 	pg_cpuset_t *result = palloc_object(pg_cpuset_t);
 
 	CPU_ZERO(result);
+	for (int i = 0; i < n; ++i)
+		pg_cpuset_add(result, cpus[i]);
+	return result;
+#elif defined(WIN32)
+	pg_cpuset_t *result;
+	int			max_groups;
+
+	/* Make a set with all possible groups indexed by group. */
+	max_groups = GetMaximumProcessorGroupCount();
+	if (max_groups == 0)
+	{
+		_dosmaperr(GetLastError());
+		elog(ERROR, "GetMaximumProcessGroupCount() failed: %m");
+	}
+	result = palloc0(offsetof(pg_cpuset_t, masks) +
+					 sizeof(result->masks[0]) * max_groups);
+	result->count = max_groups;
+	for (int i = 0; i < max_groups; ++i)
+		result->masks[i].Group = i;
 	for (int i = 0; i < n; ++i)
 		pg_cpuset_add(result, cpus[i]);
 	return result;
@@ -108,7 +181,7 @@ pg_cpuset_make_empty(void)
 static void
 pg_cpuset_free(pg_cpuset_t *set)
 {
-#if defined(HAVE_CPU_SET_MACROS)
+#if defined(HAVE_CPU_SET_MACROS) || defined(WIN32)
 	pfree(set);
 #endif
 }
@@ -119,6 +192,10 @@ typedef struct pg_cpuset_iterator
 	pg_cpuset_t empty;
 	pg_cpuset_t remaining;
 	pg_cpu_t	next;
+#elif defined(WIN32)
+	const pg_cpuset_t *cpuset;
+	int			index;
+	int			next_processor;
 #else
 	int			dummy;
 #endif
@@ -131,6 +208,18 @@ pg_cpuset_iterator_begin(const pg_cpuset_t *cpuset, pg_cpuset_iterator *iter)
 	CPU_ZERO(&iter->empty);
 	iter->remaining = *cpuset;
 	iter->next = 0;
+#elif defined(WIN32)
+	iter->cpuset = cpuset;
+	iter->index = 0;
+	iter->next_processor = 0;
+	/* Find the first non-empty mask. */
+	while (iter->index < cpuset->count &&
+		   cpuset->masks[iter->index].Mask == 0)
+		iter->index++;
+	/* If we succeeded, find the lowest processor bit. */
+	if (iter->index < cpuset->count)
+		iter->next_processor =
+			pg_rightmost_one_pos64(cpuset->masks[iter->index].Mask);
 #endif
 }
 
@@ -139,6 +228,8 @@ pg_cpuset_iterator_has_next(const pg_cpuset_iterator *iter)
 {
 #ifdef HAVE_CPU_SET_MACROS
 	return !CPU_EQUAL(&iter->empty, &iter->remaining);
+#elif defined(WIN32)
+	return iter->index < iter->cpuset->count;
 #else
 	return false;
 #endif
@@ -153,6 +244,40 @@ pg_cpuset_iterator_next(pg_cpuset_iterator *iter)
 		iter->next++;
 	CPU_CLR(iter->next, &iter->remaining);
 	return iter->next++;
+#elif defined(WIN32)
+	const GROUP_AFFINITY *mask;
+	pg_cpu_t	result = {0};
+	uint64		rest;
+
+	/* We are pointing at the CPU to return already. */
+	Assert(pg_cpuset_iterator_has_next(iter));
+	mask = &iter->cpuset->masks[iter->index];
+	Assert(mask->Mask & (1 << iter->next_processor));
+	result.Group = mask->Group;
+	result.Number = iter->next_processor;
+
+	/* Mask off that processor and all lower processors. */
+	rest = mask->Mask & ~((1 << (iter->next_processor + 1)) - 1);
+	if (rest != 0)
+	{
+		/* The lowest remaining processor is next. */
+		iter->next_processor = pg_rightmost_one_pos64(rest);
+	}
+	else
+	{
+		/* Advance index until we find a non-empty mask. */
+		do
+		{
+			iter->index++;
+		}
+		while (iter->index < iter->cpuset->count &&
+			   iter->cpuset->masks[iter->index].Mask == 0);
+		/* If we didn't run out of entries, the lowest bit is next. */
+		if (iter->index < iter->cpuset->count)
+			iter->next_processor =
+				pg_rightmost_one_pos64(iter->cpuset->masks[iter->index].Mask);
+	}
+	return result;
 #else
 	return 0;
 #endif
@@ -197,6 +322,41 @@ pg_cpuset_get_affinity(void)
 
 	pfree(result);
 	return NULL;
+#elif defined(WIN32)
+	pg_cpuset_t *result;
+	WORD		max_count;
+	USHORT		count;
+	int			save_errno;
+
+	max_count = GetMaximumProcessorGroupCount();
+	if (max_count == 0)
+	{
+		_dosmaperr(GetLastError());
+		return NULL;
+	}
+	result = palloc0(offsetof(pg_cpuset_t, masks) +
+					 sizeof(result->masks[0]) * max_count);
+
+	/* Get the affinities for this thread, or default if never set. */
+	if (GetThreadSelectedCpuSetMasks(GetCurrentThread(),
+									 &result->masks[0],
+									 max_count,
+									 &count) &&
+		(count > 0 ||
+		 GetProcessDefaultCpuSetMasks(GetCurrentProcess(),
+									  &result->masks[0],
+									  max_count,
+									  &count)))
+	{
+		result->count = count;
+		return result;
+	}
+
+	_dosmaperr(GetLastError());
+	save_errno = errno;
+	pfree(result);
+	errno = save_errno;
+	return NULL;
 #else
 	errno = ENOSYS;
 	return NULL;
@@ -218,6 +378,14 @@ pg_cpuset_set_affinity(const pg_cpuset_t *set)
 						   sizeof(*set),
 						   set) == 0)
 		result = 0;
+#elif defined(WIN32)
+	if (SetThreadSelectedCpuSetMasks(GetCurrentThread(),
+									 unconstify(GROUP_AFFINITY *,
+												&set->masks[0]),
+									 set->count))
+		result = 0;
+	else
+		_dosmaperr(GetLastError());
 #else
 	errno = ENOSYS;
 #endif
