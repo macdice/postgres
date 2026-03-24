@@ -1741,6 +1741,54 @@ include_dir 'conf.d'
    <sect1 id="runtime-config-resource">
     <title>Resource Consumption</title>
 
+    <sect2 id="runtime-config-resource-cpu">
+     <title>CPU</title>
+
+     <variablelist>
+     <varlistentry id="guc-numa-partitions" xreflabel="numa_partitions">
+      <term><varname>numa_partitions</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>numa_partitions</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls the partitioning of certain resources to match NUMA topology.
+       </para>
+       <para>
+        The default is 1, meaning one partition per NUMA node, or on non-NUMA
+        systems, no partitioning.  Partitioning can be disabled on NUMA systems
+        with 0.
+       </para>
+       <para>
+        Values greater than 1 create sub-NUMA-node partitions, or partition
+        non-NUMA systems.  Currently, partitions below NUMA-level are created
+        by arbitrarily dividing CPUs into ranges of equal size with contiguous
+        CPU IDs.
+       </para>
+       <para>
+        CPU partitions can be seen in the <link
+        linkend="view-pg-cpus">pg_cpus</link> view.  They affect the following
+        subsystems:
+       </para>
+       <itemizedlist>
+        <listitem>
+        <para>
+         XXX WRITE ME
+        </para>
+        </listitem>
+       </itemizedlist>
+       <para>
+        Non-default settings require Linux, FreeBSD or Windows.
+       </para>
+       <para>
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     </variablelist>
+    </sect2>
+
     <sect2 id="runtime-config-resource-memory">
      <title>Memory</title>
 

@@ -40,6 +40,7 @@
 #include "replication/walsender.h"
 #include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
+#include "storage/cpu_affinity.h"
 #include "storage/dsm.h"
 #include "storage/dsm_registry.h"
 #include "storage/ipc.h"

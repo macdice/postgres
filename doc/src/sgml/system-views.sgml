@@ -1049,6 +1049,16 @@ AND c1.path[c2.level] = c2.path[c2.level];
       </para></entry>
      </row>
 
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>partition</structfield> <type>int4</type>
+      </para>
+      <para>
+       A grouping of CPUs used by PostgreSQL, depending on
+       <xref linkend="guc-numa-partitions"/>.
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

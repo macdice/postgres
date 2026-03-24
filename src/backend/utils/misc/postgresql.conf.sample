@@ -167,6 +167,7 @@
 #vacuum_buffer_usage_limit = 2MB        # size of vacuum and analyze buffer access strategy ring;
                                         # 0 to disable vacuum buffer access strategy;
                                         # range 128kB to 16GB
+#numa_partitions = 1                    # 0-8 (change requires restart)
 
 # SLRU buffers (change requires restart)
 #commit_timestamp_buffers = 0           # memory for pg_commit_ts (0 = auto)

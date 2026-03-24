@@ -49,6 +49,7 @@
 #include "replication/walreceiver.h"
 #include "storage/dsm.h"
 #include "storage/io_worker.h"
+#include "storage/numa_partition.h"
 #include "storage/pg_shmem.h"
 #include "tcop/backend_startup.h"
 #include "utils/memutils.h"
@@ -89,6 +90,7 @@ typedef int InheritableSocket;
 typedef struct
 {
 	char		DataDir[MAXPGPATH];
+	cpu_table	numa_partition_table;
 #ifndef WIN32
 	unsigned long UsedShmemSegID;
 #else
@@ -712,6 +714,7 @@ save_backend_variables(BackendParameters *param,
 
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
 
+	param->numa_partition_table = numa_partition_table;
 	param->MyPMChildSlot = child_slot;
 
 #ifdef WIN32
@@ -966,6 +969,7 @@ restore_backend_variables(BackendParameters *param)
 
 	SetDataDir(param->DataDir);
 
+	numa_partition_table = param->numa_partition_table;
 	MyPMChildSlot = param->MyPMChildSlot;
 
 #ifdef WIN32

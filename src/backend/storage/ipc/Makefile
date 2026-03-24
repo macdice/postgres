@@ -18,6 +18,7 @@ OBJS = \
 	ipc.o \
 	ipci.o \
 	latch.o \
+	numa_partition.o \
 	pmsignal.o \
 	procarray.o \
 	procsignal.o \

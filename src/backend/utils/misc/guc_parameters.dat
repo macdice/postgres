@@ -2249,6 +2249,14 @@
   max => 'INT_MAX',
 },
 
+{ name => 'numa_partitions', type => 'int', context => 'PGC_POSTMASTER', group => 'RESOURCES_CPU',
+  short_desc => 'Sets the number of partitions that each NUMA node is divided into for internal resource management.',
+  variable => 'numa_partitions',
+  boot_val => '1',
+  min => '0',
+  max => '16',
+},
+
 { name => 'oauth_validator_libraries', type => 'string', context => 'PGC_SIGHUP', group => 'CONN_AUTH_AUTH',
   short_desc => 'Lists libraries that may be called to validate OAuth v2 bearer tokens.',
   flags => 'GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY',

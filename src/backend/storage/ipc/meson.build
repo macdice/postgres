@@ -10,6 +10,7 @@ backend_sources += files(
   'ipc.c',
   'ipci.c',
   'latch.c',
+  'numa_partition.c',
   'pmsignal.c',
   'procarray.c',
   'procsignal.c',

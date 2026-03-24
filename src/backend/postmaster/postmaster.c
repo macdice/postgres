@@ -113,6 +113,7 @@
 #include "storage/fd.h"
 #include "storage/io_worker.h"
 #include "storage/ipc.h"
+#include "storage/numa_partition.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "tcop/backend_startup.h"
@@ -895,6 +896,12 @@ PostmasterMain(int argc, char *argv[])
 		ereport(DEBUG3, errmsg_internal("%s", si.data));
 		pfree(si.data);
 	}
+
+	/*
+	 * Initalize CPU affinity early so that subsystems and extensions know how
+	 * many CPU sets there are while reserving shared memory.
+	 */
+	numa_partition_initialize();
 
 	/*
 	 * Create lockfile for data directory.

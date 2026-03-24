@@ -37,6 +37,7 @@
 #include "storage/bufpage.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/numa_partition.h"
 #include "storage/proc.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -353,6 +354,9 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	 */
 	checkDataDir();
 	ChangeToDataDir();
+
+	/* Not relevant, but must be initialized. */
+	numa_partition_initialize();
 
 	CreateDataDirLockFile(false);
 

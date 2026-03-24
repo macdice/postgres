@@ -12855,9 +12855,9 @@
   proname => 'pg_get_cpus', prorows => '100', proretset => 't',
   provolatile => 'v', proparallel => 'r', prorettype => 'record',
   proargtypes => '',
-  proallargtypes => '{int4,int4,int4}',
-  proargmodes => '{o,o,o}',
-  proargnames => '{cpu,pgroup,numa_node}',
+  proallargtypes => '{int4,int4,int4,int4}',
+  proargmodes => '{o,o,o,o}',
+  proargnames => '{cpu,pgroup,numa_node,partition}',
   prosrc => 'pg_get_cpus',
   proacl => '{POSTGRES=X,pg_read_all_stats=X}' },
 

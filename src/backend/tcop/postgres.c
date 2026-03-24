@@ -64,6 +64,7 @@
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/fd.h"
+#include "storage/numa_partition.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
@@ -4137,6 +4138,9 @@ PostgresSingleUserMain(int argc, char *argv[],
 	 */
 	checkDataDir();
 	ChangeToDataDir();
+
+	/* Not relevant for single-user mode, but must be initialized. */
+	numa_partition_initialize();
 
 	/*
 	 * Create lockfile for data directory.
