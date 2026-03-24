@@ -40,6 +40,7 @@
 #include "replication/walsender.h"
 #include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
+#include "storage/cpu_affinity.h"
 #include "storage/dsm.h"
 #include "storage/dsm_registry.h"
 #include "storage/ipc.h"
@@ -101,6 +102,7 @@ CalculateShmemSize(void)
 	size = 100000;
 	size = add_size(size, hash_estimate_size(SHMEM_INDEX_SIZE,
 											 sizeof(ShmemIndexEnt)));
+	size = add_size(size, CpuAffinityShmemSize());
 	size = add_size(size, dsm_estimate_size());
 	size = add_size(size, DSMRegistryShmemSize());
 	size = add_size(size, BufferManagerShmemSize());
@@ -260,6 +262,7 @@ CreateOrAttachShmemStructs(void)
 	 */
 	InitShmemIndex();
 
+	CpuAffinityShmemInit();
 	dsm_shmem_init();
 	DSMRegistryShmemInit();
 

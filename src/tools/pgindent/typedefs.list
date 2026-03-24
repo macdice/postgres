@@ -555,6 +555,7 @@ CostSelector
 Counters
 CoverExt
 CoverPos
+CpuAffinityControl
 CreateAmStmt
 CreateCastStmt
 CreateConversionStmt

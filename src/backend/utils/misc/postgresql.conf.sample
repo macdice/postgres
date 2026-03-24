@@ -196,6 +196,9 @@
 #max_files_per_process = 1000           # min 64
                                         # (change requires restart)
 
+# - CPU -
+#cpu_affinity = 1                       # 0-4 (change requires restart)
+
 # - Background Writer -
 
 #bgwriter_delay = 200ms                 # 10-10000ms between rounds

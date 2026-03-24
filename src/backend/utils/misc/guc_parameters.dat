@@ -485,6 +485,14 @@
   options => 'constraint_exclusion_options',
 },
 
+{ name => 'cpu_affinity', type => 'int', context => 'PGC_POSTMASTER', group => 'RESOURCES_CPU',
+  short_desc => 'Sets the level of NUMA node and sub-node affinity and resource partitioning.',
+  variable => 'cpu_affinity',
+  boot_val => '1',
+  min => '0',
+  max => '8',
+},
+
 { name => 'cpu_index_tuple_cost', type => 'real', context => 'PGC_USERSET', group => 'QUERY_TUNING_COST',
   short_desc => 'Sets the planner\'s estimate of the cost of processing each index entry during an index scan.',
   flags => 'GUC_EXPLAIN',

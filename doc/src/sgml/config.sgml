@@ -1741,6 +1741,36 @@ include_dir 'conf.d'
    <sect1 id="runtime-config-resource">
     <title>Resource Consumption</title>
 
+    <sect2 id="runtime-config-resource-cpu">
+     <title>CPU</title>
+
+     <variablelist>
+     <varlistentry id="guc-cpu-sets-per-numa-node" xreflabel="cpu_affinity">
+      <term><varname>cpu_affinity</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>cpu_affinity</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the number of partitions and pools of certain internal resources that
+        are created for each NUMA node that is detected.
+       </para>
+       <para>
+        The default is 1, meaning one partition per NUMA node, or on non-NUMA
+        systems, one partition.  Resource partitioning can be disabled on NUMA
+        systems by setting the value to 0.  It can also be set to 2 or 4,
+        creating sub-node partitions. This option currently only has an effect
+        on Linux, FreeBSD and Windows.
+       </para>
+       <para>
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     </variablelist>
+    </sect2>
+
     <sect2 id="runtime-config-resource-memory">
      <title>Memory</title>
 

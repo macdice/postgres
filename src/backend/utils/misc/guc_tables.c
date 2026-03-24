@@ -80,6 +80,7 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/copydir.h"
+#include "storage/cpu_affinity.h"
 #include "storage/fd.h"
 #include "storage/io_worker.h"
 #include "storage/large_object.h"
@@ -726,6 +727,7 @@ const char *const config_group_names[] =
 	[CONN_AUTH_SSL] = gettext_noop("Connections and Authentication / SSL"),
 	[RESOURCES_MEM] = gettext_noop("Resource Usage / Memory"),
 	[RESOURCES_DISK] = gettext_noop("Resource Usage / Disk"),
+	[RESOURCES_CPU] = gettext_noop("Resource Usage / CPU"),
 	[RESOURCES_KERNEL] = gettext_noop("Resource Usage / Kernel Resources"),
 	[RESOURCES_BGWRITER] = gettext_noop("Resource Usage / Background Writer"),
 	[RESOURCES_IO] = gettext_noop("Resource Usage / I/O"),
