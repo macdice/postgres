@@ -44,6 +44,7 @@ typedef struct
 	BackendType bkend_type;		/* child process flavor, see above */
 	struct RegisteredBgWorker *rw;	/* bgworker info, if this is a bgworker */
 	bool		bgworker_notify;	/* gets bgworker start/stop notifications */
+	int			io_worker_pool;
 	dlist_node	elem;			/* list link in ActiveChildList */
 } PMChild;
 

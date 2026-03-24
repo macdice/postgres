@@ -14,6 +14,7 @@
 #ifndef IO_WORKER_H
 #define IO_WORKER_H
 
+#include "storage/numa_partition.h"
 
 pg_noreturn extern void IoWorkerMain(const void *startup_data, size_t startup_data_len);
 
@@ -38,7 +39,9 @@ extern const char *show_debug_io_worker_limit_read(void);
 extern const char *show_debug_io_worker_limit_write(void);
 
 /* Interfaces visible to the postmaster. */
-extern bool pgaio_worker_test_grow(void);
-extern bool pgaio_worker_test_and_clear_grow(void);
+#define MAX_IO_WORKER_POOLS MAX_NUMA_PARTITIONS
+extern int	pgaio_worker_num_pools(void);
+extern bool pgaio_worker_test_grow(int pool);
+extern bool pgaio_worker_test_and_clear_grow(int pool);
 
 #endif							/* IO_WORKER_H */

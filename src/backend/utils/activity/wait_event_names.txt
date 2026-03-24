@@ -366,10 +366,9 @@ WALSummarizer	"Waiting to read or update WAL summarization state."
 DSMRegistry	"Waiting to read or update the dynamic shared memory registry."
 InjectionPoint	"Waiting to read or update information related to injection points."
 SerialControl	"Waiting to read or update shared <filename>pg_serial</filename> state."
-AioWorkerSubmissionQueue	"Waiting to access AIO worker submission queue."
 WaitLSN	"Waiting to read or update shared Wait-for-LSN state."
 LogicalDecodingControl	"Waiting to read or update logical decoding status information."
-AioWorkerControl	"Waiting to update AIO worker information."
+AioWorkerControl	"Waiting to update AIO worker rate limit settings."
 
 #
 # END OF PREDEFINED LWLOCKS (DO NOT CHANGE THIS LINE)
@@ -417,6 +416,8 @@ XactSLRU	"Waiting to access the transaction status SLRU cache."
 ParallelVacuumDSA	"Waiting for parallel vacuum dynamic shared memory allocation."
 AioUringCompletion	"Waiting for another process to complete IO via io_uring."
 ShmemIndex	"Waiting to find or allocate space in shared memory."
+AioWorkerPool	"Waiting to reconfigure IO worker pool."
+AioWorkerQueue	"Waiting to access IO submission queue."
 
 # No "ABI_compatibility" region here as WaitEventLWLock has its own C code.
 

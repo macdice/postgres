@@ -45,6 +45,7 @@
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
+#include "storage/numa_partition.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
@@ -59,27 +60,34 @@
 /* Debugging only: show activity and statistics in ps command line. */
 /* #define PGAIO_WORKER_SHOW_PS_INFO */
 
-typedef struct PgAioWorkerSubmissionQueue
+typedef uint64 PgAioWorkerSet;
+
+typedef struct PgAioWorkerPool
 {
+	/* Seen by postmaster */
+	volatile bool grow;
+
+	/* Members protected with pool_lock. */
+	LWLock		pool_lock;
+	PgAioWorkerSet worker_set;
+	int			nworkers;
+	ProcNumber	workers[MAX_IO_WORKERS];
+
 	ConditionVariable space_cv;
+
+	/* Members protected with queue_lock. */
+	LWLock		queue_lock;
+	PgAioWorkerSet idle_worker_set;
 	uint32		size;
 	uint32		head;
 	uint32		tail;
 	int			sqes[FLEXIBLE_ARRAY_MEMBER];
-} PgAioWorkerSubmissionQueue;
+} PgAioWorkerPool;
 
 typedef struct PgAioWorkerSlot
 {
 	ProcNumber	proc_number;
 } PgAioWorkerSlot;
-
-/*
- * Sets of worker IDs are held in a simple bitmap, accessed through functions
- * that provide a more readable abstraction.  If we wanted to support more
- * workers than that, the contention on the single queue would surely get too
- * high, so we might want to consider multiple pools instead of widening this.
- */
-typedef uint64 PgAioWorkerSet;
 
 #define PGAIO_WORKER_SET_BITS (sizeof(PgAioWorkerSet) * CHAR_BIT)
 
@@ -96,22 +104,10 @@ typedef struct PgAioWorkerControl
 	int			limit_read_block_ns;
 	int			limit_write_block_ns;
 	bool		limit_enabled;
-
-	/* Seen by postmaster */
-	volatile bool grow;
-
-	/* Protected by AioWorkerSubmissionQueueLock. */
-	PgAioWorkerSet idle_worker_set;
-
-	/* Protected by AioWorkerControlLock. */
-	PgAioWorkerSet worker_set;
-	int			nworkers;
-
-	/* Protected by AioWorkerControlLock. */
-	PgAioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
 } PgAioWorkerControl;
 
 static size_t pgaio_worker_shmem_size(void);
+static size_t pgaio_worker_shmem_size_per_numa_partition(void);
 static void pgaio_worker_shmem_init(bool first_time);
 
 static bool pgaio_worker_needs_synchronous_execution(PgAioHandle *ioh);
@@ -120,6 +116,7 @@ static int	pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios);
 
 const IoMethodOps pgaio_worker_ops = {
 	.shmem_size = pgaio_worker_shmem_size,
+	.shmem_size_per_numa_partition = pgaio_worker_shmem_size_per_numa_partition,
 	.shmem_init = pgaio_worker_shmem_init,
 
 	.needs_synchronous_execution = pgaio_worker_needs_synchronous_execution,
@@ -141,7 +138,8 @@ int			io_worker_queue_size = 64;
 bool		io_worker_overflow_sync = true;
 
 static int	MyIoWorkerId = -1;
-static PgAioWorkerSubmissionQueue *io_worker_submission_queue;
+static PgAioWorkerPool *io_worker_pool;
+static PgAioWorkerPool *io_worker_pools[16];
 static PgAioWorkerControl *io_worker_control;
 
 
@@ -231,63 +229,61 @@ pgaio_worker_set_count(PgAioWorkerSet *set)
 #endif
 
 static size_t
-pgaio_worker_queue_shmem_size(int *queue_size)
+pgaio_worker_shmem_size_per_numa_partition(void)
 {
-	/* Round size up to next power of two so we can make a mask. */
-	*queue_size = pg_nextpower2_32(io_worker_queue_size);
-
-	return offsetof(PgAioWorkerSubmissionQueue, sqes) +
-		sizeof(int) * *queue_size;
-}
-
-static size_t
-pgaio_worker_control_shmem_size(void)
-{
-	return offsetof(PgAioWorkerControl, workers) +
-		sizeof(PgAioWorkerSlot) * MAX_IO_WORKERS;
+	return offsetof(PgAioWorkerPool, sqes) +
+		sizeof(int) * io_worker_queue_size;
 }
 
 static size_t
 pgaio_worker_shmem_size(void)
 {
-	size_t		sz;
-	int			queue_size;
-
-	sz = pgaio_worker_queue_shmem_size(&queue_size);
-	sz = add_size(sz, pgaio_worker_control_shmem_size());
-
-	return sz;
+	return sizeof(PgAioWorkerControl);
 }
 
 static void
 pgaio_worker_shmem_init(bool first_time)
 {
 	bool		found;
-	int			queue_size;
+	int			pools;
 
-	io_worker_submission_queue =
-		ShmemInitStruct("AioWorkerSubmissionQueue",
-						pgaio_worker_queue_shmem_size(&queue_size),
-						&found);
-	if (!found)
+	pools = numa_partition_count();
+	for (int i = 0; i < pools; ++i)
 	{
-		ConditionVariableInit(&io_worker_submission_queue->space_cv);
-		io_worker_submission_queue->size = queue_size;
-		io_worker_submission_queue->head = 0;
-		io_worker_submission_queue->tail = 0;
+		PgAioWorkerPool *pool;
+		char		shmem_name[80];
+
+		snprintf(shmem_name, sizeof(shmem_name), "AioWorkerPool %d", i);
+		pool = ShmemInitStructOnNumaNode(shmem_name,
+										 numa_partition_to_numa_node(i),
+										 pgaio_worker_shmem_size_per_numa_partition(),
+										 &found);
+		io_worker_pools[i] = pool;
+
+		if (!found)
+		{
+			LWLockInitialize(&pool->pool_lock, LWTRANCHE_AIO_WORKER_POOL);
+			LWLockInitialize(&pool->queue_lock, LWTRANCHE_AIO_WORKER_QUEUE);
+			ConditionVariableInit(&pool->space_cv);
+
+			pgaio_worker_set_initialize(&pool->worker_set);
+			pgaio_worker_set_initialize(&pool->idle_worker_set);
+			for (int j = 0; j < MAX_IO_WORKERS; ++j)
+				pool->workers[j] = INVALID_PROC_NUMBER;
+
+			pool->size = io_worker_queue_size;
+			pool->head = 0;
+			pool->tail = 0;
+			pool->grow = false;
+		}
 	}
 
 	io_worker_control =
 		ShmemInitStruct("AioWorkerControl",
-						pgaio_worker_control_shmem_size(),
+						pgaio_worker_shmem_size(),
 						&found);
 	if (!found)
 	{
-		io_worker_control->grow = false;
-		pgaio_worker_set_initialize(&io_worker_control->worker_set);
-		pgaio_worker_set_initialize(&io_worker_control->idle_worker_set);
-		for (int i = 0; i < MAX_IO_WORKERS; ++i)
-			io_worker_control->workers[i].proc_number = INVALID_PROC_NUMBER;
 
 		assign_debug_io_worker_limit_iops(io_worker_limit_iops, NULL);
 		assign_debug_io_worker_limit_read(io_worker_limit_read, NULL);
@@ -296,7 +292,7 @@ pgaio_worker_shmem_init(bool first_time)
 }
 
 static void
-pgaio_worker_grow(bool grow)
+pgaio_worker_grow(PgAioWorkerPool *pool, bool grow)
 {
 	/*
 	 * This is called from sites that don't hold AioWorkerControlLock, but
@@ -306,15 +302,15 @@ pgaio_worker_grow(bool grow)
 	if (!grow)
 	{
 		/* Avoid dirtying memory if not already set. */
-		if (io_worker_control->grow)
-			io_worker_control->grow = false;
+		if (pool->grow)
+			pool->grow = false;
 	}
 	else
 	{
 		/* Do nothing if request already pending. */
-		if (!io_worker_control->grow)
+		if (!pool->grow)
 		{
-			io_worker_control->grow = true;
+			pool->grow = true;
 			SendPostmasterSignal(PMSIGNAL_IO_WORKER_GROW);
 		}
 	}
@@ -324,9 +320,9 @@ pgaio_worker_grow(bool grow)
  * Called by the postmaster to check if a new worker is needed.
  */
 bool
-pgaio_worker_test_grow(void)
+pgaio_worker_test_grow(int pool)
 {
-	return io_worker_control && io_worker_control->grow;
+	return io_worker_pools[pool] && io_worker_pools[pool]->grow;
 }
 
 /*
@@ -334,33 +330,33 @@ pgaio_worker_test_grow(void)
  * to launch one, and clear the flag.
  */
 bool
-pgaio_worker_test_and_clear_grow(void)
+pgaio_worker_test_and_clear_grow(int pool)
 {
 	bool		result;
 
-	result = io_worker_control->grow;
+	result = io_worker_pools[pool]->grow;
 	if (result)
-		io_worker_control->grow = false;
+		io_worker_pools[pool]->grow = false;
 
 	return result;
 }
 
 static int
-pgaio_worker_choose_idle(int minimum_worker)
+pgaio_worker_choose_idle(PgAioWorkerPool *pool, int minimum_worker)
 {
 	PgAioWorkerSet worker_set;
 	int			worker;
 
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(&pool->queue_lock, LW_EXCLUSIVE));
 
-	worker_set = io_worker_control->idle_worker_set;
+	worker_set = pool->idle_worker_set;
 	pgaio_worker_set_remove_less_than(&worker_set, minimum_worker);
 	if (pgaio_worker_set_is_empty(&worker_set))
 		return -1;
 
 	/* Find the lowest numbered idle worker and mark it not idle. */
 	worker = pgaio_worker_set_get_lowest(&worker_set);
-	pgaio_worker_set_remove(&io_worker_control->idle_worker_set, worker);
+	pgaio_worker_set_remove(&pool->idle_worker_set, worker);
 
 	return worker;
 }
@@ -370,7 +366,7 @@ pgaio_worker_choose_idle(int minimum_worker)
  * process in the submission queue.
  */
 static void
-pgaio_worker_wake(int worker)
+pgaio_worker_wake(PgAioWorkerPool *pool, int worker)
 {
 	ProcNumber	proc_number;
 
@@ -381,65 +377,64 @@ pgaio_worker_wake(int worker)
 	 * races: *someone* will see the queued IO.  If there are no workers
 	 * running, the postmaster will start a new one.
 	 */
-	proc_number = io_worker_control->workers[worker].proc_number;
+	proc_number = pool->workers[worker];
 	if (proc_number != INVALID_PROC_NUMBER)
 		SetLatch(&GetPGProcByNumber(proc_number)->procLatch);
 }
 
 static bool
-pgaio_worker_submission_queue_insert(PgAioHandle *ioh)
+pgaio_worker_submission_queue_insert(PgAioWorkerPool *pool, PgAioHandle *ioh)
 {
-	PgAioWorkerSubmissionQueue *queue;
 	uint32		new_head;
 
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(&pool->queue_lock, LW_EXCLUSIVE));
 
-	queue = io_worker_submission_queue;
-	new_head = (queue->head + 1) & (queue->size - 1);
-	if (new_head == queue->tail)
+	new_head = pool->head + 1;
+	if (new_head == pool->size)
+		new_head = 0;
+	if (new_head == pool->tail)
 	{
 		pgaio_debug(DEBUG3, "io queue is full, at %u elements",
-					io_worker_submission_queue->size);
+					pool->size);
 		return false;			/* full */
 	}
 
-	queue->sqes[queue->head] = pgaio_io_get_id(ioh);
-	queue->head = new_head;
+	pool->sqes[pool->head] = pgaio_io_get_id(ioh);
+	pool->head = new_head;
 
 	return true;
 }
 
 static int
-pgaio_worker_submission_queue_consume(void)
+pgaio_worker_submission_queue_consume(PgAioWorkerPool *pool)
 {
-	PgAioWorkerSubmissionQueue *queue;
 	int			result;
 
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(&pool->queue_lock, LW_EXCLUSIVE));
 
-	queue = io_worker_submission_queue;
-	if (queue->tail == queue->head)
+	if (pool->tail == pool->head)
 		return -1;				/* empty */
 
-	result = queue->sqes[queue->tail];
-	queue->tail = (queue->tail + 1) & (queue->size - 1);
+	result = pool->sqes[pool->tail];
+	if (++pool->tail == pool->size)
+		pool->tail = 0;
 
 	return result;
 }
 
 static uint32
-pgaio_worker_submission_queue_depth(void)
+pgaio_worker_submission_queue_depth(PgAioWorkerPool *pool)
 {
 	uint32		head;
 	uint32		tail;
 
-	Assert(LWLockHeldByMeInMode(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(&pool->queue_lock, LW_EXCLUSIVE));
 
-	head = io_worker_submission_queue->head;
-	tail = io_worker_submission_queue->tail;
+	head = pool->head;
+	tail = pool->tail;
 
 	if (tail > head)
-		head += io_worker_submission_queue->size;
+		head += pool->size;
 
 	Assert(head >= tail);
 
@@ -455,9 +450,20 @@ pgaio_worker_needs_synchronous_execution(PgAioHandle *ioh)
 		|| !pgaio_io_can_reopen(ioh);
 }
 
+/*
+ * Choose which pool to submit a request to.  This is determined by the CPU
+ * partition the caller is running on at this very instant.
+ */
+static PgAioWorkerPool *
+pgaio_worker_choose_pool(void)
+{
+	return io_worker_pools[numa_partition_current()];
+}
+
 static int
 pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 {
+	PgAioWorkerPool *pool;
 	PgAioHandle **synchronous_ios = NULL;
 	int			nsync = 0;
 	int			worker = -1;
@@ -467,30 +473,36 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 	for (int i = 0; i < num_staged_ios; i++)
 		pgaio_io_prepare_submit(staged_ios[i]);
 
+	pool = pgaio_worker_choose_pool();
+
 	/* If synchronous fallback is not enabled, we have to wait for the lock. */
 	if (!io_worker_overflow_sync)
-		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+		LWLockAcquire(&pool->queue_lock, LW_EXCLUSIVE);
 
 	/*
 	 * If synchronous fallback is enabled, we also follow that path if we
 	 * can't acquire the submission lock immediate.
 	 */
 	if (!io_worker_overflow_sync ||
-		LWLockConditionalAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE))
+		LWLockConditionalAcquire(&pool->queue_lock, LW_EXCLUSIVE))
 	{
 		for (int i = 0; i < num_staged_ios; ++i)
 		{
 			Assert(!pgaio_worker_needs_synchronous_execution(staged_ios[i]));
-			if (!pgaio_worker_submission_queue_insert(staged_ios[i]))
+			if (!pgaio_worker_submission_queue_insert(pool, staged_ios[i]))
 			{
 				if (!io_worker_overflow_sync)
 				{
 					/* Wait for at least one IO to be drained and try again. */
-					ConditionVariablePrepareToSleep(&io_worker_submission_queue->space_cv);
-					LWLockRelease(AioWorkerSubmissionQueueLock);
-					ConditionVariableSleep(&io_worker_submission_queue->space_cv,
+					ConditionVariablePrepareToSleep(&pool->space_cv);
+					LWLockRelease(&pool->queue_lock);
+					ConditionVariableSleep(&pool->space_cv,
 										   WAIT_EVENT_AIO_WORKER_SUBMISSION);
-					LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
+
+					/* Might have migrated. */
+					pool = pgaio_worker_choose_pool();
+
+					LWLockAcquire(&pool->queue_lock, LW_EXCLUSIVE);
 					ConditionVariableCancelSleep();
 					continue;
 				}
@@ -510,9 +522,9 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 		if (worker == -1)
 		{
 			/* Choose an idle worker to wake up if we haven't already. */
-			worker = pgaio_worker_choose_idle(0);
+			worker = pgaio_worker_choose_idle(pool, 0);
 		}
-		LWLockRelease(AioWorkerSubmissionQueueLock);
+		LWLockRelease(&pool->queue_lock);
 	}
 	else
 	{
@@ -526,7 +538,7 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 	 * determine whether the pool is too small.
 	 */
 	if (worker != -1)
-		pgaio_worker_wake(worker);
+		pgaio_worker_wake(pool, worker);
 
 	/* Run whatever is left synchronously. */
 	while (nsync > 0)
@@ -537,21 +549,24 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 		/* Between synchronous operations, try to enqueue again. */
 		if (nsync > 0)
 		{
+			pool = pgaio_worker_choose_pool();
+
 			worker = -1;
-			if (LWLockConditionalAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE))
+			if (LWLockConditionalAcquire(&pool->queue_lock, LW_EXCLUSIVE))
 			{
 				while (nsync > 0 &&
-					   pgaio_worker_submission_queue_insert(*synchronous_ios))
+					   pgaio_worker_submission_queue_insert(pool,
+															*synchronous_ios))
 				{
 					synchronous_ios++;
 					nsync--;
 					if (worker == -1)
-						worker = pgaio_worker_choose_idle(0);
+						worker = pgaio_worker_choose_idle(pool, 0);
 				}
-				LWLockRelease(AioWorkerSubmissionQueueLock);
+				LWLockRelease(&pool->queue_lock);
 			}
 			if (worker != -1)
-				pgaio_worker_wake(worker);
+				pgaio_worker_wake(pool, worker);
 		}
 	}
 
@@ -567,25 +582,21 @@ pgaio_worker_die(int code, Datum arg)
 {
 	PgAioWorkerSet notify_set;
 
-	LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-	pgaio_worker_set_remove(&io_worker_control->idle_worker_set, MyIoWorkerId);
-	LWLockRelease(AioWorkerSubmissionQueueLock);
-
-	LWLockAcquire(AioWorkerControlLock, LW_EXCLUSIVE);
-	Assert(io_worker_control->workers[MyIoWorkerId].proc_number == MyProcNumber);
-	io_worker_control->workers[MyIoWorkerId].proc_number = INVALID_PROC_NUMBER;
-	Assert(pgaio_worker_set_contains(&io_worker_control->worker_set, MyIoWorkerId));
-	pgaio_worker_set_remove(&io_worker_control->worker_set, MyIoWorkerId);
-	notify_set = io_worker_control->worker_set;
-	Assert(io_worker_control->nworkers > 0);
-	io_worker_control->nworkers--;
-	Assert(pgaio_worker_set_count(&io_worker_control->worker_set) ==
-		   io_worker_control->nworkers);
-	LWLockRelease(AioWorkerControlLock);
+	LWLockAcquire(&io_worker_pool->queue_lock, LW_EXCLUSIVE);
+	pgaio_worker_set_remove(&io_worker_pool->idle_worker_set, MyIoWorkerId);
+	io_worker_pool->workers[MyIoWorkerId] = INVALID_PROC_NUMBER;
+	Assert(pgaio_worker_set_contains(&io_worker_pool->worker_set, MyIoWorkerId));
+	pgaio_worker_set_remove(&io_worker_pool->worker_set, MyIoWorkerId);
+	notify_set = io_worker_pool->worker_set;
+	Assert(io_worker_pool->nworkers > 0);
+	io_worker_pool->nworkers--;
+	Assert(pgaio_worker_set_count(&io_worker_pool->worker_set) ==
+		   io_worker_pool->nworkers);
+	LWLockRelease(&io_worker_pool->queue_lock);
 
 	/* Notify other workers on pool change. */
 	while (!pgaio_worker_set_is_empty(&notify_set))
-		pgaio_worker_wake(pgaio_worker_set_pop_lowest(&notify_set));
+		pgaio_worker_wake(io_worker_pool, pgaio_worker_set_pop_lowest(&notify_set));
 }
 
 /*
@@ -600,29 +611,28 @@ pgaio_worker_register(void)
 
 	MyIoWorkerId = -1;
 
-	LWLockAcquire(AioWorkerControlLock, LW_EXCLUSIVE);
+	LWLockAcquire(&io_worker_pool->queue_lock, LW_EXCLUSIVE);
 	pgaio_worker_set_fill(&free_worker_set);
-	pgaio_worker_set_subtract(&free_worker_set, &io_worker_control->worker_set);
+	pgaio_worker_set_subtract(&free_worker_set, &io_worker_pool->worker_set);
 	if (!pgaio_worker_set_is_empty(&free_worker_set))
 		MyIoWorkerId = pgaio_worker_set_get_lowest(&free_worker_set);
 	if (MyIoWorkerId == -1)
 		elog(ERROR, "couldn't find a free worker ID");
+	Assert(io_worker_pool->workers[MyIoWorkerId] == INVALID_PROC_NUMBER);
+	io_worker_pool->workers[MyIoWorkerId] = MyProcNumber;
 
-	Assert(io_worker_control->workers[MyIoWorkerId].proc_number ==
-		   INVALID_PROC_NUMBER);
-	io_worker_control->workers[MyIoWorkerId].proc_number = MyProcNumber;
-
-	old_worker_set = io_worker_control->worker_set;
+	old_worker_set = io_worker_pool->worker_set;
 	Assert(!pgaio_worker_set_contains(&old_worker_set, MyIoWorkerId));
-	pgaio_worker_set_insert(&io_worker_control->worker_set, MyIoWorkerId);
-	io_worker_control->nworkers++;
-	Assert(pgaio_worker_set_count(&io_worker_control->worker_set) ==
-		   io_worker_control->nworkers);
-	LWLockRelease(AioWorkerControlLock);
+	pgaio_worker_set_insert(&io_worker_pool->worker_set, MyIoWorkerId);
+	io_worker_pool->nworkers++;
+	Assert(pgaio_worker_set_count(&io_worker_pool->worker_set) ==
+		   io_worker_pool->nworkers);
+	LWLockRelease(&io_worker_pool->queue_lock);
 
 	/* Notify other workers on pool change. */
 	while (!pgaio_worker_set_is_empty(&old_worker_set))
-		pgaio_worker_wake(pgaio_worker_set_pop_lowest(&old_worker_set));
+		pgaio_worker_wake(io_worker_pool,
+						  pgaio_worker_set_pop_lowest(&old_worker_set));
 
 	on_shmem_exit(pgaio_worker_die, 0);
 }
@@ -665,9 +675,9 @@ pgaio_worker_can_timeout(void)
 	PgAioWorkerSet worker_set;
 
 	/* Serialize against pool size changes. */
-	LWLockAcquire(AioWorkerControlLock, LW_SHARED);
-	worker_set = io_worker_control->worker_set;
-	LWLockRelease(AioWorkerControlLock);
+	LWLockAcquire(&io_worker_pool->pool_lock, LW_SHARED);
+	worker_set = io_worker_pool->worker_set;
+	LWLockRelease(&io_worker_pool->pool_lock);
 
 	if (MyIoWorkerId != pgaio_worker_set_get_highest(&worker_set))
 		return false;
@@ -757,6 +767,7 @@ void
 IoWorkerMain(const void *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
+	int			pool_number;
 	TimestampTz idle_timeout_abs = 0;
 	int			timeout_guc_used = 0;
 	PgAioHandle *volatile error_ioh = NULL;
@@ -782,10 +793,27 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	pqsignal(SIGUSR2, SignalHandlerForShutdownRequest);
 
+	/* Find the pool that the postmaster told this worker to join. */
+	Assert(startup_data_len == sizeof(pool_number));
+	memcpy(&pool_number, startup_data, sizeof(pool_number));
+	Assert(pool_number >= 0);
+	Assert(pool_number < numa_partition_count());
+	Assert(pool_number < lengthof(io_worker_pools));
+	io_worker_pool = io_worker_pools[pool_number];
+
+	/* Pin worker to assigned partition. */
+	numa_partition_pin_worker(pool_number);
+
 	/* also registers a shutdown callback to unregister */
 	pgaio_worker_register();
 
-	sprintf(cmd, "%d", MyIoWorkerId);
+	/* Show pool number in proctitle, unless there's only one of them. */
+	if (pgaio_worker_num_pools() > 1)
+		sprintf(cmd, "[pool %d] %d",
+				pool_number,
+				MyIoWorkerId);
+	else
+		sprintf(cmd, "%d", MyIoWorkerId);
 	set_ps_display(cmd);
 
 	errcallback.callback = pgaio_worker_error_callback;
@@ -842,17 +870,17 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		 * The lwlock acquisition also provides the necessary memory barrier
 		 * to ensure that we don't see an outdated data in the handle.
 		 */
-		LWLockAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE);
-		if ((io_index = pgaio_worker_submission_queue_consume()) == -1)
+		LWLockAcquire(&io_worker_pool->queue_lock, LW_EXCLUSIVE);
+		if ((io_index = pgaio_worker_submission_queue_consume(io_worker_pool)) == -1)
 		{
 			/* Nothing to do.  Mark self idle. */
-			pgaio_worker_set_insert(&io_worker_control->idle_worker_set,
+			pgaio_worker_set_insert(&io_worker_pool->idle_worker_set,
 									MyIoWorkerId);
 		}
 		else
 		{
 			/* Got one.  Clear idle flag. */
-			pgaio_worker_set_remove(&io_worker_control->idle_worker_set,
+			pgaio_worker_set_remove(&io_worker_pool->idle_worker_set,
 									MyIoWorkerId);
 
 			/*
@@ -862,8 +890,9 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			 */
 			if (wakeups <= ios)
 			{
-				queue_depth = pgaio_worker_submission_queue_depth();
-				worker = pgaio_worker_choose_idle(MyIoWorkerId + 1);
+				queue_depth = pgaio_worker_submission_queue_depth(io_worker_pool);
+				worker = pgaio_worker_choose_idle(io_worker_pool,
+												  MyIoWorkerId + 1);
 
 				/*
 				 * If there were no idle higher numbered peers and there are
@@ -874,21 +903,21 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 					grow = true;
 			}
 		}
-		LWLockRelease(AioWorkerSubmissionQueueLock);
+		LWLockRelease(&io_worker_pool->queue_lock);
 
 		/* Propagate wakeups. */
 		if (worker != -1)
-			pgaio_worker_wake(worker);
+			pgaio_worker_wake(io_worker_pool, worker);
 		else if (grow)
-			pgaio_worker_grow(true);
+			pgaio_worker_grow(io_worker_pool, true);
 
 		if (io_index != -1)
 		{
 			PgAioHandle *ioh = NULL;
 
 			/* If the queue was previously full, wake potential inserters. */
-			if (queue_depth == io_worker_submission_queue->size - 2)
-				ConditionVariableBroadcast(&io_worker_submission_queue->space_cv);
+			if (queue_depth == io_worker_pool->size - 2)
+				ConditionVariableBroadcast(&io_worker_pool->space_cv);
 
 			/* Cancel timeout and update wakeup:work ratio. */
 			idle_timeout_abs = 0;
@@ -978,7 +1007,7 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			int			timeout_ms;
 
 			/* Cancel new worker if pending. */
-			pgaio_worker_grow(false);
+			pgaio_worker_grow(io_worker_pool, false);
 
 			/* Compute the remaining allowed idle time. */
 			if (io_worker_idle_timeout == -1)
@@ -1068,6 +1097,12 @@ bool
 pgaio_workers_enabled(void)
 {
 	return io_method == IOMETHOD_WORKER;
+}
+
+int
+pgaio_worker_num_pools(void)
+{
+	return numa_partition_count();
 }
 
 static void

@@ -13,6 +13,7 @@ my $node = PostgreSQL::Test::Cluster->new('worker');
 $node->init();
 $node->append_conf(
 	'postgresql.conf', qq(
+numa_partitions=0
 io_method=worker
 io_worker_idle_timeout=0ms
 io_worker_launch_interval=0ms

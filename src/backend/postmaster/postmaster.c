@@ -409,10 +409,19 @@ static DNSServiceRef bonjour_sdref = NULL;
 #endif
 
 /* State for IO worker management. */
-static TimestampTz io_worker_launch_next_time = 0;
-static TimestampTz io_worker_launch_last_time = 0;
-static int	io_worker_count = 0;
-static PMChild *io_worker_children[MAX_IO_WORKERS];
+typedef struct PostmasterIoWorkerState
+{
+	TimestampTz next_launch_time;
+	TimestampTz last_launch_time;
+	int			last_launch_pool;
+	int			count;
+	int			pools;
+	int			pool_count[MAX_IO_WORKER_POOLS];
+	PMChild    *children[MAX_IO_WORKERS];
+	PMChild    *pool_children[MAX_IO_WORKER_POOLS][MAX_IO_WORKERS];
+} PostmasterIoWorkerState;
+
+static PostmasterIoWorkerState *io_workers = NULL;
 
 /*
  * postmaster.c - function prototypes
@@ -450,8 +459,10 @@ static void LaunchMissingBackgroundProcesses(void);
 static void maybe_start_bgworkers(void);
 static bool maybe_reap_io_worker(int pid);
 static void maybe_adjust_io_workers(void);
+static bool io_worker_any_pool_needs_worker(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
 static PMChild *StartChildProcess(BackendType type);
+static PMChild *StartChildProcessWithData(BackendType type, void *data, size_t size);
 static void StartSysLogger(void);
 static void StartAutovacuumWorker(void);
 static bool StartBackgroundWorker(RegisteredBgWorker *rw);
@@ -1391,6 +1402,9 @@ PostmasterMain(int argc, char *argv[])
 	UpdatePMState(PM_STARTUP);
 
 	/* Make sure we can perform I/O while starting up. */
+	io_workers = palloc0_object(PostmasterIoWorkerState);
+	io_workers->pools = pgaio_worker_num_pools();
+	io_workers->last_launch_pool = -1;
 	maybe_adjust_io_workers();
 
 	/* Start bgwriter and checkpointer so they can help with recovery */
@@ -1588,8 +1602,8 @@ DetermineSleepTime(void)
 		return 0;
 
 	/* If we need a new IO worker, defer until launch interval expires. */
-	if (pgaio_worker_test_grow() && io_worker_count < io_max_workers)
-		next_wakeup = io_worker_launch_next_time;
+	if (io_worker_any_pool_needs_worker())
+		next_wakeup = io_workers->next_launch_time;
 
 	if (HaveCrashedWorker)
 	{
@@ -3121,7 +3135,7 @@ PostmasterStateMachine(void)
 		 * PM_WAIT_IO_WORKERS state ends when there's only checkpointer and
 		 * dead-end children left.
 		 */
-		if (io_worker_count == 0)
+		if (io_workers->count == 0)
 		{
 			UpdatePMState(PM_WAIT_CHECKPOINTER);
 
@@ -3996,7 +4010,7 @@ CountChildren(BackendTypeMask targetMask)
  * failure.
  */
 static PMChild *
-StartChildProcess(BackendType type)
+StartChildProcessWithData(BackendType type, void *data, size_t size)
 {
 	PMChild    *pmchild;
 	pid_t		pid;
@@ -4016,7 +4030,10 @@ StartChildProcess(BackendType type)
 		return NULL;
 	}
 
-	pid = postmaster_child_launch(type, pmchild->child_slot, NULL, 0, NULL);
+	/* B_IO_WORKER is the only auxiliary process expected to pass data. */
+	Assert(type == B_IO_WORKER || data == NULL);
+
+	pid = postmaster_child_launch(type, pmchild->child_slot, data, size, NULL);
 	if (pid < 0)
 	{
 		/* in parent, fork failed */
@@ -4036,6 +4053,15 @@ StartChildProcess(BackendType type)
 	/* in parent, successful fork */
 	pmchild->pid = pid;
 	return pmchild;
+}
+
+/*
+ * As above but with NULL data.
+ */
+static PMChild *
+StartChildProcess(BackendType type)
+{
+	return StartChildProcessWithData(type, NULL, 0);
 }
 
 /*
@@ -4382,19 +4408,102 @@ maybe_start_bgworkers(void)
 static bool
 maybe_reap_io_worker(int pid)
 {
-	for (int i = 0; i < MAX_IO_WORKERS; ++i)
+	for (int i = 0; i < io_workers->count; ++i)
 	{
-		if (io_worker_children[i] &&
-			io_worker_children[i]->pid == pid)
-		{
-			ReleasePostmasterChildSlot(io_worker_children[i]);
+		PMChild    *child = io_workers->children[i];
 
-			--io_worker_count;
-			io_worker_children[i] = NULL;
+		/* List is dense. */
+		Assert(child);
+
+		if (child->pid == pid)
+		{
+			bool		found PG_USED_FOR_ASSERTS_ONLY = false;
+			int			pool = child->io_worker_pool;
+			int			pool_count = io_workers->pool_count[pool];
+
+			/* Decrement count and move final child into this entry. */
+			--io_workers->count;
+			io_workers->children[i] = io_workers->children[io_workers->count];
+			io_workers->children[io_workers->count] = NULL;
+
+			/* Find in per-pool array. */
+			for (int j = 0; j < pool_count; ++j)
+			{
+				PMChild    *pool_child = io_workers->pool_children[pool][j];
+
+				if (pool_child == child)
+				{
+					--pool_count;
+					io_workers->pool_children[pool][j] =
+						io_workers->pool_children[pool][pool_count];
+					io_workers->pool_children[pool][pool_count] = NULL;
+					io_workers->pool_count[pool] = pool_count;
+					found = true;
+					break;
+				}
+			}
+			Assert(found);
+
+			ReleasePostmasterChildSlot(child);
+
 			return true;
 		}
 	}
 	return false;
+}
+
+/*
+ * Check if any pool needs a new worker.  Used to determine sleep time.
+ */
+static bool
+io_worker_any_pool_needs_worker(void)
+{
+	int			max_per_pool = io_max_workers / io_workers->pools;
+
+	for (int i = 0; i < io_workers->pools; ++i)
+		if (pgaio_worker_test_grow(i) &&
+			io_workers->pool_count[i] < max_per_pool)
+			return true;
+
+	return false;
+}
+
+/*
+ * Find the next pool whose minimum is not satisfied, in round-robin launch
+ * order.
+ */
+static int
+io_worker_find_pool_under_minimum(void)
+{
+	for (int i = 0; i < io_workers->pools; ++i)
+	{
+		int			pool = io_workers->last_launch_pool + i + 1;
+
+		pool %= io_workers->pools;
+		if (io_workers->pool_count[pool] < io_min_workers)
+			return pool;
+	}
+
+	return -1;
+}
+
+/*
+ * Find the next pool that wants to grow and consume its "grow" flag,
+ * respecting round-robin launch order.
+ */
+static int
+io_worker_find_pool_with_grow_pending(void)
+{
+	for (int i = 0; i < io_workers->pools; ++i)
+	{
+		int			pool = io_workers->last_launch_pool + i + 1;
+
+		pool %= io_workers->pools;
+		if (pgaio_worker_test_and_clear_grow(pool))
+			return pool;
+	}
+
+	return -1;
 }
 
 /*
@@ -4408,6 +4517,8 @@ maybe_reap_io_worker(int pid)
 static void
 maybe_adjust_io_workers(void)
 {
+	int			pool = -1;
+
 	if (!pgaio_workers_enabled())
 		return;
 
@@ -4432,22 +4543,24 @@ maybe_adjust_io_workers(void)
 	Assert(pmState < PM_WAIT_IO_WORKERS);
 
 	/* Not enough workers running? */
-	while (io_worker_count < io_max_workers)
+	while (io_workers->count < io_max_workers)
 	{
 		PMChild    *child;
 		int			i;
 
 		/* Respect launch interval after minimum pool is reached. */
-		if (io_worker_count >= io_min_workers)
+		pool = io_worker_find_pool_under_minimum();
+		if (pool == -1)
 		{
 			TimestampTz now = GetCurrentTimestamp();
 
-			/*
-			 * Still waiting for launch interval to expire, or no launch
-			 * requested?
-			 */
-			if (now < io_worker_launch_next_time ||
-				!pgaio_worker_test_and_clear_grow())
+			/* Still waiting for launch interval to expire? */
+			if (now < io_workers->next_launch_time)
+				break;
+
+			/* No pools requested more workers? */
+			pool = io_worker_find_pool_with_grow_pending();
+			if (pool == -1)
 				break;
 
 			/*
@@ -4455,8 +4568,8 @@ maybe_adjust_io_workers(void)
 			 * that the postmaster's other duties and the advancing clock
 			 * don't produce an inaccurate launch interval.
 			 */
-			io_worker_launch_next_time =
-				TimestampTzPlusMilliseconds(io_worker_launch_next_time,
+			io_workers->next_launch_time =
+				TimestampTzPlusMilliseconds(io_workers->next_launch_time,
 											io_worker_launch_interval);
 
 			/*
@@ -4465,28 +4578,34 @@ maybe_adjust_io_workers(void)
 			 * a period.  Compute a new future time relative to the last
 			 * actual launch time instead, and proceed to launch a worker.
 			 */
-			if (io_worker_launch_next_time <= now)
-				io_worker_launch_next_time =
-					TimestampTzPlusMilliseconds(io_worker_launch_last_time,
+			if (io_workers->next_launch_time <= now)
+				io_workers->next_launch_time =
+					TimestampTzPlusMilliseconds(io_workers->last_launch_time,
 												io_worker_launch_interval);
-			io_worker_launch_last_time = now;
+			io_workers->last_launch_time = now;
 		}
 
-		/* find unused entry in io_worker_children array */
+		Assert(pool != -1);
+
+		/* find unused entry in io_workers->children array */
 		for (i = 0; i < MAX_IO_WORKERS; ++i)
 		{
-			if (io_worker_children[i] == NULL)
+			if (io_workers->children[i] == NULL)
 				break;
 		}
 		if (i == MAX_IO_WORKERS)
 			elog(ERROR, "could not find a free IO worker slot");
 
 		/* Try to launch one. */
-		child = StartChildProcess(B_IO_WORKER);
+		child = StartChildProcessWithData(B_IO_WORKER, &pool, sizeof(pool));
 		if (child != NULL)
 		{
-			io_worker_children[i] = child;
-			++io_worker_count;
+			child->io_worker_pool = pool;
+			io_workers->children[i] = child;
+			io_workers->count++;
+			io_workers->pool_children[pool][io_workers->pool_count[pool]] = child;
+			io_workers->pool_count[pool]++;
+			io_workers->last_launch_pool = pool;
 		}
 		else
 			break;				/* try again next time */

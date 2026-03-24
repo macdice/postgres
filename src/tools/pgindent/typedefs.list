@@ -2251,9 +2251,9 @@ PgAioUringCaps
 PgAioUringContext
 PgAioWaitRef
 PgAioWorkerControl
+PgAioWorkerPool
 PgAioWorkerSet
 PgAioWorkerSlot
-PgAioWorkerSubmissionQueue
 PgArchData
 PgBackendGSSStatus
 PgBackendSSLStatus
@@ -2369,6 +2369,7 @@ PortalStrategy
 PostParseColumnRefHook
 PostRewriteHook
 PostgresPollingStatusType
+PostmasterIoWorkerState
 PostingItem
 PreParseColumnRefHook
 PredClass
