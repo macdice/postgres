@@ -3637,6 +3637,7 @@ corrupt_items
 cost_qual_eval_context
 count_param_references_context
 cp_hash_func
+cpu_table
 create_upper_paths_hook_type
 createdb_failure_params
 crosstab_HashEnt
