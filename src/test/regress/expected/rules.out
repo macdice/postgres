@@ -1335,6 +1335,10 @@ pg_backend_memory_contexts| SELECT name,
 pg_config| SELECT name,
     setting
    FROM pg_config() pg_config(name, setting);
+pg_cpus| SELECT cpu,
+    pgroup,
+    numa_node
+   FROM pg_get_cpus() pg_get_cpus(cpu, pgroup, numa_node);
 pg_cursors| SELECT name,
     statement,
     is_holdable,

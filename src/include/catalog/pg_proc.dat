@@ -12851,4 +12851,14 @@
   proname => 'hashoid8extended', prorettype => 'int8',
   proargtypes => 'oid8 int8', prosrc => 'hashoid8extended' },
 
+{ oid => '8888', descr => 'CPUs',
+  proname => 'pg_get_cpus', prorows => '100', proretset => 't',
+  provolatile => 'v', proparallel => 'r', prorettype => 'record',
+  proargtypes => '',
+  proallargtypes => '{int4,int4,int4}',
+  proargmodes => '{o,o,o}',
+  proargnames => '{cpu,pgroup,numa_node}',
+  prosrc => 'pg_get_cpus',
+  proacl => '{POSTGRES=X,pg_read_all_stats=X}' },
+
 ]
