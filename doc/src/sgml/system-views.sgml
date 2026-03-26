@@ -77,6 +77,11 @@
      </row>
 
      <row>
+      <entry><link linkend="view-pg-cpus"><structname>pg_cpus</structname></link></entry>
+      <entry>CPUs</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-cursors"><structname>pg_cursors</structname></link></entry>
       <entry>open cursors</entry>
      </row>
@@ -990,7 +995,77 @@ AND c1.path[c2.level] = c2.path[c2.level];
 
  </sect1>
 
- <sect1 id="view-pg-cursors">
+ <sect1 id="view-pg-cpus">
+  <title><structname>pg_cpus</structname></title>
+
+  <indexterm zone="view-pg-cpus">
+   <primary>pg_cpus</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_cpus</structname> view lists CPUs detected by
+   <productname>PostgreSQL</productname>.
+  </para>
+  <table>
+   <title><structname>pg_cpus</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>cpu</structfield> <type>int4</type>
+      </para>
+      <para>
+       Logical processor identifier assigned by the operating system.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pgroup</structfield> <type>int4</type>
+      </para>
+      <para>
+       Processor group.  This is part of the full identifier on
+       Windows systems with more than 64 CPUs.  Empty on other systems.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>numa_node</structfield> <type>int4</type>
+      </para>
+      <para>
+       The NUMA node number.  Zero on non-NUMA systems.
+      </para></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_cpus</structname> view is read-only.
+  </para>
+
+  <para>
+   By default, the <structname>pg_cpus</structname> view can be read only by
+   superusers or roles with privileges of the
+   <literal>pg_read_all_stats</literal> role.
+  </para>
+ </sect1>
+
+
+  <sect1 id="view-pg-cursors">
   <title><structname>pg_cursors</structname></title>
 
   <indexterm zone="view-pg-cursors">

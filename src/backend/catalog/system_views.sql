@@ -1516,3 +1516,8 @@ CREATE VIEW pg_aios AS
     SELECT * FROM pg_get_aios();
 REVOKE ALL ON pg_aios FROM PUBLIC;
 GRANT SELECT ON pg_aios TO pg_read_all_stats;
+
+CREATE VIEW pg_cpus AS
+    SELECT * FROM pg_get_cpus();
+REVOKE ALL ON pg_cpus FROM PUBLIC;
+GRANT SELECT ON pg_cpus TO pg_read_all_stats;
