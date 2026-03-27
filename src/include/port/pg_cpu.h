@@ -16,9 +16,6 @@
 #ifdef HAVE_SCHED_GETCPU
 #include <sched.h>
 #endif
-#ifdef HAVE_GETCPUID
-#include <sys/processor.h>
-#endif
 #ifdef WIN32
 #include <windows.h>
 #endif
@@ -63,8 +60,6 @@ pg_cpu_current(void)
 {
 #if defined(HAVE_SCHED_GETCPU)
 	return sched_getcpu();		/* Linux, FreeBSD */
-#elif defined(GETCPUID)
-	return getcpuid();			/* Solaris, illumos */
 #elif defined(WIN32)
 	pg_cpu_t	cpu;
 

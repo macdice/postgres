@@ -3103,7 +3103,6 @@ func_checks = [
   ['explicit_bzero'],
   ['explicit_memset'],
   ['getauxval'],
-  ['getcpuid'],
   ['getifaddrs'],
   ['getopt', {'dependencies': [getopt_dep, gnugetopt_dep], 'skip': always_replace_getopt}],
   ['getopt_long', {'dependencies': [getopt_dep, gnugetopt_dep], 'skip': always_replace_getopt_long}],
