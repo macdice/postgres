@@ -30,11 +30,14 @@ typedef struct PGShmemHeader PGShmemHeader; /* avoid including
 											 * storage/pg_shmem.h here */
 extern void InitShmemAllocator(PGShmemHeader *seghdr);
 extern void *ShmemAlloc(Size size);
+extern void *ShmemAllocOnNumaNode(int node, size_t size);
 extern void *ShmemAllocNoError(Size size);
 extern bool ShmemAddrIsValid(const void *addr);
 extern HTAB *ShmemInitHash(const char *name, int64 init_size, int64 max_size,
 						   HASHCTL *infoP, int hash_flags);
 extern void *ShmemInitStruct(const char *name, Size size, bool *foundPtr);
+extern void *ShmemInitStructOnNumaNode(const char *name, int node, size_t size,
+									   bool *found);
 extern Size add_size(Size s1, Size s2);
 extern Size mul_size(Size s1, Size s2);
 

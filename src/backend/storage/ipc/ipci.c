@@ -40,10 +40,10 @@
 #include "replication/walsender.h"
 #include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
-#include "storage/cpu_affinity.h"
 #include "storage/dsm.h"
 #include "storage/dsm_registry.h"
 #include "storage/ipc.h"
+#include "storage/numa_partition.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/predicate.h"
@@ -153,6 +153,16 @@ CalculateShmemSize(void)
 	return size;
 }
 
+size_t
+CalculateShmemSizePerNumaPartition(void)
+{
+	size_t		size = 0;
+
+	size = add_size(size, AioShmemSizePerNumaPartition());
+
+	return size;
+}
+
 #ifdef EXEC_BACKEND
 /*
  * AttachSharedMemoryStructs
@@ -195,6 +205,8 @@ CreateSharedMemoryAndSemaphores(void)
 	PGShmemHeader *shim;
 	PGShmemHeader *seghdr;
 	Size		size;
+	size_t		per_partition_size;
+	size_t		per_numa_node_size;
 
 	Assert(!IsUnderPostmaster);
 
@@ -202,10 +214,15 @@ CreateSharedMemoryAndSemaphores(void)
 	size = CalculateShmemSize();
 	elog(DEBUG3, "invoking IpcMemoryCreate(size=%zu)", size);
 
+	/* Compute the size of the per-NUMA-node shared memory blocks */
+	per_partition_size = CalculateShmemSizePerNumaPartition();
+	per_numa_node_size = per_partition_size *
+		(Max(1, numa_partition_count_per_numa_node()));
+
 	/*
 	 * Create the shmem segment
 	 */
-	seghdr = PGSharedMemoryCreate(size, &shim);
+	seghdr = PGSharedMemoryCreate(size, per_numa_node_size, &shim);
 
 	/*
 	 * Make sure that huge pages are never reported as "unknown" while the

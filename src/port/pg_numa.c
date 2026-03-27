@@ -28,6 +28,7 @@
  */
 #ifdef USE_LIBNUMA
 
+#include <limits.h>
 #include <numa.h>
 #include <numaif.h>
 
@@ -152,6 +153,96 @@ pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset)
 
 	return 0;
 }
+
+#define PG_NUMA_MAX_NODE ((sizeof(unsigned long) * CHAR_BIT) - 1)
+
+static bool
+pg_numa_node_value_ok(int node)
+{
+	if (node < 0 ||
+		node > PG_NUMA_MAX_NODE ||
+		pg_numa_get_max_node() > PG_NUMA_MAX_NODE)
+	{
+		errno = EOVERFLOW;
+		return false;
+	}
+	return true;
+}
+
+int
+pg_numa_set_policy_prefer(int node)
+{
+	unsigned long bitmap = 1 << node;
+
+	if (!pg_numa_node_value_ok(node))
+		return -1;
+
+	return set_mempolicy(MPOL_PREFERRED, &bitmap, PG_NUMA_MAX_NODE);
+}
+
+int
+pg_numa_set_policy_interleave(void)
+{
+	unsigned long bitmap = ((1 << pg_numa_get_max_node()) + 1) - 1;
+
+	if (!pg_numa_node_value_ok(0))
+		return -1;
+
+	return set_mempolicy(MPOL_INTERLEAVE, &bitmap, PG_NUMA_MAX_NODE);
+}
+
+int
+pg_numa_set_policy_local(void)
+{
+	unsigned long bitmap = 0;
+
+	return set_mempolicy(MPOL_LOCAL, &bitmap, PG_NUMA_MAX_NODE);
+}
+
+typedef struct pg_numa_policy_holder
+{
+	int			mode;
+	unsigned long nodemask;
+} pg_numa_policy_holder;
+
+int
+pg_numa_save_policy(pg_numa_opaque_policy *policy)
+{
+	struct pg_numa_policy_holder *p = (pg_numa_policy_holder *) policy;
+
+	if (!pg_numa_node_value_ok(0))
+		return -1;
+
+	return get_mempolicy(&p->mode,
+						 &p->nodemask,
+						 PG_NUMA_MAX_NODE,
+						 NULL,
+						 0);
+}
+
+int
+pg_numa_restore_policy(const pg_numa_opaque_policy *policy)
+{
+	const struct pg_numa_policy_holder *p = (const pg_numa_policy_holder *) policy;
+
+	return set_mempolicy(p->mode,
+						 &p->nodemask,
+						 PG_NUMA_MAX_NODE);
+}
+
+int
+pg_numa_tonode_memory(void *mem, size_t size, int node)
+{
+	numa_tonode_memory(mem, size, node);
+	return 0;
+}
+
+int
+pg_numa_run_on_node(int node)
+{
+	return numa_run_on_node(node);
+}
+
 
 #elif defined(__FreeBSD__)
 

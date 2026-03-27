@@ -21,6 +21,7 @@
 
 /* aio_init.c */
 extern Size AioShmemSize(void);
+extern Size AioShmemSizePerNumaPartition(void);
 extern void AioShmemInit(void);
 
 extern void pgaio_init_backend(void);

@@ -96,11 +96,19 @@ typedef struct ShmemAllocatorData
 
 	HASHHDR    *index;			/* location of ShmemIndex */
 	LWLock		index_lock;		/* protects ShmemIndex */
+
+	int			num_numa_nodes;
+	size_t		per_numa_node_size;
+	struct
+	{
+		size_t		free_offset;
+		void	   *base;
+	}			per_numa_node[];
 } ShmemAllocatorData;
 
 #define ShmemIndexLock (&ShmemAllocator->index_lock)
 
-static void *ShmemAllocRaw(Size size, Size *allocated_size);
+static void *ShmemAllocRaw(int node, Size size, Size *allocated_size);
 
 /* shared memory global variables */
 
@@ -168,6 +176,12 @@ InitShmemAllocator(PGShmemHeader *seghdr)
 		SpinLockInit(&ShmemAllocator->shmem_lock);
 		ShmemAllocator->free_offset = offset;
 		LWLockInitialize(&ShmemAllocator->index_lock, LWTRANCHE_SHMEM_INDEX);
+		ShmemAllocator->num_numa_nodes = seghdr->num_numa_nodes;
+		for (int i = 0; i < ShmemAllocator->num_numa_nodes; ++i)
+		{
+			ShmemAllocator->per_numa_node[i].base = seghdr->per_numa_node_addr[i];
+			ShmemAllocator->per_numa_node[i].free_offset = 0;
+		}
 	}
 
 	ShmemSegHdr = seghdr;
@@ -211,12 +225,30 @@ ShmemAlloc(Size size)
 	void	   *newSpace;
 	Size		allocated_size;
 
-	newSpace = ShmemAllocRaw(size, &allocated_size);
+	newSpace = ShmemAllocRaw(-1, size, &allocated_size);
 	if (!newSpace)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of shared memory (%zu bytes requested)",
 						size)));
+	return newSpace;
+}
+
+/*
+ * As above, but from NUMA-node local memory.
+ */
+void *
+ShmemAllocOnNumaNode(int node, size_t size)
+{
+	void	   *newSpace;
+	Size		allocated_size;
+
+	newSpace = ShmemAllocRaw(node, size, &allocated_size);
+	if (!newSpace)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of shared memory on NUMA node %d (%zu bytes requested)",
+						node, size)));
 	return newSpace;
 }
 
@@ -230,21 +262,25 @@ ShmemAllocNoError(Size size)
 {
 	Size		allocated_size;
 
-	return ShmemAllocRaw(size, &allocated_size);
+	return ShmemAllocRaw(-1, size, &allocated_size);
 }
 
 /*
  * ShmemAllocRaw -- allocate align chunk and return allocated size
  *
+ * node should be -1 for general interleaved memory, and a NUMA node number
+ * for node-local memory.
+ *
  * Also sets *allocated_size to the number of bytes allocated, which will
  * be equal to the number requested plus any padding we choose to add.
  */
 static void *
-ShmemAllocRaw(Size size, Size *allocated_size)
+ShmemAllocRaw(int numa_node, Size size, Size *allocated_size)
 {
 	Size		newStart;
 	Size		newFree;
 	void	   *newSpace;
+
 
 	/*
 	 * Ensure all space is adequately aligned.  We used to only MAXALIGN this
@@ -262,10 +298,24 @@ ShmemAllocRaw(Size size, Size *allocated_size)
 
 	Assert(ShmemSegHdr != NULL);
 
+	if (numa_node >= 0 && ShmemAllocator->per_numa_node_size > 0)
+	{
+		SpinLockAcquire(&ShmemAllocator->shmem_lock);
+		newStart = ShmemAllocator->per_numa_node[numa_node].free_offset;
+		newFree = newStart + size;
+		if (newFree <= ShmemAllocator->per_numa_node_size)
+		{
+			newSpace = (char *)
+				ShmemAllocator->per_numa_node[numa_node].base + newStart;
+			ShmemAllocator->per_numa_node[numa_node].free_offset = newFree;
+		}
+		else
+			newSpace = NULL;
+		SpinLockRelease(&ShmemAllocator->shmem_lock);
+	}
+
 	SpinLockAcquire(&ShmemAllocator->shmem_lock);
-
 	newStart = ShmemAllocator->free_offset;
-
 	newFree = newStart + size;
 	if (newFree <= ShmemSegHdr->totalsize)
 	{
@@ -379,6 +429,15 @@ ShmemInitHash(const char *name,		/* table string name for shmem index */
 void *
 ShmemInitStruct(const char *name, Size size, bool *foundPtr)
 {
+	return ShmemInitStructOnNumaNode(name, -1, size, foundPtr);
+}
+
+/*
+ * As above, but allocate memory on a specific NUMA node.
+ */
+void *
+ShmemInitStructOnNumaNode(const char *name, int node, Size size, bool *foundPtr)
+{
 	ShmemIndexEnt *result;
 	void	   *structPtr;
 
@@ -421,7 +480,7 @@ ShmemInitStruct(const char *name, Size size, bool *foundPtr)
 		Size		allocated_size;
 
 		/* It isn't in the table yet. allocate and initialize it */
-		structPtr = ShmemAllocRaw(size, &allocated_size);
+		structPtr = ShmemAllocRaw(node, size, &allocated_size);
 		if (structPtr == NULL)
 		{
 			/* out of memory; remove the failed ShmemIndex entry */

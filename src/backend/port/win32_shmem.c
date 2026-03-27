@@ -205,6 +205,7 @@ EnableLockPagesPrivilege(int elevel)
  */
 PGShmemHeader *
 PGSharedMemoryCreate(Size size,
+					 size_t per_numa_node_size,
 					 PGShmemHeader **shim)
 {
 	void	   *memAddress;
@@ -219,6 +220,10 @@ PGSharedMemoryCreate(Size size,
 	Size		orig_size = size;
 	DWORD		flProtect = PAGE_READWRITE;
 	DWORD		desiredAccess;
+	int			num_numa_nodes = pg_numa_max_node() + 1;
+
+	/* No per-NUMA-node memory yet, so move that request. */
+	size += per_numa_node_size * num_numa_nodes;
 
 	ShmemProtectiveRegion = VirtualAlloc(NULL, PROTECTIVE_REGION_SIZE,
 										 MEM_RESERVE, PAGE_NOACCESS);
@@ -391,6 +396,8 @@ retry:
 	hdr->totalsize = size;
 	hdr->content_offset = MAXALIGN(sizeof(PGShmemHeader));
 	hdr->dsm_control = 0;
+	hdr->per_numa_node_size = 0;
+	hdr->num_numa_nodes = 0;
 
 	/* Save info for possible future use */
 	UsedShmemSegAddr = memAddress;

@@ -145,6 +145,17 @@ AioShmemSize(void)
 	return sz;
 }
 
+size_t
+AioShmemSizePerNumaPartition(void)
+{
+	size_t		size = 0;
+
+	if (pgaio_method_ops->shmem_size_per_numa_partition)
+		size = add_size(size, pgaio_method_ops->shmem_size_per_numa_partition());
+
+	return size;
+}
+
 void
 AioShmemInit(void)
 {

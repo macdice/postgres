@@ -78,6 +78,7 @@ extern void check_on_shmem_exit_lists_are_empty(void);
 extern PGDLLIMPORT shmem_startup_hook_type shmem_startup_hook;
 
 extern Size CalculateShmemSize(void);
+extern Size CalculateShmemSizePerNumaPartition(void);
 extern void CreateSharedMemoryAndSemaphores(void);
 #ifdef EXEC_BACKEND
 extern void AttachSharedMemoryStructs(void);

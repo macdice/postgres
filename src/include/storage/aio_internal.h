@@ -276,6 +276,9 @@ typedef struct IoMethodOps
 	 */
 	size_t		(*shmem_size) (void);
 
+	/* As above, but for per-NUMA-partition memory. */
+	size_t		(*shmem_size_per_numa_partition) (void);
+
 	/*
 	 * Initialize shared memory. First time is true if AIO's shared memory was
 	 * just initialized, false otherwise. Optional.

@@ -29,6 +29,7 @@
 
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
+#include "port/pg_numa.h"
 #include "portability/mem.h"
 #include "storage/dsm.h"
 #include "storage/fd.h"
@@ -589,6 +590,38 @@ check_huge_page_size(int *newval, void **extra, GucSource source)
 	return true;
 }
 
+static void *
+CreateAnonymousSegmentOnNumaNode(size_t size, int numa_node)
+{
+	void	   *ptr;
+	int			mmap_flags = MAP_SHARED | MAP_ANONYMOUS | MAP_HASSEMAPHORE;
+//	pg_numa_opaque_policy policy;
+
+//	if (pg_numa_save_policy(&policy) < 0)
+//		elog(FATAL, "pg_numa_save_policy() failed: %m");
+
+//	if (pg_numa_run_on_node(numa_node) < 0)
+//		elog(FATAL, "pg_numa_run_on_node(%d) failed: %m", numa_node);
+
+//	if (pg_numa_set_policy_local() < 0)
+//		elog(FATAL, "pg_numa_set_policy_prefer(%d) failed: %m", numa_node);
+
+	ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
+	if (ptr == MAP_FAILED)
+		elog(FATAL, "could not allocate %zu bytes of shared memory on NUMA node %d: %m",
+			 size, numa_node);
+
+	memset(ptr, 0, size);
+
+//	if (pg_numa_run_on_node(-1) < 0)
+//		elog(FATAL, "pg_numa_run_on_node(%d) failed: %m", numa_node);
+
+//	if (pg_numa_restore_policy(&policy) < 0)
+//		elog(FATAL, "pg_numa_restore_policy() failed: %m");
+
+	return ptr;
+}
+
 /*
  * Creates an anonymous mmap()ed shared memory segment.
  *
@@ -693,6 +726,8 @@ AnonymousShmemDetach(int status, Datum arg)
  * standard header.  Also, register an on_shmem_exit callback to release
  * the storage.
  *
+ * Also, optionally create a set of extra segments for each NUMA node.
+ *
  * Dead Postgres segments pertinent to this DataDir are recycled if found, but
  * we do not fail upon collision with foreign shmem segments.  The idea here
  * is to detect and re-use keys that may have been assigned by a crashed
@@ -700,6 +735,7 @@ AnonymousShmemDetach(int status, Datum arg)
  */
 PGShmemHeader *
 PGSharedMemoryCreate(Size size,
+					 size_t per_numa_node_size,
 					 PGShmemHeader **shim)
 {
 	IpcMemoryKey NextShmemSegID;
@@ -707,6 +743,7 @@ PGSharedMemoryCreate(Size size,
 	PGShmemHeader *hdr;
 	struct stat statbuf;
 	Size		sysvsize;
+	int			num_numa_nodes;
 
 	/*
 	 * We use the data directory's ID info (inode and device numbers) to
@@ -736,10 +773,25 @@ PGSharedMemoryCreate(Size size,
 	/* Room for a header? */
 	Assert(size > MAXALIGN(sizeof(PGShmemHeader)));
 
+	num_numa_nodes = pg_numa_get_max_node() + 1;
+
 	if (shared_memory_type == SHMEM_TYPE_MMAP)
 	{
 		AnonymousShmem = CreateAnonymousSegment(&size);
 		AnonymousShmemSize = size;
+
+		if (per_numa_node_size > 0)
+		{
+			/* These addresses are written to the flexible array. */
+			for (int i = 0; i < num_numa_nodes; ++i)
+				((PGShmemHeader *) AnonymousShmem)->per_numa_node_addr[i] =
+					CreateAnonymousSegmentOnNumaNode(per_numa_node_size, i);
+		}
+		else
+		{
+			/* Prevent attempt to allocate 0 bytes... */
+			num_numa_nodes = 0;
+		}
 
 		/* Register on-exit routine to unmap the anonymous segment */
 		on_shmem_exit(AnonymousShmemDetach, (Datum) 0);
@@ -749,6 +801,10 @@ PGSharedMemoryCreate(Size size,
 	}
 	else
 	{
+		/* No NUMA support in SysV memory.  Transfer space to regular chunk. */
+		size += per_numa_node_size * num_numa_nodes;
+		per_numa_node_size = 0;
+
 		sysvsize = size;
 
 		/* huge pages are only available with mmap */
@@ -855,7 +911,11 @@ PGSharedMemoryCreate(Size size,
 	 * Initialize space allocation status for segment.
 	 */
 	hdr->totalsize = size;
-	hdr->content_offset = MAXALIGN(sizeof(PGShmemHeader));
+	hdr->content_offset = MAXALIGN(sizeof(PGShmemHeader) +
+								   sizeof(hdr->per_numa_node_addr[0]) *
+								   num_numa_nodes);
+	hdr->num_numa_nodes = num_numa_nodes;
+	hdr->per_numa_node_size = per_numa_node_size;
 	*shim = hdr;
 
 	/* Save info for possible future use */

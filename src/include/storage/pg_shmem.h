@@ -39,6 +39,15 @@ typedef struct PGShmemHeader	/* standard header for all Postgres shmem */
 	dev_t		device;			/* device data directory is on */
 	ino_t		inode;			/* inode number of data directory */
 #endif
+
+	/*
+	 * An implementation might also provide per-NUMA-node memory.  If so,
+	 * per_numa_node_size is not zero, and per_numa_node_addr[] has
+	 * pg_numa_get_max_node() + 1 entries.
+	 */
+	int			num_numa_nodes;
+	size_t		per_numa_node_size;
+	void	   *per_numa_node_addr[];
 } PGShmemHeader;
 
 /* GUC variables */
@@ -86,6 +95,7 @@ extern void PGSharedMemoryNoReAttach(void);
 #endif
 
 extern PGShmemHeader *PGSharedMemoryCreate(Size size,
+										   size_t per_numa_node_size,
 										   PGShmemHeader **shim);
 extern bool PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2);
 extern void PGSharedMemoryDetach(void);

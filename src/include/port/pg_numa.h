@@ -46,6 +46,10 @@ extern PGDLLIMPORT int pg_numa_set_policy_prefer(int node);
 extern PGDLLIMPORT int pg_numa_set_policy_interleave(void);
 extern PGDLLIMPORT int pg_numa_set_policy_local(void);
 
+extern PGDLLIMPORT int pg_numa_tonode_memory(void *mem, size_t size, int node);
+extern PGDLLIMPORT int pg_numa_run_on_node(int node);
+
+
 #ifdef USE_LIBNUMA
 
 /*
