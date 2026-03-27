@@ -34,6 +34,18 @@ extern PGDLLIMPORT int pg_numa_get_max_node(void);
 extern PGDLLIMPORT int pg_numa_get_node_for_cpu(pg_cpu_t cpu);
 extern PGDLLIMPORT int pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset);
 
+typedef struct pg_numa_opaque_policy
+{
+	char		buffer[128];
+} pg_numa_opaque_policy;
+
+extern PGDLLIMPORT int pg_numa_save_policy(pg_numa_opaque_policy *policy);
+extern PGDLLIMPORT int pg_numa_restore_policy(const pg_numa_opaque_policy *policy);
+
+extern PGDLLIMPORT int pg_numa_set_policy_prefer(int node);
+extern PGDLLIMPORT int pg_numa_set_policy_interleave(void);
+extern PGDLLIMPORT int pg_numa_set_policy_local(void);
+
 #ifdef USE_LIBNUMA
 
 /*

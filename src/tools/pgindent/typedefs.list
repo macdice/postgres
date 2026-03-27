@@ -3991,6 +3991,8 @@ pg_local_to_utf_combined
 pg_locale_t
 pg_mb_radix_tree
 pg_md5_ctx
+pg_numa_opaque_policy
+pg_numa_policy_holder
 pg_on_exit_callback
 pg_prng_state
 pg_re_flags

@@ -155,6 +155,8 @@ pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset)
 
 #elif defined(__FreeBSD__)
 
+#include <sys/param.h>
+#include <sys/domainset.h>
 #include <sys/sysctl.h>
 
 int
@@ -209,6 +211,90 @@ pg_numa_get_cpus_for_node(int node, pg_cpuset_t *cpuset)
 			pg_cpuset_add(cpuset, i);
 	}
 	return 0;
+}
+
+int
+pg_numa_set_policy_prefer(int node)
+{
+	domainset_t domains;
+
+	DOMAINSET_ZERO(&domains);
+	DOMAINSET_SET(node, &domains);
+	return cpuset_setdomain(CPU_LEVEL_WHICH,
+							CPU_WHICH_PID,
+							-1,
+							sizeof(domains),
+							&domains,
+							DOMAINSET_POLICY_PREFER);
+}
+
+int
+pg_numa_set_policy_interleave(void)
+{
+	int			num_nodes = pg_numa_get_max_node() + 1;
+	domainset_t domains;
+
+	DOMAINSET_ZERO(&domains);
+	for (int i = 0; i < num_nodes; ++i)
+		DOMAINSET_SET(i, &domains);
+	return cpuset_setdomain(CPU_LEVEL_WHICH,
+							CPU_WHICH_PID,
+							-1,
+							sizeof(domains),
+							&domains,
+							DOMAINSET_POLICY_INTERLEAVE);
+}
+
+int
+pg_numa_set_policy_local(void)
+{
+	int			num_nodes = pg_numa_get_max_node() + 1;
+	domainset_t domains;
+
+	DOMAINSET_ZERO(&domains);
+	for (int i = 0; i < num_nodes; ++i)
+		DOMAINSET_SET(i, &domains);
+	return cpuset_setdomain(CPU_LEVEL_WHICH,
+							CPU_WHICH_PID,
+							-1,
+							sizeof(domains),
+							&domains,
+							DOMAINSET_POLICY_FIRSTTOUCH);
+}
+
+typedef struct pg_numa_policy_holder
+{
+	domainset_t domains;
+	int			policy;
+} pg_numa_policy_holder;
+
+int
+pg_numa_save_policy(pg_numa_opaque_policy *policy)
+{
+	struct pg_numa_policy_holder *p = (pg_numa_policy_holder *) policy;
+
+	static_assert(sizeof(*policy) >= sizeof(*p),
+				  "pg_numa_opaque_policy too small");
+
+	return cpuset_getdomain(CPU_LEVEL_WHICH,
+							CPU_WHICH_PID,
+							-1,
+							sizeof(p->domains),
+							&p->domains,
+							&p->policy);
+}
+
+int
+pg_numa_restore_policy(const pg_numa_opaque_policy *policy)
+{
+	const struct pg_numa_policy_holder *p = (const pg_numa_policy_holder *) policy;
+
+	return cpuset_setdomain(CPU_LEVEL_WHICH,
+							CPU_WHICH_PID,
+							-1,
+							sizeof(p->domains),
+							&p->domains,
+							p->policy);
 }
 
 #elif defined(WIN32)
