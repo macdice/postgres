@@ -67,6 +67,7 @@
 #include "libpq-fe.h"
 #include "pgbench.h"
 #include "port/pg_bitutils.h"
+#include "port/pg_cpuset.h"
 #include "portability/instr_time.h"
 
 /* X/Open (XSI) requires <math.h> to provide M_PI, but core POSIX does not */
@@ -963,6 +964,7 @@ usage(void)
 		   "  --log-prefix=PREFIX      prefix for transaction time log file\n"
 		   "                           (default: \"pgbench_log\")\n"
 		   "  --max-tries=NUM          max number of tries to run transaction (default: 1)\n"
+		   "  --pin=CPUS               set affinity to CPUs (e.g., 0,8,16,27-31)\n"
 		   "  --progress-timestamp     use Unix epoch timestamps for progress\n"
 		   "  --random-seed=SEED       set random seed (\"time\", \"rand\", integer)\n"
 		   "  --sampling-rate=NUM      fraction of transactions to log (e.g., 0.01 for 1%%)\n"
@@ -6728,6 +6730,24 @@ set_random_seed(const char *seed)
 	return true;
 }
 
+static bool
+handle_affinity(const char *s)
+{
+	pg_cpuset_t affinity;
+
+	if (pg_cpuset_read(&affinity, s) < 0)
+	{
+		pg_log_error("could not parse CPU set");
+		return false;
+	}
+	if (pg_cpuset_set_process_affinity_self(&affinity) < 0)
+	{
+		pg_log_error("could not set process affinity");
+		return false;
+	}
+	return true;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -6779,6 +6799,7 @@ main(int argc, char **argv)
 		{"exit-on-abort", no_argument, NULL, 16},
 		{"debug", no_argument, NULL, 17},
 		{"continue-on-error", no_argument, NULL, 18},
+		{"pin", required_argument, NULL, 19},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -7135,6 +7156,9 @@ main(int argc, char **argv)
 			case 18:			/* continue-on-error */
 				benchmarking_option_set = true;
 				continue_on_error = true;
+				break;
+			case 19:			/* cpus */
+				handle_affinity(optarg);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */
