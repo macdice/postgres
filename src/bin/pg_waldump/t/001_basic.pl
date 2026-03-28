@@ -11,6 +11,16 @@ use Test::More;
 use List::Util qw(shuffle);
 
 my $tar = $ENV{TAR};
+my @tar_c_flags;
+
+# bsdtar (macOS, *BSD) archives sparse files in GNU tar PAX 1.0 format by
+# default, unlike GNU tar itself.  Some filesystems create sparse files
+# implicitly when you write zeroes, and since pg_waldump can't understand that
+# encoding, we disable it here.
+if (system("$tar --no-read-sparse -c - /dev/null > /dev/null") == 0)
+{
+  push(@tar_c_flags, "--no-read-sparse");
+}
 
 program_help_ok('pg_waldump');
 program_version_ok('pg_waldump');
@@ -346,7 +356,7 @@ sub generate_archive
 	# move into the WAL directory before archiving files
 	my $cwd = getcwd;
 	chdir($directory) || die "chdir: $!";
-	command_ok([$tar, $compression_flags, $archive, @files]);
+	command_ok([$tar, @tar_c_flags, $compression_flags, $archive, @files]);
 	chdir($cwd) || die "chdir: $!";
 }
 
