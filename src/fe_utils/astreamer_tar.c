@@ -27,6 +27,8 @@
 #include "fe_utils/astreamer.h"
 #include "pgtar.h"
 
+#define SPARSE_PREFIX "GNUSparseFile."
+
 typedef struct astreamer_tar_parser
 {
 	astreamer	base;
@@ -34,6 +36,7 @@ typedef struct astreamer_tar_parser
 	astreamer_member member;
 	size_t		file_bytes_sent;
 	size_t		pad_bytes_expected;
+	size_t		sparse_map_expected;
 } astreamer_tar_parser;
 
 typedef struct astreamer_tar_archiver
@@ -174,10 +177,47 @@ astreamer_tar_parser_content(astreamer *streamer, astreamer_member *member,
 				nbytes = mystreamer->member.size - mystreamer->file_bytes_sent;
 				nbytes = Min(nbytes, len);
 				Assert(nbytes > 0);
-				astreamer_content(mystreamer->base.bbs_next,
-								  &mystreamer->member,
-								  data, nbytes,
-								  ASTREAMER_MEMBER_CONTENTS);
+
+				if (mystreamer->file_bytes_sent <
+					mystreamer->sparse_map_expected)
+				{
+					size_t		skip_bytes;
+
+					/*
+					 * To support sparse files generally, we'd need to keep
+					 * buffering sparse map blocks until we have enough to
+					 * parse it completely and produce a table of (offset,
+					 * length) entries, and then emit the contents with zeroes
+					 * inserted between those ranges.
+					 *
+					 * https://www.gnu.org/software/tar/manual/html_node/PAX-1.html
+					 *
+					 * XXX Simplification: there can't be any holes before the
+					 * end of valid WAL data, so we just expose the raw size
+					 * not counting holes and stream the data without the
+					 * holes inserted.  We also assume that the sparse map is
+					 * just one block, since there isn't any reason to expect
+					 * more than one hole at the end.  You can't figure out
+					 * where it ends in general without parsing the map, which
+					 * we should do to be completely correct.
+					 */
+					skip_bytes = Min(nbytes, mystreamer->sparse_map_expected);
+					mystreamer->file_bytes_sent += skip_bytes;
+					data += skip_bytes;
+					nbytes -= skip_bytes;
+					len -= skip_bytes;
+
+					/* Finished receiving the sparse map? */
+					if (mystreamer->file_bytes_sent ==
+						mystreamer->sparse_map_expected)
+						mystreamer->sparse_map_expected = 0;
+				}
+
+				if (nbytes > 0)
+					astreamer_content(mystreamer->base.bbs_next,
+									  &mystreamer->member,
+									  data, nbytes,
+									  ASTREAMER_MEMBER_CONTENTS);
 				mystreamer->file_bytes_sent += nbytes;
 				data += nbytes;
 				len -= nbytes;
@@ -268,6 +308,7 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 	int			i;
 	astreamer_member *member = &mystreamer->member;
 	char	   *buffer = mystreamer->base.bbs_buffer.data;
+	char	   *p;
 
 	Assert(mystreamer->base.bbs_buffer.len == TAR_BLOCK_SIZE);
 
@@ -294,6 +335,34 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 	strlcpy(member->pathname, &buffer[TAR_OFFSET_NAME], MAXPGPATH);
 	if (member->pathname[0] == '\0')
 		pg_fatal("tar member has empty name");
+
+	mystreamer->sparse_map_expected = false;
+	if ((p = strstr(member->pathname, SPARSE_PREFIX)) &&
+		(p == member->pathname || p[-1] == '/'))
+	{
+		const char *slash;
+
+		/*
+		 * https://www.gnu.org/software/tar/manual/html_node/PAX-1.html
+		 *
+		 * Ideally we would read variables from a preceding PaxHeader
+		 * pseudo-file: GNU.sparse.name for member->pathname, and
+		 * GNU.sparse.realsize for member->size.
+		 *
+		 * XXX Simplification: in practice (1) GNU and BSD tar use
+		 * GNUSparseFile.%p/REALNAME so we can just strip the prefix, and (2)
+		 * we don't expect holes in valid WAL data, so when we expose the raw
+		 * size it must at least cover the range of valid data, even if the
+		 * file appears bogusly truncated because the hole(s) are missing.
+		 */
+		if ((slash = strchr(p, '/')))
+		{
+			/* Expect at least one sparse map block. */
+			mystreamer->sparse_map_expected = TAR_BLOCK_SIZE;
+			memmove(p, slash + 1, strlen(slash + 1) + 1);
+		}
+	}
+
 	member->size = read_tar_number(&buffer[TAR_OFFSET_SIZE], 12);
 	member->mode = read_tar_number(&buffer[TAR_OFFSET_MODE], 8);
 	member->uid = read_tar_number(&buffer[TAR_OFFSET_UID], 8);
