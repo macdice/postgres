@@ -155,7 +155,16 @@ PostgreSQL documentation
         created inside the directory specified by the <envar>TMPDIR</envar>
         environment variable if it is set; otherwise, it will be created within
         the same directory as the tar archive.
+        Tar archives must be in plain ustar format.
        </para>
+       <note>
+        <para>
+         BSD tar can produce incompatible archives unless its
+         <option>--no-read-sparse</option> option is used.  GNU tar's default
+         format is sufficient, but <option>--sparse</option> should be
+         avoided.
+        </para>
+       </note>
       </listitem>
      </varlistentry>
 

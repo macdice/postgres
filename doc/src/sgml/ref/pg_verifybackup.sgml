@@ -265,7 +265,16 @@ PostgreSQL documentation
         archive, rather than in <literal>pg_wal</literal>. This may be
         useful if the backup is stored in a separate location from the WAL
         archive.
+        Tar archives must be in plain ustar format.
        </para>
+       <note>
+        <para>
+         BSD tar can produce incompatible archives unless its
+         <option>--no-read-sparse</option> option is used.  GNU tar's default
+         format is sufficient, but <option>--sparse</option> should be
+         avoided.
+        </para>
+       </note>
       </listitem>
      </varlistentry>
     </variablelist>
