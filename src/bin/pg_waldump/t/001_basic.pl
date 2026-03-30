@@ -6,6 +6,7 @@ use warnings FATAL => 'all';
 use Cwd;
 use File::Copy;
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::RecursiveCopy;
 use PostgreSQL::Test::Utils;
 use Test::More;
 use List::Util qw(shuffle);
@@ -203,9 +204,13 @@ $node->safe_psql('postgres',
 	qq{SELECT pg_logical_emit_message(true, 'test 026', repeat('xyzxz', 123456))}
 );
 
-my ($end_lsn, $end_walfile) = split /\|/,
+my ($end_lsn, $end_walfile, $wal_segsize) = split /\|/,
   $node->safe_psql('postgres',
-	q{SELECT pg_current_wal_insert_lsn(), pg_walfile_name(pg_current_wal_insert_lsn())}
+	q{SELECT pg_current_wal_insert_lsn(),
+			 pg_walfile_name(pg_current_wal_insert_lsn()),
+			 setting
+        FROM pg_settings
+       WHERE name = 'wal_segment_size'}
   );
 
 my $default_ts_oid = $node->safe_psql('postgres',
@@ -330,7 +335,7 @@ sub test_pg_waldump
 # Create a tar archive, shuffle the file order
 sub generate_archive
 {
-	my ($archive, $directory, $compression_flags) = @_;
+	my ($archive, $directory, $compression_flags, @extra_flags) = @_;
 
 	my @files;
 	opendir my $dh, $directory or die "opendir: $!";
@@ -346,7 +351,7 @@ sub generate_archive
 	# move into the WAL directory before archiving files
 	my $cwd = getcwd;
 	chdir($directory) || die "chdir: $!";
-	command_ok([$tar, $compression_flags, $archive, @files]);
+	command_ok([$tar, @extra_flags, $compression_flags, $archive, @files]);
 	chdir($cwd) || die "chdir: $!";
 }
 
@@ -467,5 +472,51 @@ for my $scenario (@scenarios)
 		unlink $path if $scenario->{'is_archive'};
 	}
 }
+
+SKIP:
+	skip "tar command is not available", 1
+		if !defined $tar;
+
+	my @sparse_flags;
+
+	# GNU tar
+	@sparse_flags = ("--sparse", "--format=pax")
+		if system("$tar --sparse --format=pax -c " .
+				  $node->data_dir . "/pg_wal/* /dev/null > /dev/null") == 0;
+	# BSD tar (this is the default, but we still need to detect BSD tar)
+	@sparse_flags = ("--read-sparse", "--format=pax")
+		if system("$tar --read-sparse --format=pax -c " .
+				  $node->data_dir . "/pg_wal/* /dev/null > /dev/null") == 0;
+
+	skip "tar command doesn't support GNU PAX format for sparse files", 1
+		if !@sparse_flags;
+
+	PostgreSQL::Test::RecursiveCopy::copypath($node->data_dir . '/pg_wal',
+											  $tmp_dir . '/pg_wal_sparse');
+
+	# truncate the unused part of final WAL file
+	my $end_byte = $end_lsn;
+	$end_byte =~ s/\///;
+	$end_byte = hex($end_byte);
+	$end_byte %= $wal_segsize;
+	truncate $tmp_dir . '/pg_wal_sparse/' . $end_walfile, $end_byte;
+
+	# now re-extend it as a hole, on Unix filesystems
+	truncate $tmp_dir . '/pg_wal_sparse/' . $end_walfile, $wal_segsize;
+
+	generate_archive($tmp_dir . '/pg_wal_sparse.tar',
+					 $tmp_dir . '/pg_wal_sparse',
+					 '-cf',
+					 @sparse_flags);
+
+	command_like(
+		[
+			'pg_waldump',
+			'--path' => $tmp_dir . '/pg_wal_sparse.tar',
+			'--start' => $start_lsn,
+			'--end' => $end_lsn,
+		],
+		qr/./,
+		'runs with GNU PAX sparse file in tar archive');
 
 done_testing();
