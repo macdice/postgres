@@ -5,6 +5,7 @@ use strict;
 use warnings FATAL => 'all';
 use Cwd;
 use File::Copy;
+use File::Spec;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
@@ -13,12 +14,14 @@ use List::Util qw(shuffle);
 my $tar = $ENV{TAR};
 my @tar_c_flags;
 
-# By default, bsdtar archives sparse files in GNU tar's --format=posix --sparse
-# format, so pg_waldump can't find files that ZFS has decided to store with
-# holes.  Turn that off.
-if (system("$tar --no-read-sparse -c - /dev/null > /dev/null") == 0)
+my $devnull = File::Spec->devnull();
+
+# By default, bsdtar archives sparse files in GNU tar's --format=pax --sparse
+# format, so pg_waldump rejects WAL that ZFS has decided to store with holes.
+# Turn that off.
+if (system("$tar --no-read-sparse -c - $devnull > $devnull") == 0)
 {
-  push(@tar_c_flags, "--no-read-sparse");
+	push(@tar_c_flags, "--no-read-sparse");
 }
 
 program_help_ok('pg_waldump');
@@ -339,7 +342,7 @@ sub test_pg_waldump
 # Create a tar archive, shuffle the file order
 sub generate_archive
 {
-	my ($archive, $directory, $compression_flags) = @_;
+	my ($archive, $directory, $compression_flags, @extra_flags) = @_;
 
 	my @files;
 	opendir my $dh, $directory or die "opendir: $!";
@@ -355,7 +358,7 @@ sub generate_archive
 	# move into the WAL directory before archiving files
 	my $cwd = getcwd;
 	chdir($directory) || die "chdir: $!";
-	command_ok([$tar, @tar_c_flags, $compression_flags, $archive, @files]);
+	command_ok([$tar, @extra_flags, @tar_c_flags, $compression_flags, $archive, @files]);
 	chdir($cwd) || die "chdir: $!";
 }
 
@@ -475,6 +478,31 @@ for my $scenario (@scenarios)
 		# Cleanup.
 		unlink $path if $scenario->{'is_archive'};
 	}
+}
+
+SKIP:
+{
+	skip "tar command is not available", 1
+		if !defined $tar;
+
+	skip "tar command doesn't understand --format=pax", 1
+		if system("$tar --format=pax -c " .
+				  $node->data_dir . "/pg_wal/* $devnull > $devnull") != 0;
+
+	generate_archive($tmp_dir . '/pg_wal_pax.tar',
+					 $node->data_dir . '/pg_wal',
+					 '-cf',
+					 ("--format=pax"));
+
+	command_fails_like(
+		[
+			'pg_waldump',
+			'--path' => $tmp_dir . '/pg_wal_pax.tar',
+			'--start' => $start_lsn,
+			'--end' => $end_lsn,
+		],
+		qr/error: pax extensions to tar format are not supported/,
+		'fails if pax extended header is detected');
 }
 
 done_testing();
