@@ -38,14 +38,19 @@ typedef struct astreamer_tar_sparse_map_entry
 
 /*
  * Information collected from a pax 'x' pseudo-file that concerns the
- * following file.  We only collect fields we're interested in: the name/value
- * pairs used by GNU tar's PAX 1.0 sparse file encoding.
+ * following file.
  */
 typedef struct astreamer_tar_pax_extended
 {
 	bool		apply_next;
-	uint64		gnu_real_size;
-	char		gnu_real_name[MAXPGPATH];
+
+	struct
+	{
+		int			major;
+		int			minor;
+		uint64		realsize;
+		char		name[MAXPGPATH];
+	} gnu_sparse;
 }			astreamer_tar_pax_extended;
 
 typedef struct astreamer_tar_sparse_map
@@ -73,6 +78,7 @@ typedef struct astreamer_tar_sparse_map
 	astreamer_tar_sparse_map_entry *entries;
 
 	/* File reconstruction state. */
+	uint64		input_stream_size;
 	uint64		output_offset;
 	uint64		output_entry;
 }			astreamer_tar_sparse_map;
@@ -88,18 +94,26 @@ typedef struct astreamer_tar_parser
 	enum
 	{
 		/* Regular files, links, directories. */
-		ASTREAMER_TAR_CONTENT_PLAIN,
+		ASTREAMER_TAR_CONTENT_PLAIN = 1 << 0,
 
 		/* PAX 'x' headers for the following file, not forwarded. */
-		ASTREAMER_TAR_CONTENT_PAX_HEADERS,
+		ASTREAMER_TAR_CONTENT_PAX_HEADERS = 1 << 1,
 
 		/* GNU PAX 1.0 sparse files, to be expanded on the fly. */
-		ASTREAMER_TAR_CONTENT_GNU_SPARSE
+		ASTREAMER_TAR_CONTENT_GNU_SPARSE = 1 << 2,
+
+		/* Skipped because we don't understand the format. */
+		ASTREAMER_TAR_CONTENT_UNSUPPORTED = 1 << 3
 	}			content_type;
 
 	astreamer_tar_pax_extended pax_extended;
 	astreamer_tar_sparse_map sparse_map;
 } astreamer_tar_parser;
+
+/* Content types that we forward to the next astreamer. */
+#define ASTREAMER_TAR_CONTENT_FORWARD_MASK \
+	(ASTREAMER_TAR_CONTENT_PLAIN | \
+	 ASTREAMER_TAR_CONTENT_GNU_SPARSE)
 
 typedef struct astreamer_tar_archiver
 {
@@ -169,11 +183,57 @@ astreamer_tar_parser_new(astreamer *next)
 	return &streamer->base;
 }
 
+/*
+ * Parse a PAX 'x' file.  This is a special file that precedes a regular file,
+ * allowing the standard header fields to be overriden, all of which we ignore:
+ *
+ * https://pubs.opengroup.org/onlinepubs/9699919799/utilities/pax.html#tag_20_92_13_03
+ *
+ * The only attributes we look for currently are GNU's sparse file ones:
+ *
+ * https://www.gnu.org/software/tar/manual/html_node/PAX-1.html
+ */
 static void
 astreamer_tar_parse_pax_extended(astreamer_tar_parser *mystreamer)
 {
-	Assert(mystreamer->content_type == ASTREAMER_TAR_CONTENT_PAX_HEADERS);
-	fprintf(stderr, "XXX PAX: %s\n", mystreamer->base.bbs_buffer.data);
+	astreamer_tar_pax_extended *pax = &mystreamer->pax_extended;
+	char *name;
+	char *value;
+	char *end_line;
+	char *end;
+	char *p;
+
+	memset(&pax->gnu_sparse, 0, sizeof(pax->gnu_sparse));
+	pax->gnu_sparse.major = -1;
+	pax->gnu_sparse.minor = -1;
+	pax->gnu_sparse.realsize = -1;
+
+	p = mystreamer->base.bbs_buffer.data;
+	end = p + mystreamer->base.bbs_buffer.len;
+
+	fprintf(stderr, "XXXXXXXXXX got PAX data: %s\n", p);
+	while (p < end &&
+		   (end_line = memchr(p, '\n', end - p)) &&
+		   (value = strchr(p, '=')) &&
+		   (name = strchr(p, ' ')))
+	{
+		*end_line = '\0';
+		*value++ = '\0';
+		*name++ = '\0';
+
+		fprintf(stderr, "[%s] = [%s]\n", name, value);
+		if (strcmp(name, "GNU.sparse.major") == 0)
+			pax->gnu_sparse.major = atoi(value);
+		else if (strcmp(name, "GNU.sparse.minor") == 0)
+			pax->gnu_sparse.minor = atoi(value);
+		else if (strcmp(name, "GNU.sparse.realsize") == 0)
+			pax->gnu_sparse.realsize = strtou64(value, NULL, 10);
+		else if (strcmp(name, "GNU.sparse.name") == 0)
+			strlcpy(pax->gnu_sparse.name, value, lengthof(pax->gnu_sparse.name));
+	}
+
+	/* Applies to the following file. */
+	pax->apply_next = true;
 }
 
 /*
@@ -183,42 +243,55 @@ static void
 astreamer_tar_apply_pax_extended(astreamer_tar_parser *mystreamer,
 								 astreamer_member *member)
 {
+	const astreamer_tar_pax_extended *pax = &mystreamer->pax_extended;
+	astreamer_tar_sparse_map *map = &mystreamer->sparse_map;
+	char *p;
+
 	/* Extended headers apply to exactly one following file. */
 	Assert(mystreamer->pax_extended.apply_next);
 	mystreamer->pax_extended.apply_next = false;
 
-#if 0
-	char	   *p;
-	char	   *slash;
+	/*
+	 * PAX extended attributes that don't include GNU sparse information can
+	 * be ignored.  High resolution mtime etc.
+	 */
+	if (pax->gnu_sparse.major == -1 &&
+		pax->gnu_sparse.minor == -1)
+		return;
 
-	fprintf(stderr, "XXXXXXXXX [%s]\n", member->pathname);
-	if ((p = strstr(member->pathname, PAX_HEADERS_NAME)) &&
-		(p == member->pathname || p[-1] == '/'))
-	{
-		map->input_state = SPARSE_MAP_EXPECT_PAX_VARIABLES;
-		map->input_expected = member->size;
-	}
-	else if ((p = strstr(member->pathname, SPARSE_PREFIX)) &&
-			 (p == member->pathname || p[-1] == '/') &&
-			 (slash = strchr(p, '/')))
-	{
-		map->member_type = SPARSE_MAP_TYPE_GNU_PAX_1_0;
+	/*
+	 * GNU sparse of an unexpected version, or missing required properties?
+	 * Skip the file, we can't decode it.  It will appear that the file is
+	 * missing.
+	 *
+	 * XXX Should this be an error?
+	 */
+	if (pax->gnu_sparse.major != 1 ||
+		pax->gnu_sparse.minor != 0 ||
+		pax->gnu_sparse.realsize == -1 ||
+		pax->gnu_sparse.name[0] == '\0')
+		mystreamer->content_type = ASTREAMER_TAR_CONTENT_UNSUPPORTED;
 
-		memmove(p, slash + 1, strlen(slash + 1) + 1);
-		astreamer_tar_sparse_map_end(map);	/* XXX FIXME */
-		map->input_state = SPARSE_MAP_EXPECT_COUNT;
-		map->input_size = 0;
-		map->input_position = 0;
-		map->input_expected = TAR_BLOCK_SIZE;
-		map->output_offset = 0;
-		map->output_entry = 0;
-		map->output_real_size = member->size;	/* XXX! */
-	}
-	else
-	{
-		map->member_type = SPARSE_MAP_TYPE_USTAR;
-	}
-#endif
+	/* Remember the input and output file sizes. */
+	map->input_stream_size = member->size;
+	member->size = pax->gnu_sparse.realsize;
+
+	/* Replace the filename. */
+	p = strrchr(member->pathname, '/');
+	if (!p)
+		p = member->pathname;	
+	strlcpy(p,
+			pax->gnu_sparse.name,
+			sizeof(member->pathname) - (p - member->pathname));
+
+	/* We are ready to decode a sparse file. */
+	map->input_state = SPARSE_MAP_EXPECT_COUNT;
+	map->input_size = 0;
+	map->input_position = 0;
+	map->input_expected = TAR_BLOCK_SIZE;
+	map->output_offset = 0;
+	map->output_entry = 0;
+	mystreamer->content_type = ASTREAMER_TAR_CONTENT_GNU_SPARSE;
 }
 
 static void
@@ -270,9 +343,8 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 			astreamer_tar_sparse_map_expand_hole(mystreamer,
 												 head_data->offset);
 
-		/* Send remaining, but stop at the next hole. */
+		/* Send remaining data, stopping at the next hole. */
 		Assert(map->output_offset >= head_data->offset);
-		/* Assert(map->output_offset < head_data->offset + head_data->length); */
 		head_remaining = head_data->length -
 			(head_data->offset - map->output_offset);
 
@@ -305,8 +377,8 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 	else
 	{
 		/*
-		 * There is more data in the file that the sparse map allows! XXX
-		 * error?
+		 * There is more data in the file that the sparse map told us. Discard
+		 * the rest.
 		 */
 	}
 	return size;
@@ -402,7 +474,7 @@ astreamer_tar_sparse_map_parse(astreamer_tar_parser *mystreamer,
 	for (int i = 0; i < Min(64, size); ++i)
 		fprintf(stderr, "XXX data[%d] = %02x [%c]\n", i, data[i], data[i]);
 	Assert(map->input_expected > 0);
-	Assert(map->input_state != SPARSE_MAP_READY);
+	Assert(map->input_state != SPARSE_MAP_EXPECT_FILE_DATA);
 	Assert(map->input_state != SPARSE_MAP_SYNTAX_ERROR);
 
 	for (;;)
@@ -427,7 +499,8 @@ astreamer_tar_sparse_map_parse(astreamer_tar_parser *mystreamer,
 
 			/*
 			 * The maximum we could go over TAR_BLOCK_SIZE is the length of an
-			 * integer + newline, but we have space for TAR_BLOCK_SIZE * 2.
+			 * integer in ASCII + newline, but we have space for
+			 * TAR_BLOCK_SIZE * 2.
 			 */
 			Assert(ingested <= TAR_BLOCK_SIZE);
 			Assert(ingested <= sizeof(map->input_buffer) - map->input_size);
@@ -485,14 +558,14 @@ astreamer_tar_sparse_map_parse(astreamer_tar_parser *mystreamer,
 				fprintf(stderr, "XXX SKIP PADDING %zu\n", map->input_expected);
 				if (map->input_expected == 0)
 				{
-					map->input_state = SPARSE_MAP_READY;
+					map->input_state = SPARSE_MAP_EXPECT_FILE_DATA;
 					Assert(map->input_ingested % TAR_BLOCK_SIZE == 0);
 					return ingested_sum;
 				}
 				continue;
 
 			case SPARSE_MAP_SYNTAX_ERROR:
-			case SPARSE_MAP_READY:
+			case SPARSE_MAP_EXPECT_FILE_DATA:
 				return ingested_sum;
 		}
 	}
@@ -562,20 +635,29 @@ astreamer_tar_parser_content(astreamer *streamer, astreamer_member *member,
 
 			case ASTREAMER_MEMBER_CONTENTS:
 
+				fprintf(stderr, "XXX ASTREAMER_MEMBER_CONTENTS, content type %d\n", mystreamer->content_type);
 				switch (mystreamer->content_type)
 				{
-					case ASTREAMER_TAR_CONTENT_PAX_HEADERS:
-						/* Buffer the whole pseudo-file including padding. */
+					case ASTREAMER_TAR_CONTENT_PAX_HEADERS:						
+						/* Buffer the whole pseudo-file. */
 						if (!astreamer_buffer_until(streamer, &data, &len,
-													member->size +
-													tarPaddingBytesRequired(member->size)))
+													mystreamer->member.size))
 							return;
 						astreamer_tar_parse_pax_extended(mystreamer);
-						mystreamer->next_context = ASTREAMER_MEMBER_HEADER;
-						mystreamer->base.bbs_buffer.len = 0;
-						break;
+						mystreamer->next_context = ASTREAMER_MEMBER_TRAILER;
+						return;
 
+					case ASTREAMER_TAR_CONTENT_UNSUPPORTED:
+						/* XXX astreamer_discard_until()? */
+						fprintf(stderr, "XXXX i will discard unsupported, the size is %zu\n", member->size);
+						if (!astreamer_buffer_until(streamer, &data, &len,
+													mystreamer->member.size))
+							return;
+						mystreamer->next_context = ASTREAMER_MEMBER_TRAILER;
+						return;
+						
 					case ASTREAMER_TAR_CONTENT_GNU_SPARSE:
+						fprintf(stderr, "XXXX i will expand stuff\n");
 						if (mystreamer->sparse_map.input_expected > 0)
 						{
 							size_t		sparse_map_bytes;
@@ -623,6 +705,7 @@ astreamer_tar_parser_content(astreamer *streamer, astreamer_member *member,
 						len -= nbytes;
 						break;
 				}
+				fprintf(stderr, "XXX sanity check ASTREAMER_MEMBER_CONTENTS, content type %d\n", mystreamer->content_type);
 
 				/*
 				 * If we've not yet sent the whole file, then there's more
@@ -664,10 +747,11 @@ astreamer_tar_parser_content(astreamer *streamer, astreamer_member *member,
 					return;
 
 				/* OK, now we can send it. */
-				astreamer_content(mystreamer->base.bbs_next,
-								  &mystreamer->member,
-								  data, mystreamer->pad_bytes_expected,
-								  ASTREAMER_MEMBER_TRAILER);
+				if (mystreamer->content_type & ASTREAMER_TAR_CONTENT_FORWARD_MASK)
+					astreamer_content(mystreamer->base.bbs_next,
+									  &mystreamer->member,
+									  data, mystreamer->pad_bytes_expected,
+									  ASTREAMER_MEMBER_TRAILER);
 
 				/* Expect next file header. */
 				mystreamer->next_context = ASTREAMER_MEMBER_HEADER;
@@ -732,12 +816,16 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 
 	/*
 	 * PAX extended headers are psueudo-files whose body describes the
-	 * following file using name/value strings.  We don't want to forward it
-	 * to the next astreamer, but we also don't want to end the stream.
+	 * following file.  We don't want to forward it to the next astreamer as
+	 * it's not logically a file, but we also don't want to end the stream.
 	 */
 	if (buffer[TAR_OFFSET_TYPEFLAG] == TAR_FILETYPE_PAX_HEADER)
 	{
 		mystreamer->content_type = ASTREAMER_TAR_CONTENT_PAX_HEADERS;
+		strlcpy(member->pathname, &buffer[TAR_OFFSET_NAME], MAXPGPATH);
+		member->size = read_tar_number(&buffer[TAR_OFFSET_SIZE], 12);
+		mystreamer->pad_bytes_expected = tarPaddingBytesRequired(member->size);
+		fprintf(stderr, "XXXXX I got a PAX header! size is %zu\n", member->size);
 		return true;
 	}
 
@@ -773,9 +861,10 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 		astreamer_tar_apply_pax_extended(mystreamer, member);
 
 	/* Forward the entire header to the next astreamer. */
-	astreamer_content(mystreamer->base.bbs_next, member,
-					  buffer, TAR_BLOCK_SIZE,
-					  ASTREAMER_MEMBER_HEADER);
+	if (mystreamer->content_type & ASTREAMER_TAR_CONTENT_FORWARD_MASK)
+		astreamer_content(mystreamer->base.bbs_next, member,
+						  buffer, TAR_BLOCK_SIZE,
+						  ASTREAMER_MEMBER_HEADER);
 
 	return true;
 }
