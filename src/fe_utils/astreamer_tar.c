@@ -64,7 +64,7 @@ typedef struct astreamer_tar_sparse_map
 		SPARSE_MAP_EXPECT_LENGTH,
 		SPARSE_MAP_SYNTAX_ERROR,
 		SPARSE_MAP_SKIP_PADDING,
-		SPARSE_MAP_READY
+		SPARSE_MAP_EXPECT_FILE_DATA
 	}			input_state;
 
 	/* Table of data ranges. Holes exist in between. */
