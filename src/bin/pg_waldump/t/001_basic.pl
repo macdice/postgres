@@ -12,6 +12,7 @@ use Test::More;
 use List::Util qw(shuffle);
 
 my $tar = $ENV{TAR};
+$tar = "gtar";
 
 program_help_ok('pg_waldump');
 program_version_ok('pg_waldump');
@@ -474,21 +475,22 @@ for my $scenario (@scenarios)
 }
 
 SKIP:
-	skip "tar command is not available", 1
+{
+	skip "tar command is not available"
 		if !defined $tar;
 
 	my @sparse_flags;
+	my $tail = "--format=pax -c " . $node->data_dir . "/pg_wal/* /dev/null > /dev/null";
 
 	# GNU tar
 	@sparse_flags = ("--sparse", "--format=pax")
-		if system("$tar --sparse --format=pax -c " .
-				  $node->data_dir . "/pg_wal/* /dev/null > /dev/null") == 0;
+		if system("$tar --sparse $tail") == 0;
 	# BSD tar (this is the default, but we still need to detect BSD tar)
 	@sparse_flags = ("--read-sparse", "--format=pax")
-		if system("$tar --read-sparse --format=pax -c " .
-				  $node->data_dir . "/pg_wal/* /dev/null > /dev/null") == 0;
+		if !@sparse_flags &&
+		   system("$tar --read-sparse $tail") == 0;
 
-	skip "tar command doesn't support GNU PAX format for sparse files", 1
+	skip "tar command doesn't support GNU PAX format for sparse files"
 		if !@sparse_flags;
 
 	PostgreSQL::Test::RecursiveCopy::copypath($node->data_dir . '/pg_wal',
@@ -500,6 +502,7 @@ SKIP:
 	$end_byte = hex($end_byte);
 	$end_byte %= $wal_segsize;
 	truncate $tmp_dir . '/pg_wal_sparse/' . $end_walfile, $end_byte;
+print("XXX truncate $tmp_dir/pg_wal_sparse/$end_walfile, $end_byte\n");
 
 	# now re-extend it as a hole, on Unix filesystems
 	truncate $tmp_dir . '/pg_wal_sparse/' . $end_walfile, $wal_segsize;
@@ -508,6 +511,7 @@ SKIP:
 					 $tmp_dir . '/pg_wal_sparse',
 					 '-cf',
 					 @sparse_flags);
+system("cp " . $tmp_dir . "/pg_wal_sparse.tar /tmp/");
 
 	command_like(
 		[
@@ -518,5 +522,6 @@ SKIP:
 		],
 		qr/./,
 		'runs with GNU PAX sparse file in tar archive');
+}
 
 done_testing();

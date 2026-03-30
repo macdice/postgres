@@ -29,6 +29,43 @@
 
 #define SPARSE_PREFIX "GNUSparseFile."
 
+typedef struct astreamer_tar_sparse_map_entry
+{
+	uint64		offset;
+	uint64		length;
+} astreamer_tar_sparse_map_entry;
+
+typedef struct astreamer_tar_sparse_map
+{
+	/* Sparse map parser state. */
+	size_t		input_expected;
+	char		input_buffer[TAR_BLOCK_SIZE * 2];
+	size_t		input_size;
+	size_t		input_position;
+	size_t		input_ingested;
+	enum
+	{
+		SPARSE_MAP_EXPECT_COUNT = 0,
+		SPARSE_MAP_EXPECT_OFFSET,
+		SPARSE_MAP_EXPECT_LENGTH,
+		SPARSE_MAP_SYNTAX_ERROR,
+		SPARSE_MAP_SKIP_PADDING,
+		SPARSE_MAP_READY
+	} input_state;
+
+	/* Table of data ranges. Holes exist in between. */
+	uint64		nentries;
+	uint64		nfilled;
+	astreamer_tar_sparse_map_entry *entries;
+
+	/* File reconstruction state. */
+	uint64		output_offset;
+	uint64		output_real_size;
+	uint64		output_entry;
+	char		output_mangled_name[MAXPGPATH];
+	char		output_real_name[MAXPGPATH];
+} astreamer_tar_sparse_map;
+
 typedef struct astreamer_tar_parser
 {
 	astreamer	base;
@@ -36,7 +73,8 @@ typedef struct astreamer_tar_parser
 	astreamer_member member;
 	size_t		file_bytes_sent;
 	size_t		pad_bytes_expected;
-	size_t		sparse_map_expected;
+
+	astreamer_tar_sparse_map sparse_map;
 } astreamer_tar_parser;
 
 typedef struct astreamer_tar_archiver
@@ -108,6 +146,286 @@ astreamer_tar_parser_new(astreamer *next)
 }
 
 /*
+ * Begin receiving a sparse map.
+ */
+static void
+astreamer_tar_sparse_map_begin(astreamer_tar_sparse_map *map)
+{
+	map->input_state = SPARSE_MAP_EXPECT_COUNT;
+	map->input_size = 0;
+	map->input_position = 0;
+	map->input_expected = TAR_BLOCK_SIZE;
+	map->output_offset = 0;
+	map->output_entry = 0;
+}
+
+static void
+astreamer_tar_sparse_map_expand_hole(astreamer_tar_parser *mystreamer,
+									 uint64 hole_end)
+{
+	astreamer_tar_sparse_map *map = &mystreamer->sparse_map;
+
+	while (hole_end > map->output_offset)
+	{
+		static const char zeroes[TAR_BLOCK_SIZE] = {0};
+		size_t size = hole_end - map->output_offset;
+		
+		if (size > sizeof(zeroes))
+			size = sizeof(zeroes);
+
+		astreamer_content(mystreamer->base.bbs_next,
+						  &mystreamer->member,
+						  zeroes,
+						  size,
+						  ASTREAMER_MEMBER_CONTENTS);
+
+		map->output_offset += size;
+	}
+}
+
+static size_t
+astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
+								const char *data,
+								size_t size)
+{
+	astreamer_tar_sparse_map *map = &mystreamer->sparse_map;
+
+	if (map->output_entry < map->nentries)
+	{
+		astreamer_tar_sparse_map_entry *head_data;
+		size_t head_remaining;
+
+		head_data = &map->entries[map->output_entry];
+
+		/* If there is a hole before this entry, expand it first. */
+		if (map->output_offset < head_data->offset)
+			astreamer_tar_sparse_map_expand_hole(mystreamer,
+												 head_data->offset);
+
+		/* Send remaining, but stop at the next hole. */
+		Assert(map->output_offset >= head_data->offset);
+		Assert(map->output_offset < head_data->offset + head_data->length);
+		head_remaining = head_data->length -
+			(head_data->offset - map->output_offset);
+
+		/* But not more data than we have received. */
+		if (size > head_remaining)
+			size = head_remaining;
+
+		astreamer_content(mystreamer->base.bbs_next,
+						  &mystreamer->member,
+						  data, size,
+						  ASTREAMER_MEMBER_CONTENTS);
+		map->output_offset += size;
+
+		/* Have we exhausted this data entry? */
+		if (map->output_offset >= head_data->offset + head_data->length)
+		{
+			map->output_entry++;
+
+			/* If that was the last one, there might be a final hole. */
+			if (map->output_entry == map->nentries &&
+				map->output_offset < map->output_real_size)
+				astreamer_tar_sparse_map_expand_hole(mystreamer,
+													 map->output_real_size);
+		}				
+	}
+	else
+	{
+		/*
+		 * There is more data in the file that the sparse map allows!
+		 * XXX error?
+		 */
+	}
+	return size;
+}
+
+static void
+astreamer_tar_sparse_map_end(astreamer_tar_sparse_map *map)
+{
+	if (map->entries)
+	{
+		pfree(map->entries);
+		map->entries = NULL;
+	}
+}
+
+/*
+ * Try to read a line from map->buffer and advance map->position to the next
+ * line, asking for more data if appropriate.
+ */
+static bool
+astreamer_tar_sparse_map_lex(astreamer_tar_sparse_map *map,
+							 uint64 *number)
+{
+	const char *p;
+	char *end;
+	size_t length;
+	size_t remaining;
+	char *newline;
+
+	Assert(map->input_size >= map->input_position);
+	remaining = map->input_size - map->input_position;
+
+	p = &map->input_buffer[map->input_position];
+	newline = memchr(p, '\n', remaining);
+	if (newline)
+	{
+		/* Replace newline with NUL terminator. */
+		*newline = '\0';
+		*number = strtou64(p, &end, 10);
+		fprintf(stderr, "GOT %zu\n", *number);
+		if (*number == UINT64_MAX || end == p)
+		{
+			map->input_state = SPARSE_MAP_SYNTAX_ERROR;
+			return false;
+		}
+
+		/* Step over the number + terminator. */
+		length = end - p;
+		length += 1;		
+		map->input_position += length;
+
+		/* Recycle buffer if we happen to hit end. */
+		if (map->input_position == map->input_size)
+		{
+			map->input_position = 0;
+			map->input_size = 0;
+		}
+		return true;
+	}
+	else
+	{
+		fprintf(stderr, "NO NEWLINE\n");
+		/* Need more data.  Keep partial number, and recycle buffer. */
+		if (remaining > 0)
+			memmove(&map->input_buffer[0], p, remaining);
+		map->input_position = 0;
+		map->input_size = remaining;
+
+		/* Do we need a new block from the source? */
+		if (map->input_expected == 0)
+			map->input_expected = TAR_BLOCK_SIZE;
+		return false;
+	}
+}
+
+/*
+ * Parse more of the sparse map.  sparse_map.bytes expected should be non-zero
+ * on entry, and will be non-zero on exit if more data is expected. Returns
+ * the number of bytes consumed by the sparse map.  If it is less than the
+ * size passed in, then some data was not consumed because it is data from the
+ * file.
+ *
+ * https://www.gnu.org/software/tar/manual/html_node/PAX-1.html
+ */
+static size_t
+astreamer_tar_sparse_map_parse(astreamer_tar_parser *mystreamer,
+							   const char *data,
+							   size_t size)
+{
+	astreamer_tar_sparse_map *map = &mystreamer->sparse_map;
+	size_t ingested_sum = 0;
+
+	for (int i = 0; i < Min(64, size); ++i)
+		fprintf(stderr, "XXX data[%d] = %02x [%c]\n", i, data[i], data[i]);
+	Assert(map->input_expected > 0);
+	Assert(map->input_state != SPARSE_MAP_READY);
+	Assert(map->input_state != SPARSE_MAP_SYNTAX_ERROR);
+
+	for (;;)
+	{
+		uint64 *expect;
+
+		/* Do we need to copy more data into map->buffer? */
+		if (map->input_expected > 0)
+		{
+			size_t ingested;
+
+			/* Do we need to wait to be called again to do that? */
+			if (size == 0)
+				break;
+
+			/* Ingest more data. */
+			fprintf(stderr, "XXX bytes_expected = %zu, input_size = %zu, input_position = %zu\n", map->input_expected, map->input_size, map->input_position);
+			
+			ingested = Min(size, map->input_expected);			
+			if (!(ingested <= sizeof(map->input_buffer) - map->input_size))
+				fprintf(stderr, "ingested = %zu, input_size = %zu", ingested, map->input_size);
+
+			/*
+			 * The maximum we could go over TAR_BLOCK_SIZE is the length of an
+			 * integer + newline, but we have space for TAR_BLOCK_SIZE * 2.
+			 */
+			Assert(ingested <= TAR_BLOCK_SIZE);
+			Assert(ingested <= sizeof(map->input_buffer) - map->input_size);
+			memcpy(&map->input_buffer[map->input_size], data, ingested);
+
+			map->input_size += ingested;
+			map->input_expected -= ingested;
+
+			data += ingested;
+			size -= ingested;
+			ingested_sum += ingested;
+			map->input_ingested += ingested;
+		}
+
+		switch (map->input_state)
+		{
+		case SPARSE_MAP_EXPECT_COUNT:
+			expect = &map->nentries;
+			if (!astreamer_tar_sparse_map_lex(map, expect))
+				continue;
+			Assert(map->entries == NULL);
+			map->entries = palloc_array(astreamer_tar_sparse_map_entry,
+										map->nentries);
+			map->nfilled = 0;
+			map->input_state = SPARSE_MAP_EXPECT_OFFSET;
+			fprintf(stderr, "XXX got count = %zu\n", map->nentries);
+			continue;
+
+		case SPARSE_MAP_EXPECT_OFFSET:
+			expect = &map->entries[map->nfilled].offset;
+			if (!astreamer_tar_sparse_map_lex(map, expect))
+				continue;
+			map->input_state = SPARSE_MAP_EXPECT_LENGTH;
+			fprintf(stderr, "XXX got offset[%zu] = %zu\n", map->nfilled, map->entries[map->nfilled].offset);
+			continue;
+
+		case SPARSE_MAP_EXPECT_LENGTH:
+			expect = &map->entries[map->nfilled].length;
+			if (!astreamer_tar_sparse_map_lex(map, expect))
+				continue;
+			fprintf(stderr, "XXX got length[%zu] = %zu\n", map->nfilled, map->entries[map->nfilled].length);
+			if (map->nfilled > 0 &&
+				map->entries[map->nfilled - 1].offset + map->entries[map->nfilled-1].length != map->entries[map->nfilled].offset)
+				fprintf(stderr, "XXX XXXXXXXX THERE IS A HOLE\n");
+			if (++map->nfilled == map->nentries)
+				map->input_state = SPARSE_MAP_SKIP_PADDING;
+			else
+				map->input_state = SPARSE_MAP_EXPECT_OFFSET;
+			continue;
+			
+		case SPARSE_MAP_SKIP_PADDING:
+			fprintf(stderr, "XXX SKIP PADDING %zu\n", map->input_expected);
+			if (map->input_expected == 0)
+			{
+				map->input_state = SPARSE_MAP_READY;
+				Assert(map->input_ingested % TAR_BLOCK_SIZE == 0);
+				return ingested_sum;
+			}
+			continue;
+
+		case SPARSE_MAP_SYNTAX_ERROR:
+		case SPARSE_MAP_READY:
+			return ingested_sum;
+		}
+	}
+
+	return ingested_sum;
+}
+
+/*
  * Parse unknown content as tar data.
  */
 static void
@@ -169,58 +487,49 @@ astreamer_tar_parser_content(astreamer *streamer, astreamer_member *member,
 
 			case ASTREAMER_MEMBER_CONTENTS:
 
-				/*
-				 * Send as much content as we have, but not more than the
-				 * remaining file length.
-				 */
-				Assert(mystreamer->file_bytes_sent < mystreamer->member.size);
-				nbytes = mystreamer->member.size - mystreamer->file_bytes_sent;
-				nbytes = Min(nbytes, len);
-				Assert(nbytes > 0);
-
-				if (mystreamer->file_bytes_sent <
-					mystreamer->sparse_map_expected)
+				/* Divert data to the sparse map until it is satisfied. */
+				if (mystreamer->sparse_map.input_expected > 0)
 				{
-					size_t		skip_bytes;
+					size_t		sparse_map_bytes;
 
-					/*
-					 * To support sparse files generally, we'd need to keep
-					 * buffering sparse map blocks until we have enough to
-					 * parse it completely and produce a table of (offset,
-					 * length) entries, and then emit the contents with zeroes
-					 * inserted between those ranges.
-					 *
-					 * https://www.gnu.org/software/tar/manual/html_node/PAX-1.html
-					 *
-					 * XXX Simplification: there can't be any holes before the
-					 * end of valid WAL data, so we just expose the raw size
-					 * not counting holes and stream the data without the
-					 * holes inserted.  We also assume that the sparse map is
-					 * just one block, since there isn't any reason to expect
-					 * more than one hole at the end.  You can't figure out
-					 * where it ends in general without parsing the map, which
-					 * we should do to be completely correct.
-					 */
-					skip_bytes = Min(nbytes, mystreamer->sparse_map_expected);
-					mystreamer->file_bytes_sent += skip_bytes;
-					data += skip_bytes;
-					nbytes -= skip_bytes;
-					len -= skip_bytes;
-
-					/* Finished receiving the sparse map? */
-					if (mystreamer->file_bytes_sent ==
-						mystreamer->sparse_map_expected)
-						mystreamer->sparse_map_expected = 0;
+					sparse_map_bytes = astreamer_tar_sparse_map_parse(mystreamer,
+																	  data,
+																	  len);
+					data += sparse_map_bytes;
+					len -= sparse_map_bytes;
 				}
 
-				if (nbytes > 0)
+				if (mystreamer->sparse_map.entries)
+				{
+					/* Expand sparse file. */
+					while (len > 0)
+					{
+						nbytes = astreamer_tar_sparse_map_expand(mystreamer,
+																 data,
+																 len);
+						data += nbytes;
+						len -= nbytes;
+					}
+				}
+				else
+				{
+					/*
+					 * Send as much content as we have, but not more than the
+					 * remaining file length.
+					 */
+					Assert(mystreamer->file_bytes_sent < mystreamer->member.size);
+					nbytes = mystreamer->member.size - mystreamer->file_bytes_sent;
+					nbytes = Min(nbytes, len);
+
+					Assert(nbytes > 0);
 					astreamer_content(mystreamer->base.bbs_next,
 									  &mystreamer->member,
 									  data, nbytes,
 									  ASTREAMER_MEMBER_CONTENTS);
-				mystreamer->file_bytes_sent += nbytes;
-				data += nbytes;
-				len -= nbytes;
+					mystreamer->file_bytes_sent += nbytes;
+					data += nbytes;
+					len -= nbytes;
+				}
 
 				/*
 				 * If we've not yet sent the whole file, then there's more
@@ -336,7 +645,7 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 	if (member->pathname[0] == '\0')
 		pg_fatal("tar member has empty name");
 
-	mystreamer->sparse_map_expected = false;
+	mystreamer->sparse_map.input_expected = 0;
 	if ((p = strstr(member->pathname, SPARSE_PREFIX)) &&
 		(p == member->pathname || p[-1] == '/'))
 	{
@@ -357,9 +666,9 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 		 */
 		if ((slash = strchr(p, '/')))
 		{
-			/* Expect at least one sparse map block. */
-			mystreamer->sparse_map_expected = TAR_BLOCK_SIZE;
 			memmove(p, slash + 1, strlen(slash + 1) + 1);
+			astreamer_tar_sparse_map_end(&mystreamer->sparse_map); /* XXX! */
+			astreamer_tar_sparse_map_begin(&mystreamer->sparse_map);
 		}
 	}
 
