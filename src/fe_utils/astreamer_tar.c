@@ -78,7 +78,8 @@ typedef struct astreamer_tar_sparse_map
 	astreamer_tar_sparse_map_entry *entries;
 
 	/* File reconstruction state. */
-	uint64		input_stream_size;
+	uint64		input_data_received;
+	uint64		input_file_size;
 //	uint64		output_offset;
 	uint64		output_entry;
 }			astreamer_tar_sparse_map;
@@ -275,11 +276,16 @@ astreamer_tar_apply_pax_extended(astreamer_tar_parser *mystreamer,
 		pax->gnu_sparse.name[0] == '\0')
 		mystreamer->content_type = ASTREAMER_TAR_CONTENT_UNSUPPORTED;
 
-	/* Remember the input and output file sizes. */
-	map->input_stream_size = member->size;
+	/* Preserve the input size. */
+	map->input_file_size = member->size;
+
+	/* Install the real (output) size. */
 	member->size = pax->gnu_sparse.realsize;
 
-	/* Replace the filename. */
+	/*
+	 * Replace GNUSparseFile.PID/filename with GNU.sparse.name.  (In practice
+	 * it looks like you could also just remove the leading directory part.)
+	 */
 	p = strrchr(member->pathname, '/');
 	if (!p)
 		p = member->pathname;	
@@ -305,7 +311,7 @@ astreamer_tar_sparse_map_expand_hole(astreamer_tar_parser *mystreamer,
 
 	while (hole_end > mystreamer->file_bytes_sent) //map->output_offset)
 	{
-		static const char zeroes[TAR_BLOCK_SIZE] = {0};
+		static const char zeroes[8192] = {0};
 		size_t		size = hole_end - mystreamer->file_bytes_sent; //map->output_offset;
 
 		if (size > sizeof(zeroes))
@@ -350,7 +356,6 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 												 head_data->offset);
 
 		/* Send remaining data, stopping at the next hole. */
-		//Assert(map->output_offset >= head_data->offset);
 		Assert(mystreamer->file_bytes_sent >= head_data->offset);
 		head_remaining = head_data->length -
 			(head_data->offset - mystreamer->file_bytes_sent); //map->output_offset);
@@ -369,6 +374,7 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 						  data, size,
 						  ASTREAMER_MEMBER_CONTENTS);
 		mystreamer->file_bytes_sent += size;
+		map->input_data_received += size;
 		//map->output_offset += size;
 		
 		/* Have we exhausted this data entry? */
@@ -377,7 +383,12 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 		{
 			map->output_entry++;
 
-			/* If that was the last one, there might be a final hole. */
+			/*
+			 * If that was the last one, there might be a final hole?  In
+			 * practice it seems that we received zero-length data range in
+			 * final position, so this may be redundant, but I don't see that
+			 * written down anywhere...
+			 */
 			if (map->output_entry == map->nentries &&
 				//map->output_offset < output_file_size)
 				mystreamer->file_bytes_sent < output_file_size)
@@ -388,10 +399,12 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 	else
 	{
 		/*
-		 * There is more data in the file that the sparse map told us. Discard
-		 * the rest.
+		 * We've stepped through all the data ranges in the sparse map, so now
+		 * we expect only padding.
 		 */
-		fprintf(stderr, "XXXX more data received than i know what to do with!\n");
+		//fprintf(stderr, "XXXX more data received than i know what to do with!\n");
+		mystreamer->next_context = ASTREAMER_MEMBER_TRAILER;
+		fprintf(stderr, "XXXX i've received %zu bytes, remainder should be %zu, and pad_bytes_expected is %zu\n", map->input_data_received, map->input_data_received % 512, mystreamer->pad_bytes_expected);
 	}
 	return size;
 }
@@ -479,10 +492,9 @@ astreamer_tar_sparse_map_lex(astreamer_tar_sparse_map * map,
  * length
  * ...
  *
- * ... followed by NUL bytes to pad out a standard 512-byte TAR block, unless
- * the list's finished exactly on a block-final byte.  Those are the ranges of
- * the data that follow, and everything in between is a hole that has been
- * stripped out of the data.
+ * ... followed by NUL bytes to pad out a standard 512-byte TAR block.  Those
+ * are the ranges of the data that follow, and everything in between is a hole
+ * that has been stripped out of the data.
  *
  * The output of this routine is just the same information in uint64_t:
  * map->nentries and map->entries[], which holds the list of {offset, length}
@@ -855,8 +867,8 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 		return false;
 
 	/*
-	 * These are never forwarded as they are logically part of the following
-	 * file.
+	 * PAX extended headers describe the following file.  It doesn't make
+	 * sense to forward them.
 	 */
 	if (buffer[TAR_OFFSET_TYPEFLAG] == TAR_FILETYPE_PAX_EXTENDED_HEADER)
 	{
@@ -867,17 +879,12 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 		fprintf(stderr, "XXXXX I got a PAX header! size is %zu, padding is %zu\n", member->size, mystreamer->pad_bytes_expected);
 		return true;
 	}
-
-	/*
-	 * Parse key fields out of the header.
-	 */
+	
+	/* Ustar header attributes.  A PAX header might override them below. */
+	mystreamer->content_type = ASTREAMER_TAR_CONTENT_PLAIN;
 	strlcpy(member->pathname, &buffer[TAR_OFFSET_NAME], MAXPGPATH);
 	if (member->pathname[0] == '\0')
 		pg_fatal("tar member has empty name");
-
-
-	/* Default assumptions that might be modified by a PAX header below. */
-	mystreamer->content_type = ASTREAMER_TAR_CONTENT_PLAIN;
 	member->size = read_tar_number(&buffer[TAR_OFFSET_SIZE], 12);
 	member->mode = read_tar_number(&buffer[TAR_OFFSET_MODE], 8);
 	member->uid = read_tar_number(&buffer[TAR_OFFSET_UID], 8);
