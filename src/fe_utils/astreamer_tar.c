@@ -60,7 +60,7 @@ typedef struct astreamer_tar_sparse_map
 	char		input_buffer[TAR_BLOCK_SIZE * 2];
 	size_t		input_size;
 	size_t		input_position;
-	size_t		input_ingested;
+	size_t		input_map_received;;
 	enum
 	{
 		/* States used while parsing a GNU PAX 1.0 sparse map. */
@@ -340,7 +340,8 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 	astreamer_tar_sparse_map *map = &mystreamer->sparse_map;
 	astreamer_member *member = &mystreamer->member;
 	size_t		output_file_size = member->size;
-
+	size_t		end_offset;
+	
 	if (map->output_entry < map->nentries)
 	{
 		astreamer_tar_sparse_map_entry *head_data;
@@ -357,13 +358,9 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 
 		/* Send remaining data, stopping at the next hole. */
 		Assert(mystreamer->file_bytes_sent >= head_data->offset);
-		head_remaining = head_data->length -
-			(head_data->offset - mystreamer->file_bytes_sent); //map->output_offset);
-//			(head_data->offset - map->output_offset);
-
-		/* But not more data than we have received. */
-		if (size > head_remaining)
-			size = head_remaining;
+		end_offset = head_data->offset + head_data->length;
+		head_remaining = end_offset - mystreamer->file_bytes_sent;
+		size = Min(size, head_remaining);
 
 		fprintf(stderr, "XXX expanding data %zu + %zu = %zu\n",
 				mystreamer->file_bytes_sent, //map->output_offset,
@@ -403,8 +400,10 @@ astreamer_tar_sparse_map_expand(astreamer_tar_parser *mystreamer,
 		 * we expect only padding.
 		 */
 		//fprintf(stderr, "XXXX more data received than i know what to do with!\n");
-		mystreamer->next_context = ASTREAMER_MEMBER_TRAILER;
+		//mystreamer->next_context = ASTREAMER_MEMBER_TRAILER;
 		fprintf(stderr, "XXXX i've received %zu bytes, remainder should be %zu, and pad_bytes_expected is %zu\n", map->input_data_received, map->input_data_received % 512, mystreamer->pad_bytes_expected);
+		fprintf(stderr, "XXXX advertised input file size %zu, we counted map %zu and data %zu = %zu\n", map->input_file_size, map->input_map_received, map->input_data_received, map->input_map_received + map->input_data_received);
+		fprintf(stderr, "XXXX i've sent %zu bytes, i expected to send %zu\n", mystreamer->file_bytes_sent, mystreamer->member.size);
 	}
 	return size;
 }
@@ -482,8 +481,8 @@ astreamer_tar_sparse_map_lex(astreamer_tar_sparse_map * map,
 
 /*
  * The sparse map lives in the first N TAR blocks of a GNUSparseFile.PID/NAME
- * file, and is then followed by the data with the holes removed.  The map
- * consists of ASCII numbers with newlines, which this routine takes as input:
+ * file, and is then followed by the data with the holes removed.  It consists
+ * of ASCII numbers with newlines:
  *
  * number-of-offset-length-pairs
  * offset
@@ -492,24 +491,12 @@ astreamer_tar_sparse_map_lex(astreamer_tar_sparse_map * map,
  * length
  * ...
  *
- * ... followed by NUL bytes to pad out a standard 512-byte TAR block.  Those
+ * It is followed by NUL padding to fill the final 512-byte TAR block.  Those
  * are the ranges of the data that follow, and everything in between is a hole
  * that has been stripped out of the data.
  *
- * The output of this routine is just the same information in uint64_t:
- * map->nentries and map->entries[], which holds the list of {offset, length}
- * entries.
- *
- * Since data can be received in chunks of any size, we need a state machine.
- *
- * We parse as much as we can on each call, leaving at most a partial line in
- * map->input_buffer because we're still waiting for a newline.  We don't know
- * how many TAR blocks of input we'll receive, we just know when we've seen
- * the last one.
- *
- * We only ever ask the caller for at most one more TAR block, by setting
- * map->input_expected.  The caller might call with much more data than that,
- * but we don't consume it all once we find the end.
+ * This routine loads them into map->entries[] incrementally with a state
+ * machine, asking for one more block when it runs out of data.
  */
 static size_t
 astreamer_tar_sparse_map_parse(astreamer_tar_parser *mystreamer,
@@ -560,7 +547,7 @@ astreamer_tar_sparse_map_parse(astreamer_tar_parser *mystreamer,
 			data += ingested;
 			size -= ingested;
 			ingested_sum += ingested;
-			map->input_ingested += ingested;
+			map->input_map_received += ingested;
 		}
 
 		switch (map->input_state)
@@ -607,7 +594,7 @@ astreamer_tar_sparse_map_parse(astreamer_tar_parser *mystreamer,
 				if (map->input_expected == 0)
 				{
 					map->input_state = SPARSE_MAP_EXPECT_FILE_DATA;
-					Assert(map->input_ingested % TAR_BLOCK_SIZE == 0);
+					Assert(map->input_map_received % TAR_BLOCK_SIZE == 0);
 					return ingested_sum;
 				}
 				continue;
@@ -694,8 +681,7 @@ astreamer_tar_parser_content(astreamer *streamer, astreamer_member *member,
 													mystreamer->member.size))
 							return;
 						astreamer_tar_parse_pax_extended(mystreamer);
-						mystreamer->file_bytes_sent = mystreamer->member.size;
-						mystreamer->next_context = ASTREAMER_MEMBER_TRAILER;
+						mystreamer->file_bytes_sent = mystreamer->member.size;						
 						break;
 
 					case ASTREAMER_TAR_CONTENT_UNSUPPORTED:
@@ -704,7 +690,7 @@ astreamer_tar_parser_content(astreamer *streamer, astreamer_member *member,
 						if (!astreamer_buffer_until(streamer, &data, &len,
 													mystreamer->member.size))
 							return;
-						mystreamer->next_context = ASTREAMER_MEMBER_TRAILER;
+						mystreamer->file_bytes_sent = mystreamer->member.size;						
 						break;
 						
 					case ASTREAMER_TAR_CONTENT_GNU_SPARSE:
@@ -880,7 +866,7 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 		return true;
 	}
 	
-	/* Ustar header attributes.  A PAX header might override them below. */
+	/* Standard header attributes.  A PAX header might override them below. */
 	mystreamer->content_type = ASTREAMER_TAR_CONTENT_PLAIN;
 	strlcpy(member->pathname, &buffer[TAR_OFFSET_NAME], MAXPGPATH);
 	if (member->pathname[0] == '\0')
