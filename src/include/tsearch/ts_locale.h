@@ -60,7 +60,7 @@ extern int	t_is##character_class##_with_len(const char *ptr, int len); \
 extern int	t_is##character_class##_cstr(const char *ptr); \
 extern int	t_is##character_class##_unbounded(const char *ptr); \
 \
-/* deprecated */ \
+pg_attribute_deprecated("use t_isXXX_{cstr,with_len,unbounded} instead") \
 extern int	t_is##character_class(const char *ptr);
 
 GENERATE_T_ISCLASS_DECL(alnum);
