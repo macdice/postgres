@@ -239,6 +239,21 @@ extern "C++"
 #endif
 
 /*
+ * Support for marking functions and types as deprecated, with a compiler
+ * warning if the function is used.  Precedes a declaration.
+ */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) || \
+	(defined(__cplusplus) && __cplusplus >= 201402L)
+#define pg_attribute_deprecated(message) [[deprecated(message)]]
+#elif defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 5)
+#define pg_attribute_deprecated(message) __attribute__((deprecated(message)))
+#elif defined(_MSC_VER)
+#define pg_attribute_deprecated(message) __declspec(deprecated(message))
+#else
+#define pg_attribute_deprecated(message)
+#endif
+
+/*
  * Append PG_USED_FOR_ASSERTS_ONLY to definitions of variables that are only
  * used in assert-enabled builds, to avoid compiler warnings about unused
  * variables in assert-disabled builds.
