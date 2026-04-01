@@ -60,6 +60,8 @@ enum tarFileType
 	TAR_FILETYPE_PLAIN = '0',
 	TAR_FILETYPE_SYMLINK = '2',
 	TAR_FILETYPE_DIRECTORY = '5',
+	TAR_FILETYPE_PAX_EXTENDED = 'x',
+	TAR_FILETYPE_PAX_EXTENDED_GLOBAL = 'g',
 };
 
 extern enum tarError tarCreateHeader(char *h, const char *filename,

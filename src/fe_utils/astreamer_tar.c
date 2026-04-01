@@ -272,6 +272,9 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 
 	Assert(mystreamer->base.bbs_buffer.len == TAR_BLOCK_SIZE);
 
+	/* Zero out fields of *member, just for consistency. */
+	memset(member, 0, sizeof(astreamer_member));
+
 	/* Check whether we've got a block of all zero bytes. */
 	for (i = 0; i < TAR_BLOCK_SIZE; ++i)
 	{
@@ -299,12 +302,28 @@ astreamer_tar_header(astreamer_tar_parser *mystreamer)
 	member->mode = read_tar_number(&buffer[TAR_OFFSET_MODE], 8);
 	member->uid = read_tar_number(&buffer[TAR_OFFSET_UID], 8);
 	member->gid = read_tar_number(&buffer[TAR_OFFSET_GID], 8);
-	member->is_directory =
-		(buffer[TAR_OFFSET_TYPEFLAG] == TAR_FILETYPE_DIRECTORY);
-	member->is_link =
-		(buffer[TAR_OFFSET_TYPEFLAG] == TAR_FILETYPE_SYMLINK);
-	if (member->is_link)
-		strlcpy(member->linktarget, &buffer[TAR_OFFSET_LINKNAME], 100);
+
+	switch (buffer[TAR_OFFSET_TYPEFLAG])
+	{
+		case TAR_FILETYPE_PLAIN:
+		case '\0':				/* backwards compatibility hack, per POSIX */
+			member->is_regular = true;
+			break;
+		case TAR_FILETYPE_DIRECTORY:
+			member->is_directory = true;
+			break;
+		case TAR_FILETYPE_SYMLINK:
+			member->is_symlink = true;
+			strlcpy(member->linktarget, &buffer[TAR_OFFSET_LINKNAME], 100);
+			break;
+		case TAR_FILETYPE_PAX_EXTENDED:
+		case TAR_FILETYPE_PAX_EXTENDED_GLOBAL:
+			pg_fatal("pax extensions to tar format are not supported");
+			break;
+		default:
+			/* For special files, set none of the three is_xxx flags */
+			break;
+	}
 
 	/* Compute number of padding bytes. */
 	mystreamer->pad_bytes_expected = tarPaddingBytesRequired(member->size);
