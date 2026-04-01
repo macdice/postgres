@@ -52,16 +52,9 @@ ts_copychar_cstr(void *dest, const void *src)
 	return ts_copychar_with_len(dest, src, pg_mblen_cstr((const char *) src));
 }
 
-/* Historical macro for the above. */
-#define COPYCHAR ts_copychar_cstr
-
 #define GENERATE_T_ISCLASS_DECL(character_class) \
 extern int	t_is##character_class##_with_len(const char *ptr, int len); \
-extern int	t_is##character_class##_cstr(const char *ptr); \
-extern int	t_is##character_class##_unbounded(const char *ptr); \
-\
-pg_attribute_deprecated("use t_isXXX_{cstr,with_len,unbounded} instead") \
-extern int	t_is##character_class(const char *ptr);
+extern int	t_is##character_class##_cstr(const char *ptr);
 
 GENERATE_T_ISCLASS_DECL(alnum);
 GENERATE_T_ISCLASS_DECL(alpha);

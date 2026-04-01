@@ -700,9 +700,6 @@ extern int	pg_mblen_range(const char *mbstr, const char *end);
 extern int	pg_mblen_with_len(const char *mbstr, int limit);
 extern int	pg_mblen_unbounded(const char *mbstr);
 
-pg_attribute_deprecated("use pg_mblen_{cstr,range,with_len,unbounded} instead")
-extern int	pg_mblen(const char *mbstr);
-
 extern int	pg_dsplen(const char *mbstr);
 extern int	pg_mbstrlen(const char *mbstr);
 extern int	pg_mbstrlen_with_len(const char *mbstr, int limit);

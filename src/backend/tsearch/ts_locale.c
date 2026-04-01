@@ -41,18 +41,6 @@ int \
 t_is##character_class##_cstr(const char *ptr) \
 { \
 	return t_is##character_class##_with_len(ptr, pg_mblen_cstr(ptr)); \
-} \
-/* ptr shall point to a string with pre-validated encoding */ \
-int \
-t_is##character_class##_unbounded(const char *ptr) \
-{ \
-	return t_is##character_class##_with_len(ptr, pg_mblen_unbounded(ptr)); \
-} \
-/* historical name for _unbounded */ \
-int \
-t_is##character_class(const char *ptr) \
-{ \
-	return t_is##character_class##_unbounded(ptr); \
 }
 
 GENERATE_T_ISCLASS_DEF(alnum)

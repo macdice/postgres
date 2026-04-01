@@ -1143,16 +1143,6 @@ pg_mblen_unbounded(const char *mbstr)
 	return length;
 }
 
-/*
- * Historical name for pg_mblen_unbounded().  Should not be used and will be
- * removed in a later version.
- */
-int
-pg_mblen(const char *mbstr)
-{
-	return pg_mblen_unbounded(mbstr);
-}
-
 /* returns the display length of a multibyte character */
 int
 pg_dsplen(const char *mbstr)
