@@ -50,11 +50,19 @@
 #include "utils/ps_status.h"
 #include "utils/wait_event.h"
 
-/* Saturation for stats counters used to estimate wakeup:work ratio. */
+/*
+ * Saturation for counters used to estimate wakeup:work ratio.  We want to
+ * distinguish between systems flooded with fast cached buffered IOs that are
+ * processed so quickly that work is often stolen by existing workers before
+ * woken workers have a chance, and systems doing real I/O that takes
+ * significant time compared to the IPC/scheduling.  This number smooths the
+ * estimate, but not much because we also want to react quickly when a burst of
+ * slow IOs arrives.
+ */
 #define PGAIO_WORKER_STATS_MAX 4
 
 /* Debugging only: show activity and statistics in ps command line. */
-/* #define PGAIO_WORKER_SHOW_PS_INFO */
+#define PGAIO_WORKER_SHOW_PS_INFO
 
 typedef struct PgAioWorkerSubmissionQueue
 {
@@ -735,22 +743,31 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 									MyIoWorkerId);
 
 			/*
-			 * See if we should wake up a higher numbered peer.  Only do this
-			 * if this worker is itself not receiving spurious wakeups.  This
-			 * heuristic discovers the useful wakeup propagation chain length.
+			 * See if we should wake up a higher numbered peer.  Only do that
+			 * if this worker is not receiving spurious wakeups itself.
+			 *
+			 * This heuristic tries to discover the useful wakeup propagation
+			 * chain length when IOs are very fast and workers wake up to find
+			 * that the work has been stolen.
+			 *
+			 * If we chose not to wake a worker when we ideally should have,
+			 * the ratio will soon correct that.
 			 */
 			if (wakeups <= ios)
 			{
 				queue_depth = pgaio_worker_submission_queue_depth();
-				worker = pgaio_worker_choose_idle(MyIoWorkerId + 1);
+				if (queue_depth > 0)
+				{
+					worker = pgaio_worker_choose_idle(MyIoWorkerId + 1);
 
-				/*
-				 * If there were no idle higher numbered peers and there are
-				 * more than enough IOs queued for me and all lower numbered
-				 * peers, then try to start a new worker.
-				 */
-				if (worker == -1 && queue_depth > MyIoWorkerId)
-					grow = true;
+					/*
+					 * If there were no idle higher numbered peers and there
+					 * are more than enough IOs queued for me and all lower
+					 * numbered peers, then try to start a new worker.
+					 */
+					if (worker == -1 && queue_depth > MyIoWorkerId)
+						grow = true;
+				}
 			}
 		}
 		LWLockRelease(AioWorkerSubmissionQueueLock);
@@ -769,8 +786,8 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			idle_timeout_abs = 0;
 			if (++ios == PGAIO_WORKER_STATS_MAX)
 			{
-				ios /= 2;
 				wakeups /= 2;
+				ios /= 2;
 			}
 
 			ioh = &pgaio_ctl->io_handles[io_index];
@@ -892,8 +909,8 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			}
 
 #ifdef PGAIO_WORKER_SHOW_PS_INFO
-			sprintf(cmd, "%d: idle, ios:wakeups = %d:%d",
-					MyIoWorkerId, ios, wakeups);
+			sprintf(cmd, "%d: idle, wakeups:ios = %d:%d",
+					MyIoWorkerId, wakeups, ios);
 			set_ps_display(cmd);
 #endif
 
@@ -911,8 +928,8 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 				/* WL_LATCH_SET */
 				if (++wakeups == PGAIO_WORKER_STATS_MAX)
 				{
-					ios /= 2;
 					wakeups /= 2;
+					ios /= 2;
 				}
 			}
 			ResetLatch(MyLatch);
