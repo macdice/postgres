@@ -23,6 +23,11 @@ OBJS = \
 override CPPFLAGS := -DFRONTEND -I$(libpq_srcdir) $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils
 
+ifeq ($(with_libarchive), yes)
+# XXX figure out where this should go
+LDFLAGS_INTERNAL += $(LIBARCHIVE_LIBS)
+endif
+
 RMGRDESCSOURCES = $(sort $(notdir $(wildcard $(top_srcdir)/src/backend/access/rmgrdesc/*desc*.c)))
 RMGRDESCOBJS = $(patsubst %.c,%.o,$(RMGRDESCSOURCES))
 

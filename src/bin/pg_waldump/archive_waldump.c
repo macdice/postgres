@@ -139,6 +139,10 @@ init_archive_reader(XLogDumpPrivate *privateInfo,
 
 	streamer = astreamer_waldump_new(privateInfo);
 
+#ifdef USE_LIBARCHIVE
+	/* libarchive will decode the tar archive. */
+	streamer = astreamer_libarchive_reader_new(streamer, pathname);
+#else
 	/* We must first parse the tar archive. */
 	streamer = astreamer_tar_parser_new(streamer);
 
@@ -152,6 +156,7 @@ init_archive_reader(XLogDumpPrivate *privateInfo,
 
 	/* And before that, we have to read the file. */
 	streamer = astreamer_plain_reader_new(streamer, pathname);
+#endif
 
 	privateInfo->archive_streamer = streamer;
 

@@ -11,7 +11,13 @@ use Test::More;
 use List::Util qw(shuffle);
 
 my $tar = $ENV{TAR};
-my @tar_p_flags = tar_portability_options($tar);
+my @tar_p_flags;
+
+# If we don't have libarchive, then we tell tar to stick to ustar format that
+# astreamer_tar.c can decode.  Otherwise we should be able to accept anything
+# that any current tar produces.
+@tar_p_flags = tar_portability_options($tar)
+  if !check_pg_config("#define USE_LIBARCHIVE");
 
 program_help_ok('pg_waldump');
 program_version_ok('pg_waldump');
@@ -373,6 +379,7 @@ my @scenarios = (
 		'compression_flags' => '-czf',
 		'is_archive' => 1,
 		'enabled' => check_pg_config("#define HAVE_LIBZ 1")
+		  || check_pg_config("#define USE_LIBARCHIVE")
 	});
 
 for my $scenario (@scenarios)

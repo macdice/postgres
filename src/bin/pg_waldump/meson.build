@@ -19,7 +19,7 @@ endif
 
 pg_waldump = executable('pg_waldump',
   pg_waldump_sources,
-  dependencies: [frontend_code, libpq, lz4, zstd],
+  dependencies: [frontend_code, libarchive, libpq, lz4, zstd],
   c_args: ['-DFRONTEND'], # needed for xlogreader et al
   kwargs: default_bin_args,
 )
