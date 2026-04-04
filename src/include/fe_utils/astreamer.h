@@ -155,6 +155,13 @@ astreamer_content(astreamer *streamer, astreamer_member *member,
 	streamer->bbs_ops->content(streamer, member, data, len, context);
 }
 
+/* Variant for astreamers that produce data themselves. */
+static inline void
+astreamer_pull(astreamer *streamer)
+{
+	astreamer_content(streamer, NULL, NULL, 0, ASTREAMER_UNKNOWN);
+}
+
 /* Finalize a astreamer. */
 static inline void
 astreamer_finalize(astreamer *streamer)
@@ -242,5 +249,10 @@ extern astreamer *astreamer_zstd_decompressor_new(astreamer *next);
 extern astreamer *astreamer_tar_parser_new(astreamer *next);
 extern astreamer *astreamer_tar_terminator_new(astreamer *next);
 extern astreamer *astreamer_tar_archiver_new(astreamer *next);
+
+#ifdef USE_LIBARCHIVE
+extern astreamer *astreamer_libarchive_reader_new(astreamer *next,
+												  const char *pathname);
+#endif
 
 #endif

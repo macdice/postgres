@@ -40,6 +40,10 @@ OBJS = \
 	string_utils.o \
 	version.o
 
+ifeq ($(with_libarchive), yes)
+OBJS += astreamer_libarchive.o
+endif
+
 ifeq ($(PORTNAME), win32)
 override CPPFLAGS += -DFD_SETSIZE=1024
 endif

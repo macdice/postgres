@@ -3589,6 +3589,7 @@ astreamer_archive_context
 astreamer_extractor
 astreamer_gzip_decompressor
 astreamer_gzip_writer
+astreamer_libarchive_reader
 astreamer_lz4_frame
 astreamer_member
 astreamer_ops

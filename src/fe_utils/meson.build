@@ -21,6 +21,10 @@ fe_utils_sources = files(
   'version.c',
 )
 
+if libarchive.found()
+  fe_utils_sources += 'astreamer_libarchive.c'
+endif
+
 psqlscan = custom_target('psqlscan',
   input: 'psqlscan.l',
   output: 'psqlscan.c',
