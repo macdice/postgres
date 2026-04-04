@@ -29,7 +29,8 @@ typedef struct astreamer_libarchive_reader
 	struct archive *archive;
 	bool		end_of_file;
 	bool		end_of_archive;
-	char		data[ASTREAMER_LIBARCHIVE_READER_BUFFER_SIZE];
+	pgoff_t		offset;
+	char		zeroes[8192];
 } astreamer_libarchive_reader;
 
 static bool astreamer_libarchive_reader_pull_content(astreamer *streamer);
@@ -117,11 +118,33 @@ astreamer_libarchive_reader_fill_member(astreamer_member *member,
 	}
 }
 
+/* Emit zeroes up to offset. */
+static void
+astreamer_libarchive_reader_expand_sparse(astreamer_libarchive_reader *mystreamer,
+										  pgoff_t offset)
+{
+	size_t		size;
+
+	while (mystreamer->offset < offset)
+	{
+		size = offset - mystreamer->offset;
+		size = Min(size, sizeof(mystreamer->zeroes));
+		astreamer_content(mystreamer->base.bbs_next,
+						  &mystreamer->member,
+						  mystreamer->zeroes,
+						  size,
+						  ASTREAMER_MEMBER_CONTENTS);
+		mystreamer->offset += size;
+	}
+}
+
 static bool
 astreamer_libarchive_reader_pull_content(astreamer *streamer)
 {
 	astreamer_libarchive_reader *mystreamer;
-	ssize_t		size;
+	const void *data;
+	size_t		size;
+	pgoff_t		offset;
 
 	mystreamer = (astreamer_libarchive_reader *) streamer;
 
@@ -148,6 +171,7 @@ astreamer_libarchive_reader_pull_content(astreamer *streamer)
 				case ARCHIVE_OK:
 					/* Send file header, then fall through to send one chunk. */
 					mystreamer->end_of_file = false;
+					mystreamer->offset = 0;
 					astreamer_libarchive_reader_fill_member(&mystreamer->member,
 															entry);
 					astreamer_content(mystreamer->base.bbs_next,
@@ -171,12 +195,19 @@ astreamer_libarchive_reader_pull_content(astreamer *streamer)
 			}
 		}
 
-		/* Stream a chunk of data, or discover end of file. */
+		/*
+		 * Stream a chunk of data, or discover end of file.
+		 *
+		 * It would be a bit simpler to use archive_read_data(), but this
+		 * interface removes the need for copying to an output buffer.  In
+		 * exchange for that, we have to deal with expanding (rare) sparse
+		 * file zeroes.
+		 */
 		Assert(!mystreamer->end_of_file);
-		size = archive_read_data(mystreamer->archive,
-								 mystreamer->data,
-								 sizeof(mystreamer->data));
-		switch (size)
+		switch (archive_read_data_block(mystreamer->archive,
+										&data,
+										&size,
+										&offset))
 		{
 			case ARCHIVE_RETRY:
 				continue;
@@ -187,10 +218,19 @@ astreamer_libarchive_reader_pull_content(astreamer *streamer)
 			case ARCHIVE_WARN:
 				pg_log_warning("libarchive: %s",
 							   archive_error_string(mystreamer->archive));
-				continue;
+				break;
+			case ARCHIVE_EOF:
+				size = 0;
+				break;
+			case ARCHIVE_OK:
+				break;
 			default:
+				pg_fatal("unexpected result from archive_read_next_data_block()");
 				break;
 		}
+
+		/* Expand any intervening sparse region. */
+		astreamer_libarchive_reader_expand_sparse(mystreamer, offset);
 
 		if (size == 0)
 		{
@@ -204,12 +244,14 @@ astreamer_libarchive_reader_pull_content(astreamer *streamer)
 			continue;
 		}
 
-		/* Stream large chunk and return. */
+		/* Stream large chunk directly from libarchive's buffer and return. */
+		Assert(mystreamer->offset == offset);
 		astreamer_content(mystreamer->base.bbs_next,
 						  &mystreamer->member,
-						  mystreamer->data,
+						  data,
 						  size,
 						  ASTREAMER_MEMBER_CONTENTS);
+		mystreamer->offset += size;
 		return true;
 	}
 	return false;
