@@ -718,6 +718,9 @@ LIBCURL_CPPFLAGS
 LIBCURL_LIBS
 LIBCURL_CFLAGS
 with_libcurl
+LIBARCHIVE_LIBS
+LIBARCHIVE_CFLAGS
+with_libarchive
 with_uuid
 LIBURING_LIBS
 LIBURING_CFLAGS
@@ -877,6 +880,7 @@ with_libedit_preferred
 with_liburing
 with_uuid
 with_ossp_uuid
+with_libarchive
 with_libcurl
 with_libnuma
 with_libxml
@@ -911,6 +915,8 @@ ICU_CFLAGS
 ICU_LIBS
 LIBURING_CFLAGS
 LIBURING_LIBS
+LIBARCHIVE_CFLAGS
+LIBARCHIVE_LIBS
 LIBCURL_CFLAGS
 LIBCURL_LIBS
 LIBNUMA_CFLAGS
@@ -1596,6 +1602,7 @@ Optional Packages:
   --with-liburing         build with io_uring support, for asynchronous I/O
   --with-uuid=LIB         build contrib/uuid-ossp using LIB (bsd,e2fs,ossp)
   --with-ossp-uuid        obsolete spelling of --with-uuid=ossp
+  --with-libarchive       build with libarchive support
   --with-libcurl          build with libcurl support
   --with-libnuma          build with libnuma support
   --with-libxml           build with XML support
@@ -1635,6 +1642,10 @@ Some influential environment variables:
               C compiler flags for LIBURING, overriding pkg-config
   LIBURING_LIBS
               linker flags for LIBURING, overriding pkg-config
+  LIBARCHIVE_CFLAGS
+              C compiler flags for LIBARCHIVE, overriding pkg-config
+  LIBARCHIVE_LIBS
+              linker flags for LIBARCHIVE, overriding pkg-config
   LIBCURL_CFLAGS
               C compiler flags for LIBCURL, overriding pkg-config
   LIBCURL_LIBS
@@ -8910,6 +8921,135 @@ $as_echo "#define HAVE_UUID_OSSP 1" >>confdefs.h
   fi
 fi
 
+
+
+#
+# libarchive
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with libarchive support" >&5
+$as_echo_n "checking whether to build with libarchive support... " >&6; }
+
+
+
+# Check whether --with-libarchive was given.
+if test "${with_libarchive+set}" = set; then :
+  withval=$with_libarchive;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_LIBARCHIVE 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-libarchive option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_libarchive=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_libarchive" >&5
+$as_echo "$with_libarchive" >&6; }
+
+if test "$with_libarchive" = yes ; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for libarchive" >&5
+$as_echo_n "checking for libarchive... " >&6; }
+
+if test -n "$LIBARCHIVE_CFLAGS"; then
+    pkg_cv_LIBARCHIVE_CFLAGS="$LIBARCHIVE_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libarchive\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libarchive") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LIBARCHIVE_CFLAGS=`$PKG_CONFIG --cflags "libarchive" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$LIBARCHIVE_LIBS"; then
+    pkg_cv_LIBARCHIVE_LIBS="$LIBARCHIVE_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libarchive\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libarchive") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LIBARCHIVE_LIBS=`$PKG_CONFIG --libs "libarchive" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        LIBARCHIVE_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libarchive" 2>&1`
+        else
+	        LIBARCHIVE_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libarchive" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$LIBARCHIVE_PKG_ERRORS" >&5
+
+	as_fn_error $? "Package requirements (libarchive) were not met:
+
+$LIBARCHIVE_PKG_ERRORS
+
+Consider adjusting the PKG_CONFIG_PATH environment variable if you
+installed software in a non-standard prefix.
+
+Alternatively, you may set the environment variables LIBARCHIVE_CFLAGS
+and LIBARCHIVE_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details." "$LINENO" 5
+elif test $pkg_failed = untried; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+	{ { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
+is in your PATH or set the PKG_CONFIG environment variable to the full
+path to pkg-config.
+
+Alternatively, you may set the environment variables LIBARCHIVE_CFLAGS
+and LIBARCHIVE_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details.
+
+To get pkg-config, see <http://pkg-config.freedesktop.org/>.
+See \`config.log' for more details" "$LINENO" 5; }
+else
+	LIBARCHIVE_CFLAGS=$pkg_cv_LIBARCHIVE_CFLAGS
+	LIBARCHIVE_LIBS=$pkg_cv_LIBARCHIVE_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+fi
+fi
 
 
 #

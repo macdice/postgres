@@ -923,6 +923,22 @@ endif
 
 
 ###############################################################
+# Library: libarchive
+###############################################################
+
+libarchive_opt = get_option('libarchive')
+if not libarchive_opt.disabled()
+  libarchive = dependency('libarchive', required: libarchive_opt)
+else
+  libarchive = not_found_dep
+endif
+if libarchive.found()
+  cdata.set('USE_LIBARCHIVE', 1)
+endif
+
+
+
+i###############################################################
 # Library: LLVM
 ###############################################################
 

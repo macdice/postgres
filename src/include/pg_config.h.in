@@ -701,6 +701,9 @@
 /* Define to 1 to build with LDAP support. (--with-ldap) */
 #undef USE_LDAP
 
+/* Define to 1 to build with libarchive support. (--with-libarchive) */
+#undef USE_LIBARCHIVE
+
 /* Define to 1 to build with libcurl support. (--with-libcurl) */
 #undef USE_LIBCURL
 

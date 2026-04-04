@@ -195,6 +195,7 @@ with_systemd	= @with_systemd@
 with_gssapi	= @with_gssapi@
 with_krb_srvnam	= @with_krb_srvnam@
 with_ldap	= @with_ldap@
+with_libarchive	= @with_libarchive@
 with_libcurl	= @with_libcurl@
 with_libnuma	= @with_libnuma@
 with_liburing	= @with_liburing@
@@ -223,6 +224,9 @@ krb_srvtab = @krb_srvtab@
 
 ICU_CFLAGS		= @ICU_CFLAGS@
 ICU_LIBS		= @ICU_LIBS@
+
+LIBARCHIVE_CFLAGS	= @LIBARCHIVE_CFLAGS@
+LIBARCHIVE_LIBS		= @LIBARCHIVE_LIBS@
 
 LIBNUMA_CFLAGS		= @LIBNUMA_CFLAGS@
 LIBNUMA_LIBS		= @LIBNUMA_LIBS@

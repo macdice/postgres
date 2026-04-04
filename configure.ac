@@ -1060,6 +1060,19 @@ AC_SUBST(with_uuid)
 
 
 #
+# libarchive
+#
+AC_MSG_CHECKING([whether to build with libarchive support])
+PGAC_ARG_BOOL(with, libarchive, no, [build with libarchive support],
+              [AC_DEFINE([USE_LIBARCHIVE], 1, [Define to 1 to build with libarchive support. (--with-libarchive)])])
+AC_MSG_RESULT([$with_libarchive])
+AC_SUBST(with_libarchive)
+if test "$with_libarchive" = yes ; then
+  PKG_CHECK_MODULES(LIBARCHIVE, libarchive)
+fi
+
+
+#
 # libcurl
 #
 AC_MSG_CHECKING([whether to build with libcurl support])
