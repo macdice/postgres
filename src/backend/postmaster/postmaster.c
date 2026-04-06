@@ -361,12 +361,23 @@ static PMState pmState = PM_INIT;
  */
 static bool connsAllowed = true;
 
-/* Start time of SIGKILL timeout during immediate shutdown or child crash */
-/* Zero means timeout is not running */
-static time_t AbortStartTime = 0;
+/* Special values for scheduling Postmaster duties at certain times. */
+#define PM_SCHEDULE_NEVER				TIMESTAMP_INFINITY
+#define PM_SCHEDULE_IMMEDIATELY			TIMESTAMP_MINUS_INFINITY
+
+/* Time of SIGKILL during immediate shutdown or child crash */
+static TimestampTz sigkill_children_scheduled_at = PM_SCHEDULE_NEVER;
 
 /* Length of said timeout */
 #define SIGKILL_CHILDREN_AFTER_SECS		5
+
+/* Time of next lockfile check and socket touch. */
+static TimestampTz lockfile_check_scheduled_at;
+static TimestampTz socket_touch_scheduled_at;
+
+/* Length of said timeouts */
+#define LOCKFILE_CHECK_SECS				60
+#define SOCKET_TOUCH_SECS				(58 * SECS_PER_MINUTE)
 
 static bool ReachedNormalRunning = false;	/* T if we've reached PM_RUN */
 
@@ -409,8 +420,8 @@ static DNSServiceRef bonjour_sdref = NULL;
 #endif
 
 /* State for IO worker management. */
-static TimestampTz io_worker_launch_next_time = 0;
-static TimestampTz io_worker_launch_last_time = 0;
+static TimestampTz io_worker_launch_next_time;
+static TimestampTz io_worker_launch_last_time;
 static int	io_worker_count = 0;
 static PMChild *io_worker_children[MAX_IO_WORKERS];
 
@@ -448,6 +459,7 @@ static void TerminateChildren(int signal);
 static int	CountChildren(BackendTypeMask targetMask);
 static void LaunchMissingBackgroundProcesses(void);
 static void maybe_start_bgworkers(void);
+static TimestampTz maybe_start_bgworkers_scheduled_at(void);
 static bool maybe_reap_io_worker(int pid);
 static void maybe_start_io_workers(void);
 static TimestampTz maybe_start_io_workers_scheduled_at(void);
@@ -1546,98 +1558,33 @@ checkControlFile(void)
 	FreeFile(fp);
 }
 
+static void
+compute_next_wakeup(TimestampTz *next_wakeup, TimestampTz wakeup)
+{
+	if (*next_wakeup > wakeup)
+		*next_wakeup = wakeup;
+}
+
 /*
  * Determine how long should we let ServerLoop sleep, in milliseconds.
- *
- * In normal conditions we wait at most one minute, to ensure that the other
- * background tasks handled by ServerLoop get done even when no requests are
- * arriving.  However, if there are background workers waiting to be started,
- * we don't actually sleep so that they are quickly serviced.  Other exception
- * cases are as shown in the code.
+ * Returns the time to wait for the next of ServerLoop()'s scheduled duties.
+ * The longest possible wait is one minute (LOCKFILE_CHECK_SECS), but it could
+ * be as low as zero if one the jobs below is due/overdue now.
  */
 static int
 DetermineSleepTime(void)
 {
-	TimestampTz next_wakeup;
+	TimestampTz next_wakeup = PM_SCHEDULE_NEVER;
 
-	/*
-	 * If an ImmediateShutdown or a crash restart has set a SIGKILL timeout,
-	 * ignore everything else and wait for that.
-	 */
-	if (Shutdown >= ImmediateShutdown || FatalError)
-	{
-		if (AbortStartTime != 0)
-		{
-			time_t		curtime = time(NULL);
-			int			seconds;
+	/* Find the time of the next scheduled ServerLoop() duty. */
+	compute_next_wakeup(&next_wakeup, sigkill_children_scheduled_at);
+	compute_next_wakeup(&next_wakeup, lockfile_check_scheduled_at);
+	compute_next_wakeup(&next_wakeup, socket_touch_scheduled_at);
+	compute_next_wakeup(&next_wakeup, maybe_start_io_workers_scheduled_at());
+	compute_next_wakeup(&next_wakeup, maybe_start_bgworkers_scheduled_at());
 
-			/*
-			 * time left to abort; clamp to 0 if it already expired, or if
-			 * time goes backwards
-			 */
-			if (curtime < AbortStartTime ||
-				curtime - AbortStartTime >= SIGKILL_CHILDREN_AFTER_SECS)
-				seconds = 0;
-			else
-				seconds = SIGKILL_CHILDREN_AFTER_SECS -
-					(curtime - AbortStartTime);
-
-			return seconds * 1000;
-		}
-	}
-
-	/* Time of next maybe_start_io_workers() call, or 0 for none. */
-	next_wakeup = maybe_start_io_workers_scheduled_at();
-
-	/* Ignore bgworkers during shutdown. */
-	if (StartWorkerNeeded && Shutdown == NoShutdown)
-		return 0;
-
-	if (HaveCrashedWorker && Shutdown == NoShutdown)
-	{
-		dlist_mutable_iter iter;
-
-		/*
-		 * When there are crashed bgworkers, we sleep just long enough that
-		 * they are restarted when they request to be.  Scan the list to
-		 * determine the minimum of all wakeup times according to most recent
-		 * crash time and requested restart interval.
-		 */
-		dlist_foreach_modify(iter, &BackgroundWorkerList)
-		{
-			RegisteredBgWorker *rw;
-			TimestampTz this_wakeup;
-
-			rw = dlist_container(RegisteredBgWorker, rw_lnode, iter.cur);
-
-			if (rw->rw_crashed_at == 0)
-				continue;
-
-			if (rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART
-				|| rw->rw_terminate)
-			{
-				ForgetBackgroundWorker(rw);
-				continue;
-			}
-
-			this_wakeup = TimestampTzPlusMilliseconds(rw->rw_crashed_at,
-													  1000L * rw->rw_worker.bgw_restart_time);
-			if (next_wakeup == 0 || this_wakeup < next_wakeup)
-				next_wakeup = this_wakeup;
-		}
-	}
-
-	if (next_wakeup != 0)
-	{
-		int			ms;
-
-		/* result of TimestampDifferenceMilliseconds is in [0, INT_MAX] */
-		ms = (int) TimestampDifferenceMilliseconds(GetCurrentTimestamp(),
-												   next_wakeup);
-		return Min(60 * 1000, ms);
-	}
-
-	return 60 * 1000;
+	/* result of TimestampDifferenceMilliseconds is in [0, INT_MAX] */
+	return TimestampDifferenceMilliseconds(GetCurrentTimestamp(), next_wakeup);
 }
 
 /*
@@ -1675,17 +1622,17 @@ ConfigurePostmasterWaitSet(bool accept_connections)
 static int
 ServerLoop(void)
 {
-	time_t		last_lockfile_recheck_time,
-				last_touch_time;
 	WaitEvent	events[MAXLISTEN];
 	int			nevents;
 
 	ConfigurePostmasterWaitSet(true);
-	last_lockfile_recheck_time = last_touch_time = time(NULL);
+
+	lockfile_check_scheduled_at = GetCurrentTimestamp();
+	socket_touch_scheduled_at = GetCurrentTimestamp();
 
 	for (;;)
 	{
-		time_t		now;
+		TimestampTz now;
 
 		nevents = WaitEventSetWait(pm_wait_set,
 								   DetermineSleepTime(),
@@ -1760,12 +1707,9 @@ ServerLoop(void)
 		/*
 		 * Lastly, check to see if it's time to do some things that we don't
 		 * want to do every single time through the loop, because they're a
-		 * bit expensive.  Note that there's up to a minute of slop in when
-		 * these tasks will be performed, since DetermineSleepTime() will let
-		 * us sleep at most that long; except for SIGKILL timeout which has
-		 * special-case logic there.
+		 * bit expensive.
 		 */
-		now = time(NULL);
+		now = GetCurrentTimestamp();
 
 		/*
 		 * If we already sent SIGQUIT to children and they are slow to shut
@@ -1776,10 +1720,10 @@ ServerLoop(void)
 		 *
 		 * Note we also do this during recovery from a process crash.
 		 */
-		if ((Shutdown >= ImmediateShutdown || FatalError) &&
-			AbortStartTime != 0 &&
-			(now - AbortStartTime) >= SIGKILL_CHILDREN_AFTER_SECS)
+		if (now >= sigkill_children_scheduled_at)
 		{
+			Assert(Shutdown >= ImmediateShutdown || FatalError);
+
 			/* We were gentle with them before. Not anymore */
 			ereport(LOG,
 			/* translator: %s is SIGKILL or SIGABRT */
@@ -1787,7 +1731,7 @@ ServerLoop(void)
 							send_abort_for_kill ? "SIGABRT" : "SIGKILL")));
 			TerminateChildren(send_abort_for_kill ? SIGABRT : SIGKILL);
 			/* reset flag so we don't SIGKILL again */
-			AbortStartTime = 0;
+			sigkill_children_scheduled_at = PM_SCHEDULE_NEVER;
 		}
 
 		/*
@@ -1800,7 +1744,7 @@ ServerLoop(void)
 		 * starting a new postmaster.  Data corruption is likely to ensue from
 		 * that anyway, but we can minimize the damage by aborting ASAP.
 		 */
-		if (now - last_lockfile_recheck_time >= 1 * SECS_PER_MINUTE)
+		if (now >= lockfile_check_scheduled_at)
 		{
 			if (!RecheckDataDirLockFile())
 			{
@@ -1808,7 +1752,9 @@ ServerLoop(void)
 						(errmsg("performing immediate shutdown because data directory lock file is invalid")));
 				kill(MyProcPid, SIGQUIT);
 			}
-			last_lockfile_recheck_time = now;
+			lockfile_check_scheduled_at =
+				TimestampTzPlusSeconds(lockfile_check_scheduled_at,
+									   LOCKFILE_CHECK_SECS);
 		}
 
 		/*
@@ -1816,11 +1762,13 @@ ServerLoop(void)
 		 * they are not removed by overzealous /tmp-cleaning tasks.  We assume
 		 * no one runs cleaners with cutoff times of less than an hour ...
 		 */
-		if (now - last_touch_time >= 58 * SECS_PER_MINUTE)
+		if (now >= socket_touch_scheduled_at)
 		{
 			TouchSocketFiles();
 			TouchSocketLockFiles();
-			last_touch_time = now;
+			socket_touch_scheduled_at =
+				TimestampTzPlusSeconds(socket_touch_scheduled_at,
+									   SOCKET_TOUCH_SECS);
 		}
 	}
 }
@@ -2231,7 +2179,9 @@ process_pm_shutdown_request(void)
 			UpdatePMState(PM_WAIT_BACKENDS);
 
 			/* set stopwatch for them to die */
-			AbortStartTime = time(NULL);
+			sigkill_children_scheduled_at =
+				TimestampTzPlusSeconds(GetCurrentTimestamp(),
+									   SIGKILL_CHILDREN_AFTER_SECS);
 
 			/*
 			 * Now wait for backends to exit.  If there are none,
@@ -2354,7 +2304,7 @@ process_pm_child_exit(void)
 			 */
 			StartupStatus = STARTUP_NOT_RUNNING;
 			FatalError = false;
-			AbortStartTime = 0;
+			sigkill_children_scheduled_at = PM_SCHEDULE_NEVER;
 			ReachedNormalRunning = true;
 			UpdatePMState(PM_RUN);
 			connsAllowed = true;
@@ -2815,8 +2765,10 @@ HandleFatalError(QuitSignalReason reason, bool consider_sigabrt)
 	 * .. and if this doesn't happen quickly enough, now the clock is ticking
 	 * for us to kill them without mercy.
 	 */
-	if (AbortStartTime == 0)
-		AbortStartTime = time(NULL);
+	if (sigkill_children_scheduled_at == PM_SCHEDULE_NEVER)
+		sigkill_children_scheduled_at =
+			TimestampTzPlusSeconds(GetCurrentTimestamp(),
+								   SIGKILL_CHILDREN_AFTER_SECS);
 }
 
 /*
@@ -3282,7 +3234,7 @@ PostmasterStateMachine(void)
 		Assert(StartupPMChild != NULL);
 		StartupStatus = STARTUP_RUNNING;
 		/* crash recovery started, reset SIGKILL flag */
-		AbortStartTime = 0;
+		sigkill_children_scheduled_at = PM_SCHEDULE_NEVER;
 
 		/* start accepting server socket connection events again */
 		ConfigurePostmasterWaitSet(true);
@@ -3759,7 +3711,7 @@ process_pm_pmsignal(void)
 	{
 		/* WAL redo has started. We're out of reinitialization. */
 		FatalError = false;
-		AbortStartTime = 0;
+		sigkill_children_scheduled_at = PM_SCHEDULE_NEVER;
 		reachedConsistency = false;
 
 		/*
@@ -4278,6 +4230,56 @@ bgworker_should_start_now(BgWorkerStartTime start_time)
 	return false;
 }
 
+static TimestampTz
+maybe_start_bgworkers_scheduled_at(void)
+{
+	TimestampTz next_wakeup;
+
+	/* Background workers are ignored during shutdown. */
+	if (Shutdown != NoShutdown)
+		return PM_SCHEDULE_NEVER;
+
+	/* Do we need a worker right now? */
+	if (StartWorkerNeeded)
+		return PM_SCHEDULE_IMMEDIATELY;
+
+	next_wakeup = PM_SCHEDULE_NEVER;
+	if (HaveCrashedWorker)
+	{
+		dlist_mutable_iter iter;
+
+		/*
+		 * When there are crashed bgworkers, we sleep just long enough that
+		 * they are restarted when they request to be.  Scan the list to
+		 * determine the minimum of all wakeup times according to most recent
+		 * crash time and requested restart interval.
+		 */
+		dlist_foreach_modify(iter, &BackgroundWorkerList)
+		{
+			RegisteredBgWorker *rw;
+			TimestampTz this_wakeup;
+
+			rw = dlist_container(RegisteredBgWorker, rw_lnode, iter.cur);
+
+			if (rw->rw_crashed_at == 0)
+				continue;
+
+			if (rw->rw_worker.bgw_restart_time == BGW_NEVER_RESTART
+				|| rw->rw_terminate)
+			{
+				ForgetBackgroundWorker(rw);
+				continue;
+			}
+
+			this_wakeup = TimestampTzPlusMilliseconds(rw->rw_crashed_at,
+													  1000L * rw->rw_worker.bgw_restart_time);
+			compute_next_wakeup(&next_wakeup, this_wakeup);
+		}
+	}
+
+	return next_wakeup;
+}
+
 /*
  * If the time is right, start background worker(s).
  *
@@ -4423,8 +4425,8 @@ maybe_reap_io_worker(int pid)
 
 /*
  * Returns the next time at which maybe_start_io_workers() would start one or
- * more I/O workers.  Any time in the past means ASAP, and 0 means no worker
- * is currently scheduled.
+ * more I/O workers, or one of the special values PM_SCHEDULE_IMMEDIATELY and
+ * PM_SCHEDULE_NEVER.
  *
  * This is called by DetermineSleepTime() and also maybe_start_io_workers()
  * itself, to make sure that they agree.
@@ -4433,25 +4435,25 @@ static TimestampTz
 maybe_start_io_workers_scheduled_at(void)
 {
 	if (!pgaio_workers_enabled())
-		return 0;
+		return PM_SCHEDULE_NEVER;
 
 	/*
 	 * If we're in final shutting down state, then we're just waiting for all
 	 * processes to exit.
 	 */
 	if (pmState >= PM_WAIT_IO_WORKERS)
-		return 0;
+		return PM_SCHEDULE_NEVER;
 
 	/* Don't start new workers during an immediate shutdown either. */
 	if (Shutdown >= ImmediateShutdown)
-		return 0;
+		return PM_SCHEDULE_NEVER;
 
 	/*
 	 * Don't start new workers if we're in the shutdown phase of a crash
 	 * restart. But we *do* need to start if we're already starting up again.
 	 */
 	if (FatalError && pmState >= PM_STOP_BACKENDS)
-		return 0;
+		return PM_SCHEDULE_NEVER;
 
 	/*
 	 * Don't start a worker if we're at or above the maximum.  (Excess workers
@@ -4459,15 +4461,15 @@ maybe_start_io_workers_scheduled_at(void)
 	 * until they are reaped.)
 	 */
 	if (io_worker_count >= io_max_workers)
-		return 0;
+		return PM_SCHEDULE_NEVER;
 
 	/* If we're under the minimum, start a worker as soon as possible. */
 	if (io_worker_count < io_min_workers)
-		return TIMESTAMP_MINUS_INFINITY;	/* start worker ASAP */
+		return PM_SCHEDULE_IMMEDIATELY;
 
 	/* Only proceed if a "grow" request is pending from existing workers. */
 	if (!pgaio_worker_test_grow())
-		return 0;
+		return PM_SCHEDULE_NEVER;
 
 	/*
 	 * maybe_start_io_workers() should start a new I/O worker after this time,
@@ -4487,7 +4489,8 @@ maybe_start_io_workers(void)
 {
 	TimestampTz scheduled_at;
 
-	while ((scheduled_at = maybe_start_io_workers_scheduled_at()) != 0)
+	while ((scheduled_at = maybe_start_io_workers_scheduled_at()) !=
+		   PM_SCHEDULE_NEVER)
 	{
 		TimestampTz now = GetCurrentTimestamp();
 		PMChild    *child;
