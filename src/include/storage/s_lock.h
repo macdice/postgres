@@ -452,7 +452,7 @@ do \
 #endif /* powerpc */
 
 
-#if defined(__mips__) && !defined(__sgi)	/* non-SGI MIPS */
+#if defined(__mips__)
 #define HAS_TEST_AND_SET
 
 typedef unsigned int slock_t;
@@ -520,7 +520,7 @@ do \
 	*((volatile slock_t *) (lock)) = 0; \
 } while (0)
 
-#endif /* __mips__ && !__sgi */
+#endif /* __mips__ */
 
 
 
