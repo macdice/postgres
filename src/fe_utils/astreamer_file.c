@@ -21,6 +21,18 @@
 #include "common/logging.h"
 #include "fe_utils/astreamer.h"
 
+/* Size of internal buffer used by astreamer_plain_reader. */
+#define ASTREAMER_PLAIN_READER_BUFFER (128 * 1024)
+
+typedef struct astreamer_plain_reader
+{
+	astreamer	base;
+	FILE	   *file;
+	size_t		size;
+	char		pathname[MAXPGPATH];
+	char		data[ASTREAMER_PLAIN_READER_BUFFER];
+} astreamer_plain_reader;
+
 typedef struct astreamer_plain_writer
 {
 	astreamer	base;
@@ -38,6 +50,16 @@ typedef struct astreamer_extractor
 	char		filename[MAXPGPATH];
 	FILE	   *file;
 } astreamer_extractor;
+
+static bool astreamer_plain_reader_pull_content(astreamer *streamer);
+static void astreamer_plain_reader_finalize(astreamer *streamer);
+static void astreamer_plain_reader_free(astreamer *streamer);
+
+static const astreamer_ops astreamer_plain_reader_ops = {
+	.pull_content = astreamer_plain_reader_pull_content,
+	.finalize = astreamer_plain_reader_finalize,
+	.free = astreamer_plain_reader_free
+};
 
 static void astreamer_plain_writer_content(astreamer *streamer,
 										   astreamer_member *member,
@@ -67,6 +89,71 @@ static const astreamer_ops astreamer_extractor_ops = {
 	.finalize = astreamer_extractor_finalize,
 	.free = astreamer_extractor_free
 };
+
+/*
+ * Create a 'source' astreamer that just reads data from a file.
+ *
+ * It must be first in a chain of astreamers, and it should be asked to read
+ * more of the file by calling astreamer_pull().  Each time you do that, it
+ * pushes some raw bytes with context ASTREAMER_UNKNOWN into the astreamer
+ * provided as 'next'.
+ */
+astreamer *
+astreamer_plain_reader_new(astreamer *next, const char *pathname)
+{
+	astreamer_plain_reader *streamer;
+
+	streamer = palloc_object(astreamer_plain_reader);
+	*((const astreamer_ops **) &streamer->base.bbs_ops) =
+		&astreamer_plain_reader_ops;
+	streamer->base.bbs_next = next;
+	strlcpy(streamer->pathname, pathname, sizeof(streamer->pathname));
+	streamer->file = fopen(pathname, "rb");
+	if (streamer->file == NULL)
+		pg_fatal("astreamer_plain_reader: could not open file \"%s\"",
+				 pathname);
+
+	return &streamer->base;
+}
+
+static bool
+astreamer_plain_reader_pull_content(astreamer *streamer)
+{
+	astreamer_plain_reader *mystreamer = (astreamer_plain_reader *) streamer;
+
+	mystreamer->size = fread(mystreamer->data,
+							 1,
+							 sizeof(mystreamer->data),
+							 mystreamer->file);
+
+	if (mystreamer->size == 0)
+	{
+		if (ferror(mystreamer->file))
+			pg_fatal("could not read file \"%s\"", mystreamer->pathname);
+		return false;
+	}
+	astreamer_content(mystreamer->base.bbs_next,
+					  NULL,
+					  mystreamer->data,
+					  mystreamer->size,
+					  ASTREAMER_UNKNOWN);
+	return true;
+}
+
+static void
+astreamer_plain_reader_finalize(astreamer *streamer)
+{
+	astreamer_finalize(streamer->bbs_next);
+}
+
+static void
+astreamer_plain_reader_free(astreamer *streamer)
+{
+	astreamer_plain_reader *mystreamer = (astreamer_plain_reader *) streamer;
+
+	pclose(mystreamer->file);
+	pfree(mystreamer);
+}
 
 /*
  * Create a astreamer that just writes data to a file.

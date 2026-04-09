@@ -3592,6 +3592,7 @@ astreamer_gzip_writer
 astreamer_lz4_frame
 astreamer_member
 astreamer_ops
+astreamer_plain_reader
 astreamer_plain_writer
 astreamer_recovery_injector
 astreamer_tar_archiver

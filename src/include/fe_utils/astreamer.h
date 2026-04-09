@@ -114,8 +114,10 @@ struct astreamer
 };
 
 /*
- * There are three callbacks for a astreamer. The 'content' callback is
- * called repeatedly, as described in the astreamer_archive_context comments.
+ * There are four callbacks for an astreamer. The 'content' callback is called
+ * repeatedly, as described in the astreamer_archive_context comments, to push
+ * data through an astreamer chain. The 'pull_content' variant is an
+ * alternative, for certain astreamers that act as a source of data themselves.
  * Then, the 'finalize' callback is called once at the end, to give the
  * astreamer a chance to perform cleanup such as closing files. Finally,
  * because this code is running in a frontend environment where, as of this
@@ -125,12 +127,23 @@ struct astreamer
  */
 struct astreamer_ops
 {
+	bool		(*pull_content) (astreamer *streamer);
 	void		(*content) (astreamer *streamer, astreamer_member *member,
 							const char *data, int len,
 							astreamer_archive_context context);
 	void		(*finalize) (astreamer *streamer);
 	void		(*free) (astreamer *streamer);
 };
+
+/*
+ * Tell a 'source' astreamer to consume content from the source it represents,
+ * and report whether there is any more data.
+ */
+static inline bool
+astreamer_pull_content(astreamer *streamer)
+{
+	return streamer->bbs_ops->pull_content(streamer);
+}
 
 /* Send some content to a astreamer. */
 static inline void
@@ -210,6 +223,8 @@ astreamer_buffer_until(astreamer *streamer, const char **data, int *len,
  * Functions for creating astreamer objects of various types. See the header
  * comments for each of these functions for details.
  */
+extern astreamer *astreamer_plain_reader_new(astreamer *next,
+											 const char *pathname);
 extern astreamer *astreamer_plain_writer_new(char *pathname, FILE *file);
 extern astreamer *astreamer_gzip_writer_new(char *pathname, FILE *file,
 											pg_compress_specification *compress);
