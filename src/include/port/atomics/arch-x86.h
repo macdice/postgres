@@ -31,6 +31,8 @@
  * faster in many scenarios.
  */
 
+#error "ASDF!"
+
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
 #if defined(__i386__) || defined(__i386)
 #define pg_memory_barrier_impl()		\
