@@ -34,12 +34,9 @@ typedef struct XLogDumpPrivate
 	/* Fields required to read WAL from archive */
 	char	   *archive_dir;
 	char	   *archive_name;	/* Tar archive filename */
-	int			archive_fd;		/* File descriptor for the open tar file */
-	bool		archive_fd_eof; /* Have we reached EOF on archive_fd? */
 
 	astreamer  *archive_streamer;
-	char	   *archive_read_buf;	/* Reusable read buffer for archive I/O */
-	size_t		archive_read_buf_size;
+	bool		archive_streamer_finalized;
 
 	/*
 	 * The buffer for the WAL file the archive streamer is currently reading,
