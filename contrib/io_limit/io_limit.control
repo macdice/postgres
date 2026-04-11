@@ -1,0 +1,5 @@
+# io_limit extension
+comment = 'io_limit'
+default_version = '1.0'
+module_pathname = '$libdir/io_limit'
+relocatable = true

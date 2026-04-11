@@ -28,4 +28,9 @@ extern bool pgaio_worker_pm_test_grow_signal_sent(void);
 extern void pgaio_worker_pm_clear_grow_signal_sent(void);
 extern bool pgaio_worker_pm_test_grow(void);
 
+/* Hook to support contrib/io_limit. */
+typedef void (*io_worker_on_perform_fn) (PgAioHandle *handle);
+extern void pgaio_worker_set_on_perform_hook(io_worker_on_perform_fn fn);
+
+
 #endif							/* IO_WORKER_H */

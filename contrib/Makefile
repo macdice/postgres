@@ -24,6 +24,7 @@ SUBDIRS = \
 		hstore		\
 		intagg		\
 		intarray	\
+		io_limit	\
 		isn		\
 		lo		\
 		ltree		\

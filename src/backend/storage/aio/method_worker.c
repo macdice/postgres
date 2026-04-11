@@ -139,6 +139,7 @@ static int	MyIoWorkerId = -1;
 static PgAioWorkerSubmissionQueue *io_worker_submission_queue;
 static PgAioWorkerControl *io_worker_control;
 
+static io_worker_on_perform_fn io_worker_on_perform_hook;
 
 static void
 pgaio_workerset_initialize(PgAioWorkerSet *set)
@@ -529,6 +530,9 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 		for (int i = 0; i < nsync; ++i)
 		{
 			pgaio_io_perform_synchronously(synchronous_ios[i]);
+
+			if (io_worker_on_perform_hook)
+				io_worker_on_perform_hook(synchronous_ios[i]);
 		}
 	}
 
@@ -929,6 +933,9 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			 */
 			pgaio_io_perform_synchronously(ioh);
 
+			if (io_worker_on_perform_hook)
+				io_worker_on_perform_hook(ioh);
+
 			RESUME_INTERRUPTS();
 			errcallback.arg = NULL;
 		}
@@ -1022,6 +1029,12 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 
 	error_context_stack = errcallback.previous;
 	proc_exit(0);
+}
+
+void
+pgaio_worker_set_on_perform_hook(io_worker_on_perform_fn fn)
+{
+	io_worker_on_perform_hook = fn;
 }
 
 bool
