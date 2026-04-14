@@ -47,7 +47,6 @@ $(eval $(call map_rule,koi8r,UCS_to_most.pl,KOI8-R.TXT,KOI8R))
 $(eval $(call map_rule,koi8u,UCS_to_most.pl,KOI8-U.TXT,KOI8U))
 $(eval $(call map_rule,gbk,UCS_to_most.pl,CP936.TXT,GBK))
 
-$(eval $(call map_rule,johab,UCS_to_JOHAB.pl,JOHAB.TXT))
 $(eval $(call map_rule,uhc,UCS_to_UHC.pl,windows-949-2000.xml))
 $(eval $(call map_rule,euc_jp,UCS_to_EUC_JP.pl,CP932.TXT JIS0212.TXT))
 $(eval $(call map_rule,euc_cn,UCS_to_EUC_CN.pl,gb18030-2022.ucm))
@@ -86,9 +85,6 @@ GB2312.TXT:
 
 JIS0212.TXT:
 	$(DOWNLOAD) https://www.unicode.org/Public/MAPPINGS/OBSOLETE/EASTASIA/JIS/$(@F)
-
-JOHAB.TXT KSX1001.TXT:
-	$(DOWNLOAD) https://www.unicode.org/Public/MAPPINGS/OBSOLETE/EASTASIA/KSC/$(@F)
 
 KOI8-R.TXT KOI8-U.TXT:
 	$(DOWNLOAD) https://www.unicode.org/Public/MAPPINGS/VENDORS/MISC/$(@F)

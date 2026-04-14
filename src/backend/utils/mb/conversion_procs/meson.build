@@ -20,7 +20,6 @@ encodings = {
   'utf8_and_gbk': ['utf8_and_gbk/utf8_and_gbk.c'],
   'utf8_and_iso8859': ['utf8_and_iso8859/utf8_and_iso8859.c'],
   'utf8_and_iso8859_1': ['utf8_and_iso8859_1/utf8_and_iso8859_1.c'],
-  'utf8_and_johab': ['utf8_and_johab/utf8_and_johab.c'],
   'utf8_and_sjis': ['utf8_and_sjis/utf8_and_sjis.c'],
   'utf8_and_sjis2004': ['utf8_and_sjis2004/utf8_and_sjis2004.c'],
   'utf8_and_uhc': ['utf8_and_uhc/utf8_and_uhc.c'],

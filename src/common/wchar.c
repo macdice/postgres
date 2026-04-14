@@ -438,21 +438,6 @@ pg_wchar2euc_with_len(const pg_wchar *from, unsigned char *to, int len)
 
 
 /*
- * JOHAB
- */
-static int
-pg_johab_mblen(const unsigned char *s)
-{
-	return pg_euc_mblen(s);
-}
-
-static int
-pg_johab_dsplen(const unsigned char *s)
-{
-	return pg_euc_dsplen(s);
-}
-
-/*
  * convert UTF8 string to pg_wchar (UCS-4)
  * caller must allocate enough space for "to", including a trailing zero!
  * len: length of from.
@@ -1143,59 +1128,6 @@ pg_euctw_verifystr(const unsigned char *s, int len)
 		else
 		{
 			l = pg_euctw_verifychar(s, len);
-			if (l == -1)
-				break;
-		}
-		s += l;
-		len -= l;
-	}
-
-	return s - start;
-}
-
-static int
-pg_johab_verifychar(const unsigned char *s, int len)
-{
-	int			l,
-				mbl;
-	unsigned char c;
-
-	l = mbl = pg_johab_mblen(s);
-
-	if (len < l)
-		return -1;
-
-	if (!IS_HIGHBIT_SET(*s))
-		return mbl;
-
-	while (--l > 0)
-	{
-		c = *++s;
-		if (!IS_EUC_RANGE_VALID(c))
-			return -1;
-	}
-	return mbl;
-}
-
-static int
-pg_johab_verifystr(const unsigned char *s, int len)
-{
-	const unsigned char *start = s;
-
-	while (len > 0)
-	{
-		int			l;
-
-		/* fast path for ASCII-subset characters */
-		if (!IS_HIGHBIT_SET(*s))
-		{
-			if (*s == '\0')
-				break;
-			l = 1;
-		}
-		else
-		{
-			l = pg_johab_verifychar(s, len);
 			if (l == -1)
 				break;
 		}
@@ -1901,7 +1833,6 @@ const pg_wchar_tbl pg_wchar_table[] = {
 	[PG_GBK] = {0, 0, pg_gbk_mblen, pg_gbk_dsplen, pg_gbk_verifychar, pg_gbk_verifystr, 2},
 	[PG_UHC] = {0, 0, pg_uhc_mblen, pg_uhc_dsplen, pg_uhc_verifychar, pg_uhc_verifystr, 2},
 	[PG_GB18030] = {0, 0, pg_gb18030_mblen, pg_gb18030_dsplen, pg_gb18030_verifychar, pg_gb18030_verifystr, 4},
-	[PG_JOHAB] = {0, 0, pg_johab_mblen, pg_johab_dsplen, pg_johab_verifychar, pg_johab_verifystr, 3},
 	[PG_SHIFT_JIS_2004] = {0, 0, pg_sjis_mblen, pg_sjis_dsplen, pg_sjis_verifychar, pg_sjis_verifystr, 2},
 };
 

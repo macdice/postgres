@@ -118,10 +118,6 @@ static const pg_encname pg_encname_tbl[] =
 		"iso88599", PG_LATIN5
 	},							/* ISO-8859-9; RFC1345,KXS2 */
 	{
-		"johab", PG_JOHAB
-	},							/* JOHAB; Extended Unix Code for simplified
-								 * Chinese */
-	{
 		"koi8", PG_KOI8R
 	},							/* _dirty_ alias for KOI8-R (backward
 								 * compatibility) */
@@ -343,7 +339,6 @@ const pg_enc2name pg_enc2name_tbl[] =
 	[PG_GBK] = DEF_ENC2NAME(GBK, 936),
 	[PG_UHC] = DEF_ENC2NAME(UHC, 949),
 	[PG_GB18030] = DEF_ENC2NAME(GB18030, 54936),
-	[PG_JOHAB] = DEF_ENC2NAME(JOHAB, 0),
 	[PG_SHIFT_JIS_2004] = DEF_ENC2NAME(SHIFT_JIS_2004, 932),
 };
 
@@ -392,7 +387,6 @@ const char *pg_enc2gettext_tbl[] =
 	[PG_GBK] = "GBK",
 	[PG_UHC] = "UHC",
 	[PG_GB18030] = "GB18030",
-	[PG_JOHAB] = "JOHAB",
 	[PG_SHIFT_JIS_2004] = "SHIFT_JISX0213",
 };
 

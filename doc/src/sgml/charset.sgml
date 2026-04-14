@@ -1929,15 +1929,6 @@ ORDER BY c COLLATE ebcdic;
          <entry></entry>
         </row>
         <row>
-         <entry><literal>JOHAB</literal></entry>
-         <entry><acronym>JOHAB</acronym></entry>
-         <entry>Korean (Hangul)</entry>
-         <entry>No</entry>
-         <entry>No</entry>
-         <entry>1&ndash;3</entry>
-         <entry></entry>
-        </row>
-        <row>
          <entry><literal>KOI8R</literal></entry>
          <entry><acronym>KOI</acronym>8-R</entry>
          <entry>Cyrillic (Russian)</entry>
@@ -2522,11 +2513,6 @@ RESET client_encoding;
         </entry>
        </row>
        <row>
-        <entry><literal>JOHAB</literal></entry>
-        <entry><emphasis>not supported as a server encoding</emphasis>
-        </entry>
-       </row>
-       <row>
         <entry><literal>KOI8R</literal></entry>
         <entry><emphasis>KOI8R</emphasis>,
         <literal>ISO_8859_5</literal>,
@@ -2872,11 +2858,6 @@ RESET client_encoding;
         <entry><literal>UTF8</literal></entry>
        </row>
        <row>
-        <entry><literal>johab_to_utf8</literal></entry>
-        <entry><literal>JOHAB</literal></entry>
-        <entry><literal>UTF8</literal></entry>
-       </row>
-       <row>
         <entry><literal>koi8_r_to_iso_8859_5</literal></entry>
         <entry><literal>KOI8R</literal></entry>
         <entry><literal>ISO_8859_5</literal></entry>
@@ -3025,11 +3006,6 @@ RESET client_encoding;
         <entry><literal>utf8_to_iso_8859_9</literal></entry>
         <entry><literal>UTF8</literal></entry>
         <entry><literal>LATIN5</literal></entry>
-       </row>
-       <row>
-        <entry><literal>utf8_to_johab</literal></entry>
-        <entry><literal>UTF8</literal></entry>
-        <entry><literal>JOHAB</literal></entry>
        </row>
        <row>
         <entry><literal>utf8_to_koi8_r</literal></entry>

@@ -174,9 +174,6 @@ static const struct encoding_match encoding_match_list[] = {
 	{PG_UHC, "UHC"},
 	{PG_UHC, "CP949"},
 
-	{PG_JOHAB, "JOHAB"},
-	{PG_JOHAB, "CP1361"},
-
 	{PG_GB18030, "GB18030"},
 	{PG_GB18030, "CP54936"},
 
