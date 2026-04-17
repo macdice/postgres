@@ -32,6 +32,7 @@
 
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
+#include "portability/instr_time.h"
 #include "port/pg_bitutils.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/interrupt.h"
@@ -68,6 +69,12 @@
 
 /* Debugging support: show current IO and wakeups:ios statistics in ps. */
 /* #define PGAIO_WORKER_SHOW_PS_INFO */
+
+/*
+ * Debugging support: write timestamp data to PGDATA/io_worker.N.log and
+ * PGDATA/io_worker_overflow.PID.log.
+ */
+/* #define PGAIO_WORKER_LOG_TIMESTAMPS */
 
 typedef struct PgAioWorkerSubmissionQueue
 {
@@ -108,7 +115,11 @@ typedef struct PgAioWorkerControl
 	int			nworkers;
 
 	/* Protected by AioWorkerControlLock. */
-	PgAioWorkerSlot workers[FLEXIBLE_ARRAY_MEMBER];
+	PgAioWorkerSlot workers[MAX_IO_WORKERS];
+
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+	instr_time	submitted_at[FLEXIBLE_ARRAY_MEMBER];
+#endif
 } PgAioWorkerControl;
 
 
@@ -246,7 +257,13 @@ pgaio_worker_shmem_request(void *arg)
 					   .ptr = (void **) &io_worker_submission_queue,
 		);
 
-	size = offsetof(PgAioWorkerControl, workers) + sizeof(PgAioWorkerSlot) * MAX_IO_WORKERS;
+	size = offsetof(PgAioWorkerControl, workers);
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+	/* XXX pgaio_ctl->io_handle_count */
+	size += sizeof(io_worker_control->submitted_at[0]) *
+		io_max_concurrency *
+		(MaxBackends + NUM_AUXILIARY_PROCS);
+#endif
 	ShmemRequestStruct(.name = "AioWorkerControl",
 					   .size = size,
 					   .ptr = (void **) &io_worker_control,
@@ -485,11 +502,22 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 	PgAioHandle **synchronous_ios = NULL;
 	int			nsync = 0;
 	int			worker = -1;
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+	instr_time	submitted_at;
+
+	INSTR_TIME_SET_CURRENT_FAST(submitted_at);
+#endif
 
 	Assert(num_staged_ios <= PGAIO_SUBMIT_BATCH_SIZE);
 
 	for (int i = 0; i < num_staged_ios; i++)
+	{
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+		io_worker_control->submitted_at[pgaio_io_get_id(staged_ios[i])] =
+			submitted_at;
+#endif
 		pgaio_io_prepare_submit(staged_ios[i]);
+	}
 
 	if (LWLockConditionalAcquire(AioWorkerSubmissionQueueLock, LW_EXCLUSIVE))
 	{
@@ -527,10 +555,44 @@ pgaio_worker_submit(uint16 num_staged_ios, PgAioHandle **staged_ios)
 	/* Run whatever is left synchronously. */
 	if (nsync > 0)
 	{
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+		char		pathname[MAXPGPATH];
+		FILE	   *log_timestamps_file;
+
+		snprintf(pathname, sizeof(pathname), "io_worker_overflow.%d.log",
+				 MyProcPid);
+		log_timestamps_file = fopen(pathname, "a");
+		if (log_timestamps_file == NULL)
+			elog(ERROR, "could not open file \"%s\"", pathname);
+#endif
+
 		for (int i = 0; i < nsync; ++i)
 		{
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+			instr_time	performed_at;
+			instr_time	completed_at;
+			const char *op_name;
+
+			op_name = pgaio_io_get_op_name(synchronous_ios[i]);
+			INSTR_TIME_SET_CURRENT_FAST(performed_at);
+#endif
+
 			pgaio_io_perform_synchronously(synchronous_ios[i]);
+
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+			INSTR_TIME_SET_CURRENT_FAST(completed_at);
+
+			fprintf(log_timestamps_file,
+					"%" PRIu64 " %" PRIu64 " %" PRIu64 " %s\n",
+					INSTR_TIME_GET_NANOSEC(submitted_at),
+					INSTR_TIME_GET_NANOSEC(performed_at),
+					INSTR_TIME_GET_NANOSEC(completed_at),
+					op_name);
+#endif
 		}
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+		fclose(log_timestamps_file);
+#endif
 	}
 
 	return num_staged_ios;
@@ -675,6 +737,9 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 	char		cmd[128];
 	int			hist_ios = 0;
 	int			hist_wakeups = 0;
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+	FILE	   *log_timestamps_file;
+#endif
 
 	AuxiliaryProcessMainCommon();
 
@@ -697,6 +762,17 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 
 	sprintf(cmd, "%d", MyIoWorkerId);
 	set_ps_display(cmd);
+
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+	{
+		char		pathname[MAXPGPATH];
+
+		snprintf(pathname, sizeof(pathname), "io_worker.%d.log", MyIoWorkerId);
+		log_timestamps_file = fopen(pathname, "a");
+		if (log_timestamps_file == NULL)
+			elog(ERROR, "could not open file \"%s\"", pathname);
+	}
+#endif
 
 	errcallback.callback = pgaio_worker_error_callback;
 	errcallback.previous = error_context_stack;
@@ -884,6 +960,11 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 		if (io_index != -1)
 		{
 			PgAioHandle *ioh = NULL;
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+			instr_time	submitted_at;
+			instr_time	performed_at;
+			instr_time	completed_at;
+#endif
 
 			/* Cancel timeout and update wakeup:work ratio. */
 			idle_timeout_abs = 0;
@@ -958,6 +1039,11 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			}
 #endif
 
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+			submitted_at = io_worker_control->submitted_at[io_index];
+			INSTR_TIME_SET_CURRENT_FAST(performed_at);
+#endif
+
 			/*
 			 * We don't expect this to ever fail with ERROR or FATAL, no need
 			 * to keep error_ioh set to the IO.
@@ -965,6 +1051,17 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			 * ensure we don't accidentally fail.
 			 */
 			pgaio_io_perform_synchronously(ioh);
+
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+			INSTR_TIME_SET_CURRENT_FAST(completed_at);
+
+			fprintf(log_timestamps_file,
+					"%" PRIu64 " %" PRIu64 " %" PRIu64 " %s\n",
+					INSTR_TIME_GET_NANOSEC(submitted_at),
+					INSTR_TIME_GET_NANOSEC(performed_at),
+					INSTR_TIME_GET_NANOSEC(completed_at),
+					pgaio_io_get_op_name(ioh));
+#endif
 
 			RESUME_INTERRUPTS();
 			errcallback.arg = NULL;
@@ -1023,6 +1120,10 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			set_ps_display(cmd);
 #endif
 
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+			fflush(log_timestamps_file);
+#endif
+
 			if (WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_TIMEOUT,
 						  timeout_ms,
 						  WAIT_EVENT_IO_WORKER_MAIN) == WL_TIMEOUT)
@@ -1056,6 +1157,10 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 				break;
 		}
 	}
+
+#ifdef PGAIO_WORKER_LOG_TIMESTAMPS
+	fclose(log_timestamps_file);
+#endif
 
 	error_context_stack = errcallback.previous;
 	proc_exit(0);
