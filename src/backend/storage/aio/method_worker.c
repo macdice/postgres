@@ -51,6 +51,7 @@
 #include "utils/ps_status.h"
 #include "utils/wait_event.h"
 
+
 /*
  * Saturation for counters used to estimate wakeup:IO ratio.
  *
@@ -803,44 +804,77 @@ IoWorkerMain(const void *startup_data, size_t startup_data_len)
 			 * failed to find a higher-numbered idle worker to wake.  Now we
 			 * decide if we should try to start one more worker.
 			 *
-			 * We do this with a simple heuristic: is the queue depth greater
-			 * than the current number of workers?
+			 * We don't rely solely on the fact that we couldn't wake an idle
+			 * worker, because that would be too eager: it wouldn't allow for
+			 * workers concurrently picking up extra jobs opportunistically
+			 * without going idle first, something that improves overall
+			 * performance considerably.
 			 *
-			 * Consider the following situations:
+			 * We can't be too slow to react: if the arrival and completion
+			 * rates are fairly close, we might run for unbounded periods of
+			 * time with a slowly growing queue, adding latency.  We want to
+			 * avoid that state at all costs.
 			 *
-			 * 1. The queue depth is constantly increasing, because IOs are
-			 * arriving faster than they can possibly be serviced.  It doesn't
-			 * matter much which threshold we choose, as we will surely hit
-			 * it.  Crossing the current worker count is a useful signal
-			 * because it's clearly too deep to avoid queuing latency already,
-			 * but still leaves a small window of opportunity to improve the
-			 * situation before the queue overflows.
+			 * We can't be too eager to react or we'd overprovision wildly:
+			 * all IOs spend *some* time in the queue due to serialization,
+			 * and the queue length is spiky.  But how spiky?
 			 *
-			 * 2. The worker pool is keeping up, no latency is being
-			 * introduced and an extra worker would be a waste of resources.
-			 * Queue depth distributions tend to be heavily skewed, with long
-			 * tails of low probability spikes (due to submission clustering,
-			 * scheduling, jitter, stalls, noisy neighbors, etc).  We want a
-			 * number that is very unlikely to be triggered by an outlier, and
-			 * we bet that an exponential or similar distribution whose
-			 * outliers never reach this threshold must be almost entirely
-			 * concentrated at the low end.  If we do see a spike as big as
-			 * the worker count, we take it as a signal that the distribution
-			 * is surely too wide.
+			 * We use a model from queueing theory to find a theshold that is
+			 * "outside" the expected distribution of queue length spikes when
+			 * there are no waits.  Assume that IO submission is a Markov
+			 * arrival process produced by independent processes (ie read
+			 * streams).  The number of busy servers in an ideal M/G/∞
+			 * queueing system, one that always has enough workers, is known
+			 * to have Poisson distribution.  See Tijms "A First Course in
+			 * Stochastic Models" section 1.1.3, Mor and Harchol-Balter
+			 * "Performance Modeling and Design of Computer Systems" section
+			 * 15.7.
 			 *
-			 * On its own, this is an extremely crude signal.  When combined
-			 * with the wakeup propagation test that precedes it (but on its
-			 * own tends to overshoot) and io_worker_launch_interval, the
-			 * result is that we gradually test each pool size until we find
-			 * one that doesn't trigger further expansion, and then hold it
-			 * for at least io_worker_idle_timeout.
+			 * We can therefore work backwards from the Poisson cumulative
+			 * distribution function to find a good threshold:
 			 *
-			 * XXX Perhaps ideas from queueing theory or control theory could
-			 * do a better job of this.
+			 * Define our goal as minimizing P99 latency.  First find the mean
+			 * number of IOs that each pool size should be able to process
+			 * concurrently while meeting that goal.  Then find a queue length
+			 * that is extremely unlikely to occur.  A single observation of a
+			 * queue longer than that is evidence that we don't have enough
+			 * workers, either for the average demand for IO concurrency, or
+			 * for the "clumping" that is expected in Poisson processes.
 			 */
 
+			/*-------------------------------------------------------------
+			 *
+			 * from scipy.optimize import brentq
+			 * from scipy.stats import poisson
+			 *
+			 * def extreme_queue_length_for_pool_size(nworkers):
+			 *
+			 *   # Find the mean IO concurrency that the pool should be able
+			 *   # to handle without delay 99% of the time.
+			 *   mean_ios = brentq(lambda x: poisson.ppf(0.99, x) - nworkers,
+			 *                     0, nworkers)
+			 *
+			 *   # Find the IO concurrency that would be a one-in-a-million
+			 *   # event around that mean.
+			 *   extreme_ios = poisson.ppf(0.999999, mean_ios)
+			 *
+			 *   # Subtract actual concurrent to obtain queue length.
+			 *   return extreme_ios - nworkers
+			 *
+			 *-------------------------------------------------------------
+			 */
+			static const int8 extreme_queue_length[] = {
+				0, 3, 3, 4, 5, 5, 5, 6,
+				6, 7, 7, 8, 8, 9, 9, 9,
+				10, 10, 10, 10, 11, 11, 11, 11,
+				12, 12, 12, 12, 13, 13, 14, 13,
+			};
+
+			static_assert(lengthof(extreme_queue_length) == MAX_IO_WORKERS,
+						  "extreme_queue_length table mismatch");
+
 			/* Read nworkers without lock for this heuristic purpose. */
-			if (queue_depth > io_worker_control->nworkers)
+			if (queue_depth > extreme_queue_length[io_worker_control->nworkers])
 				pgaio_worker_request_grow();
 		}
 
