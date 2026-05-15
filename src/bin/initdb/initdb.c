@@ -137,6 +137,7 @@ static char *share_path = NULL;
 /* values to be obtained from arguments */
 static char *pg_data = NULL;
 static char *encoding = NULL;
+static char *encoding_mode_str = NULL;
 static char *locale = NULL;
 static char *lc_collate = NULL;
 static char *lc_ctype = NULL;
@@ -174,6 +175,7 @@ static bool sync_data_files = true;
 /* internal vars */
 static const char *progname;
 static int	encodingid;
+static EncodingMode encoding_mode;
 static char *bki_file;
 static char *hba_file;
 static char *ident_file;
@@ -302,6 +304,7 @@ static void check_locale_name(int category, const char *locale,
 							  char **canonname);
 static bool check_locale_encoding(const char *locale, int user_enc);
 static void setlocales(void);
+static void setup_encoding_mode(void);
 static void usage(const char *progname);
 void		setup_pgdata(void);
 void		setup_bin_paths(const char *argv0);
@@ -2547,6 +2550,7 @@ usage(const char *progname)
 	printf(_("      --auth-host=METHOD    default authentication method for local TCP/IP connections\n"));
 	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
+	printf(_("      --encoding-mode=MODE  UNIFORM, MIXED or LEGACY\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
 	printf(_("      --icu-locale=LOCALE   set ICU locale ID for new databases\n"));
@@ -2810,6 +2814,25 @@ setup_locale_encoding(void)
 		exit(1);
 }
 
+static void
+setup_encoding_mode(void)
+{
+	if (encoding_mode_str == NULL ||
+		pg_strcasecmp(encoding_mode_str, "uniform") == 0)
+		encoding_mode = ENCODING_MODE_UNIFORM;
+	else if (pg_strcasecmp(encoding_mode_str, "mixed") == 0)
+		encoding_mode = ENCODING_MODE_MIXED;
+	else if (pg_strcasecmp(encoding_mode_str, "legacy") == 0)
+		encoding_mode = ENCODING_MODE_LEGACY;
+	else
+		pg_fatal("invalid encoding mode \"%s\"; expected UNIFORM, MIXED or LEGACY",
+				 encoding_mode_str);
+
+	printf(_("The encoding mode has been set to \"%s\".\n"),
+		   encoding_mode == ENCODING_MODE_UNIFORM ? "UNIFORM" :
+		   encoding_mode == ENCODING_MODE_MIXED ? "MIXED" :
+		   "LEGACY");
+}
 
 void
 setup_data_file_paths(void)
@@ -3184,6 +3207,7 @@ main(int argc, char *argv[])
 {
 	static struct option long_options[] = {
 		{"pgdata", required_argument, NULL, 'D'},
+		{"encoding-mode", required_argument, NULL, 22},
 		{"encoding", required_argument, NULL, 'E'},
 		{"locale", required_argument, NULL, 1},
 		{"lc-collate", required_argument, NULL, 2},
@@ -3420,6 +3444,9 @@ main(int argc, char *argv[])
 			case 21:
 				sync_data_files = false;
 				break;
+			case 22:
+				encoding_mode_str = pg_strdup(optarg);
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -3513,6 +3540,7 @@ main(int argc, char *argv[])
 	setup_data_file_paths();
 
 	setup_locale_encoding();
+	setup_encoding_mode();
 
 	setup_text_search();
 

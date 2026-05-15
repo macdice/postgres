@@ -738,6 +738,7 @@ EditableObjectType
 ElementsState
 ElidedNode
 EnableTimeoutParams
+EncodingMode
 EndDataPtrType
 EndDirectModify_function
 EndForeignInsert_function

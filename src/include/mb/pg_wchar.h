@@ -56,6 +56,34 @@ typedef unsigned int pg_wchar;
 #define ISSJISTAIL(c) (((c) >= 0x40 && (c) <= 0x7e) || ((c) >= 0x80 && (c) <= 0xfc))
 
 /*
+ * Encoding mode for the whole cluster.  This is stored in pg_control.
+ */
+typedef enum EncodingMode
+{
+	/*
+	 * Databases can use different encodings, and there are no restrictions on
+	 * text in shared catalogs.  In this mode, invalid bytes sequences and
+	 * misencodings can occur when text crosses database boundaries.  This
+	 * mode will be removed in a future release.
+	 */
+	ENCODING_MODE_LEGACY = -1,
+
+	/*
+	 * Databases must use the same encoding as template0, and text in shared
+	 * catalogs has the same encoding.  This mode allows non-ASCII role names,
+	 * database names etc.
+	 */
+	ENCODING_MODE_UNIFORM,
+
+	/*
+	 * Databases can use different encodings, but text in shared catalogs is
+	 * restricted to ASCII so that it has the same meaning in all possible
+	 * server encodings.
+	 */
+	ENCODING_MODE_MIXED,
+} EncodingMode;
+
+/*
  * PostgreSQL encoding identifiers
  *
  * WARNING: If you add some encoding don't forget to update
