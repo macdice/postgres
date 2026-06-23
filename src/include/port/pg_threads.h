@@ -136,9 +136,9 @@ static inline void
 pg_thrd_exit(int result)
 {
 #ifdef WIN32
-    ExitThread((DWORD) result);
+	ExitThread((DWORD) result);
 #else
-    pthread_exit((void *)(intptr_t) result);
+	pthread_exit((void *) (intptr_t) result);
 #endif
 }
 
@@ -205,7 +205,7 @@ typedef pthread_key_t pg_tss_t;
  * tss_dtor_t.  Avoiding this would require our own destructor registry, so
  * we'll put up with this wart for now.
  */
-typedef void (pg_tss_dtor_calling_convention *pg_tss_dtor_t) (void *);
+typedef void (pg_tss_dtor_calling_convention * pg_tss_dtor_t) (void *);
 
 #ifdef PG_THREADS_WIN32
 #define PG_TSS_DTOR_ITERATIONS 1

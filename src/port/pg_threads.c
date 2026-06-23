@@ -38,9 +38,9 @@ typedef struct pg_thrd_start_info
 
 #ifdef PG_THREADS_WIN32
 	/* Space to pass the thread's handle, for use by pg_thrd_current(). */
-	pg_thrd_t self;
+	pg_thrd_t	self;
 #endif
-} pg_thrd_start_info;
+}			pg_thrd_start_info;
 
 #ifdef PG_THREADS_WIN32
 static thread_local pg_thrd_t my_thrd_handle;
@@ -64,6 +64,7 @@ pg_thrd_body(void *thunk)
 	int			result;
 
 #ifdef PG_THREADS_WIN32
+
 	/*
 	 * Windows threads don't know their own handle, and can't get it directly.
 	 * So wait for pg_thrd_create() to give it to us.  Hopefully it is was
@@ -184,4 +185,3 @@ pg_call_once_trampoline(pg_once_flag *flag, void *parameter, void **context)
 	return TRUE;
 }
 #endif
-
