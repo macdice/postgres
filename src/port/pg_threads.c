@@ -36,13 +36,13 @@ typedef struct pg_thrd_start_info
 	pg_thrd_start_t function;
 	void	   *argument;
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	/* Space to pass the thread's handle, for use by pg_thrd_current(). */
 	pg_thrd_t	self;
 #endif
 }			pg_thrd_start_info;
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 static thread_local pg_thrd_t my_thrd_handle;
 #endif
 
@@ -50,7 +50,7 @@ static thread_local pg_thrd_t my_thrd_handle;
  * A trampoline function, to handle calling convention and parameter
  * variations in the native APIs.
  */
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 static DWORD __stdcall
 pg_thrd_body(void *thunk)
 #else
@@ -63,7 +63,7 @@ pg_thrd_body(void *thunk)
 	void	   *argument = start_info->argument;
 	int			result;
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 
 	/*
 	 * Retrieve handle passed here by pg_thrd_create() before allowing this
@@ -78,7 +78,7 @@ pg_thrd_body(void *thunk)
 
 	result = function(argument);
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return (DWORD) result;
 #else
 	return (void *) (intptr_t) result;
@@ -96,7 +96,7 @@ pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument)
 	start_info->function = function;
 	start_info->argument = argument;
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	*thread = CreateThread(NULL, 0, pg_thrd_body, start_info,
 						   CREATE_SUSPENDED, 0);
 	if (*thread != NULL)
@@ -149,7 +149,7 @@ pg_thrd_join(pg_thrd_t thread, int *result)
 	return pg_thrd_error;
 }
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 pg_thrd_t
 pg_thrd_current_win32(void)
 {

@@ -63,7 +63,7 @@ typedef enum pg_thrd_error_t
 static inline int
 pg_thrd_maperror(int error)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return error ? pg_thrd_success : pg_thrd_error;
 #else
 	return error == 0 ? pg_thrd_success : pg_thrd_error;
@@ -79,7 +79,7 @@ pg_thrd_maperror(int error)
  */
 
 /* Like C11 thrd_t.  Uses native thread identifier. */
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 typedef HANDLE pg_thrd_t;
 #else
 typedef pthread_t pg_thrd_t;
@@ -92,7 +92,7 @@ typedef int (*pg_thrd_start_t) (void *);
 extern int	pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument);
 extern int	pg_thrd_join(pg_thrd_t thread, int *result);
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 extern pg_thrd_t pg_thrd_current_win32(void);
 #endif
 
@@ -100,7 +100,7 @@ extern pg_thrd_t pg_thrd_current_win32(void);
 static inline pg_thrd_t
 pg_thrd_current(void)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_thrd_current_win32();
 #else
 	return pthread_self();
@@ -111,7 +111,7 @@ pg_thrd_current(void)
 static inline int
 pg_thrd_equal(pg_thrd_t lhs, pg_thrd_t rhs)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return lhs == rhs;
 #else
 	return pthread_equal(lhs, rhs);
@@ -138,7 +138,7 @@ pg_thrd_exit(int result)
  */
 
 /* Like C11 once_flag. */
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 typedef INIT_ONCE pg_once_flag;
 #define PG_ONCE_FLAG_INIT INIT_ONCE_STATIC_INIT
 #else
@@ -149,7 +149,7 @@ typedef pthread_once_t pg_once_flag;
 /* Like C11 once_function_t. */
 typedef void (*pg_call_once_function_t) (void);
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 extern BOOL CALLBACK pg_call_once_trampoline(pg_once_flag *flag,
 											 void *parameter,
 											 void **context);
@@ -159,7 +159,7 @@ extern BOOL CALLBACK pg_call_once_trampoline(pg_once_flag *flag,
 static inline void
 pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	InitOnceExecuteOnce(flag, pg_call_once_trampoline, (void *) function, NULL);
 #else
 	pthread_once(flag, function);
@@ -178,13 +178,13 @@ pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
  */
 
 /* Like C11 tss_t. */
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 typedef DWORD pg_tss_t;
 #else
 typedef pthread_key_t pg_tss_t;
 #endif
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 /* Windows helpers that deal with destructor API differences. */
 extern int pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor);
 extern void pg_tss_win32_delete(pg_tss_t tss_id);
@@ -193,7 +193,7 @@ extern void pg_tss_win32_delete(pg_tss_t tss_id);
 /* Like C11 tss_dtor_t. */
 typedef void (*pg_tss_dtor_t) (void *);
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 #define PG_TSS_DTOR_ITERATIONS 1
 #else
 #define PG_TSS_DTOR_ITERATIONS PTHREAD_DESTRUCTOR_ITERATIONS
@@ -202,7 +202,7 @@ typedef void (*pg_tss_dtor_t) (void *);
 static inline int
 pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_tss_win32_create(tss_id);
 #else
 	return pg_thrd_maperror(pthread_key_create(tss_id, destructor));
@@ -212,7 +212,7 @@ pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 static inline void
 pg_tss_delete(pg_tss_t tss_id)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	pg_tss_win32_delete(tss_id);
 #else
 	pthread_key_delete(tss_id);
@@ -222,7 +222,7 @@ pg_tss_delete(pg_tss_t tss_id)
 static inline void *
 pg_tss_get(pg_tss_t tss_id)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return FlsGetValue(tss_id);
 #else
 	return pthread_getspecific(tss_id);
@@ -232,7 +232,7 @@ pg_tss_get(pg_tss_t tss_id)
 static inline int
 pg_tss_set(pg_tss_t tss_id, void *value)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_thrd_maperror(FlsSetValue(tss_id, value));
 #else
 	return pg_thrd_maperror(pthread_setspecific(tss_id, value));
@@ -250,7 +250,7 @@ pg_tss_set(pg_tss_t tss_id, void *value)
  *-------------------------------------------------------------------------
  */
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 typedef SRWLOCK pg_rwlock_t;
 #define PG_RWLOCK_STATIC_INIT SRWLOCK_INIT
 #else
@@ -261,7 +261,7 @@ typedef pthread_rwlock_t pg_rwlock_t;
 static inline int
 pg_rwlock_init(pg_rwlock_t * lock)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	InitializeSRWLock(lock);
 	return pg_thrd_success;
 #else
@@ -272,7 +272,7 @@ pg_rwlock_init(pg_rwlock_t * lock)
 static inline int
 pg_rwlock_rdlock(pg_rwlock_t * lock)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	AcquireSRWLockShared(lock);
 	return pg_thrd_success;
 #else
@@ -283,7 +283,7 @@ pg_rwlock_rdlock(pg_rwlock_t * lock)
 static inline int
 pg_rwlock_wrlock(pg_rwlock_t * lock)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	AcquireSRWLockExclusive(lock);
 	return pg_thrd_success;
 #else
@@ -294,7 +294,7 @@ pg_rwlock_wrlock(pg_rwlock_t * lock)
 static inline int
 pg_wrlock_unlock(pg_rwlock_t * lock)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	ReleaseSRWLockExclusive(lock);
 	return pg_thrd_success;
 #else
@@ -305,7 +305,7 @@ pg_wrlock_unlock(pg_rwlock_t * lock)
 static inline int
 pg_rdlock_unlock(pg_rwlock_t * lock)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	ReleaseSRWLockShared(lock);
 	return pg_thrd_success;
 #else
@@ -321,7 +321,7 @@ pg_rdlock_unlock(pg_rwlock_t * lock)
  *-------------------------------------------------------------------------
  */
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 /*
  * CRITICAL_SECTION might be the most obvious Windows mechanism for
  * pg_mtx_t, but SRWLock is reported to be at least as fast when used
@@ -348,7 +348,7 @@ typedef enum pg_mtx_type_t
 static inline int
 pg_mtx_init(pg_mtx_t *mutex, int type)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_rwlock_init(mutex);
 #else
 	return pg_thrd_maperror(pthread_mutex_init(mutex, NULL));
@@ -358,7 +358,7 @@ pg_mtx_init(pg_mtx_t *mutex, int type)
 static inline int
 pg_mtx_lock(pg_mtx_t *mutex)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_rwlock_wrlock(mutex);
 #else
 	return pg_thrd_maperror(pthread_mutex_lock(mutex));
@@ -368,7 +368,7 @@ pg_mtx_lock(pg_mtx_t *mutex)
 static inline int
 pg_mtx_unlock(pg_mtx_t *mutex)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_wrlock_unlock(mutex);
 #else
 	return pg_thrd_maperror(pthread_mutex_unlock(mutex));
@@ -378,7 +378,7 @@ pg_mtx_unlock(pg_mtx_t *mutex)
 static inline int
 pg_mtx_destroy(pg_mtx_t *mutex)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_thrd_success;
 #else
 	return pg_thrd_maperror(pthread_mutex_destroy(mutex));
@@ -393,7 +393,7 @@ pg_mtx_destroy(pg_mtx_t *mutex)
  *-------------------------------------------------------------------------
  */
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 typedef CONDITION_VARIABLE pg_cnd_t;
 #else
 typedef pthread_cond_t pg_cnd_t;
@@ -402,7 +402,7 @@ typedef pthread_cond_t pg_cnd_t;
 static inline int
 pg_cnd_init(pg_cnd_t *condvar)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	InitializeConditionVariable(condvar);
 	return pg_thrd_success;
 #else
@@ -413,7 +413,7 @@ pg_cnd_init(pg_cnd_t *condvar)
 static inline int
 pg_cnd_broadcast(pg_cnd_t *condvar)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	WakeAllConditionVariable(condvar);
 	return pg_thrd_success;
 #else
@@ -424,7 +424,7 @@ pg_cnd_broadcast(pg_cnd_t *condvar)
 static inline int
 pg_cnd_wait(pg_cnd_t *condvar, pg_mtx_t *mutex)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	SleepConditionVariableSRW(condvar, mutex, INFINITE, 0);
 	return pg_thrd_success;
 #else
@@ -435,7 +435,7 @@ pg_cnd_wait(pg_cnd_t *condvar, pg_mtx_t *mutex)
 static inline int
 pg_cnd_destroy(pg_cnd_t *condvar)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_thrd_success;
 #else
 	return pg_thrd_maperror(pthread_cond_destroy(condvar));
@@ -452,7 +452,7 @@ pg_cnd_destroy(pg_cnd_t *condvar)
  *-------------------------------------------------------------------------
  */
 
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 typedef SYNCHRONIZATION_BARRIER pg_barrier_t;
 #elif defined(HAVE_PTHREAD_BARRIER)
 typedef pthread_barrier_t pg_barrier_t;
@@ -470,7 +470,7 @@ typedef struct pg_barrier_t
 static inline int
 pg_barrier_init(pg_barrier_t *barrier, int count)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_thrd_maperror(InitializeSynchronizationBarrier(barrier, count, 0));
 #elif defined(HAVE_PTHREAD_BARRIER)
 	return pg_thrd_maperror(pthread_barrier_init(barrier, NULL, count));
@@ -492,7 +492,7 @@ pg_barrier_init(pg_barrier_t *barrier, int count)
 static inline int
 pg_barrier_wait(pg_barrier_t *barrier)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	if (EnterSynchronizationBarrier(barrier, SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY))
 		return pg_thrd_success_last;
 	else
@@ -532,7 +532,7 @@ pg_barrier_wait(pg_barrier_t *barrier)
 static inline int
 pg_barrier_destroy(pg_barrier_t *barrier)
 {
-#ifdef PG_THREADS_WIN32
+#ifdef WIN32
 	return pg_thrd_success;
 #elif defined(HAVE_PTHREAD_BARRIER)
 	return pg_thrd_maperror(pthread_barrier_destroy(barrier));
