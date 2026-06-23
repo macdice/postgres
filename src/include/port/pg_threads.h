@@ -3,8 +3,8 @@
  * pg_threads.h
  *    Portable multi-threading API.
  *
- * A multi-threading API abstraction loosely based on a subset C11
- * standard's <threads.h> header.  The identifiers have a pg_ prefix.
+ * A multi-threading API abstraction loosely based on a subset of C11
+ * <threads.h>.  The identifiers have a pg_ prefix.
  *
  * We have some extensions of our own, not present in C11:
  *
@@ -23,30 +23,17 @@
 #ifndef PG_THREADS_H
 #define PG_THREADS_H
 
-#ifdef WIN32
-#define PG_THREADS_WIN32
-#endif
-
-#include <stdint.h>
-#if defined(PG_THREADS_WIN32)
+#if defined(WIN32)
 #include <windows.h>
 #else
 #include <pthread.h>
 #endif
 
 
-/*-------------------------------------------------------------------------
- *
- * Though we don't yet require C11 <threads.h> because it isn't available yet
- * on some platforms, we do require the C11 thread local storage class, which
- * is part of the language.
- *
- * See also pg_tss_t, which is similar but uses explicit set/get functions and
- * supports destructor function that are called at thread exit.
- *
- *-------------------------------------------------------------------------
+/*
+ * We require C11's _Thread_local storage class (a language feature), but not
+ * the <threads.h> header, so we define the standard macro ourselves.
  */
-
 #ifndef thread_local
 #define thread_local _Thread_local
 #endif
@@ -195,6 +182,12 @@ pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
 typedef DWORD pg_tss_t;
 #else
 typedef pthread_key_t pg_tss_t;
+#endif
+
+#ifdef PG_THREADS_WIN32
+/* Windows helpers that deal with destructor API differences. */
+extern int pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor);
+extern void pg_tss_win32_delete(pg_tss_t tss_id);
 #endif
 
 /* Like C11 tss_dtor_t. */

@@ -193,7 +193,8 @@ pg_call_once_trampoline(pg_once_flag *flag, void *parameter, void **context)
  *     prototype doesn't match a plain function pointer.
  *
  * We use Windows' native TLS, but manage our own destructor table.  A single
- * dummy FLS is registered, and we use its destructor to drive our own.
+ * dummy FLS is registered, and its destructor to drive our own from the
+ * table.
  *
  *-------------------------------------------------------------------------
  */
@@ -207,7 +208,7 @@ typedef struct pg_tss_win32_entry
 static pg_mtx_t pg_tss_win32_lock = PG_MTX_STATIC_INIT;
 static int pg_tss_win32_count = 0;
 static pg_tss_win32_entry pg_tss_win32_table[TLS_MINIMUM_AVAILABLE];
-static bool pg_tss_win32_fls = FLS_OUT_OF_INDEXES;
+static DWORD pg_tss_win32_fls = FLS_OUT_OF_INDEXES;
 
 int
 pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
