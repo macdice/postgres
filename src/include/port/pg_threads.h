@@ -271,7 +271,7 @@ pg_rwlock_init(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_rwlock_rdlock(pg_rwlock_t * lock)
+pg_rwlock_rlock(pg_rwlock_t * lock)
 {
 #ifdef WIN32
 	AcquireSRWLockShared(lock);
@@ -282,7 +282,7 @@ pg_rwlock_rdlock(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_rwlock_wrlock(pg_rwlock_t * lock)
+pg_rwlock_wlock(pg_rwlock_t * lock)
 {
 #ifdef WIN32
 	AcquireSRWLockExclusive(lock);
@@ -293,7 +293,7 @@ pg_rwlock_wrlock(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_wrlock_unlock(pg_rwlock_t * lock)
+pg_rwlock_wunlock(pg_rwlock_t * lock)
 {
 #ifdef WIN32
 	ReleaseSRWLockExclusive(lock);
@@ -304,7 +304,7 @@ pg_wrlock_unlock(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_rdlock_unlock(pg_rwlock_t * lock)
+pg_rwlock_runlock(pg_rwlock_t * lock)
 {
 #ifdef WIN32
 	ReleaseSRWLockShared(lock);
@@ -360,7 +360,7 @@ static inline int
 pg_mtx_lock(pg_mtx_t *mutex)
 {
 #ifdef WIN32
-	return pg_rwlock_wrlock(mutex);
+	return pg_rwlock_wlock(mutex);
 #else
 	return pg_thrd_maperror(pthread_mutex_lock(mutex));
 #endif
@@ -370,7 +370,7 @@ static inline int
 pg_mtx_unlock(pg_mtx_t *mutex)
 {
 #ifdef WIN32
-	return pg_wrlock_unlock(mutex);
+	return pg_rwlock_wunlock(mutex);
 #else
 	return pg_thrd_maperror(pthread_mutex_unlock(mutex));
 #endif

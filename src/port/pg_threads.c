@@ -205,7 +205,7 @@ typedef struct pg_tss_win32_entry
 	pg_tss_dtor_t destructor;
 } pg_tss_win32_entry;
 
-static pg_mtx_t pg_tss_win32_lock = PG_MTX_STATIC_INIT;
+static pg_rwlock_t pg_tss_win32_lock = PG_RWLOCK_STATIC_INIT;
 static int pg_tss_win32_count = 0;
 static pg_tss_win32_entry pg_tss_win32_table[TLS_MINIMUM_AVAILABLE];
 static DWORD pg_tss_win32_fls = FLS_OUT_OF_INDEXES;
@@ -218,12 +218,12 @@ static void CALLBACK
 pg_tss_win32_call_destructors(void *dummy)
 {
 	/*
-	 * XXX We don't yet have support for iterating more than once, in case
-	 * destructors themselves cause more non-NULL values to appear.
+	 * XXX We don't yet have support for iterating more than once, to handle
+	 * destructors that cause more non-NULL values to appear.
 	 */
 	Assert(PG_TSS_DTOR_ITERATIONS == 1);
 
-	pg_mtx_lock(&pg_tss_win32_lock);
+	pg_rwlock_rlock(&pg_tss_win32_lock);
 	for (int i = 0; i < pg_tss_win32_count; ++i)
 	{
 		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
@@ -231,15 +231,15 @@ pg_tss_win32_call_destructors(void *dummy)
 
 		if (value)
 		{
-			pg_mtx_unlock(&pg_tss_win32_lock);
+			pg_rwlock_runlock(&pg_tss_win32_lock);
 
 			pg_tss_set(entry->id, NULL);
 			entry->destructor(value);
 
-			pg_mtx_lock(&pg_tss_win32_lock);
+			pg_rwlock_rlock(&pg_tss_win32_lock);
 		}
 	}
-	pg_mtx_unlock(&pg_tss_win32_lock);
+	pg_rwlock_runlock(&pg_tss_win32_lock);
 }
 
 int
@@ -257,7 +257,7 @@ pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 		return result;
 	}
 
-	pg_mtx_lock(&pg_tss_win32_lock);
+	pg_rwlock_wlock(&pg_tss_win32_lock);
 	/* Too many entries for our fixed-sized table? */
 	if (pg_tss_win32_count == lengthof(pg_tss_win32_table))
 		goto fail;
@@ -277,7 +277,7 @@ pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 	entry->destructor = destructor;
 	result = pg_thrd_success;
 fail:
-	pg_mtx_unlock(&pg_tss_win32_lock);
+	pg_rwlock_wunlock(&pg_tss_win32_lock);
 
 	return result;
 }
@@ -285,7 +285,7 @@ fail:
 void
 pg_tss_win32_delete(pg_tss_t tss_id)
 {
-	pg_mtx_lock(&pg_tss_win32_lock);
+	pg_rwlock_wlock(&pg_tss_win32_lock);
 	for (int i = 0; i < pg_tss_win32_count; ++i)
 	{
 		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
@@ -299,7 +299,7 @@ pg_tss_win32_delete(pg_tss_t tss_id)
 			break;
 		}
 	}
-	pg_mtx_unlock(&pg_tss_win32_lock);
+	pg_rwlock_wunlock(&pg_tss_win32_lock);
 }
 
 #endif

@@ -4059,6 +4059,7 @@ pg_re_flags
 pg_regex_t
 pg_regmatch_t
 pg_regoff_t
+pg_rwlock_t
 pg_saslprep_rc
 pg_saslprep_test_context
 pg_sha1_ctx
