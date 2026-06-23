@@ -203,7 +203,7 @@ typedef struct pg_tss_win32_entry
 {
 	pg_tss_t	id;
 	pg_tss_dtor_t destructor;
-}			pg_tss_win32_entry;
+} pg_tss_win32_entry;
 
 static pg_rwlock_t pg_tss_win32_lock = PG_RWLOCK_STATIC_INIT;
 static int	pg_tss_win32_count = 0;

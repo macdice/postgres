@@ -4078,6 +4078,7 @@ pg_thrd_thunk
 pg_time_t
 pg_time_usec_t
 pg_tss_t
+pg_tss_win32_entry
 pg_tz
 pg_tz_cache
 pg_tzenum
