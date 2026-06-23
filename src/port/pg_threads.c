@@ -185,3 +185,120 @@ pg_call_once_trampoline(pg_once_flag *flag, void *parameter, void **context)
 	return TRUE;
 }
 #endif
+
+#ifdef WIN32
+/*-------------------------------------------------------------------------
+ *
+ * Windows implementation of tss_t functions.
+ *
+ * TlsAlloc() doesn't support destructors, and although FlsAlloc() does, it has
+ * semantic differences that require some wrapping:
+ *
+ * 1.  We don't want to run destructors in tss_delete(), only on exit.
+ * 2.  The calling convention for destructors is CALLBACK, so the function
+ *     prototype doesn't match a plain function pointer.
+ *
+ * We use Windows' native TLS, but manage our own destructor table.  A single
+ * dummy FLS is registered, and we use its destructor to drive our own.
+ *
+ *-------------------------------------------------------------------------
+ */
+
+typedef struct pg_tss_win32_entry
+{
+	pg_tss_t id;
+	pg_tss_dtor_t destructor;
+} pg_tss_win32_entry;
+
+static pg_mtx_t pg_tss_win32_lock = PG_MTX_STATIC_INIT;
+static int pg_tss_win32_count = 0;
+static pg_tss_win32_entry pg_tss_win32_table[TLS_MINIMUM_AVAILABLE];
+static bool pg_tss_win32_fls = FLS_OUT_OF_INDEXES;
+
+int
+pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
+{
+	int result = pg_thrd_error;
+	pg_tss_win32_entry *entry;
+
+	/* If no destructor, just create a native TLS. */
+	if (!destructor)
+	{
+		*tss_id = TlsAlloc();
+		if (*tss_id != TLS_OUT_OF_INDEXES)
+			result = pg_thrd_success;
+		return result;
+	}
+
+	pg_mtx_lock(&pg_tss_win32_lock);
+	/* Too many entries for our fixed-sized table? */
+	if (pg_tss_win32_count == lengthof(pg_tss_win32_table))
+		goto fail;
+	/* Do we need to install the FLS destructor? */
+	if (pg_tss_win32_fls == FLS_OUT_OF_INDEXES)
+	{
+		pg_tss_win32_fls = FlsAlloc(pg_tss_win32_call_destructors);
+		if (pg_tss_win32_fls == FLS_OUT_OF_INDEXES)
+			goto fail;
+		FlsSetValue(pg_tss_win32_fls, (void *) 1);	/* non-NULL dummy */
+	}
+	*tss_id = TlsAlloc();
+	if (*tss_id == TLS_OUT_OF_INDEXES)
+		goto fail;
+	entry = &pg_tss_win32_table[pg_tss_win32_count++];
+	entry->id = *tss_id;
+	entry->destructor = destructor;
+	result = pg_thrd_success;
+fail:
+	pg_mtx_unlock(&pg_tss_win32_lock);
+
+	return result;
+}
+
+void
+pg_tss_win32_delete(pg_tss_t tss_id)
+{
+	pg_mtx_lock(&pg_tss_win32_lock);
+	for (int i = 0; i < pg_tss_win32_count; ++i)
+	{
+		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
+		if (entry->id == tss_id)
+		{
+			/* Move final slot into this slot. */
+			if (i < pg_tss_win32_count - 1)
+				pg_tss_win32_table[i] =
+					pg_tss_win32_table[pg_tss_win32_count - 1];
+			pg_tss_win32_count--;
+			break;
+		}
+	}
+	pg_mtx_unlock(&pg_tss_win32_lock);
+}
+
+/*
+ * When the OS calls the destructor for our single dummy FLS, we need to call
+ * the destructor for each TSS that has a destructor and a non-NULL value.
+ */
+void CALLBACK
+pg_tss_win32_call_destructors(void *dummy)
+{
+	pg_mtx_lock(&pg_tss_win32_lock);
+	for (int i = 0; i < pg_tss_win32_count; ++i)
+	{
+		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
+		void *value = pg_tss_get(entry->id);
+
+		if (value)
+		{
+			pg_mtx_unlock(&pg_tss_win32_lock);
+
+			pg_tss_set(entry->id, NULL);
+			entry->destructor(value);
+
+			pg_mtx_lock(&pg_tss_win32_lock);
+		}
+	}
+	pg_mtx_unlock(&pg_tss_win32_lock);
+}
+
+#endif

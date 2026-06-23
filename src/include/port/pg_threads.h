@@ -193,19 +193,12 @@ pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
 /* Like C11 tss_t. */
 #ifdef PG_THREADS_WIN32
 typedef DWORD pg_tss_t;
-#define pg_tss_dtor_calling_convention CALLBACK
 #else
 typedef pthread_key_t pg_tss_t;
-#define pg_tss_dtor_calling_convention
 #endif
 
-/*
- * We have to include the pg_tss_dtor_calling_convention, because Windows'
- * FLS API requires __stdcall.  This is a variation from the C11 function type
- * tss_dtor_t.  Avoiding this would require our own destructor registry, so
- * we'll put up with this wart for now.
- */
-typedef void (pg_tss_dtor_calling_convention * pg_tss_dtor_t) (void *);
+/* Like C11 tss_dtor_t. */
+typedef void (*pg_tss_dtor_t) (void *);
 
 #ifdef PG_THREADS_WIN32
 #define PG_TSS_DTOR_ITERATIONS 1
@@ -217,8 +210,7 @@ static inline int
 pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 {
 #ifdef PG_THREADS_WIN32
-	*tss_id = FlsAlloc(destructor);
-	return *tss_id == FLS_OUT_OF_INDEXES ? pg_thrd_error : pg_thrd_success;
+	return pg_tss_win32_create(tss_id);
 #else
 	return pg_thrd_maperror(pthread_key_create(tss_id, destructor));
 #endif
@@ -228,11 +220,7 @@ static inline void
 pg_tss_delete(pg_tss_t tss_id)
 {
 #ifdef PG_THREADS_WIN32
-	/*
-	 * XXX This calls the destructor, unlike tss_delete() and
-	 * pthread_key_delete().
-	 */
-	FlsDelete(tss_id);
+	pg_tss_win32_delete(tss_id);
 #else
 	pthread_key_delete(tss_id);
 #endif
