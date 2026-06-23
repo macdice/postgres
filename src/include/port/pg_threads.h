@@ -208,7 +208,7 @@ static inline int
 pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 {
 #ifdef WIN32
-	return pg_tss_win32_create(tss_id);
+	return pg_tss_win32_create(tss_id, destructor);
 #else
 	return pg_thrd_maperror(pthread_key_create(tss_id, destructor));
 #endif

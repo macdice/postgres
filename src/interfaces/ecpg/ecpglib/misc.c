@@ -56,7 +56,8 @@ static struct sqlca_t sqlca_init =
 };
 
 static pg_tss_t sqlca_key;
-static pg_once_flag ecpg_once = PG_ONCE_FLAG_INIT;
+static pg_once_flag sqlca_key_once = PG_ONCE_FLAG_INIT;
+
 static pg_mtx_t debug_mutex = PG_MTX_STATIC_INIT;
 static pg_mtx_t debug_init_mutex = PG_MTX_STATIC_INIT;
 static volatile int simple_debug = 0;
@@ -91,16 +92,18 @@ ecpg_init(const struct connection *con, const char *connection_name, const int l
 	return true;
 }
 
+#if 0
 static void
 ecpg_sqlca_key_destructor(void *arg)
 {
 	free(arg);					/* sqlca structure allocated in ECPGget_sqlca */
 }
+#endif
 
 static void
-ecpg_init_once(void)
+sqlca_key_init_once(void)
 {
-	pg_tss_create(&sqlca_key, ecpg_sqlca_key_destructor);
+	pg_tss_create(&sqlca_key, free);
 }
 
 struct sqlca_t *
@@ -108,7 +111,7 @@ ECPGget_sqlca(void)
 {
 	struct sqlca_t *sqlca;
 
-	pg_call_once(&ecpg_once, ecpg_init_once);
+	pg_call_once(&sqlca_key_once, sqlca_key_init_once);
 
 	sqlca = pg_tss_get(sqlca_key);
 	if (sqlca == NULL)
