@@ -15,7 +15,7 @@ locale_t	ecpg_clocale = (locale_t) 0;
 #endif
 
 static pg_mtx_t connections_mutex = PG_MTX_STATIC_INIT;
-static pg_thread_local struct connection *actual_connection_this_thread;
+static thread_local struct connection *actual_connection_this_thread;
 static struct connection *actual_connection = NULL;
 static struct connection *all_connections = NULL;
 

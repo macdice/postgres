@@ -41,22 +41,17 @@ typedef struct pg_thrd_start_info
 	 * A place for the thread's own handle to be passed from parent thread to
 	 * child thread.  We assume that this can be stored and loaded atomically,
 	 * which is true on the relevant architectures, because HANDLEs are
-	 * pointer-sized.
+	 * pointer-sized.  If we're unlucky, we might also need to wait for it to
+	 * be set.
 	 */
 	pg_thrd_t self;
-
-	/*
-	 * In the unlikely event that pg_thrd_current() is called in the child
-	 * thread before the parent thread has set it, we need a wait to wait for
-	 * it.
-	 */
 	pg_mtx_t mutex;
 	pg_cnd_t cond;
 #endif
 } pg_thrd_start_info;
 
 #ifdef PG_THREADS_WIN32
-static pg_thread_local pg_thrd_t my_thrd_handle;
+static thread_local pg_thrd_t my_thrd_handle;
 #endif
 
 /*
@@ -174,8 +169,8 @@ pg_thrd_t
 pg_thrd_current_win32(void)
 {
 	/*
-	 * In .c file to avoid potential DLL complications if pg_thread_local
-	 * access is inlined.
+	 * This function is in .c file, to avoid potential cross-DLL complications
+	 * if a load from thread_local is inlined.
 	 */
 	return my_thrd_handle;
 }

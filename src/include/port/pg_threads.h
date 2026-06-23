@@ -9,13 +9,13 @@
  * We have some extensions of our own, not present in C11:
  *
  * - pg_rwlock_t for read/write locks
- * - pg_mtx_t static initializer PG_MTX_STATIC_INIT
+ * - pg_mtx_t has a static initializer PG_MTX_STATIC_INIT
  * - pg_barrier_t
  *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *    src/port/pg_threads.c
+ *    src/port/pg_threads.h
  *
  *-------------------------------------------------------------------------
  */
@@ -37,23 +37,19 @@
 
 /*-------------------------------------------------------------------------
  *
- * Thread-local storage class.  This is a C11 language feature, not a
- * library feature.  We don't require C11, but we expect compilers to
- * provide some way to request thread-local storage.  (See also
- * pg_tss_t, which is similar but uses explicit set/get functions and
- * supports destructor function that are called at thread exit.)
+ * Though we don't yet require C11 <threads.h> because it isn't available yet
+ * on some platforms, we do require the C11 thread local storage class, which
+ * is part of the language.
+ *
+ * See also pg_tss_t, which is similar but uses explicit set/get functions and
+ * supports destructor function that are called at thread exit.
  *
  *-------------------------------------------------------------------------
  */
 
-#if defined(_MSC_VER)
-/* MSVC */
-#define pg_thread_local __declspec(thread)
-#elif defined(__GNUC__) || defined(__INTEL_COMPILER) || defined(__SUNPRO_C)
-/* GCC, Clang, Intel C, XLC, Solaris Studio */
-#define pg_thread_local __thread
-#else
-#error "no known thread_local storage class for this compiler"
+/* This macro is normally defined by <thread.h>. */
+#ifndef thread_local
+#define thread_local _Thread_Local
 #endif
 
 
@@ -177,10 +173,9 @@ pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
 /*-------------------------------------------------------------------------
  *
  * Thread-specific storage.  This mechanism is an alternative to using
- * the pg_thread_local storage class, which should be preferred where
- * possible.  The only advantage is that the TSS interface allows a
- * destructor functions to be run for non-NULL values when each thread
- * exits.
+ * the C11 thread_local storage class, which should be preferred where
+ * possible.  The only advantage is that the TSS interface allows a destructor
+ * functions to be run for non-NULL values when each thread exits.
  *
  *-------------------------------------------------------------------------
  */
@@ -336,10 +331,10 @@ pg_rdlock_unlock(pg_rwlock_t * lock)
  * pg_mtx_t, but SRWLock is reported to be at least as fast when used
  * only in exclusive mode, and has the advantage of a static
  * initializer (CRITICAL_SECTION must be initialized and destroyed
- * explicitly because it allocates resources other than the space it
- * occupies.)  C11 doesn't define a static initializer (possibly
- * because CRITICAL_SECTION doesn't?), but we want one anyway.  So
- * we'll just point pg_mtx_t to pg_rwlock_t.
+ * explicitly because it allocates kernel resource).
+ *
+ * C11 doesn't define a static initializer, but we want one anyway.  So we'll
+ * just point pg_mtx_t to pg_rwlock_t on Windows.
  */
 typedef pg_rwlock_t pg_mtx_t;
 #define PG_MTX_STATIC_INIT PG_RWLOCK_STATIC_INIT
