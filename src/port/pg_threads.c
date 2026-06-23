@@ -217,6 +217,12 @@ static DWORD pg_tss_win32_fls = FLS_OUT_OF_INDEXES;
 static void CALLBACK
 pg_tss_win32_call_destructors(void *dummy)
 {
+	/*
+	 * XXX We don't yet have support for iterating more than once, in case
+	 * destructors themselves cause more non-NULL values to appear.
+	 */
+	Assert(PG_TSS_DTOR_ITERATIONS == 1);
+
 	pg_mtx_lock(&pg_tss_win32_lock);
 	for (int i = 0; i < pg_tss_win32_count; ++i)
 	{

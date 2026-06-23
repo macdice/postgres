@@ -195,10 +195,6 @@ extern void pg_tss_win32_delete(pg_tss_t tss_id);
 
 /* Like C11 TSS_DTOR_ITERATIONS. */
 #ifdef WIN32
-/*
- * We could teach pg_tss_win32_call_destructors() to loop more than once, but
- * there is currently no call for it.
- */
 #define PG_TSS_DTOR_ITERATIONS 1
 #else
 #define PG_TSS_DTOR_ITERATIONS PTHREAD_DESTRUCTOR_ITERATIONS
