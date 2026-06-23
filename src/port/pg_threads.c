@@ -250,31 +250,11 @@ fail:
 	return result;
 }
 
-void
-pg_tss_win32_delete(pg_tss_t tss_id)
-{
-	pg_mtx_lock(&pg_tss_win32_lock);
-	for (int i = 0; i < pg_tss_win32_count; ++i)
-	{
-		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
-		if (entry->id == tss_id)
-		{
-			/* Move final slot into this slot. */
-			if (i < pg_tss_win32_count - 1)
-				pg_tss_win32_table[i] =
-					pg_tss_win32_table[pg_tss_win32_count - 1];
-			pg_tss_win32_count--;
-			break;
-		}
-	}
-	pg_mtx_unlock(&pg_tss_win32_lock);
-}
-
 /*
  * When the OS calls the destructor for our single dummy FLS, we need to call
  * the destructor for each TSS that has a destructor and a non-NULL value.
  */
-void CALLBACK
+static void CALLBACK
 pg_tss_win32_call_destructors(void *dummy)
 {
 	pg_mtx_lock(&pg_tss_win32_lock);
@@ -291,6 +271,26 @@ pg_tss_win32_call_destructors(void *dummy)
 			entry->destructor(value);
 
 			pg_mtx_lock(&pg_tss_win32_lock);
+		}
+	}
+	pg_mtx_unlock(&pg_tss_win32_lock);
+}
+
+void
+pg_tss_win32_delete(pg_tss_t tss_id)
+{
+	pg_mtx_lock(&pg_tss_win32_lock);
+	for (int i = 0; i < pg_tss_win32_count; ++i)
+	{
+		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
+		if (entry->id == tss_id)
+		{
+			/* Move final slot into this slot. */
+			if (i < pg_tss_win32_count - 1)
+				pg_tss_win32_table[i] =
+					pg_tss_win32_table[pg_tss_win32_count - 1];
+			pg_tss_win32_count--;
+			break;
 		}
 	}
 	pg_mtx_unlock(&pg_tss_win32_lock);
