@@ -66,17 +66,11 @@ pg_thrd_body(void *thunk)
 #ifdef PG_THREADS_WIN32
 
 	/*
-	 * Windows threads don't know their own handle, and can't get it directly.
-	 * So wait for pg_thrd_create() to give it to us.  Hopefully it is was
-	 * stored before we even started running and we won't need to sleep.
+	 * Retrieve handle passed here by pg_thrd_create() before allowing this
+	 * thread to run.  (pg_thrd_current() can't use CurrentThread(), because
+	 * that returns a pseudo-handle with the same value in all threads.)
 	 */
-	if (start_info->self == NULL)
-	{
-		pg_mtx_lock(&start_info->mutex);
-		while (start_info->self == NULL)
-			pg_cnd_wait(&start_info->cond, &start_info->mutex);
-		pg_mtx_unlock(&start_info->mutex);
-	}
+	Assert(start_info->self);
 	my_thrd_handle = start_info->self;
 #endif
 
