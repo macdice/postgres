@@ -92,14 +92,6 @@ ecpg_init(const struct connection *con, const char *connection_name, const int l
 	return true;
 }
 
-#if 0
-static void
-ecpg_sqlca_key_destructor(void *arg)
-{
-	free(arg);					/* sqlca structure allocated in ECPGget_sqlca */
-}
-#endif
-
 static void
 sqlca_key_init_once(void)
 {
