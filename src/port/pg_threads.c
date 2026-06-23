@@ -201,12 +201,12 @@ pg_call_once_trampoline(pg_once_flag *flag, void *parameter, void **context)
 
 typedef struct pg_tss_win32_entry
 {
-	pg_tss_t id;
+	pg_tss_t	id;
 	pg_tss_dtor_t destructor;
-} pg_tss_win32_entry;
+}			pg_tss_win32_entry;
 
 static pg_rwlock_t pg_tss_win32_lock = PG_RWLOCK_STATIC_INIT;
-static int pg_tss_win32_count = 0;
+static int	pg_tss_win32_count = 0;
 static pg_tss_win32_entry pg_tss_win32_table[TLS_MINIMUM_AVAILABLE];
 static DWORD pg_tss_win32_fls = FLS_OUT_OF_INDEXES;
 
@@ -227,7 +227,7 @@ pg_tss_win32_call_destructors(void *dummy)
 	for (int i = 0; i < pg_tss_win32_count; ++i)
 	{
 		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
-		void *value = pg_tss_get(entry->id);
+		void	   *value = pg_tss_get(entry->id);
 
 		if (value)
 		{
@@ -245,7 +245,7 @@ pg_tss_win32_call_destructors(void *dummy)
 int
 pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 {
-	int result = pg_thrd_error;
+	int			result = pg_thrd_error;
 	pg_tss_win32_entry *entry;
 
 	/* If no destructor, just create a native TLS. */
@@ -289,6 +289,7 @@ pg_tss_win32_delete(pg_tss_t tss_id)
 	for (int i = 0; i < pg_tss_win32_count; ++i)
 	{
 		pg_tss_win32_entry *entry = &pg_tss_win32_table[i];
+
 		if (entry->id == tss_id)
 		{
 			/* Move final slot into this slot. */

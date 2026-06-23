@@ -189,7 +189,7 @@ typedef void (*pg_tss_dtor_t) (void *);
 
 #ifdef WIN32
 /* Windows helpers that deal with destructor API differences. */
-extern int pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor);
+extern int	pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor);
 extern void pg_tss_win32_delete(pg_tss_t tss_id);
 #endif
 
@@ -260,7 +260,7 @@ typedef pthread_rwlock_t pg_rwlock_t;
 #endif
 
 static inline int
-pg_rwlock_init(pg_rwlock_t * lock)
+pg_rwlock_init(pg_rwlock_t *lock)
 {
 #ifdef WIN32
 	InitializeSRWLock(lock);
@@ -271,7 +271,7 @@ pg_rwlock_init(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_rwlock_rlock(pg_rwlock_t * lock)
+pg_rwlock_rlock(pg_rwlock_t *lock)
 {
 #ifdef WIN32
 	AcquireSRWLockShared(lock);
@@ -282,7 +282,7 @@ pg_rwlock_rlock(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_rwlock_wlock(pg_rwlock_t * lock)
+pg_rwlock_wlock(pg_rwlock_t *lock)
 {
 #ifdef WIN32
 	AcquireSRWLockExclusive(lock);
@@ -293,7 +293,7 @@ pg_rwlock_wlock(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_rwlock_wunlock(pg_rwlock_t * lock)
+pg_rwlock_wunlock(pg_rwlock_t *lock)
 {
 #ifdef WIN32
 	ReleaseSRWLockExclusive(lock);
@@ -304,7 +304,7 @@ pg_rwlock_wunlock(pg_rwlock_t * lock)
 }
 
 static inline int
-pg_rwlock_runlock(pg_rwlock_t * lock)
+pg_rwlock_runlock(pg_rwlock_t *lock)
 {
 #ifdef WIN32
 	ReleaseSRWLockShared(lock);
