@@ -184,16 +184,21 @@ typedef DWORD pg_tss_t;
 typedef pthread_key_t pg_tss_t;
 #endif
 
+/* Like C11 tss_dtor_t. */
+typedef void (*pg_tss_dtor_t) (void *);
+
 #ifdef WIN32
 /* Windows helpers that deal with destructor API differences. */
 extern int pg_tss_win32_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor);
 extern void pg_tss_win32_delete(pg_tss_t tss_id);
 #endif
 
-/* Like C11 tss_dtor_t. */
-typedef void (*pg_tss_dtor_t) (void *);
-
+/* Like C11 TSS_DTOR_ITERATIONS. */
 #ifdef WIN32
+/*
+ * We could teach pg_tss_win32_call_destructors() to loop more than once, but
+ * there is currently no call for it.
+ */
 #define PG_TSS_DTOR_ITERATIONS 1
 #else
 #define PG_TSS_DTOR_ITERATIONS PTHREAD_DESTRUCTOR_ITERATIONS
