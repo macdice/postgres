@@ -37,16 +37,8 @@ typedef struct pg_thrd_start_info
 	void	   *argument;
 
 #ifdef PG_THREADS_WIN32
-	/*
-	 * A place for the thread's own handle to be passed from parent thread to
-	 * child thread.  We assume that this can be stored and loaded atomically,
-	 * which is true on the relevant architectures, because HANDLEs are
-	 * pointer-sized.  If we're unlucky, we might also need to wait for it to
-	 * be set.
-	 */
+	/* Space to pass the thread's handle, for use by pg_thrd_current(). */
 	pg_thrd_t self;
-	pg_mtx_t mutex;
-	pg_cnd_t cond;
 #endif
 } pg_thrd_start_info;
 
@@ -110,18 +102,16 @@ pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument)
 	start_info->argument = argument;
 
 #ifdef PG_THREADS_WIN32
-	start_info->self = NULL;
-	pg_mtx_init(&start_info->mutex, pg_mtx_plain);
-	pg_cnd_init(&start_info->cond);
-
-	*thread = CreateThread(NULL, 0, pg_thrd_body, start_info, 0, 0);
+	*thread = CreateThread(NULL, 0, pg_thrd_body, start_info,
+						   CREATE_SUSPENDED, 0);
 	if (*thread != NULL)
 	{
-		/* Tell the thread what its own handle is. */
-		pg_mtx_lock(&start_info->mutex);
+		/*
+		 * Give the thread its own handle so that pg_thrd_current() works,
+		 * before it is allowed to start running.
+		 */
 		start_info->self = *thread;
-		pg_mtx_unlock(&start_info->mutex);
-		pg_cnd_broadcast(&start_info->cond);
+		ResumeThread(*thread);
 
 		return pg_thrd_success;
 	}

@@ -47,9 +47,8 @@
  *-------------------------------------------------------------------------
  */
 
-/* This macro is normally defined by <thread.h>. */
 #ifndef thread_local
-#define thread_local _Thread_Local
+#define thread_local _Thread_local
 #endif
 
 
@@ -60,6 +59,7 @@
  *-------------------------------------------------------------------------
  */
 
+/* Like C11 thrd_error_t. */
 typedef enum pg_thrd_error_t
 {
 	pg_thrd_success = 0,
@@ -72,6 +72,7 @@ typedef enum pg_thrd_error_t
 	pg_thrd_success_last = 5,
 } pg_thrd_error_t;
 
+/* Convert native error to C11 error. */
 static inline int
 pg_thrd_maperror(int error)
 {
@@ -90,14 +91,17 @@ pg_thrd_maperror(int error)
  *-------------------------------------------------------------------------
  */
 
+/* Like C11 thrd_t.  Uses native thread identifier. */
 #ifdef PG_THREADS_WIN32
 typedef HANDLE pg_thrd_t;
 #else
 typedef pthread_t pg_thrd_t;
 #endif
 
+/* Like C11 thrd_start_t. */
 typedef int (*pg_thrd_start_t) (void *);
 
+/* Like C11 thrd_create(), thrd_join(). */
 extern int	pg_thrd_create(pg_thrd_t *thread, pg_thrd_start_t function, void *argument);
 extern int	pg_thrd_join(pg_thrd_t thread, int *result);
 
@@ -105,6 +109,7 @@ extern int	pg_thrd_join(pg_thrd_t thread, int *result);
 extern pg_thrd_t pg_thrd_current_win32(void);
 #endif
 
+/* Like C11 thrd_current(). */
 static inline pg_thrd_t
 pg_thrd_current(void)
 {
@@ -115,6 +120,7 @@ pg_thrd_current(void)
 #endif
 }
 
+/* Like C11 thrd_equal(). */
 static inline int
 pg_thrd_equal(pg_thrd_t lhs, pg_thrd_t rhs)
 {
@@ -125,6 +131,7 @@ pg_thrd_equal(pg_thrd_t lhs, pg_thrd_t rhs)
 #endif
 }
 
+/* Like C11 thrd_exit(). */
 static inline void
 pg_thrd_exit(int result)
 {
@@ -143,6 +150,7 @@ pg_thrd_exit(int result)
  *-------------------------------------------------------------------------
  */
 
+/* Like C11 once_flag. */
 #ifdef PG_THREADS_WIN32
 typedef INIT_ONCE pg_once_flag;
 #define PG_ONCE_FLAG_INIT INIT_ONCE_STATIC_INIT
@@ -151,6 +159,7 @@ typedef pthread_once_t pg_once_flag;
 #define PG_ONCE_FLAG_INIT PTHREAD_ONCE_INIT
 #endif
 
+/* Like C11 once_function_t. */
 typedef void (*pg_call_once_function_t) (void);
 
 #ifdef PG_THREADS_WIN32
@@ -159,6 +168,7 @@ extern BOOL CALLBACK pg_call_once_trampoline(pg_once_flag *flag,
 											 void **context);
 #endif
 
+/* Like C11 call_once(). */
 static inline void
 pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
 {
@@ -173,13 +183,14 @@ pg_call_once(pg_once_flag *flag, pg_call_once_function_t function)
 /*-------------------------------------------------------------------------
  *
  * Thread-specific storage.  This mechanism is an alternative to using
- * the C11 thread_local storage class, which should be preferred where
- * possible.  The only advantage is that the TSS interface allows a destructor
- * functions to be run for non-NULL values when each thread exits.
+ * the thread_local storage class, which should be preferred where possible.
+ * The only advantage is that the TSS interface allows a destructor function
+ * to be run for non-NULL values when the thread exits.
  *
  *-------------------------------------------------------------------------
  */
 
+/* Like C11 tss_t. */
 #ifdef PG_THREADS_WIN32
 typedef DWORD pg_tss_t;
 #define pg_tss_dtor_calling_convention CALLBACK
@@ -190,9 +201,9 @@ typedef pthread_key_t pg_tss_t;
 
 /*
  * We have to include the pg_tss_dtor_calling_convention, because Windows'
- * FLS API requires __stdcall.  This is a variation from the plain C11 function
- * type tss_dtor_t.  Avoiding this would seem to require implementating our own
- * destructor registry, so we'll put up with this wart for now.
+ * FLS API requires __stdcall.  This is a variation from the C11 function type
+ * tss_dtor_t.  Avoiding this would require our own destructor registry, so
+ * we'll put up with this wart for now.
  */
 typedef void (pg_tss_dtor_calling_convention *pg_tss_dtor_t) (void *);
 
@@ -217,6 +228,10 @@ static inline void
 pg_tss_delete(pg_tss_t tss_id)
 {
 #ifdef PG_THREADS_WIN32
+	/*
+	 * XXX This calls the destructor, unlike tss_delete() and
+	 * pthread_key_delete().
+	 */
 	FlsDelete(tss_id);
 #else
 	pthread_key_delete(tss_id);
