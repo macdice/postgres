@@ -91,7 +91,7 @@ ecpg_init(const struct connection *con, const char *connection_name, const int l
 	return true;
 }
 
-static void pg_tss_dtor_calling_convention
+static void
 ecpg_sqlca_key_destructor(void *arg)
 {
 	free(arg);					/* sqlca structure allocated in ECPGget_sqlca */

@@ -85,7 +85,7 @@ struct auto_mem
 static pg_tss_t auto_mem_key;
 static pg_once_flag auto_mem_once = PG_ONCE_FLAG_INIT;
 
-static void pg_tss_dtor_calling_convention
+static void
 auto_mem_destructor(void *arg)
 {
 	(void) arg;					/* keep the compiler quiet */

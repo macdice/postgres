@@ -25,7 +25,7 @@ static pg_once_flag descriptor_once = PG_ONCE_FLAG_INIT;
 
 static void descriptor_deallocate_all(struct descriptor *list);
 
-static void pg_tss_dtor_calling_convention
+static void
 descriptor_destructor(void *arg)
 {
 	descriptor_deallocate_all(arg);
