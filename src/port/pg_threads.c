@@ -193,8 +193,7 @@ pg_call_once_trampoline(pg_once_flag *flag, void *parameter, void **context)
  *     prototype doesn't match a plain function pointer.
  *
  * We use Windows' native TLS, but manage our own destructor table.  A single
- * dummy FLS is registered, and its destructor to drive our own from the
- * table.
+ * dummy FLS is registered, and its destructor walks our own destructor table.
  *
  *-------------------------------------------------------------------------
  */
@@ -218,8 +217,9 @@ static void CALLBACK
 pg_tss_win32_call_destructors(void *dummy)
 {
 	/*
-	 * XXX We don't yet have support for iterating more than once, to handle
-	 * destructors that cause more non-NULL values to appear.
+	 * XXX We don't yet have support for iterating more than once, as required
+	 * to handle destructors that themselves cause more non-NULL values to
+	 * appear.
 	 */
 	Assert(PG_TSS_DTOR_ITERATIONS == 1);
 

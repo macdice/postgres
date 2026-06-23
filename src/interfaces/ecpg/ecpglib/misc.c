@@ -93,7 +93,7 @@ ecpg_init(const struct connection *con, const char *connection_name, const int l
 }
 
 static void
-sqlca_key_init_once(void)
+ecpg_sqlca_key_init(void)
 {
 	pg_tss_create(&sqlca_key, free);
 }
@@ -103,7 +103,7 @@ ECPGget_sqlca(void)
 {
 	struct sqlca_t *sqlca;
 
-	pg_call_once(&sqlca_key_once, sqlca_key_init_once);
+	pg_call_once(&sqlca_key_once, ecpg_sqlca_key_init);
 
 	sqlca = pg_tss_get(sqlca_key);
 	if (sqlca == NULL)
