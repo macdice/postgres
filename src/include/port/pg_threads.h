@@ -451,7 +451,7 @@ pg_cnd_destroy(pg_cnd_t *condvar)
 /*-------------------------------------------------------------------------
  *
  * Barriers.  Not in C11.  Apple currently lacks the POSIX version.
- * We assume that the OS might know a better way to implement it that
+ * We assume that the OS might know a better way to implement it than
  * we do, so we only provide our own if we have to.
  *
  *-------------------------------------------------------------------------
@@ -459,7 +459,7 @@ pg_cnd_destroy(pg_cnd_t *condvar)
 
 #ifdef WIN32
 typedef SYNCHRONIZATION_BARRIER pg_barrier_t;
-#elif defined(HAVE_PTHREAD_BARRIER)
+#elif defined(HAVE_PTHREAD_BARRIER_WAIT)
 typedef pthread_barrier_t pg_barrier_t;
 #else
 typedef struct pg_barrier_t
@@ -477,7 +477,7 @@ pg_barrier_init(pg_barrier_t *barrier, int count)
 {
 #ifdef WIN32
 	return pg_thrd_maperror(InitializeSynchronizationBarrier(barrier, count, 0));
-#elif defined(HAVE_PTHREAD_BARRIER)
+#elif defined(HAVE_PTHREAD_BARRIER_WAIT)
 	return pg_thrd_maperror(pthread_barrier_init(barrier, NULL, count));
 #else
 	barrier->sense = false;
@@ -502,7 +502,7 @@ pg_barrier_wait(pg_barrier_t *barrier)
 		return pg_thrd_success_last;
 	else
 		return pg_thrd_success;
-#elif defined(HAVE_PTHREAD_BARRIER)
+#elif defined(HAVE_PTHREAD_BARRIER_WAIT)
 	int			error = pthread_barrier_wait(barrier);
 
 	if (error == 0)
@@ -539,7 +539,7 @@ pg_barrier_destroy(pg_barrier_t *barrier)
 {
 #ifdef WIN32
 	return pg_thrd_success;
-#elif defined(HAVE_PTHREAD_BARRIER)
+#elif defined(HAVE_PTHREAD_BARRIER_WAIT)
 	return pg_thrd_maperror(pthread_barrier_destroy(barrier));
 #else
 	pg_mtx_destroy(&barrier->mutex);
