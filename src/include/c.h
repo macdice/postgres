@@ -107,6 +107,17 @@ extern "C++"
  */
 
 /*
+ * In C23 and C++11, thread_local is a storage class keyword.  In C11,
+ * _Thread_local is the keyword and <thread.h> defines thread_local as a
+ * macro.  Since we don't require <thread.h> yet, define it here if needed.
+ */
+#if !(defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) && !defined(__cplusplus)
+#ifndef thread_local
+#define thread_local _Thread_local
+#endif
+#endif
+
+/*
  * Disable "inline" if PG_FORCE_DISABLE_INLINE is defined.
  * This is used to work around compiler bugs and might also be useful for
  * investigatory purposes.

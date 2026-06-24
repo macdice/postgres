@@ -3,14 +3,17 @@
  * pg_threads.h
  *    Portable multi-threading API.
  *
- * A multi-threading API abstraction loosely based on a subset of C11
- * <threads.h>.  The identifiers have a pg_ prefix.
+ * A multi-threading API abstraction based on a subset of C11 <threads.h>,
+ * with some extensions.  The identifiers have a pg_ prefix but otherwise
+ * follow C11 naming.
  *
  * We have some extensions of our own, not present in C11:
  *
  * - pg_rwlock_t for read/write locks
- * - pg_mtx_t has a static initializer PG_MTX_STATIC_INIT
+ * - pg_mtx_t has initialization value PG_MTX_STATIC_INIT
  * - pg_barrier_t
+ *
+ * We require the compiler to provide thread_local or _Thread_local (see c.h).
  *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  *
@@ -27,15 +30,6 @@
 #include <windows.h>
 #else
 #include <pthread.h>
-#endif
-
-
-/*
- * We require C11's _Thread_local storage class (a language feature), but not
- * the <threads.h> header, so we define the standard macro ourselves.
- */
-#ifndef thread_local
-#define thread_local _Thread_local
 #endif
 
 
@@ -446,13 +440,12 @@ pg_cnd_destroy(pg_cnd_t *condvar)
 
 /*-------------------------------------------------------------------------
  *
- * Barriers.  Not in C11.  Apple currently lacks the POSIX version.
- * We assume that the OS might know a better way to implement it than
- * we do, so we only provide our own if we have to.
+ * Barriers.  Not in C11.
  *
  *-------------------------------------------------------------------------
  */
 
+/* A thread synchronization barrier. */
 #ifdef WIN32
 typedef SYNCHRONIZATION_BARRIER pg_barrier_t;
 #elif defined(HAVE_PTHREAD_BARRIER_WAIT)
@@ -468,6 +461,9 @@ typedef struct pg_barrier_t
 } pg_barrier_t;
 #endif
 
+/*
+ * Initialize a thread synchronization barrier that waits for 'count' threads.
+ */
 static inline int
 pg_barrier_init(pg_barrier_t *barrier, int count)
 {
@@ -490,23 +486,38 @@ pg_barrier_init(pg_barrier_t *barrier, int count)
 #endif
 }
 
+/*
+ * Wait for all expected threads to arrive at the barrier, and elect one
+ * arbitrary thread to perform a computation.  Sets *elected_thread to true in
+ * one thread, and false in all others.
+ */
 static inline int
-pg_barrier_wait(pg_barrier_t *barrier)
+pg_barrier_wait_and_elect(pg_barrier_t *barrier, bool *elected_thread)
 {
 #ifdef WIN32
-	if (EnterSynchronizationBarrier(barrier, SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY))
-		return pg_thrd_success_last;
+	if (EnterSynchronizationBarrier(barrier,
+									SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY))
+		*elected_thread = true;
 	else
-		return pg_thrd_success;
+		*elected_thread = false;
+	return pg_thrd_success;
 #elif defined(HAVE_PTHREAD_BARRIER_WAIT)
 	int			error = pthread_barrier_wait(barrier);
 
 	if (error == 0)
+	{
+		*elected_thread = false;
 		return pg_thrd_success;
+	}
 	else if (error == PTHREAD_BARRIER_SERIAL_THREAD)
-		return pg_thrd_success_last;
+	{
+		*elected_thread = true;
+		return pg_thrd_success;
+	}
 	else
+	{
 		return pg_thrd_error;
+	}
 #else
 	bool		initial_sense;
 
@@ -518,7 +529,8 @@ pg_barrier_wait(pg_barrier_t *barrier)
 		barrier->sense = !barrier->sense;
 		pg_mtx_unlock(&barrier->mutex);
 		pg_cnd_broadcast(&barrier->cond);
-		return pg_thrd_success_last;
+		*elected_thread = true;
+		return pg_thrd_success;
 	}
 	initial_sense = barrier->sense;
 	do
@@ -526,8 +538,20 @@ pg_barrier_wait(pg_barrier_t *barrier)
 		pg_cnd_wait(&barrier->cond, &barrier->mutex);
 	} while (barrier->sense == initial_sense);
 	pg_mtx_unlock(&barrier->mutex);
+	*elected_thread = false;
 	return pg_thrd_success;
 #endif
+}
+
+/*
+ * Wait for all threads to arrive at the barrier.
+ */
+static inline int
+pg_barrier_wait(pg_barrier_t *barrier)
+{
+	bool		elected_thread pg_attribute_unused();
+
+	return pg_barrier_wait_and_elect(barrier, &elected_thread);
 }
 
 static inline int
