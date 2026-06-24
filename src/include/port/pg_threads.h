@@ -437,8 +437,9 @@ pg_cnd_destroy(pg_cnd_t *condvar)
 
 /*-------------------------------------------------------------------------
  *
- * Barriers.  Not in C11.  In POSIX this is part of the "advanced realtime
- * threads" API and missing on macOS, so we provide our own implementation.
+ * Barriers.  Not in C11.  This is part of the POSIX "advanced realtime
+ * threads" API that is missing on macOS, so a fallback implementation is
+ * provided.
  *
  *-------------------------------------------------------------------------
  */
