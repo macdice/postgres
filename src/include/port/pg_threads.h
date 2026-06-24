@@ -13,7 +13,7 @@
  * - pg_mtx_t has initialization value PG_MTX_STATIC_INIT
  * - pg_barrier_t
  *
- * We require the compiler to provide thread_local or _Thread_local (see c.h).
+ * For thread_local, see c.h.
  *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  *
@@ -128,7 +128,7 @@ pg_thrd_exit(int result)
  *-------------------------------------------------------------------------
  */
 
-/* Like C11 once_flag. */
+/* Like C11 once_flag, ONCE_FLAG_INIT. */
 #ifdef WIN32
 typedef INIT_ONCE pg_once_flag;
 #define PG_ONCE_FLAG_INIT INIT_ONCE_STATIC_INIT
@@ -141,6 +141,7 @@ typedef pthread_once_t pg_once_flag;
 typedef void (*pg_call_once_function_t) (void);
 
 #ifdef WIN32
+/* Windows helper that deals with function type mismatch. */
 extern BOOL CALLBACK pg_call_once_trampoline(pg_once_flag *flag,
 											 void *parameter,
 											 void **context);
@@ -191,6 +192,7 @@ extern void pg_tss_win32_delete(pg_tss_t tss_id);
 #define PG_TSS_DTOR_ITERATIONS PTHREAD_DESTRUCTOR_ITERATIONS
 #endif
 
+/* Like C11 tss_create(). */
 static inline int
 pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 {
@@ -201,6 +203,7 @@ pg_tss_create(pg_tss_t *tss_id, pg_tss_dtor_t destructor)
 #endif
 }
 
+/* Like C11 tss_delete(). */
 static inline void
 pg_tss_delete(pg_tss_t tss_id)
 {
@@ -211,6 +214,7 @@ pg_tss_delete(pg_tss_t tss_id)
 #endif
 }
 
+/* Like C11 tss_get(). */
 static inline void *
 pg_tss_get(pg_tss_t tss_id)
 {
@@ -221,6 +225,7 @@ pg_tss_get(pg_tss_t tss_id)
 #endif
 }
 
+/* Like C11 tss_set(). */
 static inline int
 pg_tss_set(pg_tss_t tss_id, void *value)
 {
@@ -313,16 +318,17 @@ pg_rwlock_runlock(pg_rwlock_t *lock)
  *-------------------------------------------------------------------------
  */
 
+/*
+ * C11 doesn't define a static initializer, but it is very convenient to have
+ * one.
+ */
 #ifdef WIN32
 /*
- * CRITICAL_SECTION might be the most obvious Windows mechanism for
- * pg_mtx_t, but SRWLock is reported to be at least as fast when used
- * only in exclusive mode, and has the advantage of a static
- * initializer (CRITICAL_SECTION must be initialized and destroyed
- * explicitly because it allocates kernel resource).
- *
- * C11 doesn't define a static initializer, but we want one anyway.  So we'll
- * just point pg_mtx_t to pg_rwlock_t on Windows.
+ * CRITICAL_SECTION might be the most obvious Windows mechanism for pg_mtx_t,
+ * but SRWLock is reported to be at least as fast when used only in exclusive
+ * mode, and has the advantage of a static initializer (CRITICAL_SECTION must
+ * be initialized and destroyed explicitly because it allocates kernel
+ * resource).  So we'll just point pg_mtx_t to pg_rwlock_t on Windows.
  */
 typedef pg_rwlock_t pg_mtx_t;
 #define PG_MTX_STATIC_INIT PG_RWLOCK_STATIC_INIT
@@ -331,12 +337,13 @@ typedef pthread_mutex_t pg_mtx_t;
 #define PG_MTX_STATIC_INIT PTHREAD_MUTEX_INITIALIZER
 #endif
 
+/* Like C11 mtx_type_t. */
 typedef enum pg_mtx_type_t
 {
 	pg_mtx_plain = 0
 } pg_mtx_type_t;
 
-
+/* Like C11 mtx_init(). */
 static inline int
 pg_mtx_init(pg_mtx_t *mutex, int type)
 {
@@ -347,6 +354,7 @@ pg_mtx_init(pg_mtx_t *mutex, int type)
 #endif
 }
 
+/* Like C11 mtx_lock(). */
 static inline int
 pg_mtx_lock(pg_mtx_t *mutex)
 {
@@ -357,6 +365,7 @@ pg_mtx_lock(pg_mtx_t *mutex)
 #endif
 }
 
+/* Like C11 mtx_unlock(). */
 static inline int
 pg_mtx_unlock(pg_mtx_t *mutex)
 {
@@ -367,6 +376,7 @@ pg_mtx_unlock(pg_mtx_t *mutex)
 #endif
 }
 
+/* Like C11 mtx_destroy(). */
 static inline int
 pg_mtx_destroy(pg_mtx_t *mutex)
 {
@@ -385,12 +395,14 @@ pg_mtx_destroy(pg_mtx_t *mutex)
  *-------------------------------------------------------------------------
  */
 
+/* Like C11 cnd_t. */
 #ifdef WIN32
 typedef CONDITION_VARIABLE pg_cnd_t;
 #else
 typedef pthread_cond_t pg_cnd_t;
 #endif
 
+/* Like C11 cnd_init(). */
 static inline int
 pg_cnd_init(pg_cnd_t *condvar)
 {
@@ -402,6 +414,7 @@ pg_cnd_init(pg_cnd_t *condvar)
 #endif
 }
 
+/* Like C11 cnd_broadcast(). */
 static inline int
 pg_cnd_broadcast(pg_cnd_t *condvar)
 {
@@ -413,6 +426,7 @@ pg_cnd_broadcast(pg_cnd_t *condvar)
 #endif
 }
 
+/* Like C11 cnd_wait(). */
 static inline int
 pg_cnd_wait(pg_cnd_t *condvar, pg_mtx_t *mutex)
 {
@@ -424,6 +438,7 @@ pg_cnd_wait(pg_cnd_t *condvar, pg_mtx_t *mutex)
 #endif
 }
 
+/* Like C11 cnd_destroy(). */
 static inline int
 pg_cnd_destroy(pg_cnd_t *condvar)
 {
@@ -461,7 +476,8 @@ typedef struct pg_barrier_t
 #endif
 
 /*
- * Initialize a thread synchronization barrier that waits for 'count' threads.
+ * Initialize a thread synchronization barrier that waits for 'count' threads
+ * when pg_barrier_wait() is called.
  */
 static inline int
 pg_barrier_init(pg_barrier_t *barrier, int count)
@@ -487,8 +503,8 @@ pg_barrier_init(pg_barrier_t *barrier, int count)
 
 /*
  * Wait for all expected threads to arrive at the barrier, and elect one
- * arbitrary thread to perform a computation.  Sets *elected_thread to true in
- * one thread, and false in all others.
+ * arbitrary thread to perform a phase of computation serially.  Sets
+ * *elected_thread to true in the elected thread, and false in all others.
  */
 static inline int
 pg_barrier_wait_and_elect(pg_barrier_t *barrier, bool *elected_thread)
@@ -542,9 +558,7 @@ pg_barrier_wait_and_elect(pg_barrier_t *barrier, bool *elected_thread)
 #endif
 }
 
-/*
- * Wait for all threads to arrive at the barrier.
- */
+/* Wait for all threads to arrive at the barrier. */
 static inline int
 pg_barrier_wait(pg_barrier_t *barrier)
 {
@@ -553,6 +567,7 @@ pg_barrier_wait(pg_barrier_t *barrier)
 	return pg_barrier_wait_and_elect(barrier, &elected_thread);
 }
 
+/* Destroy a barrier. */
 static inline int
 pg_barrier_destroy(pg_barrier_t *barrier)
 {
