@@ -26,6 +26,7 @@
 #define WAITEVENTSET_H
 
 #include "utils/resowner.h"
+#include "storage/latch.h"
 
 /*
  * Bitmasks for events that may wake-up WaitLatch(), WaitLatchOrSocket(), or
@@ -56,12 +57,31 @@
 							 WL_SOCKET_ACCEPT | \
 							 WL_SOCKET_CLOSED)
 
+/* special flags in event_mask of ModifyWaitEventSet() */
+#define WL_ADD				(1 << 31)
+#define WL_DEL		 	 	(-1)
+
+/* Supported waitable object types. */
+typedef enum
+{
+	WL_TYPE_INVALID,
+	WL_TYPE_SOCKET,				/* id is a socket descriptor */
+	WL_TYPE_LATCH,				/* id is a pointer to Latch */
+	WL_TYPE_POSTMASTER_DEATH,	/* id is not used */
+	
+	WL_TYPE_LAST_VALID = WL_TYPE_POSTMASTER_DEATH,
+	WL_TYPE_FIRST_VALID = WL_TYPE_INVALID + 1
+} WaitEventType;
+
+/* An identifier for one of the above types. */
+typedef intptr_t WaitEventId;
+
 typedef struct WaitEvent
 {
-	int			pos;			/* position in the event data structure */
+	WaitEventType	id_type;
+	WaitEventId	id;
 	uint32		events;			/* triggered events */
-	pgsocket	fd;				/* socket fd associated with event */
-	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
+	void	   *user_data;		/* pointer provided when adding */
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
 #endif
@@ -78,12 +98,18 @@ struct Latch;
 extern void InitializeWaitEventSupport(void);
 
 extern WaitEventSet *CreateWaitEventSet(ResourceOwner resowner, int nevents);
+extern WaitEventSet *CreateVirtualWaitEventSet(ResourceOwner resowner,
+											   WaitEventSet *underlying,
+											   int nevents);
+extern bool ReserveWaitEventSetSpace(WaitEventSet *set, int nevents);
 extern void FreeWaitEventSet(WaitEventSet *set);
 extern void FreeWaitEventSetAfterFork(WaitEventSet *set);
-extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
-							  struct Latch *latch, void *user_data);
-extern void ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events,
-							struct Latch *latch);
+
+extern bool ModifyWaitEventSet(WaitEventSet *set,
+							   WaitEventType id_type,
+							   WaitEventId id,
+							   int event_mask);
+
 extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
 							 WaitEvent *occurred_events, int nevents,
 							 uint32 wait_event_info);
@@ -94,5 +120,18 @@ extern bool WaitEventSetCanReportClosed(void);
 extern void WakeupMyProc(void);
 extern void WakeupOtherProc(int pid);
 #endif
+
+/* Convenient variants of ModifyWaitEventSet() with typed arguments. */
+
+extern void AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
+extern void ModifyWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
+extern void DeleteWaitEventSetLatch(WaitEventSet *set);
+
+extern void	AddWaitEventSetSocket(WaitEventSet *set, pgsocket socket, int event_mask);;
+extern void ModifyWaitEventSetSocket(WaitEventSet *set, pgsocket socket, int event_mask);;
+extern void DeleteWaitEventSetSocket(WaitEventSet *set, pgsocket socket);
+
+extern void AddWaitEventSetPostmasterDeath(WaitEventSet *set, int event_mask);;
+extern void ModifyWaitEventSetPostmasterDeath(WaitEventSet *set, int event_mask);;
 
 #endif							/* WAITEVENTSET_H */

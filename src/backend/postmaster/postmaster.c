@@ -1660,15 +1660,11 @@ ConfigurePostmasterWaitSet(bool accept_connections)
 
 	pm_wait_set = CreateWaitEventSet(NULL,
 									 accept_connections ? (1 + NumListenSockets) : 1);
-	AddWaitEventToSet(pm_wait_set, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch,
-					  NULL);
+	AddWaitEventSetLatch(pm_wait_set, MyLatch);
 
 	if (accept_connections)
-	{
 		for (int i = 0; i < NumListenSockets; i++)
-			AddWaitEventToSet(pm_wait_set, WL_SOCKET_ACCEPT, ListenSockets[i],
-							  NULL, NULL);
-	}
+			ModifyWaitEventSetSocket(pm_wait_set, ListenSockets[i], WL_SOCKET_ACCEPT);
 }
 
 /*
@@ -1724,7 +1720,7 @@ ServerLoop(void)
 			{
 				ClientSocket s;
 
-				if (AcceptConnection(events[i].fd, &s) == STATUS_OK)
+				if (AcceptConnection(events[i].id, &s) == STATUS_OK)
 					BackendStartup(&s);
 
 				/* We no longer need the open socket in this process */

@@ -175,8 +175,6 @@ Port *
 pq_init(ClientSocket *client_sock)
 {
 	Port	   *port;
-	int			socket_pos PG_USED_FOR_ASSERTS_ONLY;
-	int			latch_pos PG_USED_FOR_ASSERTS_ONLY;
 
 	/* allocate the Port struct and copy the ClientSocket contents to it */
 	port = palloc0_object(Port);
@@ -305,20 +303,10 @@ pq_init(ClientSocket *client_sock)
 		elog(FATAL, "fcntl(F_SETFD) failed on socket: %m");
 #endif
 
-	FeBeWaitSet = CreateWaitEventSet(NULL, FeBeWaitSetNEvents);
-	socket_pos = AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE,
-								   port->sock, NULL, NULL);
-	latch_pos = AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
-								  MyLatch, NULL);
-	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
-					  NULL, NULL);
-
-	/*
-	 * The event positions match the order we added them, but let's sanity
-	 * check them to be sure.
-	 */
-	Assert(socket_pos == FeBeWaitSetSocketPos);
-	Assert(latch_pos == FeBeWaitSetLatchPos);
+	FeBeWaitSet = CreateWaitEventSet(NULL, 3);
+	AddWaitEventSetSocket(FeBeWaitSet, port->sock, WL_SOCKET_WRITEABLE);
+	AddWaitEventSetLatch(FeBeWaitSet, MyLatch);
+	AddWaitEventSetPostmasterDeath(FeBeWaitSet, WL_POSTMASTER_DEATH);
 
 	return port;
 }
@@ -2056,16 +2044,16 @@ show_tcp_user_timeout(void)
 bool
 pq_check_connection(void)
 {
-	WaitEvent	events[FeBeWaitSetNEvents];
+	WaitEvent	events[3];
 	int			rc;
 
 	/*
 	 * It's OK to modify the socket event filter without restoring, because
 	 * all FeBeWaitSet socket wait sites do the same.
 	 */
-	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, WL_SOCKET_CLOSED, NULL);
+	ModifyWaitEventSetSocket(FeBeWaitSet, MyProcPort->sock, WL_SOCKET_CLOSED);
 
-retry:
+ retry:
 	rc = WaitEventSetWait(FeBeWaitSet, 0, events, lengthof(events), 0);
 	for (int i = 0; i < rc; ++i)
 	{

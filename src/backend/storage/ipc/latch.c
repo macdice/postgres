@@ -34,26 +34,18 @@ static WaitEventSet *LatchWaitSet;
 void
 InitializeLatchWaitSet(void)
 {
-	int			latch_pos PG_USED_FOR_ASSERTS_ONLY;
-
 	Assert(LatchWaitSet == NULL);
 
 	/* Set up the WaitEventSet used by WaitLatch(). */
 	LatchWaitSet = CreateWaitEventSet(NULL, 2);
-	latch_pos = AddWaitEventToSet(LatchWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
-								  MyLatch, NULL);
-	Assert(latch_pos == LatchWaitSetLatchPos);
+	AddWaitEventSetLatch(LatchWaitSet, MyLatch);
 
 	/*
 	 * WaitLatch will modify this to WL_EXIT_ON_PM_DEATH or
 	 * WL_POSTMASTER_DEATH on each call.
 	 */
 	if (IsUnderPostmaster)
-	{
-		latch_pos = AddWaitEventToSet(LatchWaitSet, WL_EXIT_ON_PM_DEATH,
-									  PGINVALID_SOCKET, NULL, NULL);
-		Assert(latch_pos == LatchWaitSetPostmasterDeathPos);
-	}
+		AddWaitEventSetPostmasterDeath(LatchWaitSet, WL_EXIT_ON_PM_DEATH);
 }
 
 /*
@@ -186,13 +178,14 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	 */
 	if (!(wakeEvents & WL_LATCH_SET))
 		latch = NULL;
-	ModifyWaitEvent(LatchWaitSet, LatchWaitSetLatchPos, WL_LATCH_SET, latch);
-
+	if (latch)
+		ModifyWaitEventSetLatch(LatchWaitSet, latch);
+	else
+		DeleteWaitEventSetLatch(LatchWaitSet);
 	if (IsUnderPostmaster)
-		ModifyWaitEvent(LatchWaitSet, LatchWaitSetPostmasterDeathPos,
-						(wakeEvents & (WL_EXIT_ON_PM_DEATH | WL_POSTMASTER_DEATH)),
-						NULL);
-
+		ModifyWaitEventSetPostmasterDeath(LatchWaitSet,
+										  wakeEvents & (WL_EXIT_ON_PM_DEATH |
+														WL_POSTMASTER_DEATH));
 	if (WaitEventSetWait(LatchWaitSet,
 						 (wakeEvents & WL_TIMEOUT) ? timeout : -1,
 						 &event, 1,
@@ -234,8 +227,7 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 		timeout = -1;
 
 	if (wakeEvents & WL_LATCH_SET)
-		AddWaitEventToSet(set, WL_LATCH_SET, PGINVALID_SOCKET,
-						  latch, NULL);
+		AddWaitEventSetLatch(set, latch);
 
 	/* Postmaster-managed callers must handle postmaster death somehow. */
 	Assert(!IsUnderPostmaster ||
@@ -243,20 +235,12 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 		   (wakeEvents & WL_POSTMASTER_DEATH));
 
 	if ((wakeEvents & WL_POSTMASTER_DEATH) && IsUnderPostmaster)
-		AddWaitEventToSet(set, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
-
-	if ((wakeEvents & WL_EXIT_ON_PM_DEATH) && IsUnderPostmaster)
-		AddWaitEventToSet(set, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
+		ModifyWaitEventSetPostmasterDeath(set,
+										  wakeEvents & (WL_EXIT_ON_PM_DEATH |
+														WL_POSTMASTER_DEATH));
 
 	if (wakeEvents & WL_SOCKET_MASK)
-	{
-		int			ev;
-
-		ev = wakeEvents & WL_SOCKET_MASK;
-		AddWaitEventToSet(set, ev, sock, NULL, NULL);
-	}
+		ModifyWaitEventSetSocket(set, sock, wakeEvents & WL_SOCKET_MASK);
 
 	rc = WaitEventSetWait(set, timeout, &event, 1, wait_event_info);
 

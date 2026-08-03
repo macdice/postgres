@@ -1045,8 +1045,8 @@ ExecAppendAsyncEventWait(AppendState *node)
 
 	Assert(node->as_eventset == NULL);
 	node->as_eventset = CreateWaitEventSet(CurrentResourceOwner, nevents);
-	AddWaitEventToSet(node->as_eventset, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-					  NULL, NULL);
+
+	AddWaitEventSetPostmasterDeath(node->as_eventset, WL_EXIT_ON_PM_DEATH);
 
 	/* Give each waiting subplan a chance to add an event. */
 	i = -1;
@@ -1081,8 +1081,7 @@ ExecAppendAsyncEventWait(AppendState *node)
 	 * we cannot change it now.  The pattern has possibly been copied to other
 	 * extensions too.
 	 */
-	AddWaitEventToSet(node->as_eventset, WL_LATCH_SET, PGINVALID_SOCKET,
-					  MyLatch, NULL);
+	AddWaitEventSetLatch(node->as_eventset, MyLatch);
 
 	/* Return at most EVENT_BUFFER_SIZE events in one call. */
 	if (nevents > EVENT_BUFFER_SIZE)
