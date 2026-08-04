@@ -1660,7 +1660,7 @@ ConfigurePostmasterWaitSet(bool accept_connections)
 
 	pm_wait_set = CreateWaitEventSet(NULL,
 									 accept_connections ? (1 + NumListenSockets) : 1);
-	AddWaitEventSetLatch(pm_wait_set, MyLatch);
+	ModifyWaitEventSetLatch(pm_wait_set, MyLatch);
 
 	if (accept_connections)
 		for (int i = 0; i < NumListenSockets; i++)

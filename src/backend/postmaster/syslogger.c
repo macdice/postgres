@@ -357,9 +357,9 @@ SysLoggerMain(const void *startup_data, size_t startup_data_len)
 	 * (including the postmaster).
 	 */
 	wes = CreateWaitEventSet(NULL, 2);
-	AddWaitEventSetLatch(wes, MyLatch);
+	ModifyWaitEventSetLatch(wes, MyLatch);
 #ifndef WIN32
-	ModifyWaitEventSetSocket(wes, WL_SOCKET_READABLE, syslogPipe[0]);
+	ModifyWaitEventSetSocket(wes, syslogPipe[0], WL_SOCKET_READABLE);
 #endif
 
 	/* main worker loop */

@@ -117,9 +117,10 @@ typedef struct Latch
 	sig_atomic_t is_set;
 	sig_atomic_t maybe_sleeping;
 	bool		is_shared;
-	int			owner_pid;
+	pid_t		owner_pid;
+	WaitEventSetHandle wakeup;
+
 #ifdef WIN32
-	HANDLE		event;
 #endif
 } Latch;
 

@@ -304,9 +304,9 @@ pq_init(ClientSocket *client_sock)
 #endif
 
 	FeBeWaitSet = CreateWaitEventSet(NULL, 3);
-	AddWaitEventSetSocket(FeBeWaitSet, port->sock, WL_SOCKET_WRITEABLE);
-	AddWaitEventSetLatch(FeBeWaitSet, MyLatch);
-	AddWaitEventSetPostmasterDeath(FeBeWaitSet, WL_POSTMASTER_DEATH);
+	ModifyWaitEventSetSocket(FeBeWaitSet, port->sock, WL_SOCKET_WRITEABLE);
+	ModifyWaitEventSetLatch(FeBeWaitSet, MyLatch);
+	ModifyWaitEventSetPostmaster(FeBeWaitSet, WL_POSTMASTER_DEATH);
 
 	return port;
 }

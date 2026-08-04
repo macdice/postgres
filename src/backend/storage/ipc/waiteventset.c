@@ -116,6 +116,19 @@
 #endif
 #endif
 
+typedef union WaitEventSetHandleImpl
+{
+	WaitEventSetHandle opaque;
+#if defined(WAIT_USE_WIN32)
+	HANDLE wakeup;
+#else
+	pid_t pid;
+#endif
+} WaitEventSetHandleImpl;
+
+static_assert(sizeof(WaitEventSetHandleImpl) == sizeof(WaitEventSetHandle),
+			  "WL_HANDLE_SIZE is too small");
+
 struct WaitEventRegistration
 {
 	WaitEvent event;
@@ -123,16 +136,27 @@ struct WaitEventRegistration
 	{
 		struct
 		{
-			/* Member used in registrations in concrete WaitEventSets.  */
+			/* Members used in concrete WaitEventSets.  */
 			dlist_head virtual_registrations;
+			/* In some cases the id is not the actual fd etc. */
+			union
+			{
+				int fd;
+#ifdef WIN32
+				HANDLE handle;
+#endif
+			};
 		} concrete;
 		struct
 		{
-			/* Members used in virtual WaitEventSet. */
-			struct WaitEventRegistration *underlying_registration;
+			/* Members used in virtual WaitEventSets. */
+			const WaitEventSet *set;
+			struct WaitEventRegistration *concrete_registration;
 			dlist_node virtual_registrations_node; 
 		} virtual;
 	};
+
+	dlist_node id_type_node;
 	dlist_node id_table_node;
 };
 
@@ -150,25 +174,28 @@ struct WaitEventSet
 	int			nevents_space;	/* maximum number of events in this set */
 
 	/*
+	 * Array of words with at least nevents_space bits, for fast and compact
+	 * slot allocation.
+	 */
+	uint64_t   *in_use_bitmap;
+	
+	/*
 	 * Array, of nevents_space length, storing the definition of events this
 	 * set is waiting for.
 	 */
 	WaitEventRegistration *events;
 
 	/*
-	 * Lists of WaitEventRegistration objects hashed by ID (= fd, handle,
-	 * ...). XXX make dynamic sized
+	 * Lists of WaitEventRegistration objects hashed by id_type + id.
 	 */	
-	dlist_head id_table[32];
+	dlist_head *id_table;
+	int id_table_buckets;
 
 	/*
-	 * If WL_LATCH_SET is specified in any wait event, latch is a pointer to
-	 * said latch, and latch_pos the offset in the ->events array. This is
-	 * useful because we check the state of the latch before performing doing
-	 * syscalls related to waiting.
+	 * Lists of WaitEventRegistration objects for each id_type.  This is
+	 * useful for certain object types that need to be checked to close races.
 	 */
-	Latch	   *latch;
-	int			latch_pos;
+	dlist_head id_type_table[WL_TYPE_LAST + 1];
 
 	/*
 	 * WL_EXIT_ON_PM_DEATH is converted to WL_POSTMASTER_DEATH, but this flag
@@ -442,7 +469,7 @@ wes_id_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
  * lifetime.
  */
 WaitEventSet *
-CreateWaitEventSet(ResourceOwner resowner, int nevents)
+CreateConcreteWaitEventSet(ResourceOwner resowner, int nevents)
 {
 	WaitEventSet *set;
 	char	   *data;
@@ -603,6 +630,20 @@ CreateVirtualWaitEventSet(ResourceOwner resowner,
 	return set;
 }
 
+static WaitEventSet *backend_wait_event_set;
+
+/*
+ * Create a virtual WaitEventSet using the per-backend WaitEventSet as the
+ * underlying implementation.
+ */
+WaitEventSet *
+CreateWaitEventSet(ResourceOwner resowner, int nevents)
+{
+	if (backend_wait_event_set == NULL)
+		backend_wait_event_set = CreateConcreteWaitEventSet(NULL, nevents * 2);
+	return CreateVirtualWaitEventSet(resowner, backend_wait_event_set, nevents);
+}
+
 /*
  * Free a previously created WaitEventSet.
  *
@@ -625,7 +666,7 @@ FreeWaitEventSet(WaitEventSet *set)
 	{
 		for (int i = 0; i < set->nevents; ++i)
 			if (set->events[i].event.id_type != WL_TYPE_INVALID &&
-				set->events[i].virtual.underlying_registration)
+				set->events[i].virtual.concrete_registration)
 				dlist_delete(&set->events[i].virtual.virtual_registrations_node);
 
 		pfree(set);
@@ -794,44 +835,100 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 }
 #endif
 
-static void
-wes_delete(WaitEventSet *set, WaitEventRegistration *reg)
-{
-}
-
-static void
-wes_validate_event_mask(WaitEventType id_type, int event_mask)
-{
-}
-
 /*
- * Add, modify or remove a registered waitable object (socket etc) depending
- * on event_mask being WL_DEL, or a combination of masks with optional WL_ADD.
+ * Add, modify or remove a registered waitable object (socket etc).
  *
- * An error is raised if event_mask is not valid for id_type.
+ * If event_mask is non-zero, the object is added if not already present, and
+ * the set of wait conditions is adjusted.
  *
- * Returns true on success.
+ * If event_mask is zero, the object is removed if present.  This must be done
+ * explicitly before closing descriptors, to avoid dangling references and
+ * platform differences.
+ *
+ * An error is raised if event_mask is not valid for id_type, or if underlying
+ * system calls fail.
  */
-bool
+void
 ModifyWaitEventSet(WaitEventSet *set,
 				   WaitEventType id_type,
 				   WaitEventId id,
 				   int event_mask)
 {
-	WaitEventRegistration *reg;
+	/*
+	 * The private flag prevents user_data pointer from being overwritten if
+	 * the event exists already.
+	 */
+	ModifyWaitEventSetWithData(set,
+							   id_type,
+							   id,
+							   event_mask | WL_PRIVATE1,
+							   NULL);
+}
 
-	reg = wes_id_table_find(set, id_type, id);
+/*
+ * As ModifyWaitEventSet() that also sets the user_data field.
+ */
+void
+ModifyWaitEventSetWithData(WaitEventSet *set,
+						   WaitEventType id_type,
+						   WaitEventId id,
+						   int event_mask,
+						   void *user_data)
+{
+	WaitEventRegistration *reg = wes_id_table_find(set, id_type, id);
+	bool user_data_immutable = event_mask & WL_PRIVATE1;
 
-	if (event_mask == WL_DEL)
+	/* Remove private flag added by ModifyWaitEventSet(). */
+	event_mask &= ~WL_PRIVATE1;
+
+	/* Replace id with special descriptors. */
+	switch (id_type)
+	{
+	case WL_POSTMASTER:
+#ifndef WIN32
+		id = postmaster_alive_fds[POSTMASTER_FD_WATCH];
+#else
+		id = 0;
+#endif
+		break;
+
+	case WL_INTERNAL:
+#if defined(WAIT_USE_SELF_PIPE)
+		id = selfpipe_readfd;
+#elif defined(WAIT_USE_SIGNALFD)
+		id = signal_fd;
+#else
+		id = PGINVALID_SOCKET;
+#endif
+		break;
+	default:
+	}
+	
+	/* Handle deletion first. */
+	if (event_mask == 0)
 	{
 		if (!reg)
-			return false;
+			return;
 
 		if (set->underlying_set)
 		{
-			/* Virtual WaitEventSet.  Unlink if necessary. */
+			/* Virtual WaitEventSet. */
 			if (reg->virtual.underlying_registration)
+			{
+				WaitEventRegistration *conc_reg;
+
+				/*
+				 * If this was the last user of the virtual registrations,
+				 * then remove the underlying concrete registration.  This
+				 * eager cleanup avoids exposing platform differences when a
+				 * descriptor is closed while it is associated with an
+				 * epoll/kqueue etc.
+				 */
 				dlist_delete(&reg->virtual.virtual_registrations_node);
+				conc_reg = reg->virtual.concrete_registration;
+				if (dlist_is_empty(&conc_reg.concrete.virtual_registrations))
+					ModifyWaitEventSet(set->underlying_set, id_type, id, 0, NULL);
+			}
 		}
 		else
 		{
@@ -862,12 +959,16 @@ ModifyWaitEventSet(WaitEventSet *set,
 				virt_reg->virtual.underlying_registration = NULL;			
 			}
 		}
-		
+
+		dlist_delete(&reg->id_type_list[id_type]);
 		wes_id_table_remove(set, reg);
+
+		/* This registration slot is now free for reuse. */
 		reg->event.id_type = WL_TYPE_INVALID;
 		return true;
 	}
-	
+
+	/* Type-specific validation and adjustments. */
 	switch (id_type)
 	{
 	case WL_TYPE_SOCKET:
@@ -875,7 +976,7 @@ ModifyWaitEventSet(WaitEventSet *set,
 			(event_mask & ~WL_SOCKET_MASK))
 			elog(ERROR,
 				 "invalid event mask %d for WL_TYPE_SOCKET",
-				 event_mask);
+				 event_mask);		
 		break;
 	case WL_TYPE_POSTMASTER_DEATH:
 		if ((event_mask & (WL_POSTMASTER_DEATH | WL_EXIT_ON_PM_DEATH)) == 0 ||
@@ -890,15 +991,55 @@ ModifyWaitEventSet(WaitEventSet *set,
 			elog(ERROR,
 				 "invalid event mask %d for WL_TYPE_LATCH",
 				 event_mask);
+		{
+			Latch *latch = (Latch *) reg->event.id;
+
+			if (latch->owner_pid != MyProcPid)
+				elog(ERROR, "cannot wait on a latch owner by another process");
+		}
+		break;
+	case WL_TYPE_INTERNAL:
+		if ((event_mask & WL_INTERNAL) == 0 ||
+			(event_mask & ~WL_INTERNAL))
+			elog(ERROR,
+				 "invalid event mask %d for WL_TYPE_INTERNAL",
+				 event_mask);
 		break;
 	default:
 		elog(ERROR, "invalid event type %d", id_type);
 	}
 
-	if (!reg && (event_mask & WL_ADD) == 0)
-		return false;
-	
 	if (!reg)
+	{		
+		reg = wes_allocate_registration(set);
+
+		if (!set->underlying_set)
+		{
+			/* Concrete WaitEventSet: find special descriptors. */
+			switch (id_type)
+			{
+			case WL_INTERNAL:
+#if defined(WAIT_USE_SELF_PIPE)
+				event->fd = selfpipe_readfd;
+#elif defined(WAIT_USE_SIGNALFD)
+				event->fd = signal_fd;
+#else
+				event->fd = PGINVALID_SOCKET;
+#endif
+				break;
+
+		}
+		
+		reg->event.id_type = id_type;
+		reg->event.id = id;
+		reg->event.events = events;
+		reg->event.user_data = user_data;
+		reg->event.internal = reg;
+		dlist_push_tail(&set->id_type_list[id_type_id], &reg->id_type_node);
+		wes_id_table_insert(set, reg);
+	}
+	
+	if (
 	{
 		switch (id_type)
 		{
@@ -929,6 +1070,11 @@ ModifyWaitEventSet(WaitEventSet *set,
 			reg = &set->events[set->nevents_space / 2 + 1];
 			Assert(reg->event.id_type == WL_TYPE_INVALID);
 		}
+	}
+	else
+	{
+		if (!(events & WL_PRIVATE_FLAG1))
+			reg->event.user_data = user_data;
 	}
 }
 
@@ -1460,47 +1606,97 @@ static int
 WaitEventSetWaitBlockVirtual(WaitEventSet *set, int cur_timeout,
 							 WaitEvent *occurred_events, int nevents)
 {
+	int underlying_count;
+	int translated_count;
+	WaitEvent *translated_events;
+
 	/*
-	 * Make sure that the underlying set has every event we want to wait for.
-	 * It may have other events registered too, but we'll deal with them if
-	 * they fire.
+	 * Make sure that every virtual registration has a matching registration
+	 * in the underlying set.
 	 */
 	for (int i = 0; i < set->nevents; ++i)
 	{
 		WaitEventRegistration *virt_reg = &set->events[i];
-		WaitEventRegistration *conc_reg = virt_reg->underlying;
+		WaitEventRegistration *conc_reg = virt_reg->virtual.concrete_registration;
 
-		if (conc_reg)
+		/* Common case with repeated usage: no change needed. */
+		if (conc_reg && conc_reg->event.events == virt_reg->event.events)
+			continue;
+
+		/* Add/modify event in underlying set to match. */
+		ModifyWaitEventSet(set->underlying_set,
+						   virt_reg->event.id_type,
+						   virt_reg->event.id,
+						   virt_reg->event.events);
+
+		/* If we had to add it, create the two-way links. */
+		if (!conc_reg)
 		{
-			Assert(conc_reg->event.fd == virt_reg->event.fd);
-			Assert(conc_reg->event.latch == virt_reg->event.latch);
-			
-			/* Common case: no changes needed. */
-			if (conc_reg->event.events == virt_reg->event.events)
-				continue;
-
-			/* fd/latch present, but we need different events. */
-			ModifyWaitEventInSet(set->underlying,
-								 conc_reg->event.events,
-								 conc_reg->event.fd,
-								 conc_reg->event.latch);
+			conc_reg = wes_id_table_find(set->underlying_set, id_type, id);
+			Assert(conc_reg);
+			virt_reg->virtual.concrete_registration = conc_reg;
+			dlist_push_head(&conc_reg.concrete.virtual_registrations,
+							&virt_reg.virtual.virtual_registrations_node);
 		}
-		else
-		{
-			/* Need to create a new entry. */
-			AddWaitEventToSet(set->underlying,
-							  virt_reg->event.events,
-							  virt_reg->event.fd,
-							  virt_reg->event.latch);
-
-			/* Find the registration object. */
-XXXXXX
-		}
-
-		
-		if (set->events[i].underlying &&
-			set->events[i].underlying->events == set->events[i].events)
 	}
+
+	/* Wait using the underlying WaitEventSet. */
+	underlying_result = WaitEventSetWait(set->underlying_set,
+										 cur_timeout,
+										 occurred_event,
+										 nevents);
+	if (underlying_result <= 0)
+		return underlying_result;
+
+	/* Filter and translate events in-place in the output array. */
+	translated_count = 0;
+	translated_events = occurred_events;
+	for (int i = 0; i < underlying_result; ++i)
+	{
+		WaitEventRegistration *conc_reg;
+		WaitEventRegistration *virt_reg;
+		dlist_iter iter;
+
+		/* Find the underlying registration. */
+		conc_reg = &set->underlying_set->events[occurred_events[i].pos];
+		
+		/* Find the corresponding virtual registration, if there is one. */
+		dlist_foreach(iter, &conc_reg.concrete.virtual_registrations)
+		{
+			/*
+			 * XXX Better data structure?  This list is not expected to be
+			 * very long in practice, and we search in most-recently-added
+			 * order.
+			 */
+			virt_reg = dlist_container(WaitEventRegistration,
+									   virtual.virtual_registrations_node,
+									   iter.cur);
+			if (virt_reg.virtual.set == set)
+				break;
+			virt_reg = NULL;
+		}
+
+		/* Skip if not interesting, and lazily remove from underlying set. */
+		if (!virt_reg)
+		{
+			ModifyWaitEventSet(set->underlying_set,
+							   conc_reg->event.id_type,
+							   conc_reg->event.id,
+							   0);
+			continue;
+		}
+
+		/* Overwrite the event using this set's registration in place. */
+		translated_events->pos = virt_reg->event.pos;
+		translated_events->id_type = virt_reg->event.id_type;
+		translated_events->id = virt_reg->event.id;
+		translated_events->user_data = virt_reg->event.user_data;
+		translated_events->events = occurred_events[i].events;
+		translated_events++;
+		translated_count+++;
+	}
+
+	return translated_count;
 }
 
 #if defined(WAIT_USE_EPOLL)
@@ -2372,29 +2568,39 @@ WakeupOtherProc(int pid)
 #endif
 
 void
-AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch)
-{
-	ModifyWaitEventSet(set,
-					   WL_TYPE_LATCH,
-					   (WaitEventId) latch,
-					   WL_ADD | WL_LATCH_SET);
-}
-
-void
 ModifyWaitEventSetLatch(WaitEventSet *set, struct Latch *latch)
 {
 	ModifyWaitEventSet(set,
 					   WL_TYPE_LATCH,
 					   (WaitEventId) latch,
-					   WL_MOD | WL_LATCH_SET);
+					   latch ? WL_LATCH_SET : 0);
 }
 
 void
-DeleteWaitEventSetLatch(WaitEventSet *set)
+ModifyWaitEventSetSocket(WaitEventSet *set, pgsocket socket, int event_mask)
 {
 	ModifyWaitEventSet(set,
-					   WL_TYPE_LATCH,
-					   (WaitEventId) latch,
-					   WL_DEL);
+					   WL_TYPE_SOCKET,
+					   socket,
+					   event_mask);
+}
+
+void
+ModifyWaitEventSetSocketWithData(WaitEventSet *set,
+								 pgsocket socket,
+								 int event_mask,
+								 void *user_data)
+{
+	ModifyWaitEventSetWithData(set,
+							   WL_TYPE_SOCKET,
+							   socket,
+							   event_mask,
+							   user_data);
+}
+
+void
+ModifyWaitEventSetPostmaster(WaitEventSet *set, int event_mask)
+{
+	ModifyWaitEventSet(set, WL_TYPE_POSTMASTER, 0, event_mask, NULL);
 }
 

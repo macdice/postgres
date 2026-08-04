@@ -38,14 +38,14 @@ InitializeLatchWaitSet(void)
 
 	/* Set up the WaitEventSet used by WaitLatch(). */
 	LatchWaitSet = CreateWaitEventSet(NULL, 2);
-	AddWaitEventSetLatch(LatchWaitSet, MyLatch);
+	ModifyWaitEventSetLatch(LatchWaitSet, MyLatch);
 
 	/*
 	 * WaitLatch will modify this to WL_EXIT_ON_PM_DEATH or
 	 * WL_POSTMASTER_DEATH on each call.
 	 */
 	if (IsUnderPostmaster)
-		AddWaitEventSetPostmasterDeath(LatchWaitSet, WL_EXIT_ON_PM_DEATH);
+		ModifyWaitEventSetPostmaster(LatchWaitSet, WL_EXIT_ON_PM_DEATH);
 }
 
 /*
@@ -178,14 +178,11 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	 */
 	if (!(wakeEvents & WL_LATCH_SET))
 		latch = NULL;
-	if (latch)
-		ModifyWaitEventSetLatch(LatchWaitSet, latch);
-	else
-		DeleteWaitEventSetLatch(LatchWaitSet);
+	ModifyWaitEventSetLatch(LatchWaitSet, latch);
 	if (IsUnderPostmaster)
-		ModifyWaitEventSetPostmasterDeath(LatchWaitSet,
-										  wakeEvents & (WL_EXIT_ON_PM_DEATH |
-														WL_POSTMASTER_DEATH));
+		ModifyWaitEventSetPostmaster(LatchWaitSet,
+									 wakeEvents & (WL_EXIT_ON_PM_DEATH |
+												   WL_POSTMASTER_DEATH));
 	if (WaitEventSetWait(LatchWaitSet,
 						 (wakeEvents & WL_TIMEOUT) ? timeout : -1,
 						 &event, 1,
@@ -227,7 +224,7 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 		timeout = -1;
 
 	if (wakeEvents & WL_LATCH_SET)
-		AddWaitEventSetLatch(set, latch);
+		ModifyWaitEventSetLatch(set, latch);
 
 	/* Postmaster-managed callers must handle postmaster death somehow. */
 	Assert(!IsUnderPostmaster ||
@@ -235,9 +232,9 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 		   (wakeEvents & WL_POSTMASTER_DEATH));
 
 	if ((wakeEvents & WL_POSTMASTER_DEATH) && IsUnderPostmaster)
-		ModifyWaitEventSetPostmasterDeath(set,
-										  wakeEvents & (WL_EXIT_ON_PM_DEATH |
-														WL_POSTMASTER_DEATH));
+		ModifyWaitEventSetPostmaster(set,
+									 wakeEvents & (WL_EXIT_ON_PM_DEATH |
+												   WL_POSTMASTER_DEATH));
 
 	if (wakeEvents & WL_SOCKET_MASK)
 		ModifyWaitEventSetSocket(set, sock, wakeEvents & WL_SOCKET_MASK);
