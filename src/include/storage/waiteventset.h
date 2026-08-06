@@ -57,8 +57,7 @@
 							 WL_SOCKET_CLOSED)
 
 /* Flags for internal usage (defined here only to avoid collisions). */
-#define WL_INTERNAL_FLAG1	(1 << 31)
-#define WL_WAKE				(1 << 30)
+#define WL_INTERNAL			(1 << 31)
 
 /* Type of waitable object. */
 typedef enum
@@ -68,9 +67,9 @@ typedef enum
 	WL_TYPE_LATCH,				/* id is a pointer to Latch */
 	WL_TYPE_SOCKET,				/* id is a socket descriptor */
 	
-	WL_TYPE_WAKE,				/* internal usage only */
+	WL_TYPE_INTERNAL,			/* internal usage only */
 	
-	WL_TYPE_LAST = WL_TYPE_WAKE,
+	WL_TYPE_LAST = WL_TYPE_INTERNAL,
 } WaitEventType;
 
 /* Identifier for a waitable object. */
@@ -118,20 +117,25 @@ extern void FreeWaitEventSet(WaitEventSet *set);
 extern void FreeWaitEventSetAfterFork(WaitEventSet *set);
 
 /* Generic operations that work for all types. */
-extern bool AddWaitEventSetObject(WaitEventSet *set,
+extern int	AddWaitEventSetObject(WaitEventSet *set,
 								  WaitEventType id_type,
 								  WaitEventId id,
 								  uint32 event_mask,
 								  void *user_data);
 extern void ModifyWaitEventSetObject(WaitEventSet *set,
-									 WaitEventType id_type,
-									 WaitEventId id,
+								 WaitEventType id_type,
+								 WaitEventId id,
 									 uint32 event_mask);
+extern void ModifyWaitEventSetIndex(WaitEventSet *set,
+									int index,
+									uint32 event_mask);
 extern bool DeleteWaitEventSetObject(WaitEventSet *set,
 									 WaitEventType id_type,
 									 WaitEventId id);
-extern int	DeleteWaitEventSetObjectType(WaitEventSet *set,
-										 WaitEventType id_type);
+extern int	DeleteWaitEventSetObjects(WaitEventSet *set,
+									  WaitEventType id_type);
+extern int	DeleteWaitEventSetIndex(WaitEventSet *set,
+									int index);
 
 /* Typed variants for latches. */
 extern void AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
