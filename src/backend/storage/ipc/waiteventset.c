@@ -70,6 +70,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "port/pg_bitutils.h"
 #include "portability/instr_time.h"
 #include "postmaster/postmaster.h"
 #include "storage/fd.h"
@@ -132,31 +133,31 @@ static_assert(sizeof(WaitEventSetHandleImpl) == sizeof(WaitEventSetHandle),
 struct WaitEventRegistration
 {
 	WaitEvent event;
+
 	union
 	{
+		/* Member used in physical WaitEventSet. */
 		struct
 		{
-			/* Members used in concrete WaitEventSets.  */
-			dlist_head virtual_registrations;
-			/* In some cases the id is not the actual fd etc. */
-			union
-			{
-				int fd;
-#ifdef WIN32
-				HANDLE handle;
-#endif
-			};
-		} concrete;
+			/* List of associated logical registrations. */
+			dlist_head logical_registrations;
+		} physical;
+		
+		/* Member used in logical WaitEventSets. */
 		struct
 		{
-			/* Members used in virtual WaitEventSets. */
+			/* Set this registration belongs to. */
 			const WaitEventSet *set;
-			struct WaitEventRegistration *concrete_registration;
-			dlist_node virtual_registrations_node; 
-		} virtual;
+
+			/* Pointer to associated physical registration. */
+			struct WaitEventRegistration *physical_registration;
+
+			/* Link used in physical.logical_registrations_node. */
+			dlist_node logical_registrations_node; 
+		} logical;
 	};
 
-	dlist_node id_type_node;
+	dlist_node id_type_table_node;
 	dlist_node id_table_node;
 };
 
@@ -167,17 +168,32 @@ struct WaitEventSet
 {
 	ResourceOwner owner;
 
-	/* Underlying concrete WaitEventSet, if this is a virtual WaitEventSet. */
+	/*
+	 * Underlying physical WaitEventSet, if this is a logical WaitEventSet.
+	 * NULL if this is a physical WaitEventSet.
+	 */
 	WaitEventSet *underlying_set;
 	
-	int			nevents;		/* number of registered events */
 	int			nevents_space;	/* maximum number of events in this set */
 
 	/*
-	 * Array of words with at least nevents_space bits, for fast and compact
-	 * slot allocation.
+	 * In a physical WaitEventSet, the space needed if all events in all
+	 * associated logical WaitEventSets were needed at once.
 	 */
-	uint64_t   *in_use_bitmap;
+	int			nevents_space_logical_sum;
+
+	/*
+	 * If nevents_space has been expanded beyond the value requested at
+	 * creation time, this is non-NULL and must be freed later.
+	 */
+	void	   *expansion_mem;
+	
+	/*
+	 * Array of words with at least nevents_space bits, for fast and compact
+	 * allocation of elements in the events array.
+	 */
+	uint64_t   *events_bitmap;
+	int			events_bitmap_size;
 	
 	/*
 	 * Array, of nevents_space length, storing the definition of events this
@@ -186,16 +202,24 @@ struct WaitEventSet
 	WaitEventRegistration *events;
 
 	/*
-	 * Lists of WaitEventRegistration objects hashed by id_type + id.
-	 */	
+	 * Index of WaitEventRegistration objects hashed by id_type, id, made of
+	 * hash chains linked with id_table_node.
+	 */
 	dlist_head *id_table;
-	int id_table_buckets;
 
 	/*
-	 * Lists of WaitEventRegistration objects for each id_type.  This is
-	 * useful for certain object types that need to be checked to close races.
+	 * Lists of WaitEventRegistration objects for each id_type, linked with
+	 * id_type_node.  This is useful for quickly finding events that need to
+	 * be examined.
 	 */
 	dlist_head id_type_table[WL_TYPE_LAST + 1];
+
+	/*
+	 * Some wait object types share a single WL_TYPE_WAKE event as an
+	 * implementation detail.  If one has been created, its registration is
+	 * stored here.
+	 */
+	WaitEventRegistration *wake_event;
 
 	/*
 	 * WL_EXIT_ON_PM_DEATH is converted to WL_POSTMASTER_DEATH, but this flag
@@ -289,6 +313,43 @@ static inline void
 ResourceOwnerForgetWaitEventSet(ResourceOwner owner, WaitEventSet *set)
 {
 	ResourceOwnerForget(owner, PointerGetDatum(set), &wait_event_set_resowner_desc);
+}
+
+
+#define sizeof_member(S, M) sizeof(((S *) NULL)->M)
+
+static int
+wes_lengthof_id_table(int nevents_space)
+{
+	return pg_nextpower2_32(nevents_space);
+}
+
+static size_t
+wes_sizeof_id_table(int nevents_space)
+{
+	return sizeof_member(WaitEventSet, id_table[0]) *
+		wes_lengthof_id_table(nevents_space);
+}
+
+static size_t
+wes_sizeof_events(int nevents_space)
+{
+	return sizeof_member(WaitEventSet, events[0]) * nevents_space;
+}
+
+static size_t
+wes_lengthof_events_bitmap(int nevents_space)
+{
+	size_t bits_per_word = sizeof_member(WaitEventSet, events_bitmap[0]) * 8;
+	
+	return (nevents_space + bits_per_word - 1) / bits_per_word;
+}
+
+static size_t
+wes_sizeof_events_bitmap(int nevents_space)
+{
+	return sizeof_member(WaitEventSet, events_bitmap[0]) *
+		wes_lengthof_events_bitmap(nevents_space);
 }
 
 
@@ -414,8 +475,8 @@ InitializeWaitEventSupport(void)
 
 static void
 wes_id_table_init(WaitEventSet *set)
-{
-	for (int i = 0; i < lengthof(set->id_table); ++i)
+{	
+	for (int i = 0; i < wes_lengthof_id_table(set->nevents_space); ++i)
 		dlist_init(&set->id_table[i]);
 }
 
@@ -423,8 +484,9 @@ static dlist_head *
 wes_id_table_bucket(WaitEventSet *set, WaitEventType type, WaitEventId id)
 {
 	uint64_t hash = hash_combine64(murmurhash64(type), murmurhash64(id));
+	size_t	buckets = wes_lengthof_id_table(set->nevents_space);
 
-	return &set->id_table[hash % lengthof(set->id_table)];
+	return &set->id_table[hash & (buckets - 1)];
 }
 
 static WaitEventRegistration *
@@ -447,6 +509,7 @@ wes_id_table_find(WaitEventSet *set, WaitEventType type, WaitEventId id)
 static void
 wes_id_table_insert(WaitEventSet *set, WaitEventRegistration *reg)
 {
+	Assert(reg->event.id_type != WL_TYPE_INVALID);
 	Assert(wes_id_table_find(set, reg->event.id_type, reg->event.id) == NULL);
 	dlist_push_tail(wes_id_table_bucket(set, reg->event.id_type, reg->event.id),
 					&reg->id_table_node);
@@ -459,8 +522,108 @@ wes_id_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
 	dlist_delete(&reg->id_table_node);
 }
 
+static void
+wes_id_type_table_insert(WaitEventSet *set, WaitEventRegistration *reg)
+{
+	Assert(reg->event.id_type != WL_TYPE_INVALID);
+	dlist_push_tail(&set->id_type_table[reg->event.id_type],
+					&reg->id_type_table_node);
+}
+
+static void
+wes_id_type_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
+{
+	dlist_delete(&reg->id_type_table_node);
+}
+
+static bool
+wes_is_physical(WaitEventSet *set)
+{
+	return set->underlying_set == NULL;
+}
+
+static bool
+wes_is_logical(WaitEventSet *set)
+{
+	return !wes_is_physical(set);
+}
+
+static void
+wes_bind_logical_registration(WaitEventRegistration *logical,
+							  WaitEventRegistration *physical)
+{
+	Assert(logical->logical.physical_registration == NULL);
+	
+	dlist_push_tail(&physical->physical.logical_registrations,
+					&logical->logical.logical_registrations_node);
+	logical->logical.physical_registration = physical;
+}
+
+static bool
+wes_has_logical_registrations(WaitEventRegistration *physical)
+{
+	return !dlist_is_empty(&physical->physical.logical_registrations);
+}
+
+static bool
+wes_logical_registration_is_bound(WaitEventRegistration *logical)
+{
+	return logical->logical.physical_registration;
+}
+
+static bool
+wes_unbind_logical_registration(WaitEventRegistration *logical)
+{
+	WaitEventRegistration *physical;
+	
+	physical = logical->logical.physical_registration;
+
+	dlist_delete(&logical->logical.logical_registrations_node);
+	logical->logical.physical_registration = NULL;
+	
+	return !wes_has_logical_registrations(physical);
+}
+
+static void
+wes_unbind_physical_registration(WaitEventRegistration *physical)
+{
+	dlist_head *list = &physical->physical.logical_registrations;
+
+	while (!dlist_is_empty(list))
+	{
+		WaitEventRegistration *logical;
+
+		logical = dlist_container(WaitEventRegistration,
+								  logical.logical_registrations_node,
+								  dlist_pop_head_node(list));
+		wes_unbind_logical_registration(logical);
+	}
+}
+
+static void
+wes_rebind_logical_registrations(WaitEventRegistration *old_physical,
+								 WaitEventRegistration *new_physical)
+{
+	dlist_head *list = &old_physical->physical.logical_registrations;
+	
+	while (!dlist_is_empty(list))
+	{
+		WaitEventRegistration *log_reg;
+
+		log_reg = dlist_container(WaitEventRegistration,
+								  logical.logical_registrations_node,
+								  dlist_pop_head_node(list));
+		
+		Assert(log_reg->logical.physical_registration == old_physical);
+
+		wes_unbind_logical_registration(log_reg);
+		wes_bind_logical_registration(log_reg, new_physical);
+	}
+}
+
 /*
- * Create a WaitEventSet with space for nevents different events to wait for.
+ * Create a physical WaitEventSet using the selected operating system
+ * facility.
  *
  * These events can then be efficiently waited upon together, using
  * WaitEventSetWait().
@@ -469,7 +632,7 @@ wes_id_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
  * lifetime.
  */
 WaitEventSet *
-CreateConcreteWaitEventSet(ResourceOwner resowner, int nevents)
+CreatePhysicalWaitEventSet(ResourceOwner resowner, int nevents)
 {
 	WaitEventSet *set;
 	char	   *data;
@@ -520,7 +683,6 @@ CreateConcreteWaitEventSet(ResourceOwner resowner, int nevents)
 	data += MAXALIGN(sizeof(HANDLE) * nevents);
 #endif
 
-	set->latch = NULL;
 	set->nevents_space = nevents;
 	set->exit_on_postmaster_death = false;
 	wes_id_table_init(set);
@@ -576,23 +738,179 @@ CreateConcreteWaitEventSet(ResourceOwner resowner, int nevents)
 	return set;
 }
 
+static int
+wes_count_used(WaitEventSet *set)
+{
+	int count = 0;
+	for (int i = 0; i < wes_lengthof_events_bitmap(i); ++i)
+		count += pg_popcount64(set->events_bitmap[i]);
+	return count;
+}
+
+static bool
+wes_is_used(WaitEventSet *set, WaitEventRegistration *reg)
+{
+	int pos = reg - set->events;
+
+	return set->events_bitmap[pos / 64] & (UINT64_C(1) << (pos % 64));
+}
+
+static void
+wes_set_used(WaitEventSet *set, WaitEventRegistration *reg)
+{
+	int pos = reg - set->events;
+
+	Assert(reg->event.id_type != WL_TYPE_INVALID);
+	Assert(!wes_is_used(set, reg));
+	set->events_bitmap[pos / 64] |= UINT64_C(1) << (pos % 64);
+}
+
+static void
+wes_clear_used(WaitEventSet *set, WaitEventRegistration *reg)	
+{
+	int pos = reg - set->events;
+
+	Assert(reg->event.id_type == WL_TYPE_INVALID);
+	Assert(wes_is_used(set, reg));
+	set->events_bitmap[pos / 64] &= ~UINT64_C(1) << (pos % 64);
+}
+					
+static WaitEventRegistration *
+wes_find_unused(WaitEventSet *set)
+{
+	int words = wes_lengthof_events_bitmap(set->nevents_space);
+	int pos = -1;
+
+	for (int i = 0; i < words; ++i)
+	{
+		uint64 word = ~set->events_bitmap[i];
+
+		if (word != 0)
+		{
+			pos = i * 64 + pg_rightmost_one_pos64(word);
+			if (pos >= set->nevents_space)
+				pos = -1;
+			break;
+		}
+	}
+
+	if (pos == -1)
+		return NULL;
+
+	Assert(set->events[pos].event.id_type == WL_TYPE_INVALID);
+	return &set->events[pos];
+}
+
+void
+ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
+{
+	char	   *data;
+	size_t		sz = 0;
+	dlist_head *new_id_table;
+	uint64_t   *new_events_bitmap;
+	WaitEventRegistration *new_events;
+
+	if (set->nevents_space >= nevents_space)
+		return;
+
+	sz += MAXALIGN(wes_sizeof_id_table(nevents_space));
+	sz += MAXALIGN(wes_sizeof_events_bitmap(nevents_space));
+	sz += MAXALIGN(wes_sizeof_events(nevents_space));
+
+	data = (char *) MemoryContextAllocZero(TopMemoryContext, sz);
+
+	new_id_table = (dlist_head *) data;
+	data += MAXALIGN(wes_sizeof_id_table(nevents_space));
+
+	new_events_bitmap = (uint64_t *) data;
+	data += MAXALIGN(wes_sizeof_events_bitmap(nevents_space));
+
+	new_events = (WaitEventRegistration *) data;
+	data += MAXALIGN(wes_sizeof_events(nevents_space));
+
+	for (int i = 0; i < set->nevents_space; ++i)
+	{
+		WaitEventRegistration *src = &set->events[i];
+		WaitEventRegistration *dst = &new_events[i];
+
+		if (src->event.id_type != WL_TYPE_INVALID)
+		{
+			WaitEventRegistration *phys_reg = NULL;
+			
+			Assert(wes_is_used(set, src));
+
+			/* Remove from indexes.*/
+			wes_id_type_table_remove(set, src);
+			wes_id_table_remove(set, src);
+
+			if (wes_is_logical(set))
+			{
+				phys_reg = src->logical.physical_registration;
+				if (phys_reg)
+					wes_unbind_logical_registration(src);
+			}
+
+			*dst = *src;
+
+			if (wes_is_logical(set))
+				if (phys_reg)
+					wes_bind_logical_registration(dst, phys_reg);
+
+			if (wes_is_physical(set))
+			{
+				dlist_init(&dst->physical.logical_registrations);
+				wes_rebind_logical_registrations(src, dst);
+			}
+		}
+		else
+		{
+			Assert(!wes_is_used(set, src));
+		}
+	}
+
+	/* The indexes have been cleaned out. */
+	for (int i = 0; i < lengthof(set->id_type_table); ++i)
+		Assert(dlist_is_empty(&set->id_type_table[i]));
+	for (int i = 0; i < wes_lengthof_id_table(set->nevents_space); ++i)
+		Assert(dlist_is_empty(&set->id_table[i]));
+
+	/* Free previous expansion memory if necessary. */
+	if (set->expansion_mem)
+		pfree(set->expansion_mem);
+
+	/* Switch the new memory into place. */
+	set->expansion_mem = data;
+	set->id_table = new_id_table;
+	set->events_bitmap = new_events_bitmap;
+	set->events = new_events;
+
+	/* Rebuild the indexes and bitmap. */
+	for (int i = 0; i < set->nevents_space; ++i)
+	{
+		WaitEventRegistration *reg = &set->events[i];
+
+		if (reg->event.id_type != WL_TYPE_INVALID)
+		{
+			wes_id_type_table_insert(set, reg);
+			wes_id_table_insert(set, reg);
+			wes_set_used(set, reg);
+		}
+	}
+
+	/* Fix up the wake_event pointer, if we have one. */
+	set->wake_event = wes_id_table_find(set, WL_TYPE_WAKE, 0);
+}
+
 /*
- * Create a lightweight virtual WaitEventSet that uses an existing underlying
- * WaitEventSet for interacting with the operating system.  This allows a
- * single per-backend WaitEventSet object to be used to support short-lived
- * temporary WaitEventSet objects with the same API.
+ * Create a lightweight "logical" WaitEventSet that shares an underlying
+ * physical WaitEventSet.
  *
- * The underlying WaitEventSet should normally not be used directly if there
- * are active virtual WaitEventSets, since they modify it as required during
- * their operations making it difficult to use directly.
- *
- * This avoids wasting kernel resources, and restrictions on putting a socket
- * into more than one WaitEventSet on Windows.
- *
- * The flags argument is reserved for future use.
+ * The physical WaitEventSet should normally not be used directly if there are
+ * active logical WaitEventSets, since they modify it as required during their
+ * operations making it difficult to use directly.
  */
 WaitEventSet *
-CreateVirtualWaitEventSet(ResourceOwner resowner,
+CreateLogicalWaitEventSet(ResourceOwner resowner,
 						  WaitEventSet *underlying_set,
 						  int nevents)
 {
@@ -600,28 +918,38 @@ CreateVirtualWaitEventSet(ResourceOwner resowner,
 	char	   *data;
 	size_t		sz = 0;
 
-	sz += MAXALIGN(sizeof(WaitEventSet));
-	sz += MAXALIGN(sizeof(WaitEvent) * nevents);
-
 	if (!underlying_set || underlying_set->underlying_set)
-		elog(ERROR, "expected non-virtual underlying WaitEventSet");
+		elog(ERROR, "underlying physical WaitEventSet required");	
+
+	/*
+	 * Reserve space in the physical WaitEventSet up front, so we can promise
+	 * not to run out of memory when adding events up to that number.
+	 */
+	underlying_set->nevents_space_logical_sum += nevents;
+	ReserveWaitEventSetSpace(underlying_set,
+							 underlying_set->nevents_space_logical_sum);
 
 	if (resowner != NULL)
 		ResourceOwnerEnlarge(resowner);
 
 	sz += MAXALIGN(sizeof(WaitEventSet));
-	sz += MAXALIGN(sizeof(WaitEventRegistration) * nevents);
+	sz += MAXALIGN(wes_sizeof_id_table(nevents));
+	sz += MAXALIGN(wes_sizeof_events_bitmap(nevents));
+	sz += MAXALIGN(wes_sizeof_events(nevents));
 
 	data = (char *) MemoryContextAllocZero(TopMemoryContext, sz);
 
 	set = (WaitEventSet *) data;
 	data += MAXALIGN(sizeof(WaitEventSet));
 
-	if (resowner != NULL)
-	{
-		ResourceOwnerRememberWaitEventSet(resowner, set);
-		set->owner = resowner;
-	}
+	set->id_table = (dlist_head *) data;
+	data += MAXALIGN(wes_sizeof_id_table(nevents));
+
+	set->events_bitmap = (uint64_t *) data;
+	data += MAXALIGN(wes_sizeof_events_bitmap(nevents));
+
+	set->events = (WaitEventRegistration *) data;
+	data += MAXALIGN(wes_sizeof_events(nevents));
 
 	set->nevents_space = nevents;
 	set->underlying_set = underlying_set;
@@ -630,18 +958,21 @@ CreateVirtualWaitEventSet(ResourceOwner resowner,
 	return set;
 }
 
-static WaitEventSet *backend_wait_event_set;
+static WaitEventSet *backend_physical_wait_event_set;
 
 /*
- * Create a virtual WaitEventSet using the per-backend WaitEventSet as the
- * underlying implementation.
+ * Create a logical WaitEventSet using the per-backend WaitEventSet as the
+ * underlying implementation.  It is created on first usage.
  */
 WaitEventSet *
 CreateWaitEventSet(ResourceOwner resowner, int nevents)
 {
-	if (backend_wait_event_set == NULL)
-		backend_wait_event_set = CreateConcreteWaitEventSet(NULL, nevents * 2);
-	return CreateVirtualWaitEventSet(resowner, backend_wait_event_set, nevents);
+	if (backend_physical_wait_event_set == NULL)
+		backend_physical_wait_event_set = CreatePhysicalWaitEventSet(NULL, 1);
+	
+	return CreateLogicalWaitEventSet(resowner,
+									 backend_physical_wait_event_set,
+									 nevents);
 }
 
 /*
@@ -662,16 +993,23 @@ FreeWaitEventSet(WaitEventSet *set)
 		set->owner = NULL;
 	}
 
+	/* Logical WaitEventSet: just unlink everything and free memory. */
 	if (set->underlying_set)
 	{
-		for (int i = 0; i < set->nevents; ++i)
+		set->underlying_set->nevents_space_logical_sum -= set->nevents_space;
+		for (int i = 0; i < set->nevents_space; ++i)
 			if (set->events[i].event.id_type != WL_TYPE_INVALID &&
-				set->events[i].virtual.concrete_registration)
-				dlist_delete(&set->events[i].virtual.virtual_registrations_node);
-
+				set->events[i].logical.physical_registration)
+				dlist_delete(&set->events[i].logical.logical_registrations_node);
+		if (set->expansion_mem)
+			pfree(set->expansion_mem);
 		pfree(set);
 		return;
 	}
+
+	if (set->nevents_space_logical_sum > 0)
+		elog(ERROR,
+			 "cannot free physical WaitEventSet that has dependent logical WaitEventSet");
 	
 #if defined(WAIT_USE_EPOLL)
 	close(set->epoll_fd);
@@ -701,6 +1039,8 @@ FreeWaitEventSet(WaitEventSet *set)
 	}
 #endif
 
+	if (set->expansion_mem)
+		pfree(set->expansion_mem);
 	pfree(set);
 }
 
@@ -835,56 +1175,12 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 }
 #endif
 
-/*
- * Add, modify or remove a registered waitable object (socket etc).
- *
- * If event_mask is non-zero, the object is added if not already present, and
- * the set of wait conditions is adjusted.
- *
- * If event_mask is zero, the object is removed if present.  This must be done
- * explicitly before closing descriptors, to avoid dangling references and
- * platform differences.
- *
- * An error is raised if event_mask is not valid for id_type, or if underlying
- * system calls fail.
- */
-void
-ModifyWaitEventSet(WaitEventSet *set,
-				   WaitEventType id_type,
-				   WaitEventId id,
-				   int event_mask)
+static WaitEventId
+wes_get_special_id(WaitEventType id_type, WaitEventId id)
 {
-	/*
-	 * The private flag prevents user_data pointer from being overwritten if
-	 * the event exists already.
-	 */
-	ModifyWaitEventSetWithData(set,
-							   id_type,
-							   id,
-							   event_mask | WL_PRIVATE1,
-							   NULL);
-}
-
-/*
- * As ModifyWaitEventSet() that also sets the user_data field.
- */
-void
-ModifyWaitEventSetWithData(WaitEventSet *set,
-						   WaitEventType id_type,
-						   WaitEventId id,
-						   int event_mask,
-						   void *user_data)
-{
-	WaitEventRegistration *reg = wes_id_table_find(set, id_type, id);
-	bool user_data_immutable = event_mask & WL_PRIVATE1;
-
-	/* Remove private flag added by ModifyWaitEventSet(). */
-	event_mask &= ~WL_PRIVATE1;
-
-	/* Replace id with special descriptors. */
 	switch (id_type)
 	{
-	case WL_POSTMASTER:
+	case WL_TYPE_POSTMASTER:
 #ifndef WIN32
 		id = postmaster_alive_fds[POSTMASTER_FD_WATCH];
 #else
@@ -892,7 +1188,7 @@ ModifyWaitEventSetWithData(WaitEventSet *set,
 #endif
 		break;
 
-	case WL_INTERNAL:
+	case WL_TYPE_WAKE:
 #if defined(WAIT_USE_SELF_PIPE)
 		id = selfpipe_readfd;
 #elif defined(WAIT_USE_SIGNALFD)
@@ -902,73 +1198,17 @@ ModifyWaitEventSetWithData(WaitEventSet *set,
 #endif
 		break;
 	default:
-	}
-	
-	/* Handle deletion first. */
-	if (event_mask == 0)
-	{
-		if (!reg)
-			return;
-
-		if (set->underlying_set)
-		{
-			/* Virtual WaitEventSet. */
-			if (reg->virtual.underlying_registration)
-			{
-				WaitEventRegistration *conc_reg;
-
-				/*
-				 * If this was the last user of the virtual registrations,
-				 * then remove the underlying concrete registration.  This
-				 * eager cleanup avoids exposing platform differences when a
-				 * descriptor is closed while it is associated with an
-				 * epoll/kqueue etc.
-				 */
-				dlist_delete(&reg->virtual.virtual_registrations_node);
-				conc_reg = reg->virtual.concrete_registration;
-				if (dlist_is_empty(&conc_reg.concrete.virtual_registrations))
-					ModifyWaitEventSet(set->underlying_set, id_type, id, 0, NULL);
-			}
-		}
-		else
-		{
-			dlist_iter iter;
-			WaitEvent del_event = reg->event;
-
-			del_event.events = 0;
-			
-			/* XXX todo */
-#if defined(WAIT_USE_EPOLL)
-			WaitEventAdjustEpoll(set, &del_event, EPOLL_CTL_DEL);
-#elif defined(WAIT_USE_KQUEUE)
-			WaitEventAdjustKqueue(set, &del_event, reg->event.events);
-#elif defined(WAIT_USE_POLL)
-			WaitEventAdjustPoll(set, &del_event);
-#elif defined(WAIT_USE_WIN32)
-			WaitEventAdjustWin32(set, &del_event);
-#endif
-		
-			/* Unlink any virtual WaitEventSet registrations. */
-			dlist_foreach(iter, &reg->concrete.virtual_registrations)
-			{
-				WaitEventRegistration *virt_reg;
-				
-				virt_reg = dlist_container(WaitEventRegistration,
-										   virtual.virtual_registrations_node,
-										   iter.cur);
-				virt_reg->virtual.underlying_registration = NULL;			
-			}
-		}
-
-		dlist_delete(&reg->id_type_list[id_type]);
-		wes_id_table_remove(set, reg);
-
-		/* This registration slot is now free for reuse. */
-		reg->event.id_type = WL_TYPE_INVALID;
-		return true;
+		break;
 	}
 
-	/* Type-specific validation and adjustments. */
+	return id;
+}
+
+static void
+wes_validate_id_type_mask(WaitEventType id_type,
+						  WaitEventId id,
+						  uint32 event_mask)
+{
 	switch (id_type)
 	{
 	case WL_TYPE_SOCKET:
@@ -978,7 +1218,7 @@ ModifyWaitEventSetWithData(WaitEventSet *set,
 				 "invalid event mask %d for WL_TYPE_SOCKET",
 				 event_mask);		
 		break;
-	case WL_TYPE_POSTMASTER_DEATH:
+	case WL_TYPE_POSTMASTER:
 		if ((event_mask & (WL_POSTMASTER_DEATH | WL_EXIT_ON_PM_DEATH)) == 0 ||
 			(event_mask & ~(WL_POSTMASTER_DEATH | WL_EXIT_ON_PM_DEATH)))
 			elog(ERROR,
@@ -991,176 +1231,256 @@ ModifyWaitEventSetWithData(WaitEventSet *set,
 			elog(ERROR,
 				 "invalid event mask %d for WL_TYPE_LATCH",
 				 event_mask);
+		if (id == 0)
+			elog(ERROR,
+				 "invalid id for WL_TYPE_LATCH");
 		{
-			Latch *latch = (Latch *) reg->event.id;
+			Latch *latch = (Latch *) id;
 
 			if (latch->owner_pid != MyProcPid)
-				elog(ERROR, "cannot wait on a latch owner by another process");
+				elog(ERROR, "cannot wait on a latch owned by another process");
 		}
 		break;
-	case WL_TYPE_INTERNAL:
-		if ((event_mask & WL_INTERNAL) == 0 ||
-			(event_mask & ~WL_INTERNAL))
+	case WL_TYPE_WAKE:
+		if ((event_mask & WL_WAKE) == 0 ||
+			(event_mask & ~WL_WAKE))
 			elog(ERROR,
-				 "invalid event mask %d for WL_TYPE_INTERNAL",
+				 "invalid event mask %d for WL_TYPE_WAKE",
 				 event_mask);
 		break;
 	default:
 		elog(ERROR, "invalid event type %d", id_type);
-	}
+	}	
+}
 
-	if (!reg)
-	{		
-		reg = wes_allocate_registration(set);
-
-		if (!set->underlying_set)
-		{
-			/* Concrete WaitEventSet: find special descriptors. */
-			switch (id_type)
-			{
-			case WL_INTERNAL:
-#if defined(WAIT_USE_SELF_PIPE)
-				event->fd = selfpipe_readfd;
-#elif defined(WAIT_USE_SIGNALFD)
-				event->fd = signal_fd;
-#else
-				event->fd = PGINVALID_SOCKET;
-#endif
-				break;
-
-		}
-		
-		reg->event.id_type = id_type;
-		reg->event.id = id;
-		reg->event.events = events;
-		reg->event.user_data = user_data;
-		reg->event.internal = reg;
-		dlist_push_tail(&set->id_type_list[id_type_id], &reg->id_type_node);
-		wes_id_table_insert(set, reg);
-	}
-	
-	if (
+static bool
+wes_id_type_uses_wake_event(WaitEventType id_type)
+{
+	switch (id_type)
 	{
-		switch (id_type)
-		{
-		case WL_TYPE_LATCH:
-		{
-			Latch *latch = (Latch *) reg->event.id;
-			if (latch->owner_pid != MyProcPid)
-				elog(ERROR, "cannot wait on a latch owner by another process");
-			if (set->latch)
-				elog(ERROR, "cannot wait on more than one latch");
-		}
-		default:
-			break;
-		}
+	case WL_TYPE_LATCH:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void
+wes_ensure_wake_event(WaitEventSet *set)
+{
+	/* Logical WaitEventSets don't need a WL_TYPE_WAKE event. */
+	if (!wes_is_physical(set))
+		return;
+
+	/* Already got one? */
+	if (set->wake_event)
+		return;
+
+	/* Create it and remember where it is. */
+	AddWaitEventSetObject(set, WL_TYPE_WAKE, 0, WL_WAKE, NULL);
+	set->wake_event = wes_id_table_find(set, WL_TYPE_WAKE, WL_WAKE);
+	Assert(set->wake_event);
+}
+
+static bool
+wes_add_or_modify(WaitEventSet *set,
+				  WaitEventType id_type,
+				  WaitEventId id,
+				  uint32 event_mask,
+				  void *user_data)
+{
+	bool add = event_mask & WL_INTERNAL_FLAG1;
+	WaitEventRegistration *reg;
+	WaitEvent new_event = {0};
+
+	event_mask &= ~WL_INTERNAL_FLAG1;
 	
-		for (int i = 0; i < set->nevents_space; ++i)
+	wes_validate_id_type_mask(id_type, id, event_mask);
+
+	id = wes_get_special_id(id_type, id);
+	reg = wes_id_table_find(set, id_type, id);
+
+	/* Raise an error if modifying something unknown. */
+	if (!add && !reg)
+		elog(ERROR,
+			 "id %" PRIdPTR ", type %d not in WaitEventSet", id, id_type);
+
+	/* Already exists?  Silently modify instead. */
+	if (add && reg)
+		add = false;
+
+	if (add)
+	{
+		if (wes_id_type_uses_wake_event(id_type))
+			wes_ensure_wake_event(set);
+
+		reg = wes_find_unused(set);
+		if (reg == NULL)
 		{
-			if (set->events[i].event.id_type == WL_TYPE_INVALID)
-			{
-				reg = &set->events[i];
-				break;
-			}
+			ReserveWaitEventSetSpace(set, set->nevents_space * 2);
+			reg = wes_find_unused(set);
+			Assert(reg);
 		}
-		if (!reg)
+
+		new_event.id_type = id_type;
+		new_event.id = id;
+		new_event.events = event_mask;
+		new_event.user_data = user_data;
+		new_event.pos = reg - set->events;
+	}
+	else
+	{		
+		new_event = reg->event;
+		new_event.events = event_mask;
+	}
+
+	if (wes_is_physical(set) && !wes_id_type_uses_wake_event(id_type))
+	{		
+#if defined(WAIT_USE_EPOLL)
+		WaitEventAdjustEpoll(set,
+							 &new_event,
+							 add ? EPOLL_CTL_ADD : EPOLL_CTL_MOD);
+#elif defined(WAIT_USE_KQUEUE)
+		WaitEventAdjustKqueue(set,
+							  &new_event,
+							  add ? 0 : reg->event.events);
+#elif defined(WAIT_USE_POLL)
+		WaitEventAdjustPoll(set, &new_event);
+#elif defined(WAIT_USE_WIN32)
+		WaitEventAdjustWin32(set, &new_event);
+#endif		
+	}
+
+	/* Special flag for pseudo-event. */
+	if (id_type == WL_TYPE_POSTMASTER)
+		set->exit_on_postmaster_death = event_mask & WL_EXIT_ON_PM_DEATH;
+	
+	/* Commit changes to memory now that the system call has succeeded. */
+	reg->event = new_event;
+	if (add)
+	{
+		wes_id_table_insert(set, reg);
+		wes_id_type_table_insert(set, reg);
+		wes_set_used(set, reg);
+	}
+
+	return add;
+}
+
+/*
+ * Add a waitable object to a WaitEventSet.  Returns true if the object was
+ * added.  If it was already present, the event mask is changed and false is
+ * returned.
+ */
+bool
+AddWaitEventSetObject(WaitEventSet *set,
+					  WaitEventType id_type,
+					  WaitEventId id,
+					  uint32 event_mask,
+					  void *user_data)
+{
+	return wes_add_or_modify(set,
+							 id_type,
+							 id,
+							 event_mask | WL_INTERNAL_FLAG1,
+							 user_data);
+}
+
+/*
+ * Modify the event mask for an object in a WaitEventSet.  An error is raised
+ * if it is not present.
+ */
+void
+ModifyWaitEventSetObject(WaitEventSet *set,
+						 WaitEventType id_type,
+						 WaitEventId id,
+						 uint32 event_mask)
+{
+	wes_add_or_modify(set, id_type, id, event_mask, NULL);
+}
+
+/*
+ * Remove a waitable object from a WaitEventSet.  Returns true if it was found
+ * and has been removed, and false if it wasn't present.
+ */
+bool
+DeleteWaitEventSetObject(WaitEventSet *set,
+						 WaitEventType id_type,
+						 WaitEventId id)
+{
+	WaitEventRegistration *reg;
+
+	id = wes_get_special_id(id_type, id);
+	reg = wes_id_table_find(set, id_type, id);
+
+	if (reg == NULL)
+		return false;
+
+	if (wes_is_logical(set))
+	{
+		if (wes_logical_registration_is_bound(reg))
 		{
-			if (!ReserveWaitEventSetSpace(set, set->nevents_space))
-				elog(ERROR, "out of memory");
-			reg = &set->events[set->nevents_space / 2 + 1];
-			Assert(reg->event.id_type == WL_TYPE_INVALID);
+			/*
+			 * This returns true when the underlying physical registration has
+			 * no remaining bindings.  We don't want to leave stale
+			 * descriptors in it (the user might close them), so we delete it
+			 * in that case.
+			 */
+			if (wes_unbind_logical_registration(reg))
+				DeleteWaitEventSetObject(set->underlying_set, id_type, id);
 		}
 	}
 	else
 	{
-		if (!(events & WL_PRIVATE_FLAG1))
-			reg->event.user_data = user_data;
+		WaitEvent del_event = reg->event;
+
+#if defined(WAIT_USE_EPOLL)
+		WaitEventAdjustEpoll(set, &del_event, EPOLL_CTL_DEL);
+#elif defined(WAIT_USE_KQUEUE)
+		del_event.events = 0;
+		WaitEventAdjustKqueue(set, &del_event, reg->event.events);
+#elif defined(WAIT_USE_POLL)
+		WaitEventAdjustPoll(set, &del_event);
+#elif defined(WAIT_USE_WIN32)
+		WaitEventAdjustWin32(set, &del_event);
+#endif
+
+		/*
+		 * Remove bindings to any logical registations.  If there are any, the
+		 * next logical WaitEventSet that needs this will add it again.
+		 */
+		wes_unbind_physical_registration(reg);
 	}
+
+	/* Remove from indexes and mark entry as free for reuse. */
+	wes_id_type_table_remove(set, reg);
+	wes_id_table_remove(set, reg);		
+	reg->event.id_type = WL_TYPE_INVALID;
+	wes_clear_used(set, reg);
+
+	return true;
 }
 
 /*
- * Change the event mask and, in the WL_LATCH_SET case, the latch associated
- * with the WaitEvent.  The latch may be changed to NULL to disable the latch
- * temporarily, and then set back to a latch later.
- *
- * 'pos' is the id returned by AddWaitEventToSet.
+ * Delete all objects of a given type.
  */
-void
-ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
+int
+DeleteWaitEventSetObjectType(WaitEventSet *set, WaitEventType id_type)
 {
-	WaitEvent  *event;
-#if defined(WAIT_USE_KQUEUE)
-	int			old_events;
-#endif
-
-	Assert(pos < set->nevents);
-
-	event = &set->events[pos];
-#if defined(WAIT_USE_KQUEUE)
-	old_events = event->events;
-#endif
-
-	/*
-	 * Allow switching between WL_POSTMASTER_DEATH and WL_EXIT_ON_PM_DEATH.
-	 *
-	 * Note that because WL_EXIT_ON_PM_DEATH is mapped to WL_POSTMASTER_DEATH
-	 * in AddWaitEventToSet(), this needs to be checked before the fast-path
-	 * below that checks if 'events' has changed.
-	 */
-	if (event->events == WL_POSTMASTER_DEATH)
+	int count = 0;
+	dlist_head *list = &set->id_type_table[id_type];
+	
+	while (!dlist_is_empty(list))
 	{
-		if (events != WL_POSTMASTER_DEATH && events != WL_EXIT_ON_PM_DEATH)
-			elog(ERROR, "cannot remove postmaster death event");
-		set->exit_on_postmaster_death = ((events & WL_EXIT_ON_PM_DEATH) != 0);
-		return;
+		WaitEventRegistration *reg;
+		
+		reg = dlist_container(WaitEventRegistration,
+							  logical.logical_registrations_node,
+							  dlist_pop_head_node(list));	   
+		DeleteWaitEventSetObject(set, reg->event.id_type, reg->event.id);
+		count++;
 	}
-
-	/*
-	 * If neither the event mask nor the associated latch changes, return
-	 * early. That's an important optimization for some sockets, where
-	 * ModifyWaitEvent is frequently used to switch from waiting for reads to
-	 * waiting on writes.
-	 */
-	if (events == event->events &&
-		(!(event->events & WL_LATCH_SET) || set->latch == latch))
-		return;
-
-	if (event->events & WL_LATCH_SET && events != event->events)
-		elog(ERROR, "cannot modify latch event");
-
-	/* FIXME: validate event mask */
-	event->events = events;
-
-	if (events == WL_LATCH_SET)
-	{
-		if (latch && latch->owner_pid != MyProcPid)
-			elog(ERROR, "cannot wait on a latch owned by another process");
-		set->latch = latch;
-
-		/*
-		 * On Unix, we don't need to modify the kernel object because the
-		 * underlying pipe (if there is one) is the same for all latches so we
-		 * can return immediately.  On Windows, we need to update our array of
-		 * handles, but we leave the old one in place and tolerate spurious
-		 * wakeups if the latch is disabled.
-		 */
-#if defined(WAIT_USE_WIN32)
-		if (!latch)
-			return;
-#else
-		return;
-#endif
-	}
-
-#if defined(WAIT_USE_EPOLL)
-	WaitEventAdjustEpoll(set, event, EPOLL_CTL_MOD);
-#elif defined(WAIT_USE_KQUEUE)
-	WaitEventAdjustKqueue(set, event, old_events);
-#elif defined(WAIT_USE_POLL)
-	WaitEventAdjustPoll(set, event);
-#elif defined(WAIT_USE_WIN32)
-	WaitEventAdjustWin32(set, event);
-#endif
+	return count;
 }
 
 #if defined(WAIT_USE_EPOLL)
@@ -1271,7 +1591,7 @@ static inline void
 WaitEventAdjustKqueueAdd(struct kevent *k_ev, int filter, int action,
 						 WaitEvent *event)
 {
-	k_ev->ident = event->fd;
+	k_ev->ident = event->id;
 	k_ev->filter = filter;
 	k_ev->flags = action;
 	k_ev->fflags = 0;
@@ -1320,7 +1640,7 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 	if (old_events == event->events)
 		return;
 
-	Assert(event->events != WL_LATCH_SET || set->latch != NULL);
+	Assert(event->events != WL_WAKE || set->wake_event != NULL);
 	Assert(event->events == WL_LATCH_SET ||
 		   event->events == WL_POSTMASTER_DEATH ||
 		   (event->events & (WL_SOCKET_READABLE |
@@ -2413,6 +2733,7 @@ WaitEventSetCanReportClosed(void)
 int
 GetNumRegisteredWaitEvents(WaitEventSet *set)
 {
+	
 	return set->nevents;
 }
 
@@ -2566,6 +2887,25 @@ WakeupOtherProc(int pid)
 	kill(pid, SIGURG);
 }
 #endif
+
+void
+AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch)
+{
+	AddWaitEventSetObject(set, WL_TYPE_LATCH, (WaitEventId) latch,
+						  WL_LATCH_SET);
+}
+
+void
+DeleteWaitEventSetLatch(WaitEventSet *set, struct Latch *latch)
+{
+	DeleteWaitEventSet(set, WL_TYPE_LATCH, (WaitEventId) latch);
+}
+
+void
+DeleteWaitEventSetLatches(WaitEventSet *set)
+{
+	DeleteWaitEventSetType(set, WL_TYPE_LATCH);
+}
 
 void
 ModifyWaitEventSetLatch(WaitEventSet *set, struct Latch *latch)
