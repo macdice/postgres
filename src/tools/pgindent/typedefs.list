@@ -3423,8 +3423,11 @@ WaitEventBuffer
 WaitEventClient
 WaitEventCustomEntryByInfo
 WaitEventCustomEntryByName
+WaitEventId
+WaitEventIndex
 WaitEventIO
 WaitEventIPC
+WaitEventRegistration
 WaitEventSet
 WaitEventTimeout
 WaitLSNProcInfo
