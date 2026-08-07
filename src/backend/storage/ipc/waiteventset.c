@@ -215,8 +215,9 @@ struct WaitEventSet
 	WaitEventRegistration *events;
 
 	/*
-	 * Hash table of WaitEventRegistration objects by {type, id} using of hash
-	 * chains linked with id_table_node, with wes_lengthof_id_table() buckets.
+	 * Hash table of WaitEventRegistration objects by {type, id} using hash
+	 * chains linked with id_table_node.  There are wes_lengthof_id_table()
+	 * buckets.
 	 */
 	dlist_head *id_table;
 
@@ -384,13 +385,9 @@ wes_init_registration(WaitEventSet *set, WaitEventRegistration *reg)
 	memset(reg, 0, sizeof(*reg));
 
 	if (wes_is_physical(set))
-	{
 		dlist_init(&reg->physical.bindings);
-	}
 	else
-	{
 		reg->logical.set = set;
-	}
 }
 
 static void
@@ -620,9 +617,9 @@ wes_type_uses_wakeup(WaitEventType type)
 			 * and adjustments for commonly manipulated objects.
 			 */
 		case WL_TYPE_LATCH:
-			return false;
-		default:
 			return true;
+		default:
+			return false;
 	}
 }
 
@@ -844,7 +841,7 @@ wes_begin_wait_latches(WaitEventSet *set,
 	/* Tell SetLatch() to wake this backend with WL_TYPE_WAKEUP. */
 	dlist_foreach(iter, &set->type_lists[WL_TYPE_LATCH])
 	{
-		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
+		reg = dlist_container(WaitEventRegistration, type_list_node, iter.cur);
 		wes_get_latch(reg)->maybe_sleeping = true;
 	}
 
@@ -867,7 +864,7 @@ wes_end_wait_latches(WaitEventSet *set)
 
 	dlist_foreach(iter, &set->type_lists[WL_TYPE_LATCH])
 	{
-		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
+		reg = dlist_container(WaitEventRegistration, type_list_node, iter.cur);
 		if (wes_get_latch(reg)->maybe_sleeping)
 			wes_get_latch(reg)->maybe_sleeping = false;
 	}
@@ -1558,6 +1555,7 @@ AddWaitEventSetObject(WaitEventSet *set,
 			wes_logical_registration_set_dirty(reg);
 	}
 
+	/* Exception safety: only update state after syscalls. */
 	reg->event.type = type;
 	reg->event.id = id;
 	reg->event.events = events;
