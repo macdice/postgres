@@ -68,11 +68,11 @@ typedef enum
 	WL_TYPE_POSTMASTER,			/* id not used */
 	WL_TYPE_LATCH,				/* id is a pointer to Latch */
 	WL_TYPE_SOCKET,				/* id is a socket descriptor */
-	
+
 	WL_TYPE_WAKEUP,				/* for internal usage */
-	
+
 	WL_TYPE_LAST = WL_TYPE_WAKEUP,
-} WaitEventType;
+}			WaitEventType;
 
 /* Identifier for a waitable object. */
 typedef intptr_t WaitEventId;
@@ -85,13 +85,13 @@ typedef uint32_t WaitEventMask;
 
 typedef struct WaitEvent
 {
-	WaitEventType	id_type;
+	WaitEventType id_type;
 	union
 	{
-		WaitEventId	id;
+		WaitEventId id;
 		WaitEventId fd;			/* deprecated name for id */
 	};
-	WaitEventMask	events;		/* triggered events */
+	WaitEventMask events;		/* triggered events */
 	void	   *user_data;		/* pointer provided when adding */
 	union
 	{
@@ -108,7 +108,7 @@ typedef struct WaitEvent
 typedef struct WaitEventSetHandle
 {
 	alignas(MAXIMUM_ALIGNOF) char opaque[WL_HANDLE_SIZE];
-} WaitEventSetHandle;
+}			WaitEventSetHandle;
 
 /* forward declarations to avoid exposing waiteventset.c implementation details */
 typedef struct WaitEventSet WaitEventSet;
@@ -183,7 +183,7 @@ extern int	WaitEventSetWait(WaitEventSet *set,
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool WaitEventSetCanReportClosed(void);
 
-extern void WakeWaitEventSet(WaitEventSetHandle *handle);
+extern void WakeWaitEventSet(WaitEventSetHandle * handle);
 
 #ifndef WIN32
 extern void WakeupMyProc(void);
