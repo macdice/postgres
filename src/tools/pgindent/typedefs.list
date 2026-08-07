@@ -3423,6 +3423,7 @@ WaitEventBuffer
 WaitEventClient
 WaitEventCustomEntryByInfo
 WaitEventCustomEntryByName
+WaitEventHandle
 WaitEventId
 WaitEventIndex
 WaitEventIO

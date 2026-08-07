@@ -62,17 +62,18 @@
 #define WL_WAKEUP_MASK		(WL_WAKEUP_RAW | WL_WAKEUP_PROCESSED)
 
 /* Type of waitable object. */
-typedef enum
+typedef enum WaitEventType
 {
-	WL_TYPE_INVALID,
+	WL_TYPE_INVALID = 0,
 	WL_TYPE_POSTMASTER,			/* id not used */
 	WL_TYPE_LATCH,				/* id is a pointer to Latch */
 	WL_TYPE_SOCKET,				/* id is a socket descriptor */
 
 	WL_TYPE_WAKEUP,				/* for internal usage */
 
+	WL_TYPE_FIRST = WL_TYPE_INVALID,
 	WL_TYPE_LAST = WL_TYPE_WAKEUP,
-}			WaitEventType;
+} WaitEventType;
 
 /* Identifier for a waitable object. */
 typedef intptr_t WaitEventId;

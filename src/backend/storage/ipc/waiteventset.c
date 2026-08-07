@@ -1396,7 +1396,7 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 	}
 
 	/* The lists have been cleaned out. */
-	for (WaitEventType type = WL_TYPE_INVALID; type <= WL_TYPE_LAST; ++type)
+	for (WaitEventType type = WL_TYPE_FIRST; type <= WL_TYPE_LAST; ++type)
 		Assert(!wes_has_type(set, type));
 	for (int i = 0; i < wes_lengthof_id_table(set->nevents_space); ++i)
 		Assert(dlist_is_empty(&set->id_table[i]));

@@ -199,7 +199,7 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	 */
 	if (event.type == WL_TYPE_LATCH && event.id != (WaitEventId) latch)
 		DeleteWaitEventSetObject(LatchWaitSet, event.type, event.id);
-	
+
 	return event.events;
 }
 
