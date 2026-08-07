@@ -152,8 +152,8 @@ struct WaitEventRegistration
 			dlist_node bindings_node;			
 			/* Set that this registration belongs to. */
 			WaitEventSet *set;
-			/* Node in log_set's list of pending registrations. */
-			dlist_node pending_registrations_node;
+			/* Node in log_set's queue of bindings to create/modify. */
+			dlist_node dirty_registrations_node;
 		} logical;
 	};
 
@@ -194,7 +194,7 @@ struct WaitEventSet
 			 * to a physical registration that might have a different event
 			 * mask.  These are resolved before waiting.
 			 */
-			dlist_head	pending_registrations;
+			dlist_head	dirty_bindings;
 		} logical;
 	};
 	
@@ -487,27 +487,27 @@ wes_is_logical(WaitEventSet *set)
 }
 
 static bool
-wes_logical_registration_is_pending(WaitEventRegistration *log_reg)
+wes_logical_registration_is_dirty(WaitEventRegistration *log_reg)
 {
 	Assert(wes_is_logical(log_reg->logical.set));
-	return !dlist_node_is_detached(&log_reg->logical.pending_registrations_node);
+	return !dlist_node_is_detached(&log_reg->logical.dirty_registrations_node);
 }
 
 static void
-wes_logical_registration_set_pending(WaitEventRegistration *log_reg)
+wes_logical_registration_set_dirty(WaitEventRegistration *log_reg)
 {
 	Assert(wes_is_logical(log_reg->logical.set));
-	Assert(!wes_logical_registration_is_pending(log_reg));
-	dlist_push_tail(&log_reg->logical.set->logical.pending_registrations,
-					&log_reg->logical.pending_registrations_node);
+	Assert(!wes_logical_registration_is_dirty(log_reg));
+	dlist_push_tail(&log_reg->logical.set->logical.dirty_registrations,
+					&log_reg->logical.dirty_registrations_node);
 }
 
 static void
-wes_logical_registration_clear_pending(WaitEventRegistration *log_reg)
+wes_logical_registration_clear_dirty(WaitEventRegistration *log_reg)
 {
 	Assert(wes_is_logical(log_reg->logical.set));
-	Assert(wes_logical_registration_is_pending(log_reg));
-	dlist_delete_thoroughly(&log_reg->logical.pending_registrations_node);
+	Assert(wes_logical_registration_is_dirty(log_reg));
+	dlist_delete_thoroughly(&log_reg->logical.dirty_registrations_node);
 }
 
 static void
@@ -516,7 +516,7 @@ wes_propagate_logical_registration_change(WaitEventSet *log_set,
 {
 	WaitEventRegistration *phy_reg;
 
-	if (wes_logical_registration_is_pending(log_reg))
+	if (wes_logical_registration_is_dirty(log_reg))
 		return;
 
 	phy_reg = log_reg->logical.binding;
@@ -524,7 +524,7 @@ wes_propagate_logical_registration_change(WaitEventSet *log_set,
 		return;
 	
 	if (log_reg->event.events != phy_reg->event.events)
-		wes_logical_registration_set_pending(log_reg);
+		wes_logical_registration_set_dirty(log_reg);
 }
 
 static void
@@ -541,13 +541,10 @@ wes_propagate_physical_registration_change(WaitEventSet *phy_set,
 								  id_table_node,
 								  iter.cur);
 
-		/* Already pending in this logical WaitEvetSet. */
-		if (wes_logical_registration_is_pending(log_reg))
-			continue;
-
 		/* This logical WaitEventSet will need to modify the mask. */
-		if (log_reg->event.events != phy_reg->event.events)
-			wes_logical_registration_set_pending(log_reg);
+		if (!wes_logical_registration_is_dirty(log_reg) &&
+			log_reg->event.events != phy_reg->event.events)
+			wes_logical_registration_set_dirty(log_reg);
 	}	
 }
 
@@ -663,11 +660,11 @@ wes_unbind_physical_registration(WaitEventRegistration *phy_reg)
 
 		/*
 		 * When one logical WaitEventSet deletes a physical event to silence
-		 * it, all logical WaitEventSets that were bound to it will need to
-		 * recreate it on demand.
+		 * it, the other logical WaitEventSets that were bound to it will need
+		 * to add it before waiting.
 		 */
-		if (!wes_logical_registration_is_pending(log_reg))
-			wes_logical_registration_set_pending(log_reg);
+		if (!wes_logical_registration_is_dirty(log_reg))
+			wes_logical_registration_set_dirty(log_reg);
 	}
 }
 
@@ -852,17 +849,10 @@ wes_process_wakeup(WaitEventSet *set, WaitEvent *occurred_events, int nevents)
 }
 
 static inline bool
-wes_has_pending_logical_registrations(WaitEventSet *set)
+wes_has_dirty_logical_registrations(WaitEventSet *set)
 {
-	return !dlist_is_empty(&set->logical.pending_registrations);
+	return !dlist_is_empty(&set->logical.dirty_registrations);
 }
-
-static void wes_adjust(WaitEventSet *set,
-					   WaitEventRegistration *reg,
-					   WaitEventType id_type,
-					   WaitEventId id,
-					   WaitEventMask old_events,
-					   WaitEventMask new_events);
 
 static void
 wes_modify_registration(WaitEventSet *set,
@@ -881,7 +871,7 @@ wes_modify_registration(WaitEventSet *set,
 				   reg->event.events,
 				   events);
 
-	/* Only change state now that syscall has succeeded. */
+	/* Exception safety: udpate state after syscall. */
 	reg->event.events = events;
 
 	if (wes_id_type_uses_wakeup(reg->event.id_type))
@@ -940,24 +930,24 @@ wes_delete_registration(WaitEventSet *set, WaitEventRegistration *reg)
 }
 
 static void
-wes_resolve_pending_registrations(WaitEventSet *set)
+wes_resolve_dirty_registrations(WaitEventSet *set)
 {
 	dlist_mutable_iter iter;
 	
 	Assert(wes_is_logical(set));
 	
-	dlist_foreach_modify(iter, &set->logical.pending_registrations)
+	dlist_foreach_modify(iter, &set->logical.dirty_registrations)
 	{
 		WaitEventRegistration *log_reg;
 		WaitEventRegistration *phy_reg;
 
 		log_reg = dlist_container(WaitEventRegistration,
-								  logical.pending_registrations_node,
+								  logical.dirty_registrations_node,
 								  iter.cur);
 
 		/*
 		 * Events handled by logical WaitEventSet using WL_TYPE_WAKEUP should
-		 * never appear in the pending list as they don't need a binding.
+		 * never appear in the dirty list as they don't need a binding.
 		 */
 		Assert(!wes_id_type_uses_wakeup(log_reg->event.id_type));
 		
@@ -987,8 +977,7 @@ wes_resolve_pending_registrations(WaitEventSet *set)
 			wes_bind_logical_registration(log_reg, phy_reg);
 		}
 
-		/* No longer pending. */
-		wes_logical_registration_clear_pending(log_reg);
+		wes_logical_registration_clear_dirty(log_reg);
 	}
 }
 
@@ -1644,7 +1633,7 @@ AddWaitEventSetObject(WaitEventSet *set,
 		if (wes_is_physical(set))
 			wes_adjust(set, reg, id_type, id, 0, events);
 		else
-			wes_mark_logical_registration_pending(set, reg);
+			wes_logical_registration_set_pending(set, reg);
 	}
 
 	reg->event.id_type = id_type;
