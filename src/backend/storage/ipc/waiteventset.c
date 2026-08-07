@@ -450,6 +450,13 @@ wes_id_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
 }
 
 static void
+wes_id_type_table_init(WaitEventSet *set)
+{
+	for (int i = 0; i < lengthof(set->id_type_table); ++i)
+		dlist_init(&set->id_type_table[i]);
+}
+
+static void
 wes_id_type_table_insert(WaitEventSet *set, WaitEventRegistration *reg)
 {
 	Assert(reg->event.id_type != WL_TYPE_INVALID);
@@ -461,6 +468,12 @@ static void
 wes_id_type_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
 {
 	dlist_delete(&reg->id_type_table_node);
+}
+
+static bool
+wes_has_id_type(WaitEventSet *set, WaitEventType id_type)
+{
+	return !dlist_is_empty(&set->id_type_table[id_type]);
 }
 
 static int
@@ -786,12 +799,6 @@ wes_validate_id_type_events(WaitEventType id_type,
 		default:
 			break;
 	}
-}
-
-static inline bool
-wes_has_object_of_type(WaitEventSet *set, WaitEventType id_type)
-{
-	return !dlist_is_empty(&set->id_type_table[id_type]);
 }
 
 static Latch *
@@ -1195,6 +1202,7 @@ CreateWaitEventSetImpl(ResourceOwner resowner,
 	set->nevents_space = nevents;
 	set->underlying_set = underlying_set;
 	wes_id_table_init(set);
+	wes_id_type_table_init(set);
 
 	if (resowner != NULL)
 	{
@@ -1544,8 +1552,8 @@ AddWaitEventSetObject(WaitEventSet *set,
 		 */
 		ReserveWaitEventSetSpace(set, set->nevents_space * 2);
 		reg = wes_find_free_registration(set);
-		wes_init_registration(set, reg);
 	}
+	wes_init_registration(set, reg);
 
 	if (!wes_id_type_uses_wakeup(id_type))
 	{
@@ -2130,7 +2138,7 @@ WaitEventSetWait(WaitEventSet *set,
 #endif
 
 	/* Prepare to wait on latches. */
-	if (wes_has_object_of_type(set, WL_TYPE_LATCH))
+	if (wes_has_id_type(set, WL_TYPE_LATCH))
 		returned_events += wes_begin_wait_latches(set, occurred_events, nevents);
 
 	/*
@@ -2177,7 +2185,7 @@ WaitEventSetWait(WaitEventSet *set,
 		}
 	}
 
-	if (wes_has_object_of_type(set, WL_TYPE_LATCH))
+	if (wes_has_id_type(set, WL_TYPE_LATCH))
 		wes_end_wait_latches(set);
 
 #ifndef WIN32
