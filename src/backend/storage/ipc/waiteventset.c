@@ -136,14 +136,11 @@ struct WaitEventRegistration
 
 	union
 	{
-		/* Members used in a physical WaitEventSet. */
 		struct
 		{
 			/* Physical registrations bind to 0..N logical registrations. */
 			dlist_head	bindings;
 		}			physical;
-
-		/* Members used in a logical WaitEventSet. */
 		struct
 		{
 			/* Logical registrations bind to 0..1 physical registrations. */
@@ -152,7 +149,7 @@ struct WaitEventRegistration
 			dlist_node	bindings_node;
 			/* Set that this registration belongs to. */
 			WaitEventSet *set;
-			/* Node in log_set's queue of bindings to create/modify. */
+			/* Node in set->logical.dirty_registrations, or detached. */
 			dlist_node	dirty_registrations_node;
 		}			logical;
 	};
@@ -179,12 +176,9 @@ struct WaitEventSet
 	{
 		struct
 		{
-			/*
-			 * Number of linked logical sets and space required to avoid
-			 * allocation failure in the underlying set if they don't exceed
-			 * their requested nevents.
-			 */
+			/* Number of linked logical sets. */
 			int			reference_count;
+			/* Space required to cover all logical sets. */
 			int			nevents_space_sum;
 		}			physical;
 		struct
@@ -262,14 +256,14 @@ struct WaitEventSet
 #endif
 };
 
-static const WaitEventMask wes_valid_masks[WL_TYPE_LAST + 1] = {
+static const WaitEventMask wes_valid_masks[] = {
 	[WL_TYPE_POSTMASTER] = WL_POSTMASTER_DEATH | WL_EXIT_ON_PM_DEATH,
 	[WL_TYPE_LATCH] = WL_LATCH_SET,
 	[WL_TYPE_SOCKET] = WL_SOCKET_MASK,
 	[WL_TYPE_WAKEUP] = WL_WAKEUP_MASK,
 };
 
-static const char *wes_type_names[WL_TYPE_LAST + 1] = {
+static const char *wes_type_names[] = {
 	[WL_TYPE_INVALID] = "WL_TYPE_INVALID",
 	[WL_TYPE_POSTMASTER] = "WL_TYPE_POSTMASTER",
 	[WL_TYPE_LATCH] = "WL_TYPE_LATCH",
@@ -623,7 +617,7 @@ wes_type_uses_wakeup(WaitEventType type)
 			 * List of waitable object types that can be handled by a logical
 			 * WaitEventSet using WL_WAKEUP_RAW, and thus don't need to be
 			 * "bound" to a physical registration.  This avoids book-keeping
-			 * and adjustments for latches and condition variables.
+			 * and adjustments for commonly manipulated objects.
 			 */
 		case WL_TYPE_LATCH:
 			return false;
@@ -639,9 +633,9 @@ wes_physical_registration_has_bindings(WaitEventRegistration *phy_reg)
 }
 
 static bool
-wes_logical_registration_is_bound(WaitEventRegistration *logical)
+wes_logical_registration_is_bound(WaitEventRegistration *log_reg)
 {
-	return logical->logical.binding != NULL;
+	return log_reg->logical.binding != NULL;
 }
 
 static void
@@ -763,7 +757,7 @@ wes_find_free_registration(WaitEventSet *set)
 static void
 wes_validate_add(WaitEventType type,
 				 WaitEventId id,
-				 uint32 events)
+				 WaitEventMask events)
 {
 	if (type <= WL_TYPE_INVALID || type > WL_TYPE_LAST)
 		elog(ERROR, "invalid type %d", type);
