@@ -56,8 +56,10 @@
 							 WL_SOCKET_ACCEPT | \
 							 WL_SOCKET_CLOSED)
 
-/* Flags for internal usage (defined here only to avoid collisions). */
-#define WL_INTERNAL			(1 << 31)
+/* Flags for internal usage. */
+#define WL_WAKEUP_RAW		(1 << 9)
+#define WL_WAKEUP_PROCESSED (1 << 10)
+#define WL_WAKEUP_MASK		(WL_WAKEUP_RAW | WL_WAKEUP_PROCESSED)
 
 /* Type of waitable object. */
 typedef enum
@@ -67,21 +69,35 @@ typedef enum
 	WL_TYPE_LATCH,				/* id is a pointer to Latch */
 	WL_TYPE_SOCKET,				/* id is a socket descriptor */
 	
-	WL_TYPE_INTERNAL,			/* internal usage only */
+	WL_TYPE_WAKEUP,				/* for internal usage */
 	
-	WL_TYPE_LAST = WL_TYPE_INTERNAL,
+	WL_TYPE_LAST = WL_TYPE_WAKEUP,
 } WaitEventType;
 
 /* Identifier for a waitable object. */
 typedef intptr_t WaitEventId;
 
+/* Type used for waitable object indexes. */
+typedef int WaitEventIndex;
+
+/* Type used for event masks. */
+typedef uint32_t WaitEventMask;
+
 typedef struct WaitEvent
 {
 	WaitEventType	id_type;
-	WaitEventId	id;
-	uint32		events;			/* triggered events */
+	union
+	{
+		WaitEventId	id;
+		WaitEventId fd;			/* deprecated name for id */
+	};
+	WaitEventMask	events;		/* triggered events */
 	void	   *user_data;		/* pointer provided when adding */
-	int			pos;			/* internal position number */
+	union
+	{
+		WaitEventIndex index;
+		WaitEventIndex pos;		/* deprecated name for index */
+	};
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
 #endif
@@ -116,50 +132,54 @@ extern void ReserveWaitEventSetSpace(WaitEventSet *set, int nevents);
 extern void FreeWaitEventSet(WaitEventSet *set);
 extern void FreeWaitEventSetAfterFork(WaitEventSet *set);
 
-/* Generic operations that work for all types. */
-extern int	AddWaitEventSetObject(WaitEventSet *set,
-								  WaitEventType id_type,
-								  WaitEventId id,
-								  uint32 event_mask,
-								  void *user_data);
+extern WaitEventIndex AddWaitEventSetObject(WaitEventSet *set,
+											WaitEventType id_type,
+											WaitEventId id,
+											WaitEventMask event_mask,
+											void *user_data);
 extern void ModifyWaitEventSetObject(WaitEventSet *set,
-								 WaitEventType id_type,
-								 WaitEventId id,
-									 uint32 event_mask);
+									 WaitEventType id_type,
+									 WaitEventId id,
+									 WaitEventMask event_mask);
 extern void ModifyWaitEventSetIndex(WaitEventSet *set,
-									int index,
-									uint32 event_mask);
+									WaitEventIndex index,
+									WaitEventMask event_mask);
 extern bool DeleteWaitEventSetObject(WaitEventSet *set,
 									 WaitEventType id_type,
 									 WaitEventId id);
 extern int	DeleteWaitEventSetObjects(WaitEventSet *set,
 									  WaitEventType id_type);
 extern int	DeleteWaitEventSetIndex(WaitEventSet *set,
-									int index);
+									WaitEventIndex index);
 
-/* Typed variants for latches. */
-extern void AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
+/* Convenient wrappers for latches. */
+extern WaitEventIndex AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
 extern void DeleteWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
-extern void DeleteWaitEventSetLatches(WaitEventSet *set);
+extern int	DeleteWaitEventSetLatches(WaitEventSet *set);
 
-/* Typed variants for sockets. */
-extern void AddWaitEventSetSocket(WaitEventSet *set,
-								  pgsocket socket,
-								  int event_mask,
-								  void *user_data);
+/* Convenient wrappers for sockets. */
+extern WaitEventIndex AddWaitEventSetSocket(WaitEventSet *set,
+											pgsocket socket,
+											WaitEventMask event_mask,
+											void *user_data);
 extern void ModifyWaitEventSetSocket(WaitEventSet *set,
 									 pgsocket socket,
-									 uint32 event_mask);
+									 WaitEventMask event_mask);
 extern void DeleteWaitEventSetSocket(WaitEventSet *set,
 									 pgsocket socket);
 
-/* Typed variants for postmaster. */
-extern void AddWaitEventSetPostmaster(WaitEventSet *set, uint32 event_mask);
-extern void ModifyWaitEventSetPostmaster(WaitEventSet *set, uint32 event_mask);
+/* Convenient wrappers for postmaster events. */
+extern WaitEventIndex AddWaitEventSetPostmaster(WaitEventSet *set,
+												WaitEventMask event_mask);
+extern void ModifyWaitEventSetPostmaster(WaitEventSet *set,
+										 WaitEventMask event_mask);
 
-extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
-							 WaitEvent *occurred_events, int nevents,
+extern int	WaitEventSetWait(WaitEventSet *set,
+							 int timeout_ms,
+							 WaitEvent *occurred_events,
+							 int nevents,
 							 uint32 wait_event_info);
+
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool WaitEventSetCanReportClosed(void);
 

@@ -1072,14 +1072,6 @@ ExecAppendAsyncEventWait(AppendState *node)
 	/*
 	 * Add the process latch to the set, so that we wake up to process the
 	 * standard interrupts with CHECK_FOR_INTERRUPTS().
-	 *
-	 * NOTE: For historical reasons, it's important that this is added to the
-	 * WaitEventSet after the ExecAsyncConfigureWait() calls.  Namely,
-	 * postgres_fdw calls "GetNumRegisteredWaitEvents(set) == 1" to check if
-	 * any other events are in the set.  That's a poor design, it's
-	 * questionable for postgres_fdw to be doing that in the first place, but
-	 * we cannot change it now.  The pattern has possibly been copied to other
-	 * extensions too.
 	 */
 	AddWaitEventSetLatch(node->as_eventset, MyLatch);
 

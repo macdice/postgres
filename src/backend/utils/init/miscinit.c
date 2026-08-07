@@ -218,11 +218,13 @@ SwitchToSharedLatch(void)
 	Assert(MyLatch == &LocalLatchData);
 	Assert(MyProc != NULL);
 
+	if (FeBeWaitSet)
+		DeleteWaitEventSetLatch(FeBeWaitSet, MyLatch);
+	
 	MyLatch = &MyProc->procLatch;
 
 	if (FeBeWaitSet)
-		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET,
-						MyLatch);
+		AddWaitEventSetLatch(FeBeWaitSet, MyLatch);
 
 	/*
 	 * Set the shared latch as the local one might have been set. This
@@ -245,11 +247,13 @@ SwitchBackToLocalLatch(void)
 	Assert(MyLatch != &LocalLatchData);
 	Assert(MyProc != NULL && MyLatch == &MyProc->procLatch);
 
+	if (FeBeWaitSet)
+		DeleteWaitEventSetLatch(FeBeWaitSet, MyLatch);
+	
 	MyLatch = &LocalLatchData;
 
 	if (FeBeWaitSet)
-		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET,
-						MyLatch);
+		AddWaitEventSetLatch(FeBeWaitSet, MyLatch);
 
 	SetLatch(MyLatch);
 }
