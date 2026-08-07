@@ -158,7 +158,7 @@ struct WaitEventRegistration
 	};
 
 	/* Nodes for membership of WaitEventSet lists of registrations. */
-	dlist_node	type_table_node;
+	dlist_node	type_list_node;
 	dlist_node	id_table_node;
 };
 
@@ -222,7 +222,7 @@ struct WaitEventSet
 
 	/*
 	 * Hash table of WaitEventRegistration objects by {type, id} using of hash
-	 * chains linked with id_table_node.
+	 * chains linked with id_table_node, with wes_lengthof_id_table() buckets.
 	 */
 	dlist_head *id_table;
 
@@ -230,7 +230,7 @@ struct WaitEventSet
 	 * Lists of WaitEventRegistration objects for each type, linked with
 	 * type_node.
 	 */
-	dlist_head	type_table[WL_TYPE_LAST + 1];
+	dlist_head	type_lists[WL_TYPE_LAST + 1];
 
 	/*
 	 * WL_EXIT_ON_PM_DEATH is converted to WL_POSTMASTER_DEATH, but this flag
@@ -449,18 +449,18 @@ wes_id_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
 }
 
 static void
-wes_type_table_init(WaitEventSet *set)
+wes_type_lists_init(WaitEventSet *set)
 {
-	for (int i = 0; i < lengthof(set->type_table); ++i)
-		dlist_init(&set->type_table[i]);
+	for (int i = 0; i < lengthof(set->type_lists); ++i)
+		dlist_init(&set->type_lists[i]);
 }
 
 static void
-wes_type_table_insert(WaitEventSet *set, WaitEventRegistration *reg)
+wes_type_list_insert(WaitEventSet *set, WaitEventRegistration *reg)
 {
 	Assert(reg->event.type != WL_TYPE_INVALID);
-	dlist_push_tail(&set->type_table[reg->event.type],
-					&reg->type_table_node);
+	dlist_push_tail(&set->type_lists[reg->event.type],
+					&reg->type_list_node);
 }
 
 static void
@@ -472,7 +472,7 @@ wes_type_list_remove(WaitEventSet *set, WaitEventRegistration *reg)
 static bool
 wes_has_type(WaitEventSet *set, WaitEventType type)
 {
-	return !dlist_is_empty(&set->type_list[type]);
+	return !dlist_is_empty(&set->type_lists[type]);
 }
 
 static int
@@ -531,9 +531,10 @@ wes_find_index(WaitEventSet *set, WaitEventIndex index)
 static bool
 wes_logical_registration_is_dirty(WaitEventRegistration *log_reg)
 {
+	Assert(log_reg->logical.set);
 	Assert(wes_is_logical(log_reg->logical.set));
 
-	/* Note that this thest requires deleting "thoroughly". */
+	/* This test requires deleting "thoroughly" when clearing. */
 	return !dlist_node_is_detached(&log_reg->logical.dirty_registrations_node);
 }
 
@@ -818,9 +819,9 @@ wes_check_latches(WaitEventSet *set,
 	dlist_iter	iter;
 	int			count = 0;
 
-	dlist_foreach(iter, &set->type_list[WL_TYPE_LATCH])
+	dlist_foreach(iter, &set->type_lists[WL_TYPE_LATCH])
 	{
-		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
+		reg = dlist_container(WaitEventRegistration, type_list_node, iter.cur);
 		if (wes_get_latch(reg)->is_set)
 		{
 			*occurred_events = reg->event;
@@ -847,7 +848,7 @@ wes_begin_wait_latches(WaitEventSet *set,
 		return count;
 
 	/* Tell SetLatch() to wake this backend with WL_TYPE_WAKEUP. */
-	dlist_foreach(iter, &set->type_list[WL_TYPE_LATCH])
+	dlist_foreach(iter, &set->type_lists[WL_TYPE_LATCH])
 	{
 		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
 		wes_get_latch(reg)->maybe_sleeping = true;
@@ -870,7 +871,7 @@ wes_end_wait_latches(WaitEventSet *set)
 	WaitEventRegistration *reg;
 	dlist_iter	iter;
 
-	dlist_foreach(iter, &set->type_list[WL_TYPE_LATCH])
+	dlist_foreach(iter, &set->type_lists[WL_TYPE_LATCH])
 	{
 		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
 		if (wes_get_latch(reg)->maybe_sleeping)
@@ -1201,7 +1202,7 @@ CreateWaitEventSetImpl(ResourceOwner resowner,
 	set->nevents_space = nevents;
 	set->underlying_set = underlying_set;
 	wes_id_table_init(set);
-	wes_type_list_init(set);
+	wes_type_lists_init(set);
 
 	if (resowner != NULL)
 	{
@@ -1395,8 +1396,8 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 	}
 
 	/* The lists have been cleaned out. */
-	for (int i = 0; i < lengthof(set->type_list); ++i)
-		Assert(dlist_is_empty(&set->type_list[i]));
+	for (WaitEventType type = WL_TYPE_INVALID; type <= WL_TYPE_LAST; ++type)
+		Assert(!wes_has_type(set, type));
 	for (int i = 0; i < wes_lengthof_id_table(set->nevents_space); ++i)
 		Assert(dlist_is_empty(&set->id_table[i]));
 
@@ -1405,6 +1406,7 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 		pfree(set->expansion_mem);
 
 	/* Switch the new memory into place. */
+	set->nevents_space = nevents_space;
 	set->expansion_mem = data;
 	set->id_table = new_id_table;
 	set->events_bitmap = new_events_bitmap;
@@ -1545,9 +1547,9 @@ AddWaitEventSetObject(WaitEventSet *set,
 	if (reg == NULL)
 	{
 		/*
-		 * You can avoid allocation failure risk here by providing a
-		 * sufficient size value at creation time, or calling
-		 * ReserveWaitEventSetSpace() youself.
+		 * Callers can avoid allocation failure risk here by providing a
+		 * sufficient nevents value at creation time, or calling
+		 * ReserveWaitEventSetSpace() earlier.
 		 */
 		ReserveWaitEventSetSpace(set, set->nevents_space * 2);
 		reg = wes_find_free_registration(set);
@@ -1647,7 +1649,7 @@ DeleteWaitEventSetObjects(WaitEventSet *set, WaitEventType type)
 
 	Assert(type > WL_TYPE_INVALID && type <= WL_TYPE_LAST);
 
-	type_list = &set->type_list[type];
+	type_list = &set->type_lists[type];
 	while (!dlist_is_empty(type_list))
 	{
 		WaitEventRegistration *reg;

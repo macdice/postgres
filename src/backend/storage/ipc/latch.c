@@ -197,8 +197,8 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	 * recompute a timeout.  We do remove it though, otherwise the caller
 	 * could get stuck in a loop.
 	 */
-	if (event.id_type == WL_TYPE_LATCH && event.id != (WaitEventId) latch)
-		DeleteWaitEventSetObject(LatchWaitSet, event.id_type, event.id);
+	if (event.type == WL_TYPE_LATCH && event.id != (WaitEventId) latch)
+		DeleteWaitEventSetObject(LatchWaitSet, event.type, event.id);
 	
 	return event.events;
 }
@@ -254,7 +254,7 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 
 	if (rc == 0)
 		ret |= WL_TIMEOUT;
-	else if (event.id_type == WL_TYPE_LATCH)
+	else if (event.type == WL_TYPE_LATCH)
 		ret |= event.events & (WL_LATCH_SET |
 							   WL_POSTMASTER_DEATH |
 							   WL_SOCKET_MASK);
