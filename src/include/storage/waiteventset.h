@@ -137,7 +137,7 @@ extern WaitEventIndex AddWaitEventSetObject(WaitEventSet *set,
 											WaitEventId id,
 											WaitEventMask event_mask,
 											void *user_data);
-extern void ModifyWaitEventSetObject(WaitEventSet *set,
+extern bool ModifyWaitEventSetObject(WaitEventSet *set,
 									 WaitEventType id_type,
 									 WaitEventId id,
 									 WaitEventMask event_mask);
@@ -149,12 +149,12 @@ extern bool DeleteWaitEventSetObject(WaitEventSet *set,
 									 WaitEventId id);
 extern int	DeleteWaitEventSetObjects(WaitEventSet *set,
 									  WaitEventType id_type);
-extern int	DeleteWaitEventSetIndex(WaitEventSet *set,
+extern void DeleteWaitEventSetIndex(WaitEventSet *set,
 									WaitEventIndex index);
 
 /* Convenient wrappers for latches. */
 extern WaitEventIndex AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
-extern void DeleteWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
+extern bool DeleteWaitEventSetLatch(WaitEventSet *set, struct Latch *latch);
 extern int	DeleteWaitEventSetLatches(WaitEventSet *set);
 
 /* Convenient wrappers for sockets. */
@@ -162,10 +162,10 @@ extern WaitEventIndex AddWaitEventSetSocket(WaitEventSet *set,
 											pgsocket socket,
 											WaitEventMask event_mask,
 											void *user_data);
-extern void ModifyWaitEventSetSocket(WaitEventSet *set,
+extern bool ModifyWaitEventSetSocket(WaitEventSet *set,
 									 pgsocket socket,
 									 WaitEventMask event_mask);
-extern void DeleteWaitEventSetSocket(WaitEventSet *set,
+extern bool DeleteWaitEventSetSocket(WaitEventSet *set,
 									 pgsocket socket);
 
 /* Convenient wrappers for postmaster events. */

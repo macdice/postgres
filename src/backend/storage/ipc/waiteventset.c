@@ -190,11 +190,12 @@ struct WaitEventSet
 		struct
 		{
 			/*
-			 * List of logical registrations that are either unbound, or bound
-			 * to a physical registration that might have a different event
-			 * mask.  These are resolved before waiting.
+			 * List of logical registrations that are either not bound to a
+			 * physical registration, or bound to a physical registration that
+			 * might have a different event mask.  These must be resolved
+			 * before waiting.
 			 */
-			dlist_head	dirty_bindings;
+			dlist_head	dirty_registrations;
 		} logical;
 	};
 	
@@ -490,6 +491,8 @@ static bool
 wes_logical_registration_is_dirty(WaitEventRegistration *log_reg)
 {
 	Assert(wes_is_logical(log_reg->logical.set));
+
+	/* Note that this thest requires deleting "thoroughly". */
 	return !dlist_node_is_detached(&log_reg->logical.dirty_registrations_node);
 }
 
@@ -849,9 +852,10 @@ wes_process_wakeup(WaitEventSet *set, WaitEvent *occurred_events, int nevents)
 }
 
 static inline bool
-wes_has_dirty_logical_registrations(WaitEventSet *set)
+wes_has_dirty_registrations(WaitEventSet *log_set)
 {
-	return !dlist_is_empty(&set->logical.dirty_registrations);
+	Assert(wes_is_logical(log_set));
+	return !dlist_is_empty(&log_set->logical.dirty_registrations);
 }
 
 static void
@@ -953,12 +957,11 @@ wes_resolve_dirty_registrations(WaitEventSet *set)
 		
 		if (wes_logical_registration_is_bound(log_reg))
 		{
-			/* Already bound. */
 			phy_reg = log_reg->logical.binding;
 			Assert(phy_reg->event.id_type == log_reg->event.id_type &&
 				   phy_reg->event.id == log_reg->event.id);
 
-			/* Modify underlying if the event mask, if different. */
+			/* Make sure event mask matches (no-op if it does). */
 			wes_modify_registration(set->underlying_set,
 									phy_reg,
 									log_reg->event.events);
@@ -1333,12 +1336,12 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 			else if (wes_logical_registration_is_bound(src))
 				wes_rebind_logical_registration(src, dst);
 
-			/* Move pending list membership. */
+			/* If src is in dirty queue, replace it with dst. */
 			if (wes_is_logical(set) &&
-				wes_logical_registration_is_pending(src))
+				wes_logical_registration_is_dirty(src))
 			{
-				wes_logical_registration_clear_pending(src);
-				wes_logical_registration_set_pending(dst);
+				wes_logical_registration_clear_dirty(src);
+				wes_logical_registration_set_dirty(dst);
 			}
 			
 			/* Remove src from lookup tables.*/
@@ -1356,8 +1359,6 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 		Assert(dlist_is_empty(&set->id_type_table[i]));
 	for (int i = 0; i < wes_lengthof_id_table(set->nevents_space); ++i)
 		Assert(dlist_is_empty(&set->id_table[i]));
-	if (wes_is_logical(set))
-		Assert(dlist_is_empty(&set->logical.pending_registrations));
 
 	/* Free previous expansion memory if necessary. */
 	if (set->expansion_mem)
@@ -1633,7 +1634,7 @@ AddWaitEventSetObject(WaitEventSet *set,
 		if (wes_is_physical(set))
 			wes_adjust(set, reg, id_type, id, 0, events);
 		else
-			wes_logical_registration_set_pending(set, reg);
+			wes_logical_registration_set_dirty(reg);
 	}
 
 	reg->event.id_type = id_type;
@@ -1703,7 +1704,7 @@ DeleteWaitEventSetObject(WaitEventSet *set,
  * Remove a waitable object from a WaitEventSet using an index returned when
  * adding it.
  */
-static void
+void
 DeleteWaitEventSetIndex(WaitEventSet *set, WaitEventIndex index)
 {
 	wes_delete_registration(set, wes_find_index(set, index));
@@ -1716,19 +1717,23 @@ DeleteWaitEventSetIndex(WaitEventSet *set, WaitEventIndex index)
 int
 DeleteWaitEventSetObjects(WaitEventSet *set, WaitEventType id_type)
 {
+	dlist_head *id_type_list;
 	int count = 0;
-	dlist_head *list = &set->id_type_table[id_type];
-	
-	while (!dlist_is_empty(list))
+
+	Assert(id_type > WL_TYPE_INVALID && id_type <= WL_TYPE_LAST);
+
+	id_type_list = &set->id_type_table[id_type];	
+	while (!dlist_is_empty(id_type_list))
 	{
 		WaitEventRegistration *reg;
 		
 		reg = dlist_container(WaitEventRegistration,
-							  logical.logical_registrations_node,
-							  dlist_pop_head_node(list));	   
+							  id_type_table_node,
+							  dlist_pop_head_node(id_type_list));	   
 		wes_delete_registration(set, reg);
 		count++;
 	}
+
 	return count;
 }
 
@@ -2062,19 +2067,22 @@ WaitEventSetWaitBlockLogical(WaitEventSet *log_set,
 	int phy_count;
 	int log_count;
 
-	if (wes_has_pending_registrations(log_set))
-		wes_resolve_pending_registrations(log_set);
-	Assert(!wes_has_pending_registrations(log_set));
+	Assert(wes_is_logical(log_set));
+
+	if (wes_has_dirty_registrations(log_set))
+		wes_resolve_dirty_registrations(log_set);
+
+	Assert(!wes_has_dirty_registrations(log_set));
 
 #ifdef USE_ASSERT_CHECKING
 	/* Sanity checks. */
 	for (int i = 0; i < log_set->nevents_space; ++i)
 	{
-		WaitEventRegistration *log_reg = &set->events[i];
+		WaitEventRegistration *log_reg = &log_set->events[i];
 		WaitEventRegistration *phy_reg = log_reg->logical.binding;
 
 		/* Usage bitmap and id_type are in sync. */
-		if (!is_used(log_reg))
+		if (!wes_is_used(log_set, log_reg))
 		{
 			Assert(log_reg->event.id_type == WL_TYPE_INVALID);
 			Assert(phy_reg == NULL);
@@ -2092,7 +2100,7 @@ WaitEventSetWaitBlockLogical(WaitEventSet *log_set,
 		/* Everything else has a matching underlying registration. */
 		Assert(phy_reg);
 		Assert(phy_reg->event.id_type == log_reg->event.id_type);
-		Assert(phy_reg->event.id == log_reg.event.id);
+		Assert(phy_reg->event.id == log_reg->event.id);
 		Assert(phy_reg->event.events == log_reg->event.events);
 	}
 #endif
@@ -2124,7 +2132,7 @@ WaitEventSetWaitBlockLogical(WaitEventSet *log_set,
 			continue;
 		}
 
-		log_reg = wes_find_logical_registration_for_set(log_set, phy_reg);		
+		log_reg = wes_find_logical_registration_for_set(phy_reg, log_set);
 		if (!log_reg)
 		{
 			/*
@@ -2148,7 +2156,7 @@ WaitEventSetWaitBlockLogical(WaitEventSet *log_set,
 	}
 
 	if (got_wakeup)
-		log_count += wes_process_wakeup(set,
+		log_count += wes_process_wakeup(log_set,
 										occurred_events + log_count,
 										nevents - log_count);
 
@@ -2180,7 +2188,6 @@ WaitEventSetWait(WaitEventSet *set,
 	int			cur_timeout = -1;
 
 	Assert(nevents > 0);
-	Assert(wes_is_logical(set) || set->nevents_space_logical_sum == 0);
 
 	/*
 	 * Initialize timeout if requested.  We must record the current time so
@@ -3152,10 +3159,10 @@ AddWaitEventSetLatch(WaitEventSet *set, struct Latch *latch)
 								 NULL);
 }
 
-void
+bool
 DeleteWaitEventSetLatch(WaitEventSet *set, struct Latch *latch)
 {
-	DeleteWaitEventSetObject(set, WL_TYPE_LATCH, (WaitEventId) latch);
+	return DeleteWaitEventSetObject(set, WL_TYPE_LATCH, (WaitEventId) latch);
 }
 
 int
@@ -3177,10 +3184,10 @@ AddWaitEventSetSocket(WaitEventSet *set,
 								 user_data);
 }
 
-void
+bool
 ModifyWaitEventSetSocket(WaitEventSet *set, pgsocket socket, WaitEventMask events)
 {
-	ModifyWaitEventSetObject(set, WL_TYPE_SOCKET, socket, events);
+	return ModifyWaitEventSetObject(set, WL_TYPE_SOCKET, socket, events);
 }
 
 WaitEventIndex
