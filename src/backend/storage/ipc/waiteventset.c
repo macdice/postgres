@@ -158,7 +158,7 @@ struct WaitEventRegistration
 	};
 
 	/* Nodes for membership of WaitEventSet lists of registrations. */
-	dlist_node	id_type_table_node;
+	dlist_node	type_table_node;
 	dlist_node	id_table_node;
 };
 
@@ -221,17 +221,16 @@ struct WaitEventSet
 	WaitEventRegistration *events;
 
 	/*
-	 * Hash table of WaitEventRegistration objects by {id_type, id} using of
-	 * hash chains linked with id_table_node.
+	 * Hash table of WaitEventRegistration objects by {type, id} using of hash
+	 * chains linked with id_table_node.
 	 */
 	dlist_head *id_table;
 
 	/*
-	 * Lists of WaitEventRegistration objects for each id_type, linked with
-	 * id_type_node.  This is useful for quickly finding events that need to
-	 * be examined.
+	 * Lists of WaitEventRegistration objects for each type, linked with
+	 * type_node.
 	 */
-	dlist_head	id_type_table[WL_TYPE_LAST + 1];
+	dlist_head	type_table[WL_TYPE_LAST + 1];
 
 	/*
 	 * WL_EXIT_ON_PM_DEATH is converted to WL_POSTMASTER_DEATH, but this flag
@@ -270,7 +269,7 @@ static const WaitEventMask wes_valid_masks[WL_TYPE_LAST + 1] = {
 	[WL_TYPE_WAKEUP] = WL_WAKEUP_MASK,
 };
 
-static const char *wes_id_type_names[WL_TYPE_LAST + 1] = {
+static const char *wes_type_names[WL_TYPE_LAST + 1] = {
 	[WL_TYPE_INVALID] = "WL_TYPE_INVALID",
 	[WL_TYPE_POSTMASTER] = "WL_TYPE_POSTMASTER",
 	[WL_TYPE_LATCH] = "WL_TYPE_LATCH",
@@ -308,7 +307,7 @@ static void drain(void);
 /* Platform-specific implementation functions. */
 static void wes_adjust_physical(WaitEventSet *set,
 								WaitEventRegistration *reg,
-								WaitEventType id_type,
+								WaitEventType type,
 								WaitEventId id,
 								WaitEventMask old_events,
 								WaitEventMask new_events);
@@ -426,7 +425,7 @@ wes_id_table_find(WaitEventSet *set, WaitEventType type, WaitEventId id)
 	{
 		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
 
-		if (reg->event.id_type == type && reg->event.id == id)
+		if (reg->event.type == type && reg->event.id == id)
 			return reg;
 	}
 
@@ -436,44 +435,44 @@ wes_id_table_find(WaitEventSet *set, WaitEventType type, WaitEventId id)
 static void
 wes_id_table_insert(WaitEventSet *set, WaitEventRegistration *reg)
 {
-	Assert(reg->event.id_type != WL_TYPE_INVALID);
-	Assert(wes_id_table_find(set, reg->event.id_type, reg->event.id) == NULL);
-	dlist_push_tail(wes_id_table_bucket(set, reg->event.id_type, reg->event.id),
+	Assert(reg->event.type != WL_TYPE_INVALID);
+	Assert(wes_id_table_find(set, reg->event.type, reg->event.id) == NULL);
+	dlist_push_tail(wes_id_table_bucket(set, reg->event.type, reg->event.id),
 					&reg->id_table_node);
 }
 
 static void
 wes_id_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
 {
-	Assert(wes_id_table_find(set, reg->event.id_type, reg->event.id) == reg);
+	Assert(wes_id_table_find(set, reg->event.type, reg->event.id) == reg);
 	dlist_delete(&reg->id_table_node);
 }
 
 static void
-wes_id_type_table_init(WaitEventSet *set)
+wes_type_table_init(WaitEventSet *set)
 {
-	for (int i = 0; i < lengthof(set->id_type_table); ++i)
-		dlist_init(&set->id_type_table[i]);
+	for (int i = 0; i < lengthof(set->type_table); ++i)
+		dlist_init(&set->type_table[i]);
 }
 
 static void
-wes_id_type_table_insert(WaitEventSet *set, WaitEventRegistration *reg)
+wes_type_table_insert(WaitEventSet *set, WaitEventRegistration *reg)
 {
-	Assert(reg->event.id_type != WL_TYPE_INVALID);
-	dlist_push_tail(&set->id_type_table[reg->event.id_type],
-					&reg->id_type_table_node);
+	Assert(reg->event.type != WL_TYPE_INVALID);
+	dlist_push_tail(&set->type_table[reg->event.type],
+					&reg->type_table_node);
 }
 
 static void
-wes_id_type_table_remove(WaitEventSet *set, WaitEventRegistration *reg)
+wes_type_list_remove(WaitEventSet *set, WaitEventRegistration *reg)
 {
-	dlist_delete(&reg->id_type_table_node);
+	dlist_delete(&reg->type_list_node);
 }
 
 static bool
-wes_has_id_type(WaitEventSet *set, WaitEventType id_type)
+wes_has_type(WaitEventSet *set, WaitEventType type)
 {
-	return !dlist_is_empty(&set->id_type_table[id_type]);
+	return !dlist_is_empty(&set->type_list[type]);
 }
 
 static int
@@ -499,7 +498,7 @@ wes_set_used(WaitEventSet *set, WaitEventRegistration *reg)
 {
 	int			pos = reg - set->events;
 
-	Assert(reg->event.id_type != WL_TYPE_INVALID);
+	Assert(reg->event.type != WL_TYPE_INVALID);
 	Assert(!wes_is_used(set, reg));
 	set->events_bitmap[pos / 64] |= UINT64_C(1) << (pos % 64);
 }
@@ -509,7 +508,7 @@ wes_clear_used(WaitEventSet *set, WaitEventRegistration *reg)
 {
 	int			pos = reg - set->events;
 
-	Assert(reg->event.id_type == WL_TYPE_INVALID);
+	Assert(reg->event.type == WL_TYPE_INVALID);
 	Assert(wes_is_used(set, reg));
 	set->events_bitmap[pos / 64] &= ~UINT64_C(1) << (pos % 64);
 }
@@ -615,9 +614,9 @@ wes_find_logical_registration_for_set(WaitEventRegistration *phy_reg,
 }
 
 static bool
-wes_id_type_uses_wakeup(WaitEventType id_type)
+wes_type_uses_wakeup(WaitEventType type)
 {
-	switch (id_type)
+	switch (type)
 	{
 			/*
 			 * List of waitable object types that can be handled by a logical
@@ -649,7 +648,7 @@ wes_bind_logical_registration(WaitEventRegistration *log_reg,
 							  WaitEventRegistration *phy_reg)
 {
 	/* Shouldn't be binding registrations that don't need it. */
-	Assert(!wes_id_type_uses_wakeup(log_reg->event.id_type));
+	Assert(!wes_type_uses_wakeup(log_reg->event.type));
 
 	/* Shouldn't be already bound. */
 	Assert(!wes_logical_registration_is_bound(log_reg));
@@ -756,30 +755,30 @@ wes_find_free_registration(WaitEventSet *set)
 	if (index == -1)
 		return NULL;
 
-	Assert(set->events[index].event.id_type == WL_TYPE_INVALID);
+	Assert(set->events[index].event.type == WL_TYPE_INVALID);
 	return &set->events[index];
 }
 
 static void
-wes_validate_id_type_events(WaitEventType id_type,
-							WaitEventId id,
-							uint32 events)
+wes_validate_add(WaitEventType type,
+				 WaitEventId id,
+				 uint32 events)
 {
-	if (id_type <= WL_TYPE_INVALID || id_type > WL_TYPE_LAST)
-		elog(ERROR, "invalid id_type %d", id_type);
+	if (type <= WL_TYPE_INVALID || type > WL_TYPE_LAST)
+		elog(ERROR, "invalid type %d", type);
 
-	if ((events & wes_valid_masks[id_type]) == 0 ||
-		(events & ~wes_valid_masks[id_type]) != 0)
+	if ((events & wes_valid_masks[type]) == 0 ||
+		(events & ~wes_valid_masks[type]) != 0)
 		elog(ERROR, "invalid events %u for type %s", events,
-			 wes_id_type_names[id_type]);
+			 wes_type_names[type]);
 
-	switch (id_type)
+	switch (type)
 	{
 		case WL_TYPE_POSTMASTER:
 		case WL_TYPE_WAKEUP:
 			if (id != 0)
 				elog(ERROR, "invalid non-zero id %" PRIdPTR " for type %s",
-					 id, wes_id_type_names[id_type]);
+					 id, wes_type_names[type]);
 			break;
 
 		case WL_TYPE_LATCH:
@@ -804,7 +803,7 @@ wes_validate_id_type_events(WaitEventType id_type,
 static Latch *
 wes_get_latch(WaitEventRegistration *reg)
 {
-	Assert(reg->event.id_type == WL_TYPE_LATCH);
+	Assert(reg->event.type == WL_TYPE_LATCH);
 	return (Latch *) reg->event.id;
 }
 
@@ -819,7 +818,7 @@ wes_check_latches(WaitEventSet *set,
 	dlist_iter	iter;
 	int			count = 0;
 
-	dlist_foreach(iter, &set->id_type_table[WL_TYPE_LATCH])
+	dlist_foreach(iter, &set->type_list[WL_TYPE_LATCH])
 	{
 		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
 		if (wes_get_latch(reg)->is_set)
@@ -848,7 +847,7 @@ wes_begin_wait_latches(WaitEventSet *set,
 		return count;
 
 	/* Tell SetLatch() to wake this backend with WL_TYPE_WAKEUP. */
-	dlist_foreach(iter, &set->id_type_table[WL_TYPE_LATCH])
+	dlist_foreach(iter, &set->type_list[WL_TYPE_LATCH])
 	{
 		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
 		wes_get_latch(reg)->maybe_sleeping = true;
@@ -871,7 +870,7 @@ wes_end_wait_latches(WaitEventSet *set)
 	WaitEventRegistration *reg;
 	dlist_iter	iter;
 
-	dlist_foreach(iter, &set->id_type_table[WL_TYPE_LATCH])
+	dlist_foreach(iter, &set->type_list[WL_TYPE_LATCH])
 	{
 		reg = dlist_container(WaitEventRegistration, id_table_node, iter.cur);
 		if (wes_get_latch(reg)->maybe_sleeping)
@@ -906,11 +905,11 @@ wes_modify_registration(WaitEventSet *set,
 	if (reg->event.events == events)
 		return;
 
-	if (!wes_id_type_uses_wakeup(reg->event.id_type) &&
+	if (!wes_type_uses_wakeup(reg->event.type) &&
 		!wes_is_logical(set))
 		wes_adjust_physical(set,
 							reg,
-							reg->event.id_type,
+							reg->event.type,
 							reg->event.id,
 							reg->event.events,
 							events);
@@ -918,7 +917,7 @@ wes_modify_registration(WaitEventSet *set,
 	/* Exception safety: udpate state after syscall. */
 	reg->event.events = events;
 
-	if (wes_id_type_uses_wakeup(reg->event.id_type))
+	if (wes_type_uses_wakeup(reg->event.type))
 	{
 		if (wes_is_physical(set))
 			wes_propagate_physical_registration_change(set, reg);
@@ -952,7 +951,7 @@ wes_delete_registration(WaitEventSet *set, WaitEventRegistration *reg)
 	{
 		wes_adjust_physical(set,
 							reg,
-							reg->event.id_type,
+							reg->event.type,
 							reg->event.id,
 							reg->event.events,
 							0);
@@ -967,9 +966,9 @@ wes_delete_registration(WaitEventSet *set, WaitEventRegistration *reg)
 	}
 
 	/* Remove from lookup tables and make available for re-use. */
-	wes_id_type_table_remove(set, reg);
+	wes_type_list_remove(set, reg);
 	wes_id_table_remove(set, reg);
-	reg->event.id_type = WL_TYPE_INVALID;
+	reg->event.type = WL_TYPE_INVALID;
 	wes_clear_used(set, reg);
 }
 
@@ -993,12 +992,12 @@ wes_resolve_dirty_registrations(WaitEventSet *set)
 		 * Events handled by logical WaitEventSet using WL_TYPE_WAKEUP should
 		 * never appear in the dirty list as they don't need a binding.
 		 */
-		Assert(!wes_id_type_uses_wakeup(log_reg->event.id_type));
+		Assert(!wes_type_uses_wakeup(log_reg->event.type));
 
 		if (wes_logical_registration_is_bound(log_reg))
 		{
 			phy_reg = log_reg->logical.binding;
-			Assert(phy_reg->event.id_type == log_reg->event.id_type &&
+			Assert(phy_reg->event.type == log_reg->event.type &&
 				   phy_reg->event.id == log_reg->event.id);
 
 			/* Make sure event mask matches (no-op if it does). */
@@ -1012,7 +1011,7 @@ wes_resolve_dirty_registrations(WaitEventSet *set)
 
 			/* Add physical registration and bind them. */
 			phy_index = AddWaitEventSetObject(set->underlying_set,
-											  log_reg->event.id_type,
+											  log_reg->event.type,
 											  log_reg->event.id,
 											  log_reg->event.events,
 											  NULL);
@@ -1202,7 +1201,7 @@ CreateWaitEventSetImpl(ResourceOwner resowner,
 	set->nevents_space = nevents;
 	set->underlying_set = underlying_set;
 	wes_id_table_init(set);
-	wes_id_type_table_init(set);
+	wes_type_list_init(set);
 
 	if (resowner != NULL)
 	{
@@ -1364,7 +1363,7 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 		WaitEventRegistration *src = &set->events[i];
 		WaitEventRegistration *dst = &new_events[i];
 
-		if (src->event.id_type != WL_TYPE_INVALID)
+		if (src->event.type != WL_TYPE_INVALID)
 		{
 			Assert(wes_is_used(set, src));
 
@@ -1386,7 +1385,7 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 			}
 
 			/* Remove src from lookup tables. */
-			wes_id_type_table_remove(set, src);
+			wes_type_list_remove(set, src);
 			wes_id_table_remove(set, src);
 		}
 		else
@@ -1396,8 +1395,8 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 	}
 
 	/* The lists have been cleaned out. */
-	for (int i = 0; i < lengthof(set->id_type_table); ++i)
-		Assert(dlist_is_empty(&set->id_type_table[i]));
+	for (int i = 0; i < lengthof(set->type_list); ++i)
+		Assert(dlist_is_empty(&set->type_list[i]));
 	for (int i = 0; i < wes_lengthof_id_table(set->nevents_space); ++i)
 		Assert(dlist_is_empty(&set->id_table[i]));
 
@@ -1416,9 +1415,9 @@ ReserveWaitEventSetSpace(WaitEventSet *set, int nevents_space)
 	{
 		WaitEventRegistration *reg = &set->events[i];
 
-		if (reg->event.id_type != WL_TYPE_INVALID)
+		if (reg->event.type != WL_TYPE_INVALID)
 		{
-			wes_id_type_table_insert(set, reg);
+			wes_type_list_insert(set, reg);
 			wes_id_table_insert(set, reg);
 			wes_set_used(set, reg);
 		}
@@ -1455,7 +1454,7 @@ FreeWaitEventSet(WaitEventSet *set)
 		phy_set->physical.reference_count--;
 
 		for (int i = 0; i < set->nevents_space; ++i)
-			if (set->events[i].event.id_type != WL_TYPE_INVALID &&
+			if (set->events[i].event.type != WL_TYPE_INVALID &&
 				wes_logical_registration_is_bound(&set->events[i]))
 				wes_unbind_logical_registration(&set->events[i]);
 
@@ -1526,21 +1525,21 @@ FreeWaitEventSetAfterFork(WaitEventSet *set)
  */
 WaitEventIndex
 AddWaitEventSetObject(WaitEventSet *set,
-					  WaitEventType id_type,
+					  WaitEventType type,
 					  WaitEventId id,
 					  uint32 events,
 					  void *user_data)
 {
 	WaitEventRegistration *reg;
 
-	if ((reg = wes_id_table_find(set, id_type, id)))
+	if ((reg = wes_id_table_find(set, type, id)))
 	{
 		/* Silently modify if already present. */
 		wes_modify_registration(set, reg, events);
 		return reg->event.index;
 	}
 
-	wes_validate_id_type_events(id_type, id, events);
+	wes_validate_add(type, id, events);
 
 	reg = wes_find_free_registration(set);
 	if (reg == NULL)
@@ -1555,22 +1554,22 @@ AddWaitEventSetObject(WaitEventSet *set,
 	}
 	wes_init_registration(set, reg);
 
-	if (!wes_id_type_uses_wakeup(id_type))
+	if (!wes_type_uses_wakeup(type))
 	{
 		if (wes_is_physical(set))
-			wes_adjust_physical(set, reg, id_type, id, 0, events);
+			wes_adjust_physical(set, reg, type, id, 0, events);
 		else
 			wes_logical_registration_set_dirty(reg);
 	}
 
-	reg->event.id_type = id_type;
+	reg->event.type = type;
 	reg->event.id = id;
 	reg->event.events = events;
 	reg->event.user_data = user_data;
 	reg->event.index = reg - set->events;
 
 	wes_id_table_insert(set, reg);
-	wes_id_type_table_insert(set, reg);
+	wes_type_list_insert(set, reg);
 	wes_set_used(set, reg);
 
 	return reg->event.index;
@@ -1582,11 +1581,11 @@ AddWaitEventSetObject(WaitEventSet *set,
  */
 bool
 ModifyWaitEventSetObject(WaitEventSet *set,
-						 WaitEventType id_type,
+						 WaitEventType type,
 						 WaitEventId id,
 						 WaitEventMask events)
 {
-	WaitEventRegistration *reg = wes_id_table_find(set, id_type, id);
+	WaitEventRegistration *reg = wes_id_table_find(set, type, id);
 
 	if (!reg)
 		return false;
@@ -1614,10 +1613,10 @@ ModifyWaitEventSetIndex(WaitEventSet *set,
  */
 bool
 DeleteWaitEventSetObject(WaitEventSet *set,
-						 WaitEventType id_type,
+						 WaitEventType type,
 						 WaitEventId id)
 {
-	WaitEventRegistration *reg = wes_id_table_find(set, id_type, id);
+	WaitEventRegistration *reg = wes_id_table_find(set, type, id);
 
 	if (!reg)
 		return false;
@@ -1641,21 +1640,21 @@ DeleteWaitEventSetIndex(WaitEventSet *set, WaitEventIndex index)
  * Delete all objects of a given type and return the number deleted.
  */
 int
-DeleteWaitEventSetObjects(WaitEventSet *set, WaitEventType id_type)
+DeleteWaitEventSetObjects(WaitEventSet *set, WaitEventType type)
 {
-	dlist_head *id_type_list;
+	dlist_head *type_list;
 	int			count = 0;
 
-	Assert(id_type > WL_TYPE_INVALID && id_type <= WL_TYPE_LAST);
+	Assert(type > WL_TYPE_INVALID && type <= WL_TYPE_LAST);
 
-	id_type_list = &set->id_type_table[id_type];
-	while (!dlist_is_empty(id_type_list))
+	type_list = &set->type_list[type];
+	while (!dlist_is_empty(type_list))
 	{
 		WaitEventRegistration *reg;
 
 		reg = dlist_container(WaitEventRegistration,
-							  id_type_table_node,
-							  dlist_pop_head_node(id_type_list));
+							  type_list_node,
+							  dlist_pop_head_node(type_list));
 		wes_delete_registration(set, reg);
 		count++;
 	}
@@ -1667,7 +1666,7 @@ DeleteWaitEventSetObjects(WaitEventSet *set, WaitEventType id_type)
 static void
 wes_adjust_physical(WaitEventSet *set,
 					WaitEventRegistration *reg,
-					WaitEventType id_type,
+					WaitEventType type,
 					WaitEventId id,
 					WaitEventMask old_events,
 					WaitEventMask new_events)
@@ -1829,7 +1828,7 @@ WaitEventAdjustKqueueAddLatch(struct kevent *k_ev, WaitEvent *event)
 static void
 WaitEventSetAdjust(WaitEventSet *set,
 				   WaitEventRegistration *reg,
-				   WaitEventType id_type,
+				   WaitEventType type,
 				   WaitEventId id,
 				   uint32 old_events,
 				   uint32 new_events)
@@ -2007,17 +2006,17 @@ wes_wait_logical(WaitEventSet *log_set,
 		WaitEventRegistration *log_reg = &log_set->events[i];
 		WaitEventRegistration *phy_reg = log_reg->logical.binding;
 
-		/* Usage bitmap and id_type are in sync. */
+		/* Usage bitmap and type are in sync. */
 		if (!wes_is_used(log_set, log_reg))
 		{
-			Assert(log_reg->event.id_type == WL_TYPE_INVALID);
+			Assert(log_reg->event.type == WL_TYPE_INVALID);
 			Assert(phy_reg == NULL);
 			continue;
 		}
-		Assert(log_reg->event.id_type != WL_TYPE_INVALID);
+		Assert(log_reg->event.type != WL_TYPE_INVALID);
 
 		/* Some events don't need binding because they share WL_WAKEUP_RAW. */
-		if (wes_id_type_uses_wakeup(log_reg->event.id_type))
+		if (wes_type_uses_wakeup(log_reg->event.type))
 		{
 			Assert(phy_reg == NULL);
 			continue;
@@ -2025,7 +2024,7 @@ wes_wait_logical(WaitEventSet *log_set,
 
 		/* Everything else has a matching underlying registration. */
 		Assert(phy_reg);
-		Assert(phy_reg->event.id_type == log_reg->event.id_type);
+		Assert(phy_reg->event.type == log_reg->event.type);
 		Assert(phy_reg->event.id == log_reg->event.id);
 		Assert(phy_reg->event.events == log_reg->event.events);
 	}
@@ -2051,7 +2050,7 @@ wes_wait_logical(WaitEventSet *log_set,
 		WaitEventMask events;
 
 		phy_reg = &log_set->underlying_set->events[occurred_events[i].index];
-		if (phy_reg->event.id_type == WL_TYPE_WAKEUP)
+		if (phy_reg->event.type == WL_TYPE_WAKEUP)
 		{
 			/* Need to poll latches and condition variables. */
 			got_wakeup = true;
@@ -2138,7 +2137,7 @@ WaitEventSetWait(WaitEventSet *set,
 #endif
 
 	/* Prepare to wait on latches. */
-	if (wes_has_id_type(set, WL_TYPE_LATCH))
+	if (wes_has_type(set, WL_TYPE_LATCH))
 		returned_events += wes_begin_wait_latches(set, occurred_events, nevents);
 
 	/*
@@ -2185,7 +2184,7 @@ WaitEventSetWait(WaitEventSet *set,
 		}
 	}
 
-	if (wes_has_id_type(set, WL_TYPE_LATCH))
+	if (wes_has_type(set, WL_TYPE_LATCH))
 		wes_end_wait_latches(set);
 
 #ifndef WIN32

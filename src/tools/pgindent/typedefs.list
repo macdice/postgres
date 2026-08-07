@@ -3430,6 +3430,7 @@ WaitEventIPC
 WaitEventRegistration
 WaitEventSet
 WaitEventTimeout
+WaitEventType
 WaitLSNProcInfo
 WaitLSNResult
 WaitLSNState

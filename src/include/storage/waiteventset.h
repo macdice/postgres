@@ -85,7 +85,7 @@ typedef uint32_t WaitEventMask;
 
 typedef struct WaitEvent
 {
-	WaitEventType id_type;
+	WaitEventType type;
 	union
 	{
 		WaitEventId id;
@@ -133,22 +133,22 @@ extern void FreeWaitEventSet(WaitEventSet *set);
 extern void FreeWaitEventSetAfterFork(WaitEventSet *set);
 
 extern WaitEventIndex AddWaitEventSetObject(WaitEventSet *set,
-											WaitEventType id_type,
+											WaitEventType type,
 											WaitEventId id,
 											WaitEventMask event_mask,
 											void *user_data);
 extern bool ModifyWaitEventSetObject(WaitEventSet *set,
-									 WaitEventType id_type,
+									 WaitEventType type,
 									 WaitEventId id,
 									 WaitEventMask event_mask);
 extern void ModifyWaitEventSetIndex(WaitEventSet *set,
 									WaitEventIndex index,
 									WaitEventMask event_mask);
 extern bool DeleteWaitEventSetObject(WaitEventSet *set,
-									 WaitEventType id_type,
+									 WaitEventType type,
 									 WaitEventId id);
 extern int	DeleteWaitEventSetObjects(WaitEventSet *set,
-									  WaitEventType id_type);
+									  WaitEventType type);
 extern void DeleteWaitEventSetIndex(WaitEventSet *set,
 									WaitEventIndex index);
 
