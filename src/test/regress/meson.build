@@ -38,7 +38,7 @@ pg_regress = executable('pg_regress',
 bin_targets += pg_regress
 
 regress_module = shared_module('regress',
-  ['regress.c'],
+  ['regress.c', 'regress_xlist.c'],
   kwargs: pg_test_mod_args,
 )
 test_install_libs += regress_module
