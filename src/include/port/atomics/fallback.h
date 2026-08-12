@@ -25,8 +25,8 @@
 #define PG_HAVE_ATOMIC_U64_SUPPORT
 typedef struct pg_atomic_uint64
 {
-	int			sema;
 	volatile uint64 value;
+	int			sema;
 } pg_atomic_uint64;
 
 #define PG_HAVE_ATOMIC_INIT_U64
