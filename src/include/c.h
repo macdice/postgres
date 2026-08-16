@@ -597,7 +597,7 @@ extern "C++"
 	_41,_42,_43,_44,_45,_46,_47,_48,_49,_50, \
 	_51,_52,_53,_54,_55,_56,_57,_58,_59,_60, \
 	_61,_62,_63,  N, ...) \
-	(N)
+	N
 
 /*
  * Generic function pointer.  This can be used in the rare cases where it's
