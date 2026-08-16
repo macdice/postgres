@@ -735,6 +735,62 @@ typedef unsigned PG_INT128_TYPE uint128
 #define PG_INT64_MAX	INT64_MAX
 #define PG_UINT64_MAX	UINT64_MAX
 
+/* Traits of built-in C types for generic usage. */
+#ifdef __cplusplus
+#define pg_type_is_integral(T) std::is_integral<T>::value
+#define pg_type_is_signed(T) std::is_signed<T>::value
+#define pg_type_is_unsigned(T) std::is_unsigned<T>::value
+#define pg_type_numeric_limits_max(T) std::numeric_limits<T>::max
+#define pg_type_numeric_limits_min(T) std::numeric_limits<T>::min
+#else
+#define pg_type_is_integral(T)							\
+	_Generic(*(T *) NULL,								\
+			 bool: true,								\
+			 char: true,								\
+			 short: true,								\
+			 int: true,									\
+			 long: true,								\
+			 long long: true,							\
+			 signed char: true,							\
+			 unsigned long long: true,					\
+			 unsigned char: true,						\
+			 unsigned short: true,						\
+			 unsigned int: true,						\
+			 unsigned long: true,						\
+			 default: false)
+#define pg_type_is_signed(T) (pg_type_is_integral(T) && ((T) -1 < (T) 0))
+#define pg_type_is_unsigned(T) (pg_type_is_integral(T) && ((T) 0 < (T) -1))
+/* <limits.h> must be included to use these. */
+#define pg_type_numeric_limits_max(T)				\
+	((T) _Generic((T) 0,							\
+				  bool: true,						\
+				  char: CHAR_MAX,					\
+				  short: SHRT_MAX,					\
+				  int: INT_MAX,						\
+				  long: LONG_MAX,					\
+				  long long: LLONG_MAX,				\
+				  signed char: SCHAR_MAX,			\
+				  unsigned char: UCHAR_MAX,			\
+				  unsigned short: USHRT_MAX,		\
+				  unsigned int: UINT_MAX,			\
+				  unsigned long: ULONG_MAX,			\
+				  unsigned long long: ULLONG_MAX))
+#define pg_type_numeric_limits_min(T)				\
+	((T) _Generic((T) 0,							\
+				  bool: false,						\
+				  char: CHAR_MIN,					\
+				  short: SHRT_MIN,					\
+				  int: INT_MIN,						\
+				  long: LONG_MIN,					\
+				  long long: LLONG_MIN,				\
+				  signed char: SCHAR_MIN,			\
+				  unsigned char: 0,					\
+				  unsigned short: 0,				\
+				  unsigned int: 0,					\
+				  unsigned long: 0,					\
+				  unsigned long long: 0))
+#endif
+
 /*
  * We now always use int64 timestamps, but keep this symbol defined for the
  * benefit of external code that might test it.
