@@ -1,29 +1,29 @@
 #ifndef REGRESS_XLIST_H
 #define REGRESS_XLIST_H
 
-/* X-macro for ops always available assuming XLIST_LINEAR fallbacks. */
-#define FOR_EACH_COMMON_OP(do, ...)								\
-	do(count, int (head, opt_context), __VA_ARGS__)					\
-	do(delete_from, void (head, node, opt_context), __VA_ARGS__)	\
-	do(delete_from_thoroughly, void (head, node, opt_context), __VA_ARGS__) \
-	do(has_next, int (head, node), __VA_ARGS__)					\
+/* X-macro for ops available to all configuration (assuming XLIST_LINEAR fallbacks). */
+#define FOR_EACH_COMMON_OP(do, ...)												\
+	do(count, int (head, opt_context), __VA_ARGS__)								\
+	do(delete_from, void (head, node, opt_context), __VA_ARGS__)				\
+	do(delete_from_thoroughly, void (head, node, opt_context), __VA_ARGS__) 	\
+	do(has_next, int (head, node), __VA_ARGS__)									\
 	do(has_prev, int (head, node, opt_context), __VA_ARGS__)					\
-	do(head_node, node (head, opt_context), __VA_ARGS__)					\
-	do(init, void (head), __VA_ARGS__)							\
-	do(insert_into_after, void (head, node, node, opt_context), __VA_ARGS__)	\
+	do(head_node, node (head, opt_context), __VA_ARGS__)						\
+	do(init, void (head), __VA_ARGS__)											\
+	do(insert_into_after, void (head, node, node, opt_context), __VA_ARGS__) 	\
 	do(insert_into_before, void (head, node, node, opt_context), __VA_ARGS__)	\
-	do(is_empty, int (head), __VA_ARGS__)				\
-	do(move_head, void (head, node, opt_context), __VA_ARGS__)			\
-	do(move_tail, void (head, node, opt_context), __VA_ARGS__)	\
-	do(node_is_detached, int (node), __VA_ARGS__)									\
-	do(pop_head_node, node (head, opt_context), __VA_ARGS__)	\
-	do(pop_tail_node, node (head, opt_context), __VA_ARGS__) \
-	do(push_head, void (head, node, opt_context), __VA_ARGS__) \
-	do(push_tail, void (head, node, opt_context), __VA_ARGS__) \
+	do(is_empty, int (head), __VA_ARGS__)										\
+	do(move_head, void (head, node, opt_context), __VA_ARGS__)					\
+	do(move_tail, void (head, node, opt_context), __VA_ARGS__)					\
+	do(node_is_detached, int (node), __VA_ARGS__)								\
+	do(pop_head_node, node (head, opt_context), __VA_ARGS__)					\
+	do(pop_tail_node, node (head, opt_context), __VA_ARGS__)					\
+	do(push_head, void (head, node, opt_context), __VA_ARGS__) 					\
+	do(push_tail, void (head, node, opt_context), __VA_ARGS__) 					\
 	do(tail_node, node (head, opt_context), __VA_ARGS__)
 
 /* X-macro for all ops. */
-#define FOR_EACH_OP(do, ...)			\
+#define FOR_EACH_OP(do, ...)					\
 	FOR_EACH_COMMON_OP(do, __VA_ARGS__)
 
 /* All ops. */
@@ -109,7 +109,7 @@ typedef struct test_step
 }			test_step;
 
 /* Macros for writing the schedule of tests. */
-#define STEP(f_name, args, ...) \
+#define TEST(f_name, args, ...) \
 	{CALL(f_name, REMOVE_PARENS(args)), __VA_ARGS__}
 #define REMOVE_PARENS(arg) REMOVE_PARENS_ arg
 #define REMOVE_PARENS_(...) __VA_ARGS__
@@ -123,17 +123,18 @@ typedef struct test_step
 #define CALL_ARGS_2(_1, _2) { CALL_ARG(_1), CALL_ARG(_2) }
 #define CALL_ARGS_3(_1, _2, _3) { CALL_ARG(_1), CALL_ARG(_2), CALL_ARG(_3) }
 #define CALL_ARG(arg) CALL_ARG__(arg, CALL_ARG__##arg)
-#define CALL_ARG__head ,		/* matching "head" gets you a longer arg
-								 * list... */
+#define CALL_ARG__head ,		/* matched "head"? make __VA_ARGS__ longer*/
 #define CALL_ARG__(...) CAT(CALL_ARG___, VA_ARGS_NARGS(__VA_ARGS__))(__VA_ARGS__)
-#define CALL_ARG___3(arg, ...) -1	/* saw "head", replace with -1 */
-#define CALL_ARG___2(arg, ...) arg	/* otherwise node index */
-#define EXPECT(v) .result = {.check = true, .value = v}
-#define EXPECT_NODE(v) .result = {.check = true, .is_node = true, .value = v}
-#define CHECK_LIST(...) .list_contents = {.check = true,				\
-										  .count = VA_ARGS_NARGS(__VA_ARGS__), \
-										  .order = {__VA_ARGS__}}
-#define CHECK_LIST_EMPTY() .list_contents = {.check = true, .count = 0}
+#define CALL_ARG___3(arg, ...) -1	/* replace "head" with -1 */
+#define CALL_ARG___2(arg, ...) arg	/* otherwise it's a node index */
+
+/* Macros for the expected result of function call. */
+#define RETURNS(v) .result = {.check = true, .value = v}
+#define RETURNS_NODE(v) .result = {.check = true, .is_node = true, .value = v}
+#define LIST(...) .list_contents = {.check = true,				\
+									.count = VA_ARGS_NARGS(__VA_ARGS__), \
+									.order = {__VA_ARGS__}}
+#define LIST_EMPTY() .list_contents = {.check = true, .count = 0}
 
 /* Counted lists can check the _count() function when CHECK_LIST() is present. */
 #define CHECK_COUNT(count, expected_count) Assert((count) == (expected_count))
@@ -148,7 +149,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
 			 nargs, step->op.nargs, f_name);
 }
 
-/* Explan X-macro to a switch case that calls the function. */
+/* Expand X-macro to switch cases to call all the functions. */
 #define EXPAND_CASE(f_name, f_type, prefix, have_context, context)	\
 	EXPAND_CASE_(f_name, prefix, have_context, context, DECODE_F_TYPE(f_type))
 #define EXPAND_CASE_(...) EXPAND_CASE__(__VA_ARGS__)
@@ -304,12 +305,12 @@ check_args(const char *f_name, int nargs, const test_step * step)
 #define MAYBE_CONTEXT_1(context) , (context)
 
 #define GET_NODE(node_index)											\
-	((node_index) < LIST_NIL ? &head.head : &array[(node_index)].node)
-#define GET_NEXT(prefix, node_index, have_context, context)			\
-	prefix##_get_next(GET_NODE(node_index)							\
+	((node_index) < 0 ? &head.head : &array[(node_index)].node)
+#define GET_NEXT(prefix, node_index, have_context, context)				\
+	prefix##_get_next(GET_NODE(node_index)								\
 					  MAYBE_CONTEXT(have_context, context))
-#define GET_PREV(prefix, node_index, have_context, context)			\
-	prefix##_get_prev(GET_NODE(node_index)							\
+#define GET_PREV(prefix, node_index, have_context, context)				\
+	prefix##_get_prev(GET_NODE(node_index)								\
 					  MAYBE_CONTEXT(have_context, context))
 #define GET_INDEX(prefix, node_p)										\
 	(node_p == &head.head ?												\
@@ -583,12 +584,6 @@ report_bad_link(const char *prefix,
 								context)								\
 	do																	\
 	{																	\
-		CHECK_NEXT_NIL(prefix,											\
-					   (step),											\
-					   (node1),											\
-					   (node2),											\
-					   have_context,									\
-					   context);										\
 		if ((node2) == LIST_TERMINATOR)									\
 		{																\
 			if ((node1) == LIST_TERMINATOR)								\
@@ -613,6 +608,15 @@ report_bad_link(const char *prefix,
 									LIST_TAIL,							\
 									(node1),							\
 									head.tail.next);					\
+			}															\
+			else														\
+			{															\
+				CHECK_NEXT_NIL(prefix,									\
+							   (step),									\
+							   (node1),									\
+							   (node2),									\
+							   have_context,							\
+							   context);								\
 			}															\
 		}																\
 	}																	\
