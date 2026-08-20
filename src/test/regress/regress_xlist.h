@@ -609,15 +609,15 @@ report_bad_link(const char *prefix,
 									(node1),							\
 									head.tail.next);					\
 			}															\
-			else														\
-			{															\
-				CHECK_NEXT_NIL(prefix,									\
-							   (step),									\
-							   (node1),									\
-							   (node2),									\
-							   have_context,							\
-							   context);								\
-			}															\
+		}																\
+		else															\
+		{																\
+			CHECK_NEXT_NIL(prefix,										\
+						   (step),										\
+						   (node1),										\
+						   (node2),										\
+						   have_context,								\
+						   context);									\
 		}																\
 	}																	\
 	while (0)
