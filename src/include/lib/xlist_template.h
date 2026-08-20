@@ -269,7 +269,7 @@ typedef struct XLIST_head
 #endif
 } XLIST_head;
 
-#endif							/* XLIST_ */
+#endif							/* XLIST_DECLARED */
 
 
 
@@ -366,9 +366,9 @@ XLIST_move_ptrdiff(XLIST_link_t link, XLIST_node *old_base, XLIST_node *new_base
 }
 
 static inline XLIST_node *
-XLIST_read_ptrdiff(XLIST_node *node, XLIST_link_t link)
+XLIST_read_ptrdiff(XLIST_node *base, XLIST_link_t link)
 {
-	return (XLIST_node *) ((char *) node + (link * XLIST_PTRDIFF_SCALE));
+	return (XLIST_node *) ((char *) base + (link * XLIST_PTRDIFF_SCALE));
 }
 
 #endif

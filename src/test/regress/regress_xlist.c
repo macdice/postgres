@@ -173,7 +173,9 @@ struct dlist_ptrdiff_cont
 static void
 test_dlist_ptrdiff_arithmetic(void)
 {
+#ifdef USE_ASSERT_CHECKING
 	size_t scale = alignof(dlist_ptrdiff_node);
+#endif
 	struct dlist_ptrdiff_cont array[8] = {0};
 
 	/* Pointing next to the node itself stores 0. */
