@@ -59,7 +59,7 @@ uninstall:
 # Build dynamically-loaded object file for CREATE FUNCTION ... LANGUAGE C.
 
 NAME = regress
-OBJS = $(WIN32RES) regress.o
+OBJS = $(WIN32RES) regress.o regress_xlist.o
 
 include $(top_srcdir)/src/Makefile.shlib
 

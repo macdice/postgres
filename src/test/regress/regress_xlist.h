@@ -319,8 +319,6 @@ check_args(const char *f_name, int nargs, const test_step * step)
 static inline const char *
 describe_node(char *buffer, size_t size, int node_index)
 {
-	Assert(node_index != LIST_TERMINATOR);
-
 	if (node_index == LIST_HEAD)
 		return "head node";
 
@@ -329,6 +327,9 @@ describe_node(char *buffer, size_t size, int node_index)
 
 	if (node_index == LIST_TAIL)
 		return "slist tail";
+
+	if (node_index == LIST_TERMINATOR)
+		return "terminator";
 
 	snprintf(buffer, size, "node %d", node_index);
 	return buffer;
