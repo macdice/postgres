@@ -59,8 +59,8 @@
  *		XLIST_NIL:			override NIL value (for XLIST_INDEX)
  *
  * Care must be taken not to overflow the link type.  In practice this means
- * that container objects must be in an array of known maximal size even when
- * using XLIST_PTRDIFF, or similarly constrained.
+ * that container objects must be in an array of known maximal size, and the
+ * list head must be place nearby when using XLIST_PTRDIFF.
  *
  *		XLIST_OBJECT_T:		provide containing-option functions
  *		XLIST_OBJECT_MEMBER
@@ -151,9 +151,8 @@ static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
 #if !defined(XLIST_EMPTY_NIL)
 #define XLIST_EMPTY_NIL
 #endif
-/* Most functions gain an array argument. */
-#define XLIST_CONTEXT_ARG , XLIST_OBJECT_T *array
-#define XLIST_CONTEXT , array
+#define XLIST_CONTEXT_ARG , XLIST_node *first_node, size_t object_size
+#define XLIST_CONTEXT , first_node, object_size
 #endif
 
 /* Other defaults. */
@@ -204,19 +203,20 @@ static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
 #define XLIST_check XLIST_MAKE_NAME(check)
 #define XLIST_decrement XLIST_MAKE_NAME(decrement)
 #define XLIST_delete_next XLIST_MAKE_NAME(delete_next)
+#define XLIST_follow XLIST_MAKE_NAME(follow_link)
 #define XLIST_get_next XLIST_MAKE_NAME(get_next)
 #define XLIST_get_next_or_head XLIST_MAKE_NAME(get_next_or_head)
 #define XLIST_get_prev XLIST_MAKE_NAME(get_prev)
 #define XLIST_get_prev_or_head XLIST_MAKE_NAME(get_prev_or_head)
-#define XLIST_get_ptrdiff XLIST_MAKE_NAME(get_ptrdiff)
 #define XLIST_increment XLIST_MAKE_NAME(inc)
+#define XLIST_link XLIST_MAKE_NAME(get_ptrdiff)
 #define XLIST_member_check XLIST_MAKE_NAME(member_check)
 #define XLIST_next_is_nil XLIST_MAKE_NAME(next_is_nil)
 #define XLIST_node_to_container XLIST_MAKE_NAME(node_to_container)
 #define XLIST_node_to_container_offset XLIST_MAKE_NAME(node_to_container_offset)
 #define XLIST_prev_is_nil XLIST_MAKE_NAME(prev_is_nil)
 #define XLIST_push_common XLIST_MAKE_NAME(push_common)
-#define XLIST_read_ptrdiff XLIST_MAKE_NAME(read_ptrdiff)
+#define XLIST_relink XLIST_MAKE_NAME(read_ptrdiff)
 #define XLIST_set_next XLIST_MAKE_NAME(set_next)
 #define XLIST_set_next_to_next_of XLIST_MAKE_NAME(set_next_to_next_of)
 #define XLIST_set_next_to_terminator XLIST_MAKE_NAME(set_next_to_terminator)
@@ -313,11 +313,10 @@ XLIST_prev_is_nil(XLIST_node *node)
 #endif
 
 #if defined(XLIST_PTRDIFF)
-
-#if defined(USE_ASSERT_CHECKING)
 static inline void
 XLIST_check_node_distance(XLIST_node *node1, XLIST_node *node2)
 {
+#if defined(USE_ASSERT_CHECKING)
 	uintptr_t	abs_difference;
 
 	/*
@@ -339,64 +338,58 @@ XLIST_check_node_distance(XLIST_node *node1, XLIST_node *node2)
 	abs_difference /= XLIST_PTRDIFF_SCALE;
 
 	Assert(abs_difference <= pg_type_numeric_limits_max(XLIST_link_t));
+#endif
 }
 #endif
-
-static inline XLIST_link_t
-XLIST_get_ptrdiff(XLIST_node *base, XLIST_node *target)
-{
-#ifdef USE_ASSERT_CHECKING
-	XLIST_check_node_distance(base, target);
-#endif
-
-	return ((char *) target - (char *) base) / XLIST_PTRDIFF_SCALE;
-}
-
-static inline XLIST_link_t
-XLIST_move_ptrdiff(XLIST_link_t link, XLIST_node *old_base, XLIST_node *new_base)
-{
-#ifdef USE_ASSERT_CHECKING
-	XLIST_node *target = (XLIST_node *) (old_base + (link * XLIST_PTRDIFF_SCALE));
-
-	XLIST_check_node_distance(old_base, target);
-	XLIST_check_node_distance(new_base, target);
-#endif
-
-	return link + (((char *) old_base - (char *) new_base) / XLIST_PTRDIFF_SCALE);
-}
 
 static inline XLIST_node *
-XLIST_read_ptrdiff(XLIST_node *base, XLIST_link_t link)
+XLIST_follow(XLIST_node *node, XLIST_link_t link XLIST_CONTEXT_ARG)
 {
-	return (XLIST_node *) ((char *) base + (link * XLIST_PTRDIFF_SCALE));
+#if defined(XLIST_PTR)
+	return link;
+#elif defined(XLIST_PTRDIFF)
+	return (XLIST_node *) ((char *) node + (link * XLIST_PTRDIFF_SCALE));
+#elif defined(XLIST_INDEX)
+	return (XLIST_node *) ((char *) first_node + (link * object_size));
+#endif
 }
 
+static inline XLIST_link_t
+XLIST_link(XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
+{
+#if defined(XLIST_PTR)
+	return target;
+#elif defined(XLIST_PTRDIFF)
+	XLIST_check_node_distance(base, target);
+	return ((char *) target - (char *) base) / XLIST_PTRDIFF_SCALE;
+#elif defined(XLIST_INDEX)
+	return ((char *) target - (char *) first_node) / object_size;
 #endif
+}
+
+static inline XLIST_link_t
+XLIST_relink(XLIST_link_t link, XLIST_node *old_base, XLIST_node *new_base)
+{
+#if defined(XLIST_PTRDIFF)
+	XLIST_check_node_distance(new_base, XLIST_follow(old_base, link));
+	return link + (((char *) old_base - (char *) new_base) / XLIST_PTRDIFF_SCALE);
+#else
+	return link;
+#endif	
+}
 
 /* Internal function to get next node. */
 static inline void
 XLIST_set_next(XLIST_node *node, XLIST_node *next XLIST_CONTEXT_ARG)
 {
-#if defined(XLIST_INDEX)
-	node->next = XLIST_node_to_container(next) - &array[0];
-#elif defined(XLIST_PTRDIFF)
-	node->next = XLIST_get_ptrdiff(node, next);
-#elif defined(XLIST_PTR)
-	node->next = next;
-#endif
+	node->next = XLIST_link(node, next XLIST_CONTEXT);
 }
 
 /* Internal function to get next node. */
 static inline XLIST_node *
 XLIST_get_next(XLIST_node *node XLIST_CONTEXT_ARG)
 {
-#if defined(XLIST_INDEX)
-	return &array[node->next].XLIST_OBJECT_MEMBER;
-#elif defined(XLIST_PTRDIFF)
-	return XLIST_read_ptrdiff(node, node->next);
-#elif defined(XLIST_PTR)
-	return node->next;
-#endif
+	return XLIST_follow(node, node->next XLIST_CONTEXT);
 }
 
 #if defined(XLIST_DLIST)
@@ -404,13 +397,7 @@ XLIST_get_next(XLIST_node *node XLIST_CONTEXT_ARG)
 static inline void
 XLIST_set_prev(XLIST_node *node, XLIST_node *prev XLIST_CONTEXT_ARG)
 {
-#if defined(XLIST_INDEX)
-	node->prev = XLIST_node_to_container(prev) - &array[0];
-#elif defined(XLIST_PTRDIFF)
-	node->prev = XLIST_get_ptrdiff(node, prev);
-#elif defined(XLIST_PTR)
-	node->prev = prev;
-#endif
+	node->prev = XLIST_link(node, prev XLIST_CONTEXT);
 }
 #endif
 
@@ -419,13 +406,7 @@ XLIST_set_prev(XLIST_node *node, XLIST_node *prev XLIST_CONTEXT_ARG)
 static inline XLIST_node *
 XLIST_get_prev(XLIST_node *node XLIST_CONTEXT_ARG)
 {
-#if defined(XLIST_INDEX)
-	return &array[node->prev].XLIST_OBJECT_MEMBER;
-#elif defined(XLIST_PTRDIFF)
-	return XLIST_read_ptrdiff(node, node->prev);
-#elif defined(XLIST_PTR)
-	return node->prev;
-#endif
+	return XLIST_follow(node, node->prev XLIST_CONTEXT);
 }
 #endif
 
@@ -459,11 +440,7 @@ XLIST_get_prev_or_head(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 static inline void
 XLIST_set_next_to_next_of(XLIST_node *dst, XLIST_node *src)
 {
-#if defined(XLIST_PTRDIFF)
-	dst->next = XLIST_move_ptrdiff(src->next, src, dst);
-#else
-	dst->next = src->next;
-#endif
+	dst->next = XLIST_relink(src->next, src, dst);
 }
 
 #if defined(XLIST_DLIST)
@@ -471,11 +448,7 @@ XLIST_set_next_to_next_of(XLIST_node *dst, XLIST_node *src)
 static inline void
 XLIST_set_prev_to_prev_of(XLIST_node *dst, XLIST_node *src)
 {
-#if defined(XLIST_PTRDIFF)
-	dst->prev = XLIST_move_ptrdiff(src->prev, src, dst);
-#else
-	dst->prev = src->prev;
-#endif
+	dst->prev = XLIST_relink(src->prev, src, dst);
 }
 #endif
 
@@ -1213,6 +1186,7 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_delete_from_thoroughly
 #undef XLIST_delete_thoroughly
 #undef XLIST_delete_next
+#undef XLIST_follow_link
 #undef XLIST_get_next
 #undef XLIST_get_next_or_head
 #undef XLIST_get_prev

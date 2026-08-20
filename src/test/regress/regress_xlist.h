@@ -150,12 +150,11 @@ check_args(const char *f_name, int nargs, const test_step * step)
 }
 
 /* Expand X-macro to switch cases to call all the functions. */
-#define EXPAND_CASE(f_name, f_type, prefix, have_context, context)	\
-	EXPAND_CASE_(f_name, prefix, have_context, context, DECODE_F_TYPE(f_type))
+#define EXPAND_CASE(f_name, f_type, prefix, context)	\
+	EXPAND_CASE_(f_name, prefix, context, DECODE_F_TYPE(f_type))
 #define EXPAND_CASE_(...) EXPAND_CASE__(__VA_ARGS__)
 #define EXPAND_CASE__(f_name,											\
 					  prefix,											\
-					  have_context,										\
 					  context,											\
 					  takes_opt_context,								\
 					  return_type,										\
@@ -166,7 +165,6 @@ check_args(const char *f_name, int nargs, const test_step * step)
 		EXPAND_CASE_RETURN_TYPE_##return_type							\
 			prefix##_##f_name(EXPAND_CASE_ARGS(nargs, __VA_ARGS__)		\
 							  EXPAND_CASE_ARG_OPT_CONTEXT(takes_opt_context, \
-														  have_context,	\
 														  context));	\
 		break;
 #define EXPAND_CASE_RETURN_TYPE_void
@@ -182,13 +180,17 @@ check_args(const char *f_name, int nargs, const test_step * step)
 #define EXPAND_CASE_ARG_TYPE_head(pos) &head
 #define EXPAND_CASE_ARG_TYPE_node(pos) &array[args[pos]].node
 #define EXPAND_CASE_ARG_OPT_CONTEXT(takes_opt_context,					\
-									have_context,						\
 									context)							\
-	EXPAND_CASE_ARG_OPT_CONTEXT_##takes_opt_context##_##have_context(context)
-#define EXPAND_CASE_ARG_OPT_CONTEXT_0_0(context)
-#define EXPAND_CASE_ARG_OPT_CONTEXT_0_1(context)
-#define EXPAND_CASE_ARG_OPT_CONTEXT_1_0(context)
-#define EXPAND_CASE_ARG_OPT_CONTEXT_1_1(context) , (context)
+	EXPAND_CASE_ARG_OPT_CONTEXT_##takes_opt_context(context)
+#define EXPAND_CASE_ARG_OPT_CONTEXT_0(context)
+#define EXPAND_CASE_ARG_OPT_CONTEXT_1(context) context()
+
+/*
+ * When using XLIST_INDEX, some functions need access to the array and the
+ * array element size.  Other link types don't.
+ */
+#define CONTEXT_NONE()
+#define CONTEXT_ARRAY_AND_SIZE() , &array[0].node, sizeof(array[0])
 
 /* Special node indexes used in this test code. */
 #define LIST_NIL -1
@@ -196,13 +198,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
 #define LIST_TERMINATOR -3		/* NIL or HEAD as appropriate */
 #define LIST_TAIL -4
 
-#define RUN_TESTS(prefix,												\
-				  check_link,											\
-				  check_count,											\
-				  have_context,											\
-				  context,												\
-				  steps,												\
-				  ops)													\
+#define RUN_TESTS(prefix, check_link, check_count, context, steps, ops)	\
 	for (int step_number = 0;											\
 		 step_number < lengthof(steps);									\
 		 ++step_number)													\
@@ -216,7 +212,6 @@ check_args(const char *f_name, int nargs, const test_step * step)
 		{																\
 			FOR_EACH_##ops##_OP(EXPAND_CASE,							\
 								prefix,									\
-								have_context,							\
 								context);								\
 		default:														\
 			elog(PANIC, "unknown op");									\
@@ -263,7 +258,6 @@ check_args(const char *f_name, int nargs, const test_step * step)
 						   step_number,									\
 						   LIST_TERMINATOR,								\
 						   LIST_TERMINATOR,								\
-						   have_context,								\
 						   context);									\
 			}															\
 			else														\
@@ -276,7 +270,6 @@ check_args(const char *f_name, int nargs, const test_step * step)
 						   step_number,									\
 						   LIST_TERMINATOR,								\
 						   order[0],									\
-						   have_context,								\
 						   context);									\
 																		\
 				/* Internal links. */									\
@@ -285,7 +278,6 @@ check_args(const char *f_name, int nargs, const test_step * step)
 							   step_number,								\
 							   order[i],								\
 							   order[i + 1],							\
-							   have_context,							\
 							   context);								\
 																		\
 				/* Last link. */										\
@@ -293,25 +285,17 @@ check_args(const char *f_name, int nargs, const test_step * step)
 						   step_number,									\
 						   order[count - 1],							\
 						   LIST_TERMINATOR,								\
-						   have_context,								\
 						   context);									\
 			}															\
 		}																\
 	}
 
-#define MAYBE_CONTEXT(have_context, context)	\
-	MAYBE_CONTEXT_##have_context(context)
-#define MAYBE_CONTEXT_0(context)
-#define MAYBE_CONTEXT_1(context) , (context)
-
 #define GET_NODE(node_index)											\
 	((node_index) < 0 ? &head.head : &array[(node_index)].node)
-#define GET_NEXT(prefix, node_index, have_context, context)				\
-	prefix##_get_next(GET_NODE(node_index)								\
-					  MAYBE_CONTEXT(have_context, context))
-#define GET_PREV(prefix, node_index, have_context, context)				\
-	prefix##_get_prev(GET_NODE(node_index)								\
-					  MAYBE_CONTEXT(have_context, context))
+#define GET_NEXT(prefix, node_index, context)							\
+	prefix##_get_next(GET_NODE(node_index) context())
+#define GET_PREV(prefix, node_index, context)							\
+	prefix##_get_prev(GET_NODE(node_index) context())
 #define GET_INDEX(prefix, node_p)										\
 	(node_p == &head.head ?												\
 	 LIST_HEAD :														\
@@ -373,46 +357,27 @@ report_bad_link(const char *prefix,
 				   step,												\
 				   node1,												\
 				   node2,												\
-				   have_context,										\
 				   context)												\
-	if (GET_NEXT(prefix, (node1), have_context, context) !=				\
-		GET_NODE(node2))												\
+	if (GET_NEXT(prefix, (node1), context) != GET_NODE(node2))			\
 		report_bad_link(#prefix,										\
 						(step),											\
 						"next",											\
 						(node1),										\
 						(node2),										\
 						GET_INDEX(prefix,								\
-								  GET_NEXT(prefix,						\
-										   (node1),						\
-										   have_context,				\
-										   context)))
+								  GET_NEXT(prefix, (node1),	context)))
 
-#define CHECK_PREV(prefix,												\
-				   step,												\
-				   node1,												\
-				   node2,												\
-				   have_context,										\
-				   context)												\
-	if (GET_PREV(prefix, (node2), have_context, context) !=				\
-		GET_NODE(node1))												\
+#define CHECK_PREV(prefix,step, node1, node2, context)					\
+	if (GET_PREV(prefix, (node2), context) != GET_NODE(node1))			\
 		report_bad_link(#prefix,										\
 						(step),											\
 						"prev",											\
 						(node2),										\
 						(node1),										\
 						GET_INDEX(prefix,								\
-								  GET_NEXT(prefix,						\
-										   (node2),						\
-										   have_context,				\
-										   context)))
+								  GET_NEXT(prefix, (node2), context)))
 
-#define CHECK_NEXT_NIL(prefix,											\
-					   step,											\
-					   node1,											\
-					   node2,											\
-					   have_context,									\
-					   context)											\
+#define CHECK_NEXT_NIL(prefix, step, node1, node2, context)				\
 	if ((node1) == LIST_TERMINATOR && (node2) == LIST_TERMINATOR)		\
 	{																	\
 		/* Expect empty head with NIL. */								\
@@ -448,21 +413,11 @@ report_bad_link(const char *prefix,
 	}																	\
 	else																\
 	{																	\
-		/* Expect internal next link. */								\
-		CHECK_NEXT(prefix,												\
-				   (step),												\
-				   (node1),												\
-				   (node2),												\
-				   have_context,										\
-				   context);											\
-	}																	\
+	/* Expect internal next link. */									\
+	CHECK_NEXT(prefix, (step), (node1),	(node2), context);				\
+	}
 
-#define CHECK_PREV_NIL(prefix,											\
-					   step,											\
-					   node1,											\
-					   node2,											\
-					   have_context,									\
-					   context)											\
+#define CHECK_PREV_NIL(prefix, step, node1, node2, context)				\
 	if ((node1) == LIST_TERMINATOR && (node2) == LIST_TERMINATOR)		\
 	{																	\
 		/* Expect empty head with NIL. */								\
@@ -499,58 +454,30 @@ report_bad_link(const char *prefix,
 	else																\
 	{																	\
 		/* Expect internal prev link. */								\
-		CHECK_PREV(prefix,												\
-				   (step),												\
-				   (node1),												\
-				   (node2),												\
-				   have_context,										\
-				   context);											\
+		CHECK_PREV(prefix, (step), (node1), (node2), context);			\
 	}																	\
 
-#define CHECK_NEXT_AND_PREV(prefix,										\
-							step,										\
-							node1,										\
-							node2,										\
-							have_context,								\
-							context)									\
+#define CHECK_NEXT_AND_PREV(prefix, step, node1, node2, context)		\
 	do																	\
 	{																	\
-		CHECK_NEXT(prefix,												\
-				   (step),												\
-				   (node1),												\
-				   (node2),												\
-				   have_context,										\
-				   context);											\
-		CHECK_PREV(prefix,												\
-				   (step),												\
-				   (node1),												\
-				   (node2),												\
-				   have_context,										\
-				   context);											\
+		CHECK_NEXT(prefix, (step), (node1), (node2), context);			\
+		CHECK_PREV(prefix, (step), (node1), (node2), context);			\
 	}																	\
 	while (0)
 
-#define CHECK_NEXT_AND_TAIL(prefix,										\
-							step,										\
-							node1,										\
-							node2,										\
-							have_context,								\
-							context)									\
+#define CHECK_NEXT_AND_TAIL(prefix, step, node1, node2, context)		\
 	do																	\
 	{																	\
 		CHECK_NEXT(prefix,												\
 				   (step),												\
 				   (node1),												\
 				   (node2),												\
-				   have_context,										\
 				   context);											\
 		if ((node2) == LIST_TERMINATOR)									\
 		{																\
 			if ((node1) == LIST_TERMINATOR)								\
 			{															\
-				if (prefix##_get_next(&head.tail						\
-									  MAYBE_CONTEXT(have_context,		\
-													context)) !=		\
+				if (prefix##_get_next(&head.tail context()) !=			\
 					&head.head)											\
 					report_bad_link(#prefix,							\
 									(step),								\
@@ -561,9 +488,7 @@ report_bad_link(const char *prefix,
 			}															\
 			else														\
 			{															\
-				if (prefix##_get_next(&head.tail						\
-									  MAYBE_CONTEXT(have_context,		\
-													context)) !=		\
+				if (prefix##_get_next(&head.tail context()) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
 									(step),								\
@@ -576,12 +501,7 @@ report_bad_link(const char *prefix,
 	}																	\
 	while (0)
 
-#define CHECK_NEXT_AND_TAIL_NIL(prefix,									\
-								step,									\
-								node1,									\
-								node2,									\
-								have_context,							\
-								context)								\
+#define CHECK_NEXT_AND_TAIL_NIL(prefix, step, node1, node2, context)	\
 	do																	\
 	{																	\
 		if ((node2) == LIST_TERMINATOR)									\
@@ -598,9 +518,7 @@ report_bad_link(const char *prefix,
 			}															\
 			else														\
 			{															\
-				if (prefix##_get_next(&head.tail						\
-									  MAYBE_CONTEXT(have_context,		\
-													context)) !=		\
+				if (prefix##_get_next(&head.tail context()) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
 									(step),								\
@@ -612,36 +530,16 @@ report_bad_link(const char *prefix,
 		}																\
 		else															\
 		{																\
-			CHECK_NEXT_NIL(prefix,										\
-						   (step),										\
-						   (node1),										\
-						   (node2),										\
-						   have_context,								\
-						   context);									\
+			CHECK_NEXT_NIL(prefix, (step), (node1), (node2), context);	\
 		}																\
 	}																	\
 	while (0)
 
-#define CHECK_NEXT_AND_PREV_NIL(prefix,									\
-								step,									\
-								node1,									\
-								node2,									\
-								have_context,							\
-								context)								\
+#define CHECK_NEXT_AND_PREV_NIL(prefix, step, node1, node2, context)	\
 	do																	\
 	{																	\
-		CHECK_NEXT_NIL(prefix,											\
-					   (step),											\
-					   (node1),											\
-					   (node2),											\
-					   have_context,									\
-					   context);										\
-		CHECK_PREV_NIL(prefix,											\
-					   (step),											\
-					   (node1),											\
-					   (node2),											\
-					   have_context,									\
-					   context);										\
+		CHECK_NEXT_NIL(prefix, (step), (node1), (node2), context);		\
+		CHECK_PREV_NIL(prefix, (step), (node1), (node2), context);		\
 	}																	\
 	while (0)
 

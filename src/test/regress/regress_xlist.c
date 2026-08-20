@@ -87,8 +87,7 @@ test_dlist_ptr(void)
 	RUN_TESTS(dlist_ptr,
 			  CHECK_NEXT_AND_PREV,
 			  NO_COUNT,
-			  0,
-			  0,
+			  CONTEXT_NONE,
 			  common_schedule,
 			  COMMON);
 }
@@ -117,8 +116,7 @@ test_dclist_ptr(void)
 	RUN_TESTS(dclist_ptr,
 			  CHECK_NEXT_AND_PREV,
 			  CHECK_COUNT,
-			  0,
-			  0,
+			  CONTEXT_NONE,
 			  common_schedule,
 			  COMMON);
 }
@@ -141,6 +139,9 @@ struct dlist_index_cont
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
 
+/* Functions declared to take "opt_context" will receive this. */
+#define DLIST_INDEX_CONTEXT() , &array[0].node, sizeof(array[0])
+
 static void
 test_dlist_index(void)
 {
@@ -150,8 +151,7 @@ test_dlist_index(void)
 	RUN_TESTS(dlist_index,
 			  CHECK_NEXT_AND_PREV_NIL,
 			  NO_COUNT,
-			  1,
-			  array,
+			  CONTEXT_ARRAY_AND_SIZE,
 			  common_schedule,
 			  COMMON);
 }
@@ -217,8 +217,7 @@ test_dlist_ptrdiff(void)
 	RUN_TESTS(dlist_ptrdiff,
 			  CHECK_NEXT_AND_PREV,
 			  NO_COUNT,
-			  0,
-			  0,
+			  CONTEXT_NONE,
 			  common_schedule,
 			  COMMON);
 }
@@ -248,8 +247,7 @@ test_slist_ptr(void)
 	RUN_TESTS(slist_ptr,
 			  CHECK_NEXT,
 			  NO_COUNT,
-			  0,
-			  0,
+			  CONTEXT_NONE,
 			  common_schedule,
 			  COMMON);
 }
@@ -280,8 +278,7 @@ test_stlist_ptr(void)
 	RUN_TESTS(stlist_ptr,
 			  CHECK_NEXT_AND_TAIL,
 			  NO_COUNT,
-			  0,
-			  0,
+			  CONTEXT_NONE,
 			  common_schedule,
 			  COMMON);
 }
@@ -312,8 +309,7 @@ test_sclist_ptr(void)
 	RUN_TESTS(sclist_ptr,
 			  CHECK_NEXT,
 			  NO_COUNT,
-			  0,
-			  0,
+			  CONTEXT_NONE,
 			  common_schedule,
 			  COMMON);
 }
@@ -344,8 +340,7 @@ test_slist_index(void)
 	RUN_TESTS(slist_index,
 			  CHECK_NEXT_NIL,
 			  NO_COUNT,
-			  1,
-			  array,
+			  CONTEXT_ARRAY_AND_SIZE,
 			  common_schedule,
 			  COMMON);
 }
@@ -377,8 +372,7 @@ test_stlist_index(void)
 	RUN_TESTS(stlist_index,
 			  CHECK_NEXT_AND_TAIL_NIL,
 			  NO_COUNT,
-			  1,
-			  array,
+			  CONTEXT_ARRAY_AND_SIZE,
 			  common_schedule,
 			  COMMON);
 }
