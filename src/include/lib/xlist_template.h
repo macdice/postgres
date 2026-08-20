@@ -54,6 +54,7 @@
  * The type used for indexes or relative pointers can be controlled with:
  *
  *		XLIST_LINK_T:		override link type (not for XLIST_PTR)
+ *		XLIST_PTRDIFF_SCALE: override scaling (default: alignof(XXX_node))
  *		XLIST_COUNT_T:		override count type (default: uint32_t)
  *		XLIST_NIL:			override NIL value (for XLIST_INDEX)
  *
@@ -121,7 +122,11 @@
 #define XLIST_LINK_T ptrdiff_t
 #endif
 static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
+/* Note that zero is indistinguishable from "pointer to self". */
 #define XLIST_NIL ((XLIST_LINK_T) 0)
+#if !defined(XLIST_PTRDIFF_SCALE)
+#define XLIST_PTRDIFF_SCALE	((ptrdiff_t) alignof(XLIST_link_t))
+#endif
 #if defined(XLIST_EMPTY_NIL) || defined(XLIST_EMPTY_LAZY)
 #error "only XLIST_EMPTY_SELF is allowed for XLIST_PTRDIFF"
 #endif
@@ -211,6 +216,7 @@ static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
 #define XLIST_node_to_container_offset XLIST_MAKE_NAME(node_to_container_offset)
 #define XLIST_prev_is_nil XLIST_MAKE_NAME(prev_is_nil)
 #define XLIST_push_common XLIST_MAKE_NAME(push_common)
+#define XLIST_read_ptrdiff XLIST_MAKE_NAME(read_ptrdiff)
 #define XLIST_set_next XLIST_MAKE_NAME(set_next)
 #define XLIST_set_next_to_next_of XLIST_MAKE_NAME(set_next_to_next_of)
 #define XLIST_set_next_to_terminator XLIST_MAKE_NAME(set_next_to_terminator)
@@ -306,7 +312,9 @@ XLIST_prev_is_nil(XLIST_node *node)
 }
 #endif
 
-#if defined(XLIST_PTRDIFF) && defined(USE_ASSERT_CHECKING)
+#if defined(XLIST_PTRDIFF)
+
+#if defined(USE_ASSERT_CHECKING)
 static inline void
 XLIST_check_node_distance(XLIST_node *node1, XLIST_node *node2)
 {
@@ -327,11 +335,13 @@ XLIST_check_node_distance(XLIST_node *node1, XLIST_node *node2)
 	else
 		abs_difference = (uintptr_t) node1 - (uintptr_t) node2;
 
+	Assert(TYPEALIGN(XLIST_PTRDIFF_SCALE, abs_difference) == abs_difference);
+	abs_difference /= XLIST_PTRDIFF_SCALE;
+
 	Assert(abs_difference <= pg_type_numeric_limits_max(XLIST_link_t));
 }
 #endif
 
-#ifdef XLIST_PTRDIFF
 static inline XLIST_link_t
 XLIST_get_ptrdiff(XLIST_node *base, XLIST_node *target)
 {
@@ -339,21 +349,28 @@ XLIST_get_ptrdiff(XLIST_node *base, XLIST_node *target)
 	XLIST_check_node_distance(base, target);
 #endif
 
-	return (char *) target - (char *) base;
+	return ((char *) target - (char *) base) / XLIST_PTRDIFF_SCALE;
 }
 
 static inline XLIST_link_t
 XLIST_move_ptrdiff(XLIST_link_t link, XLIST_node *old_base, XLIST_node *new_base)
 {
 #ifdef USE_ASSERT_CHECKING
-	XLIST_node *target = (XLIST_node *) (old_base + link);
+	XLIST_node *target = (XLIST_node *) (old_base + (link * XLIST_PTRDIFF_SCALE));
 
 	XLIST_check_node_distance(old_base, target);
 	XLIST_check_node_distance(new_base, target);
 #endif
 
-	return link + ((char *) old_base - (char *) new_base);
+	return link + (((char *) old_base - (char *) new_base) / XLIST_PTRDIFF_SCALE);
 }
+
+static inline XLIST_node *
+XLIST_read_ptrdiff(XLIST_node *node, XLIST_link_t link)
+{
+	return (XLIST_node *) ((char *) node + (link * XLIST_PTRDIFF_SCALE));
+}
+
 #endif
 
 /* Internal function to get next node. */
@@ -376,7 +393,7 @@ XLIST_get_next(XLIST_node *node XLIST_CONTEXT_ARG)
 #if defined(XLIST_INDEX)
 	return &array[node->next].XLIST_OBJECT_MEMBER;
 #elif defined(XLIST_PTRDIFF)
-	return (XLIST_node *) ((char *) node + node->next);
+	return XLIST_read_ptrdiff(node, node->next);
 #elif defined(XLIST_PTR)
 	return node->next;
 #endif
@@ -405,7 +422,7 @@ XLIST_get_prev(XLIST_node *node XLIST_CONTEXT_ARG)
 #if defined(XLIST_INDEX)
 	return &array[node->prev].XLIST_OBJECT_MEMBER;
 #elif defined(XLIST_PTRDIFF)
-	return (XLIST_node *) ((char *) node + node->prev);
+	return XLIST_read_ptrdiff(node, node->prev);
 #elif defined(XLIST_PTR)
 	return node->prev;
 #endif
@@ -1186,6 +1203,7 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_MAKE_NAME
 #undef XLIST_MAKE_NAME_
 #undef XLIST_MAX_PREFIX
+#undef XLIST_PTRDIFF_SCALE
 #undef XLIST_check
 #undef XLIST_count
 #undef XLIST_count_t
@@ -1233,6 +1251,7 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_set_next_to_next_of
 #undef XLIST_set_prev
 #undef XLIST_set_prev_to_prev_of
+#undef XLIST_read_ptrdiff
 #undef XLIST_tail_node
 
 #endif

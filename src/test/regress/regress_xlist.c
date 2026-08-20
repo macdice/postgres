@@ -62,37 +62,6 @@ static const struct test_step common_schedule[] = {
 	STEP(count, (head), EXPECT(0)),
 };
 
-#if 0
-static const struct test_step slist_schedule[] = {
-	{INIT, NOARGS, EXPECT_EMPTY_LIST},
-	{IS_EMPTY, NOARGS, EXPECT_TRUE},
-	{COUNT, NOARGS, EXPECT_INTEGER(0)},
-	{PUSH_HEAD, ARG(0), EXPECT_LIST(0)},
-	{IS_EMPTY, NOARGS, EXPECT_FALSE},
-	{PUSH_HEAD, ARG(1), EXPECT_LIST(1, 0)},
-	{INSERT_INTO_AFTER, ARGS(0, 2), EXPECT_LIST(1, 0, 2)},
-	{INSERT_AFTER, ARGS(0, 3), EXPECT_LIST(1, 0, 3, 2)},
-	{INSERT_AFTER, ARGS(1, 4), EXPECT_LIST(1, 4, 0, 3, 2)},
-	{COUNT, NOARGS, EXPECT_INTEGER(5)},
-	{HAS_NEXT, ARG(1), EXPECT_TRUE},
-	{HAS_NEXT, ARG(3), EXPECT_TRUE},
-	{HAS_NEXT, ARG(2), EXPECT_FALSE},
-	{HEAD_NODE, NOARGS, EXPECT_NODE(1)},
-	{TAIL_NODE, NOARGS, EXPECT_NODE(2)},
-	{PUSH_TAIL, ARG(2), EXPECT_LIST(2)},
-	{PUSH_TAIL, ARG(3), EXPECT_LIST(2, 3)},
-	{PUSH_HEAD, ARG(1), EXPECT_LIST(1, 2, 3)},
-	{PUSH_HEAD, ARG(0), EXPECT_LIST(0, 1, 2, 3)},
-	{MOVE_HEAD, ARG(1), EXPECT_LIST(1, 0, 2, 3)},
-	{MOVE_TAIL, ARG(2), EXPECT_LIST(1, 0, 3, 2)},
-	{POP_TAIL_NODE, NOARGS, EXPECT_NODE_AND_LIST(2, 1, 0, 3)},
-	{POP_TAIL_NODE, NOARGS, EXPECT_NODE_AND_LIST(3, 1, 0)},
-	{POP_HEAD_NODE, NOARGS, EXPECT_NODE_AND_LIST(1, 0)},
-	{POP_HEAD_NODE, NOARGS, EXPECT_NODE_AND_EMPTY_LIST(0)},
-	{COUNT, NOARGS, EXPECT_INTEGER(0)},
-};
-#endif
-
 
 #define XLIST_PREFIX dlist_ptr
 #define XLIST_DLIST
@@ -204,6 +173,7 @@ struct dlist_ptrdiff_cont
 static void
 test_dlist_ptrdiff_arithmetic(void)
 {
+	size_t scale = alignof(dlist_ptrdiff_node);
 	struct dlist_ptrdiff_cont array[8] = {0};
 
 	/* Pointing next to the node itself stores 0. */
@@ -219,20 +189,20 @@ test_dlist_ptrdiff_arithmetic(void)
 
 	/* Pointing next to adjacent object stores object size delta. */
 	dlist_ptrdiff_set_next(&array[3].node, &array[4].node);
-	Assert(array[3].node.next == sizeof(array[3]));
+	Assert(array[3].node.next == sizeof(array[3]) / scale);
 	Assert(dlist_ptrdiff_get_next(&array[3].node) == &array[4].node);
 	/* ... and for prev. */
 	dlist_ptrdiff_set_prev(&array[3].node, &array[2].node);
-	Assert(array[3].node.prev == -sizeof(array[3]));
+	Assert(array[3].node.prev == -(sizeof(array[3]) / scale));
 	Assert(dlist_ptrdiff_get_prev(&array[3].node) == &array[2].node);
 
 	/* Pointing next to next-of(node) adjusts the delta correctly. */
 	dlist_ptrdiff_set_next_to_next_of(&array[5].node, &array[3].node);
-	Assert(array[5].node.next == -sizeof(array[5]));
+	Assert(array[5].node.next == -(sizeof(array[5]) / scale));
 	Assert(dlist_ptrdiff_get_next(&array[5].node) == &array[4].node);
 	/* ... and for prev-of(node). */
 	dlist_ptrdiff_set_prev_to_prev_of(&array[5].node, &array[3].node);
-	Assert(array[5].node.prev == -sizeof(array[5]) * (5 - 2));
+	Assert(array[5].node.prev == -((sizeof(array[5]) * (5 - 2)) / scale));
 	Assert(dlist_ptrdiff_get_prev(&array[5].node) == &array[2].node);
 }
 
