@@ -299,14 +299,14 @@ XLIST_node_to_container(XLIST_node *node)
 #endif
 
 static inline bool
-XLIST_next_is_nil(XLIST_node *node)
+XLIST_next_is_nil(const XLIST_node *node)
 {
 	return node->next == XLIST_NIL;
 }
 
 #if defined(XLIST_DLIST)
 static inline bool
-XLIST_prev_is_nil(XLIST_node *node)
+XLIST_prev_is_nil(const XLIST_node *node)
 {
 	return node->prev == XLIST_NIL;
 }
@@ -314,7 +314,7 @@ XLIST_prev_is_nil(XLIST_node *node)
 
 #if defined(XLIST_PTRDIFF)
 static inline void
-XLIST_check_node_distance(XLIST_node *node1, XLIST_node *node2)
+XLIST_check_node_distance(const XLIST_node *node1, const XLIST_node *node2)
 {
 #if defined(USE_ASSERT_CHECKING)
 	uintptr_t	abs_difference;
@@ -343,7 +343,7 @@ XLIST_check_node_distance(XLIST_node *node1, XLIST_node *node2)
 #endif
 
 static inline XLIST_node *
-XLIST_follow(XLIST_node *node, XLIST_link_t link XLIST_CONTEXT_ARG)
+XLIST_follow(const XLIST_node *node, XLIST_link_t link XLIST_CONTEXT_ARG)
 {
 #if defined(XLIST_PTR)
 	return link;
@@ -355,7 +355,7 @@ XLIST_follow(XLIST_node *node, XLIST_link_t link XLIST_CONTEXT_ARG)
 }
 
 static inline XLIST_link_t
-XLIST_link(XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
+XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 {
 #if defined(XLIST_PTR)
 	return target;
@@ -368,7 +368,9 @@ XLIST_link(XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 }
 
 static inline XLIST_link_t
-XLIST_relink(XLIST_link_t link, XLIST_node *old_base, XLIST_node *new_base)
+XLIST_relink(XLIST_link_t link,
+			 const XLIST_node *old_base,
+			 const XLIST_node *new_base)
 {
 #if defined(XLIST_PTRDIFF)
 	XLIST_check_node_distance(new_base, XLIST_follow(old_base, link));
@@ -387,7 +389,7 @@ XLIST_set_next(XLIST_node *node, XLIST_node *next XLIST_CONTEXT_ARG)
 
 /* Internal function to get next node. */
 static inline XLIST_node *
-XLIST_get_next(XLIST_node *node XLIST_CONTEXT_ARG)
+XLIST_get_next(const XLIST_node *node XLIST_CONTEXT_ARG)
 {
 	return XLIST_follow(node, node->next XLIST_CONTEXT);
 }
@@ -404,7 +406,7 @@ XLIST_set_prev(XLIST_node *node, XLIST_node *prev XLIST_CONTEXT_ARG)
 #if defined(XLIST_DLIST)
 /* Internal function to get previous node. */
 static inline XLIST_node *
-XLIST_get_prev(XLIST_node *node XLIST_CONTEXT_ARG)
+XLIST_get_prev(const XLIST_node *node XLIST_CONTEXT_ARG)
 {
 	return XLIST_follow(node, node->prev XLIST_CONTEXT);
 }
@@ -690,7 +692,7 @@ XLIST_is_empty(const XLIST_head *list)
 #endif
 
 #if defined(XLIST_EMPTY_LAZY) || defined(XLIST_EMPTY_SELF)
-	if (XLIST_get_next(unconstify(XLIST_node *, &list->head)) == &list->head)
+	if (XLIST_get_next(&list->head) == &list->head)
 		return true;
 #endif
 	return false;
@@ -706,12 +708,12 @@ XLIST_has_next(const XLIST_head *list, const XLIST_node *node)
 #if defined(XLIST_EMPTY_NIL)
 	return node->next != XLIST_NIL;
 #else
-	return XLIST_get_next(unconstify(XLIST_node *, node)) != &list->head;
+	return XLIST_get_next(node) != &list->head;
 #endif
 }
 
-static inline XLIST_node *XLIST_prev_node(XLIST_head *list,
-										  XLIST_node *node XLIST_CONTEXT_ARG);
+static inline XLIST_node *XLIST_prev_node(const XLIST_head *list,
+										  const XLIST_node *node XLIST_CONTEXT_ARG);
 
 #if defined(XLIST_DLIST) || defined(XLIST_LINEAR)
 /*
@@ -756,7 +758,7 @@ XLIST_node_is_detached(const XLIST_node *node)
  * Return the next node in the list (there must be one).
  */
 static inline XLIST_node *
-XLIST_next_node(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
+XLIST_next_node(const XLIST_head *list, const XLIST_node *node XLIST_CONTEXT_ARG)
 {
 	Assert(XLIST_has_next(list, node));
 	return XLIST_get_next(node XLIST_CONTEXT);
@@ -767,20 +769,20 @@ XLIST_next_node(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
  * Return previous node in the list (there must be one).
  */
 static inline XLIST_node *
-XLIST_prev_node(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
+XLIST_prev_node(const XLIST_head *list, const XLIST_node *node XLIST_CONTEXT_ARG)
 {
 #if defined(XLIST_XLIST)
 	Assert(XLIST_has_prev(list, node XLIST_CONTEXT));
 	return XLIST_get_prev(node XLIST_CONTEXT);
 #else
 	Assert(!XLIST_is_empty(list));
-	for (XLIST_node *cur = &list->head;
+	for (const XLIST_node *cur = &list->head;
 		 XLIST_has_next(list, cur);)
 	{
 		XLIST_node *next = XLIST_get_next(cur XLIST_CONTEXT);
 
 		if (next == node)
-			return cur;
+			return unconstify(XLIST_node *, cur);
 		cur = next;
 	}
 	Assert(false);
@@ -796,6 +798,7 @@ static inline XLIST_node *
 XLIST_head_node(XLIST_head *list XLIST_CONTEXT_ARG)
 {
 	Assert(!XLIST_is_empty(list));
+	//return XLIST_follow(cur, cur->next XLIST_CONTEXT);
 	return XLIST_get_next(&list->head XLIST_CONTEXT);
 }
 
@@ -804,7 +807,7 @@ XLIST_head_node(XLIST_head *list XLIST_CONTEXT_ARG)
  * Return the last node in the list (there must be one).
  */
 static inline XLIST_node *
-XLIST_tail_node(XLIST_head *list XLIST_CONTEXT_ARG)
+XLIST_tail_node(const XLIST_head *list XLIST_CONTEXT_ARG)
 {
 	Assert(!XLIST_is_empty(list));
 #if defined(XLIST_DLIST)
