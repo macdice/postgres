@@ -365,7 +365,7 @@ report_bad_link(const char *prefix,
 						(node1),										\
 						(node2),										\
 						GET_INDEX(prefix,								\
-								  GET_NEXT(prefix, (node1),	context)))
+								  GET_NEXT(prefix, (node2),	context)))
 
 #define CHECK_PREV(prefix,step, node1, node2, context)					\
 	if (GET_PREV(prefix, (node2), context) != GET_NODE(node1))			\
@@ -375,7 +375,7 @@ report_bad_link(const char *prefix,
 						(node2),										\
 						(node1),										\
 						GET_INDEX(prefix,								\
-								  GET_NEXT(prefix, (node2), context)))
+								  GET_NEXT(prefix, (node1), context)))
 
 #define CHECK_NEXT_NIL(prefix, step, node1, node2, context)				\
 	if ((node1) == LIST_TERMINATOR && (node2) == LIST_TERMINATOR)		\
@@ -409,12 +409,12 @@ report_bad_link(const char *prefix,
 							"next",										\
 							LIST_HEAD,									\
 							(node2),									\
-							LIST_NIL);									\
+							head.head.next);							\
 	}																	\
 	else																\
 	{																	\
-	/* Expect internal next link. */									\
-	CHECK_NEXT(prefix, (step), (node1),	(node2), context);				\
+		/* Expect internal next link. */								\
+		CHECK_NEXT(prefix, (step), (node1),	(node2), context);			\
 	}
 
 #define CHECK_PREV_NIL(prefix, step, node1, node2, context)				\
@@ -449,7 +449,7 @@ report_bad_link(const char *prefix,
 							"prev",										\
 							LIST_HEAD,									\
 							(node1),									\
-							LIST_NIL);									\
+							head.head.prev);							\
 	}																	\
 	else																\
 	{																	\
@@ -468,15 +468,12 @@ report_bad_link(const char *prefix,
 #define CHECK_NEXT_AND_TAIL(prefix, step, node1, node2, context)		\
 	do																	\
 	{																	\
-		CHECK_NEXT(prefix,												\
-				   (step),												\
-				   (node1),												\
-				   (node2),												\
-				   context);											\
+		CHECK_NEXT(prefix, (step), (node1), (node2), context);			\
 		if ((node2) == LIST_TERMINATOR)									\
 		{																\
 			if ((node1) == LIST_TERMINATOR)								\
 			{															\
+				/* Expect tail to point to head. */						\
 				if (prefix##_get_next(&head.tail context()) !=			\
 					&head.head)											\
 					report_bad_link(#prefix,							\
@@ -488,6 +485,7 @@ report_bad_link(const char *prefix,
 			}															\
 			else														\
 			{															\
+				/* Expect tail to point to last node. */				\
 				if (prefix##_get_next(&head.tail context()) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
@@ -504,10 +502,12 @@ report_bad_link(const char *prefix,
 #define CHECK_NEXT_AND_TAIL_NIL(prefix, step, node1, node2, context)	\
 	do																	\
 	{																	\
+		CHECK_NEXT_NIL(prefix, (step), (node1), (node2), context);		\
 		if ((node2) == LIST_TERMINATOR)									\
 		{																\
 			if ((node1) == LIST_TERMINATOR)								\
 			{															\
+				/* Expect tail to be NIL. */							\
 				if (!prefix##_next_is_nil(&head.tail))					\
 					report_bad_link(#prefix,							\
 									(step),								\
@@ -518,6 +518,7 @@ report_bad_link(const char *prefix,
 			}															\
 			else														\
 			{															\
+				/* Expect tail to point to last node. */				\
 				if (prefix##_get_next(&head.tail context()) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
@@ -527,10 +528,6 @@ report_bad_link(const char *prefix,
 									(node1),							\
 									head.tail.next);					\
 			}															\
-		}																\
-		else															\
-		{																\
-			CHECK_NEXT_NIL(prefix, (step), (node1), (node2), context);	\
 		}																\
 	}																	\
 	while (0)
