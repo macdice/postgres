@@ -32,16 +32,36 @@
  *		XLIST_PTRDIFF:			nodes linked relative pointers
  *		XLIST_INDEX:			nodes linked by array index
  *
- * The type used for indexes or relative pointers can be controlled with:
+ * XLIST_PTR lists are straightforward but can't be relocated.
+ *
+ * XLIST_PTRDIFF lists can only be used when all the nodes including the list
+ * head are in one contiguous chunk of memory with a total span between nodes
+ * that doesn't overflow the link type.  That chunk can be reallocated, the
+ * list can be bitwise-copied to another single contiguous chunk or remapped
+ * at a difference address, but there can be no links between individual stack
+ * objects or between stack, heap, or shared memory regions.  That would be a
+ * recipe for overflowing the link type anyway, but more subtly the provenance
+ * tracking in modern compilers (and the model being formalized in ISO TS
+ * 6010) will fail to analyze aliases correctly and clobber or eliminate
+ * stores though pointers computed from nodes it considers to belong to
+ * different allocations ("storage instances" in standardese).
+ *
+ * XXX Technically C has a narrower definition of pointer arithmetic that
+ * applies only to the top-level elements of an array and the members of an
+ * struct computed with offsetof(), so apparently we shouldn't use the
+ * "container_of" trick that probably appears in every large C program.
+ *
+ * XLIST_INDEX can be relocated, and the list head can be in a separate
+ * allocation from the array of objects holding the nodes, but have a higher
+ * runtime cost due to branching.
+ *
+ * The types and values used for indexes and relative pointers can be
+ * controlled with:
  *
  *		XLIST_LINK_T:			override link type (not for XLIST_PTR)
  *		XLIST_PTRDIFF_SCALE:	override scaling (default: alignof(node))
  *		XLIST_COUNT_T:			override count type (default: uint32_t)
  *		XLIST_NIL:				override NIL value (for XLIST_INDEX)
- *
- * Care must be taken not to overflow the link type.  In practice this means
- * that container objects must be in an array of known maximal size, and the
- * list head must be place nearby when using XLIST_PTRDIFF.
  *
  * XLIST_LINK_INDEX adds arguments "first_node" and "object_size" to most
  * functions.
@@ -52,7 +72,7 @@
  *		XLIST_EMPTY_SELF:		empty lists have head pointing to itself
  *		XLIST_EMPTY_NIL:		empty lists have NIL (less efficient)
  *
- * Whether or not zero-initialization is supported is controlled with:
+ * Whether or not zero-initialized lists are supported is controlled with:
  *
  *		XLIST_INIT_ON_ZERO_MEM:	zero-initialized memory is a valid list
  *		XLIST_INIT_REQUIRED:	the list must be initialized (more efficient)
@@ -386,7 +406,7 @@ XLIST_follow(const XLIST_node *node, XLIST_link_t link XLIST_CONTEXT_ARG)
 #if defined(XLIST_PTR)
 	return link;
 #elif defined(XLIST_PTRDIFF)
-	return (XLIST_node *) ((char *) node + (link * XLIST_PTRDIFF_SCALE));
+	return (XLIST_node *) ((ptrdiff_t) node + (link * XLIST_PTRDIFF_SCALE));
 #elif defined(XLIST_INDEX)
 	return (XLIST_node *) ((char *) first_node + (link * object_size));
 #endif
@@ -399,8 +419,9 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 	return target;
 #elif defined(XLIST_PTRDIFF)
 	XLIST_check_node_distance(base, target);
-	return ((char *) target - (char *) base) / XLIST_PTRDIFF_SCALE;
+	return ((ptrdiff_t) target - (ptrdiff_t) base) / XLIST_PTRDIFF_SCALE;
 #elif defined(XLIST_INDEX)
+	Assert(target >= first_node);
 	return ((char *) target - (char *) first_node) / object_size;
 #endif
 }
@@ -412,7 +433,7 @@ XLIST_relink(XLIST_link_t link,
 {
 #if defined(XLIST_PTRDIFF)
 	XLIST_check_node_distance(new_base, XLIST_follow(old_base, link));
-	return link + (((char *) old_base - (char *) new_base) / XLIST_PTRDIFF_SCALE);
+	return link + (((ptrdiff_t) old_base - (ptrdiff_t) new_base) / XLIST_PTRDIFF_SCALE);
 #else
 	return link;
 #endif	
