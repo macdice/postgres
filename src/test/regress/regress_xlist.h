@@ -297,9 +297,10 @@ check_args(const char *f_name, int nargs, const test_step * step)
 #define GET_PREV(prefix, node_index, context)							\
 	prefix##_get_prev(GET_NODE(node_index) context())
 #define GET_INDEX(prefix, node_p)										\
-	(node_p == &head.head ?												\
-	 LIST_HEAD :														\
-	 (((char *) (node_p) - (char *) &array[0].node) / sizeof(array[0])))
+	((node_p >= &array[0].node &&										\
+	  node_p < &array[lengthof(array)].node) ?							\
+	 (((char *) (node_p) - (char *) array) / sizeof(array[0])) :		\
+	 LIST_HEAD)
 
 static inline const char *
 describe_node(char *buffer, size_t size, int node_index)
@@ -432,7 +433,7 @@ report_bad_link(const char *prefix,
 	else if ((node1) == LIST_TERMINATOR)								\
 	{																	\
 		/* Expect first node with NIL as previous. */					\
-		if (!prefix##_prev_is_nil(&array[(node2)].node))				\
+		if (!prefix##_prev_is_nil(GET_NODE(node2)))						\
 			report_bad_link(#prefix,									\
 							(step),										\
 							"prev",										\
