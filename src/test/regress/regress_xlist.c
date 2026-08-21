@@ -8,58 +8,58 @@
  * XLIST_LINEAR or XLIST_DLIST is enabled.
  */
 static const struct test_step common_schedule[] = {
-	TEST(init, (head), LIST_EMPTY()),
-	TEST(is_empty, (head), RETURNS(true)),
-	TEST(count, (head), RETURNS(0)),
-	TEST(push_head, (head, 0), LIST(0)),
-	TEST(init, (head), LIST_EMPTY()),
-	TEST(is_empty, (head), RETURNS(true)),
-	TEST(count, (head), RETURNS(0)),
-	TEST(push_head, (head, 0), LIST(0)),
-	TEST(is_empty, (head), RETURNS(false)),
-	TEST(tail_node, (head), RETURNS_NODE(0)),
-	TEST(push_head, (head, 1), LIST(1, 0)),
-	TEST(insert_into_before, (head, 0, 2), LIST(1, 2, 0)),
-	TEST(insert_into_before, (head, 1, 3), LIST(3, 1, 2, 0)),
-	TEST(insert_into_after, (head, 1, 4), LIST(3, 1, 4, 2, 0)),
-	TEST(insert_into_after, (head, 0, 5), LIST(3, 1, 4, 2, 0, 5)),
-	TEST(tail_node, (head), RETURNS_NODE(5)),
-	TEST(count, (head), RETURNS(6)),
-	TEST(has_prev, (head, 3), RETURNS(false)),
-	TEST(has_next, (head, 3), RETURNS(true)),
-	TEST(has_prev, (head, 1), RETURNS(true)),
-	TEST(has_next, (head, 1), RETURNS(true)),
-	TEST(has_prev, (head, 5), RETURNS(true)),
-	TEST(has_next, (head, 5), RETURNS(false)),
-	TEST(head_node, (head), RETURNS_NODE(3)),
-	TEST(tail_node, (head), RETURNS_NODE(5)),
-	TEST(delete_from, (head, 4), LIST(3, 1, 2, 0, 5)),
-	TEST(tail_node, (head), RETURNS_NODE(5)),
-	TEST(count, (head), RETURNS(5)),
-	TEST(delete_from_thoroughly, (head, 5), LIST(3, 1, 2, 0)),
-	TEST(tail_node, (head), RETURNS_NODE(0)),
-	TEST(count, (head), RETURNS(4)),
+	TEST(init, (list), LIST_EMPTY()),
+	TEST(is_empty, (list), RETURNS(true)),
+	TEST(count, (list), RETURNS(0)),
+	TEST(push_head, (list, 0), LIST(0)),
+	TEST(init, (list), LIST_EMPTY()),
+	TEST(is_empty, (list), RETURNS(true)),
+	TEST(count, (list), RETURNS(0)),
+	TEST(push_head, (list, 0), LIST(0)),
+	TEST(is_empty, (list), RETURNS(false)),
+	TEST(tail_node, (list), RETURNS_NODE(0)),
+	TEST(push_head, (list, 1), LIST(1, 0)),
+	TEST(insert_into_before, (list, 0, 2), LIST(1, 2, 0)),
+	TEST(insert_into_before, (list, 1, 3), LIST(3, 1, 2, 0)),
+	TEST(insert_into_after, (list, 1, 4), LIST(3, 1, 4, 2, 0)),
+	TEST(insert_into_after, (list, 0, 5), LIST(3, 1, 4, 2, 0, 5)),
+	TEST(tail_node, (list), RETURNS_NODE(5)),
+	TEST(count, (list), RETURNS(6)),
+	TEST(has_prev, (list, 3), RETURNS(false)),
+	TEST(has_next, (list, 3), RETURNS(true)),
+	TEST(has_prev, (list, 1), RETURNS(true)),
+	TEST(has_next, (list, 1), RETURNS(true)),
+	TEST(has_prev, (list, 5), RETURNS(true)),
+	TEST(has_next, (list, 5), RETURNS(false)),
+	TEST(head_node, (list), RETURNS_NODE(3)),
+	TEST(tail_node, (list), RETURNS_NODE(5)),
+	TEST(delete_from, (list, 4), LIST(3, 1, 2, 0, 5)),
+	TEST(tail_node, (list), RETURNS_NODE(5)),
+	TEST(count, (list), RETURNS(5)),
+	TEST(delete_from_thoroughly, (list, 5), LIST(3, 1, 2, 0)),
+	TEST(tail_node, (list), RETURNS_NODE(0)),
+	TEST(count, (list), RETURNS(4)),
 	TEST(node_is_detached, (5), RETURNS(true)),
 	TEST(node_is_detached, (2), RETURNS(false)),
-	TEST(delete_from_thoroughly, (head, 3), LIST(1, 2, 0)),
+	TEST(delete_from_thoroughly, (list, 3), LIST(1, 2, 0)),
 	TEST(node_is_detached, (3), RETURNS(true)),
-	TEST(delete_from, (head, 2), LIST(1, 0)),
-	TEST(delete_from_thoroughly, (head, 1), LIST(0)),
+	TEST(delete_from, (list, 2), LIST(1, 0)),
+	TEST(delete_from_thoroughly, (list, 1), LIST(0)),
 	TEST(node_is_detached, (1), RETURNS(true)),
-	TEST(push_tail, (head, 3), LIST(0, 3)),
-	TEST(delete_from, (head, 3), LIST(0)),
-	TEST(delete_from, (head, 0), LIST_EMPTY()),
-	TEST(push_tail, (head, 2), LIST(2)),
-	TEST(push_tail, (head, 3), LIST(2, 3)),
-	TEST(push_head, (head, 1), LIST(1, 2, 3)),
-	TEST(push_head, (head, 0), LIST(0, 1, 2, 3)),
-	TEST(move_head, (head, 1), LIST(1, 0, 2, 3)),
-	TEST(move_tail, (head, 2), LIST(1, 0, 3, 2)),
-	TEST(pop_tail_node, (head), RETURNS_NODE(2), LIST(1, 0, 3)),
-	TEST(pop_tail_node, (head), RETURNS_NODE(3), LIST(1, 0)),
-	TEST(pop_head_node, (head), RETURNS_NODE(1), LIST(0)),
-	TEST(pop_head_node, (head), RETURNS_NODE(0), LIST_EMPTY()),
-	TEST(count, (head), RETURNS(0)),
+	TEST(push_tail, (list, 3), LIST(0, 3)),
+	TEST(delete_from, (list, 3), LIST(0)),
+	TEST(delete_from, (list, 0), LIST_EMPTY()),
+	TEST(push_tail, (list, 2), LIST(2)),
+	TEST(push_tail, (list, 3), LIST(2, 3)),
+	TEST(push_head, (list, 1), LIST(1, 2, 3)),
+	TEST(push_head, (list, 0), LIST(0, 1, 2, 3)),
+	TEST(move_head, (list, 1), LIST(1, 0, 2, 3)),
+	TEST(move_tail, (list, 2), LIST(1, 0, 3, 2)),
+	TEST(pop_tail_node, (list), RETURNS_NODE(2), LIST(1, 0, 3)),
+	TEST(pop_tail_node, (list), RETURNS_NODE(3), LIST(1, 0)),
+	TEST(pop_head_node, (list), RETURNS_NODE(1), LIST(0)),
+	TEST(pop_head_node, (list), RETURNS_NODE(0), LIST_EMPTY()),
+	TEST(count, (list), RETURNS(0)),
 };
 
 
@@ -80,9 +80,9 @@ static void
 test_dlist_ptr(void)
 {
 	struct dlist_ptr_cont array[8] = {0};
-	dlist_ptr_head head = {0};
+	dlist_ptr_head list = {0};
 
-	Assert(dlist_ptr_is_empty(&head));
+	Assert(dlist_ptr_is_empty(&list));
 
 	RUN_TESTS(dlist_ptr,
 			  CHECK_NEXT_AND_PREV,
@@ -111,7 +111,7 @@ static void
 test_dclist_ptr(void)
 {
 	struct dclist_ptr_cont array[8] = {0};
-	dclist_ptr_head head = {0};
+	dclist_ptr_head list = {0};
 
 	RUN_TESTS(dclist_ptr,
 			  CHECK_NEXT_AND_PREV,
@@ -146,7 +146,7 @@ static void
 test_dlist_index(void)
 {
 	struct dlist_index_cont array[8] = {0};
-	dlist_index_head head = {0};
+	dlist_index_head list = {0};
 
 	RUN_TESTS(dlist_index,
 			  CHECK_NEXT_AND_PREV_NIL,
@@ -212,7 +212,7 @@ static void
 test_dlist_ptrdiff(void)
 {
 	struct dlist_ptrdiff_cont array[8] = {0};
-	dlist_ptrdiff_head head = {0};
+	dlist_ptrdiff_head list = {0};
 
 	RUN_TESTS(dlist_ptrdiff,
 			  CHECK_NEXT_AND_PREV,
@@ -240,9 +240,9 @@ static void
 test_slist_ptr(void)
 {
 	struct slist_ptr_cont array[8] = {0};
-	slist_ptr_head head = {0};
+	slist_ptr_head list = {0};
 
-	Assert(slist_ptr_is_empty(&head));
+	Assert(slist_ptr_is_empty(&list));
 
 	RUN_TESTS(slist_ptr,
 			  CHECK_NEXT,
@@ -271,9 +271,9 @@ static void
 test_stlist_ptr(void)
 {
 	struct stlist_ptr_cont array[8] = {0};
-	stlist_ptr_head head = {0};
+	stlist_ptr_head list = {0};
 
-	Assert(stlist_ptr_is_empty(&head));
+	Assert(stlist_ptr_is_empty(&list));
 
 	RUN_TESTS(stlist_ptr,
 			  CHECK_NEXT_AND_TAIL,
@@ -302,9 +302,9 @@ static void
 test_sclist_ptr(void)
 {
 	struct sclist_ptr_cont array[8] = {0};
-	sclist_ptr_head head = {0};
+	sclist_ptr_head list = {0};
 
-	Assert(sclist_ptr_is_empty(&head));
+	Assert(sclist_ptr_is_empty(&list));
 
 	RUN_TESTS(sclist_ptr,
 			  CHECK_NEXT,
@@ -335,7 +335,7 @@ static void
 test_slist_index(void)
 {
 	struct slist_index_cont array[8] = {0};
-	slist_index_head head = {0};
+	slist_index_head list = {0};
 
 	RUN_TESTS(slist_index,
 			  CHECK_NEXT_NIL,
@@ -367,7 +367,7 @@ static void
 test_stlist_index(void)
 {
 	struct stlist_index_cont array[8] = {0};
-	stlist_index_head head = {0};
+	stlist_index_head list = {0};
 
 	RUN_TESTS(stlist_index,
 			  CHECK_NEXT_AND_TAIL_NIL,

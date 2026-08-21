@@ -260,10 +260,30 @@ typedef struct XLIST_node
  */
 typedef struct XLIST_head
 {
+	/*
+	 * head.next and (if doubly-linked) head.prev point to the head and (if
+	 * doubly-linked) tail nodes of the list.
+	 *
+	 * The representation of an empty list depends on the selected policy:
+	 * they either point to the head node itself (XLIST_EMPTY_SELF) or hold
+	 * NIL (XLIST_EMPTY_NIL).  Additionally, if XLIST_EMPTY_LAZY_INIT is
+	 * specified, they may be zero before the first push, to support
+	 * zero-initialization at the cost of a small branch for every push.
+	 */
 	XLIST_node	head;
+
 #if defined(XLIST_TAILED)
+	/*
+	 * If XLIST_SLIST + XLIST_TAILED are requested for O(1) _tail_node() and
+	 * _push_tail() operations, tail.next points to the tail node.
+	 *
+	 * In empty lists, tail.next points points to head (XLIST_EMPTY_SELF),
+	 * holds NIL (XLIST_EMPTY_NIL) or is zero before the first push
+	 * (XLIST_EMPTY_LAZY_INIT).
+	 */
 	XLIST_node	tail;
 #endif
+
 #if defined(XLIST_COUNTED)
 	XLIST_count_t count;
 #endif

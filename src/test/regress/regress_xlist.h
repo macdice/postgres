@@ -3,24 +3,24 @@
 
 /* X-macro for ops available to all configuration (assuming XLIST_LINEAR fallbacks). */
 #define FOR_EACH_COMMON_OP(do, ...)												\
-	do(count, int (head, opt_context), __VA_ARGS__)								\
-	do(delete_from, void (head, node, opt_context), __VA_ARGS__)				\
-	do(delete_from_thoroughly, void (head, node, opt_context), __VA_ARGS__) 	\
-	do(has_next, int (head, node), __VA_ARGS__)									\
-	do(has_prev, int (head, node, opt_context), __VA_ARGS__)					\
-	do(head_node, node (head, opt_context), __VA_ARGS__)						\
-	do(init, void (head), __VA_ARGS__)											\
-	do(insert_into_after, void (head, node, node, opt_context), __VA_ARGS__) 	\
-	do(insert_into_before, void (head, node, node, opt_context), __VA_ARGS__)	\
-	do(is_empty, int (head), __VA_ARGS__)										\
-	do(move_head, void (head, node, opt_context), __VA_ARGS__)					\
-	do(move_tail, void (head, node, opt_context), __VA_ARGS__)					\
+	do(count, int (list, opt_context), __VA_ARGS__)								\
+	do(delete_from, void (list, node, opt_context), __VA_ARGS__)				\
+	do(delete_from_thoroughly, void (list, node, opt_context), __VA_ARGS__) 	\
+	do(has_next, int (list, node), __VA_ARGS__)									\
+	do(has_prev, int (list, node, opt_context), __VA_ARGS__)					\
+	do(head_node, node (list, opt_context), __VA_ARGS__)						\
+	do(init, void (list), __VA_ARGS__)											\
+	do(insert_into_after, void (list, node, node, opt_context), __VA_ARGS__) 	\
+	do(insert_into_before, void (list, node, node, opt_context), __VA_ARGS__)	\
+	do(is_empty, int (list), __VA_ARGS__)										\
+	do(move_head, void (list, node, opt_context), __VA_ARGS__)					\
+	do(move_tail, void (list, node, opt_context), __VA_ARGS__)					\
 	do(node_is_detached, int (node), __VA_ARGS__)								\
-	do(pop_head_node, node (head, opt_context), __VA_ARGS__)					\
-	do(pop_tail_node, node (head, opt_context), __VA_ARGS__)					\
-	do(push_head, void (head, node, opt_context), __VA_ARGS__) 					\
-	do(push_tail, void (head, node, opt_context), __VA_ARGS__) 					\
-	do(tail_node, node (head, opt_context), __VA_ARGS__)
+	do(pop_head_node, node (list, opt_context), __VA_ARGS__)					\
+	do(pop_tail_node, node (list, opt_context), __VA_ARGS__)					\
+	do(push_head, void (list, node, opt_context), __VA_ARGS__) 					\
+	do(push_tail, void (list, node, opt_context), __VA_ARGS__) 					\
+	do(tail_node, node (list, opt_context), __VA_ARGS__)
 
 /* X-macro for all ops. */
 #define FOR_EACH_OP(do, ...)					\
@@ -66,7 +66,7 @@ op_name_to_string(op_name op)
  *
  * takes_opt_context, return_type, nargs, arg_type...
  *
- * Example: void(head, node, opt_context) -> 1, void, 2, head, node
+ * Example: void(list, node, opt_context) -> 1, void, 2, list, node
  *
  * Example: int(node) -> 0, int, 1, node
  */
@@ -78,7 +78,7 @@ op_name_to_string(op_name op)
 	CAT(DECODE_F_TYPE__, LAST(__VA_ARGS__))(return_type, __VA_ARGS__)
 #define DECODE_F_TYPE__opt_context(return_type, ...)			\
 	DECODE_F_TYPE___(1, return_type, DROP_LAST(__VA_ARGS__))
-#define DECODE_F_TYPE__head(return_type, ...)		\
+#define DECODE_F_TYPE__list(return_type, ...)		\
 	DECODE_F_TYPE___(0, return_type, __VA_ARGS__)
 #define DECODE_F_TYPE__node(return_type, ...)		\
 	DECODE_F_TYPE___(0, return_type, __VA_ARGS__)
@@ -123,9 +123,9 @@ typedef struct test_step
 #define CALL_ARGS_2(_1, _2) { CALL_ARG(_1), CALL_ARG(_2) }
 #define CALL_ARGS_3(_1, _2, _3) { CALL_ARG(_1), CALL_ARG(_2), CALL_ARG(_3) }
 #define CALL_ARG(arg) CALL_ARG__(arg, CALL_ARG__##arg)
-#define CALL_ARG__head ,		/* matched "head"? make __VA_ARGS__ longer*/
+#define CALL_ARG__list ,		/* matched "list"? make __VA_ARGS__ longer*/
 #define CALL_ARG__(...) CAT(CALL_ARG___, VA_ARGS_NARGS(__VA_ARGS__))(__VA_ARGS__)
-#define CALL_ARG___3(arg, ...) -1	/* replace "head" with -1 */
+#define CALL_ARG___3(arg, ...) -1	/* replace "list" with -1 */
 #define CALL_ARG___2(arg, ...) arg	/* otherwise it's a node index */
 
 /* Macros for the expected result of function call. */
@@ -177,7 +177,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
 #define EXPAND_CASE_ARGS_3(_1, _2, _3) EXPAND_CASE_ARG(_1, 0),	\
 		EXPAND_CASE_ARG(_2, 1), EXPAND_CASE_ARG(_3, 2)
 #define EXPAND_CASE_ARG(type, pos) EXPAND_CASE_ARG_TYPE_##type(pos)
-#define EXPAND_CASE_ARG_TYPE_head(pos) &head
+#define EXPAND_CASE_ARG_TYPE_list(pos) &list
 #define EXPAND_CASE_ARG_TYPE_node(pos) &array[args[pos]].node
 #define EXPAND_CASE_ARG_OPT_CONTEXT(takes_opt_context,					\
 									context)							\
@@ -248,7 +248,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
 																		\
 		if (step->list_contents.check)									\
 		{																\
-			check_count(prefix##_count(&head),							\
+			check_count(prefix##_count(&list),							\
 						step->list_contents.count);						\
 																		\
 			if (step->list_contents.count == 0)							\
@@ -307,7 +307,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
 #define GET_IPREV_I(prefix, node_index, context)	\
 	GET_IPREV(prefix, GET_NODE(node_index), context)
 #define GET_NODE(node_index)									\
-	((node_index) < 0 ? &head.head : &array[(node_index)].node)
+	((node_index) < 0 ? &list.head : &array[(node_index)].node)
 #define GET_INDEX(node_p)												\
 	((node_p >= &array[0].node &&										\
 	  node_p < &array[lengthof(array)].node) ?							\
@@ -392,13 +392,13 @@ report_bad_link(const char *prefix,
 	if ((node1) == LIST_TERMINATOR && (node2) == LIST_TERMINATOR)		\
 	{																	\
 		/* Expect empty head with NIL. */								\
-		if (!prefix##_next_is_nil(&head.head))							\
+		if (!prefix##_next_is_nil(&list.head))							\
 			report_bad_link(#prefix,									\
 							(step),										\
 							"next",										\
 							LIST_HEAD,									\
 							LIST_NIL,									\
-							GET_INEXT(prefix, &head.head, context));	\
+							GET_INEXT(prefix, &list.head, context));	\
 	}																	\
 	else if ((node2) == LIST_TERMINATOR)								\
 	{																	\
@@ -409,18 +409,18 @@ report_bad_link(const char *prefix,
 							"next",										\
 							(node1),									\
 							LIST_NIL,									\
-							GET_INEXT(prefix, &head.head, context));	\
+							GET_INEXT(prefix, &list.head, context));	\
 	}																	\
 	else if ((node1) == LIST_TERMINATOR)								\
 	{																	\
 		/* Expect head to point to first node. */						\
-		if (prefix##_next_is_nil(&head.head))							\
+		if (prefix##_next_is_nil(&list.head))							\
 			report_bad_link(#prefix,									\
 							(step),										\
 							"next",										\
 							LIST_HEAD,									\
 							(node2),									\
-							GET_INEXT(prefix, &head.head, context));	\
+							GET_INEXT(prefix, &list.head, context));	\
 	}																	\
 	else																\
 	{																	\
@@ -432,13 +432,13 @@ report_bad_link(const char *prefix,
 	if ((node1) == LIST_TERMINATOR && (node2) == LIST_TERMINATOR)		\
 	{																	\
 		/* Expect empty head with NIL. */								\
-		if (!prefix##_prev_is_nil(&head.head))							\
+		if (!prefix##_prev_is_nil(&list.head))							\
 			report_bad_link(#prefix,									\
 							(step),										\
 							"prev",										\
 							LIST_HEAD,									\
 							LIST_NIL,									\
-							GET_IPREV(prefix, &head.head, context));	\
+							GET_IPREV(prefix, &list.head, context));	\
 	}																	\
 	else if ((node1) == LIST_TERMINATOR)								\
 	{																	\
@@ -454,13 +454,13 @@ report_bad_link(const char *prefix,
 	else if ((node2) == LIST_TERMINATOR)								\
 	{																	\
 		/* Expect head.next to point to last node. */					\
-		if (prefix##_prev_is_nil(&head.head))							\
+		if (prefix##_prev_is_nil(&list.head))							\
 			report_bad_link(#prefix,									\
 							(step),										\
 							"prev",										\
 							LIST_HEAD,									\
 							(node1),									\
-							GET_IPREV(prefix, &head.head, context));	\
+							GET_IPREV(prefix, &list.head, context));	\
 	}																	\
 	else																\
 	{																	\
@@ -485,21 +485,21 @@ report_bad_link(const char *prefix,
 			if ((node1) == LIST_TERMINATOR)								\
 			{															\
 				/* Expect tail.next to point to head. */				\
-				if (GET_NEXT(prefix, &head.tail, context) !=			\
-					&head.head)											\
+				if (GET_NEXT(prefix, &list.tail, context) !=			\
+					&list.head)											\
 					report_bad_link(#prefix,							\
 									(step),								\
 									"next",								\
 									LIST_TAIL,							\
 									LIST_HEAD,							\
 									GET_INEXT(prefix,					\
-											  &head.tail,				\
+											  &list.tail,				\
 											  context));				\
 			}															\
 			else														\
 			{															\
 				/* Expect tail.next to point to last node. */			\
-				if (GET_NEXT(prefix, &head.tail, context) !=			\
+				if (GET_NEXT(prefix, &list.tail, context) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
 									(step),								\
@@ -507,7 +507,7 @@ report_bad_link(const char *prefix,
 									LIST_TAIL,							\
 									(node1),							\
 									GET_INEXT(prefix,					\
-											  &head.tail,				\
+											  &list.tail,				\
 											  context));				\
 			}															\
 		}																\
@@ -523,20 +523,20 @@ report_bad_link(const char *prefix,
 			if ((node1) == LIST_TERMINATOR)								\
 			{															\
 				/* Expect tail.next to be NIL. */						\
-				if (!prefix##_next_is_nil(&head.tail))					\
+				if (!prefix##_next_is_nil(&list.tail))					\
 					report_bad_link(#prefix,							\
 									(step),								\
 									"next",								\
 									LIST_TAIL,							\
 									LIST_NIL,							\
 									GET_INEXT(prefix,					\
-											  &head.tail,				\
+											  &list.tail,				\
 											  context));				\
 			}															\
 			else														\
 			{															\
 				/* Expect tail.next to point to last node. */			\
-				if (GET_NEXT(prefix, &head.tail, context) !=			\
+				if (GET_NEXT(prefix, &list.tail, context) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
 									(step),								\
@@ -544,7 +544,7 @@ report_bad_link(const char *prefix,
 									LIST_TAIL,							\
 									(node1),							\
 									GET_INEXT(prefix,					\
-											  &head.tail,				\
+											  &list.tail,				\
 											  context));				\
 			}															\
 		}																\
