@@ -4,69 +4,59 @@
  *		Template for specialized linked lists implementations.
  *
  * This is a template that must be parameterized with macros before inclusion.
- * If the declarations and definitions are being split between headers, then
- * one of the following should be used:
+ * If the type declarations and function definitions are being split between
+ * headers, then one of the following should be used:
  *
- *		XLIST_DECLARE_ONLY:	define types and declare functions only
- *		XLIST_DEFINE_ONLY:	define functions only
+ *		XLIST_DECLARE_ONLY:		define types only
+ *		XLIST_DEFINE_ONLY:		define functions only
  *
  * Alternatively, both can be generated at the same time with:
  *
- * 		XLIST_DECLARE:		define types only
- * 		XLIST_DEFINE:		define functions (may be deferred to second inclusion)
- *
- * It is necessary to include this template twice, with XLIST_DEFINE defined
- * the second time if using XLIST_OBJECT_T to break a circularity.
+ * 		XLIST_DECLARE:			define types only }-- one or both
+ * 		XLIST_DEFINE:			define functions  }
  *
  * The main macros are:
  *
- *		XLIST_PREFIX:		replaces XLIST in type and function names (required)
+ *		XLIST_PREFIX:			replaces XLIST in names (required)
  *
- *		XLIST_SLIST:		singly-linked list (one of these is required)
- * 		XLIST_DLIST:		doubly-linked list
+ *		XLIST_SLIST:			singly-linked list }-- choose one
+ * 		XLIST_DLIST:			doubly-linked list }
  *
- * 		XLIST_COUNTED:		enable efficient _count() (default: uint32_t)
- * 		XLIST_TAILED:		enable efficient _push_tail() for SLIST
- *		XLIST_LINEAR:		enable inefficient O(n) functions for SLIST
+ * 		XLIST_COUNTED:			enable efficient _count() (default: uint32_t)
+ * 		XLIST_TAILED:			enable efficient _push_tail() for SLIST
+ *		XLIST_LINEAR:			enable inefficient O(n) functions for SLIST
  *
- * The pointers between nodes have the following representation options:
+ * The links between nodes have the following representation options:
  *
- * 		XLIST_PTR:			nodes linked by plain pointers
- *		XLIST_PTRDIFF:		nodes linked relative pointers
- *		XLIST_INDEX:		nodes linked by array index
- *
- * XLIST_LINK_INDEX adds an "array" argument to most functions, and also
- * reveals a set of function XLIST_*_index() that can optionally be used
- * instead of the node-based functions.
- *
- *										PTR		PTRDIFF	INDEX
- *		API requires extra argument		no		no		yes
- *		Needs XLIST_OBJECT_T			no		no		yes
- *		Optional index-based API		no		no		yes
- *		Relocatable						no		yes		yes
- *		Branch-free	(XLIST_EMPTY_SELF)	yes		yes		no
- *		Zero-initialization				yes 	yes		no
- *		Node size						biggest	medium?	smallest?
- *
- * XLIST_PTRDIFF is a straighforward replacement for pointers, but XLIST_INDEX
- * brings many branches into the code, gated on XLIST_EMPTY_NIL.
+ * 		XLIST_PTR:				nodes linked by plain pointers
+ *		XLIST_PTRDIFF:			nodes linked relative pointers
+ *		XLIST_INDEX:			nodes linked by array index
  *
  * The type used for indexes or relative pointers can be controlled with:
  *
- *		XLIST_LINK_T:		override link type (not for XLIST_PTR)
- *		XLIST_PTRDIFF_SCALE: override scaling (default: alignof(XXX_node))
- *		XLIST_COUNT_T:		override count type (default: uint32_t)
- *		XLIST_NIL:			override NIL value (for XLIST_INDEX)
+ *		XLIST_LINK_T:			override link type (not for XLIST_PTR)
+ *		XLIST_PTRDIFF_SCALE:	override scaling (default: alignof(node))
+ *		XLIST_COUNT_T:			override count type (default: uint32_t)
+ *		XLIST_NIL:				override NIL value (for XLIST_INDEX)
  *
  * Care must be taken not to overflow the link type.  In practice this means
  * that container objects must be in an array of known maximal size, and the
  * list head must be place nearby when using XLIST_PTRDIFF.
  *
- *		XLIST_OBJECT_T:		provide containing-option functions
- *		XLIST_OBJECT_MEMBER
+ * XLIST_LINK_INDEX adds arguments "first_node" and "object_size" to most
+ * functions.
  *
- * Specializing for object type reveals the XLIST_*_object() family of
- * functions, an alternative to the node-based API.
+ * The representation of empty lists can be controlled explicitly, but
+ * by default NIL is used only for XLIST_INDEX:
+ *
+ *		XLIST_EMPTY_SELF:		empty lists have head pointing to itself
+ *		XLIST_EMPTY_NIL:		empty lists have NIL (less efficient)
+ *
+ * Whether or not zero-initialization is supported is controlled with:
+ *
+ *		XLIST_INIT_ON_ZERO_MEM:	zero-initialized memory is a valid list
+ *		XLIST_INIT_REQUIRED:	the list must be initialized (more efficient)
+ *
  *
  * Portions Copyright (c) 2016-2026, PostgreSQL Global Development Group
  *
@@ -84,37 +74,48 @@
 #define XLIST_MACROS
 
 /* Check basic required parameters. */
+#if !defined(XLIST_DECLARE) && !defined(XLIST_DEFINE)
+#error "one or both of XLIST_DECLARE, XLIST_DEFINE must be defined"
+#endif
 #if !defined(XLIST_PREFIX)
 #error "XLIST_PREFIX must be defined"
 #endif
 #if defined(XLIST_SLIST) + defined(XLIST_DLIST) != 1
 #error "one of XLIST_SLIST, XLIST_DLIST must be defined"
 #endif
-#if !defined(XLIST_DECLARE) && !defined(XLIST_DEFINE)
-#error "one or both of XLIST_DECLARE, XLIST_DEFINE must be defined"
+#if defined(XLIST_TAILED) && !defined(XLIST_SLIST)
+#error "XLIST_TAILED is only allowed for XLIST_SLIST"
 #endif
 #if defined(XLIST_PTR) + defined(XLIST_PTRDIFF) + defined(XLIST_INDEX) != 1
-#error "one of XLIST_PTR, XLIST_PTRDIFF, XLIST_INDEX must be defined"
+#error "exactly one of XLIST_PTR, XLIST_PTRDIFF, XLIST_INDEX must be defined"
+#endif
+#if defined(XLIST_EMPTY_NIL) + defined(XLIST_EMPTY_SELF) > 1
+#error "at most one of XLIST_EMPTY_NIL, XLIST_EMPTY_SELF can be defined"
+#endif
+#if defined(XLIST_INIT_ON_ZERO_MEM) + defined(XLIST_INIT_REQUIRED) > 1
+#error "at most one of XLIST_INIT_ON_ZERO_MEM, XLIST_INIT_REQUIRED can be defined"
 #endif
 #if defined(XLIST_OBJECT_T) != defined(XLIST_OBJECT_MEMBER)
 #error "both or neither of XLIST_OBJECT_T, XLIST_OBJECT_MEMBER must be defined"
 #endif
-#if defined(XLIST_EMPTY_NIL) + defined(XLIST_EMPTY_SELF) + defined(XLIST_EMPTY_LAZY) > 1
-#error "at most one of XLIST_EMPTY_NIL, XLIST_EMPTY_SELF, XLIST_EMPTY_LAZY must be defined"
-#endif
-#if defined(XLIST_TAILED) && !defined(XLIST_SLIST)
-#error "XLIST_TAILED is only allowed for XLIST_SLIST"
-#endif
 
 /* Checks and defaults for XLIST_PTR. */
 #if defined(XLIST_PTR)
+/*
+ * XLIST_EMPTY_NIL is unlikely to be useful with XLIST_PTR, but we still need
+ * a NIL value to use for XLIST_delete_thoroughly().
+ */
 #define XLIST_NIL NULL
-#if !defined(XLIST_EMPTY_NIL) && !defined(XLIST_EMPTY_SELF) && !defined(XLIST_EMPTY_LAZY)
-#define XLIST_EMPTY_LAZY
+/* Defaults match the traditional dlist API. */
+#if !defined(XLIST_EMPTY_SELF) && !defined(XLIST_EMPTY_NIL)
+#define XLIST_EMPTY_SELF
+#endif
+#if !defined(XLIST_INIT_ON_ZERO_MEM) && !defined(XLIST_INIT_REQUIRED)
+#define XLIST_INIT_ON_ZERO_MEM
 #endif
 #define XLIST_CONTEXT_ARG
 #define XLIST_CONTEXT
-#endif
+#endif			/* XLIST_PTR */
 
 /* Checks and defaults for relative pointers. */
 #if defined(XLIST_PTRDIFF)
@@ -122,38 +123,58 @@
 #define XLIST_LINK_T ptrdiff_t
 #endif
 static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
-/* Note that zero is indistinguishable from "pointer to self". */
+/* XLIST_NIL must be zero for XLIST_PTRDIFF. */
 #define XLIST_NIL ((XLIST_LINK_T) 0)
 #if !defined(XLIST_PTRDIFF_SCALE)
+/* Usurp invariable low-end bits unless explicitly told not to (1). */
 #define XLIST_PTRDIFF_SCALE	((ptrdiff_t) alignof(XLIST_link_t))
 #endif
-#if defined(XLIST_EMPTY_NIL) || defined(XLIST_EMPTY_LAZY)
-#error "only XLIST_EMPTY_SELF is allowed for XLIST_PTRDIFF"
-#endif
-#if !defined(XLIST_EMPTY_SELF)
+/* Defaults match the traditional dlist API, but see XLIST_push_common(). */
+#if !defined(XLIST_EMPTY_SELF) && !defined(XLIST_EMPTY_NIL)
 #define XLIST_EMPTY_SELF
+#endif
+#if !defined(XLIST_INIT_ON_ZERO_MEM) && !defined(XLIST_INIT_REQUIRED)
+#define XLIST_INIT_ON_ZERO_MEM
 #endif
 #define XLIST_CONTEXT_ARG
 #define XLIST_CONTEXT
-#endif
+#endif			/* XLIST_PTRDIFF */
 
 /* Checks and defaults for array indexes. */
 #if defined(XLIST_INDEX)
-#if !defined(XLIST_OBJECT_T)
-#error "XLIST_OBJECT_T must be defined if using arrays"
-#endif
 #if !defined(XLIST_LINK_T)
 #define XLIST_LINK_T int
 #endif
 #if !defined(XLIST_NIL)
 #define XLIST_NIL (-1)
 #endif
-#if !defined(XLIST_EMPTY_NIL)
+#if !defined(XLIST_EMPTY_SELF) && !defined(XLIST_EMPTY_NIL)
 #define XLIST_EMPTY_NIL
 #endif
+#if defined(XLIST_EMPTY_SELF)
+/* The list head isn't in the array and doesn't have an index. */
+#error "XLIST_EMPTY_SELF cannot be used with XLIST_INDEX"
+#endif
+#if !defined(XLIST_INIT_ON_ZERO_MEM) && !defined(XLIST_INIT_REQUIRED)
+#define XLIST_INIT_REQUIRED
+#endif
+#if defined(XLIST_INIT_ON_ZERO_MEM)
+#if defined(XLIST_SLIST)
+/*
+ * A singly-linked list beginning with index zero is indistinguishable from
+ * zeroed memory, so XLIST_INIT_REQUIRED must be used.
+ */
+#error "XLIST_INDEX + XLIST_INIT_ON_ZERO_MEM incompatible with XLIST_SLIST"
+#elif defined(XLIST_DLIST) 
+/* Likewise for doubly-linked lists if XLIST_NIL is 0. */
+static_assert((XLIST_LINK_T) (XLIST_NIL) != 0,
+			  "XLIST_INDEX + XLIST_INIT_ON_ZERO_MEM incompatible with zero as XLIST_NIL");
+#endif
+#endif
+/* Most functions need these extra arguments to follow links. */
 #define XLIST_CONTEXT_ARG , XLIST_node *first_node, size_t object_size
 #define XLIST_CONTEXT , first_node, object_size
-#endif
+#endif			/* XLIST_INDEX */
 
 /* Other defaults. */
 #if !defined(XLIST_COUNT_T)
@@ -209,6 +230,7 @@ static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
 #define XLIST_get_prev XLIST_MAKE_NAME(get_prev)
 #define XLIST_get_prev_or_head XLIST_MAKE_NAME(get_prev_or_head)
 #define XLIST_increment XLIST_MAKE_NAME(inc)
+#define XLIST_is_zero_mem XLIST_MAKE_NAME(is_zero_mem)
 #define XLIST_link XLIST_MAKE_NAME(get_ptrdiff)
 #define XLIST_member_check XLIST_MAKE_NAME(member_check)
 #define XLIST_next_is_nil XLIST_MAKE_NAME(next_is_nil)
@@ -216,7 +238,7 @@ static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
 #define XLIST_node_to_container_offset XLIST_MAKE_NAME(node_to_container_offset)
 #define XLIST_prev_is_nil XLIST_MAKE_NAME(prev_is_nil)
 #define XLIST_push_common XLIST_MAKE_NAME(push_common)
-#define XLIST_relink XLIST_MAKE_NAME(read_ptrdiff)
+#define XLIST_relink XLIST_MAKE_NAME(relink)
 #define XLIST_set_next XLIST_MAKE_NAME(set_next)
 #define XLIST_set_next_to_next_of XLIST_MAKE_NAME(set_next_to_next_of)
 #define XLIST_set_next_to_terminator XLIST_MAKE_NAME(set_next_to_terminator)
@@ -238,8 +260,8 @@ typedef XLIST_COUNT_T XLIST_count_t;
 #if defined(XLIST_PTR)
 typedef struct XLIST_node *XLIST_link_t;
 #else
-static_assert(pg_type_is_integral(XLIST_LINK_T), "integer type required");
 typedef XLIST_LINK_T XLIST_link_t;
+static_assert(pg_type_is_integral(XLIST_link_t), "integer type required");
 #endif
 
 /*
@@ -261,14 +283,10 @@ typedef struct XLIST_node
 typedef struct XLIST_head
 {
 	/*
-	 * head.next and (if doubly-linked) head.prev point to the head and (if
-	 * doubly-linked) tail nodes of the list.
-	 *
-	 * The representation of an empty list depends on the selected policy:
-	 * they either point to the head node itself (XLIST_EMPTY_SELF) or hold
-	 * NIL (XLIST_EMPTY_NIL).  Additionally, if XLIST_EMPTY_LAZY_INIT is
-	 * specified, they may be zero before the first push, to support
-	 * zero-initialization at the cost of a small branch for every push.
+	 * head.next and (if doubly-linked) head.prev point to the head and tail
+	 * nodes of the list.  In an empty list, they either point to head itself
+	 * (XLIST_EMPTY_SELF) or hold NIL (XLIST_EMPTY_NIL), and may optionally
+	 * hold zero (XLIST_INIT_ON_ZERO_MEM).
 	 */
 	XLIST_node	head;
 
@@ -278,8 +296,8 @@ typedef struct XLIST_head
 	 * _push_tail() operations, tail.next points to the tail node.
 	 *
 	 * In empty lists, tail.next points points to head (XLIST_EMPTY_SELF),
-	 * holds NIL (XLIST_EMPTY_NIL) or is zero before the first push
-	 * (XLIST_EMPTY_LAZY_INIT).
+	 * holds NIL (XLIST_EMPTY_NIL) or is zeroed memory before the first push
+	 * (XLIST_INIT_ON_ZERO_MEM).
 	 */
 	XLIST_node	tail;
 #endif
@@ -552,26 +570,56 @@ XLIST_delete_next(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 static inline void XLIST_init(XLIST_head *list);
 static inline bool XLIST_is_empty(const XLIST_head *list);
 
+static inline bool
+XLIST_is_zero_mem(const XLIST_head *list)
+{
+	if (list->head.next == 0)
+	{
+#if defined(XLIST_DLIST)
+#if defined(XLIST_INDEX)
+		/*
+		 * It might be a list with index zero in head position, so also check
+		 * the tail pointer.  (XLIST_INDEX + XLIST_SLIST was excluded at the
+		 * top of the file.)
+		 */
+		if (list->head.prev != 0)
+			return false;
+#endif
+
+		/*
+		  * If next is 0, prev should be zero too.  (XLIST_INDEX with
+		  * XLIST_NIL == 0 was excluded at the top of the file, see top.)
+		  */
+		Assert(list->head.prev == 0);
+#endif
+
+		return true;
+	}
+	return false;
+}
+
 /*
  * Internal routine used by push_head() and push_tail().
  */
 static inline bool
 XLIST_push_common(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 {
-#if defined(XLIST_EMPTY_LAZY)
-	if (list->head.next == XLIST_NIL)
-	{
-		/* First insertion into a lazy self-initializing list. */
+	/*
+	 * Lazy initialization of zero-initialized object, if requested.
+	 *
+	 * We skip this for XLIST_PTRDIFF, because it initialized to zeroes for
+	 * both XLIST_EMPTY_NIL and XLIST_EMPTY_SELF so we can save an branch.
+	 */
+#if defined(XLIST_INIT_ON_ZERO_MEM) && !defined(XLIST_PTRDIFF)
+	if (unlikely(XLIST_is_zero_mem(list)))
 		XLIST_init(list);
-	}
 #endif
 
 #if defined(XLIST_EMPTY_SELF) && !defined(XLIST_PTRDIFF)
 
 	/*
-	 * List must have been initialized.  We can't make this assertion for
-	 * XLIST_PTRDIFF because a pointer to self is indisinguishible from
-	 * zero-initialization.
+	 * List must have been initialized by XLIST_INIT_ON_ZERO_MEM or explicitly
+	 * if using XLIST_INIT_REQUIRED.  XLIST_PTRDIFF gets a free pass.
 	 */
 	Assert(list->head.next != XLIST_NIL);
 #endif
@@ -581,8 +629,8 @@ XLIST_push_common(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 #endif
 
 #if defined(XLIST_EMPTY_NIL)
-	/* Insertion into empty NIL-list require a special branch. */
-	if (XLIST_is_empty(list))
+	/* Insertion into empty NIL-list specially. */
+	if (unlikely(XLIST_is_empty(list)))
 	{
 		node->next = XLIST_NIL;
 		XLIST_set_next(&list->head, node XLIST_CONTEXT);
@@ -596,6 +644,7 @@ XLIST_push_common(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 	}
 #endif
 
+	/* Otherwise leave it to the caller to insert at the appropriate end. */
 	return false;
 }
 
@@ -612,9 +661,9 @@ XLIST_check(XLIST_head *list)
 	if (list == NULL)
 		elog(ERROR, "linked list head address is NULL");
 
-#if defined(XLIST_EMPTY_LAZY) || defined(XLIST_EMPTY_NIL)
-	if (head->head.next == XLIST_NIL && head->head.prev == XLIST_NIL)
-		return;					/* OK, initialized as NIL (usually zeroes) */
+#if defined(XLIST_INIT_ON_ZERO_MEM)
+	if (head->head.next == 0 && head->head.prev == 0)
+		return;					/* OK, initialized as zeroes */
 #endif
 
 	/* iterate in forward direction */
@@ -706,12 +755,15 @@ XLIST_node_init(XLIST_node *node)
 static inline bool
 XLIST_is_empty(const XLIST_head *list)
 {
-#if defined(XLIST_EMPTY_LAZY) || defined(XLIST_EMPTY_NIL)
-	if (list->head.next == XLIST_NIL)
+#if defined(XLIST_INIT_ON_ZERO_MEM)
+	if (list->head.next == 0)
 		return true;
 #endif
 
-#if defined(XLIST_EMPTY_LAZY) || defined(XLIST_EMPTY_SELF)
+#if defined(XLIST_EMPTY_NIL)
+	if (list->head.next == XLIST_NIL)
+		return true;
+#elif defined(XLIST_EMPTY_SELF)
 	if (XLIST_get_next(&list->head) == &list->head)
 		return true;
 #endif
@@ -1180,6 +1232,8 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_DEFINE_ONLY
 #undef XLIST_DLIST
 #undef XLIST_INDEX
+#undef XLIST_INIT_ON_ZERO_MEM
+#undef XLIST_INIT_REQUIRED
 #undef XLIST_LINK_T
 #undef XLIST_NIL
 #undef XLIST_OBJECT_MEMBER
@@ -1193,7 +1247,6 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 /* Undefine internal macros. */
 #undef XLIST_CONTEXT
 #undef XLIST_CONTEXT_ARG
-#undef XLIST_EMPTY_LAZY
 #undef XLIST_EMPTY_NIL
 #undef XLIST_EMPTY_SELF
 #undef XLIST_MAKE_NAME
@@ -1226,6 +1279,7 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_insert_into_after
 #undef XLIST_insert_into_before
 #undef XLIST_is_empty
+#undef XLIST_is_zero_mem
 #undef XLIST_link_t
 #undef XLIST_member_check
 #undef XLIST_move_head
