@@ -290,13 +290,25 @@ check_args(const char *f_name, int nargs, const test_step * step)
 		}																\
 	}
 
-#define GET_NODE(node_index)											\
+#define GET_NEXT(prefix, node, context)			\
+	prefix##_get_next((node) context())
+#define GET_PREV(prefix, node, context)			\
+	prefix##_get_prev((node) context())
+#define GET_NEXT_I(prefix, node_index, context)	\
+	GET_NEXT(prefix, GET_NODE(node_index), context)
+#define GET_PREV_I(prefix, node_index, context)	\
+	GET_PREV(prefix, GET_NODE(node_index), context)
+#define GET_INEXT(prefix, node, context)	\
+	GET_INDEX(GET_NEXT(prefix, (node), context))
+#define GET_IPREV(prefix, node, context)	\
+	GET_INDEX(GET_PREV(prefix, (node), context))
+#define GET_INEXT_I(prefix, node_index, context)	\
+	GET_INEXT(prefix, GET_NODE(node_index), context)
+#define GET_IPREV_I(prefix, node_index, context)	\
+	GET_IPREV(prefix, GET_NODE(node_index), context)
+#define GET_NODE(node_index)									\
 	((node_index) < 0 ? &head.head : &array[(node_index)].node)
-#define GET_NEXT(prefix, node_index, context)							\
-	prefix##_get_next(GET_NODE(node_index) context())
-#define GET_PREV(prefix, node_index, context)							\
-	prefix##_get_prev(GET_NODE(node_index) context())
-#define GET_INDEX(prefix, node_p)										\
+#define GET_INDEX(node_p)												\
 	((node_p >= &array[0].node &&										\
 	  node_p < &array[lengthof(array)].node) ?							\
 	 (((char *) (node_p) - (char *) array) / sizeof(array[0])) :		\
@@ -359,24 +371,22 @@ report_bad_link(const char *prefix,
 				   node1,												\
 				   node2,												\
 				   context)												\
-	if (GET_NEXT(prefix, (node1), context) != GET_NODE(node2))			\
+	if (GET_NEXT_I(prefix, (node1), context) != GET_NODE(node2))		\
 		report_bad_link(#prefix,										\
 						(step),											\
 						"next",											\
 						(node1),										\
 						(node2),										\
-						GET_INDEX(prefix,								\
-								  GET_NEXT(prefix, (node2),	context)))
+						GET_INEXT_I(prefix, (node1), context));
 
 #define CHECK_PREV(prefix,step, node1, node2, context)					\
-	if (GET_PREV(prefix, (node2), context) != GET_NODE(node1))			\
+	if (GET_PREV_I(prefix, (node2), context) != GET_NODE(node1))		\
 		report_bad_link(#prefix,										\
 						(step),											\
 						"prev",											\
 						(node2),										\
 						(node1),										\
-						GET_INDEX(prefix,								\
-								  GET_NEXT(prefix, (node1), context)))
+						GET_IPREV_I(prefix, (node2), context));
 
 #define CHECK_NEXT_NIL(prefix, step, node1, node2, context)				\
 	if ((node1) == LIST_TERMINATOR && (node2) == LIST_TERMINATOR)		\
@@ -388,18 +398,18 @@ report_bad_link(const char *prefix,
 							"next",										\
 							LIST_HEAD,									\
 							LIST_NIL,									\
-							head.head.next);							\
+							GET_INEXT(prefix, &head.head, context));	\
 	}																	\
 	else if ((node2) == LIST_TERMINATOR)								\
 	{																	\
 		/* Expect last node with NIL as next. */						\
-		if (!prefix##_next_is_nil(&array[(node1)].node))				\
+		if (!prefix##_next_is_nil(GET_NODE(node1)))						\
 			report_bad_link(#prefix,									\
 							(step),										\
 							"next",										\
 							(node1),									\
 							LIST_NIL,									\
-							array[(node1)].node.next);					\
+							GET_INEXT(prefix, &head.head, context));	\
 	}																	\
 	else if ((node1) == LIST_TERMINATOR)								\
 	{																	\
@@ -410,7 +420,7 @@ report_bad_link(const char *prefix,
 							"next",										\
 							LIST_HEAD,									\
 							(node2),									\
-							head.head.next);							\
+							GET_INEXT(prefix, &head.head, context));	\
 	}																	\
 	else																\
 	{																	\
@@ -428,7 +438,7 @@ report_bad_link(const char *prefix,
 							"prev",										\
 							LIST_HEAD,									\
 							LIST_NIL,									\
-							head.head.prev);							\
+							GET_IPREV(prefix, &head.head, context));	\
 	}																	\
 	else if ((node1) == LIST_TERMINATOR)								\
 	{																	\
@@ -439,18 +449,18 @@ report_bad_link(const char *prefix,
 							"prev",										\
 							(node2),									\
 							LIST_NIL,									\
-							array[(node2)].node.prev);					\
+							GET_IPREV_I(prefix, (node2), context));		\
 	}																	\
 	else if ((node2) == LIST_TERMINATOR)								\
 	{																	\
-		/* Expect tail to point to last node. */						\
+		/* Expect head.next to point to last node. */					\
 		if (prefix##_prev_is_nil(&head.head))							\
 			report_bad_link(#prefix,									\
 							(step),										\
 							"prev",										\
 							LIST_HEAD,									\
 							(node1),									\
-							head.head.prev);							\
+							GET_IPREV(prefix, &head.head, context));	\
 	}																	\
 	else																\
 	{																	\
@@ -474,27 +484,31 @@ report_bad_link(const char *prefix,
 		{																\
 			if ((node1) == LIST_TERMINATOR)								\
 			{															\
-				/* Expect tail to point to head. */						\
-				if (prefix##_get_next(&head.tail context()) !=			\
+				/* Expect tail.next to point to head. */				\
+				if (GET_NEXT(prefix, &head.tail, context) !=			\
 					&head.head)											\
 					report_bad_link(#prefix,							\
 									(step),								\
 									"next",								\
 									LIST_TAIL,							\
 									LIST_HEAD,							\
-									GET_INDEX(prefix, head.tail.next));	\
+									GET_INEXT(prefix,					\
+											  &head.tail,				\
+											  context));				\
 			}															\
 			else														\
 			{															\
-				/* Expect tail to point to last node. */				\
-				if (prefix##_get_next(&head.tail context()) !=			\
+				/* Expect tail.next to point to last node. */			\
+				if (GET_NEXT(prefix, &head.tail, context) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
 									(step),								\
 									"next",								\
 									LIST_TAIL,							\
 									(node1),							\
-									GET_INDEX(prefix, head.tail.next));	\
+									GET_INEXT(prefix,					\
+											  &head.tail,				\
+											  context));				\
 			}															\
 		}																\
 	}																	\
@@ -508,26 +522,30 @@ report_bad_link(const char *prefix,
 		{																\
 			if ((node1) == LIST_TERMINATOR)								\
 			{															\
-				/* Expect tail to be NIL. */							\
+				/* Expect tail.next to be NIL. */						\
 				if (!prefix##_next_is_nil(&head.tail))					\
 					report_bad_link(#prefix,							\
 									(step),								\
 									"next",								\
 									LIST_TAIL,							\
 									LIST_NIL,							\
-									head.tail.next);					\
+									GET_INEXT(prefix,					\
+											  &head.tail,				\
+											  context));				\
 			}															\
 			else														\
 			{															\
-				/* Expect tail to point to last node. */				\
-				if (prefix##_get_next(&head.tail context()) !=			\
+				/* Expect tail.next to point to last node. */			\
+				if (GET_NEXT(prefix, &head.tail, context) !=			\
 					GET_NODE(node1))									\
 					report_bad_link(#prefix,							\
 									(step),								\
 									"next",								\
 									LIST_TAIL,							\
 									(node1),							\
-									head.tail.next);					\
+									GET_INEXT(prefix,					\
+											  &head.tail,				\
+											  context));				\
 			}															\
 		}																\
 	}																	\
