@@ -123,7 +123,7 @@ typedef struct test_step
 #define CALL_ARGS_2(_1, _2) { CALL_ARG(_1), CALL_ARG(_2) }
 #define CALL_ARGS_3(_1, _2, _3) { CALL_ARG(_1), CALL_ARG(_2), CALL_ARG(_3) }
 #define CALL_ARG(arg) CALL_ARG__(arg, CALL_ARG__##arg)
-#define CALL_ARG__list ,		/* matched "list"? make __VA_ARGS__ longer*/
+#define CALL_ARG__list ,		/* matched "list"? make __VA_ARGS__ longer */
 #define CALL_ARG__(...) CAT(CALL_ARG___, VA_ARGS_NARGS(__VA_ARGS__))(__VA_ARGS__)
 #define CALL_ARG___3(arg, ...) -1	/* replace "list" with -1 */
 #define CALL_ARG___2(arg, ...) arg	/* otherwise it's a node index */

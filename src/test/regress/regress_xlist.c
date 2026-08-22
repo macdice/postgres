@@ -67,6 +67,7 @@ static const struct test_step common_schedule[] = {
 #define XLIST_DLIST
 #define XLIST_PTR
 #define XLIST_REGRESS
+#define XLIST_DEBUG
 #define XLIST_DECLARE
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
@@ -178,7 +179,7 @@ static void
 test_dlist_ptrdiff_arithmetic(void)
 {
 #ifdef USE_ASSERT_CHECKING
-	size_t scale = alignof(dlist_ptrdiff_node);
+	size_t		scale = alignof(dlist_ptrdiff_node);
 #endif
 	struct dlist_ptrdiff_cont array[8] = {0};
 

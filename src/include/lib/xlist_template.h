@@ -152,7 +152,7 @@
 #endif
 #define XLIST_CONTEXT_ARG
 #define XLIST_CONTEXT
-#endif			/* XLIST_PTR */
+#endif							/* XLIST_PTR */
 
 /* Checks and defaults for relative pointers. */
 #if defined(XLIST_PTRDIFF)
@@ -177,7 +177,7 @@ static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
 #endif
 #define XLIST_CONTEXT_ARG
 #define XLIST_CONTEXT
-#endif			/* XLIST_PTRDIFF */
+#endif							/* XLIST_PTRDIFF */
 
 /* Checks and defaults for array indexes. */
 #if defined(XLIST_INDEX)
@@ -204,7 +204,7 @@ static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
  * zeroed memory, so XLIST_INIT_REQUIRED must be used.
  */
 #error "XLIST_INDEX + XLIST_INIT_ON_ZERO_MEM incompatible with XLIST_SLIST"
-#elif defined(XLIST_DLIST) 
+#elif defined(XLIST_DLIST)
 /* Likewise for doubly-linked lists if XLIST_NIL is 0. */
 static_assert((XLIST_LINK_T) (XLIST_NIL) != 0,
 			  "XLIST_INDEX + XLIST_INIT_ON_ZERO_MEM incompatible with zero as XLIST_NIL");
@@ -220,7 +220,7 @@ static_assert((XLIST_LINK_T) (XLIST_NIL) != 0,
 #define XLIST_CONTEXT_ARG , XLIST_node *first_node, size_t object_size
 #define XLIST_CONTEXT , first_node, object_size
 #endif
-#endif			/* XLIST_INDEX */
+#endif							/* XLIST_INDEX */
 
 /* Other defaults. */
 #if !defined(XLIST_COUNT_T)
@@ -343,6 +343,7 @@ typedef struct XLIST_head
 	XLIST_node	head;
 
 #if defined(XLIST_TAILED)
+
 	/*
 	 * If XLIST_SLIST + XLIST_TAILED are requested for O(1) _tail_node() and
 	 * _push_tail() operations, tail.next points to the tail node.
@@ -371,6 +372,12 @@ typedef struct XLIST_head
  *
  *-------------------------------------------------------------------------
  */
+
+static inline XLIST_node *XLIST_head_node(const XLIST_head *list XLIST_CONTEXT_ARG);
+static inline XLIST_node *XLIST_next_node(const XLIST_head *list,
+										  const XLIST_node *node XLIST_CONTEXT_ARG);
+static inline bool XLIST_has_next(const XLIST_head *list, const XLIST_node *node);
+static inline XLIST_count_t XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG);
 
 #ifdef XLIST_OBJECT_T
 static inline XLIST_OBJECT_T *
@@ -449,7 +456,7 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 #if defined(XLIST_PTR)
 	return target;
 #elif defined(XLIST_PTRDIFF)
-	intptr_t difference;
+	intptr_t	difference;
 
 	/* Assert that the result fits. */
 	XLIST_check_node_distance(base, target);
@@ -514,7 +521,7 @@ XLIST_relink(XLIST_link_t link,
 			 const XLIST_node *new_base)
 {
 #if defined(XLIST_PTRDIFF)
-	int64_t difference;
+	int64_t		difference;
 
 	XLIST_check_node_distance(new_base, XLIST_follow(old_base, link));
 
@@ -526,7 +533,7 @@ XLIST_relink(XLIST_link_t link,
 	return link + (difference >> XLIST_PTRDIFF_SHIFT);
 #else
 	return link;
-#endif	
+#endif
 }
 
 /* Internal function to get next node. */
@@ -698,9 +705,9 @@ XLIST_is_zero_mem(const XLIST_head *list)
 #endif
 
 		/*
-		  * If next is 0, prev should be zero too.  (XLIST_INDEX with
-		  * XLIST_NIL == 0 was excluded at the top of the file, see top.)
-		  */
+		 * If next is 0, prev should be zero too.  (XLIST_INDEX with XLIST_NIL
+		 * == 0 was excluded at the top of the file, see top.)
+		 */
 		Assert(list->head.prev == 0);
 #endif
 
@@ -824,7 +831,7 @@ XLIST_check_prev_link(const XLIST_node *before,
 		elog(PANIC,
 			 "expected %s node at %p to have prev link to %s node at %p, but it has %"
 			 PRIxPTR
-			 "; context: %s",			 
+			 "; context: %s",
 			 after_name,
 			 after,
 			 before_name,
@@ -844,64 +851,114 @@ XLIST_check_links(const XLIST_head *list,
 	{
 		/* Empty list representation. */
 #if defined(XLIST_EMPTY_NIL)
-		XLIST_check_next_nil(&list->head, "head", debug_context XLIST_CONTEXT);
+		XLIST_check_next_nil(&list->head,
+							 "head",
+							 debug_context XLIST_CONTEXT);
 #elif defined(XLIST_EMPTY_SELF)
-		XLIST_check_next_link(&list->head, &list->head, "head", "head", debug_context XLIST_CONTEXT);
+		XLIST_check_next_link(&list->head,
+							  &list->head,
+							  "head",
+							  "head",
+							  debug_context XLIST_CONTEXT);
 #endif
 
 #if defined(XLIST_TAILED)
 #if defined(XLIST_EMPTY_NIL)
-		XLIST_check_next_nil(&list->tail, "tail", debug_context XLIST_CONTEXT);
+		XLIST_check_next_nil(&list->tail,
+							 "tail",
+							 debug_context XLIST_CONTEXT);
 #elif defined(XLIST_EMPTY_SELF)
-		XLIST_check_next_link(&list->tail, &list->head, "tail", "head", debug_context XLIST_CONTEXT);
+		XLIST_check_next_link(&list->tail,
+							  &list->head,
+							  "tail",
+							  "head",
+							  debug_context XLIST_CONTEXT);
 #endif
 #endif
 
 #if defined(XLIST_DLIST)
 #if defined(XLIST_EMPTY_NIL)
-		XLIST_check_prev_nil(&list->head, "head", debug_context XLIST_CONTEXT);
+		XLIST_check_prev_nil(&list->head,
+							 "head",
+							 debug_context XLIST_CONTEXT);
 #elif defined(XLIST_EMPTY_SELF)
-		XLIST_check_prev_link(&list->head, &list->head, "head", "head", debug_context XLIST_CONTEXT);
+		XLIST_check_prev_link(&list->head,
+							  &list->head,
+							  "head",
+							  "head",
+							  debug_context XLIST_CONTEXT);
 #endif
 #endif
 	}
 	else if (before == NULL)
 	{
 		/* Head to first node. */
-		XLIST_check_next_link(&list->head, after, "head", "first",  debug_context XLIST_CONTEXT);
+		XLIST_check_next_link(&list->head,
+							  after,
+							  "head",
+							  "first",
+							  debug_context XLIST_CONTEXT);
 
 #if defined(XLIST_DLIST)
 #if defined(XLIST_EMPTY_NIL)
-		XLIST_check_prev_nil(after, "first", debug_context XLIST_CONTEXT);
+		XLIST_check_prev_nil(after,
+							 "first",
+							 debug_context XLIST_CONTEXT);
 #else
-		XLIST_check_prev_link(&list->head, after, "head", "first", debug_context XLIST_CONTEXT);
+		XLIST_check_prev_link(&list->head,
+							  after,
+							  "head",
+							  "first",
+							  debug_context XLIST_CONTEXT);
 #endif
 #endif
 	}
 	else if (after != NULL)
 	{
 		/* Tested with each node as before except the final one. */
-		XLIST_check_next_link(before, after, "internal", "internal", debug_context XLIST_CONTEXT);
+		XLIST_check_next_link(before,
+							  after,
+							  "internal",
+							  "internal",
+							  debug_context XLIST_CONTEXT);
 
 #if defined(XLIST_DLIST)
-		XLIST_check_prev_link(before, after, "internal", "internal", debug_context XLIST_CONTEXT);
+		XLIST_check_prev_link(before,
+							  after,
+							  "internal",
+							  "internal",
+							  debug_context XLIST_CONTEXT);
 #endif
 	}
 	else
 	{
 		/* Final node. */
 #if defined(XLIST_EMPTY_NIL)
-		XLIST_check_next_nil(before, "final", debug_context XLIST_CONTEXT);
+		XLIST_check_next_nil(before,
+							 "final",
+							 debug_context XLIST_CONTEXT);
 #else
-		XLIST_check_next_link(before, &list->head, "final", "head", debug_context XLIST_CONTEXT);
+		XLIST_check_next_link(before,
+							  &list->head,
+							  "final",
+							  "head",
+							  debug_context XLIST_CONTEXT);
 #endif
 
 #if defined(XLIST_TAILED)
-		XLIST_check_next_link(&list->tail, before, "tail", "final", debug_context XLIST_CONTEXT);
+		XLIST_check_next_link(&list->tail,
+							  before,
+							  "tail",
+							  "final",
+							  debug_context XLIST_CONTEXT);
 #endif
 
 #if defined(XLIST_DLIST)
-		XLIST_check_prev_link(before, &list->head, "final", "head", debug_context XLIST_CONTEXT);
+		XLIST_check_prev_link(before,
+							  &list->head,
+							  "final",
+							  "head",
+							  debug_context XLIST_CONTEXT);
 #endif
 	}
 }
@@ -919,75 +976,102 @@ XLIST_check_contents(const XLIST_head *list,
 		if (XLIST_is_zero_mem(list))
 			return;
 #endif
-		XLIST_check_links(list, NULL, NULL, debug_message XLIST_CONTEXT);
+		XLIST_check_links(list,
+						  NULL,
+						  NULL,
+						  debug_message XLIST_CONTEXT);
 		return;
 	}
-	
-	/* First link. */
-	XLIST_check_links(list, NULL, expect[0], debug_message XLIST_CONTEXT);
+	else
+	{
+		XLIST_check_links(list,
+						  NULL,
+						  expect[0],
+						  debug_message XLIST_CONTEXT);
+		for (int i = 0; i < count - 1; ++i)
+			XLIST_check_links(list,
+							  expect[i],
+							  expect[i + 1],
+							  debug_message XLIST_CONTEXT);
+		XLIST_check_links(list,
+						  expect[count - 1],
+						  NULL,
+						  debug_message XLIST_CONTEXT);
+	}
 
-	/* Internal links. */
-	for (int i = 0; i < count - 1; ++i)
-		XLIST_check_links(list, expect[i], expect[i + 1], debug_message XLIST_CONTEXT);
-
-	/* Final link. */
-	XLIST_check_links(list, expect[count - 1], NULL, debug_message XLIST_CONTEXT);
+#if defined(XLIST_COUNTED)
+	if (count != XLIST_count(list XLIST_CONTEXT))
+		elog(PANIC,
+			 CppAsString(XLIST_check_contents) ": expected %" PRIu64
+			 " nodes but counter has %" PRIu64,
+			 (uint64_t) count,
+			 (uint64_t) XLIST_count(list XLIST_CONTEXT));
+#endif
 }
-#endif			/* XLIST_REGRESS */
+#endif							/* XLIST_REGRESS */
 
 static inline void
-XLIST_check(XLIST_head *list)
+XLIST_check(XLIST_head *list XLIST_CONTEXT_ARG)
 {
 #ifdef XLIST_DEBUG
-	XLIST_node *cur;
-	XLIST_node *tail;
 	XLIST_count_t count = 0;
+	const char *debug_context = CppAsString(XLIST_check);
 
 	if (list == NULL)
 		elog(ERROR, "linked list head address is NULL");
 
 #if defined(XLIST_INIT_ON_ZERO_MEM)
-	if (head->head.next == 0 && head->head.prev == 0)
+	if (XLIST_is_zero_mem(list))
 		return;					/* OK, initialized as zeroes */
 #endif
 
-	/* iterate in forward direction */
-	for (cur = head->head.next; cur != &head->head; cur = cur->next)
+	if (XLIST_is_empty(list))
 	{
-		if (cur == NULL ||
-			cur->next == NULL ||
-			cur->prev == NULL ||
-			cur->prev->next != cur ||
-			cur->next->prev != cur)
-			elog(ERROR, "doubly linked list is corrupted");
+		XLIST_check_links(list, NULL, NULL, debug_context XLIST_CONTEXT);
+	}
+	else
+	{
+		XLIST_node *cur = XLIST_head_node(list XLIST_CONTEXT);
+
+		XLIST_check_links(list, NULL, cur, debug_context XLIST_CONTEXT);
+		while (XLIST_has_next(list, cur))
+		{
+			XLIST_node *next = XLIST_next_node(list, cur XLIST_CONTEXT);
+
+			XLIST_check_links(list, cur, next, debug_context XLIST_CONTEXT);
+			cur = next;
+			count++;
+		}
+		count++;
+		XLIST_check_links(list, cur, NULL, debug_context XLIST_CONTEXT);
 	}
 
-	/* iterate in backward direction */
-	for (cur = head->head.prev; cur != &head->head; cur = cur->prev)
-	{
-		if (cur == NULL ||
-			cur->next == NULL ||
-			cur->prev == NULL ||
-			cur->prev->next != cur ||
-			cur->next->prev != cur)
-			elog(ERROR, "doubly linked list is corrupted");
-	}
+#if defined(XLIST_COUNTED)
+	if (count != XLIST_count(list XLIST_CONTEXT))
+		elog(PANIC,
+			 debug_context ": counted %" PRIu64 " nodes but list counter has %"
+			 PRIu64,
+			 (uint64_t) count,
+			 XLIST_count(list XLIST_CONTEXT));
+#endif
 #endif
 }
 
 /* Insternal consistency check. */
 static inline void
-XLIST_member_check(const XLIST_head *list, const XLIST_node *node)
+XLIST_member_check(const XLIST_head *list, 
+				   const XLIST_node *node XLIST_CONTEXT_ARG)
 {
 #ifdef XLIST_DEBUG
-	XLIST_node *cur = &list->head;
+	const XLIST_node *cur = &list->head;
 
-	while (XLIST_has_next(list, node))
+	while (XLIST_has_next(list, cur))
 	{
-		cur = XLIST_get_net(node);
+		cur = XLIST_next_node(list, cur XLIST_CONTEXT);
 		if (cur == node)
 			return;
 	}
+
 	elog(PANIC, "linked list member check failure");
 #endif
 }
@@ -1028,9 +1112,9 @@ XLIST_init(XLIST_head *list)
 static inline void
 XLIST_node_init(XLIST_node *node)
 {
-	node->next = 0;
+	node->next = XLIST_NIL;
 #if defined(XLIST_DLIST)
-	node->prev = 0;
+	node->prev = XLIST_NIL;
 #endif
 }
 
@@ -1041,7 +1125,7 @@ static inline bool
 XLIST_is_empty(const XLIST_head *list)
 {
 #if defined(XLIST_INIT_ON_ZERO_MEM)
-	if (list->head.next == 0)
+	if (XLIST_is_zero_mem(list))
 		return true;
 #endif
 
@@ -1152,10 +1236,9 @@ XLIST_prev_node(const XLIST_head *list, const XLIST_node *node XLIST_CONTEXT_ARG
  * Return the first node in the list (there must be one).
  */
 static inline XLIST_node *
-XLIST_head_node(XLIST_head *list XLIST_CONTEXT_ARG)
+XLIST_head_node(const XLIST_head *list XLIST_CONTEXT_ARG)
 {
 	Assert(!XLIST_is_empty(list));
-	//return XLIST_follow(cur, cur->next XLIST_CONTEXT);
 	return XLIST_get_next(&list->head XLIST_CONTEXT);
 }
 
@@ -1352,7 +1435,7 @@ XLIST_delete_thoroughly(XLIST_node *node XLIST_CONTEXT_ARG)
 static inline void
 XLIST_delete_from(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 {
-	XLIST_member_check(list, node);
+	XLIST_member_check(list, node XLIST_CONTEXT);
 
 #if defined(XLIST_DLIST)
 	XLIST_set_next_to_next_of(XLIST_get_prev_or_head(list, node XLIST_CONTEXT), node);
@@ -1439,7 +1522,7 @@ XLIST_move_head(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 	XLIST_delete_from(list, node XLIST_CONTEXT);
 	XLIST_push_head(list, node XLIST_CONTEXT);
 
-	XLIST_check(list);
+	XLIST_check(list XLIST_CONTEXT);
 }
 #endif
 
@@ -1460,7 +1543,7 @@ XLIST_move_tail(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 	XLIST_delete_from(list, node XLIST_CONTEXT);
 	XLIST_push_tail(list, node XLIST_CONTEXT);
 
-	XLIST_check(list);
+	XLIST_check(list XLIST_CONTEXT);
 }
 #endif
 
