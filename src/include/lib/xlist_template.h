@@ -59,7 +59,7 @@
  * controlled with:
  *
  *		XLIST_LINK_T:			override link type (not for XLIST_PTR)
- *		XLIST_PTRDIFF_SCALE:	override scaling (default: alignof(node))
+ *		XLIST_PTRDIFF_SHIFT:	override scaling (default based on alignment)
  *		XLIST_COUNT_T:			override count type (default: uint32_t)
  *		XLIST_NIL:				override NIL value (for XLIST_INDEX)
  *
@@ -145,9 +145,11 @@
 static_assert(pg_type_is_signed(XLIST_LINK_T), "signed type required");
 /* XLIST_NIL must be zero for XLIST_PTRDIFF. */
 #define XLIST_NIL ((XLIST_LINK_T) 0)
-#if !defined(XLIST_PTRDIFF_SCALE)
-/* Usurp invariable low-end bits unless explicitly told not to (1). */
-#define XLIST_PTRDIFF_SCALE	((ptrdiff_t) alignof(XLIST_link_t))
+#if !defined(XLIST_PTRDIFF_SHIFT)
+/* Usurp invariable low-end bits for extra range unless set to 0. */
+#define XLIST_PTRDIFF_SHIFT (alignof(XLIST_link_t) == 2 ? 1 :			\
+							 alignof(XLIST_link_t) == 4 ? 2 :			\
+							 alignof(XLIST_link_t) == 8 ? 3 : 0)
 #endif
 /* Defaults match the traditional dlist API, but see XLIST_push_common(). */
 #if !defined(XLIST_EMPTY_SELF) && !defined(XLIST_EMPTY_NIL)
@@ -378,22 +380,15 @@ XLIST_check_node_distance(const XLIST_node *node1, const XLIST_node *node2)
 	uintptr_t	abs_difference;
 
 	/*
-	 * TYPE_MAX <= abs(TYPE_MIN) in the integer representations required by
-	 * C11, so it's a safe ceiling to use in both directions.  All modern
-	 * computers use two's complement (the only representation allowed by
-	 * POSIX:2001 and C23), where abs(TYPE_MIN) is higher by one.
+	 * TYPE_MAX <= abs(TYPE_MIN), consider only the absolute difference to
+	 * avoid mistakes in the rules of signed arithmetic.
 	 */
-	static_assert(-pg_type_numeric_limits_max(XLIST_link_t) < 0,
-				  "expected to be able to negate the maximum value of "
-				  "XLIST_LINK_T without wrapping around");
-
-	if (node2 >= node1)
+	if ((uint64_t) node2 >= (uint64_t) node1)
 		abs_difference = (uintptr_t) node2 - (uintptr_t) node1;
 	else
 		abs_difference = (uintptr_t) node1 - (uintptr_t) node2;
 
-	Assert(TYPEALIGN(XLIST_PTRDIFF_SCALE, abs_difference) == abs_difference);
-	abs_difference /= XLIST_PTRDIFF_SCALE;
+	abs_difference >>= XLIST_PTRDIFF_SHIFT;
 
 	Assert(abs_difference <= pg_type_numeric_limits_max(XLIST_link_t));
 #endif
@@ -401,12 +396,12 @@ XLIST_check_node_distance(const XLIST_node *node1, const XLIST_node *node2)
 #endif
 
 static inline XLIST_node *
-XLIST_follow(const XLIST_node *node, XLIST_link_t link XLIST_CONTEXT_ARG)
+XLIST_follow(const XLIST_node *base, XLIST_link_t link XLIST_CONTEXT_ARG)
 {
 #if defined(XLIST_PTR)
 	return link;
 #elif defined(XLIST_PTRDIFF)
-	return (XLIST_node *) ((ptrdiff_t) node + (link * XLIST_PTRDIFF_SCALE));
+	return (XLIST_node *) ((uintptr_t) base + (link << XLIST_PTRDIFF_SHIFT));
 #elif defined(XLIST_INDEX)
 	return (XLIST_node *) ((char *) first_node + (link * object_size));
 #endif
@@ -418,8 +413,45 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 #if defined(XLIST_PTR)
 	return target;
 #elif defined(XLIST_PTRDIFF)
+	intptr_t difference;
+
+	/* Assert that the result fits. */
 	XLIST_check_node_distance(base, target);
-	return ((ptrdiff_t) target - (ptrdiff_t) base) / XLIST_PTRDIFF_SCALE;
+
+	/*
+	 * Assumptions:
+	 *
+	 * 1.  base and target must have the same provenance (they reside in the
+	 * same variable, malloc(), mmap() etc).  XLIST_follow() will be able to
+	 * synthesize the pointer with the same provenance as the target argument,
+	 * or if the whole list is relocated by (say) reallocation, the same
+	 * provenance as any other pointers into the new copy.
+	 *
+	 * 2.  Casting the pointers to integers before subtraction causes them to
+	 * be consider to be "exposed" (ISO TS 6010 sense) for the purposes of
+	 * alias analysis, unlike char pointer arithmetic.  Without exposure, the
+	 * compiler might consider target to have no potential aliases and reorder
+	 * accesses inappropriately.  It also avoids the problem of pointer
+	 * arithmetic being undefined except for top-level array elements and
+	 * members within one object.
+	 *
+	 * 3.  Pointer-to-integer conversion gives us the numerical address in a
+	 * linear memory model.  (Pointer/integer conversion is implement-defined
+	 * and only guaranteed to survive a round trip; a Deathstation 9000 or a
+	 * segmented memory system could conform while scrambling/unscrambling the
+	 * bits, which would break XLIST_PTRDIFF_SHIFT > 1 and defeat our
+	 * reasoning about the safe range of XLIST_link_t.)  We can't satisfy
+	 * point 2 without this additional assumption.
+	 *
+	 * 4.  This branch is optimized away leaving just subtraction and shift,
+	 * but the phrasing avoids the undefinedness of signed overflow.
+	 */
+	if ((uintptr_t) target >= (uintptr_t) base)
+		difference = (uintptr_t) target - (uintptr_t) base;
+	else
+		difference = -((uintptr_t) base - (uintptr_t) target);
+
+	return difference >> XLIST_PTRDIFF_SHIFT;
 #elif defined(XLIST_INDEX)
 	Assert(target >= first_node);
 	return ((char *) target - (char *) first_node) / object_size;
@@ -432,8 +464,16 @@ XLIST_relink(XLIST_link_t link,
 			 const XLIST_node *new_base)
 {
 #if defined(XLIST_PTRDIFF)
+	int64_t difference;
+
 	XLIST_check_node_distance(new_base, XLIST_follow(old_base, link));
-	return link + (((ptrdiff_t) old_base - (ptrdiff_t) new_base) / XLIST_PTRDIFF_SCALE);
+
+	if ((uintptr_t) old_base >= (uintptr_t) new_base)
+		difference = (uintptr_t) old_base - (uintptr_t) new_base;
+	else
+		difference = -((uintptr_t) new_base - (uintptr_t) old_base);
+
+	return link + (difference >> XLIST_PTRDIFF_SHIFT);
 #else
 	return link;
 #endif	
