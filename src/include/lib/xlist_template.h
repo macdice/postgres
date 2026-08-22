@@ -1059,7 +1059,7 @@ XLIST_check(XLIST_head *list XLIST_CONTEXT_ARG)
 
 /* Insternal consistency check. */
 static inline void
-XLIST_member_check(const XLIST_head *list, 
+XLIST_member_check(const XLIST_head *list,
 				   const XLIST_node *node XLIST_CONTEXT_ARG)
 {
 #ifdef XLIST_DEBUG
