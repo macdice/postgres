@@ -249,7 +249,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
 		{																\
 			char debug_context[80];										\
 			const prefix##_node *										\
-				expected[lengthof(step->list_contents.order)];			\
+				expected[lengthof(step->list_contents.order)] = {0};	\
 																		\
 			for (int i = 0; i < step->list_contents.count; ++i)			\
 				expected[i] =											\
