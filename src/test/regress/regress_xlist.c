@@ -377,6 +377,42 @@ test_stlist_index(void)
 			  COMMON);
 }
 
+
+#define XLIST_PREFIX my_slist_index
+#define XLIST_SLIST
+#define XLIST_INDEX
+#define XLIST_INDEX_TO_NODE_EX(i, array)		\
+	&((struct my_slist_index_cont *) array)[i].node
+#define XLIST_NODE_TO_INDEX_EX(n, array)								\
+	((struct my_slist_index_cont *)										\
+	 (((char *) (n)) - offsetof(struct my_slist_index_cont, node))) -	\
+	(struct my_slist_index_cont *) array
+#define XLIST_DECLARE
+#include "lib/xlist_template.h"
+
+struct my_slist_index_cont
+{
+	int			dummy;
+	my_slist_index_node node;
+};
+
+#define XLIST_DEFINE
+#include "lib/xlist_template.h"
+
+static void
+test_my_slist_index(void)
+{
+	struct my_slist_index_cont array[8] = {0};
+	my_slist_index_head list = {0};
+
+	RUN_TESTS(my_slist_index,
+			  CHECK_NEXT_NIL,
+			  NO_COUNT,
+			  CONTEXT_ARRAY,
+			  common_schedule,
+			  COMMON);
+}
+
 PG_FUNCTION_INFO_V1(test_xlist);
 
 Datum
@@ -396,6 +432,8 @@ test_xlist(PG_FUNCTION_ARGS)
 
 	test_slist_index();
 	test_stlist_index();
+
+	test_my_slist_index();
 
 	PG_RETURN_NULL();
 }

@@ -191,6 +191,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
  */
 #define CONTEXT_NONE()
 #define CONTEXT_ARRAY_AND_SIZE() , &array[0].node, sizeof(array[0])
+#define CONTEXT_ARRAY() , array
 
 /* Special node indexes used in this test code. */
 #define LIST_NIL -1

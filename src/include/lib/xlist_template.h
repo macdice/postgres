@@ -48,12 +48,12 @@
  *
  * XXX Technically C has a narrower definition of pointer arithmetic that
  * applies only to the top-level elements of an array and the members of an
- * struct computed with offsetof(), so apparently we shouldn't use the
- * "container_of" trick that probably appears in every large C program.
+ * struct computed with offsetof(), but in practice so many programs use
+ * techniques like "container_of"...
  *
  * XLIST_INDEX can be relocated, and the list head can be in a separate
  * allocation from the array of objects holding the nodes, but have a higher
- * runtime cost due to branching.
+ * runtime cost due to the XLIST_EMPTY_NIL policy (see below).
  *
  * The types and values used for indexes and relative pointers can be
  * controlled with:
@@ -63,8 +63,21 @@
  *		XLIST_COUNT_T:			override count type (default: uint32_t)
  *		XLIST_NIL:				override NIL value (for XLIST_INDEX)
  *
- * XLIST_LINK_INDEX adds arguments "first_node" and "object_size" to most
- * functions.
+ * By default, XLIST_LINK_INDEX adds context arguments "first_node" and
+ * "object_size" to most function so that links can be followed (see
+ * XLIST_CONTEXT_ARG in function prototypes).
+ *
+ * Alternatively, to specialize for a single use case, a pair of function-like
+ * macros can be defined to show how to convert between indexes and nodes:
+ *
+ *		XLIST_INDEX_TO_NODE		#define XLIST_INDEX_TO_NODE(i) &array[i].node
+ *		XLIST_NODE_TO_INDEX		#define XLIST_NODE_TO_INDEX(n) ...
+ *
+ *		XLIST_INDEX_TO_NODE_EX	alternative variant taking (index, user_data)
+ *		XLIST_NODE_TO_INDEX_EX	alternative variant taking (node, user_data)
+ *
+ * If the second variant is used, a context argument void *user_data is added
+ * to list functions and passed directly through.
  *
  * The representation of empty lists can be controlled explicitly, but
  * by default NIL is used only for XLIST_INDEX:
@@ -193,9 +206,16 @@ static_assert((XLIST_LINK_T) (XLIST_NIL) != 0,
 			  "XLIST_INDEX + XLIST_INIT_ON_ZERO_MEM incompatible with zero as XLIST_NIL");
 #endif
 #endif
-/* Most functions need these extra arguments to follow links. */
+#if defined(XLIST_INDEX_TO_NODE_EX)
+#define XLIST_CONTEXT_ARG , void *user_data
+#define XLIST_CONTEXT , user_data
+#elif !defined(XLIST_INDEX_TO_NODE)
 #define XLIST_CONTEXT_ARG , XLIST_node *first_node, size_t object_size
 #define XLIST_CONTEXT , first_node, object_size
+#else
+#define XLIST_CONTEXT_ARG
+#define XLIST_CONTEXT
+#endif
 #endif			/* XLIST_INDEX */
 
 /* Other defaults. */
@@ -403,7 +423,13 @@ XLIST_follow(const XLIST_node *base, XLIST_link_t link XLIST_CONTEXT_ARG)
 #elif defined(XLIST_PTRDIFF)
 	return (XLIST_node *) ((uintptr_t) base + (link << XLIST_PTRDIFF_SHIFT));
 #elif defined(XLIST_INDEX)
+#if defined(XLIST_INDEX_TO_NODE)
+	return XLIST_INDEX_TO_NODE(link);
+#elif defined(XLIST_INDEX_TO_NODE_EX)
+	return XLIST_INDEX_TO_NODE_EX(link, user_data);
+#else
 	return (XLIST_node *) ((char *) first_node + (link * object_size));
+#endif
 #endif
 }
 
@@ -453,8 +479,14 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 
 	return difference >> XLIST_PTRDIFF_SHIFT;
 #elif defined(XLIST_INDEX)
+#if defined(XLIST_INDEX_TO_NODE)
+	return XLIST_NODE_TO_INDEX(target);
+#elif defined(XLIST_INDEX_TO_NODE_EX)
+	return XLIST_NODE_TO_INDEX_EX(target, user_data);
+#else
 	Assert(target >= first_node);
 	return ((char *) target - (char *) first_node) / object_size;
+#endif
 #endif
 }
 
@@ -1293,10 +1325,14 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_DEFINE_ONLY
 #undef XLIST_DLIST
 #undef XLIST_INDEX
+#undef XLIST_INDEX_TO_NODE
+#undef XLIST_INDEX_TO_NODE_EX
 #undef XLIST_INIT_ON_ZERO_MEM
 #undef XLIST_INIT_REQUIRED
 #undef XLIST_LINK_T
 #undef XLIST_NIL
+#undef XLIST_NODE_TO_INDEX
+#undef XLIST_NODE_TO_INDEX_EX
 #undef XLIST_OBJECT_MEMBER
 #undef XLIST_OBJECT_T
 #undef XLIST_PREFIX
