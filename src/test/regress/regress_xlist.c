@@ -381,9 +381,10 @@ test_stlist_index(void)
 #define XLIST_PREFIX my_slist_index
 #define XLIST_SLIST
 #define XLIST_INDEX
-#define XLIST_INDEX_TO_NODE_EX(i, array)		\
+#define XLIST_INDEX_USER_DATA
+#define XLIST_INDEX_TO_NODE(i, array)				\
 	&((struct my_slist_index_cont *) array)[i].node
-#define XLIST_NODE_TO_INDEX_EX(n, array)								\
+#define XLIST_NODE_TO_INDEX(n, array)									\
 	((struct my_slist_index_cont *)										\
 	 (((char *) (n)) - offsetof(struct my_slist_index_cont, node))) -	\
 	(struct my_slist_index_cont *) array

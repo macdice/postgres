@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * xlist_template.h
- *		Template for specialized linked lists implementations.
+ *		Template for linked list types and functions.
  *
  * This is a template that must be parameterized with macros before inclusion.
  * If the type declarations and function definitions are being split between
@@ -15,9 +15,9 @@
  * 		XLIST_DECLARE:			define types only }-- one or both
  * 		XLIST_DEFINE:			define functions  }
  *
- * The main macros are:
+ * The main parameters are:
  *
- *		XLIST_PREFIX:			replaces XLIST in names (required)
+ *		XLIST_PREFIX:			replaces XLIST in all identifiers (required)
  *
  *		XLIST_SLIST:			singly-linked list }-- choose one
  * 		XLIST_DLIST:			doubly-linked list }
@@ -26,34 +26,27 @@
  * 		XLIST_TAILED:			enable efficient _push_tail() for SLIST
  *		XLIST_LINEAR:			enable inefficient O(n) functions for SLIST
  *
- * The links between nodes have the following representation options:
+ * The links between nodes have the following options:
  *
  * 		XLIST_PTR:				nodes linked by plain pointers
  *		XLIST_PTRDIFF:			nodes linked relative pointers
  *		XLIST_INDEX:			nodes linked by array index
  *
- * XLIST_PTR lists are straightforward but can't be relocated.
+ * XLIST_PTR lists are straightforward but have a fixed size and can't be
+ * relocated or used in DSM segments.
  *
- * XLIST_PTRDIFF lists can only be used when all the nodes including the list
- * head are in one contiguous chunk of memory with a total span between nodes
- * that doesn't overflow the link type.  That chunk can be reallocated, the
- * list can be bitwise-copied to another single contiguous chunk or remapped
- * at a difference address, but there can be no links between individual stack
- * objects or between stack, heap, or shared memory regions.  That would be a
- * recipe for overflowing the link type anyway, but more subtly the provenance
- * tracking in modern compilers (and the model being formalized in ISO TS
- * 6010) will fail to analyze aliases correctly and clobber or eliminate
- * stores though pointers computed from nodes it considers to belong to
- * different allocations ("storage instances" in standardese).
- *
- * XXX Technically C has a narrower definition of pointer arithmetic that
- * applies only to the top-level elements of an array and the members of an
- * struct computed with offsetof(), but in practice so many programs use
- * techniques like "container_of"...
+ * XLIST_PTRDIFF lists are only safe when all the nodes including the list
+ * head are in one contiguous chunk of memory with a maximum span
+ * representable with the selected link type.  That chunk can be reallocated,
+ * bitwise copied to some other single chunk, written to disk and read back
+ * in, or remapped at a different address, as long as there are never links
+ * between objects that the compiler considers to be part of separate
+ * allocations.  See comments in XLIST_link().
  *
  * XLIST_INDEX can be relocated, and the list head can be in a separate
  * allocation from the array of objects holding the nodes, but have a higher
- * runtime cost due to the XLIST_EMPTY_NIL policy (see below).
+ * runtime cost due branching required by the XLIST_EMPTY_NIL policy (see
+ * below).
  *
  * The types and values used for indexes and relative pointers can be
  * controlled with:
@@ -65,7 +58,7 @@
  *
  * By default, XLIST_LINK_INDEX adds context arguments "first_node" and
  * "object_size" to most function so that links can be followed (see
- * XLIST_CONTEXT_ARG in function prototypes).
+ * XLIST_CONTEXT_ARG in argument lists).
  *
  * Alternatively, to specialize for a single use case, a pair of function-like
  * macros can be defined to show how to convert between indexes and nodes:
@@ -73,11 +66,11 @@
  *		XLIST_INDEX_TO_NODE		#define XLIST_INDEX_TO_NODE(i) &array[i].node
  *		XLIST_NODE_TO_INDEX		#define XLIST_NODE_TO_INDEX(n) ...
  *
- *		XLIST_INDEX_TO_NODE_EX	alternative variant taking (index, user_data)
- *		XLIST_NODE_TO_INDEX_EX	alternative variant taking (node, user_data)
+ * Additionally, if the following macro is defined then most list functions
+ * gain a void *user_data argument (see XLIST_CONTEXT_ARG) that is passed
+ * through to the above function-like macros as a second argument:
  *
- * If the second variant is used, a context argument void *user_data is added
- * to list functions and passed directly through.
+ *		XLIST_INDEX_USER_DATA	pass a user_data argument to the above
  *
  * The representation of empty lists can be controlled explicitly, but
  * by default NIL is used only for XLIST_INDEX:
@@ -85,7 +78,7 @@
  *		XLIST_EMPTY_SELF:		empty lists have head pointing to itself
  *		XLIST_EMPTY_NIL:		empty lists have NIL (less efficient)
  *
- * Whether or not zero-initialized lists are supported is controlled with:
+ * Whether or not zero-initialized list heads are allowed is controlled with:
  *
  *		XLIST_INIT_ON_ZERO_MEM:	zero-initialized memory is a valid list
  *		XLIST_INIT_REQUIRED:	the list must be initialized (more efficient)
@@ -121,6 +114,17 @@
 #endif
 #if defined(XLIST_PTR) + defined(XLIST_PTRDIFF) + defined(XLIST_INDEX) != 1
 #error "exactly one of XLIST_PTR, XLIST_PTRDIFF, XLIST_INDEX must be defined"
+#endif
+#if !defined(XLIST_INDEX) && (defined(XLIST_INDEX_TO_NODE) ||	\
+							  defined(XLIST_NODE_TO_INDEX) ||	\
+							  defined(XLIST_INDEX_USER_DATA))
+#error "XLIST_INDEX_TO_NODE, XLIST_NODE_TO_INDEX and XLIST_INDEX_USER_DATA are only allowed if XLIST_INDEX is defined"
+#endif
+#if defined(XLIST_INDEX_TO_NODE) + defined(XLIST_NODE_TO_INDEX) == 1
+#error "XLIST_INDEX_TO_NODE and XLIST_NODE_TO_INDEX must both be defined if one is"
+#endif
+#if defined (XLIST_INDEX_USER_DATA) && !defined(XLIST_INDEX_TO_NODE)
+#error "XLIST_INDEX_USER_DATA requires XLIST_INDEX_TO_NODE and XLIST_NODE_TO_INDEX"
 #endif
 #if defined(XLIST_EMPTY_NIL) + defined(XLIST_EMPTY_SELF) > 1
 #error "at most one of XLIST_EMPTY_NIL, XLIST_EMPTY_SELF can be defined"
@@ -206,15 +210,15 @@ static_assert((XLIST_LINK_T) (XLIST_NIL) != 0,
 			  "XLIST_INDEX + XLIST_INIT_ON_ZERO_MEM incompatible with zero as XLIST_NIL");
 #endif
 #endif
-#if defined(XLIST_INDEX_TO_NODE_EX)
+#if defined(XLIST_INDEX_USER_DATA)
 #define XLIST_CONTEXT_ARG , void *user_data
 #define XLIST_CONTEXT , user_data
-#elif !defined(XLIST_INDEX_TO_NODE)
-#define XLIST_CONTEXT_ARG , XLIST_node *first_node, size_t object_size
-#define XLIST_CONTEXT , first_node, object_size
-#else
+#elif defined(XLIST_INDEX_TO_NODE)
 #define XLIST_CONTEXT_ARG
 #define XLIST_CONTEXT
+#else
+#define XLIST_CONTEXT_ARG , XLIST_node *first_node, size_t object_size
+#define XLIST_CONTEXT , first_node, object_size
 #endif
 #endif			/* XLIST_INDEX */
 
@@ -423,10 +427,10 @@ XLIST_follow(const XLIST_node *base, XLIST_link_t link XLIST_CONTEXT_ARG)
 #elif defined(XLIST_PTRDIFF)
 	return (XLIST_node *) ((uintptr_t) base + (link << XLIST_PTRDIFF_SHIFT));
 #elif defined(XLIST_INDEX)
-#if defined(XLIST_INDEX_TO_NODE)
+#if defined(XLIST_INDEX_USER_DATA)
+	return XLIST_INDEX_TO_NODE(link, user_data);
+#elif defined(XLIST_INDEX_TO_NODE)
 	return XLIST_INDEX_TO_NODE(link);
-#elif defined(XLIST_INDEX_TO_NODE_EX)
-	return XLIST_INDEX_TO_NODE_EX(link, user_data);
 #else
 	return (XLIST_node *) ((char *) first_node + (link * object_size));
 #endif
@@ -447,30 +451,38 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 	/*
 	 * Assumptions:
 	 *
-	 * 1.  base and target must have the same provenance (they reside in the
-	 * same variable, malloc(), mmap() etc).  XLIST_follow() will be able to
-	 * synthesize the pointer with the same provenance as the target argument,
-	 * or if the whole list is relocated by (say) reallocation, the same
-	 * provenance as any other pointers into the new copy.
+	 * 1.  base and target must have the same provenance (they reside inside
+	 * the same variable, malloc(), mmap() etc).  XLIST_follow() will be able
+	 * to synthesize the pointer with the same provenance as the target
+	 * argument, or if the whole list is relocated by (say) reallocation, the
+	 * same provenance as any other pointers into the new copy.
 	 *
 	 * 2.  Casting the pointers to integers before subtraction causes them to
-	 * be consider to be "exposed" (ISO TS 6010 sense) for the purposes of
-	 * alias analysis, unlike char pointer arithmetic.  Without exposure, the
-	 * compiler might consider target to have no potential aliases and reorder
-	 * accesses inappropriately.  It also avoids the problem of pointer
-	 * arithmetic being undefined except for top-level array elements and
-	 * members within one object.
+	 * be consider to be "exposed" (ISO TS 6010's formal way of saying that
+	 * the address has been taken and now potentially escaped into the wild)
+	 * for the purposes of alias analysis, unlike char pointer arithmetic.
+	 * Without that, the compiler can and will consider 'target' to have no
+	 * potential aliases and then reorder accesses inappropriately in an
+	 * optimized build.  It also avoids the problem of pointer arithmetic
+	 * being undefined except for top-level array elements and members within
+	 * one object or array element.
 	 *
-	 * 3.  Pointer-to-integer conversion gives us the numerical address in a
-	 * linear memory model.  (Pointer/integer conversion is implement-defined
-	 * and only guaranteed to survive a round trip; a Deathstation 9000 or a
-	 * segmented memory system could conform while scrambling/unscrambling the
-	 * bits, which would break XLIST_PTRDIFF_SHIFT > 1 and defeat our
-	 * reasoning about the safe range of XLIST_link_t.)  We can't satisfy
-	 * point 2 without this additional assumption.
+	 * 3.  Pointer-to-integer conversion gives us the actual address, and
+	 * memory is linear and flat.  (Pointer/integer conversion is
+	 * implement-defined and only guaranteed to survive a round trip; a
+	 * Deathstation 9000 or a segmented memory system could conform but also
+	 * scramble/unscramble the bits, which would break XLIST_PTRDIFF_SHIFT > 0
+	 * and defeat our reasoning about the safe range of XLIST_link_t, but also
+	 * other parts of our source tree, for example stack depth checks and
+	 * dsa_pointer.)
 	 *
-	 * 4.  This branch is optimized away leaving just subtraction and shift,
-	 * but the phrasing avoids the undefinedness of signed overflow.
+	 * 4.  The following should compile to two instructions: subtract and
+	 * shift.  Using unsigned arithmetic is a simple way to avoid undefined
+	 * behavior on signed overflow.  Using shift instead of division avoids a
+	 * couple of instructions that deal with the rounding direction of
+	 * negative numbers, at the cost of requiring two's complement to give
+	 * correct results.  We already require two's complement elsewhere, as do
+	 * POSIX:2001, C23 and C++20.
 	 */
 	if ((uintptr_t) target >= (uintptr_t) base)
 		difference = (uintptr_t) target - (uintptr_t) base;
@@ -479,10 +491,10 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 
 	return difference >> XLIST_PTRDIFF_SHIFT;
 #elif defined(XLIST_INDEX)
-#if defined(XLIST_INDEX_TO_NODE)
+#if defined(XLIST_INDEX_USER_DATA)
+	return XLIST_NODE_TO_INDEX(target, user_data);
+#elif defined(XLIST_INDEX_TO_NODE)
 	return XLIST_NODE_TO_INDEX(target);
-#elif defined(XLIST_INDEX_TO_NODE_EX)
-	return XLIST_NODE_TO_INDEX_EX(target, user_data);
 #else
 	Assert(target >= first_node);
 	return ((char *) target - (char *) first_node) / object_size;

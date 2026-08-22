@@ -231,9 +231,7 @@ check_args(const char *f_name, int nargs, const test_step * step)
 						 step_number,									\
 						 #prefix,										\
 						 step->result.value,							\
-						 (int) (((char *) node -						\
-								 (char *) &array[0].node) /				\
-								sizeof(array[0])));						\
+						 0); /*GET_INDEX(node));*/								\
 			}															\
 			else														\
 			{															\
@@ -310,9 +308,9 @@ check_args(const char *f_name, int nargs, const test_step * step)
 #define GET_NODE(node_index)									\
 	((node_index) < 0 ? &list.head : &array[(node_index)].node)
 #define GET_INDEX(node_p)												\
-	((node_p >= &array[0].node &&										\
-	  node_p < &array[lengthof(array)].node) ?							\
-	 (((char *) (node_p) - (char *) array) / sizeof(array[0])) :		\
+	(((node_p) >= &array[0].node &&										\
+	  (node_p) < &array[lengthof(array)].node) ?						\
+	 (((char *) (node_p) - (char *) array[0].node) / sizeof(array[0])) : \
 	 LIST_HEAD)
 
 static inline const char *
@@ -410,7 +408,7 @@ report_bad_link(const char *prefix,
 							"next",										\
 							(node1),									\
 							LIST_NIL,									\
-							GET_INEXT(prefix, &list.head, context));	\
+							GET_INEXT_I(prefix, (node1), context));		\
 	}																	\
 	else if ((node1) == LIST_TERMINATOR)								\
 	{																	\
