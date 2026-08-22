@@ -285,10 +285,8 @@ static_assert((XLIST_LINK_T) (XLIST_NIL) != 0,
 #define XLIST_is_zero_mem XLIST_MAKE_NAME(is_zero_mem)
 #define XLIST_link XLIST_MAKE_NAME(get_ptrdiff)
 #define XLIST_member_check XLIST_MAKE_NAME(member_check)
-#define XLIST_next_is_nil XLIST_MAKE_NAME(next_is_nil)
 #define XLIST_node_to_container XLIST_MAKE_NAME(node_to_container)
 #define XLIST_node_to_container_offset XLIST_MAKE_NAME(node_to_container_offset)
-#define XLIST_prev_is_nil XLIST_MAKE_NAME(prev_is_nil)
 #define XLIST_push_common XLIST_MAKE_NAME(push_common)
 #define XLIST_relink XLIST_MAKE_NAME(relink)
 #define XLIST_set_next XLIST_MAKE_NAME(set_next)
@@ -393,20 +391,6 @@ XLIST_node_to_container(XLIST_node *node)
 										  offsetof(XLIST_OBJECT_T,
 												   XLIST_OBJECT_MEMBER));
 };
-#endif
-
-static inline bool
-XLIST_next_is_nil(const XLIST_node *node)
-{
-	return node->next == XLIST_NIL;
-}
-
-#if defined(XLIST_DLIST)
-static inline bool
-XLIST_prev_is_nil(const XLIST_node *node)
-{
-	return node->prev == XLIST_NIL;
-}
 #endif
 
 #if defined(XLIST_PTRDIFF)
@@ -766,7 +750,8 @@ XLIST_push_common(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 	return false;
 }
 
-#if defined(XLIST_REGRESS)
+#if defined(XLIST_REGRESS) || defined(XLIST_DEBUG)
+
 static inline void
 XLIST_check_next_nil(const XLIST_node *node,
 					 const char *name,
@@ -963,6 +948,9 @@ XLIST_check_links(const XLIST_head *list,
 	}
 }
 
+#endif			/* XLIST_REGRESS || XLIST_DEBUG */
+
+#if defined(XLIST_REGRESS)
 /* Internal consistency check. */
 static inline void
 XLIST_check_contents(const XLIST_head *list,
@@ -1057,7 +1045,7 @@ XLIST_check(XLIST_head *list XLIST_CONTEXT_ARG)
 #endif
 }
 
-/* Insternal consistency check. */
+/* Internal consistency check. */
 static inline void
 XLIST_member_check(const XLIST_head *list,
 				   const XLIST_node *node XLIST_CONTEXT_ARG)
@@ -1664,7 +1652,6 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_member_check
 #undef XLIST_move_head
 #undef XLIST_move_tail
-#undef XLIST_next_is_nil
 #undef XLIST_next_node
 #undef XLIST_node
 #undef XLIST_node_init
@@ -1673,7 +1660,6 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_node_to_container_offset
 #undef XLIST_pop_head_node
 #undef XLIST_pop_tail_node
-#undef XLIST_prev_is_nil
 #undef XLIST_prev_node
 #undef XLIST_push_common
 #undef XLIST_push_head
