@@ -66,6 +66,7 @@ static const struct test_step common_schedule[] = {
 #define XLIST_PREFIX dlist_ptr
 #define XLIST_DLIST
 #define XLIST_PTR
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
@@ -97,6 +98,7 @@ test_dlist_ptr(void)
 #define XLIST_DLIST
 #define XLIST_COUNTED
 #define XLIST_PTR
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
@@ -127,6 +129,7 @@ test_dclist_ptr(void)
 #define XLIST_INDEX
 #define XLIST_OBJECT_T struct dlist_index_cont
 #define XLIST_OBJECT_MEMBER node
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #include "lib/xlist_template.h"
 
@@ -160,6 +163,7 @@ test_dlist_index(void)
 #define XLIST_PREFIX dlist_ptrdiff
 #define XLIST_DLIST
 #define XLIST_PTRDIFF
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
@@ -226,6 +230,7 @@ test_dlist_ptrdiff(void)
 #define XLIST_SLIST
 #define XLIST_LINEAR
 #define XLIST_PTR
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
@@ -257,6 +262,7 @@ test_slist_ptr(void)
 #define XLIST_TAILED
 #define XLIST_LINEAR
 #define XLIST_PTR
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
@@ -288,6 +294,7 @@ test_stlist_ptr(void)
 #define XLIST_COUNTED
 #define XLIST_LINEAR
 #define XLIST_PTR
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #define XLIST_DEFINE
 #include "lib/xlist_template.h"
@@ -319,6 +326,7 @@ test_sclist_ptr(void)
 #define XLIST_INDEX
 #define XLIST_OBJECT_T struct slist_index_cont
 #define XLIST_OBJECT_MEMBER node
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #include "lib/xlist_template.h"
 
@@ -351,6 +359,7 @@ test_slist_index(void)
 #define XLIST_INDEX
 #define XLIST_OBJECT_T struct stlist_index_cont
 #define XLIST_OBJECT_MEMBER node
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #include "lib/xlist_template.h"
 
@@ -388,6 +397,7 @@ test_stlist_index(void)
 	((struct my_slist_index_cont *)										\
 	 (((char *) (n)) - offsetof(struct my_slist_index_cont, node))) -	\
 	(struct my_slist_index_cont *) array
+#define XLIST_REGRESS
 #define XLIST_DECLARE
 #include "lib/xlist_template.h"
 

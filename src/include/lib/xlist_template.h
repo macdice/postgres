@@ -268,6 +268,12 @@ static_assert((XLIST_LINK_T) (XLIST_NIL) != 0,
 
 /* Generate private function names. */
 #define XLIST_check XLIST_MAKE_NAME(check)
+#define XLIST_check_contents XLIST_MAKE_NAME(check_contents)
+#define XLIST_check_links XLIST_MAKE_NAME(check_links)
+#define XLIST_check_next_link XLIST_MAKE_NAME(check_next_link)
+#define XLIST_check_next_nil XLIST_MAKE_NAME(check_next_nil)
+#define XLIST_check_prev_link XLIST_MAKE_NAME(check_prev_link)
+#define XLIST_check_prev_nil XLIST_MAKE_NAME(check_prev_nil)
 #define XLIST_decrement XLIST_MAKE_NAME(decrement)
 #define XLIST_delete_next XLIST_MAKE_NAME(delete_next)
 #define XLIST_follow XLIST_MAKE_NAME(follow_link)
@@ -753,8 +759,182 @@ XLIST_push_common(XLIST_head *list, XLIST_node *node XLIST_CONTEXT_ARG)
 	return false;
 }
 
+#if defined(XLIST_REGRESS)
+static inline void
+XLIST_check_next_nil(const XLIST_node *node,
+					 const char *name,
+					 const char *debug_context XLIST_CONTEXT_ARG)
+{
+	if (node->next != XLIST_NIL)
+		elog(PANIC,
+			 "expected %s node at %p to have next == NIL, but it has %" PRIxPTR
+			 "; context: %s",
+			 name,
+			 node,
+			 (uintptr_t) node->next,
+			 debug_context);
+}
+
+#if defined(XLIST_DLIST)
+static inline void
+XLIST_check_prev_nil(const XLIST_node *node,
+					 const char *name,
+					 const char *debug_context XLIST_CONTEXT_ARG)
+{
+	if (node->prev != XLIST_NIL)
+		elog(PANIC,
+			 "expected %s node at %p to have prev == NIL, but it has %" PRIxPTR
+			 "; context: %s",
+			 name,
+			 node,
+			 (uintptr_t) node->prev,
+			 debug_context);
+}
+#endif
+
+static inline void
+XLIST_check_next_link(const XLIST_node *before,
+					  const XLIST_node *after,
+					  const char *before_name,
+					  const char *after_name,
+					  const char *debug_context XLIST_CONTEXT_ARG)
+{
+	if (XLIST_get_next(before XLIST_CONTEXT) != after)
+		elog(PANIC,
+			 "expected %s node at %p to have next link to %s node at %p, but it has %"
+			 PRIxPTR
+			 "; context: %s",
+			 before_name,
+			 before,
+			 after_name,
+			 after,
+			 (uintptr_t) before->next,
+			 debug_context);
+}
+
+#if defined(XLIST_DLIST)
+static inline void
+XLIST_check_prev_link(const XLIST_node *before,
+					  const XLIST_node *after,
+					  const char *before_name,
+					  const char *after_name,
+					  const char *debug_context XLIST_CONTEXT_ARG)
+{
+	if (XLIST_get_prev(after XLIST_CONTEXT) != before)
+		elog(PANIC,
+			 "expected %s node at %p to have prev link to %s node at %p, but it has %"
+			 PRIxPTR
+			 "; context: %s",			 
+			 after_name,
+			 after,
+			 before_name,
+			 before,
+			 (uintptr_t) after->prev,
+			 debug_context);
+}
+#endif
+
+static inline void
+XLIST_check_links(const XLIST_head *list,
+				  const XLIST_node *before,
+				  const XLIST_node *after,
+				  const char *debug_context XLIST_CONTEXT_ARG)
+{
+	if (before == NULL && after == NULL)
+	{
+		/* Empty list representation. */
+#if defined(XLIST_EMPTY_NIL)
+		XLIST_check_next_nil(&list->head, "head", debug_context XLIST_CONTEXT);
+#elif defined(XLIST_EMPTY_SELF)
+		XLIST_check_next_link(&list->head, &list->head, "head", "head", debug_context XLIST_CONTEXT);
+#endif
+
+#if defined(XLIST_TAILED)
+#if defined(XLIST_EMPTY_NIL)
+		XLIST_check_next_nil(&list->tail, "tail", debug_context XLIST_CONTEXT);
+#elif defined(XLIST_EMPTY_SELF)
+		XLIST_check_next_link(&list->tail, &list->head, "tail", "head", debug_context XLIST_CONTEXT);
+#endif
+#endif
+
+#if defined(XLIST_DLIST)
+#if defined(XLIST_EMPTY_NIL)
+		XLIST_check_prev_nil(&list->head, "head", debug_context XLIST_CONTEXT);
+#elif defined(XLIST_EMPTY_SELF)
+		XLIST_check_prev_link(&list->head, &list->head, "head", "head", debug_context XLIST_CONTEXT);
+#endif
+#endif
+	}
+	else if (before == NULL)
+	{
+		/* Head to first node. */
+		XLIST_check_next_link(&list->head, after, "head", "first",  debug_context XLIST_CONTEXT);
+
+#if defined(XLIST_DLIST)
+#if defined(XLIST_EMPTY_NIL)
+		XLIST_check_prev_nil(after, "first", debug_context XLIST_CONTEXT);
+#else
+		XLIST_check_prev_link(&list->head, after, "head", "first", debug_context XLIST_CONTEXT);
+#endif
+#endif
+	}
+	else if (after != NULL)
+	{
+		/* Tested with each node as before except the final one. */
+		XLIST_check_next_link(before, after, "internal", "internal", debug_context XLIST_CONTEXT);
+
+#if defined(XLIST_DLIST)
+		XLIST_check_prev_link(before, after, "internal", "internal", debug_context XLIST_CONTEXT);
+#endif
+	}
+	else
+	{
+		/* Final node. */
+#if defined(XLIST_EMPTY_NIL)
+		XLIST_check_next_nil(before, "final", debug_context XLIST_CONTEXT);
+#else
+		XLIST_check_next_link(before, &list->head, "final", "head", debug_context XLIST_CONTEXT);
+#endif
+
+#if defined(XLIST_TAILED)
+		XLIST_check_next_link(&list->tail, before, "tail", "final", debug_context XLIST_CONTEXT);
+#endif
+
+#if defined(XLIST_DLIST)
+		XLIST_check_prev_link(before, &list->head, "final", "head", debug_context XLIST_CONTEXT);
+#endif
+	}
+}
 
 /* Internal consistency check. */
+static inline void
+XLIST_check_contents(const XLIST_head *list,
+					 const XLIST_count_t count,
+					 const XLIST_node *expect[],
+					 const char *debug_message XLIST_CONTEXT_ARG)
+{
+	if (count == 0)
+	{
+#if defined(XLIST_INIT_ON_ZERO_MEM)
+		if (XLIST_is_zero_mem(list))
+			return;
+#endif
+		XLIST_check_links(list, NULL, NULL, debug_message XLIST_CONTEXT);
+		return;
+	}
+	
+	/* First link. */
+	XLIST_check_links(list, NULL, expect[0], debug_message XLIST_CONTEXT);
+
+	/* Internal links. */
+	for (int i = 0; i < count - 1; ++i)
+		XLIST_check_links(list, expect[i], expect[i + 1], debug_message XLIST_CONTEXT);
+
+	/* Final link. */
+	XLIST_check_links(list, expect[count - 1], NULL, debug_message XLIST_CONTEXT);
+}
+#endif			/* XLIST_REGRESS */
+
 static inline void
 XLIST_check(XLIST_head *list)
 {
@@ -1331,6 +1511,7 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_MACROS
 
 /* Undefine template parameter macros. */
+#undef XLIST_DEBUG
 #undef XLIST_DECLARE
 #undef XLIST_DECLARE_ONLY
 #undef XLIST_DEFINE
@@ -1350,6 +1531,7 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_PREFIX
 #undef XLIST_PTR
 #undef XLIST_PTRDIFF
+#undef XLIST_REGRESS
 #undef XLIST_SLIST
 #undef XLIST_TAILED
 
@@ -1363,6 +1545,12 @@ XLIST_count(const XLIST_head *list XLIST_CONTEXT_ARG)
 #undef XLIST_MAX_PREFIX
 #undef XLIST_PTRDIFF_SCALE
 #undef XLIST_check
+#undef XLIST_check_contents
+#undef XLIST_check_links
+#undef XLIST_check_next_link
+#undef XLIST_check_next_nil
+#undef XLIST_check_prev_link
+#undef XLIST_check_prev_nil
 #undef XLIST_count
 #undef XLIST_count_t
 #undef XLIST_decrement
