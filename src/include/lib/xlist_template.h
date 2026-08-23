@@ -36,12 +36,13 @@
  * relocated or used in DSM segments.
  *
  * XLIST_PTRDIFF lists are only safe when all the nodes including the list
- * head are in one contiguous chunk of memory with a maximum span
- * representable with the selected link type.  That chunk can be reallocated,
- * bitwise copied to some other single chunk, written to disk and read back
- * in, or remapped at a different address, as long as there are never links
- * between objects that the compiler considers to be part of separate
- * allocations.  See comments in XLIST_link().
+ * head are in one object/array or one chunk of memory (malloc(), palloc(),
+ * dsa_allocate(), dsm_create(), mmap()...) with a maximum span representable
+ * with the selected link type.  The whole list can be reallocated, bitwise
+ * copied to some other single chunk, written to disk and read back in, or
+ * remapped at a different address, as long as there are never links between
+ * objects that the compiler considers to belong to separate allocations.  See
+ * comments in XLIST_link().
  *
  * XLIST_INDEX can be relocated, and the list head can be in a separate
  * allocation from the array of objects holding the nodes, but have a higher
@@ -455,14 +456,21 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 	 * same provenance as any other pointers into the new copy.
 	 *
 	 * 2.  Casting the pointers to integers before subtraction causes them to
-	 * be consider to be "exposed" (ISO TS 6010's formal way of saying that
-	 * the address has been taken and now potentially escaped into the wild)
-	 * for the purposes of alias analysis, unlike char pointer arithmetic.
-	 * Without that, the compiler can and will consider 'target' to have no
-	 * potential aliases and then reorder accesses inappropriately in an
-	 * optimized build.  It also avoids the problem of pointer arithmetic
-	 * being undefined except for top-level array elements and members within
-	 * one object or array element.
+	 * be consider to be "exposed" (ISO TS 6010's way of saying that an
+	 * address in that "storage instance" has been taken and now potentially
+	 * escaped into the wild) for the purposes of alias analysis, unlike char
+	 * pointer arithmetic.  Without that, compilers can and will consider
+	 * 'target' to have no potential aliases and then reorder accesses
+	 * inappropriately in an optimized build.  It also avoids *part* of the
+	 * problem of pointer arithmetic being undefined except for top-level
+	 * array elements and members within one single object or array element
+	 * (but see next).  (Compare the ubiquitous container-of idiom, which is
+	 * UB as of the current standard: it also uses pointer arithmetic to
+	 * escape the bounds of an object, but works because compilers actually
+	 * analyze pointers in terms of the *allocation* that objects are part of,
+	 * which coincides with C's objects for variables but not for malloc() and
+	 * other system-provided memory, something the standards community is
+	 * trying to address by formalizing pointer provenance concepts.)
 	 *
 	 * 3.  Pointer-to-integer conversion gives us the actual address, and
 	 * memory is linear and flat.  (Pointer/integer conversion is
@@ -470,8 +478,7 @@ XLIST_link(const XLIST_node *base, XLIST_node *target XLIST_CONTEXT_ARG)
 	 * Deathstation 9000 or a segmented memory system could conform but also
 	 * scramble/unscramble the bits, which would break XLIST_PTRDIFF_SHIFT > 0
 	 * and defeat our reasoning about the safe range of XLIST_link_t, but also
-	 * other parts of our source tree, for example stack depth checks and
-	 * dsa_pointer.)
+	 * other parts of our source tree.)
 	 *
 	 * 4.  The following should compile to two instructions: subtract and
 	 * shift.  Using unsigned arithmetic is a simple way to avoid undefined
@@ -948,7 +955,7 @@ XLIST_check_links(const XLIST_head *list,
 	}
 }
 
-#endif			/* XLIST_REGRESS || XLIST_DEBUG */
+#endif							/* XLIST_REGRESS || XLIST_DEBUG */
 
 #if defined(XLIST_REGRESS)
 /* Internal consistency check. */
@@ -1001,8 +1008,10 @@ XLIST_check_contents(const XLIST_head *list,
 static inline void
 XLIST_check(XLIST_head *list XLIST_CONTEXT_ARG)
 {
-#ifdef XLIST_DEBUG
+#if defined(XLIST_DEBUG)
+#if defined(XLIST_COUNTED)
 	XLIST_count_t count = 0;
+#endif
 	const char *debug_context = CppAsString(XLIST_check);
 
 	if (list == NULL)
@@ -1028,9 +1037,13 @@ XLIST_check(XLIST_head *list XLIST_CONTEXT_ARG)
 
 			XLIST_check_links(list, cur, next, debug_context XLIST_CONTEXT);
 			cur = next;
+#if defined(XLIST_COUNTED)
 			count++;
+#endif
 		}
+#if defined(XLIST_COUNTED)
 		count++;
+#endif
 		XLIST_check_links(list, cur, NULL, debug_context XLIST_CONTEXT);
 	}
 
