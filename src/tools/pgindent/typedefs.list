@@ -3675,7 +3675,9 @@ btree_gin_convert_function
 btree_gin_leftmost_function
 build_simple_rel_hook_type
 bytea
-cached_re_str
+cached_re
+cached_re_entry
+cached_re_key
 canonicalize_state
 cashKEY
 catalogid_hash

@@ -30,6 +30,7 @@
 #include "postgres.h"
 
 #include "catalog/pg_type.h"
+#include "common/hashfn.h"
 #include "funcapi.h"
 #include "regex/regex.h"
 #include "utils/array.h"
@@ -72,46 +73,85 @@ typedef struct regexp_matches_ctx
  * Whenever we use an entry, it's moved up to the front of the list.
  * Over time, an item's average position corresponds to its frequency of use.
  *
- * When we first create an entry, it's inserted at the front of
- * the array, dropping the entry at the end of the array if necessary to
- * make room.  (This might seem to be weighting the new entry too heavily,
- * but if we insert new entries further back, we'll be unable to adjust to
- * a sudden shift in the query mix where we are presented with MAX_CACHED_RES
- * never-before-seen items used circularly.  We ought to be able to handle
- * that case, so we have to insert at the front.)
+ * When we first create an entry, it's inserted at the head end of the LRU
+ * queue, dropping entries at the tail end if necessary to make room.  (This
+ * might seem to be weighting the new entry too heavily, but if we insert new
+ * entries further back, we'll be unable to adjust to a sudden shift in the
+ * query mix where we are presented with enough never-before-seen items used
+ * circularly.  We ought to be able to handle that case, so we have to insert
+ * at the front.)
  *
- * Knuth mentions a variant strategy in which a used item is moved up just
- * one place in the list.  Although he says this uses fewer comparisons on
+ * Knuth mentions a variant strategy in which a used item is moved up just one
+ * place in the list.  Although he says this uses fewer comparisons on
  * average, it seems not to adapt very well to the situation where you have
  * both some reusable patterns and a steady stream of non-reusable patterns.
  * A reusable pattern that isn't used at least as often as non-reusable
  * patterns are seen will "fail to keep up" and will drop off the end of the
- * cache.  With move-to-front, a reusable pattern is guaranteed to stay in
- * the cache as long as it's used at least once in every MAX_CACHED_RES uses.
+ * cache.  With move-to-front, a reusable pattern is guaranteed to stay in the
+ * cache as long as it's used frequently enough that the cache isn't exceeded
+ * between uses.
  */
 
 /* this is the maximum number of cached regular expressions */
 #ifndef MAX_CACHED_RES
-#define MAX_CACHED_RES	32
+#define	MAX_CACHED_RES 32
 #endif
 
 /* A parent memory context for regular expressions. */
 static MemoryContext RegexpCacheMemoryContext;
 
-/* this structure describes one cached regular expression */
-typedef struct cached_re_str
+typedef struct cached_re_key
 {
-	MemoryContext cre_context;	/* memory context for this regexp */
 	char	   *cre_pat;		/* original RE (not null terminated!) */
 	int			cre_pat_len;	/* length of original RE, in bytes */
 	int			cre_flags;		/* compile flags: extended,icase etc */
 	Oid			cre_collation;	/* collation to use */
-	regex_t		cre_re;			/* the compiled regular expression */
-} cached_re_str;
+} cached_re_key;
 
-static int	num_res = 0;		/* # of cached re's */
-static cached_re_str re_array[MAX_CACHED_RES];	/* cached re's */
+/*
+ * Cached regular expression.  Lives in cre_context.
+ */
+typedef struct cached_re
+{
+	cached_re_key cre_key;
 
+	MemoryContext cre_context;
+	regex_t		cre_re;
+
+	/* Link in re_cache_lru queue. */
+	dlist_node	cre_lru_node;
+} cached_re;
+
+/*
+ * Entry in the hash table.
+ */
+typedef struct cached_re_entry
+{
+	union
+	{
+		cached_re_key *key;
+		cached_re  *cre;
+	};
+
+	bool		status;
+} cached_re_entry;
+
+static bool cached_re_key_equal(const cached_re_key *a, const cached_re_key *b);
+static uint32 cached_re_key_hash(const cached_re_key *key);
+
+#define SH_PREFIX re_cache
+#define SH_ELEMENT_TYPE cached_re_entry
+#define SH_KEY_TYPE cached_re_key *
+#define SH_KEY key
+#define SH_EQUAL(table, a, b) cached_re_key_equal((a), (b))
+#define SH_HASH_KEY(table, key) cached_re_key_hash(key)
+#define SH_SCOPE static inline
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+
+static re_cache_hash * re_cache_table;
+static dclist_head re_cache_lru;
 
 /* Local functions */
 static regexp_matches_ctx *setup_regexp_matches(text *orig_str, text *pattern,
@@ -124,6 +164,34 @@ static regexp_matches_ctx *setup_regexp_matches(text *orig_str, text *pattern,
 static ArrayType *build_regexp_match_result(regexp_matches_ctx *matchctx);
 static Datum build_regexp_split_result(regexp_matches_ctx *splitctx);
 
+static bool
+cached_re_key_equal(const cached_re_key *a, const cached_re_key *b)
+{
+	return (a->cre_pat_len == b->cre_pat_len &&
+			memcmp(a->cre_pat, b->cre_pat, a->cre_pat_len) == 0 &&
+			a->cre_flags == b->cre_flags &&
+			a->cre_collation == b->cre_collation);
+}
+
+static uint32
+cached_re_key_hash(const cached_re_key *key)
+{
+	uint32		result;
+
+	result = hash_bytes((const unsigned char *) key->cre_pat, key->cre_pat_len);
+	result = hash_combine(result, murmurhash32(key->cre_flags));
+	result = hash_combine(result, murmurhash32(key->cre_collation));
+
+	return result;
+}
+
+static void
+cached_re_drop(cached_re *cre)
+{
+	dclist_delete_from(&re_cache_lru, &cre->cre_lru_node);
+	re_cache_delete(re_cache_table, &cre->cre_key);
+	MemoryContextDelete(cre->cre_context);
+}
 
 /*
  * RE_compile_and_cache - compile a RE, caching if possible
@@ -144,36 +212,28 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 	char	   *text_re_val = VARDATA_ANY(text_re);
 	pg_wchar   *pattern;
 	int			pattern_len;
-	int			i;
 	int			regcomp_result;
-	cached_re_str re_temp;
 	char		errMsg[100];
 	MemoryContext oldcontext;
+	MemoryContext re_context;
+	cached_re_key key;
+	cached_re_entry *entry;
+	cached_re  *cre;
+	bool		found;
 
-	/*
-	 * Look for a match among previously compiled REs.  Since the data
-	 * structure is self-organizing with most-used entries at the front, our
-	 * search strategy can just be to scan from the front.
-	 */
-	for (i = 0; i < num_res; i++)
+	/* Build key object for hash table. */
+	key.cre_pat = text_re_val;
+	key.cre_pat_len = text_re_len;
+	key.cre_flags = cflags;
+	key.cre_collation = collation;
+
+	/* If found, move it to head of LRU queue and return it. */
+	if (likely(re_cache_table &&
+			   (entry = re_cache_lookup(re_cache_table, &key))))
 	{
-		if (re_array[i].cre_pat_len == text_re_len &&
-			re_array[i].cre_flags == cflags &&
-			re_array[i].cre_collation == collation &&
-			memcmp(re_array[i].cre_pat, text_re_val, text_re_len) == 0)
-		{
-			/*
-			 * Found a match; move it to front if not there already.
-			 */
-			if (i > 0)
-			{
-				re_temp = re_array[i];
-				memmove(&re_array[1], &re_array[0], i * sizeof(cached_re_str));
-				re_array[0] = re_temp;
-			}
-
-			return &re_array[0].cre_re;
-		}
+		cre = entry->cre;
+		dclist_move_head(&re_cache_lru, &cre->cre_lru_node);
+		return &cre->cre_re;
 	}
 
 	/* Set up the cache memory on first go through. */
@@ -182,11 +242,11 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 			AllocSetContextCreate(TopMemoryContext,
 								  "RegexpCacheMemoryContext",
 								  ALLOCSET_SMALL_SIZES);
-
-	/*
-	 * Couldn't find it, so try to compile the new RE.  To avoid leaking
-	 * resources on failure, we build into the re_temp local.
-	 */
+	/* And the hash table. */
+	if (unlikely(!re_cache_table))
+		re_cache_table = re_cache_create(RegexpCacheMemoryContext,
+										 MAX_CACHED_RES,
+										 NULL);
 
 	/* Convert pattern string to wide characters */
 	pattern = palloc_array(pg_wchar, text_re_len + 1);
@@ -201,12 +261,15 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 	 * re-parent it under the longer lived cache context if we make it to the
 	 * bottom of this function.
 	 */
-	re_temp.cre_context = AllocSetContextCreate(CurrentMemoryContext,
-												"RegexpMemoryContext",
-												ALLOCSET_SMALL_SIZES);
-	oldcontext = MemoryContextSwitchTo(re_temp.cre_context);
+	re_context = AllocSetContextCreate(CurrentMemoryContext,
+									   "RegexpMemoryContext",
+									   ALLOCSET_SMALL_SIZES);
+	oldcontext = MemoryContextSwitchTo(re_context);
 
-	regcomp_result = pg_regcomp(&re_temp.cre_re,
+	cre = palloc_object(cached_re);
+	cre->cre_context = re_context;
+
+	regcomp_result = pg_regcomp(&cre->cre_re,
 								pattern,
 								pattern_len,
 								cflags,
@@ -217,51 +280,46 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 	if (regcomp_result != REG_OKAY)
 	{
 		/* re didn't compile (no need for pg_regfree, if so) */
-		pg_regerror(regcomp_result, &re_temp.cre_re, errMsg, sizeof(errMsg));
+		pg_regerror(regcomp_result, &cre->cre_re, errMsg, sizeof(errMsg));
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
 				 errmsg("invalid regular expression: %s", errMsg)));
 	}
 
-	/* Copy the pattern into the per-regexp memory context. */
-	re_temp.cre_pat = palloc(text_re_len + 1);
-	memcpy(re_temp.cre_pat, text_re_val, text_re_len);
+	/* Fill in the key, copying cre_path to per-regexp memory. */
+	cre->cre_key.cre_pat = palloc(text_re_len + 1);
+	memcpy(cre->cre_key.cre_pat, text_re_val, text_re_len);
+	cre->cre_key.cre_pat_len = key.cre_pat_len;
+	cre->cre_key.cre_flags = key.cre_flags;
+	cre->cre_key.cre_collation = key.cre_collation;
 
 	/*
-	 * NUL-terminate it only for the benefit of the identifier used for the
-	 * memory context, visible in the pg_backend_memory_contexts view.
+	 * NUL-terminate cre_path and make it visible in the ident column of the
+	 * pg_backend_memory_contexts view.  Space for that was allocated above.
 	 */
-	re_temp.cre_pat[text_re_len] = 0;
-	MemoryContextSetIdentifier(re_temp.cre_context, re_temp.cre_pat);
+	cre->cre_key.cre_pat[text_re_len] = 0;
+	MemoryContextSetIdentifier(cre->cre_context, cre->cre_key.cre_pat);
 
-	re_temp.cre_pat_len = text_re_len;
-	re_temp.cre_flags = cflags;
-	re_temp.cre_collation = collation;
-
-	/*
-	 * Okay, we have a valid new item in re_temp; insert it into the storage
-	 * array.  Discard last entry if needed.
-	 */
-	if (num_res >= MAX_CACHED_RES)
+	/* See if we need to drop anything to make room. */
+	if (dclist_count(&re_cache_lru) == MAX_CACHED_RES)
 	{
-		--num_res;
-		Assert(num_res < MAX_CACHED_RES);
-		/* Delete the memory context holding the regexp and pattern. */
-		MemoryContextDelete(re_array[num_res].cre_context);
+		cached_re  *drop_cre = dclist_container(cached_re,
+												cre_lru_node,
+												dclist_tail_node(&re_cache_lru));
+
+		cached_re_drop(drop_cre);
 	}
 
+	/* Insert into hash table and LRU queue. */
+	entry = re_cache_insert(re_cache_table, &cre->cre_key, &found);
+	dclist_push_head(&re_cache_lru, &cre->cre_lru_node);
+
 	/* Re-parent the memory context to our long-lived cache context. */
-	MemoryContextSetParent(re_temp.cre_context, RegexpCacheMemoryContext);
-
-	if (num_res > 0)
-		memmove(&re_array[1], &re_array[0], num_res * sizeof(cached_re_str));
-
-	re_array[0] = re_temp;
-	num_res++;
+	MemoryContextSetParent(cre->cre_context, RegexpCacheMemoryContext);
 
 	MemoryContextSwitchTo(oldcontext);
 
-	return &re_array[0].cre_re;
+	return &cre->cre_re;
 }
 
 /*
