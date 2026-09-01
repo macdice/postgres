@@ -41,7 +41,7 @@
  *	  - SH_SCOPE - in which scope (e.g. extern, static inline) do function
  *		declarations reside
  *	  - SH_RAW_ALLOCATOR - if defined, memory contexts are not used; instead,
- *	    use this to allocate bytes. The allocator must zero the returned space.
+ *	    use this to allocate bytes.
  *	  - SH_USE_NONDEFAULT_ALLOCATOR - if defined no element allocator functions
  *		are defined, so you can supply your own
  *	  The following parameters are only relevant when SH_DEFINE is defined:
@@ -52,7 +52,30 @@
  *	  - SH_GET_HASH(tb, a) - return the field to store the hash in
  *
  *	  The element type is required to contain a "status" member that can store
- *	  the range of values defined in the SH_STATUS enum.
+ *	  the range of values defined in the SH_STATUS enum, unless empty entries
+ *	  can be distinguished with one of the following techniques:
+ *
+ *	  1. If the key is a scalar type that has a value that will never be
+ *	  inserted (checked by an assertion), it can be specified with:
+ *	  - SH_KEY_EMPTY_VALUE - eg NULL, 0, -1, InvalidOid, ...
+ *
+ *	  2.  If the key is a struct or union type and a single member can be used
+ *	  to distinguish a key that will never be inserted (checked by an
+ *	  assertion), it can be specified with:
+ *	  - SH_KEY_EMPTY_MEMBER - eg oid, name[0], left.id, ...
+ *	  - SH_KEY_EMPTY_VALUE
+ *
+ *	  3.  A non-key member can also be used to detect empty entries.  This is
+ *	  primarily useful keys that have no unused value in general, eg Datum
+ *	  holding values of any SQL type.  This variant cannot assert that
+ *	  inserted entries are recognizable as non-empty, so a "status" member
+ *	  might be preferable despite wasting memory:
+ *	  - SH_ENTRY_EMPTY_MEMBER
+ *	  - SH_ENTRY_EMPTY_VALUE
+ *
+ *	  (General entry-is-empty test/assign expressions could be supported too,
+ *	  but single-member single-value configurations are easier to work with and
+ *	  seem to cover realistic cases in practice.)
  *
  *	  While SH_STORE_HASH (and subsequently SH_GET_HASH) are optional, because
  *	  the hash table implementation needs to compare hashes to move elements
@@ -123,6 +146,7 @@
 #define SH_START_ITERATE_AT SH_MAKE_NAME(start_iterate_at)
 #define SH_ITERATE SH_MAKE_NAME(iterate)
 #define SH_ALLOCATE SH_MAKE_NAME(allocate)
+#define SH_INIT_BUCKETS SH_MAKE_NAME(init_buckets)
 #define SH_FREE SH_MAKE_NAME(free)
 #define SH_ESTIMATE_SPACE SH_MAKE_NAME(estimate_space)
 #define SH_STAT SH_MAKE_NAME(stat)
@@ -288,6 +312,33 @@ SH_SCOPE void SH_STAT(SH_TYPE * tb);
 #define SH_COMPARE_KEYS(tb, ahash, akey, b) (SH_EQUAL(tb, b->SH_KEY, akey))
 #endif
 
+/* How to do we distinguish empty buckets from in-use buckets? */
+#if defined(SH_KEY_EMPTY_MEMBER) && defined(SH_KEY_EMPTY_VALUE)
+/* Special value of a scalar member of key type. */
+#define SH_IS_EMPTY(entry) ((entry)->SH_KEY.SH_KEY_EMPTY_MEMBER == (SH_KEY_EMPTY_VALUE))
+#define SH_IS_IN_USE(entry) !SH_IS_EMPTY(entry)
+#define SH_SET_EMPTY(entry) (entry)->SH_KEY.SH_KEY_EMPTY_MEMBER = (SH_KEY_EMPTY_VALUE)
+#define SH_SET_IN_USE(entry) Assert(!SH_IS_EMPTY(entry))
+#elif defined(SH_KEY_EMPTY_VALUE)
+/* Special value of scalar key type. */
+#define SH_IS_EMPTY(entry) ((entry)->SH_KEY == (SH_KEY_EMPTY_VALUE))
+#define SH_IS_IN_USE(entry) !SH_IS_EMPTY(entry)
+#define SH_SET_EMPTY(entry) ((entry)->SH_KEY) = (SH_KEY_EMPTY_VALUE)
+#define SH_SET_IN_USE(entry) Assert(!SH_IS_EMPTY(entry))
+#elif defined(SH_ELEMENT_EMPTY_MEMBER) && defined(SH_ELEMENT_EMPTY_VALUE)
+/* Special value of a scalar member of element type. */
+#define SH_IS_EMPTY(entry) ((entry)->SH_ELEMENT_EMPTY_MEMBER == (SH_ELEMENT_EMPTY_VALUE))
+#define SH_IS_IN_USE(entry) !SH_IS_EMPTY(entry)
+#define SH_SET_EMPTY(entry) (entry)->SH_ELEMENT_EMPTY_MEMBER = (SH_ELEMENT_EMPTY_VALUE)
+#define SH_SET_IN_USE(entry)	/* can't assert, filled after insert... */
+#else
+/* Dedicated status member of element type. */
+#define SH_IS_EMPTY(entry) ((entry)->status == SH_STATUS_EMPTY)
+#define SH_IS_IN_USE(entry) ((entry)->status == SH_STATUS_IN_USE)
+#define SH_SET_EMPTY(entry) ((entry)->status = SH_STATUS_EMPTY)
+#define SH_SET_IN_USE(entry) ((entry)->status = SH_STATUS_IN_USE)
+#endif
+
 /*
  * Wrap the following definitions in include guards, to avoid multiple
  * definition errors if this header is included more than once.  The rest of
@@ -419,8 +470,7 @@ SH_ALLOCATE(SH_TYPE * type, Size size)
 #ifdef SH_RAW_ALLOCATOR
 	return SH_RAW_ALLOCATOR(size);
 #else
-	return MemoryContextAllocExtended(type->ctx, size,
-									  MCXT_ALLOC_HUGE | MCXT_ALLOC_ZERO);
+	return MemoryContextAllocExtended(type->ctx, size, MCXT_ALLOC_HUGE);
 #endif
 }
 
@@ -432,6 +482,35 @@ SH_FREE(SH_TYPE * type, void *pointer)
 }
 
 #endif
+
+/*
+ * Mark all buckets as empty.
+ */
+static inline void
+SH_INIT_BUCKETS(SH_ELEMENT_TYPE * elements, uint32 nelements)
+{
+	SH_ELEMENT_TYPE zeroed_element;
+
+	/*
+	 * Test whether zeroed memory satisfies the configured test for an empty
+	 * bucket.  Optimized builds should constant-fold this test, leaving just
+	 * one branch in the generated code.
+	 */
+	memset(&zeroed_element, 0, sizeof(zeroed_element));
+	if (SH_IS_EMPTY(&zeroed_element))
+	{
+		/* Used optimized memory-fill when it is equivalent. */
+		memset(elements, 0, sizeof(SH_ELEMENT_TYPE) * nelements);
+	}
+	else
+	{
+		/* Non-zero-initialized empty value must be stored in every bucket. */
+		for (uint32 i = 0; i < nelements; ++i)
+			SH_SET_EMPTY(&elements[i]);
+	}
+
+	Assert(SH_IS_EMPTY(&elements[0]));
+}
 
 /*
  * Create a hash table with enough space for `nelements` distinct members.
@@ -455,6 +534,7 @@ SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 
 #ifdef SH_RAW_ALLOCATOR
 	tb = (SH_TYPE *) SH_RAW_ALLOCATOR(sizeof(SH_TYPE));
+	memset(tb, 0, sizeof(SH_TYPE));
 #else
 	tb = (SH_TYPE *) MemoryContextAllocZero(ctx, sizeof(SH_TYPE));
 	tb->ctx = ctx;
@@ -467,6 +547,7 @@ SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
 	size = SH_COMPUTE_SIZE(size);
 
 	tb->data = (SH_ELEMENT_TYPE *) SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * size);
+	SH_INIT_BUCKETS(tb->data, size);
 
 	SH_UPDATE_PARAMETERS(tb, size);
 	return tb;
@@ -484,7 +565,7 @@ SH_DESTROY(SH_TYPE * tb)
 SH_SCOPE void
 SH_RESET(SH_TYPE * tb)
 {
-	memset(tb->data, 0, sizeof(SH_ELEMENT_TYPE) * tb->size);
+	SH_INIT_BUCKETS(tb->data, tb->size);
 	tb->members = 0;
 }
 
@@ -512,6 +593,7 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 	newsize = SH_COMPUTE_SIZE(newsize);
 
 	tb->data = (SH_ELEMENT_TYPE *) SH_ALLOCATE(tb, sizeof(SH_ELEMENT_TYPE) * newsize);
+	SH_INIT_BUCKETS(tb->data, newsize);
 
 	/*
 	 * Update parameters for new table after allocation succeeds to avoid
@@ -545,7 +627,7 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 		uint32		hash;
 		uint32		optimal;
 
-		if (oldentry->status != SH_STATUS_IN_USE)
+		if (SH_IS_EMPTY(oldentry))
 		{
 			startelem = i;
 			break;
@@ -567,7 +649,7 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 	{
 		SH_ELEMENT_TYPE *oldentry = &olddata[copyelem];
 
-		if (oldentry->status == SH_STATUS_IN_USE)
+		if (SH_IS_IN_USE(oldentry))
 		{
 			uint32		hash;
 			uint32		startelem2;
@@ -583,10 +665,8 @@ SH_GROW(SH_TYPE * tb, uint64 newsize)
 			{
 				newentry = &newdata[curelem];
 
-				if (newentry->status == SH_STATUS_EMPTY)
-				{
+				if (SH_IS_EMPTY(newentry))
 					break;
-				}
 
 				curelem = SH_NEXT(tb, curelem, startelem2);
 			}
@@ -654,14 +734,14 @@ restart:
 		SH_ELEMENT_TYPE *entry = &data[curelem];
 
 		/* any empty bucket can directly be used */
-		if (entry->status == SH_STATUS_EMPTY)
+		if (SH_IS_EMPTY(entry))
 		{
 			tb->members++;
 			entry->SH_KEY = key;
 #ifdef SH_STORE_HASH
 			SH_GET_HASH(tb, entry) = hash;
 #endif
-			entry->status = SH_STATUS_IN_USE;
+			SH_SET_IN_USE(entry);
 			*found = false;
 			return entry;
 		}
@@ -676,7 +756,7 @@ restart:
 
 		if (SH_COMPARE_KEYS(tb, hash, key, entry))
 		{
-			Assert(entry->status == SH_STATUS_IN_USE);
+			Assert(SH_IS_IN_USE(entry));
 			*found = true;
 			return entry;
 		}
@@ -700,7 +780,7 @@ restart:
 				emptyelem = SH_NEXT(tb, emptyelem, startelem);
 				emptyentry = &data[emptyelem];
 
-				if (emptyentry->status == SH_STATUS_EMPTY)
+				if (SH_IS_EMPTY(emptyentry))
 				{
 					lastentry = emptyentry;
 					break;
@@ -749,7 +829,7 @@ restart:
 #ifdef SH_STORE_HASH
 			SH_GET_HASH(tb, entry) = hash;
 #endif
-			entry->status = SH_STATUS_IN_USE;
+			SH_SET_IN_USE(entry);
 			*found = false;
 			return entry;
 		}
@@ -811,12 +891,10 @@ SH_LOOKUP_HASH_INTERNAL(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash)
 	{
 		SH_ELEMENT_TYPE *entry = &tb->data[curelem];
 
-		if (entry->status == SH_STATUS_EMPTY)
-		{
+		if (SH_IS_EMPTY(entry))
 			return NULL;
-		}
 
-		Assert(entry->status == SH_STATUS_IN_USE);
+		Assert(SH_IS_IN_USE(entry));
 
 		if (SH_COMPARE_KEYS(tb, hash, key, entry))
 			return entry;
@@ -869,10 +947,10 @@ SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key)
 	{
 		SH_ELEMENT_TYPE *entry = &tb->data[curelem];
 
-		if (entry->status == SH_STATUS_EMPTY)
+		if (SH_IS_EMPTY(entry))
 			return false;
 
-		if (entry->status == SH_STATUS_IN_USE &&
+		if (SH_IS_IN_USE(entry) &&
 			SH_COMPARE_KEYS(tb, hash, key, entry))
 		{
 			SH_ELEMENT_TYPE *lastentry = entry;
@@ -895,9 +973,9 @@ SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key)
 				curelem = SH_NEXT(tb, curelem, startelem);
 				curentry = &tb->data[curelem];
 
-				if (curentry->status != SH_STATUS_IN_USE)
+				if (!SH_IS_IN_USE(curentry))
 				{
-					lastentry->status = SH_STATUS_EMPTY;
+					SH_SET_EMPTY(lastentry);
 					break;
 				}
 
@@ -907,7 +985,7 @@ SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key)
 				/* current is at optimal position, done */
 				if (curoptimal == curelem)
 				{
-					lastentry->status = SH_STATUS_EMPTY;
+					SH_SET_EMPTY(lastentry);
 					break;
 				}
 
@@ -958,9 +1036,9 @@ SH_DELETE_ITEM(SH_TYPE * tb, SH_ELEMENT_TYPE * entry)
 		curelem = SH_NEXT(tb, curelem, startelem);
 		curentry = &tb->data[curelem];
 
-		if (curentry->status != SH_STATUS_IN_USE)
+		if (!SH_IS_IN_USE(curentry))
 		{
-			lastentry->status = SH_STATUS_EMPTY;
+			SH_SET_EMPTY(lastentry);
 			break;
 		}
 
@@ -970,7 +1048,7 @@ SH_DELETE_ITEM(SH_TYPE * tb, SH_ELEMENT_TYPE * entry)
 		/* current is at optimal position, done */
 		if (curoptimal == curelem)
 		{
-			lastentry->status = SH_STATUS_EMPTY;
+			SH_SET_EMPTY(lastentry);
 			break;
 		}
 
@@ -998,7 +1076,7 @@ SH_START_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter)
 	{
 		SH_ELEMENT_TYPE *entry = &tb->data[i];
 
-		if (entry->status != SH_STATUS_IN_USE)
+		if (SH_IS_EMPTY(entry))
 		{
 			startelem = i;
 			break;
@@ -1064,10 +1142,8 @@ SH_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter)
 
 		if ((iter->cur & tb->sizemask) == (iter->end & tb->sizemask))
 			iter->done = true;
-		if (elem->status == SH_STATUS_IN_USE)
-		{
+		if (SH_IS_IN_USE(elem))
 			return elem;
-		}
 	}
 
 	return NULL;
@@ -1141,7 +1217,7 @@ SH_STAT(SH_TYPE * tb)
 
 		elem = &tb->data[i];
 
-		if (elem->status != SH_STATUS_IN_USE)
+		if (!SH_IS_IN_USE(elem))
 			continue;
 
 		hash = SH_ENTRY_HASH(tb, elem);
@@ -1197,7 +1273,12 @@ SH_STAT(SH_TYPE * tb)
 #undef SH_PREFIX
 #undef SH_KEY_TYPE
 #undef SH_KEY
+#undef SH_KEY_IS_EMPTY
+#undef SH_KEY_EMPTY_MEMBER
+#undef SH_KEY_EMPTY_VALUE
 #undef SH_ELEMENT_TYPE
+#undef SH_ELEMENT_EMPTY_MEMBER
+#undef SH_ELEMENT_EMPTY_VALUE
 #undef SH_HASH_KEY
 #undef SH_SCOPE
 #undef SH_DECLARE
@@ -1217,6 +1298,11 @@ SH_STAT(SH_TYPE * tb)
 #undef SH_GROW_MAX_MOVE
 #undef SH_GROW_MIN_FILLFACTOR
 #undef SH_MAX_SIZE
+#undef SH_IS_EMPTY
+#undef SH_IS_IN_USE
+#undef SH_SET_EMPTY
+#undef SH_SET_EMPTY_AFTER_ALLOC
+#undef SH_SET_IN_USE
 
 /* types */
 #undef SH_TYPE
@@ -1255,3 +1341,4 @@ SH_STAT(SH_TYPE * tb)
 #undef SH_ENTRY_HASH
 #undef SH_INSERT_HASH_INTERNAL
 #undef SH_LOOKUP_HASH_INTERNAL
+#undef SH_INIT_BUCKETS
