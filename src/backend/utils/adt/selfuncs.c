@@ -162,7 +162,6 @@ typedef struct MCVHashEntry
 	Datum		value;			/* the value represented by this entry */
 	int			index;			/* its index in the relevant AttStatsSlot */
 	uint32		hash;			/* hash code for the Datum */
-	char		status;			/* status code used by simplehash.h */
 } MCVHashEntry;
 
 /* private_data for the simplehash hash table */
@@ -278,6 +277,8 @@ static double btcost_correlation(IndexOptInfo *index,
 /* Define support routines for MCV hash tables */
 #define SH_PREFIX				MCVHashTable
 #define SH_ELEMENT_TYPE			MCVHashEntry
+#define SH_ELEMENT_EMPTY_MEMBER index
+#define SH_ELEMENT_EMPTY_VALUE	-1
 #define SH_KEY_TYPE				Datum
 #define SH_KEY					value
 #define SH_HASH_KEY(tab,key)	hash_mcv(tab, key)
