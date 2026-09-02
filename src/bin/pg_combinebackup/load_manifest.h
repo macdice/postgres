@@ -21,7 +21,6 @@
  */
 typedef struct manifest_file
 {
-	uint32		status;			/* hash status */
 	const char *pathname;
 	uint64		size;
 	pg_checksum_type checksum_type;
@@ -33,7 +32,7 @@ typedef struct manifest_file
 #define SH_ELEMENT_TYPE	manifest_file
 #define SH_KEY_TYPE		const char *
 #define	SH_SCOPE		extern
-#define SH_RAW_ALLOCATOR	pg_malloc0
+#define SH_RAW_ALLOCATOR	pg_malloc
 #define SH_DECLARE
 #include "lib/simplehash.h"
 

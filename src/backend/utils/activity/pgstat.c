@@ -151,7 +151,6 @@
 typedef struct PgStat_SnapshotEntry
 {
 	PgStat_HashKey key;
-	char		status;			/* for simplehash use */
 	void	   *data;			/* the stats data itself */
 } PgStat_SnapshotEntry;
 
@@ -166,6 +165,8 @@ typedef struct PgStat_SnapshotEntry
 #define SH_ELEMENT_TYPE PgStat_SnapshotEntry
 #define SH_KEY_TYPE PgStat_HashKey
 #define SH_KEY key
+#define SH_KEY_EMPTY_MEMBER kind
+#define SH_KEY_EMPTY_VALUE PGSTAT_KIND_INVALID
 #define SH_HASH_KEY(tb, key) \
 	pgstat_hash_hash_key(&key, sizeof(PgStat_HashKey), NULL)
 #define SH_EQUAL(tb, a, b) \

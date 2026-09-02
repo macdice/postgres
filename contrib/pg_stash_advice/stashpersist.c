@@ -53,7 +53,6 @@ typedef struct pgsa_saved_entry
  */
 typedef struct pgsa_saved_stash
 {
-	uint32		status;
 	char	   *name;
 } pgsa_saved_stash;
 
@@ -61,6 +60,7 @@ typedef struct pgsa_saved_stash
 #define SH_ELEMENT_TYPE pgsa_saved_stash
 #define SH_KEY_TYPE char *
 #define SH_KEY name
+#define SH_KEY_EMPTY_VALUE NULL
 #define SH_HASH_KEY(tb, key) hash_bytes((const unsigned char *) (key), strlen(key))
 #define SH_EQUAL(tb, a, b) (strcmp(a, b) == 0)
 #define SH_SCOPE static inline

@@ -56,8 +56,6 @@ typedef enum
  */
 typedef struct file_entry_t
 {
-	uint32		status;			/* hash status */
-
 	const char *path;
 	file_content_type_t content_type;
 

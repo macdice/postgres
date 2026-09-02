@@ -43,10 +43,11 @@
 #define SH_ELEMENT_TYPE			file_entry_t
 #define SH_KEY_TYPE				const char *
 #define SH_KEY					path
+#define SH_KEY_EMPTY_VALUE		NULL
 #define SH_HASH_KEY(tb, key)	hash_string(key)
 #define SH_EQUAL(tb, a, b)		(strcmp(a, b) == 0)
 #define SH_SCOPE				static inline
-#define SH_RAW_ALLOCATOR		pg_malloc0
+#define SH_RAW_ALLOCATOR		pg_malloc
 #define SH_DECLARE
 #define SH_DEFINE
 #include "lib/simplehash.h"
@@ -68,17 +69,17 @@ static file_entry_t *lookup_filehash_entry(const char *path);
 typedef struct keepwal_entry
 {
 	const char *path;
-	uint32		status;
 } keepwal_entry;
 
 #define SH_PREFIX				keepwal
 #define SH_ELEMENT_TYPE			keepwal_entry
 #define SH_KEY_TYPE				const char *
 #define SH_KEY					path
+#define SH_KEY_EMPTY_VALUE		NULL
 #define SH_HASH_KEY(tb, key)	hash_string(key)
 #define SH_EQUAL(tb, a, b)		(strcmp(a, b) == 0)
 #define SH_SCOPE				static inline
-#define SH_RAW_ALLOCATOR		pg_malloc0
+#define SH_RAW_ALLOCATOR		pg_malloc
 #define SH_DECLARE
 #define SH_DEFINE
 #include "lib/simplehash.h"

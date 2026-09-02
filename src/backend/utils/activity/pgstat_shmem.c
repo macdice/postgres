@@ -25,7 +25,6 @@
 typedef struct PgStat_EntryRefHashEntry
 {
 	PgStat_HashKey key;			/* hash key */
-	char		status;			/* for simplehash use */
 	PgStat_EntryRef *entry_ref;
 } PgStat_EntryRefHashEntry;
 
@@ -35,6 +34,8 @@ typedef struct PgStat_EntryRefHashEntry
 #define SH_ELEMENT_TYPE PgStat_EntryRefHashEntry
 #define SH_KEY_TYPE PgStat_HashKey
 #define SH_KEY key
+#define SH_KEY_EMPTY_MEMBER kind
+#define SH_KEY_EMPTY_VALUE PGSTAT_KIND_INVALID
 #define SH_HASH_KEY(tb, key) \
 	pgstat_hash_hash_key(&key, sizeof(PgStat_HashKey), NULL)
 #define SH_EQUAL(tb, a, b) \

@@ -76,6 +76,7 @@ static bool pgsa_is_identifier(char *str);
 #define SH_ELEMENT_TYPE pgsa_stash_name
 #define SH_KEY_TYPE uint64
 #define SH_KEY pgsa_stash_id
+#define SH_KEY_EMPTY_VALUE 0
 #define SH_HASH_KEY(tb, key) hash_bytes((const unsigned char *) &(key), sizeof(uint64))
 #define SH_EQUAL(tb, a, b) (a == b)
 #define SH_SCOPE extern

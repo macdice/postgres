@@ -178,9 +178,6 @@ typedef struct SearchPathCacheEntry
 	Oid			firstNS;		/* first explicitly-listed namespace */
 	bool		temp_missing;
 	bool		forceRecompute; /* force recompute of finalPath */
-
-	/* needed for simplehash */
-	char		status;
 } SearchPathCacheEntry;
 
 /*
@@ -282,6 +279,8 @@ spcachekey_equal(SearchPathCacheKey a, SearchPathCacheKey b)
 #define SH_ELEMENT_TYPE	SearchPathCacheEntry
 #define SH_KEY_TYPE		SearchPathCacheKey
 #define SH_KEY			key
+#define SH_KEY_EMPTY_MEMBER		searchPath
+#define SH_KEY_EMPTY_VALUE		NULL
 #define SH_HASH_KEY(tb, key)   	spcachekey_hash(key)
 #define SH_EQUAL(tb, a, b)		spcachekey_equal(a, b)
 #define SH_SCOPE		static inline
@@ -407,7 +406,6 @@ spcache_insert(const char *searchPath, Oid roleid)
 			entry->firstNS = InvalidOid;
 			entry->temp_missing = false;
 			entry->forceRecompute = false;
-			/* do not touch entry->status, used by simplehash */
 		}
 
 		LastSearchPathCacheEntry = entry;

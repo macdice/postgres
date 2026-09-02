@@ -57,7 +57,6 @@ static DumpId lastDumpId = 0;	/* Note: 0 is InvalidDumpId */
 typedef struct _catalogIdMapEntry
 {
 	CatalogId	catId;			/* the indexed CatalogId */
-	uint32		status;			/* hash status */
 	uint32		hashval;		/* hash code for the CatalogId */
 	DumpableObject *dobj;		/* the associated DumpableObject, if any */
 	ExtensionInfo *ext;			/* owning extension, if any */
@@ -67,12 +66,14 @@ typedef struct _catalogIdMapEntry
 #define SH_ELEMENT_TYPE	CatalogIdMapEntry
 #define SH_KEY_TYPE		CatalogId
 #define	SH_KEY			catId
+#define SH_KEY_EMPTY_MEMBER		tableoid
+#define SH_KEY_EMPTY_VALUE		InvalidOid
 #define SH_HASH_KEY(tb, key)	hash_bytes((const unsigned char *) &(key), sizeof(CatalogId))
 #define SH_EQUAL(tb, a, b)		((a).oid == (b).oid && (a).tableoid == (b).tableoid)
 #define SH_STORE_HASH
 #define SH_GET_HASH(tb, a) (a)->hashval
 #define	SH_SCOPE		static inline
-#define SH_RAW_ALLOCATOR	pg_malloc0
+#define SH_RAW_ALLOCATOR	pg_malloc
 #define SH_DECLARE
 #define SH_DEFINE
 #include "lib/simplehash.h"

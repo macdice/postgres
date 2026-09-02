@@ -36,7 +36,6 @@
 
 typedef struct
 {
-	uint32		status;
 	uint32		hashval;
 	char	   *rolename;
 } RoleNameEntry;
@@ -45,12 +44,13 @@ typedef struct
 #define SH_ELEMENT_TYPE	RoleNameEntry
 #define SH_KEY_TYPE	char *
 #define SH_KEY		rolename
+#define SH_KEY_EMPTY_VALUE		NULL
 #define SH_HASH_KEY(tb, key)	hash_string(key)
 #define SH_EQUAL(tb, a, b)		(strcmp(a, b) == 0)
 #define SH_STORE_HASH
 #define SH_GET_HASH(tb, a)		(a)->hashval
 #define SH_SCOPE	static inline
-#define SH_RAW_ALLOCATOR	pg_malloc0
+#define SH_RAW_ALLOCATOR	pg_malloc
 #define SH_DECLARE
 #define SH_DEFINE
 #include "lib/simplehash.h"

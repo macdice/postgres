@@ -81,7 +81,6 @@ typedef struct
 typedef struct
 {
 	pgpa_trove_entry_key key;
-	int			status;
 	Bitmapset  *indexes;
 } pgpa_trove_entry_element;
 
@@ -106,6 +105,8 @@ pgpa_trove_entry_compare_key(pgpa_trove_entry_key a, pgpa_trove_entry_key b)
 #define SH_ELEMENT_TYPE		pgpa_trove_entry_element
 #define SH_KEY_TYPE			pgpa_trove_entry_key
 #define SH_KEY				key
+#define SH_KEY_EMPTY_MEMBER	alias_name
+#define SH_KEY_EMPTY_VALUE	NULL
 #define SH_HASH_KEY(tb, key)	pgpa_trove_entry_hash_key(key)
 #define	SH_EQUAL(tb, a, b)	pgpa_trove_entry_compare_key(a, b)
 #define SH_SCOPE			static inline

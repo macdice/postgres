@@ -54,7 +54,6 @@ typedef struct
  */
 typedef struct
 {
-	uint32		status;
 	const char *path;
 	uint64		size;
 } backup_file_entry;
@@ -64,6 +63,7 @@ static uint32 hash_string_pointer(const char *s);
 #define SH_ELEMENT_TYPE			backup_file_entry
 #define SH_KEY_TYPE             const char *
 #define SH_KEY                  path
+#define SH_KEY_EMPTY_VALUE		NULL
 #define SH_HASH_KEY(tb, key)    hash_string_pointer(key)
 #define SH_EQUAL(tb, a, b)		(strcmp(a, b) == 0)
 #define SH_SCOPE                static inline

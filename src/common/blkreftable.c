@@ -123,12 +123,14 @@ struct BlockRefTableEntry
 #define SH_ELEMENT_TYPE BlockRefTableEntry
 #define SH_KEY_TYPE BlockRefTableKey
 #define SH_KEY key
+#define SH_KEY_EMPTY_MEMBER rlocator.spcOid
+#define SH_KEY_EMPTY_VALUE InvalidOid
 #define SH_HASH_KEY(tb, key) \
 	hash_bytes((const unsigned char *) &key, sizeof(BlockRefTableKey))
 #define SH_EQUAL(tb, a, b) (memcmp(&a, &b, sizeof(BlockRefTableKey)) == 0)
 #define SH_SCOPE static inline
 #ifdef FRONTEND
-#define SH_RAW_ALLOCATOR pg_malloc0
+#define SH_RAW_ALLOCATOR pg_malloc
 #endif
 #define SH_DEFINE
 #define SH_DECLARE

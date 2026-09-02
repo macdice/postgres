@@ -62,7 +62,6 @@ char	   *TmpWalSegDir = NULL;
  */
 typedef struct ArchivedWALFile
 {
-	uint32		status;			/* hash status */
 	const char *fname;			/* hash key: WAL segment name */
 
 	StringInfo	buf;			/* holds WAL bytes read from archive */
@@ -79,10 +78,11 @@ static uint32 hash_string_pointer(const char *s);
 #define SH_ELEMENT_TYPE			ArchivedWALFile
 #define SH_KEY_TYPE				const char *
 #define SH_KEY					fname
+#define SH_KEY_EMPTY_VALUE		NULL
 #define SH_HASH_KEY(tb, key)	hash_string_pointer(key)
 #define SH_EQUAL(tb, a, b)		(strcmp(a, b) == 0)
 #define SH_SCOPE				static inline
-#define SH_RAW_ALLOCATOR		pg_malloc0
+#define SH_RAW_ALLOCATOR		pg_malloc
 #define SH_DECLARE
 #define SH_DEFINE
 #include "lib/simplehash.h"
