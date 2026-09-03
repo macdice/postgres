@@ -117,7 +117,6 @@ typedef struct MemoizeEntry
 	MinimalTuple tuplehead;		/* Pointer to the first tuple or NULL if no
 								 * tuples are cached for this entry */
 	uint32		hash;			/* Hash value (cached) */
-	char		status;			/* Hash status */
 	bool		complete;		/* Did we read the outer plan to completion? */
 } MemoizeEntry;
 
@@ -172,6 +171,7 @@ static bool MemoizeHash_equal(struct memoize_hash *tb,
 #define SH_ELEMENT_TYPE MemoizeEntry
 #define SH_KEY_TYPE MemoizeKey *
 #define SH_KEY key
+#define SH_KEY_EMPTY_VALUE NULL
 #define SH_HASH_KEY(tb, key) MemoizeHash_hash(tb, key)
 #define SH_EQUAL(tb, a, b) MemoizeHash_equal(tb, a, b)
 #define SH_SCOPE static inline
@@ -179,6 +179,14 @@ static bool MemoizeHash_equal(struct memoize_hash *tb,
 #define SH_GET_HASH(tb, a) a->hash
 #define SH_DEFINE
 #include "lib/simplehash.h"
+
+/*
+ * Special key value, distinct from SH_KEY_EMPTY_VALUE and any valid pointer,
+ * to indicate that MemoizeState's probeslot contains the key values.  This
+ * value is only used during lookups, and is replaced after insertion by
+ * cache_lookup().
+ */
+#define MEMOIZE_KEY_PROBESLOT (MemoizeKey *) -1
 
 /*
  * MemoizeHash_hash
@@ -195,6 +203,8 @@ MemoizeHash_hash(struct memoize_hash *tb, const MemoizeKey *key)
 	TupleTableSlot *pslot = mstate->probeslot;
 	uint32		hashkey = 0;
 	int			numkeys = mstate->nkeys;
+
+	Assert(key == MEMOIZE_KEY_PROBESLOT);
 
 	oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
 
@@ -257,6 +267,8 @@ MemoizeHash_equal(struct memoize_hash *tb, const MemoizeKey *key1,
 	ExprContext *econtext = mstate->ss.ps.ps_ExprContext;
 	TupleTableSlot *tslot = mstate->tableslot;
 	TupleTableSlot *pslot = mstate->probeslot;
+
+	Assert(key2 == MEMOIZE_KEY_PROBESLOT);
 
 	/* probeslot should have already been prepared by prepare_probe_slot() */
 	ExecStoreMinimalTuple(key1->params, tslot, false);
@@ -504,7 +516,7 @@ cache_reduce_memory(MemoizeState *mstate, MemoizeKey *specialkey)
 		 * pointer to the key here, we must perform a hash table lookup to
 		 * find the entry that the key belongs to.
 		 */
-		entry = memoize_lookup(mstate->hashtable, NULL);
+		entry = memoize_lookup(mstate->hashtable, MEMOIZE_KEY_PROBESLOT);
 
 		/*
 		 * Sanity check that we found the entry belonging to the LRU list
@@ -569,7 +581,7 @@ cache_lookup(MemoizeState *mstate, bool *found)
 	 * Add the new entry to the cache.  No need to pass a valid key since the
 	 * hash function uses mstate's probeslot, which we populated above.
 	 */
-	entry = memoize_insert(mstate->hashtable, NULL, found);
+	entry = memoize_insert(mstate->hashtable, MEMOIZE_KEY_PROBESLOT, found);
 
 	if (*found)
 	{
@@ -625,10 +637,9 @@ cache_lookup(MemoizeState *mstate, bool *found)
 		 * code in simplehash.h to shuffle elements to earlier buckets in the
 		 * hash table.  If it has, we'll need to find the entry again by
 		 * performing a lookup.  Fortunately, we can detect if this has
-		 * happened by seeing if the entry is still in use and that the key
-		 * pointer matches our expected key.
+		 * happened by seeing if the key pointer matches our expected key.
 		 */
-		if (entry->status != memoize_SH_IN_USE || entry->key != key)
+		if (entry->key != key)
 		{
 			/*
 			 * We need to repopulate the probeslot as lookups performed during
@@ -637,7 +648,7 @@ cache_lookup(MemoizeState *mstate, bool *found)
 			prepare_probe_slot(mstate, key);
 
 			/* Re-find the newly added entry */
-			entry = memoize_lookup(mstate->hashtable, NULL);
+			entry = memoize_lookup(mstate->hashtable, MEMOIZE_KEY_PROBESLOT);
 			Assert(entry != NULL);
 		}
 	}
@@ -713,10 +724,9 @@ cache_store_tuple(MemoizeState *mstate, TupleTableSlot *slot)
 		 * code in simplehash.h to shuffle elements to earlier buckets in the
 		 * hash table.  If it has, we'll need to find the entry again by
 		 * performing a lookup.  Fortunately, we can detect if this has
-		 * happened by seeing if the entry is still in use and that the key
-		 * pointer matches our expected key.
+		 * happened by seeing if the key pointer matches our expected key.
 		 */
-		if (entry->status != memoize_SH_IN_USE || entry->key != key)
+		if (entry->key != key)
 		{
 			/*
 			 * We need to repopulate the probeslot as lookups performed during
