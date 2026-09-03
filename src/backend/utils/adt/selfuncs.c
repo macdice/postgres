@@ -156,11 +156,16 @@
 #define EQJOINSEL_MCV_HASH_THRESHOLD 20
 #endif
 
-/* Entries in the simplehash hash table used by eqjoinsel_find_matches */
+/*
+ * Entries in the simplehash hash table used by eqjoinsel_find_matches.  To
+ * keep entries compact without giving up faster initialization with memset(),
+ * there is no status member.  Instead, index is 1-based, and zero marks an
+ * empty hash table entry.
+ */
 typedef struct MCVHashEntry
 {
 	Datum		value;			/* the value represented by this entry */
-	int			index;			/* its index in the relevant AttStatsSlot */
+	int			index;			/* 1-based index in the relevant AttStatsSlot */
 	uint32		hash;			/* hash code for the Datum */
 } MCVHashEntry;
 
@@ -278,7 +283,7 @@ static double btcost_correlation(IndexOptInfo *index,
 #define SH_PREFIX				MCVHashTable
 #define SH_ELEMENT_TYPE			MCVHashEntry
 #define SH_ELEMENT_EMPTY_MEMBER index
-#define SH_ELEMENT_EMPTY_VALUE	-1
+#define SH_ELEMENT_EMPTY_VALUE	0
 #define SH_KEY_TYPE				Datum
 #define SH_KEY					value
 #define SH_HASH_KEY(tab,key)	hash_mcv(tab, key)
@@ -3036,7 +3041,7 @@ eqjoinsel_find_matches(FmgrInfo *eqproc, Oid collation,
 			 * matches the behavior that the non-hashed code path would have.
 			 */
 			if (likely(!found))
-				entry->index = i;
+				entry->index = i + 1;
 		}
 
 		/*
@@ -3062,12 +3067,12 @@ eqjoinsel_find_matches(FmgrInfo *eqproc, Oid collation,
 			MCVHashEntry *entry = MCVHashTable_lookup(hashTable,
 													  statsProbe->values[i]);
 
-			/* As in the other code path, skip already-matched hash entries */
-			if (entry != NULL && !hasMatchHash[entry->index])
+			/* As in the other code path, skip already-matched hash entries. */
+			if (entry != NULL && !hasMatchHash[entry->index - 1])
 			{
-				hasMatchHash[entry->index] = hasMatchProbe[i] = true;
+				hasMatchHash[entry->index - 1] = hasMatchProbe[i] = true;
 				nmatches++;
-				matchprodfreq += statsHash->numbers[entry->index] * statsProbe->numbers[i];
+				matchprodfreq += statsHash->numbers[entry->index - 1] * statsProbe->numbers[i];
 			}
 		}
 
