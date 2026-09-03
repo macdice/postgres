@@ -67,6 +67,14 @@
  *	  - SH_KEY_EMPTY_MEMBER - eg oid, name[0], left.id, ...
  *	  - SH_KEY_EMPTY_VALUE
  *
+ *	  3.  A non-key member can also be used to detect empty entries.  This is
+ *	  primarily useful keys that have no unused value in general, eg Datum
+ *	  holding values of any SQL type.  This variant cannot assert that
+ *	  inserted entries are recognizable as non-empty, so a "status" member
+ *	  might be preferable despite wasting memory:
+ *	  - SH_ENTRY_EMPTY_MEMBER
+ *	  - SH_ENTRY_EMPTY_VALUE
+ *
  *	  (General entry-is-empty test/assign expressions could be supported too,
  *	  but single-member single-value configurations are easier to work with and
  *	  seem to cover realistic cases in practice.)
@@ -318,6 +326,12 @@ SH_SCOPE void SH_STAT(SH_TYPE * tb);
 #define SH_IS_IN_USE(entry) !SH_IS_EMPTY(entry)
 #define SH_SET_EMPTY(entry) ((entry)->SH_KEY) = (SH_KEY_EMPTY_VALUE)
 #define SH_SET_IN_USE(entry) Assert(!SH_IS_EMPTY(entry))
+#elif defined(SH_ELEMENT_EMPTY_MEMBER) && defined(SH_ELEMENT_EMPTY_VALUE)
+/* Special value of a scalar member of element type. */
+#define SH_IS_EMPTY(entry) ((entry)->SH_ELEMENT_EMPTY_MEMBER == (SH_ELEMENT_EMPTY_VALUE))
+#define SH_IS_IN_USE(entry) !SH_IS_EMPTY(entry)
+#define SH_SET_EMPTY(entry) (entry)->SH_ELEMENT_EMPTY_MEMBER = (SH_ELEMENT_EMPTY_VALUE)
+#define SH_SET_IN_USE(entry)	/* can't assert, filled after insert... */
 #else
 /* Dedicated status member of element type. */
 #define SH_IS_EMPTY(entry) ((entry)->status == SH_STATUS_EMPTY)
@@ -1235,6 +1249,8 @@ SH_STAT(SH_TYPE * tb)
 #undef SH_KEY_EMPTY_MEMBER
 #undef SH_KEY_EMPTY_VALUE
 #undef SH_ELEMENT_TYPE
+#undef SH_ELEMENT_EMPTY_MEMBER
+#undef SH_ELEMENT_EMPTY_VALUE
 #undef SH_HASH_KEY
 #undef SH_SCOPE
 #undef SH_DECLARE
