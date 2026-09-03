@@ -39,6 +39,7 @@ static inline TupleHashEntry LookupTupleHashEntry_internal(TupleHashTable hashta
 #define SH_ELEMENT_TYPE TupleHashEntryData
 #define SH_KEY_TYPE MinimalTuple
 #define SH_KEY firstTuple
+#define SH_KEY_EMPTY_VALUE NULL
 #define SH_HASH_KEY(tb, key) TupleHashTableHash_internal(tb, key)
 #define SH_EQUAL(tb, a, b) TupleHashTableMatch(tb, a, b) == 0
 #define SH_SCOPE extern
@@ -47,6 +48,11 @@ static inline TupleHashEntry LookupTupleHashEntry_internal(TupleHashTable hashta
 #define SH_DEFINE
 #include "lib/simplehash.h"
 
+/*
+ * Special key value, distinct from SH_KEY_EMPTY_VALUE and any valid pointer,
+ * to indicate that the input slot should be used.
+ */
+#define TUPLEHASH_KEY_INPUTSLOT (MinimalTuple) -1
 
 /*****************************************************************************
  *		Utility routines for grouping tuples together
@@ -394,7 +400,8 @@ LookupTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 	hashtable->in_hash_expr = hashtable->tab_hash_expr;
 	hashtable->cur_eq_func = hashtable->tab_eq_func;
 
-	local_hash = TupleHashTableHash_internal(hashtable->hashtab, NULL);
+	local_hash = TupleHashTableHash_internal(hashtable->hashtab,
+											 TUPLEHASH_KEY_INPUTSLOT);
 	entry = LookupTupleHashEntry_internal(hashtable, slot, isnew, local_hash);
 
 	if (hash != NULL)
@@ -422,7 +429,8 @@ TupleHashTableHash(TupleHashTable hashtable, TupleTableSlot *slot)
 	/* Need to run the hash functions in short-lived context */
 	oldContext = MemoryContextSwitchTo(hashtable->tempcxt);
 
-	hash = TupleHashTableHash_internal(hashtable->hashtab, NULL);
+	hash = TupleHashTableHash_internal(hashtable->hashtab,
+									   TUPLEHASH_KEY_INPUTSLOT);
 
 	MemoryContextSwitchTo(oldContext);
 
@@ -472,7 +480,6 @@ FindTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 {
 	TupleHashEntry entry;
 	MemoryContext oldContext;
-	MinimalTuple key;
 
 	/* Need to run the hash functions in short-lived context */
 	oldContext = MemoryContextSwitchTo(hashtable->tempcxt);
@@ -483,17 +490,16 @@ FindTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 	hashtable->cur_eq_func = eqcomp;
 
 	/* Search the hash table */
-	key = NULL;					/* flag to reference inputslot */
-	entry = tuplehash_lookup(hashtable->hashtab, key);
+	entry = tuplehash_lookup(hashtable->hashtab, TUPLEHASH_KEY_INPUTSLOT);
 	MemoryContextSwitchTo(oldContext);
 
 	return entry;
 }
 
 /*
- * If tuple is NULL, use the input slot instead. This convention avoids the
- * need to materialize virtual input tuples unless they actually need to get
- * copied into the table.
+ * If tuple is TUPLEHASH_KEY_INPUTSLOT, use the input slot instead. This
+ * convention avoids the need to materialize virtual input tuples unless they
+ * actually need to get copied into the table.
  *
  * Also, the caller must select an appropriate memory context for running
  * the hash functions.
@@ -507,7 +513,7 @@ TupleHashTableHash_internal(struct tuplehash_hash *tb,
 	TupleTableSlot *slot;
 	bool		isnull;
 
-	if (tuple == NULL)
+	if (tuple == TUPLEHASH_KEY_INPUTSLOT)
 	{
 		/* Process the current input tuple for the table */
 		hashtable->exprcontext->ecxt_innertuple = hashtable->inputslot;
@@ -554,7 +560,7 @@ LookupTupleHashEntry_internal(TupleHashTable hashtable, TupleTableSlot *slot,
 	bool		found;
 	MinimalTuple key;
 
-	key = NULL;					/* flag to reference inputslot */
+	key = TUPLEHASH_KEY_INPUTSLOT;
 
 	if (isnew)
 	{
@@ -611,10 +617,10 @@ TupleHashTableMatch(struct tuplehash_hash *tb, MinimalTuple tuple1, MinimalTuple
 	 * LookupTupleHashEntry's dummy TupleHashEntryData.  The other direction
 	 * could be supported too, but is not currently required.
 	 */
-	Assert(tuple1 != NULL);
+	Assert(tuple1 != TUPLEHASH_KEY_INPUTSLOT);
 	slot1 = hashtable->tableslot;
 	ExecStoreMinimalTuple(tuple1, slot1, false);
-	Assert(tuple2 == NULL);
+	Assert(tuple2 == TUPLEHASH_KEY_INPUTSLOT);
 	slot2 = hashtable->inputslot;
 
 	/* For crosstype comparisons, the inputslot must be first */
