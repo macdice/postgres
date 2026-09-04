@@ -220,6 +220,11 @@ typedef enum BufferLockMode
 	 * An exclusive lock conflicts with every other lock type.
 	 */
 	BUFFER_LOCK_EXCLUSIVE,
+
+	/*
+	 * Highest used numerical value, used for assertions.
+	 */
+	BUFFER_LOCK_MAX = BUFFER_LOCK_EXCLUSIVE,
 } BufferLockMode;
 
 

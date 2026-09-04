@@ -95,6 +95,18 @@
 #define BUF_DROP_FULL_SCAN_THRESHOLD		(uint64) (NBuffers / 32)
 
 /*
+ * In order to pack PrivatRefCountEntry into 8 bytes, we steal a couple of
+ * bits of the reference count to store the lockmode.  Other resources are
+ * certain to be exceeded long before you could manage to open enough cursors
+ * and streams to pin an individual buffer anywhere near a billion times.
+ */
+#define PRIVATE_LOCKMODE_BITS 2
+#define PRIVATE_REFCOUNT_BITS 32 - PRIVATE_LOCKMODE_BITS
+
+static_assert(BUFFER_LOCK_MAX < (1 << PRIVATE_LOCKMODE_BITS),
+			  "BufferLockMode overflows bitfield");
+
+/*
  * This is separated out from PrivateRefCountEntry to allow for copying all
  * the data members via struct assignment.
  */
@@ -103,13 +115,13 @@ typedef struct PrivateRefCountData
 	/*
 	 * How many times has the buffer been pinned by this backend.
 	 */
-	int32		refcount;
+	uint32		refcount : PRIVATE_REFCOUNT_BITS;
 
 	/*
 	 * Is the buffer locked by this backend? BUFFER_LOCK_UNLOCK indicates that
 	 * the buffer is not locked.
 	 */
-	BufferLockMode lockmode;
+	BufferLockMode lockmode : PRIVATE_LOCKMODE_BITS;
 } PrivateRefCountData;
 
 typedef struct PrivateRefCountEntry
@@ -125,15 +137,21 @@ typedef struct PrivateRefCountEntry
 	 */
 	Buffer		buffer;
 
-	char		status;
-
 	PrivateRefCountData data;
 } PrivateRefCountEntry;
+
+/*
+ * Compilers might not be strictly required to store a bitfield of 32 bits in
+ * a 32-bit word, but we'd like to know about it if that one doesn't.
+ */
+static_assert(sizeof(PrivateRefCountEntry) == 8,
+			  "unexpected PrivateRefCountEntry size");
 
 #define SH_PREFIX refcount
 #define SH_ELEMENT_TYPE PrivateRefCountEntry
 #define SH_KEY_TYPE Buffer
 #define SH_KEY buffer
+#define SH_KEY_EMPTY_VALUE InvalidBuffer
 #define SH_HASH_KEY(tb, key) murmurhash32((uint32) (key))
 #define SH_EQUAL(tb, a, b) ((a) == (b))
 #define SH_SCOPE static inline
@@ -3377,8 +3395,8 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
 		 */
 		result = (pg_atomic_read_u64(&buf->state) & BM_VALID) != 0;
 
-		Assert(ref->data.refcount > 0);
 		ref->data.refcount++;
+		Assert(ref->data.refcount != 0);
 		ResourceOwnerRememberBuffer(CurrentResourceOwner, b);
 	}
 
