@@ -116,7 +116,6 @@ typedef struct
 /* Hash table entry in ec_derives_hash. */
 typedef struct
 {
-	uint32		status;
 	ECDerivesKey key;
 	RestrictInfo *rinfo;
 } ECDerivesEntry;
@@ -128,6 +127,8 @@ typedef struct
 #define SH_ELEMENT_TYPE			ECDerivesEntry
 #define SH_KEY_TYPE             ECDerivesKey
 #define SH_KEY                  key
+#define SH_KEY_EMPTY_MEMBER		em2
+#define SH_KEY_EMPTY_VALUE		NULL
 #define SH_HASH_KEY(tb, key)	\
 	hash_bytes((const unsigned char *) &(key), sizeof(ECDerivesKey))
 #define SH_EQUAL(tb, a, b)		\
@@ -3728,6 +3729,9 @@ fill_ec_derives_key(ECDerivesKey *key,
 		key->em2 = leftem;
 	}
 	key->parent_ec = parent_ec;
+
+	/* SH_KEY_IS_EMPTY relies on this to detect unused entries. */
+	Assert(key->em2);
 }
 
 /*
