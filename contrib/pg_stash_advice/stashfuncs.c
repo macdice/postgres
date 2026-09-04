@@ -28,7 +28,6 @@ PG_FUNCTION_INFO_V1(pg_start_stash_advice_worker);
 
 typedef struct pgsa_stash_count
 {
-	uint32		status;
 	uint64		pgsa_stash_id;
 	int64		num_entries;
 } pgsa_stash_count;
@@ -37,6 +36,7 @@ typedef struct pgsa_stash_count
 #define SH_ELEMENT_TYPE pgsa_stash_count
 #define SH_KEY_TYPE uint64
 #define SH_KEY pgsa_stash_id
+#define SH_KEY_EMPTY_VALUE 0
 #define SH_HASH_KEY(tb, key) hash_bytes((const unsigned char *) &(key), sizeof(uint64))
 #define SH_EQUAL(tb, a, b) (a == b)
 #define SH_SCOPE static inline

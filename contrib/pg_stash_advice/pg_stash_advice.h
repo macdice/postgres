@@ -72,7 +72,6 @@ typedef struct pgsa_shared_state
 /* For stash ID -> stash name hash table */
 typedef struct pgsa_stash_name
 {
-	uint32		status;
 	uint64		pgsa_stash_id;
 	char	   *name;
 } pgsa_stash_name;
