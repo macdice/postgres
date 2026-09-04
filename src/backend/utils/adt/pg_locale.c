@@ -120,17 +120,15 @@ static struct pg_locale_struct c_locale = {
 typedef struct
 {
 	Oid			collid;			/* hash key: pg_collation OID */
+	uint32		hash;			/* cached hash value */
 	pg_locale_t locale;			/* locale_t struct, or 0 if not valid */
-
-	/* needed for simplehash */
-	uint32		hash;
-	char		status;
 } collation_cache_entry;
 
 #define SH_PREFIX		collation_cache
 #define SH_ELEMENT_TYPE	collation_cache_entry
 #define SH_KEY_TYPE		Oid
 #define SH_KEY			collid
+#define SH_KEY_EMPTY_VALUE InvalidOid
 #define SH_HASH_KEY(tb, key)   	murmurhash32((uint32) key)
 #define SH_EQUAL(tb, a, b)		(a == b)
 #define SH_GET_HASH(tb, a)		a->hash
