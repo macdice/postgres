@@ -36,11 +36,16 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/regexp.h"
 #include "utils/varlena.h"
 
 #define PG_GETARG_TEXT_PP_IF_EXISTS(_n) \
 	(PG_NARGS() > (_n) ? PG_GETARG_TEXT_PP(_n) : NULL)
 
+
+/* GUCs. */
+int regexp_cache_expressions = 32;
+int regexp_cache_mem = -1;
 
 /* all the options of interest for regex functions */
 typedef struct pg_re_flags
@@ -91,11 +96,6 @@ typedef struct regexp_matches_ctx
  * cache as long as it's used frequently enough that the cache isn't exceeded
  * between uses.
  */
-
-/* this is the maximum number of cached regular expressions */
-#ifndef MAX_CACHED_RES
-#define	MAX_CACHED_RES 32
-#endif
 
 /* A parent memory context for regular expressions. */
 static MemoryContext RegexpCacheMemoryContext;
@@ -245,7 +245,7 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 	/* And the hash table. */
 	if (unlikely(!re_cache_table))
 		re_cache_table = re_cache_create(RegexpCacheMemoryContext,
-										 MAX_CACHED_RES,
+										 regexp_cache_expressions,
 										 NULL);
 
 	/* Convert pattern string to wide characters */
@@ -301,7 +301,13 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 	MemoryContextSetIdentifier(cre->cre_context, cre->cre_key.cre_pat);
 
 	/* See if we need to drop anything to make room. */
-	if (dclist_count(&re_cache_lru) == MAX_CACHED_RES)
+	while ((regexp_cache_expressions > 0 &&
+			dclist_count(&re_cache_lru) >= regexp_cache_expressions) ||
+		   (regexp_cache_mem >= 0 &&
+			dclist_count(&re_cache_lru) > 0 &&
+			MemoryContextMemAllocated(cre->cre_context, true) +
+			MemoryContextMemAllocated(RegexpCacheMemoryContext, true) >
+			regexp_cache_mem))
 	{
 		cached_re  *drop_cre = dclist_container(cached_re,
 												cre_lru_node,

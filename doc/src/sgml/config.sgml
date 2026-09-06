@@ -2423,6 +2423,37 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-regexp-cache-expressions" xreflabel="regexp_cache_expressions">
+      <term><varname>regexp_cache_expressions</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>min_dynamic_shared_memory</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the size of the cache of compiled regular expressions in
+        each backend, expressed as the number of expressions.
+        This applies alongside <varname>regexp_cache_mem</varname>.
+        -1 mean no limit.  The default value is 32.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-regexp-cache-mem" xreflabel="regexp_cache_mem">
+      <term><varname>regexp_cache_mem</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>regexp_cache_mem</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the size of compiled regular expressions that each backend
+        caches, expressed as the amount of allocated memory.
+        This applies alongside <varname>regexp_cache_expressions</varname>.
+        -1 mean no limit, and is the default value.
+       </para>
+      </listitem>
+     </varlistentry>
      </variablelist>
      </sect2>
 
