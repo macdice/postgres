@@ -177,6 +177,10 @@
 #subtransaction_buffers = 0             # memory for pg_subtrans (0 = auto)
 #transaction_buffers = 0                # memory for pg_xact (0 = auto)
 
+# Compiled regular expression cache memory
+#regexp_cache_expressions = 32          # session limit by count
+#regexp_cache_mem = -1                  # session limit in bytes
+
 # - Disk -
 
 #temp_file_limit = -1                   # limits per-process temp file space

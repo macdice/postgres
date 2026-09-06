@@ -103,6 +103,7 @@
 #include "utils/pg_locale.h"
 #include "utils/plancache.h"
 #include "utils/ps_status.h"
+#include "utils/regexp.h"
 #include "utils/rls.h"
 #include "utils/xml.h"
 

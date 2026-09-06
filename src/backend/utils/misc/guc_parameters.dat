@@ -2543,6 +2543,23 @@
   max => '1000000.0',
 },
 
+{ name => 'regexp_cache_expressions', type => 'int', context => 'PGC_USERSET', group => 'RESOURCES_MEM',
+  short_desc => 'Limits the number of cached compiled regular expressions per backend.',
+  variable => 'regexp_cache_expressions',
+  boot_val => '32',
+  min => '-1',
+  max => 'INT_MAX',
+},
+
+{ name => 'regexp_cache_mem', type => 'int', context => 'PGC_USERSET', group => 'RESOURCES_MEM',
+  short_desc => 'Limits the memory allocated for cached compiled regular expressions per backend.',
+  flags => 'GUC_UNIT_BYTE',
+  variable => 'regexp_cache_mem',
+  boot_val => '-1',
+  min => '-1',
+  max => 'INT_MAX',
+},
+
 { name => 'remove_temp_files_after_crash', type => 'bool', context => 'PGC_SIGHUP', group => 'DEVELOPER_OPTIONS',
   short_desc => 'Remove temporary files after backend crash.',
   flags => 'GUC_NOT_IN_SAMPLE',
