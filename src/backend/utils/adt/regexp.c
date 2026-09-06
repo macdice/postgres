@@ -36,6 +36,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/pg_locale.h"
 #include "utils/regexp.h"
 #include "utils/varlena.h"
 
@@ -44,8 +45,8 @@
 
 
 /* GUCs. */
-int regexp_cache_expressions = 32;
-int regexp_cache_mem = -1;
+int			regexp_cache_expressions = 32;
+int			regexp_cache_mem = -1;
 
 /* all the options of interest for regex functions */
 typedef struct pg_re_flags
@@ -118,7 +119,7 @@ typedef struct cached_re
 	MemoryContext cre_context;
 	regex_t		cre_re;
 
-	/* Link in re_cache_lru queue. */
+	pg_locale_callback cre_locale_callback;
 	dlist_node	cre_lru_node;
 } cached_re;
 
@@ -188,9 +189,17 @@ cached_re_key_hash(const cached_re_key *key)
 static void
 cached_re_drop(cached_re *cre)
 {
+	pg_locale_del_callback(&cre->cre_locale_callback);
 	dclist_delete_from(&re_cache_lru, &cre->cre_lru_node);
 	re_cache_delete(re_cache_table, &cre->cre_key);
 	MemoryContextDelete(cre->cre_context);
+}
+
+static void
+cached_re_inval(void *arg)
+{
+	/* Collation changed/dropped.  Drop cached RE. */
+	cached_re_drop((cached_re *) arg);
 }
 
 /*
@@ -216,6 +225,7 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 	char		errMsg[100];
 	MemoryContext oldcontext;
 	MemoryContext re_context;
+	pg_locale_t locale;
 	cached_re_key key;
 	cached_re_entry *entry;
 	cached_re  *cre;
@@ -313,12 +323,19 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 												cre_lru_node,
 												dclist_tail_node(&re_cache_lru));
 
+		pg_locale_del_callback(&drop_cre->cre_locale_callback);
 		cached_re_drop(drop_cre);
 	}
 
 	/* Insert into hash table and LRU queue. */
 	entry = re_cache_insert(re_cache_table, &cre->cre_key, &found);
 	dclist_push_head(&re_cache_lru, &cre->cre_lru_node);
+
+	/* Register callback to drop this entry on collation change/drop. */
+	locale = pg_newlocale_from_collation(collation);
+	cre->cre_locale_callback.func = cached_re_inval;
+	cre->cre_locale_callback.arg = cre;
+	pg_locale_add_callback(locale, &cre->cre_locale_callback);
 
 	/* Re-parent the memory context to our long-lived cache context. */
 	MemoryContextSetParent(cre->cre_context, RegexpCacheMemoryContext);

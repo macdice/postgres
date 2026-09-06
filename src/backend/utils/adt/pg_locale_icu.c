@@ -309,6 +309,22 @@ make_libc_ctype_locale(const char *ctype)
 }
 #endif							/* USE_ICU */
 
+static void
+free_pg_locale_icu(pg_locale_t locale)
+{
+	if (locale->icu.ucasemap)
+		ucasemap_close(locale->icu.ucasemap);
+	if (locale->icu.lt != 0)
+		freelocale(locale->icu.lt);
+	if (locale->icu.ucol)
+		ucol_close(locale->icu.ucol);
+	pfree(locale);
+}
+
+static const struct locale_methods locale_methods_icu = {
+	.free = free_pg_locale_icu,
+};
+
 pg_locale_t
 create_pg_locale_icu(Oid collid, MemoryContext context)
 {
@@ -319,6 +335,8 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	UCollator  *collator;
 	locale_t	loc = (locale_t) 0;
 	pg_locale_t result;
+	UVersionInfo versioninfo;
+	size_t		data_size = 0;
 
 	if (collid == DEFAULT_COLLATION_OID)
 	{
@@ -379,13 +397,26 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 
 	collator = make_icu_collator(iculocstr, icurules);
 
-	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
-	result->icu.locale = MemoryContextStrdup(context, iculocstr);
+	data_size += U_MAX_VERSION_STRING_LENGTH;
+	data_size += strlen(iculocstr) + 1;
+
+	result = MemoryContextAllocZero(context,
+									offsetof(struct pg_locale_struct, data) +
+									data_size);
+	ucol_getVersion(collator, versioninfo);
+	u_versionToString(versioninfo, result->data);
+	result->collate_version = result->data;
+	strlcat(result->data + U_MAX_VERSION_STRING_LENGTH,
+			iculocstr,
+			data_size - U_MAX_VERSION_STRING_LENGTH);
+	result->collate_name = result->data + U_MAX_VERSION_STRING_LENGTH;
+	result->ctype_name = result->data + U_MAX_VERSION_STRING_LENGTH;
 	result->icu.ucol = collator;
 	result->icu.lt = loc;
 	result->deterministic = deterministic;
 	result->collate_is_c = false;
 	result->ctype_is_c = false;
+	result->locale = &locale_methods_icu;
 	if (GetDatabaseEncoding() == PG_UTF8)
 	{
 		result->icu.ucasemap = pg_ucasemap_open(iculocstr);
@@ -918,7 +949,7 @@ convert_case_uchar(ICU_Convert_Func func, pg_locale_t mylocale,
 	*buff_dest = palloc_array(UChar, len_dest);
 	status = U_ZERO_ERROR;
 	len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-					mylocale->icu.locale, &status);
+					mylocale->ctype_name, &status);
 	if (status == U_BUFFER_OVERFLOW_ERROR)
 	{
 		/* try again with adjusted length */
@@ -926,7 +957,7 @@ convert_case_uchar(ICU_Convert_Func func, pg_locale_t mylocale,
 		*buff_dest = palloc_array(UChar, len_dest);
 		status = U_ZERO_ERROR;
 		len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-						mylocale->icu.locale, &status);
+						mylocale->ctype_name, &status);
 	}
 	if (U_FAILURE(status))
 		ereport(ERROR,

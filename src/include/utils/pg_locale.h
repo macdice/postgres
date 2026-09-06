@@ -13,6 +13,7 @@
 #define _PG_LOCALE_
 
 #include "common/unicode_limits.h"
+#include "lib/ilist.h"
 #include "mb/pg_wchar.h"
 
 /* use for libc locale names */
@@ -75,6 +76,16 @@ extern void cache_locale_time(void);
 
 struct pg_locale_struct;
 typedef struct pg_locale_struct *pg_locale_t;
+
+/* Hooks for extensions. */
+extern PGDLLIMPORT pg_locale_t (*create_pg_locale_hook) (Oid collid,
+														 MemoryContext context);
+
+/* Locale behavior */
+struct locale_methods
+{
+	void		(*free) (pg_locale_t locale);
+};
 
 /*
  * Collation behavior: string ordering.
@@ -170,11 +181,19 @@ struct ctype_methods
  */
 struct pg_locale_struct
 {
+	uint32		collid_inval_hash;
+	int			reference_count;
+
 	bool		deterministic;
 	bool		collate_is_c;
 	bool		ctype_is_c;
 	bool		is_default;
 
+	const char *collate_version;	/* NULL if provider not capable */
+	const char *collate_name;
+	const char *ctype_name;
+
+	const struct locale_methods *locale;
 	const struct collate_methods *collate;	/* NULL if collate_is_c */
 	const struct ctype_methods *ctype;	/* NULL if ctype_is_c */
 
@@ -182,25 +201,45 @@ struct pg_locale_struct
 	{
 		struct
 		{
-			const char *locale;
 			bool		casemap_full;
 		}			builtin;
 		locale_t	lt;
 #ifdef USE_ICU
 		struct
 		{
-			const char *locale;
 			struct UCollator *ucol;
 			struct UCaseMap *ucasemap;
 			locale_t	lt;
 		}			icu;
 #endif
 	};
+
+	dlist_head	callbacks;
+
+	char		data[FLEXIBLE_ARRAY_MEMBER];
 };
+
+/* User-supplied registration of invalidation callback. */
+typedef struct pg_locale_callback
+{
+	void		(*func) (void *arg);
+	void	   *arg;
+	dlist_node	node;
+} pg_locale_callback;
 
 extern void init_database_collation(void);
 extern pg_locale_t pg_database_locale(void);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
+
+extern void pg_pinlocale(pg_locale_t locale);
+extern void pg_releaselocale(pg_locale_t locale);
+
+extern void pg_locale_add_callback(pg_locale_t locale,
+								   pg_locale_callback *callback);
+extern void pg_locale_del_callback(pg_locale_callback *callback);
+extern void pg_locale_set_var_null_on_inval(pg_locale_t locale,
+											pg_locale_callback *callback,
+											pg_locale_t *var);
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);
 

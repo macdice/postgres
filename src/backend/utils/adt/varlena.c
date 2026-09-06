@@ -99,6 +99,7 @@ typedef struct
 	hyperLogLogState full_card; /* Full key cardinality state */
 	double		prop_card;		/* Required cardinality proportion */
 	pg_locale_t locale;
+	MemoryContextCallback cleanup;
 } VarStringSortSupport;
 
 /*
@@ -1660,6 +1661,14 @@ bttextsortsupport(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+static void
+varstr_sortsupport_cleanup(void *arg)
+{
+	VarStringSortSupport *sss = (VarStringSortSupport *) arg;
+
+	pg_releaselocale(sss->locale);
+}
+
 /*
  * Generic sortsupport interface for character type's operator classes.
  * Includes locale support, and support for BpChar semantics (i.e. removing
@@ -1797,6 +1806,22 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 			ssup->comparator = ssup_datum_uint64_cmp;
 			ssup->abbrev_converter = varstr_abbrev_convert;
 			ssup->abbrev_abort = varstr_abbrev_abort;
+		}
+
+		/*
+		 * If holding a reference to a pg_locale_t, there is a chance of cache
+		 * invalidations if this SortSupport is part of the execution state of
+		 * a query.  Pin it for the same lifetime as our ssup_extra object,
+		 * which isn't explicitly freed and relies on ssup_cxt for bulk
+		 * cleanup.  (We can't use ssup as arg, it is sometimes pointer to an
+		 * object on the stack that goes out of scope too soon.)
+		 */
+		if (sss->locale)
+		{
+			pg_pinlocale(sss->locale);
+			sss->cleanup.func = varstr_sortsupport_cleanup;
+			sss->cleanup.arg = sss;
+			MemoryContextRegisterResetCallback(ssup->ssup_cxt, &sss->cleanup);
 		}
 	}
 }

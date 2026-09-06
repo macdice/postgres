@@ -25,9 +25,13 @@ ltree_crc32_sz(const char *buf, int size)
 	const char *p = buf;
 	const char *end = buf + size;
 	static pg_locale_t locale = NULL;
+	static pg_locale_callback locale_callback;
 
-	if (!locale)
+	if (unlikely(!locale))
+	{
 		locale = pg_database_locale();
+		pg_locale_set_var_null_on_inval(locale, &locale_callback, &locale);
+	}
 
 	INIT_TRADITIONAL_CRC32(crc);
 	while (size > 0)

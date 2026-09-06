@@ -279,10 +279,21 @@ static const struct ctype_methods ctype_methods_builtin = {
 	.wc_toupper = wc_toupper_builtin,
 };
 
+static void
+free_pg_locale_builtin(pg_locale_t locale)
+{
+	pfree(locale);
+}
+
+static const struct locale_methods locale_methods_builtin = {
+	.free = free_pg_locale_builtin,
+};
+
 pg_locale_t
 create_pg_locale_builtin(Oid collid, MemoryContext context)
 {
 	const char *locstr;
+	const char *canonical_locale;
 	pg_locale_t result;
 
 	if (collid == DEFAULT_COLLATION_OID)
@@ -312,15 +323,18 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 		ReleaseSysCache(tp);
 	}
 
-	builtin_validate_locale(GetDatabaseEncoding(), locstr);
+	/* String constant, don't free. */
+	canonical_locale = builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
 	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
-
-	result->builtin.locale = MemoryContextStrdup(context, locstr);
+	result->collate_name = canonical_locale;
+	result->ctype_name = canonical_locale;
+	result->collate_version = "1";
 	result->builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->deterministic = true;
 	result->collate_is_c = true;
 	result->ctype_is_c = (strcmp(locstr, "C") == 0);
+	result->locale = &locale_methods_builtin;
 	if (!result->ctype_is_c)
 		result->ctype = &ctype_methods_builtin;
 

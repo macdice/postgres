@@ -26,6 +26,7 @@
 #include "utils/syscache.h"
 
 #ifdef __GLIBC__
+#include <langinfo.h>
 #include <gnu/libc-version.h>
 #endif
 
@@ -769,6 +770,36 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, size_t srclen,
 	return result_size;
 }
 
+static void
+free_pg_locale_libc(pg_locale_t locale)
+{
+	if (locale->lt)
+		freelocale(locale->lt);
+	pfree(locale);
+}
+
+static const struct locale_methods locale_methods_libc = {
+	.free = free_pg_locale_libc,
+};
+
+/*
+ * Check for locale names that are defined to have binary order by the C and
+ * POSIX standards.  We also treat "C." + codeset the same way, since
+ * "C.UTF-8" is provided by many systems.
+ */
+static bool
+suppress_collate_version(const char *collcollate)
+{
+	/*
+	 * XXX This was historically incorrect on Debian/Ubuntu systems before
+	 * glibc 2.35.  They shipped a C.UTF-8 that unintentionally failed to
+	 * implement strict binary order.
+	 */
+	return pg_strcasecmp("C", collcollate) == 0 ||
+		pg_strncasecmp("C.", collcollate, 2) == 0 ||
+		pg_strcasecmp("POSIX", collcollate) == 0;
+}
+
 pg_locale_t
 create_pg_locale_libc(Oid collid, MemoryContext context)
 {
@@ -776,6 +807,10 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	const char *ctype;
 	locale_t	loc;
 	pg_locale_t result;
+	size_t		data_size;
+#ifdef WIN32
+	char	   *collate_version = NULL;
+#endif
 
 	if (collid == DEFAULT_COLLATION_OID)
 	{
@@ -813,16 +848,92 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 		ReleaseSysCache(tp);
 	}
 
+	/* Do we need to allocate some extra space for strings? */
+	data_size = 0;
+#if !defined(HAVE_XLOCALE_H) && !defined(_NL_LOCALE_NAME)
+	data_size += strlen(collate) + 1;
+	data_size += strlen(ctype) + 1;
+#endif
+#ifdef WIN32
+	collate_version = get_collation_actual_version_libc(collate);
+	if (collate_version)
+		data_size = strlen(collate_version) + 1;
+#endif
 
 	loc = make_libc_collator(collate, ctype);
 
-	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
+	result = MemoryContextAllocZero(context,
+									offsetof(struct pg_locale_struct, data) +
+									data_size);
+	if (loc == NULL)
+	{
+		result->collate_name = "C";
+		result->ctype_name = "C";
+	}
+	else
+	{
+		/*
+		 * Store the locale names.  If libc can give us pointers to its
+		 * canonical locale names that are guaranteed to be valid until
+		 * freelocale() is called, use those.  (These strings are currently
+		 * only for informational purposes in system views.)
+		 */
+#if defined(HAVE_GETLOCALENAME_L)
+		/* POSIX:2024 */
+		result->collate_name = getlocalename_l(LC_COLLATE, loc);
+		result->ctype_name = getlocalename_l(LC_CTYPE, loc);
+#elif defined(HAVE_XLOCALE_H)
+		/* Apple/BSD extension */
+		result->collate_name = querylocale(LC_MASK_COLLATE, loc);
+		result->ctype_name = querylocale(LC_MASK_CTYPE, loc);
+#elif defined(NL_LOCALE_NAME)
+		/* Glibc extension */
+		result->collate_name = nl_langinfo_l(NL_LOCALE_NAME(LC_COLLATE), loc);
+		result->ctype_name = nl_langinfo_l(NL_LOCALE_NAME(LC_CTYPE), loc);
+#else
+		/* Otherwise copy what we have into the reserved space. */
+		snprintf(result->data,
+				 data_size,
+				 "%s%c%s",
+				 collate,
+				 0,
+				 ctype);
+		result->collate_name = result->data;
+		result->ctype_name = result->collate_name + strlen(collate) + 1;
+#endif
+
+		/* Same for the version string. */
+		if (!suppress_collate_version(collate))
+		{
+#if defined(__GLIBC__)
+			/* Use the library version because we don't have anything better. */
+			result->collate_version = gnu_get_libc_version();
+#elif defined(LC_MASK_VERSION)
+			/*
+			 * FreeBSD: like get_collation_actual_version_libc(), except we
+			 * already have a locale_t and we don't need a copy.
+			 */
+			result->collate_version = querylocale(LC_MASK_VERSION | LC_MASK_COLLATE,
+												  loc);
+#elif defined(WIN32)
+			if (collate_version)
+			{
+				result->collate_version = result->ctype_name + strlen(ctype) + 1;
+				strcpy(&result->data[result->collate_version - result->data],
+					   collate_version);
+				pfree(collate_version);
+			}
+#endif
+		}
+	}
+
 	result->deterministic = true;
 	result->collate_is_c = (strcmp(collate, "C") == 0) ||
 		(strcmp(collate, "POSIX") == 0);
 	result->ctype_is_c = (strcmp(ctype, "C") == 0) ||
 		(strcmp(ctype, "POSIX") == 0);
 	result->lt = loc;
+	result->locale = &locale_methods_libc;
 	if (!result->collate_is_c)
 	{
 #ifdef WIN32
@@ -1021,64 +1132,63 @@ strxfrm_libc(char *dest, size_t destsize, const char *src, pg_locale_t locale)
 char *
 get_collation_actual_version_libc(const char *collcollate)
 {
-	char	   *collversion = NULL;
+	char	   *collversion;
 
-	if (pg_strcasecmp("C", collcollate) != 0 &&
-		pg_strncasecmp("C.", collcollate, 2) != 0 &&
-		pg_strcasecmp("POSIX", collcollate) != 0)
-	{
+	if (suppress_collate_version(collcollate))
+		return NULL;
+
 #if defined(__GLIBC__)
-		/* Use the glibc version because we don't have anything better. */
-		collversion = pstrdup(gnu_get_libc_version());
+	/* Use the glibc version because we don't have anything better. */
+	collversion = pstrdup(gnu_get_libc_version());
 #elif defined(LC_VERSION_MASK)
-		locale_t	loc;
+	locale_t	loc;
 
-		/* Look up FreeBSD collation version. */
-		loc = newlocale(LC_COLLATE_MASK, collcollate, NULL);
-		if (loc)
-		{
-			collversion =
-				pstrdup(querylocale(LC_COLLATE_MASK | LC_VERSION_MASK, loc));
-			freelocale(loc);
-		}
-		else
-			ereport(ERROR,
-					(errmsg("could not load locale \"%s\"", collcollate)));
-#elif defined(WIN32)
-		/*
-		 * If we are targeting Windows Vista and above, we can ask for a name
-		 * given a collation name (earlier versions required a location code
-		 * that we don't have).
-		 */
-		NLSVERSIONINFOEX version = {sizeof(NLSVERSIONINFOEX)};
-		WCHAR		wide_collcollate[LOCALE_NAME_MAX_LENGTH];
-
-		MultiByteToWideChar(CP_ACP, 0, collcollate, -1, wide_collcollate,
-							LOCALE_NAME_MAX_LENGTH);
-		if (!GetNLSVersionEx(COMPARE_STRING, wide_collcollate, &version))
-		{
-			/*
-			 * GetNLSVersionEx() wants a language tag such as "en-US", not a
-			 * locale name like "English_United States.1252".  Until those
-			 * values can be prevented from entering the system, or 100%
-			 * reliably converted to the more useful tag format, tolerate the
-			 * resulting error and report that we have no version data.
-			 */
-			if (GetLastError() == ERROR_INVALID_PARAMETER)
-				return NULL;
-
-			ereport(ERROR,
-					(errmsg("could not get collation version for locale \"%s\": error code %lu",
-							collcollate,
-							GetLastError())));
-		}
-		collversion = psprintf("%lu.%lu,%lu.%lu",
-							   (version.dwNLSVersion >> 8) & 0xFFFF,
-							   version.dwNLSVersion & 0xFF,
-							   (version.dwDefinedVersion >> 8) & 0xFFFF,
-							   version.dwDefinedVersion & 0xFF);
-#endif
+	/* Look up FreeBSD collation version. */
+	loc = newlocale(LC_COLLATE_MASK, collcollate, NULL);
+	if (loc)
+	{
+		collversion =
+			pstrdup(querylocale(LC_COLLATE_MASK | LC_VERSION_MASK, loc));
+		freelocale(loc);
 	}
+	else
+		ereport(ERROR,
+				(errmsg("could not load locale \"%s\"", collcollate)));
+#elif defined(WIN32)
+
+	/*
+	 * If we are targeting Windows Vista and above, we can ask for a name
+	 * given a collation name (earlier versions required a location code that
+	 * we don't have).
+	 */
+	NLSVERSIONINFOEX version = {sizeof(NLSVERSIONINFOEX)};
+	WCHAR		wide_collcollate[LOCALE_NAME_MAX_LENGTH];
+
+	MultiByteToWideChar(CP_ACP, 0, collcollate, -1, wide_collcollate,
+						LOCALE_NAME_MAX_LENGTH);
+	if (!GetNLSVersionEx(COMPARE_STRING, wide_collcollate, &version))
+	{
+		/*
+		 * GetNLSVersionEx() wants a language tag such as "en-US", not a
+		 * locale name like "English_United States.1252".  Until those values
+		 * can be prevented from entering the system, or 100% reliably
+		 * converted to the more useful tag format, tolerate the resulting
+		 * error and report that we have no version data.
+		 */
+		if (GetLastError() == ERROR_INVALID_PARAMETER)
+			return NULL;
+
+		ereport(ERROR,
+				(errmsg("could not get collation version for locale \"%s\": error code %lu",
+						collcollate,
+						GetLastError())));
+	}
+	collversion = psprintf("%lu.%lu,%lu.%lu",
+						   (version.dwNLSVersion >> 8) & 0xFFFF,
+						   version.dwNLSVersion & 0xFF,
+						   (version.dwDefinedVersion >> 8) & 0xFFFF,
+						   version.dwDefinedVersion & 0xFF);
+#endif
 
 	return collversion;
 }

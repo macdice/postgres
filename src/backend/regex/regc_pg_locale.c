@@ -209,10 +209,12 @@ typedef struct pg_ctype_cache
 	regc_wc_probefunc probefunc;	/* regc_wc_isalpha or a sibling */
 	pg_locale_t locale;			/* locale this entry is for */
 	struct cvec cv;				/* cache entry contents */
-	struct pg_ctype_cache *next;	/* chain link */
+
+	pg_locale_callback locale_callback;
+	dlist_node	node;			/* cache chain link */
 } pg_ctype_cache;
 
-static pg_ctype_cache *pg_ctype_cache_list = NULL;
+static dlist_head pg_ctype_cache_list;
 
 /*
  * Add a chr or range to pcc->cv; return false if run out of memory
@@ -254,6 +256,18 @@ store_match(pg_ctype_cache *pcc, pg_wchar chr1, int nchrs)
 	return true;
 }
 
+static void
+regc_ctype_cache_inval(void *arg)
+{
+	pg_ctype_cache *pcc = (pg_ctype_cache *) arg;
+
+	/* Collation changed/dropped.  Drop cached ctype information. */
+	dlist_delete(&pcc->node);
+	free(pcc->cv.chrs);
+	free(pcc->cv.ranges);
+	free(pcc);
+}
+
 /*
  * Given a probe function (e.g., regc_wc_isalpha) get a struct cvec for all
  * chrs satisfying the probe function.  The active collation is the one
@@ -269,12 +283,14 @@ regc_ctype_get_cache(regc_wc_probefunc probefunc, int cclasscode)
 	pg_wchar	cur_chr;
 	int			nmatches;
 	chr		   *newchrs;
+	dlist_iter	iter;
 
 	/*
 	 * Do we already have the answer cached?
 	 */
-	for (pcc = pg_ctype_cache_list; pcc != NULL; pcc = pcc->next)
+	dlist_foreach(iter, &pg_ctype_cache_list)
 	{
+		pcc = dlist_container(pg_ctype_cache, node, iter.cur);
 		if (pcc->probefunc == probefunc &&
 			pcc->locale == pg_regex_locale)
 			return &pcc->cv;
@@ -389,11 +405,15 @@ regc_ctype_get_cache(regc_wc_probefunc probefunc, int cclasscode)
 		pcc->cv.rangespace = pcc->cv.nranges;
 	}
 
+	/* Register callback to drop pcc if the locale goes away. */
+	pcc->locale_callback.func = regc_ctype_cache_inval;
+	pcc->locale_callback.arg = pcc;
+	pg_locale_add_callback(pcc->locale, &pcc->locale_callback);
+
 	/*
 	 * Success, link it into cache chain
 	 */
-	pcc->next = pg_ctype_cache_list;
-	pg_ctype_cache_list = pcc;
+	dlist_push_head(&pg_ctype_cache_list, &pcc->node);
 
 	return &pcc->cv;
 
