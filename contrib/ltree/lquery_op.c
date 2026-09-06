@@ -82,6 +82,7 @@ ltree_label_match(const char *pred, size_t pred_len, const char *label,
 				  size_t label_len, bool prefix, bool ci)
 {
 	static pg_locale_t locale = NULL;
+	static pg_locale_callback locale_callback;
 	char	   *fpred;			/* casefolded predicate */
 	size_t		fpred_len = pred_len;
 	char	   *flabel;			/* casefolded label */
@@ -101,8 +102,11 @@ ltree_label_match(const char *pred, size_t pred_len, const char *label,
 	 * This path is necessary even if pred_len > label_len, because the byte
 	 * lengths may change after casefolding.
 	 */
-	if (!locale)
+	if (unlikely(!locale))
+	{
 		locale = pg_database_locale();
+		pg_locale_set_var_null_on_inval(locale, &locale_callback, &locale);
+	}
 
 	fpred = palloc(fpred_len + 1);
 	len = pg_strfold(fpred, fpred_len + 1, pred, pred_len, locale);

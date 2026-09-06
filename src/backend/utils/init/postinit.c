@@ -340,9 +340,8 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	HeapTuple	tup;
 	Form_pg_database dbform;
 	Datum		datum;
-	bool		isnull;
-	char	   *collate;
 	char	   *ctype;
+	char	   *collate;
 
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
@@ -447,48 +446,6 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 
 	init_database_collation();
-
-	/*
-	 * Check collation version.  See similar code in
-	 * pg_newlocale_from_collation().  Note that here we warn instead of error
-	 * in any case, so that we don't prevent connecting.
-	 */
-	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datcollversion,
-							&isnull);
-	if (!isnull)
-	{
-		char	   *actual_versionstr;
-		char	   *collversionstr;
-		char	   *locale;
-
-		collversionstr = TextDatumGetCString(datum);
-
-		if (dbform->datlocprovider == COLLPROVIDER_LIBC)
-			locale = collate;
-		else
-		{
-			datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
-			locale = TextDatumGetCString(datum);
-		}
-
-		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, locale);
-		if (!actual_versionstr)
-			/* should not happen */
-			elog(WARNING,
-				 "database \"%s\" has no actual collation version, but a version was recorded",
-				 name);
-		else if (strcmp(actual_versionstr, collversionstr) != 0)
-			ereport(WARNING,
-					(errmsg("database \"%s\" has a collation version mismatch",
-							name),
-					 errdetail("The database was created using collation version %s, "
-							   "but the operating system provides version %s.",
-							   collversionstr, actual_versionstr),
-					 errhint("Rebuild all objects in this database that use the default collation and run "
-							 "ALTER DATABASE %s REFRESH COLLATION VERSION, "
-							 "or build PostgreSQL with the right library version.",
-							 quote_identifier(name))));
-	}
 
 	ReleaseSysCache(tup);
 }

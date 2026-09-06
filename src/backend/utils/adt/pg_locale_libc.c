@@ -23,9 +23,11 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/syscache.h"
 
 #ifdef __GLIBC__
+#include <langinfo.h>
 #include <gnu/libc-version.h>
 #endif
 
@@ -75,7 +77,20 @@
  */
 #define		TEXTBUFLEN			1024
 
-extern pg_locale_t create_pg_locale_libc(Oid collid, MemoryContext context);
+static pg_locale_t pg_newlocale_libc(const locale_descriptor *descriptor,
+									 int flags,
+									 MemoryContext context);
+static char *pg_getactuallocaleversion_libc(const char *locale, int category);
+
+extern const struct locale_provider_methods locale_provider_methods_libc;
+
+/*
+ * Entry points for libc locale provider.
+ */
+const struct locale_provider_methods locale_provider_methods_libc = {
+	.getactuallocaleversion = pg_getactuallocaleversion_libc,
+	.newlocale = pg_newlocale_libc,
+};
 
 static int	strncoll_libc(const char *arg1, size_t len1,
 						  const char *arg2, size_t len2,
@@ -768,60 +783,146 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, size_t srclen,
 	return result_size;
 }
 
-pg_locale_t
-create_pg_locale_libc(Oid collid, MemoryContext context)
+static void
+pg_freelocale_libc(pg_locale_t locale)
 {
-	const char *collate;
-	const char *ctype;
+	if (locale->lt)
+	{
+#ifndef WIN32
+		freelocale(locale->lt);
+#else
+		_free_locale(locale->lt);
+#endif
+	}
+	pfree(locale);
+}
+
+static const struct locale_methods locale_methods_libc = {
+	.freelocale = pg_freelocale_libc,
+};
+
+/*
+ * Check for locale names that are defined to have binary order by the C and
+ * POSIX standards.  We also treat "C." + codeset the same way, since
+ * "C.UTF-8" is provided by many systems.
+ */
+static bool
+suppress_collate_version(const char *collcollate)
+{
+	/*
+	 * XXX It was historically incorrect on Debian/Ubuntu systems to treat
+	 * "C.*" this way before glibc 2.35.  They shipped a C.UTF-8 that
+	 * unintentionally failed to implement code point order.
+	 */
+	return pg_strcasecmp("C", collcollate) == 0 ||
+		pg_strncasecmp("C.", collcollate, 2) == 0 ||
+		pg_strcasecmp("POSIX", collcollate) == 0;
+}
+
+#if 0
+/*
+ * Ask libc what it thinks the locale name of a given category is, for
+ * informational purposes only.  This might give a canonicalized answer on
+ * some systems.  Result is valid until loc is freed.  Must not be called with
+ * LC_GLOBAL_LOCALE which doesn't guarantee that, but we never open that.
+ */
+static const char *
+get_canonical_localename(locale_t loc, int category)
+{
+#if defined(HAVE_GETLOCALENAME_L)
+	/* POSIX:2024 way to query locale name. */
+	return getlocalename_l(category, loc);
+#elif defined(HAVE_XLOCALE_H)
+	/* Apple/BSD way to query locale name. */
+	if (category == LC_COLLATE)
+		return querylocale(LC_COLLATE_MASK, loc);
+	else if (category == LC_CTYPE)
+		return querylocale(LC_CTYPE_MASK, loc);
+#elif defined(NL_LOCALE_NAME)
+	/* Glibc way to query locale name. */
+	return nl_langinfo_l(NL_LOCALE_NAME(category), loc);
+#endif
+
+	return NULL;
+}
+#endif
+
+static pg_locale_t
+pg_newlocale_libc(const struct locale_descriptor *descriptor,
+				  int flags,
+				  MemoryContext context)
+{
+	const char *collate = descriptor->collate;
+	const char *ctype = descriptor->ctype;
 	locale_t	loc;
 	pg_locale_t result;
+	size_t		descriptor_size;
+	size_t		collate_version_size;
+#ifdef WIN32
+	char	   *collate_version = NULL;
+#endif
 
-	if (collid == DEFAULT_COLLATION_OID)
-	{
-		HeapTuple	tp;
-		Datum		datum;
+	collate_version_size = 0;
 
-		tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-									   Anum_pg_database_datcollate);
-		collate = TextDatumGetCString(datum);
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-									   Anum_pg_database_datctype);
-		ctype = TextDatumGetCString(datum);
+#ifdef WIN32
 
-		ReleaseSysCache(tp);
-	}
-	else
-	{
-		HeapTuple	tp;
-		Datum		datum;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collid);
-
-		datum = SysCacheGetAttrNotNull(COLLOID, tp,
-									   Anum_pg_collation_collcollate);
-		collate = TextDatumGetCString(datum);
-		datum = SysCacheGetAttrNotNull(COLLOID, tp,
-									   Anum_pg_collation_collctype);
-		ctype = TextDatumGetCString(datum);
-
-		ReleaseSysCache(tp);
-	}
-
-
+	/*
+	 * We only need to allocated extra space to store collation_version on
+	 * Windows, because the other mechanisms provide a pointer to a string
+	 * with the lifetime of loc or a constant string.
+	 */
+	collate_version = get_collation_actual_version_libc(collate);
+	if (collate_version)
+		collate_version_size = strlen(collate_version) + 1;
+#endif
 	loc = make_libc_collator(collate, ctype);
 
-	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
+	descriptor_size = size_locale_descriptor(descriptor);
+
+	result = MemoryContextAllocZero(context,
+									sizeof(struct pg_locale_struct) +
+									descriptor_size + collate_version_size);
+	pg_locale_set_descriptor(result, descriptor);
+
+	/*
+	 * Store collate_version, if we have it and it's not a name we choose to
+	 * exclude from versioning.
+	 */
+	if (!suppress_collate_version(collate))
+	{
+#if defined(__GLIBC__)
+		/* Use the library version because we don't have anything better. */
+		result->collate_version = gnu_get_libc_version();
+#elif defined(LC_VERSION_MASK)
+		/*
+		 * FreeBSD: like get_collation_actual_version_libc(), except we
+		 * already have a locale_t and we don't need a copy.
+		 */
+		result->collate_version =
+			querylocale(LC_VERSION_MASK | LC_COLLATE_MASK, loc);
+#elif defined(WIN32)
+		/* Windows: copy and free the string acquired above. */
+		if (collate_version)
+		{
+			char	   *dst;
+
+			dst = (char *) result + sizeof(*result) + descriptor_size;
+
+			result->collate_version = dst;
+			memcpy(dst, collate_version, collate_version_size);
+			pfree(collate_version);
+		}
+#endif
+	}
+
 	result->deterministic = true;
 	result->collate_is_c = (strcmp(collate, "C") == 0) ||
 		(strcmp(collate, "POSIX") == 0);
 	result->ctype_is_c = (strcmp(ctype, "C") == 0) ||
 		(strcmp(ctype, "POSIX") == 0);
 	result->lt = loc;
+
+	result->locale = &locale_methods_libc;
 	if (!result->collate_is_c)
 	{
 #ifdef WIN32
@@ -1017,14 +1118,15 @@ strxfrm_libc(char *dest, size_t destsize, const char *src, pg_locale_t locale)
 	return strxfrm_l(dest, src, destsize, locale->lt);
 }
 
-char *
-get_collation_actual_version_libc(const char *collcollate)
+static char *
+pg_getactuallocaleversion_libc(const char *collcollate, int category)
 {
 	char	   *collversion = NULL;
 
-	if (pg_strcasecmp("C", collcollate) != 0 &&
-		pg_strncasecmp("C.", collcollate, 2) != 0 &&
-		pg_strcasecmp("POSIX", collcollate) != 0)
+	if (category != LC_COLLATE)
+		return NULL;
+
+	if (!suppress_collate_version(collcollate))
 	{
 #if defined(__GLIBC__)
 		/* Use the glibc version because we don't have anything better. */
@@ -1044,11 +1146,7 @@ get_collation_actual_version_libc(const char *collcollate)
 			ereport(ERROR,
 					(errmsg("could not load locale \"%s\"", collcollate)));
 #elif defined(WIN32)
-		/*
-		 * If we are targeting Windows Vista and above, we can ask for a name
-		 * given a collation name (earlier versions required a location code
-		 * that we don't have).
-		 */
+
 		NLSVERSIONINFOEX version = {sizeof(NLSVERSIONINFOEX)};
 		WCHAR		wide_collcollate[LOCALE_NAME_MAX_LENGTH];
 

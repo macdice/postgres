@@ -82,6 +82,7 @@ backend_sources += files(
   'pg_locale.c',
   'pg_locale_builtin.c',
   'pg_locale_icu.c',
+  'pg_locale_icu_iter.c',
   'pg_locale_libc.c',
   'pg_lsn.c',
   'pg_ndistinct.c',

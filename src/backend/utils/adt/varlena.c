@@ -99,6 +99,7 @@ typedef struct
 	hyperLogLogState full_card; /* Full key cardinality state */
 	double		prop_card;		/* Required cardinality proportion */
 	pg_locale_t locale;
+	MemoryContextCallback cleanup;
 } VarStringSortSupport;
 
 /*
@@ -1660,6 +1661,14 @@ bttextsortsupport(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+static void
+varstr_sortsupport_cleanup(void *arg)
+{
+	VarStringSortSupport *sss = (VarStringSortSupport *) arg;
+
+	pg_releaselocale(sss->locale);
+}
+
 /*
  * Generic sortsupport interface for character type's operator classes.
  * Includes locale support, and support for BpChar semantics (i.e. removing
@@ -1797,6 +1806,19 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 			ssup->comparator = ssup_datum_uint64_cmp;
 			ssup->abbrev_converter = varstr_abbrev_convert;
 			ssup->abbrev_abort = varstr_abbrev_abort;
+		}
+
+		/*
+		 * If holding a reference to a pg_locale_t, pin it for the lifetime of
+		 * the struct that holds it.  This prevents it from being freed by
+		 * syscache invalidation.
+		 */
+		if (sss->locale)
+		{
+			pg_pinlocale(sss->locale);
+			sss->cleanup.func = varstr_sortsupport_cleanup;
+			sss->cleanup.arg = sss;
+			MemoryContextRegisterResetCallback(ssup->ssup_cxt, &sss->cleanup);
 		}
 	}
 }

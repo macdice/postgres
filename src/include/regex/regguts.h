@@ -292,6 +292,7 @@ struct cvec
 	int			rangespace;		/* number of ranges allocated in ranges[] */
 	chr		   *ranges;			/* pointer to vector of chr pairs */
 	int			cclasscode;		/* value of "enum classes", or -1 */
+	void	   *private_data;	/* used by regc_pg_locale */
 };
 
 

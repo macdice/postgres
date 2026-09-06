@@ -1974,6 +1974,7 @@ PGresAttValue
 PGresParamDesc
 PGresult
 PGresult_data
+PgUCharIteratorMultibyteContext
 PIO_STATUS_BLOCK
 PLAINTREE
 PLAssignStmt
@@ -3294,10 +3295,13 @@ TypeName
 TzAbbrevCache
 U32
 U8
+UBool
 UCaseMap
 UChar
+UChar32
 UCharIterator
 UColAttributeValue
+UCollationResult
 UCollator
 UConverter
 UErrorCode
@@ -3305,6 +3309,7 @@ UINT
 ULARGE_INTEGER
 ULONG
 ULONG_PTR
+UParseError
 UV
 UVersionInfo
 UnicodeNormalizationForm
@@ -3929,6 +3934,7 @@ local_relopts
 local_source
 local_ts_iter
 local_ts_radix_tree
+locale_descriptor
 locale_t
 locate_agg_of_level_context
 locate_var_of_level_context
@@ -4032,6 +4038,7 @@ pg_gssinfo
 pg_hmac_ctx
 pg_hmac_errno
 pg_local_to_utf_combined
+pg_locale_callback
 pg_locale_t
 pg_mb_radix_tree
 pg_md5_ctx

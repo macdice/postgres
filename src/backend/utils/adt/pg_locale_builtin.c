@@ -20,6 +20,7 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/syscache.h"
 
 /*
@@ -31,9 +32,23 @@
 StaticAssertDecl(SIZE_MAX / UTF8_MAX_CASEMAP_EXPANSION > MaxAllocSize,
 				 "case mapping may overflow size_t");
 
-extern pg_locale_t create_pg_locale_builtin(Oid collid,
-											MemoryContext context);
-extern char *get_collation_actual_version_builtin(const char *collcollate);
+static char *pg_getactuallocaleversion_builtin(const char *locale, int category);
+static pg_locale_t pg_newlocale_builtin(const locale_descriptor *descriptor,
+										int flags,
+										MemoryContext context);
+
+extern const struct locale_provider_methods locale_provider_methods_builtin;
+
+const struct locale_provider_methods locale_provider_methods_builtin = {
+	.getactuallocaleversion = pg_getactuallocaleversion_builtin,
+	.newlocale = pg_newlocale_builtin,
+};
+
+static void pg_freelocale_builtin(pg_locale_t locale);
+
+static const struct locale_methods locale_methods_builtin = {
+	.freelocale = pg_freelocale_builtin,
+};
 
 struct WordBoundaryState
 {
@@ -277,57 +292,46 @@ static const struct ctype_methods ctype_methods_builtin = {
 	.wc_toupper = wc_toupper_builtin,
 };
 
-pg_locale_t
-create_pg_locale_builtin(Oid collid, MemoryContext context)
+static void
+pg_freelocale_builtin(pg_locale_t locale)
+{
+	pfree(locale);
+}
+
+static pg_locale_t
+pg_newlocale_builtin(const locale_descriptor *descriptor,
+					 int flags,
+					 MemoryContext context)
 {
 	const char *locstr;
 	pg_locale_t result;
 
-	if (collid == DEFAULT_COLLATION_OID)
-	{
-		HeapTuple	tp;
-		Datum		datum;
-
-		tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-									   Anum_pg_database_datlocale);
-		locstr = TextDatumGetCString(datum);
-		ReleaseSysCache(tp);
-	}
-	else
-	{
-		HeapTuple	tp;
-		Datum		datum;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collid);
-		datum = SysCacheGetAttrNotNull(COLLOID, tp,
-									   Anum_pg_collation_colllocale);
-		locstr = TextDatumGetCString(datum);
-		ReleaseSysCache(tp);
-	}
+	locstr = descriptor->locale;
 
 	builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
-	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
-
-	result->builtin.locale = MemoryContextStrdup(context, locstr);
+	result = MemoryContextAllocZero(context,
+									sizeof(struct pg_locale_struct) +
+									size_locale_descriptor(descriptor));
+	pg_locale_set_descriptor(result, descriptor);
+	result->collate_version = "1";
 	result->builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->deterministic = true;
 	result->collate_is_c = true;
 	result->ctype_is_c = (strcmp(locstr, "C") == 0);
+	result->locale = &locale_methods_builtin;
 	if (!result->ctype_is_c)
 		result->ctype = &ctype_methods_builtin;
 
 	return result;
 }
 
-char *
-get_collation_actual_version_builtin(const char *collcollate)
+static char *
+pg_getactuallocaleversion_builtin(const char *collcollate, int category)
 {
+	if (category != LC_COLLATE)
+		return NULL;
+
 	/*
 	 * The supported locales (C, C.UTF-8, and PG_UNICODE_FAST) are all based
 	 * on memcmp and are not expected to change, but track the version anyway.
