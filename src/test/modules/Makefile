@@ -52,6 +52,7 @@ SUBDIRS = \
 		  test_saslprep \
 		  test_shmem \
 		  test_shm_mq \
+		  test_simplehash \
 		  test_slru \
 		  test_tidstore \
 		  test_wait_lsn \
