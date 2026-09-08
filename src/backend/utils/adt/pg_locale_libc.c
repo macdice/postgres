@@ -773,13 +773,14 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, size_t srclen,
 static void
 free_pg_locale_libc(pg_locale_t locale)
 {
+	if (locale->lt)
+	{
 #ifdef WIN32
-	if (locale->lt)
-		freelocale(locale->lt);
-#else
-	if (locale->lt)
 		_freelocale(locale->lt);
+#else
+		freelocale(locale->lt);
 #endif
+	}
 	pfree(locale);
 }
 
