@@ -884,8 +884,8 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 		result->ctype_name = getlocalename_l(LC_CTYPE, loc);
 #elif defined(HAVE_XLOCALE_H)
 		/* Apple/BSD extension */
-		result->collate_name = querylocale(LC_MASK_COLLATE, loc);
-		result->ctype_name = querylocale(LC_MASK_CTYPE, loc);
+		result->collate_name = querylocale(LC_COLLATE_MASK, loc);
+		result->ctype_name = querylocale(LC_CTYPE_MASK, loc);
 #elif defined(NL_LOCALE_NAME)
 		/* Glibc extension */
 		result->collate_name = nl_langinfo_l(NL_LOCALE_NAME(LC_COLLATE), loc);
@@ -908,12 +908,12 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 #if defined(__GLIBC__)
 			/* Use the library version because we don't have anything better. */
 			result->collate_version = gnu_get_libc_version();
-#elif defined(LC_MASK_VERSION)
+#elif defined(LC_VERSION_MASK)
 			/*
 			 * FreeBSD: like get_collation_actual_version_libc(), except we
 			 * already have a locale_t and we don't need a copy.
 			 */
-			result->collate_version = querylocale(LC_MASK_VERSION | LC_MASK_COLLATE,
+			result->collate_version = querylocale(LC_VERSION_MASK | LC_COLLATE_MASK,
 												  loc);
 #elif defined(WIN32)
 			if (collate_version)
