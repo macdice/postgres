@@ -1227,7 +1227,7 @@ init_database_collation(void)
 
 	Assert(default_locale == NULL || default_locale_inval);
 
-	if (!default_locale)
+	if (default_locale == NULL)
 	{
 		/* Register syscache invalidation callback for my database row. */
 		default_locale_inval_hash =
@@ -1321,8 +1321,7 @@ init_database_collation(void)
 
 	/*
 	 * If reloading after a syscache invalidation, notify registered callbacks
-	 * that the default locale has changed and release our pin.  Other pinned
-	 * references remain valid.
+	 * that the default locale has changed and release our pin.
 	 */
 	if (default_locale)
 	{
@@ -1330,7 +1329,7 @@ init_database_collation(void)
 		pg_releaselocale(default_locale);
 	}
 
-	/* The default_locale variable holds a pin. */
+	/* Pin the new default locale. */
 	pg_pinlocale(result);
 	default_locale = result;
 }
@@ -1375,15 +1374,14 @@ pg_newlocale_from_collation(Oid collid)
 
 	if (collid == DEFAULT_COLLATION_OID)
 	{
+		/* should not happen: init_database_collation() not yet run */
 		if (unlikely(default_locale == NULL))
 			elog(ERROR, "default locale not initialized");
 
-		if (likely(!default_locale_inval))
-			return default_locale;
+		/* syscache invalidation: reload */
+		if (unlikely(default_locale_inval))
+			init_database_collation();
 
-		/* Might need to reinitialize after a syscache invalidation. */
-		elog(LOG, "pg_locale_t cache: reinit DEFAULT_COLLATION_OID");
-		init_database_collation();
 		return default_locale;
 	}
 
