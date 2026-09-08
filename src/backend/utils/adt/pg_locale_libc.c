@@ -773,8 +773,13 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, size_t srclen,
 static void
 free_pg_locale_libc(pg_locale_t locale)
 {
+#ifdef WIN32
 	if (locale->lt)
 		freelocale(locale->lt);
+#else
+	if (locale->lt)
+		_freelocale(locale->lt);
+#endif
 	pfree(locale);
 }
 
@@ -1132,63 +1137,58 @@ strxfrm_libc(char *dest, size_t destsize, const char *src, pg_locale_t locale)
 char *
 get_collation_actual_version_libc(const char *collcollate)
 {
-	char	   *collversion;
+	char	   *collversion = NULL;
 
-	if (suppress_collate_version(collcollate))
-		return NULL;
-
-#if defined(__GLIBC__)
-	/* Use the glibc version because we don't have anything better. */
-	collversion = pstrdup(gnu_get_libc_version());
-#elif defined(LC_VERSION_MASK)
-	locale_t	loc;
-
-	/* Look up FreeBSD collation version. */
-	loc = newlocale(LC_COLLATE_MASK, collcollate, NULL);
-	if (loc)
+	if (!suppress_collate_version(collcollate))
 	{
-		collversion =
-			pstrdup(querylocale(LC_COLLATE_MASK | LC_VERSION_MASK, loc));
-		freelocale(loc);
-	}
-	else
-		ereport(ERROR,
-				(errmsg("could not load locale \"%s\"", collcollate)));
+#if defined(__GLIBC__)
+		/* Use the glibc version because we don't have anything better. */
+		collversion = pstrdup(gnu_get_libc_version());
+#elif defined(LC_VERSION_MASK)
+		locale_t	loc;
+
+		/* Look up FreeBSD collation version. */
+		loc = newlocale(LC_COLLATE_MASK, collcollate, NULL);
+		if (loc)
+		{
+			collversion =
+				pstrdup(querylocale(LC_COLLATE_MASK | LC_VERSION_MASK, loc));
+			freelocale(loc);
+		}
+		else
+			ereport(ERROR,
+					(errmsg("could not load locale \"%s\"", collcollate)));
 #elif defined(WIN32)
 
-	/*
-	 * If we are targeting Windows Vista and above, we can ask for a name
-	 * given a collation name (earlier versions required a location code that
-	 * we don't have).
-	 */
-	NLSVERSIONINFOEX version = {sizeof(NLSVERSIONINFOEX)};
-	WCHAR		wide_collcollate[LOCALE_NAME_MAX_LENGTH];
+		NLSVERSIONINFOEX version = {sizeof(NLSVERSIONINFOEX)};
+		WCHAR		wide_collcollate[LOCALE_NAME_MAX_LENGTH];
 
-	MultiByteToWideChar(CP_ACP, 0, collcollate, -1, wide_collcollate,
-						LOCALE_NAME_MAX_LENGTH);
-	if (!GetNLSVersionEx(COMPARE_STRING, wide_collcollate, &version))
-	{
-		/*
-		 * GetNLSVersionEx() wants a language tag such as "en-US", not a
-		 * locale name like "English_United States.1252".  Until those values
-		 * can be prevented from entering the system, or 100% reliably
-		 * converted to the more useful tag format, tolerate the resulting
-		 * error and report that we have no version data.
-		 */
-		if (GetLastError() == ERROR_INVALID_PARAMETER)
-			return NULL;
+		MultiByteToWideChar(CP_ACP, 0, collcollate, -1, wide_collcollate,
+							LOCALE_NAME_MAX_LENGTH);
+		if (!GetNLSVersionEx(COMPARE_STRING, wide_collcollate, &version))
+		{
+			/*
+			 * GetNLSVersionEx() wants a language tag such as "en-US", not a
+			 * locale name like "English_United States.1252".  Until those
+			 * values can be prevented from entering the system, or 100%
+			 * reliably converted to the more useful tag format, tolerate the
+			 * resulting error and report that we have no version data.
+			 */
+			if (GetLastError() == ERROR_INVALID_PARAMETER)
+				return NULL;
 
-		ereport(ERROR,
-				(errmsg("could not get collation version for locale \"%s\": error code %lu",
-						collcollate,
-						GetLastError())));
-	}
-	collversion = psprintf("%lu.%lu,%lu.%lu",
-						   (version.dwNLSVersion >> 8) & 0xFFFF,
-						   version.dwNLSVersion & 0xFF,
-						   (version.dwDefinedVersion >> 8) & 0xFFFF,
-						   version.dwDefinedVersion & 0xFF);
+			ereport(ERROR,
+					(errmsg("could not get collation version for locale \"%s\": error code %lu",
+							collcollate,
+							GetLastError())));
+		}
+		collversion = psprintf("%lu.%lu,%lu.%lu",
+							   (version.dwNLSVersion >> 8) & 0xFFFF,
+							   version.dwNLSVersion & 0xFF,
+							   (version.dwDefinedVersion >> 8) & 0xFFFF,
+							   version.dwDefinedVersion & 0xFF);
 #endif
+	}
 
 	return collversion;
 }
