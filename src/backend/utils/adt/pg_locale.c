@@ -1143,7 +1143,14 @@ invoke_invalidation_callbacks(pg_locale_t locale)
 		callback = dlist_container(pg_locale_callback,
 								   node,
 								   dlist_head_node(&locale->callbacks));
+		/*
+		 * It is convenient for callback->func() to use a common
+		 * drop-cached-object routine that in other circumstances needs to
+		 * call pg_locale_del_callback(), so make that OK by deleting
+		 * "thoroughly".
+		 */
 		dlist_delete_thoroughly(&callback->node);
+
 		callback->func(callback->arg);
 	}
 }
@@ -1494,7 +1501,10 @@ pg_locale_add_callback(pg_locale_t locale, pg_locale_callback *callback)
 void
 pg_locale_del_callback(pg_locale_callback *callback)
 {
-	/* If adding was a no-op, deleting is too. */
+	/*
+	 * pg_locale_add_callback() no-op case, or invoke_invalidation_callbacks()
+	 * has already removed this node?
+	 */
 	if (dlist_node_is_detached(&callback->node))
 		return;
 
