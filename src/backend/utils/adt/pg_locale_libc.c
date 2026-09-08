@@ -775,10 +775,10 @@ free_pg_locale_libc(pg_locale_t locale)
 {
 	if (locale->lt)
 	{
-#ifdef WIN32
-		_freelocale(locale->lt);
-#else
+#ifndef WIN32
 		freelocale(locale->lt);
+#else
+		_free_locale(locale->lt);
 #endif
 	}
 	pfree(locale);

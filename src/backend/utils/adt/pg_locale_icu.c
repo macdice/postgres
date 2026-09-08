@@ -314,7 +314,13 @@ free_pg_locale_icu(pg_locale_t locale)
 	if (locale->icu.ucasemap)
 		ucasemap_close(locale->icu.ucasemap);
 	if (locale->icu.lt != 0)
+	{
+#ifndef WIN32
 		freelocale(locale->icu.lt);
+#else
+		_free_locale(locale->icu.lt);
+#endif
+	}
 	if (locale->icu.ucol)
 		ucol_close(locale->icu.ucol);
 	pfree(locale);
