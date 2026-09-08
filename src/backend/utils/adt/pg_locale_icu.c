@@ -307,7 +307,6 @@ make_libc_ctype_locale(const char *ctype)
 
 	return loc;
 }
-#endif							/* USE_ICU */
 
 static void
 free_pg_locale_icu(pg_locale_t locale)
@@ -324,6 +323,8 @@ free_pg_locale_icu(pg_locale_t locale)
 static const struct locale_methods locale_methods_icu = {
 	.free = free_pg_locale_icu,
 };
+
+#endif							/* USE_ICU */
 
 pg_locale_t
 create_pg_locale_icu(Oid collid, MemoryContext context)
