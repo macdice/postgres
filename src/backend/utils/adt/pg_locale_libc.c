@@ -770,8 +770,23 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, size_t srclen,
 	return result_size;
 }
 
+static bool
+pg_samelocale_libc(pg_locale_t locale, pg_locale_t other)
+{
+	Assert(locale->provider == COLLPROVIDER_LIBC);	
+	Assert(other->provider == COLLPROVIDER_LIBC);	
+
+	/* Common fields already checked by pg_samelocale(). */
+	if (strcmp(locale->libc.collate, other->libc.collate) != 0)
+		return false;
+	if (strcmp(locale->libc.ctype, other->libc.ctype) != 0)
+		return false;
+
+	return true;
+}
+
 static void
-free_pg_locale_libc(pg_locale_t locale)
+pg_freelocale_libc(pg_locale_t locale)
 {
 	if (locale->lt)
 	{
@@ -785,7 +800,8 @@ free_pg_locale_libc(pg_locale_t locale)
 }
 
 static const struct locale_methods locale_methods_libc = {
-	.free = free_pg_locale_libc,
+	.samelocale = pg_samelocale_libc,
+	.freelocale = pg_freelocale_libc,
 };
 
 /*
@@ -806,17 +822,46 @@ suppress_collate_version(const char *collcollate)
 		pg_strcasecmp("POSIX", collcollate) == 0;
 }
 
+#if 0
+/*
+ * Ask libc what it thinks the locale name of a given category is, for
+ * informational purposes only.  This might give a canonicalized answer on
+ * some systems.  Result is valid until loc is freed.  Must not be called with
+ * LC_GLOBAL_LOCALE which doesn't guarantee that, but we never open that.
+ */
+static const char *
+get_canonical_localename(locale_t loc, int category)
+{
+#if defined(HAVE_GETLOCALENAME_L)
+	/* POSIX:2024 way to query locale name. */
+	return getlocalename_l(category, loc);
+#elif defined(HAVE_XLOCALE_H)
+	/* Apple/BSD way to query locale name. */
+	if (category == LC_COLLATE)
+		return querylocale(LC_COLLATE_MASK, loc);
+	else if (category == LC_CTYPE)
+		return querylocale(LC_CTYPE_MASK, loc);
+#elif defined(NL_LOCALE_NAME)
+	/* Glibc way to query locale name. */
+	return nl_langinfo_l(NL_LOCALE_NAME(category), loc);
+#endif
+	
+	return NULL;
+}
+#endif
+	
 pg_locale_t
 create_pg_locale_libc(Oid collid, MemoryContext context)
 {
 	const char *collate;
 	const char *ctype;
+	bool		isnull;
 	locale_t	loc;
 	pg_locale_t result;
 	size_t		collate_size;
 	size_t		ctype_size;
 	size_t		data_size;
-	char	   *data;
+	char	   *data;	
 #ifdef WIN32
 	size_t		collate_version_size;
 	char	   *collate_version = NULL;
@@ -837,6 +882,8 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 									   Anum_pg_database_datctype);
 		ctype = TextDatumGetCString(datum);
 
+		datum = SysCacheGetAttr(DATABASEOID, tp,
+								Anum_pg_database_datcollversion, &isnull);
 		ReleaseSysCache(tp);
 	}
 	else
@@ -855,6 +902,8 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 									   Anum_pg_collation_collctype);
 		ctype = TextDatumGetCString(datum);
 
+		datum = SysCacheGetAttr(COLLOID, tp,
+								Anum_pg_collation_collversion, &isnull);
 		ReleaseSysCache(tp);
 	}
 
@@ -883,17 +932,17 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	result->provider = COLLPROVIDER_LIBC;
 	data = result->data;
 
-	/* Store collate_name. */
-	result->collate_name = data;
+	/* Store collate. */
+	result->libc.collate = data;
 	strcpy(data, collate);
 	data += collate_size + 1;
 
-	/* Store ctype_name. */
-	result->ctype_name = data;
+	/* Store ctype. */
+	result->libc.ctype = data;
 	strcpy(data, ctype);
 	data += ctype_size + 1;
 
-	/* Store collate_version, if we have it and it's not a name we block. */
+	/* Store provider_collate_version, if we have it and it's not a name we block. */
 	if (!suppress_collate_version(collate))
 	{
 #if defined(__GLIBC__)
@@ -904,17 +953,17 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 		 * FreeBSD: like get_collation_actual_version_libc(), except we
 		 * already have a locale_t and we don't need a copy.
 		 */
-		result->collate_version =
+		result->provider_collate_version =
 			querylocale(LC_VERSION_MASK | LC_COLLATE_MASK, loc);
 #elif defined(WIN32)
 		/* Windows: use the NLSVERSIONINFOEX data acquired above. */
-		if (collate_version)
+		if (provider_collate_version)
 		{
-			result->collate_version = data;
-			strcpy(data, collate_version, collate_version_size);
-			data += collate_version_size + 1;
+			result->provider_collate_version = data;
+			strcpy(data, provider_collate_version, provider_collate_version_size);
+			data += provider_collate_version_size + 1;
 
-			pfree(collate_version);
+			pfree(provider_collate_version);
 		}
 #endif
 	}

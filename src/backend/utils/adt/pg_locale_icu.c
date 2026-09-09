@@ -308,8 +308,20 @@ make_libc_ctype_locale(const char *ctype)
 	return loc;
 }
 
+static bool
+pg_samelocale_icu(pg_locale_t locale, pg_locale_t other)
+{
+	Assert(locale->provider == COLLPROVIDER_ICU);	
+	Assert(other->provider == COLLPROVIDER_ICU);	
+
+	/* Common fields already checked by pg_samelocale(). */
+	/* XXX TODO */
+
+	return true;
+}
+
 static void
-free_pg_locale_icu(pg_locale_t locale)
+pg_freelocale_icu(pg_locale_t locale)
 {
 	if (locale->icu.ucasemap)
 		ucasemap_close(locale->icu.ucasemap);
@@ -326,16 +338,9 @@ free_pg_locale_icu(pg_locale_t locale)
 	pfree(locale);
 }
 
-static const struct locale_methods locale_methods_icu = {
-	.free = free_pg_locale_icu,
-};
-
-#endif							/* USE_ICU */
-
-pg_locale_t
-create_pg_locale_icu(Oid collid, MemoryContext context)
+static pg_locale_t
+pg_newlocale_icu(Oid collid, MemoryContext context)
 {
-#ifdef USE_ICU
 	bool		deterministic;
 	const char *iculocstr;
 	const char *icurules = NULL;
@@ -346,7 +351,8 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	UVersionInfo versioninfo;
 	char		collate_version[U_MAX_VERSION_STRING_LENGTH];
 	size_t		collate_version_size;
-	size_t		collate_size;
+	size_t		iculocstr_size;
+	size_t		icurules_size;
 	size_t		ctype_size;
 	size_t		data_size;
 	char	   *data;
@@ -410,16 +416,19 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 
 	collator = make_icu_collator(iculocstr, icurules);
 
-	collate_size = strlen(iculocstr);
+	iculocstr_size = strlen(iculocstr);
+	data_size = iculocstr_size;
+
+	icurules_size = icurules ? strlen(icurules) : 0;
+	if (icurules_size > 0)
+		data_size += icurules_size + 1;
 
 	ucol_getVersion(collator, versioninfo);
 	u_versionToString(versioninfo, collate_version);
 	collate_version_size = strlen(collate_version);
+	data_size += collate_version_size + 1;
 
-	data_size = collate_size + 1 + collate_version_size + 1;
-
-	/* Historical kludge: if using libc for ctype, need space for that. */
-	ctype_size = strlen(ctype);
+	ctype_size = ctype ? strlen(ctype) : 0;
 	if (ctype_size > 0)
 		data_size += ctype_size + 1;
 
@@ -429,26 +438,29 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	result->provider = COLLPROVIDER_ICU;
 	data = result->data;
 
-	/* Store collate_name. */
-	result->collate_name = data;
+	/* Store icu.locale. */
+	result->icu.locale = data;
 	strcpy(data, iculocstr);
-	data += collate_size + 1;
+	data += iculocstr_size + 1;
 
-	/* Store ctype_name. */
-	if (ctype == NULL)
+	/* Store icu.rules if present. */
+	if (icurules)
 	{
-		/* Using ICU for ctype, so just point to same string. */
-		result->ctype_name = result->collate_name;
-	}
-	else
+		result->icu.rules = data;
+		strcpy(data, icurules);
+		data += icurules_size + 1;
+	}	
+
+	/* Store icu.ctype if using libc for that. */
+	if (ctype)
 	{
-		/* Historical kludge: using libc for ctype, for historical reasons. */
-		result->ctype_name = data;
+		result->icu.ctype = data;
 		strcpy(data, ctype);
 		data += ctype_size + 1;
 	}
 
 	/* Store collate_version. */
+	result->collate_version = data;
 	strcpy(data, collate_version);
 	data += collate_version_size + 1;
 
@@ -459,7 +471,7 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	result->deterministic = deterministic;
 	result->collate_is_c = false;
 	result->ctype_is_c = false;
-	result->locale = &locale_methods_icu;
+	result->locale = pg_locale_methods_icu;
 	if (GetDatabaseEncoding() == PG_UTF8)
 	{
 		result->icu.ucasemap = pg_ucasemap_open(iculocstr);
@@ -473,15 +485,37 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	}
 
 	return result;
+}
+
+
 #else							/* not USE_ICU */
+
+static pg_locale_t
+pg_newlocale_icu(Oid collid, MemoryContext context)
+{ 
 	/* could get here if a collation was created by a build with ICU */
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("ICU is not supported in this build")));
 
 	return NULL;
-#endif							/* not USE_ICU */
 }
+
+static const struct locale_methods locale_methods_icu = {
+	.newlocale = pg_newlocale_icu,
+};
+
+#endif							/* not USE_ICU */
+
+static const struct locale_methods default_locale_methods_icu = {
+	.newlocale = pg_newlocale_icu,
+#ifdef USE_ICU
+	.samelocale = pg_samelocale_icu,
+	.freelocale = pg_freelocale_icu,
+#endif
+};
+
+const struct locale_methods *pg_locale_methods_icu = &default_locale_methods_icu;
 
 #ifdef USE_ICU
 
@@ -992,7 +1026,7 @@ convert_case_uchar(ICU_Convert_Func func, pg_locale_t mylocale,
 	*buff_dest = palloc_array(UChar, len_dest);
 	status = U_ZERO_ERROR;
 	len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-					mylocale->ctype_name, &status);
+					mylocale->icu.locale, &status);
 	if (status == U_BUFFER_OVERFLOW_ERROR)
 	{
 		/* try again with adjusted length */
@@ -1000,7 +1034,7 @@ convert_case_uchar(ICU_Convert_Func func, pg_locale_t mylocale,
 		*buff_dest = palloc_array(UChar, len_dest);
 		status = U_ZERO_ERROR;
 		len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-						mylocale->ctype_name, &status);
+						mylocale->icu.locale, &status);
 	}
 	if (U_FAILURE(status))
 		ereport(ERROR,

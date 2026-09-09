@@ -31,10 +31,6 @@
 StaticAssertDecl(SIZE_MAX / UTF8_MAX_CASEMAP_EXPANSION > MaxAllocSize,
 				 "case mapping may overflow size_t");
 
-extern pg_locale_t create_pg_locale_builtin(Oid collid,
-											MemoryContext context);
-extern char *get_collation_actual_version_builtin(const char *collcollate);
-
 struct WordBoundaryState
 {
 	const char *str;
@@ -279,18 +275,29 @@ static const struct ctype_methods ctype_methods_builtin = {
 	.wc_toupper = wc_toupper_builtin,
 };
 
+static bool
+pg_samelocale_builtin(pg_locale_t locale, pg_locale_t other)
+{
+	Assert(locale->provider == COLLPROVIDER_BUILTIN);
+	Assert(other->provider == COLLPROVIDER_BUILTIN);
+	
+	/* Common fields already checked by pg_samelocale(). */
+	if (strcmp(locale->builtin.locale, other->builtin.locale) != 0)
+		return false;
+	if (locale->builtin.casemap_full != other->builtin.casemap_full)
+		return false;
+
+	return true;
+}
+
 static void
-free_pg_locale_builtin(pg_locale_t locale)
+pg_freelocale_builtin(pg_locale_t locale)
 {
 	pfree(locale);
 }
 
-static const struct locale_methods locale_methods_builtin = {
-	.free = free_pg_locale_builtin,
-};
-
-pg_locale_t
-create_pg_locale_builtin(Oid collid, MemoryContext context)
+static pg_locale_t
+pg_newlocale_builtin(Oid collid, MemoryContext context)
 {
 	const char *locstr;
 	size_t		data_size;
@@ -332,14 +339,13 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 									data_size);
 	result->provider = COLLPROVIDER_BUILTIN;
 	strcpy(result->data, locstr);
-	result->collate_name = result->data;
-	result->ctype_name = result->data;
+	result->builtin.locale = result->data;
 	result->collate_version = "1";
 	result->builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->deterministic = true;
 	result->collate_is_c = true;
 	result->ctype_is_c = (strcmp(locstr, "C") == 0);
-	result->locale = &locale_methods_builtin;
+	result->locale = &pg_locale_methods_builtin;
 	if (!result->ctype_is_c)
 		result->ctype = &ctype_methods_builtin;
 
@@ -347,8 +353,11 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 }
 
 char *
-get_collation_actual_version_builtin(const char *collcollate)
+pg_localeversion_builtin(const char *locale, int category)
 {
+	if (category != LC_COLLATE)
+		return NULL;
+
 	/*
 	 * The supported locales (C, C.UTF-8, and PG_UNICODE_FAST) are all based
 	 * on memcmp and are not expected to change, but track the version anyway.
@@ -356,17 +365,24 @@ get_collation_actual_version_builtin(const char *collcollate)
 	 * Note that the character semantics may change for some locales, but the
 	 * collation version only tracks changes to sort order.
 	 */
-	if (strcmp(collcollate, "C") == 0)
+	if (strcmp(locale, "C") == 0)
 		return "1";
-	else if (strcmp(collcollate, "C.UTF-8") == 0)
+	else if (strcmp(locale, "C.UTF-8") == 0)
 		return "1";
-	else if (strcmp(collcollate, "PG_UNICODE_FAST") == 0)
+	else if (strcmp(locale, "PG_UNICODE_FAST") == 0)
 		return "1";
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("invalid locale name \"%s\" for builtin provider",
-						collcollate)));
+						locale)));
 
 	return NULL;				/* keep compiler quiet */
 }
+
+const struct locale_methods pg_locale_methods_builtin = {
+	.newlocale = pg_newlocale_builtin,
+	.samelocale = pg_samelocale_builtin,
+	.freelocale = pg_freelocale_builtin,
+	.localeversion = pg_localeversion_builtin,
+};

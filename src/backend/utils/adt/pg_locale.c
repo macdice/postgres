@@ -70,23 +70,14 @@
 
 #define		MAX_L10N_DATA		80
 
-/* Hooks. */
-pg_locale_t (*create_pg_locale_hook) (Oid collid, MemoryContext context);
-
 /* pg_locale_builtin.c */
-extern pg_locale_t create_pg_locale_builtin(Oid collid, MemoryContext context);
-extern char *get_collation_actual_version_builtin(const char *collcollate);
+extern const struct locale_methods *pg_locale_methods_builtin;
 
 /* pg_locale_icu.c */
 #ifdef USE_ICU
 extern UCollator *pg_ucol_open(const char *loc_str);
-extern char *get_collation_actual_version_icu(const char *collcollate);
 #endif
 extern pg_locale_t create_pg_locale_icu(Oid collid, MemoryContext context);
-
-/* pg_locale_libc.c */
-extern pg_locale_t create_pg_locale_libc(Oid collid, MemoryContext context);
-extern char *get_collation_actual_version_libc(const char *collcollate);
 
 /* GUC settings */
 char	   *locale_messages;
@@ -117,12 +108,12 @@ static bool CurrentLocaleConvValid = false;
 static bool CurrentLCTimeValid = false;
 
 static const struct pg_locale_struct c_locale = {
+	.id = C_COLLATION_OID,
+	.provider = COLLPROVIDER_BUILTIN,
 	.reference_count = -1,
 	.deterministic = true,
 	.collate_is_c = true,
 	.ctype_is_c = true,
-	.collate_name = "C",
-	.ctype_name = "C",
 };
 
 /* Cache for collation-related knowledge */
@@ -1052,11 +1043,29 @@ IsoLocaleName(const char *winlocname)
 
 #endif							/* WIN32 && LC_MESSAGES */
 
+static const struct locale_methods *
+pg_locale_methods(char provider)
+{
+	switch (provider)
+	{
+	case COLLPROVIDER_BUILTIN:
+		return pg_locale_methods_builtin;
+	case COLLPROVIDER_ICU:
+		return pg_locale_methods_icu;
+	case COLLPROVIDER_LIBC:
+		return pg_locale_methods_libc;
+	default:
+		/* shouldn't happen */
+		PGLOCALE_SUPPORT_ERROR(provider);
+	}
+	return NULL;
+}
+
 /*
  * Create a new pg_locale_t struct for the given collation oid.
  */
 static pg_locale_t
-create_pg_locale(Oid collid, MemoryContext context)
+pg_newlocale(Oid collid, MemoryContext context)
 {
 	HeapTuple	tp;
 	Form_pg_collation collform;
@@ -1069,17 +1078,7 @@ create_pg_locale(Oid collid, MemoryContext context)
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 	collform = (Form_pg_collation) GETSTRUCT(tp);
 
-	if (create_pg_locale_hook)
-		result = create_pg_locale_hook(collid, context);
-	else if (collform->collprovider == COLLPROVIDER_BUILTIN)
-		result = create_pg_locale_builtin(collid, context);
-	else if (collform->collprovider == COLLPROVIDER_ICU)
-		result = create_pg_locale_icu(collid, context);
-	else if (collform->collprovider == COLLPROVIDER_LIBC)
-		result = create_pg_locale_libc(collid, context);
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(collform->collprovider);
+	result = pg_locale_methods(collform->collprovider)->newlocale(collid, context);
 
 	result->is_default = false;
 
@@ -1157,24 +1156,54 @@ invoke_invalidation_callbacks(pg_locale_t locale)
 }
 
 /*
- * Check if two pg_locale_t objects have identical ctype_name, collate_name
- * and collate_version.
+ * Check if two pg_locale_t objects are functionally identical.  This is
+ * intended to detect spurious invalidations of default_locale, when
+ * pg_database is updated for reasons that don't affect collations.
  */
 static bool
-pg_locale_unchanged(pg_locale_t a, pg_locale_t b)
+pg_samelocale(pg_locale_t locale, pg_locale_t other)
 {
-	if (strcmp(a->ctype_name, b->ctype_name))
+	if (locale->id != other->id)
 		return false;
 
-	if (strcmp(a->collate_name, b->collate_name))
+	if (locale->deterministic != other->deterministic ||
+		locale->collate_is_c != other->collate_is_c ||
+		locale->ctype_is_c != other->ctype_is_c ||
+		locale->is_default != other->is_default)
 		return false;
 
-	if (a->collate_version == NULL)
-		return b->collate_version == NULL;
-	else if (b->collate_version == NULL)
+	/* Both must lack actual version, or they must match. */
+	if (locale->collate_version)
+	{
+		if (!other->collate_version)
+			return false;
+		if (strcmp(locale->collate_version, other->collate_version) != 0)
+			return false;
+	}
+	else if (other->collate_version)
 		return false;
-	else
-		return strcmp(a->collate_version, b->collate_version) == 0;
+
+	/* Method tables must match. */
+	if (locale->locale != other->locale ||
+		locale->collate != other->collate ||
+		locale->ctype != other->ctype)
+		return false;
+
+	/* This is implied by the above but just to be safe... */
+	if (locale->provider != other->provider)
+		return false;
+
+	/* Defer to installed method for provider-specific union members. */
+	return locale->locale->samelocale(locale, other);
+}
+
+/*
+ * Not public.  See notes above pg_newlocale_from_collation().
+ */
+static void
+pg_freelocale(pg_locale_t locale)
+{
+	locale->locale->freelocale(locale);
 }
 
 /*
@@ -1210,7 +1239,7 @@ collation_cache_syscache_inval(Datum arg,
 	{
 		if (entry->locale &&
 			(hashvalue == 0 ||
-			 hashvalue == entry->locale->collid_inval_hash))
+			 hashvalue == entry->locale->inval_hash))
 		{
 			pg_locale_t locale = entry->locale;
 
@@ -1251,34 +1280,22 @@ init_database_collation(void)
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbform = (Form_pg_database) GETSTRUCT(tup);
 
-	if (create_pg_locale_hook)
-		result = create_pg_locale_hook(DEFAULT_COLLATION_OID,
-									   TopMemoryContext);
-	else if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
-		result = create_pg_locale_builtin(DEFAULT_COLLATION_OID,
-										  TopMemoryContext);
-	else if (dbform->datlocprovider == COLLPROVIDER_ICU)
-		result = create_pg_locale_icu(DEFAULT_COLLATION_OID,
-									  TopMemoryContext);
-	else if (dbform->datlocprovider == COLLPROVIDER_LIBC)
-		result = create_pg_locale_libc(DEFAULT_COLLATION_OID,
-									   TopMemoryContext);
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(dbform->datlocprovider);
+	result = pg_locale_methods(dbform->datlocprovider)->newlocale(DEFAULT_COLLATION_OID,
+																  TopMemoryContext);
 
 	/*
-	 * If reloading after syscache invalidation and no change can be detected,
-	 * keep default_locale as is and return early.
+	 * If reloading after syscache invalidation, if no change is detected then
+	 * free result and return early.  This suppresses invalidations when
+	 * pg_database is updated without affecting locales.
 	 */
 	if (default_locale)
 	{
 		default_locale_inval = false;
 
-		if (pg_locale_unchanged(default_locale, result))
+		if (pg_samelocale(default_locale, result))
 		{
 			ReleaseSysCache(tup);
-			result->locale->free(result);
+			pg_freelocale(result);
 			return;
 		}
 	}
@@ -1432,11 +1449,11 @@ pg_newlocale_from_collation(Oid collid)
 
 	if (cache_entry->locale == NULL)
 	{
-		cache_entry->locale = create_pg_locale(collid, CollationCacheContext);
+		cache_entry->locale = pg_newlocale(collid, CollationCacheContext);
 
 		pg_pinlocale(cache_entry->locale);
 
-		cache_entry->locale->collid_inval_hash =
+		cache_entry->locale->inval_hash =
 			GetSysCacheHashValue1(COLLOID, ObjectIdGetDatum(collid));
 	}
 
@@ -1471,7 +1488,7 @@ pg_releaselocale(pg_locale_t locale)
 	Assert(locale->reference_count > 0);
 
 	if (--locale->reference_count == 0)
-		locale->locale->free(locale);
+		pg_freelocale(locale);
 }
 
 /*
@@ -1542,18 +1559,8 @@ pg_locale_set_var_null_on_inval(pg_locale_t locale,
 char *
 get_collation_actual_version(char collprovider, const char *collcollate)
 {
-	char	   *collversion = NULL;
-
-	if (collprovider == COLLPROVIDER_BUILTIN)
-		collversion = get_collation_actual_version_builtin(collcollate);
-#ifdef USE_ICU
-	else if (collprovider == COLLPROVIDER_ICU)
-		collversion = get_collation_actual_version_icu(collcollate);
-#endif
-	else if (collprovider == COLLPROVIDER_LIBC)
-		collversion = get_collation_actual_version_libc(collcollate);
-
-	return collversion;
+	return pg_locale_methods(collprovider)->localeversion(collcollate,
+														  LC_COLLATE);
 }
 
 /* lowercasing/casefolding in C locale */
