@@ -1809,12 +1809,9 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 		}
 
 		/*
-		 * If holding a reference to a pg_locale_t, there is a chance of cache
-		 * invalidations if this SortSupport is part of the execution state of
-		 * a query.  Pin it for the same lifetime as our ssup_extra object,
-		 * which isn't explicitly freed and relies on ssup_cxt for bulk
-		 * cleanup.  (We can't use ssup as arg, it is sometimes pointer to an
-		 * object on the stack that goes out of scope too soon.)
+		 * If holding a reference to a pg_locale_t, pin it for the lifetime of
+		 * the struct that holds it.  This prevents it from being freed by
+		 * syscache invalidation.
 		 */
 		if (sss->locale)
 		{

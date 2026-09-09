@@ -799,7 +799,7 @@ suppress_collate_version(const char *collcollate)
 	/*
 	 * XXX This was historically incorrect on Debian/Ubuntu systems before
 	 * glibc 2.35.  They shipped a C.UTF-8 that unintentionally failed to
-	 * implement strict binary order.
+	 * implement code point order.
 	 */
 	return pg_strcasecmp("C", collcollate) == 0 ||
 		pg_strncasecmp("C.", collcollate, 2) == 0 ||
