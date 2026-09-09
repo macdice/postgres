@@ -797,9 +797,9 @@ static bool
 suppress_collate_version(const char *collcollate)
 {
 	/*
-	 * XXX This was historically incorrect on Debian/Ubuntu systems before
-	 * glibc 2.35.  They shipped a C.UTF-8 that unintentionally failed to
-	 * implement code point order.
+	 * XXX It was historically incorrect on Debian/Ubuntu systems to treat
+	 * "C.*" this way before glibc 2.35.  They shipped a C.UTF-8 that
+	 * unintentionally failed to implement code point order.
 	 */
 	return pg_strcasecmp("C", collcollate) == 0 ||
 		pg_strncasecmp("C.", collcollate, 2) == 0 ||
@@ -813,8 +813,12 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	const char *ctype;
 	locale_t	loc;
 	pg_locale_t result;
+	size_t		collate_size;
+	size_t		ctype_size;
 	size_t		data_size;
+	char	   *data;
 #ifdef WIN32
+	size_t		collate_version_size;
 	char	   *collate_version = NULL;
 #endif
 
@@ -854,16 +858,21 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 		ReleaseSysCache(tp);
 	}
 
-	/* Do we need to allocate some extra space for strings? */
-	data_size = 0;
-#if !defined(HAVE_XLOCALE_H) && !defined(_NL_LOCALE_NAME)
-	data_size += strlen(collate) + 1;
-	data_size += strlen(ctype) + 1;
-#endif
+	/* Reserve some extra space for strings that we want to capture. */
+	collate_size = strlen(collate);
+	ctype_size = strlen(ctype);
+	data_size = collate_size + 1 + ctype_size + 1;
 #ifdef WIN32
 	collate_version = get_collation_actual_version_libc(collate);
 	if (collate_version)
-		data_size = strlen(collate_version) + 1;
+	{
+		collate_version_size = strlen(collate_version);
+		data_size += collate_version_size + 1;
+	}
+	else
+	{
+		collate_version_size = 0;
+	}
 #endif
 
 	loc = make_libc_collator(collate, ctype);
@@ -871,67 +880,47 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	result = MemoryContextAllocZero(context,
 									offsetof(struct pg_locale_struct, data) +
 									data_size);
-	if (loc == NULL)
-	{
-		result->collate_name = "C";
-		result->ctype_name = "C";
-	}
-	else
-	{
-		/*
-		 * Store the locale names.  If libc can give us pointers to its
-		 * canonical locale names that are guaranteed to be valid until
-		 * freelocale() is called, use those.  (These strings are currently
-		 * only for informational purposes in system views.)
-		 */
-#if defined(HAVE_GETLOCALENAME_L)
-		/* POSIX:2024 */
-		result->collate_name = getlocalename_l(LC_COLLATE, loc);
-		result->ctype_name = getlocalename_l(LC_CTYPE, loc);
-#elif defined(HAVE_XLOCALE_H)
-		/* Apple/BSD extension */
-		result->collate_name = querylocale(LC_COLLATE_MASK, loc);
-		result->ctype_name = querylocale(LC_CTYPE_MASK, loc);
-#elif defined(NL_LOCALE_NAME)
-		/* Glibc extension */
-		result->collate_name = nl_langinfo_l(NL_LOCALE_NAME(LC_COLLATE), loc);
-		result->ctype_name = nl_langinfo_l(NL_LOCALE_NAME(LC_CTYPE), loc);
-#else
-		/* Otherwise copy what we have into the reserved space. */
-		snprintf(result->data,
-				 data_size,
-				 "%s%c%s",
-				 collate,
-				 0,
-				 ctype);
-		result->collate_name = result->data;
-		result->ctype_name = result->collate_name + strlen(collate) + 1;
-#endif
 
-		/* Same for the version string. */
-		if (!suppress_collate_version(collate))
-		{
+	data = result->data;
+
+	/* Store collate_name. */
+	result->collate_name = data;
+	strcpy(data, collate);
+	data += collate_size + 1;
+
+	/* Store ctype_name. */
+	result->ctype_name = data;
+	strcpy(data, ctype);
+	data += ctype_size + 1;
+
+	/* Store collate_version, if we have it and it's not a name we block. */
+	if (!suppress_collate_version(collate))
+	{
 #if defined(__GLIBC__)
-			/* Use the library version because we don't have anything better. */
-			result->collate_version = gnu_get_libc_version();
+		/* Use the library version because we don't have anything better. */
+		result->collate_version = gnu_get_libc_version();
 #elif defined(LC_VERSION_MASK)
-			/*
-			 * FreeBSD: like get_collation_actual_version_libc(), except we
-			 * already have a locale_t and we don't need a copy.
-			 */
-			result->collate_version = querylocale(LC_VERSION_MASK | LC_COLLATE_MASK,
-												  loc);
+		/*
+		 * FreeBSD: like get_collation_actual_version_libc(), except we
+		 * already have a locale_t and we don't need a copy.
+		 */
+		result->collate_version =
+			querylocale(LC_VERSION_MASK | LC_COLLATE_MASK, loc);
 #elif defined(WIN32)
-			if (collate_version)
-			{
-				result->collate_version = result->ctype_name + strlen(ctype) + 1;
-				strcpy(&result->data[result->collate_version - result->data],
-					   collate_version);
-				pfree(collate_version);
-			}
-#endif
+		/* Windows: use the NLSVERSIONINFOEX data acquired above. */
+		if (collate_version)
+		{
+			result->collate_version = data;
+			strcpy(data, collate_version, collate_version_size);
+			data += collate_version_size + 1;
+
+			pfree(collate_version);
 		}
+#endif
 	}
+
+	/* Check we didn't overrun the allocated space. */
+	Assert(data > result->data && data <= result->data + data_size);
 
 	result->deterministic = true;
 	result->collate_is_c = (strcmp(collate, "C") == 0) ||

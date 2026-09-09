@@ -3201,7 +3201,6 @@ func_checks = [
   ['explicit_memset'],
   ['getauxval'],
   ['getifaddrs'],
-  ['getlocalename_l'],
   ['getopt', {'dependencies': [getopt_dep, gnugetopt_dep], 'skip': always_replace_getopt}],
   ['getopt_long', {'dependencies': [getopt_dep, gnugetopt_dep], 'skip': always_replace_getopt_long}],
   ['getpeereid'],

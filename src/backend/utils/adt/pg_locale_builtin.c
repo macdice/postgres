@@ -293,7 +293,7 @@ pg_locale_t
 create_pg_locale_builtin(Oid collid, MemoryContext context)
 {
 	const char *locstr;
-	const char *canonical_locale;
+	size_t		data_size;
 	pg_locale_t result;
 
 	if (collid == DEFAULT_COLLATION_OID)
@@ -323,12 +323,16 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 		ReleaseSysCache(tp);
 	}
 
-	/* String constant, don't free. */
-	canonical_locale = builtin_validate_locale(GetDatabaseEncoding(), locstr);
+	builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
-	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
-	result->collate_name = canonical_locale;
-	result->ctype_name = canonical_locale;
+	data_size = strlen(locstr) + 1;
+
+	result = MemoryContextAllocZero(context,
+									offsetof(struct pg_locale_struct, data) +
+									data_size);
+	strcpy(result->data, locstr);
+	result->collate_name = result->data;
+	result->ctype_name = result->data;
 	result->collate_version = "1";
 	result->builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->deterministic = true;

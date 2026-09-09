@@ -1143,6 +1143,7 @@ invoke_invalidation_callbacks(pg_locale_t locale)
 		callback = dlist_container(pg_locale_callback,
 								   node,
 								   dlist_head_node(&locale->callbacks));
+
 		/*
 		 * It is convenient for callback->func() to use a common
 		 * drop-cached-object routine that in other circumstances needs to
@@ -1369,7 +1370,7 @@ pg_database_locale(void)
  * It is safe to use the returned pg_locale_t in a scope that can't process
  * invalidations.  For all references held across potential syscache
  * invalidation boundaries, either a pin should be acquired and released to
- * mark the lifetime of the reference (for example see sortsupport.c), or an
+ * mark the lifetime of the reference (for example see varlena.c), or an
  * invalidation callback should be registered to drop the reference (for
  * example see regexp.c).
  */
