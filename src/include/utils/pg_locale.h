@@ -181,17 +181,23 @@ struct ctype_methods
  */
 struct pg_locale_struct
 {
+	/* Lifetime/invalidation management. */
 	uint32		collid_inval_hash;
 	int			reference_count;
 
+	/* From pg_database or pg_collation row. */
+	char		provider;
+	const char *collate_name;
+	const char *ctype_name;
+
+	/* Reported by provider (not catalog version), NULL if unavailable. */
+	const char *collate_version;
+
+	/* Flags for key characteristics. */
 	bool		deterministic;
 	bool		collate_is_c;
 	bool		ctype_is_c;
 	bool		is_default;
-
-	const char *collate_version;	/* NULL if provider not capable */
-	const char *collate_name;
-	const char *ctype_name;
 
 	const struct locale_methods *locale;
 	const struct collate_methods *collate;	/* NULL if collate_is_c */

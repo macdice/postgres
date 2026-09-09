@@ -880,7 +880,7 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	result = MemoryContextAllocZero(context,
 									offsetof(struct pg_locale_struct, data) +
 									data_size);
-
+	result->provider = COLLPROVIDER_LIBC;
 	data = result->data;
 
 	/* Store collate_name. */
@@ -919,7 +919,6 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 #endif
 	}
 
-	/* Check we didn't overrun the allocated space. */
 	Assert(data > result->data && data <= result->data + data_size);
 
 	result->deterministic = true;

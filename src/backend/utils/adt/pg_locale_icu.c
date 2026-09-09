@@ -343,7 +343,13 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	locale_t	loc = (locale_t) 0;
 	pg_locale_t result;
 	UVersionInfo versioninfo;
-	size_t		data_size = 0;
+	char		libc_ctype[LOCALE_NAME_BUFLEN] = {0};
+	char		collate_version[U_MAX_VERSION_STRING_LENGTH];
+	size_t		collate_version_size;
+	size_t		collate_size;
+	size_t		ctype_size;
+	size_t		data_size;
+	char	   *data;
 
 	if (collid == DEFAULT_COLLATION_OID)
 	{
@@ -373,6 +379,7 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 			datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
 										   Anum_pg_database_datctype);
 			ctype = TextDatumGetCString(datum);
+			strlcpy(libc_ctype, ctype, lengthof(libc_ctype));
 
 			loc = make_libc_ctype_locale(ctype);
 		}
@@ -404,20 +411,50 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 
 	collator = make_icu_collator(iculocstr, icurules);
 
-	data_size += U_MAX_VERSION_STRING_LENGTH;
-	data_size += strlen(iculocstr) + 1;
+	collate_size = strlen(iculocstr);	
+	
+	ucol_getVersion(collator, versioninfo);
+	u_versionToString(versioninfo, collate_version);
+	collate_version_size = strlen(collate_version);
+
+	data_size = collate_size + 1 + collate_version_size + 1;
+
+	/* Historical kludge: if using libc for ctype, need space for that. */
+	ctype_size = strlen(libc_ctype);
+	if (ctype_size > 0)
+		data_size += ctype_size + 1;
 
 	result = MemoryContextAllocZero(context,
 									offsetof(struct pg_locale_struct, data) +
 									data_size);
-	ucol_getVersion(collator, versioninfo);
-	u_versionToString(versioninfo, result->data);
-	result->collate_version = result->data;
-	strlcat(result->data + U_MAX_VERSION_STRING_LENGTH,
-			iculocstr,
-			data_size - U_MAX_VERSION_STRING_LENGTH);
-	result->collate_name = result->data + U_MAX_VERSION_STRING_LENGTH;
-	result->ctype_name = result->data + U_MAX_VERSION_STRING_LENGTH;
+	result->provider = COLLPROVIDER_ICU;
+	data = result->data;
+
+	/* Store collate_name. */
+	result->collate_name = data;
+	strcpy(data, iculocstr);
+	data += collate_size + 1;
+
+	/* Store ctype_name. */
+	if (ctype_size == 0)
+	{
+		/* Using ICU for ctype, so just point to same string. */
+		result->ctype_name = result->collate_name;		
+	}
+	else
+	{
+		/* Historical kludge: using libc for ctype, for historical reasons. */
+		result->ctype_name = data;
+		strcpy(data, libc_ctype);
+		data += ctype_size + 1;
+	}
+
+	/* Store collate_version. */
+	strcpy(data, collate_version);
+	data += collate_version_size + 1;
+
+	Assert(data > result->data && data <= result->data + data_size);
+
 	result->icu.ucol = collator;
 	result->icu.lt = loc;
 	result->deterministic = deterministic;

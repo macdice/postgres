@@ -330,6 +330,7 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 	result = MemoryContextAllocZero(context,
 									offsetof(struct pg_locale_struct, data) +
 									data_size);
+	result->provider = COLLPROVIDER_BUILTIN;
 	strcpy(result->data, locstr);
 	result->collate_name = result->data;
 	result->ctype_name = result->data;
