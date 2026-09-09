@@ -339,11 +339,11 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	bool		deterministic;
 	const char *iculocstr;
 	const char *icurules = NULL;
+	const char *ctype = NULL;
 	UCollator  *collator;
 	locale_t	loc = (locale_t) 0;
 	pg_locale_t result;
 	UVersionInfo versioninfo;
-	char		libc_ctype[LOCALE_NAME_BUFLEN] = {0};
 	char		collate_version[U_MAX_VERSION_STRING_LENGTH];
 	size_t		collate_version_size;
 	size_t		collate_size;
@@ -374,12 +374,11 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 		/* libc only needed for default locale and single-byte encoding */
 		if (pg_database_encoding_max_length() == 1)
 		{
-			const char *ctype;
 
 			datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
 										   Anum_pg_database_datctype);
+
 			ctype = TextDatumGetCString(datum);
-			strlcpy(libc_ctype, ctype, lengthof(libc_ctype));
 
 			loc = make_libc_ctype_locale(ctype);
 		}
@@ -411,8 +410,8 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 
 	collator = make_icu_collator(iculocstr, icurules);
 
-	collate_size = strlen(iculocstr);	
-	
+	collate_size = strlen(iculocstr);
+
 	ucol_getVersion(collator, versioninfo);
 	u_versionToString(versioninfo, collate_version);
 	collate_version_size = strlen(collate_version);
@@ -420,7 +419,7 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	data_size = collate_size + 1 + collate_version_size + 1;
 
 	/* Historical kludge: if using libc for ctype, need space for that. */
-	ctype_size = strlen(libc_ctype);
+	ctype_size = strlen(ctype);
 	if (ctype_size > 0)
 		data_size += ctype_size + 1;
 
@@ -436,16 +435,16 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	data += collate_size + 1;
 
 	/* Store ctype_name. */
-	if (ctype_size == 0)
+	if (ctype == NULL)
 	{
 		/* Using ICU for ctype, so just point to same string. */
-		result->ctype_name = result->collate_name;		
+		result->ctype_name = result->collate_name;
 	}
 	else
 	{
 		/* Historical kludge: using libc for ctype, for historical reasons. */
 		result->ctype_name = data;
-		strcpy(data, libc_ctype);
+		strcpy(data, ctype);
 		data += ctype_size + 1;
 	}
 
