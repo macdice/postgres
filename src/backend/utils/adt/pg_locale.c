@@ -1389,8 +1389,8 @@ pg_database_locale(void)
  * For simplicity, we always generate COLLATE + CTYPE even though we
  * might only need one of them.
  *
- * This function takes its name from POSIX newlocale(), but there is no
- * corresponding pg_freelocale() operation.  Instead, pg_pinlocale() and
+ * This function takes its name from POSIX newlocale(), but the corresponding
+ * pg_freelocale() operation is private.  Instead, pg_pinlocale() and
  * pg_releaselocale() manage a reference count.  The cache itself holds one
  * reference and releases it when the underlying syscache is invalidated.
  * This can happen when a collation is dropped, a catalog entry is updated, or

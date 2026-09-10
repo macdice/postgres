@@ -438,7 +438,7 @@ pg_newlocale_icu(Oid collid, MemoryContext context)
 	collator = make_icu_collator(iculocstr, icurules);
 
 	iculocstr_size = strlen(iculocstr);
-	data_size = iculocstr_size;
+	data_size = iculocstr_size + 1;
 
 	icurules_size = icurules ? strlen(icurules) : 0;
 	if (icurules_size > 0)
