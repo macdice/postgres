@@ -1047,7 +1047,7 @@ IsoLocaleName(const char *winlocname)
 #endif							/* WIN32 && LC_MESSAGES */
 
 static const struct locale_provider_methods *
-pg_locale_provider_methods(char provider)
+pg_locale_provider(char provider)
 {
 	switch (provider)
 	{
@@ -1088,7 +1088,7 @@ pg_newlocale(Oid collid, MemoryContext context)
 	 * common pg_locale_descriptor, so that each provider doesn't have to
 	 * duplicate the catalog lookup.
 	 */
-	result = pg_locale_provider_methods(provider)->newlocale(collid, context);
+	result = pg_locale_provider(provider)->newlocale(collid, context);
 
 	result->is_default = false;
 
@@ -1292,8 +1292,8 @@ init_database_collation(void)
 	dbform = (Form_pg_database) GETSTRUCT(tup);
 	provider = dbform->datlocprovider;
 
-	result = pg_locale_provider_methods(provider)->newlocale(DEFAULT_COLLATION_OID,
-															 TopMemoryContext);
+	result = pg_locale_provider(provider)->newlocale(DEFAULT_COLLATION_OID,
+													 TopMemoryContext);
 
 	/*
 	 * When reloading after syscache invalidation, check if result is
@@ -1575,8 +1575,8 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 	 * the version and we wouldn't need a separate function that takes a
 	 * locale name.
 	 */
-	if (pg_locale_provider_methods(collprovider)->getactuallocaleversion)
-		return pg_locale_provider_methods(collprovider)->
+	if (pg_locale_provider(collprovider)->getactuallocaleversion)
+		return pg_locale_provider(collprovider)->
 			getactuallocaleversion(collcollate, LC_COLLATE);
 
 	return NULL;
