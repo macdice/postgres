@@ -76,7 +76,16 @@
  */
 #define		TEXTBUFLEN			1024
 
-extern pg_locale_t create_pg_locale_libc(Oid collid, MemoryContext context);
+static pg_locale_t pg_newlocale_libc(Oid collid, MemoryContext context);
+static char *pg_getactuallocaleversion_libc(const char *locale, int category);
+
+/*
+ * Entry points for libc locale provider.
+ */
+const struct locale_provider_methods locale_provider_methods_libc = {
+	.getactuallocaleversion = pg_getactuallocaleversion_libc,
+	.newlocale = pg_newlocale_libc,
+};
 
 static int	strncoll_libc(const char *arg1, size_t len1,
 						  const char *arg2, size_t len2,
@@ -773,8 +782,8 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, size_t srclen,
 static bool
 pg_samelocale_libc(pg_locale_t locale, pg_locale_t other)
 {
-	Assert(locale->provider == COLLPROVIDER_LIBC);	
-	Assert(other->provider == COLLPROVIDER_LIBC);	
+	Assert(locale->provider == COLLPROVIDER_LIBC);
+	Assert(other->provider == COLLPROVIDER_LIBC);
 
 	/* Common fields already checked by pg_samelocale(). */
 	if (strcmp(locale->libc.collate, other->libc.collate) != 0)
@@ -845,13 +854,13 @@ get_canonical_localename(locale_t loc, int category)
 	/* Glibc way to query locale name. */
 	return nl_langinfo_l(NL_LOCALE_NAME(category), loc);
 #endif
-	
+
 	return NULL;
 }
 #endif
-	
-pg_locale_t
-create_pg_locale_libc(Oid collid, MemoryContext context)
+
+static pg_locale_t
+pg_newlocale_libc(Oid collid, MemoryContext context)
 {
 	const char *collate;
 	const char *ctype;
@@ -861,7 +870,7 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	size_t		collate_size;
 	size_t		ctype_size;
 	size_t		data_size;
-	char	   *data;	
+	char	   *data;
 #ifdef WIN32
 	size_t		collate_version_size;
 	char	   *collate_version = NULL;
@@ -942,7 +951,10 @@ create_pg_locale_libc(Oid collid, MemoryContext context)
 	strcpy(data, ctype);
 	data += ctype_size + 1;
 
-	/* Store provider_collate_version, if we have it and it's not a name we block. */
+	/*
+	 * Store provider_collate_version, if we have it and it's not a name we
+	 * block.
+	 */
 	if (!suppress_collate_version(collate))
 	{
 #if defined(__GLIBC__)
@@ -1173,9 +1185,12 @@ strxfrm_libc(char *dest, size_t destsize, const char *src, pg_locale_t locale)
 }
 
 char *
-get_collation_actual_version_libc(const char *collcollate)
+pg_getactuallocaleversion_libc(const char *collcollate, int category)
 {
 	char	   *collversion = NULL;
+
+	if (category != LC_COLLATE)
+		return NULL;
 
 	if (!suppress_collate_version(collcollate))
 	{

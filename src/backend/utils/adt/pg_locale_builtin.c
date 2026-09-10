@@ -31,6 +31,24 @@
 StaticAssertDecl(SIZE_MAX / UTF8_MAX_CASEMAP_EXPANSION > MaxAllocSize,
 				 "case mapping may overflow size_t");
 
+static char *pg_getactuallocaleversion_builtin(const char *locale, int category);
+static pg_locale_t pg_newlocale_builtin(Oid collid, MemoryContext context);
+
+extern const struct locale_provider_methods locale_provider_methods_builtin;
+
+const struct locale_provider_methods locale_provider_methods_builtin = {
+	.getactuallocaleversion = pg_getactuallocaleversion_builtin,
+	.newlocale = pg_newlocale_builtin,
+};
+
+static bool pg_samelocale_builtin(pg_locale_t locale, pg_locale_t other);
+static void pg_freelocale_builtin(pg_locale_t locale);
+
+static const struct locale_methods locale_methods_builtin = {
+	.samelocale = pg_samelocale_builtin,
+	.freelocale = pg_freelocale_builtin,
+};
+
 struct WordBoundaryState
 {
 	const char *str;
@@ -280,7 +298,7 @@ pg_samelocale_builtin(pg_locale_t locale, pg_locale_t other)
 {
 	Assert(locale->provider == COLLPROVIDER_BUILTIN);
 	Assert(other->provider == COLLPROVIDER_BUILTIN);
-	
+
 	/* Common fields already checked by pg_samelocale(). */
 	if (strcmp(locale->builtin.locale, other->builtin.locale) != 0)
 		return false;
@@ -345,15 +363,15 @@ pg_newlocale_builtin(Oid collid, MemoryContext context)
 	result->deterministic = true;
 	result->collate_is_c = true;
 	result->ctype_is_c = (strcmp(locstr, "C") == 0);
-	result->locale = &pg_locale_methods_builtin;
+	result->locale = &locale_methods_builtin;
 	if (!result->ctype_is_c)
 		result->ctype = &ctype_methods_builtin;
 
 	return result;
 }
 
-char *
-pg_localeversion_builtin(const char *locale, int category)
+static char *
+pg_getactuallocaleversion_builtin(const char *locale, int category)
 {
 	if (category != LC_COLLATE)
 		return NULL;
@@ -379,10 +397,3 @@ pg_localeversion_builtin(const char *locale, int category)
 
 	return NULL;				/* keep compiler quiet */
 }
-
-const struct locale_methods pg_locale_methods_builtin = {
-	.newlocale = pg_newlocale_builtin,
-	.samelocale = pg_samelocale_builtin,
-	.freelocale = pg_freelocale_builtin,
-	.localeversion = pg_localeversion_builtin,
-};

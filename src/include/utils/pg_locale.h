@@ -76,40 +76,32 @@ extern void cache_locale_time(void);
 struct pg_locale_struct;
 typedef struct pg_locale_struct *pg_locale_t;
 
-typedef void *pg_locale_iterator;
-
-/* Locale provider methods. */
+/*
+ * Locale provider methods.
+ */
 struct locale_provider_methods
 {
-	pg_locale_t (*newlocale) (const char *collate,
-							  const char *ctype,
-							  const char *rules,
-							  MemoryContext context);
+	/* optional */
+	char	   *(*getactuallocaleversion) (const char *locale, int category);
 
-//	pg_locale_t (*trynewlocale) (Oid collid, MemoryContext context);
-//	pg_locale_t (*newlocale) (Oid collid, MemoryContext context);
-//	pg_locale_t (*trynewlocale) (Oid collid, MemoryContext context);
-//	char *		(*localeversion) (const char *locale_name, int category);
-
-	void		(*begin) (pg_locale_iterator *iterator);
-	const char *(*next) (pg_locale_iterator *iterator);
-	void		(*end) (pg_locale_iterator *iterator);
+	/* required */
+	pg_locale_t (*newlocale) (Oid collid, MemoryContext context);
 };
 
-typedef const struct locale_provider_methods *(*locale_provider_method_hook)(
-extern PGDLLIMPORT const struct locale_provider_methods *(*pg_locale_method_hook)(Oid co
+/* For private use (no PGDLLIMPORT). */
+extern const struct locale_provider_methods locale_provider_methods_builtin;
+extern const struct locale_provider_methods locale_provider_methods_icu;
+extern const struct locale_provider_methods locale_provider_methods_libc;
 
-/* Locale methods. */
+/*
+ * Locale methods.
+ */
 struct locale_methods
 {
+	/* required */
 	void		(*freelocale) (pg_locale_t locale);
 	bool		(*samelocale) (pg_locale_t locale, pg_locale_t other_locale);
 };
-
-/* Hook points allowing an extension to intercept ->newlocale(). */
-extern PGDLLIMPORT const struct locale_methods *locale_methods_builtin;
-extern PGDLLIMPORT const struct locale_methods *locale_methods_libc;
-extern PGDLLIMPORT const struct locale_methods *locale_methods_icu;
 
 /*
  * Collation behavior: string ordering.
@@ -205,19 +197,21 @@ struct ctype_methods
  */
 struct pg_locale_struct
 {
+	/* Identity and lifetime state managed by pg_locale.c. */
 	Oid			id;
-	char		provider;				/* collprovider/datcollprovider */
+	char		provider;
 	uint32		inval_hash;
 	int			reference_count;
+	dlist_head	callbacks;
 
-	/* Actual version reported by provider, or NULL if unavailable. */
+	/* Everything below this point managed by provider's newlocale(). */
 	const char *collate_version;
 
 	bool		deterministic;
 	bool		collate_is_c;
 	bool		ctype_is_c;
 	bool		is_default;
-	   
+
 	const struct locale_methods *locale;
 	const struct collate_methods *collate;	/* NULL if collate_is_c */
 	const struct ctype_methods *ctype;	/* NULL if ctype_is_c */
@@ -229,10 +223,10 @@ struct pg_locale_struct
 			const char *locale;
 			bool		casemap_full;
 		}			builtin;
-		locale_t	lt;					/* historical name for libc.lt */
+		locale_t	lt;			/* historical name for libc.lt */
 		struct
 		{
-			locale_t	lt;				/* must be first */
+			locale_t	lt;		/* must be first */
 			const char *collate;
 			const char *ctype;
 		}			libc;
@@ -241,15 +235,13 @@ struct pg_locale_struct
 		{
 			const char *locale;
 			const char *rules;
-			const char *ctype;			/* default single-byte only */
+			const char *ctype;	/* default single-byte only */
 			struct UCollator *ucol;
 			struct UCaseMap *ucasemap;
 			locale_t	lt;
 		}			icu;
 #endif
 	};
-
-	dlist_head	callbacks;
 
 	char		data[FLEXIBLE_ARRAY_MEMBER];
 };

@@ -71,13 +71,16 @@
 #define		MAX_L10N_DATA		80
 
 /* pg_locale_builtin.c */
-extern const struct locale_methods *pg_locale_methods_builtin;
+extern const struct locale_provider_methods *pg_locale_provider_methods_builtin;
 
 /* pg_locale_icu.c */
 #ifdef USE_ICU
 extern UCollator *pg_ucol_open(const char *loc_str);
 #endif
-extern pg_locale_t create_pg_locale_icu(Oid collid, MemoryContext context);
+extern const struct locale_provider_methods *pg_locale_provider_methods_icu;
+
+/* pg_locale_libc.c */
+extern const struct locale_provider_methods *pg_locale_provider_methods_libc;
 
 /* GUC settings */
 char	   *locale_messages;
@@ -1043,20 +1046,20 @@ IsoLocaleName(const char *winlocname)
 
 #endif							/* WIN32 && LC_MESSAGES */
 
-static const struct locale_methods *
-pg_locale_methods(char provider)
+static const struct locale_provider_methods *
+pg_locale_provider_methods(char provider)
 {
 	switch (provider)
 	{
-	case COLLPROVIDER_BUILTIN:
-		return pg_locale_methods_builtin;
-	case COLLPROVIDER_ICU:
-		return pg_locale_methods_icu;
-	case COLLPROVIDER_LIBC:
-		return pg_locale_methods_libc;
-	default:
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(provider);
+		case COLLPROVIDER_BUILTIN:
+			return &locale_provider_methods_builtin;
+		case COLLPROVIDER_ICU:
+			return &locale_provider_methods_icu;
+		case COLLPROVIDER_LIBC:
+			return &locale_provider_methods_libc;
+		default:
+			/* shouldn't happen */
+			PGLOCALE_SUPPORT_ERROR(provider);
 	}
 	return NULL;
 }
@@ -1072,13 +1075,20 @@ pg_newlocale(Oid collid, MemoryContext context)
 	pg_locale_t result;
 	Datum		datum;
 	bool		isnull;
+	char		provider;
 
 	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 	collform = (Form_pg_collation) GETSTRUCT(tp);
+	provider = collform->collprovider;
 
-	result = pg_locale_methods(collform->collprovider)->newlocale(collid, context);
+	/*
+	 * XXX Consider passing all the catalog information to ->newlocale() in a
+	 * common pg_locale_descriptor, so that each provider doesn't have to
+	 * duplicate the catalog lookup.
+	 */
+	result = pg_locale_provider_methods(provider)->newlocale(collid, context);
 
 	result->is_default = false;
 
@@ -1198,7 +1208,7 @@ pg_samelocale(pg_locale_t locale, pg_locale_t other)
 }
 
 /*
- * Not public.  See notes above pg_newlocale_from_collation().
+ * Internal usage only.
  */
 static void
 pg_freelocale(pg_locale_t locale)
@@ -1261,6 +1271,7 @@ init_database_collation(void)
 	pg_locale_t result;
 	Datum		datum;
 	bool		isnull;
+	char		provider;
 
 	Assert(default_locale == NULL || default_locale_inval);
 
@@ -1279,9 +1290,10 @@ init_database_collation(void)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbform = (Form_pg_database) GETSTRUCT(tup);
+	provider = dbform->datlocprovider;
 
-	result = pg_locale_methods(dbform->datlocprovider)->newlocale(DEFAULT_COLLATION_OID,
-																  TopMemoryContext);
+	result = pg_locale_provider_methods(provider)->newlocale(DEFAULT_COLLATION_OID,
+															 TopMemoryContext);
 
 	/*
 	 * If reloading after syscache invalidation, if no change is detected then
@@ -1559,8 +1571,17 @@ pg_locale_set_var_null_on_inval(pg_locale_t locale,
 char *
 get_collation_actual_version(char collprovider, const char *collcollate)
 {
-	return pg_locale_methods(collprovider)->localeversion(collcollate,
-														  LC_COLLATE);
+	/*
+	 * XXX Consider changing ->newlocale() to accept a pg_locale_descriptor
+	 * instead of an oid, and then here we could open it temporarily to access
+	 * the version and we wouldn't need a separate function that takes a
+	 * locale name.
+	 */
+	if (pg_locale_provider_methods(collprovider)->getactuallocaleversion)
+		return pg_locale_provider_methods(collprovider)->
+			getactuallocaleversion(collcollate, LC_COLLATE);
+
+	return NULL;
 }
 
 /* lowercasing/casefolding in C locale */

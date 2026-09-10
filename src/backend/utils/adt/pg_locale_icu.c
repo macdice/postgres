@@ -47,7 +47,16 @@
  */
 #define		TEXTBUFLEN			1024
 
-extern pg_locale_t create_pg_locale_icu(Oid collid, MemoryContext context);
+static pg_locale_t pg_newlocale_icu(Oid collid, MemoryContext context);
+static char *pg_getactuallocaleversion_icu(const char *locale, int category);
+
+/*
+ * Entry points for ICU locale provider.
+ */
+const struct locale_provider_methods locale_provider_methods_icu = {
+	.getactuallocaleversion = pg_getactuallocaleversion_icu,
+	.newlocale = pg_newlocale_icu,
+};
 
 #ifdef USE_ICU
 
@@ -138,6 +147,15 @@ static int32_t u_strFoldCase_default(UChar *dest, int32_t destCapacity,
 									 const char *locale,
 									 UErrorCode *pErrorCode);
 static int32_t foldcase_options(const char *locale);
+
+static bool pg_samelocale_icu(pg_locale_t locale, pg_locale_t other);
+static void pg_freelocale_icu(pg_locale_t locale);
+
+static const struct locale_methods locale_methods_icu =
+{
+	.samelocale = pg_samelocale_icu,
+	.freelocale = pg_freelocale_icu,
+};
 
 /*
  * XXX: many of the functions below rely on casts directly from pg_wchar to
@@ -311,8 +329,8 @@ make_libc_ctype_locale(const char *ctype)
 static bool
 pg_samelocale_icu(pg_locale_t locale, pg_locale_t other)
 {
-	Assert(locale->provider == COLLPROVIDER_ICU);	
-	Assert(other->provider == COLLPROVIDER_ICU);	
+	Assert(locale->provider == COLLPROVIDER_ICU);
+	Assert(other->provider == COLLPROVIDER_ICU);
 
 	/* Common fields already checked by pg_samelocale(). */
 	/* XXX TODO */
@@ -338,9 +356,12 @@ pg_freelocale_icu(pg_locale_t locale)
 	pfree(locale);
 }
 
+#endif							/* USE_ICU */
+
 static pg_locale_t
 pg_newlocale_icu(Oid collid, MemoryContext context)
 {
+#if USE_ICU
 	bool		deterministic;
 	const char *iculocstr;
 	const char *icurules = NULL;
@@ -449,7 +470,7 @@ pg_newlocale_icu(Oid collid, MemoryContext context)
 		result->icu.rules = data;
 		strcpy(data, icurules);
 		data += icurules_size + 1;
-	}	
+	}
 
 	/* Store icu.ctype if using libc for that. */
 	if (ctype)
@@ -471,7 +492,7 @@ pg_newlocale_icu(Oid collid, MemoryContext context)
 	result->deterministic = deterministic;
 	result->collate_is_c = false;
 	result->ctype_is_c = false;
-	result->locale = pg_locale_methods_icu;
+	result->locale = &locale_methods_icu;
 	if (GetDatabaseEncoding() == PG_UTF8)
 	{
 		result->icu.ucasemap = pg_ucasemap_open(iculocstr);
@@ -485,37 +506,15 @@ pg_newlocale_icu(Oid collid, MemoryContext context)
 	}
 
 	return result;
-}
-
-
 #else							/* not USE_ICU */
-
-static pg_locale_t
-pg_newlocale_icu(Oid collid, MemoryContext context)
-{ 
 	/* could get here if a collation was created by a build with ICU */
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("ICU is not supported in this build")));
 
 	return NULL;
-}
-
-static const struct locale_methods locale_methods_icu = {
-	.newlocale = pg_newlocale_icu,
-};
-
 #endif							/* not USE_ICU */
-
-static const struct locale_methods default_locale_methods_icu = {
-	.newlocale = pg_newlocale_icu,
-#ifdef USE_ICU
-	.samelocale = pg_samelocale_icu,
-	.freelocale = pg_freelocale_icu,
-#endif
-};
-
-const struct locale_methods *pg_locale_methods_icu = &default_locale_methods_icu;
+}
 
 #ifdef USE_ICU
 
@@ -932,11 +931,14 @@ strxfrm_prefix_icu_utf8(char *dest, size_t destsize, const char *src,
 }
 
 char *
-get_collation_actual_version_icu(const char *collcollate)
+pg_getactuallocaleversion_icu(const char *collcollate, int category)
 {
 	UCollator  *collator;
 	UVersionInfo versioninfo;
 	char		buf[U_MAX_VERSION_STRING_LENGTH];
+
+	if (category != LC_COLLATE)
+		return NULL;
 
 	collator = pg_ucol_open(collcollate);
 
