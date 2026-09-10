@@ -193,10 +193,13 @@ cached_re_inval(void *arg)
 	cached_re  *cre = (cached_re *) arg;
 
 	/*
-	 * Collation changed/dropped.  We can't drop the cached expression
-	 * immediately as callers of RE_compile_and_cache() expect its result to
-	 * remain valid until the next call.  Move it to the invalid queue, for
-	 * processing by the next call.
+	 * Collation changed/dropped.  Defer cleanup until next call to
+	 * RE_compile_and_cache(), just in case invalidations are processed
+	 * between compilation and use.
+	 *
+	 * (If compiled REs held and used a reference to the pg_locale_t, we'd
+	 * additionally need to hold a pin until that time in order for the RE to
+	 * remain usable, but they don't.)
 	 */
 	dclist_delete_from(&re_cache_lru, &cre->cre_node);
 	dlist_push_head(&re_cache_invalid, &cre->cre_node);
@@ -227,6 +230,8 @@ cached_re_drop_invalid(void)
  *
  * Pattern is given in the database encoding.  We internally convert to
  * an array of pg_wchar, which is what Spencer's regex package wants.
+ *
+ * The returned object is valid until the next call.
  */
 regex_t *
 RE_compile_and_cache(text *text_re, int cflags, Oid collation)
