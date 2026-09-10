@@ -120,7 +120,7 @@ typedef struct cached_re
 	regex_t		cre_re;
 
 	pg_locale_callback cre_locale_callback;
-	dlist_node	cre_lru_node;
+	dlist_node	cre_node;		/* link in re_cache_lru or re_cache_invalid */
 } cached_re;
 
 /*
@@ -153,6 +153,7 @@ static uint32 cached_re_key_hash(const cached_re_key *key);
 
 static re_cache_hash * re_cache_table;
 static dclist_head re_cache_lru;
+static dlist_head re_cache_invalid;
 
 /* Local functions */
 static regexp_matches_ctx *setup_regexp_matches(text *orig_str, text *pattern,
@@ -187,19 +188,32 @@ cached_re_key_hash(const cached_re_key *key)
 }
 
 static void
-cached_re_drop(cached_re *cre)
+cached_re_inval(void *arg)
 {
-	pg_locale_del_callback(&cre->cre_locale_callback);
-	dclist_delete_from(&re_cache_lru, &cre->cre_lru_node);
-	re_cache_delete(re_cache_table, &cre->cre_key);
-	MemoryContextDelete(cre->cre_context);
+	cached_re  *cre = (cached_re *) arg;
+
+	/*
+	 * Collation changed/dropped.  We can't drop the cached expression
+	 * immediately as callers of RE_compile_and_cache() expect its result to
+	 * remain valid until the next call.  Move it to the invalid queue, for
+	 * processing by the next call.
+	 */
+	dclist_delete_from(&re_cache_lru, &cre->cre_node);
+	dlist_push_head(&re_cache_invalid, &cre->cre_node);
 }
 
 static void
-cached_re_inval(void *arg)
+cached_re_drop_invalid(void)
 {
-	/* Collation changed/dropped.  Drop cached RE. */
-	cached_re_drop((cached_re *) arg);
+	while (!dlist_is_empty(&re_cache_invalid))
+	{
+		cached_re  *drop_cre = dlist_container(cached_re,
+											   cre_node,
+											   dlist_pop_head_node(&re_cache_invalid));
+
+		re_cache_delete(re_cache_table, &drop_cre->cre_key);
+		MemoryContextDelete(drop_cre->cre_context);
+	}
 }
 
 /*
@@ -231,6 +245,9 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 	cached_re  *cre;
 	bool		found;
 
+	if (unlikely(!dlist_is_empty(&re_cache_invalid)))
+		cached_re_drop_invalid();
+
 	/* Build key object for hash table. */
 	key.cre_pat = text_re_val;
 	key.cre_pat_len = text_re_len;
@@ -242,7 +259,7 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 			   (entry = re_cache_lookup(re_cache_table, &key))))
 	{
 		cre = entry->cre;
-		dclist_move_head(&re_cache_lru, &cre->cre_lru_node);
+		dclist_move_head(&re_cache_lru, &cre->cre_node);
 		return &cre->cre_re;
 	}
 
@@ -320,16 +337,18 @@ RE_compile_and_cache(text *text_re, int cflags, Oid collation)
 			regexp_cache_mem))
 	{
 		cached_re  *drop_cre = dclist_container(cached_re,
-												cre_lru_node,
+												cre_node,
 												dclist_tail_node(&re_cache_lru));
 
 		pg_locale_del_callback(&drop_cre->cre_locale_callback);
-		cached_re_drop(drop_cre);
+		dclist_delete_from(&re_cache_lru, &drop_cre->cre_node);
+		re_cache_delete(re_cache_table, &drop_cre->cre_key);
+		MemoryContextDelete(drop_cre->cre_context);
 	}
 
 	/* Insert into hash table and LRU queue. */
 	entry = re_cache_insert(re_cache_table, &cre->cre_key, &found);
-	dclist_push_head(&re_cache_lru, &cre->cre_lru_node);
+	dclist_push_head(&re_cache_lru, &cre->cre_node);
 
 	/* Register callback to drop this entry on collation change/drop. */
 	locale = pg_newlocale_from_collation(collation);
