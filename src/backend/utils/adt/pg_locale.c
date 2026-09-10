@@ -1296,9 +1296,9 @@ init_database_collation(void)
 															 TopMemoryContext);
 
 	/*
-	 * If reloading after syscache invalidation, if no change is detected then
-	 * free result and return early.  This suppresses invalidations when
-	 * pg_database is updated without affecting locales.
+	 * When reloading after syscache invalidation, check if result is
+	 * functionally identical, and if so, free it and do nothing.  This skips
+	 * spurious invalidation callbacks when datfrozenxid is updated.
 	 */
 	if (default_locale)
 	{
@@ -1389,19 +1389,17 @@ pg_database_locale(void)
  * For simplicity, we always generate COLLATE + CTYPE even though we
  * might only need one of them.
  *
- * This function takes its name from POSIX newlocale(), but the corresponding
- * pg_freelocale() operation is private.  Instead, pg_pinlocale() and
- * pg_releaselocale() manage a reference count.  The cache itself holds one
- * reference and releases it when the underlying syscache is invalidated.
- * This can happen when a collation is dropped, a catalog entry is updated, or
- * invalidation messages overflow and everything is invalidated.
- *
  * It is safe to use the returned pg_locale_t in a scope that can't process
- * invalidations.  For all references held across potential syscache
- * invalidation boundaries, either a pin should be acquired and released to
- * mark the lifetime of the reference (for example see varlena.c), or an
- * invalidation callback should be registered to drop the reference (for
- * example see regexp.c).
+ * syscache invalidations, for example to make an immediate use of it and then
+ * not retain it.  For any reference held for longer, one or both of the
+ * following can be used to manage object lifetime:
+ *
+ * 1.  A pin can be acquired and released.  See varlena.c for example.
+ * (Currently no ResourceOwner support for releasing pins on error is
+ * implemented, but it could be added if it turns out to be necessary.)
+ *
+ * 2.  A callback can be registered.  See regexp.c/regc_pg_locale.c for
+ * examples.
  */
 pg_locale_t
 pg_newlocale_from_collation(Oid collid)
