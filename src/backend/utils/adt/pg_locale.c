@@ -70,6 +70,9 @@
 
 #define		MAX_L10N_DATA		80
 
+/* Extension hook. */
+pg_locale_provider_hook_function pg_locale_provider_hook = NULL;
+
 /* pg_locale_builtin.c */
 extern const struct locale_provider_methods *pg_locale_provider_methods_builtin;
 
@@ -1083,12 +1086,12 @@ pg_newlocale(Oid collid, MemoryContext context)
 	collform = (Form_pg_collation) GETSTRUCT(tp);
 	provider = collform->collprovider;
 
-	/*
-	 * XXX Consider passing all the catalog information to ->newlocale() in a
-	 * common pg_locale_descriptor, so that each provider doesn't have to
-	 * duplicate the catalog lookup.
-	 */
-	result = pg_locale_provider(provider)->newlocale(collid, context);
+	if (pg_locale_provider_hook)
+		result = pg_locale_provider_hook(pg_locale_provider(provider),
+										 collid,
+										 context);
+	else
+		result = pg_locale_provider(provider)->newlocale(collid, context);
 
 	result->is_default = false;
 
@@ -1292,8 +1295,13 @@ init_database_collation(void)
 	dbform = (Form_pg_database) GETSTRUCT(tup);
 	provider = dbform->datlocprovider;
 
-	result = pg_locale_provider(provider)->newlocale(DEFAULT_COLLATION_OID,
-													 TopMemoryContext);
+	if (pg_locale_provider_hook)
+		result = pg_locale_provider_hook(pg_locale_provider(provider),
+										 DEFAULT_COLLATION_OID,
+										 TopMemoryContext);
+	else
+		result = pg_locale_provider(provider)->newlocale(DEFAULT_COLLATION_OID,
+														 TopMemoryContext);
 
 	/*
 	 * When reloading after syscache invalidation, check if result is
