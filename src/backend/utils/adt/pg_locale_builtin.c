@@ -371,7 +371,7 @@ pg_newlocale_builtin(Oid collid, MemoryContext context)
 }
 
 static char *
-pg_getactuallocaleversion_builtin(const char *locale, int category)
+pg_getactuallocaleversion_builtin(const char *collcollate, int category)
 {
 	if (category != LC_COLLATE)
 		return NULL;
@@ -383,17 +383,17 @@ pg_getactuallocaleversion_builtin(const char *locale, int category)
 	 * Note that the character semantics may change for some locales, but the
 	 * collation version only tracks changes to sort order.
 	 */
-	if (strcmp(locale, "C") == 0)
+	if (strcmp(collcollate, "C") == 0)
 		return "1";
-	else if (strcmp(locale, "C.UTF-8") == 0)
+	else if (strcmp(collcollate, "C.UTF-8") == 0)
 		return "1";
-	else if (strcmp(locale, "PG_UNICODE_FAST") == 0)
+	else if (strcmp(collcollate, "PG_UNICODE_FAST") == 0)
 		return "1";
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("invalid locale name \"%s\" for builtin provider",
-						locale)));
+						collcollate)));
 
 	return NULL;				/* keep compiler quiet */
 }
