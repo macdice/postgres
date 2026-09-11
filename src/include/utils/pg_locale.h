@@ -78,6 +78,13 @@ typedef struct pg_locale_struct *pg_locale_t;
 
 /*
  * Locale provider methods.
+ *
+ * XXX Consider encoding, validation, iteration functions here instead of
+ * open-coding in various places.
+ *
+ * XXX Consider shifting this and all other struct definitions to
+ * pg_locale_internal.h, and leaving just pg_locale_t and public function
+ * declarations here.
  */
 struct locale_provider_methods
 {
@@ -95,7 +102,7 @@ extern const struct locale_provider_methods locale_provider_methods_libc;
 
 /*
  * Hook function allowing extensions to intercept pg_locale_provider_methods
- * calls, but with access to the core functions.
+ * calls.
  */
 typedef pg_locale_t (*pg_newlocale_hook_function)
 			(pg_locale_t (*std_newlocale) (Oid, MemoryContext),

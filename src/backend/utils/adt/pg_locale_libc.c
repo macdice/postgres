@@ -952,8 +952,8 @@ pg_newlocale_libc(Oid collid, MemoryContext context)
 	data += ctype_size + 1;
 
 	/*
-	 * Store provider_collate_version, if we have it and it's not a name we
-	 * block.
+	 * Store collate_version, if we have it and it's not a name we choose to
+	 * exclude from versioning.
 	 */
 	if (!suppress_collate_version(collate))
 	{
@@ -965,17 +965,17 @@ pg_newlocale_libc(Oid collid, MemoryContext context)
 		 * FreeBSD: like get_collation_actual_version_libc(), except we
 		 * already have a locale_t and we don't need a copy.
 		 */
-		result->provider_collate_version =
+		result->collate_version =
 			querylocale(LC_VERSION_MASK | LC_COLLATE_MASK, loc);
 #elif defined(WIN32)
 		/* Windows: use the NLSVERSIONINFOEX data acquired above. */
-		if (provider_collate_version)
+		if (collate_version)
 		{
-			result->provider_collate_version = data;
-			strcpy(data, provider_collate_version, provider_collate_version_size);
-			data += provider_collate_version_size + 1;
+			result->collate_version = data;
+			strcpy(data, collate_version, collate_version_size);
+			data += collate_version_size + 1;
 
-			pfree(provider_collate_version);
+			pfree(collate_version);
 		}
 #endif
 	}
