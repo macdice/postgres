@@ -71,7 +71,7 @@
 #define		MAX_L10N_DATA		80
 
 /* Extension hook. */
-pg_locale_provider_hook_function pg_locale_provider_hook = NULL;
+pg_newlocale_hook_function pg_newlocale_hook = NULL;
 
 /* pg_locale_builtin.c */
 extern const struct locale_provider_methods *pg_locale_provider_methods_builtin;
@@ -1086,10 +1086,10 @@ pg_newlocale(Oid collid, MemoryContext context)
 	collform = (Form_pg_collation) GETSTRUCT(tp);
 	provider = collform->collprovider;
 
-	if (pg_locale_provider_hook)
-		result = pg_locale_provider_hook(pg_locale_provider(provider),
-										 collid,
-										 context);
+	if (pg_newlocale_hook)
+		result = pg_newlocale_hook(pg_locale_provider(provider)->newlocale,
+								   collid,
+								   context);
 	else
 		result = pg_locale_provider(provider)->newlocale(collid, context);
 
@@ -1295,10 +1295,10 @@ init_database_collation(void)
 	dbform = (Form_pg_database) GETSTRUCT(tup);
 	provider = dbform->datlocprovider;
 
-	if (pg_locale_provider_hook)
-		result = pg_locale_provider_hook(pg_locale_provider(provider),
-										 DEFAULT_COLLATION_OID,
-										 TopMemoryContext);
+	if (pg_newlocale_hook)
+		result = pg_newlocale_hook(pg_locale_provider(provider)->newlocale,
+								   DEFAULT_COLLATION_OID,
+								   TopMemoryContext);
 	else
 		result = pg_locale_provider(provider)->newlocale(DEFAULT_COLLATION_OID,
 														 TopMemoryContext);

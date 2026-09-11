@@ -97,11 +97,11 @@ extern const struct locale_provider_methods locale_provider_methods_libc;
  * Hook function allowing extensions to intercept pg_locale_provider_methods
  * calls, but with access to the core functions.
  */
-typedef pg_locale_t (*pg_locale_provider_hook_function)
-			(const struct locale_provider_methods *std_methods,
+typedef pg_locale_t (*pg_newlocale_hook_function)
+			(pg_locale_t (*std_newlocale) (Oid, MemoryContext),
 			 Oid collid,
-			 MemoryContext context);
-extern PGDLLIMPORT pg_locale_provider_hook_function pg_locale_provider_hook;
+			 MemoryContext);
+extern PGDLLIMPORT pg_newlocale_hook_function pg_newlocale_hook;
 
 /*
  * Locale methods.
