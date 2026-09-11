@@ -1184,7 +1184,7 @@ strxfrm_libc(char *dest, size_t destsize, const char *src, pg_locale_t locale)
 	return strxfrm_l(dest, src, destsize, locale->lt);
 }
 
-char *
+static char *
 pg_getactuallocaleversion_libc(const char *collcollate, int category)
 {
 	char	   *collversion = NULL;
