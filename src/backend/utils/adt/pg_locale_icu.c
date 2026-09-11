@@ -54,7 +54,9 @@ static char *pg_getactuallocaleversion_icu(const char *locale, int category);
  * Entry points for ICU locale provider.
  */
 const struct locale_provider_methods locale_provider_methods_icu = {
+#ifdef USE_ICU
 	.getactuallocaleversion = pg_getactuallocaleversion_icu,
+#endif
 	.newlocale = pg_newlocale_icu,
 };
 
