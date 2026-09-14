@@ -50,7 +50,9 @@
 static pg_locale_t pg_newlocale_icu(const locale_descriptor *descriptor,
 									int flags,
 									MemoryContext context);
+#ifdef USE_ICU
 static char *pg_getactuallocaleversion_icu(const char *locale, int category);
+#endif
 
 extern const struct locale_provider_methods locale_provider_methods_icu;
 
@@ -830,6 +832,7 @@ strxfrm_prefix_icu_utf8(char *dest, size_t destsize, const char *src,
 	return strnxfrm_prefix_icu_utf8_internal(dest, destsize, src, -1, locale);
 }
 
+#ifdef USE_ICU
 char *
 pg_getactuallocaleversion_icu(const char *collcollate, int category)
 {
@@ -848,6 +851,7 @@ pg_getactuallocaleversion_icu(const char *collcollate, int category)
 	u_versionToString(versioninfo, buf);
 	return pstrdup(buf);
 }
+#endif
 
 /*
  * Convert a string in the database encoding into a string of UChars.

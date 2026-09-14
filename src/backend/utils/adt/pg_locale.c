@@ -1527,14 +1527,14 @@ pg_database_locale(void)
  * It is safe to use the returned pg_locale_t in a scope that can't process
  * syscache invalidations, for example to make an immediate use of it and then
  * not retain it.  For any reference held for longer, one or both of the
- * following can be used to manage object lifetime:
+ * following techniques can be used to manage object lifetime:
  *
- * 1.  A pin can be acquired and released.  See varlena.c for example.
- * (Currently no ResourceOwner support for releasing pins on error is
- * implemented, but it could be added if it turns out to be necessary.)
+ * 1.  A pin can be acquired and later released.  See varlena.c for example.
+ * (Currently no ResourceOwner support is implemented implemented, but could
+ * be added if necessary to release pins on error.)
  *
- * 2.  A callback can be registered.  See regexp.c/regc_pg_locale.c for
- * examples.
+ * 2.  A callback can be registered to drop references immediately or later.
+ * See regexp.c/regc_pg_locale.c for examples.
  */
 pg_locale_t
 pg_newlocale_from_collation(Oid collid)
@@ -1548,7 +1548,7 @@ pg_newlocale_from_collation(Oid collid)
 		if (unlikely(default_locale == NULL))
 			elog(ERROR, "default locale not initialized");
 
-		/* syscache invalidation: reload */
+		/* invalidated by syscache: reload */
 		if (unlikely(default_locale_inval))
 			init_database_collation();
 

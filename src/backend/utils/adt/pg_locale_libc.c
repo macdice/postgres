@@ -872,10 +872,7 @@ pg_newlocale_libc(const struct locale_descriptor *descriptor,
 	 */
 	collate_version = get_collation_actual_version_libc(collate);
 	if (collate_version)
-	{
-		collate_version_size = strlen(collate_version);
-		data_size += collate_version_size + 1;
-	}
+		collate_version_size = strlen(collate_version) + 1;
 #endif
 
 	loc = make_libc_collator(collate, ctype);
