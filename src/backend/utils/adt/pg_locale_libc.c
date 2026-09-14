@@ -76,10 +76,12 @@
  */
 #define		TEXTBUFLEN			1024
 
-static pg_locale_t pg_newlocale_libc(const struct locale_descriptor *descriptor,
+static pg_locale_t pg_newlocale_libc(const locale_descriptor *descriptor,
 									 int flags,
 									 MemoryContext context);
 static char *pg_getactuallocaleversion_libc(const char *locale, int category);
+
+extern const struct locale_provider_methods locale_provider_methods_libc;
 
 /*
  * Entry points for libc locale provider.

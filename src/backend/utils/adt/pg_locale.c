@@ -74,16 +74,16 @@
 pg_newlocale_hook_function pg_newlocale_hook = NULL;
 
 /* pg_locale_builtin.c */
-extern const struct locale_provider_methods *pg_locale_provider_methods_builtin;
+extern const struct locale_provider_methods locale_provider_methods_builtin;
 
 /* pg_locale_icu.c */
 #ifdef USE_ICU
 extern UCollator *pg_ucol_open(const char *loc_str);
 #endif
-extern const struct locale_provider_methods *pg_locale_provider_methods_icu;
+extern const struct locale_provider_methods locale_provider_methods_icu;
 
 /* pg_locale_libc.c */
-extern const struct locale_provider_methods *pg_locale_provider_methods_libc;
+extern const struct locale_provider_methods locale_provider_methods_libc;
 
 /* GUC settings */
 char	   *locale_messages;
@@ -1078,7 +1078,7 @@ pg_locale_provider(char provider)
  * before an error is raised.
  */
 static void
-set_locale_descriptor(pg_locale_t locale, const struct locale_descriptor *src)
+set_locale_descriptor(pg_locale_t locale, const locale_descriptor *src)
 {
 	size_t		size_collate;
 	size_t		size_ctype;
@@ -1132,7 +1132,7 @@ set_locale_descriptor(pg_locale_t locale, const struct locale_descriptor *src)
 }
 
 static void
-free_locale_descriptor_strings(struct locale_descriptor *descriptor)
+free_locale_descriptor_strings(locale_descriptor *descriptor)
 {
 	const char *mem = NULL;
 
@@ -1291,8 +1291,8 @@ cstr_or_null_eq(const char *a, const char *b)
 }
 
 static bool
-locale_descriptor_eq(const struct locale_descriptor *a,
-					 const struct locale_descriptor *b)
+locale_descriptor_eq(const locale_descriptor *a,
+					 const locale_descriptor *b)
 {
 	return (a->id == b->id &&
 			a->provider == b->provider &&

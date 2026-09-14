@@ -32,7 +32,7 @@ StaticAssertDecl(SIZE_MAX / UTF8_MAX_CASEMAP_EXPANSION > MaxAllocSize,
 				 "case mapping may overflow size_t");
 
 static char *pg_getactuallocaleversion_builtin(const char *locale, int category);
-static pg_locale_t pg_newlocale_builtin(const struct locale_descriptor *descriptor,
+static pg_locale_t pg_newlocale_builtin(const locale_descriptor *descriptor,
 										int flags,
 										MemoryContext context);
 

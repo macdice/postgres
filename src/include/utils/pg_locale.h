@@ -118,11 +118,6 @@ struct locale_provider_methods
 							  MemoryContext context);
 };
 
-/* For private use (no PGDLLIMPORT). */
-extern const struct locale_provider_methods locale_provider_methods_builtin;
-extern const struct locale_provider_methods locale_provider_methods_icu;
-extern const struct locale_provider_methods locale_provider_methods_libc;
-
 /*
  * Hook function allowing extensions to intercept ->newlocale calls and make
  * adjustments or supply an entirely different implementation.

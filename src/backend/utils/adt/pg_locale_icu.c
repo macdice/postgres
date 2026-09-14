@@ -47,10 +47,12 @@
  */
 #define		TEXTBUFLEN			1024
 
-static pg_locale_t pg_newlocale_icu(const struct locale_descriptor *descriptor,
+static pg_locale_t pg_newlocale_icu(const locale_descriptor *descriptor,
 									int flags,
 									MemoryContext context);
 static char *pg_getactuallocaleversion_icu(const char *locale, int category);
+
+extern const struct locale_provider_methods locale_provider_methods_icu;
 
 /*
  * Entry points for ICU locale provider.
@@ -347,7 +349,7 @@ pg_freelocale_icu(pg_locale_t locale)
 #endif							/* USE_ICU */
 
 static pg_locale_t
-pg_newlocale_icu(const struct locale_descriptor *descriptor,
+pg_newlocale_icu(const locale_descriptor *descriptor,
 				 int flags,
 				 MemoryContext context)
 {
