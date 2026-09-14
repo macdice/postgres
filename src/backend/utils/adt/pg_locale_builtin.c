@@ -32,7 +32,9 @@ StaticAssertDecl(SIZE_MAX / UTF8_MAX_CASEMAP_EXPANSION > MaxAllocSize,
 				 "case mapping may overflow size_t");
 
 static char *pg_getactuallocaleversion_builtin(const char *locale, int category);
-static pg_locale_t pg_newlocale_builtin(Oid collid, MemoryContext context);
+static pg_locale_t pg_newlocale_builtin(const struct locale_descriptor *descriptor,
+										int flags,
+										MemoryContext context);
 
 extern const struct locale_provider_methods locale_provider_methods_builtin;
 
@@ -41,11 +43,9 @@ const struct locale_provider_methods locale_provider_methods_builtin = {
 	.newlocale = pg_newlocale_builtin,
 };
 
-static bool pg_samelocale_builtin(pg_locale_t locale, pg_locale_t other);
 static void pg_freelocale_builtin(pg_locale_t locale);
 
 static const struct locale_methods locale_methods_builtin = {
-	.samelocale = pg_samelocale_builtin,
 	.freelocale = pg_freelocale_builtin,
 };
 
@@ -293,21 +293,6 @@ static const struct ctype_methods ctype_methods_builtin = {
 	.wc_toupper = wc_toupper_builtin,
 };
 
-static bool
-pg_samelocale_builtin(pg_locale_t locale, pg_locale_t other)
-{
-	Assert(locale->provider == COLLPROVIDER_BUILTIN);
-	Assert(other->provider == COLLPROVIDER_BUILTIN);
-
-	/* Common fields already checked by pg_samelocale(). */
-	if (strcmp(locale->builtin.locale, other->builtin.locale) != 0)
-		return false;
-	if (locale->builtin.casemap_full != other->builtin.casemap_full)
-		return false;
-
-	return true;
-}
-
 static void
 pg_freelocale_builtin(pg_locale_t locale)
 {
@@ -315,49 +300,18 @@ pg_freelocale_builtin(pg_locale_t locale)
 }
 
 static pg_locale_t
-pg_newlocale_builtin(Oid collid, MemoryContext context)
+pg_newlocale_builtin(const locale_descriptor *descriptor,
+					 int flags,
+					 MemoryContext context)
 {
 	const char *locstr;
-	size_t		data_size;
 	pg_locale_t result;
 
-	if (collid == DEFAULT_COLLATION_OID)
-	{
-		HeapTuple	tp;
-		Datum		datum;
-
-		tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-									   Anum_pg_database_datlocale);
-		locstr = TextDatumGetCString(datum);
-		ReleaseSysCache(tp);
-	}
-	else
-	{
-		HeapTuple	tp;
-		Datum		datum;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collid);
-		datum = SysCacheGetAttrNotNull(COLLOID, tp,
-									   Anum_pg_collation_colllocale);
-		locstr = TextDatumGetCString(datum);
-		ReleaseSysCache(tp);
-	}
+	locstr = descriptor->locale;
 
 	builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
-	data_size = strlen(locstr) + 1;
-
-	result = MemoryContextAllocZero(context,
-									offsetof(struct pg_locale_struct, data) +
-									data_size);
-	result->provider = COLLPROVIDER_BUILTIN;
-	strcpy(result->data, locstr);
-	result->builtin.locale = result->data;
+	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
 	result->collate_version = "1";
 	result->builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->deterministic = true;

@@ -47,7 +47,9 @@
  */
 #define		TEXTBUFLEN			1024
 
-static pg_locale_t pg_newlocale_icu(Oid collid, MemoryContext context);
+static pg_locale_t pg_newlocale_icu(const struct locale_descriptor *descriptor,
+									int flags,
+									MemoryContext context);
 static char *pg_getactuallocaleversion_icu(const char *locale, int category);
 
 /*
@@ -150,12 +152,10 @@ static int32_t u_strFoldCase_default(UChar *dest, int32_t destCapacity,
 									 UErrorCode *pErrorCode);
 static int32_t foldcase_options(const char *locale);
 
-static bool pg_samelocale_icu(pg_locale_t locale, pg_locale_t other);
 static void pg_freelocale_icu(pg_locale_t locale);
 
 static const struct locale_methods locale_methods_icu =
 {
-	.samelocale = pg_samelocale_icu,
 	.freelocale = pg_freelocale_icu,
 };
 
@@ -322,22 +322,8 @@ make_libc_ctype_locale(const char *ctype)
 #else
 	loc = _create_locale(LC_ALL, ctype);
 #endif
-	if (!loc)
-		report_newlocale_failure(ctype);
 
 	return loc;
-}
-
-static bool
-pg_samelocale_icu(pg_locale_t locale, pg_locale_t other)
-{
-	Assert(locale->provider == COLLPROVIDER_ICU);
-	Assert(other->provider == COLLPROVIDER_ICU);
-
-	/* Common fields already checked by pg_samelocale(). */
-	/* XXX TODO */
-
-	return true;
 }
 
 static void
@@ -361,133 +347,43 @@ pg_freelocale_icu(pg_locale_t locale)
 #endif							/* USE_ICU */
 
 static pg_locale_t
-pg_newlocale_icu(Oid collid, MemoryContext context)
+pg_newlocale_icu(const struct locale_descriptor *descriptor,
+				 int flags,
+				 MemoryContext context)
 {
 #if USE_ICU
-	bool		deterministic;
-	const char *iculocstr;
-	const char *icurules = NULL;
-	const char *ctype = NULL;
+	bool		deterministic = descriptor->deterministic;
+	const char *iculocstr = descriptor->locale;
+	const char *icurules = descriptor->icurules;
+	const char *ctype = descriptor->ctype;
 	UCollator  *collator;
 	locale_t	loc = (locale_t) 0;
-	pg_locale_t result;
 	UVersionInfo versioninfo;
-	char		collate_version[U_MAX_VERSION_STRING_LENGTH];
-	size_t		collate_version_size;
-	size_t		iculocstr_size;
-	size_t		icurules_size;
-	size_t		ctype_size;
-	size_t		data_size;
-	char	   *data;
-
-	if (collid == DEFAULT_COLLATION_OID)
-	{
-		HeapTuple	tp;
-		Datum		datum;
-		bool		isnull;
-
-		tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
-
-		/* default database collation is always deterministic */
-		deterministic = true;
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-									   Anum_pg_database_datlocale);
-		iculocstr = TextDatumGetCString(datum);
-		datum = SysCacheGetAttr(DATABASEOID, tp,
-								Anum_pg_database_daticurules, &isnull);
-		if (!isnull)
-			icurules = TextDatumGetCString(datum);
-
-		/* libc only needed for default locale and single-byte encoding */
-		if (pg_database_encoding_max_length() == 1)
-		{
-
-			datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-										   Anum_pg_database_datctype);
-
-			ctype = TextDatumGetCString(datum);
-
-			loc = make_libc_ctype_locale(ctype);
-		}
-
-		ReleaseSysCache(tp);
-	}
-	else
-	{
-		Form_pg_collation collform;
-		HeapTuple	tp;
-		Datum		datum;
-		bool		isnull;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collid);
-		collform = (Form_pg_collation) GETSTRUCT(tp);
-		deterministic = collform->collisdeterministic;
-		datum = SysCacheGetAttrNotNull(COLLOID, tp,
-									   Anum_pg_collation_colllocale);
-		iculocstr = TextDatumGetCString(datum);
-		datum = SysCacheGetAttr(COLLOID, tp,
-								Anum_pg_collation_collicurules, &isnull);
-		if (!isnull)
-			icurules = TextDatumGetCString(datum);
-
-		ReleaseSysCache(tp);
-	}
+	char	   *trailing_space;
+	pg_locale_t result;
 
 	collator = make_icu_collator(iculocstr, icurules);
 
-	iculocstr_size = strlen(iculocstr);
-	data_size = iculocstr_size + 1;
-
-	icurules_size = icurules ? strlen(icurules) : 0;
-	if (icurules_size > 0)
-		data_size += icurules_size + 1;
-
-	ucol_getVersion(collator, versioninfo);
-	u_versionToString(versioninfo, collate_version);
-	collate_version_size = strlen(collate_version);
-	data_size += collate_version_size + 1;
-
-	ctype_size = ctype ? strlen(ctype) : 0;
-	if (ctype_size > 0)
-		data_size += ctype_size + 1;
+	/* libc only needed for default locale and single-byte encoding */
+	if (descriptor->id && DEFAULT_COLLATION_OID &&
+		pg_database_encoding_max_length() == 1)
+	{
+		loc = make_libc_ctype_locale(ctype);
+		if (!loc)
+		{
+			ucol_close(collator);
+			report_newlocale_failure(ctype);
+		}
+	}
 
 	result = MemoryContextAllocZero(context,
-									offsetof(struct pg_locale_struct, data) +
-									data_size);
-	result->provider = COLLPROVIDER_ICU;
-	data = result->data;
+									sizeof(struct pg_locale_struct) +
+									U_MAX_VERSION_STRING_LENGTH);
 
-	/* Store icu.locale. */
-	result->icu.locale = data;
-	strcpy(data, iculocstr);
-	data += iculocstr_size + 1;
-
-	/* Store icu.rules if present. */
-	if (icurules)
-	{
-		result->icu.rules = data;
-		strcpy(data, icurules);
-		data += icurules_size + 1;
-	}
-
-	/* Store icu.ctype if using libc for that. */
-	if (ctype)
-	{
-		result->icu.ctype = data;
-		strcpy(data, ctype);
-		data += ctype_size + 1;
-	}
-
-	/* Store collate_version. */
-	result->collate_version = data;
-	strcpy(data, collate_version);
-	data += collate_version_size + 1;
-
-	Assert(data > result->data && data <= result->data + data_size);
+	trailing_space = (char *) result + sizeof(*result);
+	ucol_getVersion(collator, versioninfo);
+	u_versionToString(versioninfo, trailing_space);
+	result->collate_version = trailing_space;
 
 	result->icu.ucol = collator;
 	result->icu.lt = loc;
@@ -1030,7 +926,7 @@ convert_case_uchar(ICU_Convert_Func func, pg_locale_t mylocale,
 	*buff_dest = palloc_array(UChar, len_dest);
 	status = U_ZERO_ERROR;
 	len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-					mylocale->icu.locale, &status);
+					mylocale->descriptor.ctype, &status);
 	if (status == U_BUFFER_OVERFLOW_ERROR)
 	{
 		/* try again with adjusted length */
@@ -1038,7 +934,7 @@ convert_case_uchar(ICU_Convert_Func func, pg_locale_t mylocale,
 		*buff_dest = palloc_array(UChar, len_dest);
 		status = U_ZERO_ERROR;
 		len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-						mylocale->icu.locale, &status);
+						mylocale->descriptor.ctype, &status);
 	}
 	if (U_FAILURE(status))
 		ereport(ERROR,

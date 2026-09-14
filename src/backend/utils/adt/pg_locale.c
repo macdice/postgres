@@ -114,8 +114,13 @@ static bool CurrentLocaleConvValid = false;
 static bool CurrentLCTimeValid = false;
 
 static const struct pg_locale_struct c_locale = {
-	.id = C_COLLATION_OID,
-	.provider = COLLPROVIDER_BUILTIN,
+	.descriptor = {
+		.id = C_COLLATION_OID,
+		.provider = COLLPROVIDER_BUILTIN,
+		.deterministic = true,
+		.collate = "C",
+		.ctype = "C"
+	},
 	.reference_count = -1,
 	.deterministic = true,
 	.collate_is_c = true,
@@ -1068,6 +1073,102 @@ pg_locale_provider(char provider)
 }
 
 /*
+ * Store descriptor in a pg_locale_t, copying its strings into a new chunk of
+ * memory allocated in TopMemoryContext.  If allocation fails, locale is freed
+ * before an error is raised.
+ */
+static void
+set_locale_descriptor(pg_locale_t locale, const struct locale_descriptor *src)
+{
+	size_t		size_collate;
+	size_t		size_ctype;
+	size_t		size_locale;
+	size_t		size_icurules;
+	size_t		size_collate_version;
+	size_t		size;
+	char	   *data;
+	char	   *p;
+
+#define SIZE_FIELD(field)												\
+	size_##field = src->field ? strlen(src->field) + 1 : 0;				\
+	size += size_##field
+
+#define COPY_FIELD(field)												\
+	if (size_##field > 0)												\
+	{																	\
+		memcpy(p, src->field, size_##field);							\
+		locale->descriptor.field = p;									\
+		p += size_##field;												\
+	}																	\
+	else																\
+		locale->descriptor.field = NULL
+
+	size = 0;
+	SIZE_FIELD(collate);
+	SIZE_FIELD(ctype);
+	SIZE_FIELD(locale);
+	SIZE_FIELD(icurules);
+	SIZE_FIELD(collate_version);
+
+	data = MemoryContextAllocExtended(TopMemoryContext,
+									  size,
+									  MCXT_ALLOC_NO_OOM);
+	if (data == NULL)
+	{
+		locale->locale->freelocale(locale);
+		elog(ERROR, "out of memory");
+	}
+
+	locale->descriptor = *src;
+	p = data;
+	COPY_FIELD(collate);
+	COPY_FIELD(ctype);
+	COPY_FIELD(locale);
+	COPY_FIELD(icurules);
+	COPY_FIELD(collate_version);
+	Assert(p == data + size);
+#undef SIZE_FIELD
+#undef COPY_FIELD
+}
+
+static void
+free_locale_descriptor_strings(struct locale_descriptor *descriptor)
+{
+	const char *mem = NULL;
+
+#define FIND_FIRST_FIELD(field)					\
+	if (mem && descriptor->field)				\
+		mem = Min(mem, descriptor->field);		\
+	else if (descriptor->field)					\
+		mem = descriptor->field
+
+	FIND_FIRST_FIELD(collate);
+	FIND_FIRST_FIELD(ctype);
+	FIND_FIRST_FIELD(locale);
+	FIND_FIRST_FIELD(icurules);
+	FIND_FIRST_FIELD(collate_version);
+
+	if (mem)
+		pfree(unconstify(char *, mem));
+}
+
+static char *
+get_syscache_cstr(Oid oid, HeapTuple tup, int attno)
+{
+	return TextDatumGetCString(SysCacheGetAttrNotNull(oid, tup, attno));
+}
+
+static char *
+get_syscache_cstr_or_null(Oid oid, HeapTuple tup, int attno)
+{
+	Datum		datum;
+	bool		isnull;
+
+	datum = SysCacheGetAttr(oid, tup, attno, &isnull);
+	return isnull ? NULL : TextDatumGetCString(datum);
+}
+
+/*
  * Create a new pg_locale_t struct for the given collation oid.
  */
 static pg_locale_t
@@ -1076,22 +1177,38 @@ pg_newlocale(Oid collid, MemoryContext context)
 	HeapTuple	tp;
 	Form_pg_collation collform;
 	pg_locale_t result;
-	Datum		datum;
-	bool		isnull;
-	char		provider;
+	locale_descriptor descriptor = {0};
+
+	Assert(collid != DEFAULT_COLLATION_OID);
 
 	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 	collform = (Form_pg_collation) GETSTRUCT(tp);
-	provider = collform->collprovider;
+	descriptor.id = collid;
+	descriptor.provider = collform->collprovider;
+	descriptor.deterministic = collform->collisdeterministic;
+	descriptor.collate = get_syscache_cstr_or_null(COLLOID, tp,
+												   Anum_pg_collation_collcollate);
+	descriptor.ctype = get_syscache_cstr_or_null(COLLOID, tp,
+												 Anum_pg_collation_collctype);
+	descriptor.locale = get_syscache_cstr_or_null(COLLOID, tp,
+												  Anum_pg_collation_colllocale);
+	descriptor.icurules = get_syscache_cstr_or_null(COLLOID, tp,
+													Anum_pg_collation_collicurules);
+	descriptor.collate_version = get_syscache_cstr_or_null(COLLOID, tp,
+														   Anum_pg_collation_collversion);
 
 	if (pg_newlocale_hook)
-		result = pg_newlocale_hook(pg_locale_provider(provider)->newlocale,
-								   collid,
+		result = pg_newlocale_hook(&descriptor,
+								   pg_locale_provider(descriptor.provider)->newlocale,
 								   context);
 	else
-		result = pg_locale_provider(provider)->newlocale(collid, context);
+		result = pg_locale_provider(descriptor.provider)->newlocale(&descriptor,
+																	0,
+																	context);
+
+	set_locale_descriptor(result, &descriptor);
 
 	result->is_default = false;
 
@@ -1101,19 +1218,8 @@ pg_newlocale(Oid collid, MemoryContext context)
 	Assert((result->ctype_is_c && result->ctype == NULL) ||
 		   (!result->ctype_is_c && result->ctype != NULL));
 
-	datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collversion,
-							&isnull);
-	if (!isnull)
+	if (result->descriptor.collate_version)
 	{
-		char	   *collversionstr;
-
-		collversionstr = TextDatumGetCString(datum);
-
-		if (collform->collprovider == COLLPROVIDER_LIBC)
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
-		else
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-
 		if (!result->collate_version)
 		{
 			/*
@@ -1123,16 +1229,18 @@ pg_newlocale(Oid collid, MemoryContext context)
 			 */
 			ereport(ERROR,
 					(errmsg("collation \"%s\" has no actual version, but a version was recorded (%s)",
-							NameStr(collform->collname), collversionstr)));
+							NameStr(collform->collname),
+							result->descriptor.collate_version)));
 		}
 
-		if (strcmp(result->collate_version, collversionstr) != 0)
+		if (strcmp(result->collate_version, result->descriptor.collate_version) != 0)
 			ereport(WARNING,
 					(errmsg("collation \"%s\" has version mismatch",
 							NameStr(collform->collname)),
 					 errdetail("The collation in the database was created using version %s, "
 							   "but the operating system provides version %s.",
-							   collversionstr, result->collate_version),
+							   result->descriptor.collate_version,
+							   result->collate_version),
 					 errhint("Rebuild all objects affected by this collation and run "
 							 "ALTER COLLATION %s REFRESH VERSION, "
 							 "or build PostgreSQL with the right library version.",
@@ -1168,46 +1276,58 @@ invoke_invalidation_callbacks(pg_locale_t locale)
 	}
 }
 
+static bool
+cstr_or_null_eq(const char *a, const char *b)
+{
+	/* Both NULL, or same address? */
+	if (a == b)
+		return true;
+
+	/* Only one is NULL? */
+	if (!a || !b)
+		return false;
+
+	return strcmp(a, b) == 0;
+}
+
+static bool
+locale_descriptor_eq(const struct locale_descriptor *a,
+					 const struct locale_descriptor *b)
+{
+	return (a->id == b->id &&
+			a->provider == b->provider &&
+			a->deterministic == b->deterministic &&
+			strcmp(a->collate, b->collate) == 0 &&
+			strcmp(a->ctype, b->collate) == 0 &&
+			cstr_or_null_eq(a->icurules, b->icurules) &&
+			cstr_or_null_eq(a->collate_version, b->collate_version));
+}
+
 /*
- * Check if two pg_locale_t objects are functionally identical.  This is
- * intended to detect spurious invalidations of default_locale, when
- * pg_database is updated for reasons that don't affect collations.
+ * Check if two pg_locale_t objects are functionally identical.  This is use
+ * to avoid propagating invalidations when pg_database rows are updated for
+ * reasons unrelated to collations.  Without this, datfrozenxid updates would
+ * cause regexp caches to be dropped.
  */
 static bool
 pg_samelocale(pg_locale_t locale, pg_locale_t other)
 {
-	if (locale->id != other->id)
+	if (!locale_descriptor_eq(&locale->descriptor, &other->descriptor))
+		return false;
+
+	if (!cstr_or_null_eq(locale->collate_version, other->collate_version))
 		return false;
 
 	if (locale->deterministic != other->deterministic ||
 		locale->collate_is_c != other->collate_is_c ||
 		locale->ctype_is_c != other->ctype_is_c ||
-		locale->is_default != other->is_default)
-		return false;
-
-	/* Both must lack actual version, or they must match. */
-	if (locale->collate_version)
-	{
-		if (!other->collate_version)
-			return false;
-		if (strcmp(locale->collate_version, other->collate_version) != 0)
-			return false;
-	}
-	else if (other->collate_version)
-		return false;
-
-	/* Method tables must match. */
-	if (locale->locale != other->locale ||
+		locale->is_default != other->is_default ||
+		locale->locale != other->locale ||
 		locale->collate != other->collate ||
 		locale->ctype != other->ctype)
 		return false;
 
-	/* This is implied by the above but just to be safe... */
-	if (locale->provider != other->provider)
-		return false;
-
-	/* Defer to installed method for provider-specific union members. */
-	return locale->locale->samelocale(locale, other);
+	return true;
 }
 
 /*
@@ -1216,6 +1336,7 @@ pg_samelocale(pg_locale_t locale, pg_locale_t other)
 static void
 pg_freelocale(pg_locale_t locale)
 {
+	free_locale_descriptor_strings(&locale->descriptor);
 	locale->locale->freelocale(locale);
 }
 
@@ -1272,9 +1393,7 @@ init_database_collation(void)
 	HeapTuple	tup;
 	Form_pg_database dbform;
 	pg_locale_t result;
-	Datum		datum;
-	bool		isnull;
-	char		provider;
+	locale_descriptor descriptor = {0};
 
 	Assert(default_locale == NULL || default_locale_inval);
 
@@ -1293,15 +1412,29 @@ init_database_collation(void)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbform = (Form_pg_database) GETSTRUCT(tup);
-	provider = dbform->datlocprovider;
+	descriptor.id = DEFAULT_COLLATION_OID;
+	descriptor.provider = dbform->datlocprovider;
+	descriptor.deterministic = true;	/* default always deterministic */
+	descriptor.collate = get_syscache_cstr(DATABASEOID, tup,
+										   Anum_pg_database_datcollate);
+	descriptor.ctype = get_syscache_cstr(DATABASEOID, tup,
+										 Anum_pg_database_datctype);
+	descriptor.locale = get_syscache_cstr_or_null(DATABASEOID, tup,
+												  Anum_pg_database_datlocale);
+	descriptor.icurules = get_syscache_cstr_or_null(DATABASEOID, tup,
+													Anum_pg_database_daticurules);
+	descriptor.collate_version = get_syscache_cstr_or_null(DATABASEOID, tup,
+														   Anum_pg_database_datcollversion);
 
 	if (pg_newlocale_hook)
-		result = pg_newlocale_hook(pg_locale_provider(provider)->newlocale,
-								   DEFAULT_COLLATION_OID,
+		result = pg_newlocale_hook(&descriptor,
+								   pg_locale_provider(descriptor.provider)->newlocale,
 								   TopMemoryContext);
 	else
-		result = pg_locale_provider(provider)->newlocale(DEFAULT_COLLATION_OID,
-														 TopMemoryContext);
+		result = pg_locale_provider(descriptor.provider)->newlocale(&descriptor,
+																	false,
+																	TopMemoryContext);
+	set_locale_descriptor(result, &descriptor);
 
 	/*
 	 * When reloading after syscache invalidation, check if result is
@@ -1333,40 +1466,34 @@ init_database_collation(void)
 	 * pg_newlocale_from_collation().  Note that here we warn instead of error
 	 * in any case, so that we don't prevent connecting.
 	 */
-	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datcollversion,
-							&isnull);
-	if (!isnull)
+	if (result->descriptor.collate_version)
 	{
-		char	   *collversionstr;
-		const char *name;
-
-		collversionstr = TextDatumGetCString(datum);
-		name = DatumGetCString(SysCacheGetAttrNotNull(DATABASEOID, tup,
-													  Anum_pg_database_datname));
-
 		if (!result->collate_version)
 			/* should not happen */
 			elog(WARNING,
 				 "database \"%s\" has no actual collation version, but a version was recorded",
-				 name);
-		else if (strcmp(result->collate_version, collversionstr) != 0)
+				 NameStr(dbform->datname));
+		else if (strcmp(result->collate_version,
+						result->descriptor.collate_version) != 0)
 			ereport(WARNING,
 					(errmsg("database \"%s\" has a collation version mismatch",
-							name),
+							NameStr(dbform->datname)),
 					 errdetail("The database was created using collation version %s, "
 							   "but the operating system provides version %s.",
-							   collversionstr, result->collate_version),
+							   result->descriptor.collate_version,
+							   result->collate_version),
 					 errhint("Rebuild all objects in this database that use the default collation and run "
 							 "ALTER DATABASE %s REFRESH COLLATION VERSION, "
 							 "or build PostgreSQL with the right library version.",
-							 quote_identifier(name))));
+							 quote_identifier(NameStr(dbform->datname)))));
 	}
 
 	ReleaseSysCache(tup);
 
 	/*
 	 * If reloading after a syscache invalidation, notify registered callbacks
-	 * that the default locale has changed and release our pin.
+	 * that the default locale has changed and release our pin on the old
+	 * version.
 	 */
 	if (default_locale)
 	{

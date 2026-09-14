@@ -3956,6 +3956,7 @@ local_relopts
 local_source
 local_ts_iter
 local_ts_radix_tree
+locale_descriptor
 locale_t
 locate_agg_of_level_context
 locate_var_of_level_context

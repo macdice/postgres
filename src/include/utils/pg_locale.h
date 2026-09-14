@@ -49,6 +49,11 @@
 #define PG_CASEMAP_BUFSZ			((PG_MAX_CASEMAP_MBCHARS * \
 									  MAX_MULTIBYTE_CHAR_LEN) + 1)
 
+/*
+ * Flags passed to newlocale implementations.
+ */
+#define PG_NEWLOCALE_FLAGS_NOT_FOUND_OK 1
+
 /* GUC settings */
 extern PGDLLIMPORT char *locale_messages;
 extern PGDLLIMPORT char *locale_monetary;
@@ -77,6 +82,22 @@ struct pg_locale_struct;
 typedef struct pg_locale_struct *pg_locale_t;
 
 /*
+ * Common representation of the collation-related attributes in pg_database
+ * and pg_collation.
+ */
+typedef struct locale_descriptor
+{
+	Oid			id;				/* DEFAULT_COLLATION_OID or collid */
+	char		provider;		/* datlocprovider or collprovider */
+	bool		deterministic;	/* true or collisdeterministic */
+	const char *collate;		/* datlocale or collcollate */
+	const char *ctype;			/* datctype or collctype */
+	const char *locale;			/* datlocale or colllocale */
+	const char *icurules;		/* daticurules or collicurules */
+	const char *collate_version;	/* datcollversion or collversion */
+} locale_descriptor;
+
+/*
  * Locale provider methods.
  *
  * XXX Consider encoding, validation, iteration functions here instead of
@@ -92,7 +113,9 @@ struct locale_provider_methods
 	char	   *(*getactuallocaleversion) (const char *locale, int category);
 
 	/* required */
-	pg_locale_t (*newlocale) (Oid collid, MemoryContext context);
+	pg_locale_t (*newlocale) (const struct locale_descriptor *descriptor,
+							  int flags,
+							  MemoryContext context);
 };
 
 /* For private use (no PGDLLIMPORT). */
@@ -101,13 +124,15 @@ extern const struct locale_provider_methods locale_provider_methods_icu;
 extern const struct locale_provider_methods locale_provider_methods_libc;
 
 /*
- * Hook function allowing extensions to intercept pg_locale_provider_methods
- * calls.
+ * Hook function allowing extensions to intercept ->newlocale calls and make
+ * adjustments or supply an entirely different implementation.
  */
-typedef pg_locale_t (*pg_newlocale_hook_function)
-			(pg_locale_t (*std_newlocale) (Oid, MemoryContext),
-			 Oid collid,
-			 MemoryContext);
+typedef pg_locale_t (*pg_newlocale_hook_function) (const locale_descriptor *descriptor,
+												   pg_locale_t (*std_newlocale)
+												   (const locale_descriptor *,
+													int,
+													MemoryContext),
+												   MemoryContext context);
 extern PGDLLIMPORT pg_newlocale_hook_function pg_newlocale_hook;
 
 /*
@@ -117,7 +142,6 @@ struct locale_methods
 {
 	/* required */
 	void		(*freelocale) (pg_locale_t locale);
-	bool		(*samelocale) (pg_locale_t locale, pg_locale_t other_locale);
 };
 
 /*
@@ -214,12 +238,14 @@ struct ctype_methods
  */
 struct pg_locale_struct
 {
-	/* Identity and lifetime state managed by pg_locale.c. */
-	Oid			id;
-	char		provider;
+	/* Members managed by pg_locale.c. */
+	locale_descriptor descriptor;
 	uint32		inval_hash;
 	int			reference_count;
 	dlist_head	callbacks;
+
+	/* May be set by provider's newlocale() if it handled warnings. */
+	bool		collate_version_warning_logged;
 
 	/* Everything below this point managed by provider's newlocale(). */
 	const char *collate_version;
@@ -237,30 +263,18 @@ struct pg_locale_struct
 	{
 		struct
 		{
-			const char *locale;
 			bool		casemap_full;
 		}			builtin;
-		locale_t	lt;			/* historical name for libc.lt */
-		struct
-		{
-			locale_t	lt;		/* must be first */
-			const char *collate;
-			const char *ctype;
-		}			libc;
+		locale_t	lt;
 #ifdef USE_ICU
 		struct
 		{
-			const char *locale;
-			const char *rules;
-			const char *ctype;	/* default single-byte only */
 			struct UCollator *ucol;
 			struct UCaseMap *ucasemap;
 			locale_t	lt;
 		}			icu;
 #endif
 	};
-
-	char		data[FLEXIBLE_ARRAY_MEMBER];
 };
 
 /* User-supplied registration of invalidation callback. */

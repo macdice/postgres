@@ -76,7 +76,9 @@
  */
 #define		TEXTBUFLEN			1024
 
-static pg_locale_t pg_newlocale_libc(Oid collid, MemoryContext context);
+static pg_locale_t pg_newlocale_libc(const struct locale_descriptor *descriptor,
+									 int flags,
+									 MemoryContext context);
 static char *pg_getactuallocaleversion_libc(const char *locale, int category);
 
 /*
@@ -779,21 +781,6 @@ strupper_libc_mb(char *dest, size_t destsize, const char *src, size_t srclen,
 	return result_size;
 }
 
-static bool
-pg_samelocale_libc(pg_locale_t locale, pg_locale_t other)
-{
-	Assert(locale->provider == COLLPROVIDER_LIBC);
-	Assert(other->provider == COLLPROVIDER_LIBC);
-
-	/* Common fields already checked by pg_samelocale(). */
-	if (strcmp(locale->libc.collate, other->libc.collate) != 0)
-		return false;
-	if (strcmp(locale->libc.ctype, other->libc.ctype) != 0)
-		return false;
-
-	return true;
-}
-
 static void
 pg_freelocale_libc(pg_locale_t locale)
 {
@@ -809,7 +796,6 @@ pg_freelocale_libc(pg_locale_t locale)
 }
 
 static const struct locale_methods locale_methods_libc = {
-	.samelocale = pg_samelocale_libc,
 	.freelocale = pg_freelocale_libc,
 };
 
@@ -860,96 +846,41 @@ get_canonical_localename(locale_t loc, int category)
 #endif
 
 static pg_locale_t
-pg_newlocale_libc(Oid collid, MemoryContext context)
+pg_newlocale_libc(const struct locale_descriptor *descriptor,
+				  int flags,
+				  MemoryContext context)
 {
-	const char *collate;
-	const char *ctype;
-	bool		isnull;
+	const char *collate = descriptor->collate;
+	const char *ctype = descriptor->ctype;
 	locale_t	loc;
 	pg_locale_t result;
-	size_t		collate_size;
-	size_t		ctype_size;
-	size_t		data_size;
-	char	   *data;
-#ifdef WIN32
 	size_t		collate_version_size;
+#ifdef WIN32
 	char	   *collate_version = NULL;
 #endif
 
-	if (collid == DEFAULT_COLLATION_OID)
-	{
-		HeapTuple	tp;
-		Datum		datum;
+	collate_version_size = 0;
 
-		tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-									   Anum_pg_database_datcollate);
-		collate = TextDatumGetCString(datum);
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
-									   Anum_pg_database_datctype);
-		ctype = TextDatumGetCString(datum);
-
-		datum = SysCacheGetAttr(DATABASEOID, tp,
-								Anum_pg_database_datcollversion, &isnull);
-		ReleaseSysCache(tp);
-	}
-	else
-	{
-		HeapTuple	tp;
-		Datum		datum;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collid);
-
-		datum = SysCacheGetAttrNotNull(COLLOID, tp,
-									   Anum_pg_collation_collcollate);
-		collate = TextDatumGetCString(datum);
-		datum = SysCacheGetAttrNotNull(COLLOID, tp,
-									   Anum_pg_collation_collctype);
-		ctype = TextDatumGetCString(datum);
-
-		datum = SysCacheGetAttr(COLLOID, tp,
-								Anum_pg_collation_collversion, &isnull);
-		ReleaseSysCache(tp);
-	}
-
-	/* Reserve some extra space for strings that we want to capture. */
-	collate_size = strlen(collate);
-	ctype_size = strlen(ctype);
-	data_size = collate_size + 1 + ctype_size + 1;
 #ifdef WIN32
+
+	/*
+	 * We only need to allocated extra space to store collation_version on
+	 * Windows, because the other mechanisms provide a pointer to a string
+	 * with the lifetime of loc or a constant string.
+	 */
 	collate_version = get_collation_actual_version_libc(collate);
 	if (collate_version)
 	{
 		collate_version_size = strlen(collate_version);
 		data_size += collate_version_size + 1;
 	}
-	else
-	{
-		collate_version_size = 0;
-	}
 #endif
 
 	loc = make_libc_collator(collate, ctype);
 
 	result = MemoryContextAllocZero(context,
-									offsetof(struct pg_locale_struct, data) +
-									data_size);
-	result->provider = COLLPROVIDER_LIBC;
-	data = result->data;
-
-	/* Store collate. */
-	result->libc.collate = data;
-	strcpy(data, collate);
-	data += collate_size + 1;
-
-	/* Store ctype. */
-	result->libc.ctype = data;
-	strcpy(data, ctype);
-	data += ctype_size + 1;
+									sizeof(struct pg_locale_struct) +
+									collate_version_size);
 
 	/*
 	 * Store collate_version, if we have it and it's not a name we choose to
@@ -968,19 +899,17 @@ pg_newlocale_libc(Oid collid, MemoryContext context)
 		result->collate_version =
 			querylocale(LC_VERSION_MASK | LC_COLLATE_MASK, loc);
 #elif defined(WIN32)
-		/* Windows: use the NLSVERSIONINFOEX data acquired above. */
+		/* Windows: copy and free the string acquired above. */
 		if (collate_version)
 		{
-			result->collate_version = data;
-			strcpy(data, collate_version, collate_version_size);
-			data += collate_version_size + 1;
+			char	   *trailing_space = (char *) result + sizeof(*result);
 
+			result->collate_version = trailing_space;
+			memcpy(trailing_space, collate_version, collate_version_size);
 			pfree(collate_version);
 		}
 #endif
 	}
-
-	Assert(data > result->data && data <= result->data + data_size);
 
 	result->deterministic = true;
 	result->collate_is_c = (strcmp(collate, "C") == 0) ||
@@ -988,6 +917,7 @@ pg_newlocale_libc(Oid collid, MemoryContext context)
 	result->ctype_is_c = (strcmp(ctype, "C") == 0) ||
 		(strcmp(ctype, "POSIX") == 0);
 	result->lt = loc;
+
 	result->locale = &locale_methods_libc;
 	if (!result->collate_is_c)
 	{
