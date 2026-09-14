@@ -23,6 +23,7 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/syscache.h"
 
 #ifdef __GLIBC__
@@ -856,6 +857,7 @@ pg_newlocale_libc(const struct locale_descriptor *descriptor,
 	const char *ctype = descriptor->ctype;
 	locale_t	loc;
 	pg_locale_t result;
+	size_t		descriptor_size;
 	size_t		collate_version_size;
 #ifdef WIN32
 	char	   *collate_version = NULL;
@@ -874,12 +876,14 @@ pg_newlocale_libc(const struct locale_descriptor *descriptor,
 	if (collate_version)
 		collate_version_size = strlen(collate_version) + 1;
 #endif
-
 	loc = make_libc_collator(collate, ctype);
+
+	descriptor_size = size_locale_descriptor(descriptor);
 
 	result = MemoryContextAllocZero(context,
 									sizeof(struct pg_locale_struct) +
-									collate_version_size);
+									descriptor_size + collate_version_size);
+	set_locale_descriptor(result, descriptor);
 
 	/*
 	 * Store collate_version, if we have it and it's not a name we choose to
@@ -901,10 +905,12 @@ pg_newlocale_libc(const struct locale_descriptor *descriptor,
 		/* Windows: copy and free the string acquired above. */
 		if (collate_version)
 		{
-			char	   *trailing_space = (char *) result + sizeof(*result);
+			char	   *dst;
 
-			result->collate_version = trailing_space;
-			memcpy(trailing_space, collate_version, collate_version_size);
+			dst = (char *) result + sizeof(*result) + descriptor_size;
+
+			result->collate_version = dst;
+			memcpy(dst, collate_version, collate_version_size);
 			pfree(collate_version);
 		}
 #endif

@@ -20,6 +20,7 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/syscache.h"
 
 /*
@@ -311,7 +312,10 @@ pg_newlocale_builtin(const locale_descriptor *descriptor,
 
 	builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
-	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
+	result = MemoryContextAllocZero(context,
+									sizeof(struct pg_locale_struct) +
+									size_locale_descriptor(descriptor));
+	set_locale_descriptor(result, descriptor);
 	result->collate_version = "1";
 	result->builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->deterministic = true;

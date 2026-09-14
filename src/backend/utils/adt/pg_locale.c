@@ -50,6 +50,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/pg_locale_c.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/relcache.h"
 #include "utils/resowner.h"
 #include "utils/syscache.h"
@@ -1073,83 +1074,60 @@ pg_locale_provider(char provider)
 }
 
 /*
- * Store descriptor in a pg_locale_t, copying its strings into a new chunk of
- * memory allocated in TopMemoryContext.  If allocation fails, locale is freed
- * before an error is raised.
+ * How much extra space do providers need to allocate after pg_locale_struct
+ * to store descriptor strings?
  */
-static void
-set_locale_descriptor(pg_locale_t locale, const locale_descriptor *src)
+size_t
+size_locale_descriptor(const locale_descriptor *descriptor)
 {
-	size_t		size_collate;
-	size_t		size_ctype;
-	size_t		size_locale;
-	size_t		size_icurules;
-	size_t		size_collate_version;
-	size_t		size;
-	char	   *data;
-	char	   *p;
+	size_t size = 0;
 
-#define SIZE_FIELD(field)												\
-	size_##field = src->field ? strlen(src->field) + 1 : 0;				\
-	size += size_##field
+	if (descriptor->collate)
+		size += strlen(descriptor->collate) + 1;
+	if (descriptor->ctype)
+		size += strlen(descriptor->ctype) + 1;
+	if (descriptor->locale)
+		size += strlen(descriptor->locale) + 1;
+	if (descriptor->icurules)
+		size += strlen(descriptor->icurules) + 1;
+	if (descriptor->collate_version)
+		size += strlen(descriptor->collate_version) + 1;
 
-#define COPY_FIELD(field)												\
-	if (size_##field > 0)												\
-	{																	\
-		memcpy(p, src->field, size_##field);							\
-		locale->descriptor.field = p;									\
-		p += size_##field;												\
-	}																	\
-	else																\
-		locale->descriptor.field = NULL
-
-	size = 0;
-	SIZE_FIELD(collate);
-	SIZE_FIELD(ctype);
-	SIZE_FIELD(locale);
-	SIZE_FIELD(icurules);
-	SIZE_FIELD(collate_version);
-
-	data = MemoryContextAllocExtended(TopMemoryContext,
-									  size,
-									  MCXT_ALLOC_NO_OOM);
-	if (data == NULL)
-	{
-		locale->locale->freelocale(locale);
-		elog(ERROR, "out of memory");
-	}
-
-	locale->descriptor = *src;
-	p = data;
-	COPY_FIELD(collate);
-	COPY_FIELD(ctype);
-	COPY_FIELD(locale);
-	COPY_FIELD(icurules);
-	COPY_FIELD(collate_version);
-	Assert(p == data + size);
-#undef SIZE_FIELD
-#undef COPY_FIELD
+	return size;
 }
 
 static void
-free_locale_descriptor_strings(locale_descriptor *descriptor)
+copy_locale_descriptor_string(char **p, const char **s)
 {
-	const char *mem = NULL;
+	size_t size;
 
-#define FIND_FIRST_FIELD(field)					\
-	if (mem && descriptor->field)				\
-		mem = Min(mem, descriptor->field);		\
-	else if (descriptor->field)					\
-		mem = descriptor->field
+	if (*s == NULL)
+		return;
 
-	FIND_FIRST_FIELD(collate);
-	FIND_FIRST_FIELD(ctype);
-	FIND_FIRST_FIELD(locale);
-	FIND_FIRST_FIELD(icurules);
-	FIND_FIRST_FIELD(collate_version);
+	size = strlen(*s) + 1;
+	memcpy(*p, *s, size);
+	*s = *p;
+	*p += size;
+}
 
-	if (mem)
-		pfree(unconstify(char *, mem));
+/*
+ * Store descriptor in a pg_locale_t, copying its strings into space past the
+ * end of the locale.  Caller must have allocated at least
+ * size_locale_descriptor(src) bytes of trailing space.
+ */
+void
+set_locale_descriptor(pg_locale_t locale, const locale_descriptor *src)
+{
+	char	   *p = (char *) locale + sizeof(*locale);
+
+	locale->descriptor = *src;
+	copy_locale_descriptor_string(&p, &locale->descriptor.collate);
+	copy_locale_descriptor_string(&p, &locale->descriptor.ctype);
+	copy_locale_descriptor_string(&p, &locale->descriptor.locale);
+	copy_locale_descriptor_string(&p, &locale->descriptor.icurules);
+	copy_locale_descriptor_string(&p, &locale->descriptor.collate_version);
+
+	Assert(p == (char *) locale + sizeof(*locale) + size_locale_descriptor(src));
 }
 
 static char *
@@ -1201,14 +1179,13 @@ pg_newlocale(Oid collid, MemoryContext context)
 
 	if (pg_newlocale_hook)
 		result = pg_newlocale_hook(&descriptor,
-								   pg_locale_provider(descriptor.provider)->newlocale,
-								   context);
+								   0,
+								   context,
+								   pg_locale_provider(descriptor.provider)->newlocale);
 	else
 		result = pg_locale_provider(descriptor.provider)->newlocale(&descriptor,
 																	0,
 																	context);
-
-	set_locale_descriptor(result, &descriptor);
 
 	result->is_default = false;
 
@@ -1331,12 +1308,11 @@ pg_samelocale(pg_locale_t locale, pg_locale_t other)
 }
 
 /*
- * Internal usage only.
+ * Regular code should never call this, but it is useful for extensions.
  */
-static void
+void
 pg_freelocale(pg_locale_t locale)
 {
-	free_locale_descriptor_strings(&locale->descriptor);
 	locale->locale->freelocale(locale);
 }
 
@@ -1428,13 +1404,13 @@ init_database_collation(void)
 
 	if (pg_newlocale_hook)
 		result = pg_newlocale_hook(&descriptor,
-								   pg_locale_provider(descriptor.provider)->newlocale,
-								   TopMemoryContext);
+								   0,
+								   TopMemoryContext,
+								   pg_locale_provider(descriptor.provider)->newlocale);
 	else
 		result = pg_locale_provider(descriptor.provider)->newlocale(&descriptor,
-																	false,
+																	0,
 																	TopMemoryContext);
-	set_locale_descriptor(result, &descriptor);
 
 	/*
 	 * When reloading after syscache invalidation, check if result is
@@ -1704,12 +1680,6 @@ pg_locale_set_var_null_on_inval(pg_locale_t locale,
 char *
 get_collation_actual_version(char collprovider, const char *collcollate)
 {
-	/*
-	 * XXX Consider changing ->newlocale() to accept a pg_locale_descriptor
-	 * instead of an oid, and then here we could open it temporarily to access
-	 * the version and we wouldn't need a separate function that takes a
-	 * locale name.
-	 */
 	if (pg_locale_provider(collprovider)->getactuallocaleversion)
 		return pg_locale_provider(collprovider)->
 			getactuallocaleversion(collcollate, LC_COLLATE);

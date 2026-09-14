@@ -97,15 +97,12 @@ typedef struct locale_descriptor
 	const char *collate_version;	/* datcollversion or collversion */
 } locale_descriptor;
 
+typedef pg_locale_t (*pg_newlocale_function) (const locale_descriptor *descriptor,
+											  int flags,
+											  MemoryContext context);
+
 /*
  * Locale provider methods.
- *
- * XXX Consider encoding, validation, iteration functions here instead of
- * open-coding in various places.
- *
- * XXX Consider shifting this and all other struct definitions to
- * pg_locale_internal.h, and leaving just pg_locale_t and public function
- * declarations here.
  */
 struct locale_provider_methods
 {
@@ -113,21 +110,19 @@ struct locale_provider_methods
 	char	   *(*getactuallocaleversion) (const char *locale, int category);
 
 	/* required */
-	pg_locale_t (*newlocale) (const struct locale_descriptor *descriptor,
-							  int flags,
-							  MemoryContext context);
+	pg_newlocale_function newlocale;
 };
+
 
 /*
  * Hook function allowing extensions to intercept ->newlocale calls and make
- * adjustments or supply an entirely different implementation.
+ * adjustments or supply an entirely different implementation.  Like
+ * pg_newlocale_function, except that it also receives the standard function.
  */
 typedef pg_locale_t (*pg_newlocale_hook_function) (const locale_descriptor *descriptor,
-												   pg_locale_t (*std_newlocale)
-												   (const locale_descriptor *,
-													int,
-													MemoryContext),
-												   MemoryContext context);
+												   int flags,
+												   MemoryContext context,
+												   pg_newlocale_function std_newlocale);
 extern PGDLLIMPORT pg_newlocale_hook_function pg_newlocale_hook;
 
 /*
@@ -233,8 +228,9 @@ struct ctype_methods
  */
 struct pg_locale_struct
 {
-	/* Members managed by pg_locale.c. */
 	locale_descriptor descriptor;
+
+	/* Members managed by pg_locale.c. */
 	uint32		inval_hash;
 	int			reference_count;
 	dlist_head	callbacks;

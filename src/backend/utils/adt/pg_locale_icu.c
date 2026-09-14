@@ -37,6 +37,7 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/syscache.h"
 
 /*
@@ -363,7 +364,8 @@ pg_newlocale_icu(const locale_descriptor *descriptor,
 	UCollator  *collator;
 	locale_t	loc = (locale_t) 0;
 	UVersionInfo versioninfo;
-	char	   *trailing_space;
+	size_t		descriptor_size;
+	char	   *version_space;
 	pg_locale_t result;
 
 	collator = make_icu_collator(iculocstr, icurules);
@@ -380,14 +382,18 @@ pg_newlocale_icu(const locale_descriptor *descriptor,
 		}
 	}
 
+	descriptor_size = size_locale_descriptor(descriptor);
+
 	result = MemoryContextAllocZero(context,
 									sizeof(struct pg_locale_struct) +
+									descriptor_size +
 									U_MAX_VERSION_STRING_LENGTH);
+	set_locale_descriptor(result, descriptor);
 
-	trailing_space = (char *) result + sizeof(*result);
+	version_space = (char *) result + sizeof(*result) + descriptor_size;
 	ucol_getVersion(collator, versioninfo);
-	u_versionToString(versioninfo, trailing_space);
-	result->collate_version = trailing_space;
+	u_versionToString(versioninfo, version_space);
+	result->collate_version = version_space;
 
 	result->icu.ucol = collator;
 	result->icu.lt = loc;
