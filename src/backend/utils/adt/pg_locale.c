@@ -1130,6 +1130,60 @@ set_locale_descriptor(pg_locale_t locale, const locale_descriptor *src)
 	Assert(p == (char *) locale + sizeof(*locale) + size_locale_descriptor(src));
 }
 
+static bool
+cstr_or_null_eq(const char *a, const char *b)
+{
+	/* Both NULL, or same address? */
+	if (a == b)
+		return true;
+
+	/* Only one is NULL? */
+	if (!a || !b)
+		return false;
+
+	return strcmp(a, b) == 0;
+}
+
+static bool
+locale_descriptor_eq(const locale_descriptor *a,
+					 const locale_descriptor *b)
+{
+	return (a->id == b->id &&
+			a->provider == b->provider &&
+			a->deterministic == b->deterministic &&
+			strcmp(a->collate, b->collate) == 0 &&
+			strcmp(a->ctype, b->collate) == 0 &&
+			cstr_or_null_eq(a->icurules, b->icurules) &&
+			cstr_or_null_eq(a->collate_version, b->collate_version));
+}
+
+/*
+ * Check if two pg_locale_t objects are functionally identical.  This is use
+ * to avoid propagating invalidations when pg_database rows are updated for
+ * reasons unrelated to collations.  Without this, datfrozenxid updates would
+ * cause regexp caches to be dropped.
+ */
+static bool
+pg_samelocale(pg_locale_t locale, pg_locale_t other)
+{
+	if (!locale_descriptor_eq(&locale->descriptor, &other->descriptor))
+		return false;
+
+	if (!cstr_or_null_eq(locale->collate_version, other->collate_version))
+		return false;
+
+	if (locale->deterministic != other->deterministic ||
+		locale->collate_is_c != other->collate_is_c ||
+		locale->ctype_is_c != other->ctype_is_c ||
+		locale->is_default != other->is_default ||
+		locale->locale != other->locale ||
+		locale->collate != other->collate ||
+		locale->ctype != other->ctype)
+		return false;
+
+	return true;
+}
+
 static char *
 get_syscache_cstr(Oid oid, HeapTuple tup, int attno)
 {
@@ -1251,60 +1305,6 @@ invoke_invalidation_callbacks(pg_locale_t locale)
 
 		callback->func(callback->arg);
 	}
-}
-
-static bool
-cstr_or_null_eq(const char *a, const char *b)
-{
-	/* Both NULL, or same address? */
-	if (a == b)
-		return true;
-
-	/* Only one is NULL? */
-	if (!a || !b)
-		return false;
-
-	return strcmp(a, b) == 0;
-}
-
-static bool
-locale_descriptor_eq(const locale_descriptor *a,
-					 const locale_descriptor *b)
-{
-	return (a->id == b->id &&
-			a->provider == b->provider &&
-			a->deterministic == b->deterministic &&
-			strcmp(a->collate, b->collate) == 0 &&
-			strcmp(a->ctype, b->collate) == 0 &&
-			cstr_or_null_eq(a->icurules, b->icurules) &&
-			cstr_or_null_eq(a->collate_version, b->collate_version));
-}
-
-/*
- * Check if two pg_locale_t objects are functionally identical.  This is use
- * to avoid propagating invalidations when pg_database rows are updated for
- * reasons unrelated to collations.  Without this, datfrozenxid updates would
- * cause regexp caches to be dropped.
- */
-static bool
-pg_samelocale(pg_locale_t locale, pg_locale_t other)
-{
-	if (!locale_descriptor_eq(&locale->descriptor, &other->descriptor))
-		return false;
-
-	if (!cstr_or_null_eq(locale->collate_version, other->collate_version))
-		return false;
-
-	if (locale->deterministic != other->deterministic ||
-		locale->collate_is_c != other->collate_is_c ||
-		locale->ctype_is_c != other->ctype_is_c ||
-		locale->is_default != other->is_default ||
-		locale->locale != other->locale ||
-		locale->collate != other->collate ||
-		locale->ctype != other->ctype)
-		return false;
-
-	return true;
 }
 
 /*
