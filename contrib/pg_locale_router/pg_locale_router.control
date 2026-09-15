@@ -1,0 +1,5 @@
+# pg_locale_router extension
+comment = 'version-aware locales'
+default_version = '1.0'
+module_pathname = '$libdir/pg_locale_router'
+relocatable = true
