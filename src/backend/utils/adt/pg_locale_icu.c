@@ -388,7 +388,7 @@ pg_newlocale_icu(const locale_descriptor *descriptor,
 									sizeof(struct pg_locale_struct) +
 									descriptor_size +
 									U_MAX_VERSION_STRING_LENGTH);
-	set_locale_descriptor(result, descriptor);
+	pg_locale_set_descriptor(result, descriptor);
 
 	version_space = (char *) result + sizeof(*result) + descriptor_size;
 	ucol_getVersion(collator, versioninfo);

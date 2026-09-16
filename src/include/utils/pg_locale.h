@@ -235,9 +235,6 @@ struct pg_locale_struct
 	int			reference_count;
 	dlist_head	callbacks;
 
-	/* May be set by provider's newlocale() if it handled warnings. */
-	bool		collate_version_warning_logged;
-
 	/* Everything below this point managed by provider's newlocale(). */
 	const char *collate_version;
 

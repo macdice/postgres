@@ -315,7 +315,7 @@ pg_newlocale_builtin(const locale_descriptor *descriptor,
 	result = MemoryContextAllocZero(context,
 									sizeof(struct pg_locale_struct) +
 									size_locale_descriptor(descriptor));
-	set_locale_descriptor(result, descriptor);
+	pg_locale_set_descriptor(result, descriptor);
 	result->collate_version = "1";
 	result->builtin.casemap_full = (strcmp(locstr, "PG_UNICODE_FAST") == 0);
 	result->deterministic = true;

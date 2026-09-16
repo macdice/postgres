@@ -1074,8 +1074,8 @@ pg_locale_provider(char provider)
 }
 
 /*
- * How much extra space do providers need to allocate after pg_locale_struct
- * to store descriptor strings?
+ * How much extra space do providers need to allocate to use
+ * copy_locale_descriptor() or pg_locale_set_descriptor()?
  */
 size_t
 size_locale_descriptor(const locale_descriptor *descriptor)
@@ -1096,38 +1096,52 @@ size_locale_descriptor(const locale_descriptor *descriptor)
 	return size;
 }
 
-static void
-copy_locale_descriptor_string(char **p, const char **s)
+static size_t
+copy_locale_descriptor_string(char *p, const char **s)
 {
 	size_t size;
 
 	if (*s == NULL)
-		return;
+		return 0;
 
 	size = strlen(*s) + 1;
-	memcpy(*p, *s, size);
-	*s = *p;
-	*p += size;
+	memcpy(p, *s, size);
+	*s = p;
+
+	return size;
 }
 
 /*
- * Store descriptor in a pg_locale_t, copying its strings into space past the
- * end of the locale.  Caller must have allocated at least
- * size_locale_descriptor(src) bytes of trailing space.
+ * Copy a "src" to "dst", and the strings it contains to "space", which must
+ * have space for size_locale_descriptor(src) bytes.
  */
 void
-set_locale_descriptor(pg_locale_t locale, const locale_descriptor *src)
+copy_locale_descriptor(locale_descriptor *dst,
+					   char *space,
+					   const locale_descriptor *src)
 {
-	char	   *p = (char *) locale + sizeof(*locale);
+	char	   *p = space;
 
-	locale->descriptor = *src;
-	copy_locale_descriptor_string(&p, &locale->descriptor.collate);
-	copy_locale_descriptor_string(&p, &locale->descriptor.ctype);
-	copy_locale_descriptor_string(&p, &locale->descriptor.locale);
-	copy_locale_descriptor_string(&p, &locale->descriptor.icurules);
-	copy_locale_descriptor_string(&p, &locale->descriptor.collate_version);
+	*dst = *src;
+	p += copy_locale_descriptor_string(p, &dst->collate);
+	p += copy_locale_descriptor_string(p, &dst->ctype);
+	p += copy_locale_descriptor_string(p, &dst->locale);
+	p += copy_locale_descriptor_string(p, &dst->icurules);
+	p += copy_locale_descriptor_string(p, &dst->collate_version);
 
-	Assert(p == (char *) locale + sizeof(*locale) + size_locale_descriptor(src));
+	Assert(p == space + size_locale_descriptor(src));
+}
+
+/*
+ * Store descriptor immediately after "locale".  The caller must have
+ * allocated enough trailing space for size_locale_descriptor(src) bytes.
+ */
+void
+pg_locale_set_descriptor(pg_locale_t locale, const locale_descriptor *src)
+{
+	copy_locale_descriptor(&locale->descriptor,
+						   (char *) locale + sizeof(*locale),
+						   src);
 }
 
 static bool

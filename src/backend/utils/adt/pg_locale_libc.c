@@ -883,7 +883,7 @@ pg_newlocale_libc(const struct locale_descriptor *descriptor,
 	result = MemoryContextAllocZero(context,
 									sizeof(struct pg_locale_struct) +
 									descriptor_size + collate_version_size);
-	set_locale_descriptor(result, descriptor);
+	pg_locale_set_descriptor(result, descriptor);
 
 	/*
 	 * Store collate_version, if we have it and it's not a name we choose to
