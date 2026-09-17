@@ -133,7 +133,7 @@ static size_t strnxfrm_prefix_icu_utf8(char *dest, size_t destsize,
 									   pg_locale_t locale);
 static size_t strxfrm_prefix_icu_utf8(char *dest, size_t destsize, const char *src,
 									  pg_locale_t locale);
-static void init_icu_converter(void);
+static UConverter *init_icu_converter(void);
 static int32_t uchar_length(UConverter *converter,
 							const char *str, int32_t len);
 static int32_t uchar_convert(UConverter *converter,
@@ -1093,27 +1093,16 @@ strnxfrm_prefix_icu_internal(char *dest, size_t destsize,
 							 const char *src, ssize_t srclen,
 							 pg_locale_t locale)
 {
-	UChar		sbuf[TEXTBUFLEN / sizeof(UChar)];
-	UChar	   *uchar = sbuf;
 	UCharIterator iter;
+	PgUCharIteratorMultibyteContext context;
 	uint32_t	state[2];
 	UErrorCode	status;
-	int32_t		ulen;
 	Size		result_bsize;
 
 	/* if encoding is UTF8, use more efficient strnxfrm_prefix_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);
 
-	init_icu_converter();
-
-	ulen = uchar_length(icu_converter, src, srclen);
-
-	if (ulen >= lengthof(sbuf))
-		uchar = palloc_array(UChar, ulen + 1);
-
-	ulen = uchar_convert(icu_converter, uchar, ulen + 1, src, srclen);
-
-	uiter_setString(&iter, uchar, ulen);
+	pg_uiter_setMultibyteString(&iter, &context, src, srclen);
 	state[0] = state[1] = 0;	/* won't need that again */
 	status = U_ZERO_ERROR;
 	result_bsize = ucol_nextSortKeyPart(locale->icu.ucol,
@@ -1127,8 +1116,7 @@ strnxfrm_prefix_icu_internal(char *dest, size_t destsize,
 				(errmsg("sort key generation failed: %s",
 						u_errorName(status))));
 
-	if (uchar != sbuf)
-		pfree(uchar);
+	pg_uiter_endMultibytestring(&iter, &context);
 
 	return result_bsize;
 }
@@ -1147,7 +1135,7 @@ strxfrm_prefix_icu(char *dest, size_t destsize, const char *src,
 	return strnxfrm_prefix_icu_internal(dest, destsize, src, -1, locale);
 }
 
-static void
+static UConverter *
 init_icu_converter(void)
 {
 	const char *icu_encoding_name;
@@ -1155,7 +1143,7 @@ init_icu_converter(void)
 	UConverter *conv;
 
 	if (icu_converter)
-		return;					/* already done */
+		return icu_converter;			/* already done */
 
 	icu_encoding_name = get_encoding_name_for_icu(GetDatabaseEncoding());
 	if (!icu_encoding_name)
@@ -1171,7 +1159,7 @@ init_icu_converter(void)
 				(errmsg("could not open ICU converter for encoding \"%s\": %s",
 						icu_encoding_name, u_errorName(status))));
 
-	icu_converter = conv;
+	return icu_converter = conv;
 }
 
 /*
@@ -1355,19 +1343,18 @@ icu_set_collation_attributes(UCollator *collator, const char *loc,
  * before reaching pg_strncoll().
  */
 
-static PgUCharConverter *
-pg_uconv_get(UCharIterator *iter)
+static PgUCharIteratorMultibyteContext *
+pg_uiter_mb_context(UCharIterator *iter)
 {
-    return (PgUCharConverter *) iter;
+    return (PgUCharIteratorMultibyteContext *) iter->context;
 }
 
 static void
-pg_uconv_convert_up_to(UCharIterator *iter, int32_t new_limit)
+pg_uiter_mb_convert_up_to(UCharIterator *iter, int32_t new_limit)
 {
-	PgUCharConverter *uconv = pg_uconv_get(iter);
+	PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
 	char16_t *buf_begin;
 	char16_t *buf_end;
-	const char *src;
 	const char *src_begin;
 	const char *src_end;
 	UErrorCode status;
@@ -1378,44 +1365,45 @@ pg_uconv_convert_up_to(UCharIterator *iter, int32_t new_limit)
 	 * Round up to convert size, and double that for next time to amortize all
 	 * these cycles.
 	 */
-	if (new_limit < iter->limit + uconv->buf_convert_size)
-		new_limit = iter->limit + uconv->buf_convert_size;
-	if (uconv->buf_convert_size < PG_UCONV_MAX_CONVERT_SIZE)
-		uconv->buf_convert_size *= 2;
+	if (new_limit < iter->limit + context->buf_convert_size)
+		new_limit = iter->limit + context->buf_convert_size;
+	if (context->buf_convert_size < PG_UITER_MB_MAX_CONVERT_SIZE)
+		context->buf_convert_size *= 2;
 
 	/* Out of space? */
-	if (unlikely(new_limit > uconv->buf_capacity))
+	if (unlikely(new_limit > context->buf_capacity))
 	{
-		size_t new_capacity = uconv->buf_capacity * 2;
+		size_t new_capacity = context->buf_capacity * 2;
 
 		if (new_limit > new_capacity)
 			new_capacity *= 2;
 
-		if (uconv->buf == uconv->buf_small)
+		if (context->buf == context->buf_small)
 		{
-			uconv->buf = palloc_array(char16_t, new_capacity);
-			memcpy(uconv->buf,
-				   uconv->buf_small,
-				   sizeof(*uconv->buf) * iter->limit);
+			context->buf = palloc_array(char16_t, new_capacity);
+			memcpy(context->buf,
+				   context->buf_small,
+				   sizeof(char16_t) * iter->limit);
 		}
 		else
 		{
-			uconv->buf = repalloc_array(uconv->buf, char16_t, new_capacity);
+			context->buf = repalloc_array(context->buf,
+										  char16_t,
+										  new_capacity);
 		}
-		uconv->buf_capacity = new_capacity;
+		context->buf_capacity = new_capacity;
 	}
 
-	buf_begin = uconv->buf + iter->limit;
-	buf_end = uconv->buf + new_limit;
+	buf_begin = context->buf + iter->limit;
+	buf_end = context->buf + new_limit;
 	Assert(buf_begin < buf_end);
 
-	src = (const char *) iter->context;
-	src_begin = src + iter->start;
-	src_end = src + iter->length;
+	src_begin = context->src + iter->start;
+	src_end = context->src + iter->length;
 	Assert(src_begin < src_end);
 
 	status = U_ZERO_ERROR;
-	ucnv_toUnicode(uconv->converter,
+	ucnv_toUnicode(context->converter,
 				   &buf_begin, buf_end,
 				   &src_begin, src_end,
 				   NULL,
@@ -1426,52 +1414,52 @@ pg_uconv_convert_up_to(UCharIterator *iter, int32_t new_limit)
 				(errmsg("%s failed: %s", "ucnv_toUnicode",
 						u_errorName(status))));
 
-	iter->limit = buf_begin - uconv->buf;
-	iter->start = src_begin - src;
+	iter->limit = buf_begin - context->buf;
+	iter->start = src_begin - context->src;
 }
 
 static UChar32
-pg_uconv_iter_current(UCharIterator *iter)
+pg_uiter_mb_current(UCharIterator *iter)
 {
-    PgUCharConverter *uconv = pg_uconv_get(iter);
+    PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
 
 	if (iter->index < iter->length)
-		return uconv->buf[iter->index];
+		return context->buf[iter->index];
 
 	return U_SENTINEL;
 }
 
 
 static UChar32
-pg_uconv_iter_next(UCharIterator *iter)
+pg_uiter_mb_next(UCharIterator *iter)
 {
-    PgUCharConverter *uconv = pg_uconv_get(iter);
+    PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
 
 	if (iter->index < iter->limit)
-		return uconv->buf[iter->index++];
+		return context->buf[iter->index++];
 
 	if (iter->start == iter->length)
 		return U_SENTINEL;
 
-	pg_uconv_convert_up_to(iter, iter->index + 1);
+	pg_uiter_mb_convert_up_to(iter, iter->index + 1);
 	Assert(iter->index < iter->limit);
 
-	return uconv->buf[iter->index++];
+	return context->buf[iter->index++];
 }
 
 static UChar32
-pg_uconv_iter_previous(UCharIterator *iter)
+pg_uiter_mb_previous(UCharIterator *iter)
 {
-    PgUCharConverter *uconv = pg_uconv_get(iter);
+    PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
 
 	if (iter->index > 0)
-		return uconv->buf[--iter->index];
+		return context->buf[--iter->index];
 
 	return U_SENTINEL;	
 }
 
 static int32_t
-pg_uconv_iter_getIndex(UCharIterator *iter, UCharIteratorOrigin origin)
+pg_uiter_mb_getIndex(UCharIterator *iter, UCharIteratorOrigin origin)
 {
     switch(origin) {
     case UITER_ZERO:
@@ -1489,11 +1477,11 @@ pg_uconv_iter_getIndex(UCharIterator *iter, UCharIteratorOrigin origin)
 }
 
 static int32_t
-pg_uconv_iter_move(UCharIterator *iter,
-				   int32_t delta,
-				   UCharIteratorOrigin origin)
+pg_uiter_mb_move(UCharIterator *iter,
+				 int32_t delta,
+				 UCharIteratorOrigin origin)
 {
-	int32_t abs_index = pg_uconv_iter_getIndex(iter, origin) + delta;
+	int32_t abs_index = pg_uiter_mb_getIndex(iter, origin) + delta;
 
 	/* Clamp to beginning of buffer. */
 	if (abs_index < 0)
@@ -1504,7 +1492,7 @@ pg_uconv_iter_move(UCharIterator *iter,
 	{
 		/* Any more input to convert? */
 		if (iter->start < iter->length)
-			pg_uconv_convert_up_to(iter, abs_index + 1);
+			pg_uiter_mb_convert_up_to(iter, abs_index + 1);
 
 		/*
 		 * If still past end then clamp, but it's OK to point one past the
@@ -1518,7 +1506,7 @@ pg_uconv_iter_move(UCharIterator *iter,
 }
 
 static UBool
-pg_uconv_iter_hasNext(UCharIterator *iter)
+pg_uiter_mb_hasNext(UCharIterator *iter)
 {
 	/* Already have more dst code units? */
 	if (iter->index < iter->limit)
@@ -1532,19 +1520,19 @@ pg_uconv_iter_hasNext(UCharIterator *iter)
 }
 
 static UBool
-pg_uconv_iter_hasPrevious(UCharIterator *iter)
+pg_uiter_mb_hasPrevious(UCharIterator *iter)
 {
 	return iter->index > 0;
 }
 
 static uint32_t
-pg_uconv_iter_getState(const UCharIterator *iter)
+pg_uiter_mb_getState(const UCharIterator *iter)
 {
 	return iter->index;
 }
 
 static void
-pg_uconv_iter_setState(UCharIterator *iter, uint32_t state, UErrorCode *status)
+pg_uiter_mb_setState(UCharIterator *iter, uint32_t state, UErrorCode *status)
 {
 	if (U_FAILURE(*status))
 		return;
@@ -1556,24 +1544,33 @@ pg_uconv_iter_setState(UCharIterator *iter, uint32_t state, UErrorCode *status)
 }
 
 /*
- * Initialize a PgUCharConverter object.
+ * Like uiter_setUTF8(), but using the database encoding.
  */
 void
-pg_uconv_init(PgUCharConverter *uconv, UConverter *converter)
+pg_uiter_setMultibyteString(UCharIterator *iter,
+							PgUCharIteratorMultibyteContext *context,
+							const char *string,
+							size_t length)
 {
-	memset(uconv, 0, sizeof(*uconv));
+	context->converter = init_icu_converter();
+	context->src = string;
+	context->buf = context->buf_small;
+	context->buf_capacity = lengthof(context->buf_small);
+	context->buf_convert_size = PG_UITER_MB_MIN_CONVERT_SIZE;
+		
+	memset(iter, 0, sizeof(*iter));
+	iter->context = context;
+	iter->length = length;
 
-	uconv->converter = converter;
-	
-	uconv->iterator.getIndex = pg_uconv_iter_getIndex;
-	uconv->iterator.move = pg_uconv_iter_move;
-	uconv->iterator.hasNext = pg_uconv_iter_hasNext;
-	uconv->iterator.hasPrevious = pg_uconv_iter_hasPrevious;
-	uconv->iterator.current = pg_uconv_iter_current;
-	uconv->iterator.next = pg_uconv_iter_next;
-	uconv->iterator.previous = pg_uconv_iter_previous;
-	uconv->iterator.getState = pg_uconv_iter_getState;
-	uconv->iterator.setState = pg_uconv_iter_setState;
+	iter->getIndex = pg_uiter_mb_getIndex;
+	iter->move = pg_uiter_mb_move;
+	iter->hasNext = pg_uiter_mb_hasNext;
+	iter->hasPrevious = pg_uiter_mb_hasPrevious;
+	iter->current = pg_uiter_mb_current;
+	iter->next = pg_uiter_mb_next;
+	iter->previous = pg_uiter_mb_previous;
+	iter->getState = pg_uiter_mb_getState;
+	iter->setState = pg_uiter_mb_setState;
 }
 
 
