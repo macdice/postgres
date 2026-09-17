@@ -37,6 +37,7 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_icu.h"
 #include "utils/pg_locale_internal.h"
 #include "utils/syscache.h"
 
@@ -1334,5 +1335,246 @@ icu_set_collation_attributes(UCollator *collator, const char *loc,
 
 	pfree(lower_str);
 }
+
+/*
+ * UCharIterator methods for incremental conversion of arbitrary encoding.
+ *
+ * The comments of icu4c/source/common/uiter.cpp near uiter_setUTF8()
+ * contemplate a small circular buffer design for handling other encodings,
+ * but that hasn't been provided yet.
+ *
+ * While it seems quite difficult to provide efficient random access to
+ * char16_t units given multibyte input in a fixed space, the approach taken
+ * here is much simpler: convert as little of the string as possible, but keep
+ * everything converted so far in memory for trivial O(1) random access.  In
+ * the worst case we have to convert the whole string into temporarily
+ * allocated memory.
+ *
+ * In our use case, strings often differ pretty close to the beginning unless
+ * they are equal, and varlena.c already has a memcpy() check for binary-equal
+ * before reaching pg_strncoll().
+ */
+
+static PgUCharConverter *
+pg_uconv_get(UCharIterator *iter)
+{
+    return (PgUCharConverter *) iter;
+}
+
+static void
+pg_uconv_convert_up_to(UCharIterator *iter, int32_t new_limit)
+{
+	PgUCharConverter *uconv = pg_uconv_get(iter);
+	char16_t *buf_begin;
+	char16_t *buf_end;
+	const char *src;
+	const char *src_begin;
+	const char *src_end;
+	UErrorCode status;
+
+	Assert(new_limit > iter->limit);
+
+	/*
+	 * Round up to convert size, and double that for next time to amortize all
+	 * these cycles.
+	 */
+	if (new_limit < iter->limit + uconv->buf_convert_size)
+		new_limit = iter->limit + uconv->buf_convert_size;
+	if (uconv->buf_convert_size < PG_UCONV_MAX_CONVERT_SIZE)
+		uconv->buf_convert_size *= 2;
+
+	/* Out of space? */
+	if (unlikely(new_limit > uconv->buf_capacity))
+	{
+		size_t new_capacity = uconv->buf_capacity * 2;
+
+		if (new_limit > new_capacity)
+			new_capacity *= 2;
+
+		if (uconv->buf == uconv->buf_small)
+		{
+			uconv->buf = palloc_array(char16_t, new_capacity);
+			memcpy(uconv->buf,
+				   uconv->buf_small,
+				   sizeof(*uconv->buf) * iter->limit);
+		}
+		else
+		{
+			uconv->buf = repalloc_array(uconv->buf, char16_t, new_capacity);
+		}
+		uconv->buf_capacity = new_capacity;
+	}
+
+	buf_begin = uconv->buf + iter->limit;
+	buf_end = uconv->buf + new_limit;
+	Assert(buf_begin < buf_end);
+
+	src = (const char *) iter->context;
+	src_begin = src + iter->start;
+	src_end = src + iter->length;
+	Assert(src_begin < src_end);
+
+	status = U_ZERO_ERROR;
+	ucnv_toUnicode(uconv->converter,
+				   &buf_begin, buf_end,
+				   &src_begin, src_end,
+				   NULL,
+				   true,
+				   &status);
+	if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR)
+		ereport(ERROR,
+				(errmsg("%s failed: %s", "ucnv_toUnicode",
+						u_errorName(status))));
+
+	iter->limit = buf_begin - uconv->buf;
+	iter->start = src_begin - src;
+}
+
+static UChar32
+pg_uconv_iter_current(UCharIterator *iter)
+{
+    PgUCharConverter *uconv = pg_uconv_get(iter);
+
+	if (iter->index < iter->length)
+		return uconv->buf[iter->index];
+
+	return U_SENTINEL;
+}
+
+
+static UChar32
+pg_uconv_iter_next(UCharIterator *iter)
+{
+    PgUCharConverter *uconv = pg_uconv_get(iter);
+
+	if (iter->index < iter->limit)
+		return uconv->buf[iter->index++];
+
+	if (iter->start == iter->length)
+		return U_SENTINEL;
+
+	pg_uconv_convert_up_to(iter, iter->index + 1);
+	Assert(iter->index < iter->limit);
+
+	return uconv->buf[iter->index++];
+}
+
+static UChar32
+pg_uconv_iter_previous(UCharIterator *iter)
+{
+    PgUCharConverter *uconv = pg_uconv_get(iter);
+
+	if (iter->index > 0)
+		return uconv->buf[--iter->index];
+
+	return U_SENTINEL;	
+}
+
+static int32_t
+pg_uconv_iter_getIndex(UCharIterator *iter, UCharIteratorOrigin origin)
+{
+    switch(origin) {
+    case UITER_ZERO:
+    case UITER_START:
+        return 0;
+    case UITER_CURRENT:
+		return iter->index;
+    case UITER_LIMIT:
+		return iter->limit;
+    case UITER_LENGTH:
+		return iter->length;
+    default:
+        return -1;
+    }
+}
+
+static int32_t
+pg_uconv_iter_move(UCharIterator *iter,
+				   int32_t delta,
+				   UCharIteratorOrigin origin)
+{
+	int32_t abs_index = pg_uconv_iter_getIndex(iter, origin) + delta;
+
+	/* Clamp to beginning of buffer. */
+	if (abs_index < 0)
+		abs_index = 0;
+
+	/* Past the end of the converted buffer? */
+	if (unlikely(abs_index >= iter->limit))
+	{
+		/* Any more input to convert? */
+		if (iter->start < iter->length)
+			pg_uconv_convert_up_to(iter, abs_index + 1);
+
+		/*
+		 * If still past end then clamp, but it's OK to point one past the
+		 * end.
+		 */
+		if (abs_index > iter->limit)
+			abs_index = iter->limit;
+	}
+
+	return iter->index = abs_index;	
+}
+
+static UBool
+pg_uconv_iter_hasNext(UCharIterator *iter)
+{
+	/* Already have more dst code units? */
+	if (iter->index < iter->limit)
+		return true;
+
+	/* Could convert more dst code units? */
+	if (iter->start < iter->length)
+		return true;
+
+	return false;
+}
+
+static UBool
+pg_uconv_iter_hasPrevious(UCharIterator *iter)
+{
+	return iter->index > 0;
+}
+
+static uint32_t
+pg_uconv_iter_getState(const UCharIterator *iter)
+{
+	return iter->index;
+}
+
+static void
+pg_uconv_iter_setState(UCharIterator *iter, uint32_t state, UErrorCode *status)
+{
+	if (U_FAILURE(*status))
+		return;
+	
+	if (state > iter->limit)
+		*status = U_INDEX_OUTOFBOUNDS_ERROR;
+	else
+		iter->index = state;
+}
+
+/*
+ * Initialize a PgUCharConverter object.
+ */
+void
+pg_uconv_init(PgUCharConverter *uconv, UConverter *converter)
+{
+	memset(uconv, 0, sizeof(*uconv));
+
+	uconv->converter = converter;
+	
+	uconv->iterator.getIndex = pg_uconv_iter_getIndex;
+	uconv->iterator.move = pg_uconv_iter_move;
+	uconv->iterator.hasNext = pg_uconv_iter_hasNext;
+	uconv->iterator.hasPrevious = pg_uconv_iter_hasPrevious;
+	uconv->iterator.current = pg_uconv_iter_current;
+	uconv->iterator.next = pg_uconv_iter_next;
+	uconv->iterator.previous = pg_uconv_iter_previous;
+	uconv->iterator.getState = pg_uconv_iter_getState;
+	uconv->iterator.setState = pg_uconv_iter_setState;
+}
+
 
 #endif							/* USE_ICU */
