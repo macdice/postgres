@@ -86,6 +86,7 @@ OBJS = \
 	pg_locale.o \
 	pg_locale_builtin.o \
 	pg_locale_icu.o \
+	pg_locale_icu_iter.o \
 	pg_locale_libc.o \
 	pg_lsn.o \
 	pg_ndistinct.o \

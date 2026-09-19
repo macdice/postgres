@@ -133,12 +133,13 @@ static size_t strnxfrm_prefix_icu_utf8(char *dest, size_t destsize,
 									   pg_locale_t locale);
 static size_t strxfrm_prefix_icu_utf8(char *dest, size_t destsize, const char *src,
 									  pg_locale_t locale);
-static UConverter *init_icu_converter(void);
+static void init_icu_converter(void);
 static int32_t uchar_length(UConverter *converter,
 							const char *str, int32_t len);
 static int32_t uchar_convert(UConverter *converter,
 							 UChar *dest, int32_t destlen,
-							 const char *src, int32_t srclen);
+							 const char *src, int32_t srclen,
+							 bool *overflow);
 static int32_t icu_to_uchar(UChar **buff_uchar, const char *buff,
 							size_t nbytes);
 static size_t icu_from_uchar(char *dest, size_t destsize,
@@ -749,17 +750,19 @@ strnxfrm_icu_internal(char *dest, size_t destsize, const char *src, ssize_t srcl
 {
 	UChar		sbuf[TEXTBUFLEN / sizeof(UChar)];
 	UChar	   *uchar = sbuf;
+	bool		overflow;
 	int32_t		ulen;
 	Size		result_bsize;
 
 	init_icu_converter();
 
-	ulen = uchar_length(icu_converter, src, srclen);
-
-	if (ulen >= lengthof(sbuf))
+	ulen = uchar_convert(icu_converter, uchar, lengthof(sbuf), src, srclen,
+						 &overflow);
+	if (overflow)
+	{
 		uchar = palloc_array(UChar, ulen + 1);
-
-	ulen = uchar_convert(icu_converter, uchar, ulen + 1, src, srclen);
+		ulen = uchar_convert(icu_converter, uchar, ulen, src, srclen, NULL);
+	}
 
 	result_bsize = ucol_getSortKey(locale->icu.ucol,
 								   uchar, ulen,
@@ -883,7 +886,8 @@ icu_to_uchar(UChar **buff_uchar, const char *buff, size_t nbytes)
 
 	*buff_uchar = palloc_array(UChar, len_uchar + 1);
 	len_uchar = uchar_convert(icu_converter,
-							  *buff_uchar, len_uchar + 1, buff, nbytes);
+							  *buff_uchar, len_uchar + 1, buff, nbytes,
+							  NULL);
 
 	return len_uchar;
 }
@@ -1045,25 +1049,39 @@ strncoll_icu_internal(const char *arg1, ssize_t len1,
 	UChar	   *uchar1,
 			   *uchar2;
 	int			result;
+	bool		uchar1_overflow;
+	bool		uchar2_overflow;
 
 	/* if encoding is UTF8, use more efficient strncoll_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);
 
 	init_icu_converter();
 
-	ulen1 = uchar_length(icu_converter, arg1, len1);
-	ulen2 = uchar_length(icu_converter, arg2, len2);
+	/* Convert directly into sbuf, or discover required size, in one pass. */
+	ulen1 = uchar_convert(icu_converter,
+						  buf,
+						  lengthof(sbuf),
+						  arg1,
+						  len1,
+						  &uchar1_overflow);
+	ulen2 = uchar_convert(icu_converter,
+						  buf + ulen1,
+						  uchar1_overflow ? 0 : lengthof(sbuf) - ulen1,
+						  arg2,
+						  len2,
+						  &uchar2_overflow);
 
-	/* ulen1+1 or ulen2+1 doesn't risk overflow, but summing them might */
-	bufsize = add_size(ulen1 + 1, ulen2 + 1);
-	if (bufsize > lengthof(sbuf))
+	if (uchar1_overflow || uchar2_overflow)
+	{
+		/* summing might overflow */
+		bufsize = add_size(ulen1, ulen2);
 		buf = palloc_array(UChar, bufsize);
+		uchar_convert(icu_converter, buf, ulen1, arg1, len1, NULL);
+		uchar_convert(icu_converter, buf + ulen1, ulen2, arg2, len2, NULL);
+	}
 
 	uchar1 = buf;
-	uchar2 = buf + ulen1 + 1;
-
-	ulen1 = uchar_convert(icu_converter, uchar1, ulen1 + 1, arg1, len1);
-	ulen2 = uchar_convert(icu_converter, uchar2, ulen2 + 1, arg2, len2);
+	uchar2 = buf + ulen1;
 
 	result = ucol_strcoll(locale->icu.ucol,
 						  uchar1, ulen1,
@@ -1093,8 +1111,8 @@ strnxfrm_prefix_icu_internal(char *dest, size_t destsize,
 							 const char *src, ssize_t srclen,
 							 pg_locale_t locale)
 {
+	PgUCharIteratorMultibyteContext iter_context;
 	UCharIterator iter;
-	PgUCharIteratorMultibyteContext context;
 	uint32_t	state[2];
 	UErrorCode	status;
 	Size		result_bsize;
@@ -1102,7 +1120,7 @@ strnxfrm_prefix_icu_internal(char *dest, size_t destsize,
 	/* if encoding is UTF8, use more efficient strnxfrm_prefix_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);
 
-	pg_uiter_setMultibyteString(&iter, &context, src, srclen);
+	pg_uiter_setDbEncodingString(&iter, &iter_context, src, srclen);
 	state[0] = state[1] = 0;	/* won't need that again */
 	status = U_ZERO_ERROR;
 	result_bsize = ucol_nextSortKeyPart(locale->icu.ucol,
@@ -1115,8 +1133,7 @@ strnxfrm_prefix_icu_internal(char *dest, size_t destsize,
 		ereport(ERROR,
 				(errmsg("sort key generation failed: %s",
 						u_errorName(status))));
-
-	pg_uiter_endMultibytestring(&iter, &context);
+	pg_uiter_close(&iter);
 
 	return result_bsize;
 }
@@ -1135,7 +1152,7 @@ strxfrm_prefix_icu(char *dest, size_t destsize, const char *src,
 	return strnxfrm_prefix_icu_internal(dest, destsize, src, -1, locale);
 }
 
-static UConverter *
+static void
 init_icu_converter(void)
 {
 	const char *icu_encoding_name;
@@ -1143,7 +1160,7 @@ init_icu_converter(void)
 	UConverter *conv;
 
 	if (icu_converter)
-		return icu_converter;			/* already done */
+		return;					/* already done */
 
 	icu_encoding_name = get_encoding_name_for_icu(GetDatabaseEncoding());
 	if (!icu_encoding_name)
@@ -1159,7 +1176,14 @@ init_icu_converter(void)
 				(errmsg("could not open ICU converter for encoding \"%s\": %s",
 						icu_encoding_name, u_errorName(status))));
 
-	return icu_converter = conv;
+	icu_converter = conv;
+}
+
+UConverter *
+pg_icu_dbencoding_converter(void)
+{
+	init_icu_converter();
+	return icu_converter;
 }
 
 /*
@@ -1174,14 +1198,9 @@ init_icu_converter(void)
 static int32_t
 uchar_length(UConverter *converter, const char *str, int32_t len)
 {
-	UErrorCode	status = U_ZERO_ERROR;
-	int32_t		ulen;
+	bool overflow;
 
-	ulen = ucnv_toUChars(converter, NULL, 0, str, len, &status);
-	if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR)
-		ereport(ERROR,
-				(errmsg("%s failed: %s", "ucnv_toUChars", u_errorName(status))));
-	return ulen;
+	return uchar_convert(converter, NULL, 0, str, len, &overflow);
 }
 
 /*
@@ -1189,18 +1208,40 @@ uchar_length(UConverter *converter, const char *str, int32_t len)
  * return the length (in UChars).
  *
  * A srclen of -1 indicates that the input string is NUL-terminated.
+ *
+ * The result is NUL-terminated if destlen is long enough, but NUL is not
+ * counted in the result.
+ *
+ * If overflow is not NULL, then *overflow is set to true to indicate that the
+ * operation failed and the return value indicates the required destlen.  If
+ * overflow is NULL, then buffer overflow is raised as an error.
  */
 static int32_t
 uchar_convert(UConverter *converter, UChar *dest, int32_t destlen,
-			  const char *src, int32_t srclen)
+			  const char *src, int32_t srclen, bool *overflow)
 {
 	UErrorCode	status = U_ZERO_ERROR;
 	int32_t		ulen;
 
 	ulen = ucnv_toUChars(converter, dest, destlen, src, srclen, &status);
+
+	if (overflow)
+	{
+		if (status == U_BUFFER_OVERFLOW_ERROR)
+		{
+			*overflow = true;
+			status = U_ZERO_ERROR;
+		}
+		else
+		{
+			*overflow = false;
+		}
+	}		
+
 	if (U_FAILURE(status))
 		ereport(ERROR,
 				(errmsg("%s failed: %s", "ucnv_toUChars", u_errorName(status))));
+
 	return ulen;
 }
 
@@ -1322,255 +1363,6 @@ icu_set_collation_attributes(UCollator *collator, const char *loc,
 	}
 
 	pfree(lower_str);
-}
-
-/*
- * UCharIterator methods for incremental conversion of arbitrary encoding.
- *
- * The comments of icu4c/source/common/uiter.cpp near uiter_setUTF8()
- * contemplate a small circular buffer design for handling other encodings,
- * but that hasn't been provided yet.
- *
- * While it seems quite difficult to provide efficient random access to
- * char16_t units given multibyte input in a fixed space, the approach taken
- * here is much simpler: convert as little of the string as possible, but keep
- * everything converted so far in memory for trivial O(1) random access.  In
- * the worst case we have to convert the whole string into temporarily
- * allocated memory.
- *
- * In our use case, strings often differ pretty close to the beginning unless
- * they are equal, and varlena.c already has a memcpy() check for binary-equal
- * before reaching pg_strncoll().
- */
-
-static PgUCharIteratorMultibyteContext *
-pg_uiter_mb_context(UCharIterator *iter)
-{
-    return (PgUCharIteratorMultibyteContext *) iter->context;
-}
-
-static void
-pg_uiter_mb_convert_up_to(UCharIterator *iter, int32_t new_limit)
-{
-	PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
-	char16_t *buf_begin;
-	char16_t *buf_end;
-	const char *src_begin;
-	const char *src_end;
-	UErrorCode status;
-
-	Assert(new_limit > iter->limit);
-
-	/*
-	 * Round up to convert size, and double that for next time to amortize all
-	 * these cycles.
-	 */
-	if (new_limit < iter->limit + context->buf_convert_size)
-		new_limit = iter->limit + context->buf_convert_size;
-	if (context->buf_convert_size < PG_UITER_MB_MAX_CONVERT_SIZE)
-		context->buf_convert_size *= 2;
-
-	/* Out of space? */
-	if (unlikely(new_limit > context->buf_capacity))
-	{
-		size_t new_capacity = context->buf_capacity * 2;
-
-		if (new_limit > new_capacity)
-			new_capacity *= 2;
-
-		if (context->buf == context->buf_small)
-		{
-			context->buf = palloc_array(char16_t, new_capacity);
-			memcpy(context->buf,
-				   context->buf_small,
-				   sizeof(char16_t) * iter->limit);
-		}
-		else
-		{
-			context->buf = repalloc_array(context->buf,
-										  char16_t,
-										  new_capacity);
-		}
-		context->buf_capacity = new_capacity;
-	}
-
-	buf_begin = context->buf + iter->limit;
-	buf_end = context->buf + new_limit;
-	Assert(buf_begin < buf_end);
-
-	src_begin = context->src + iter->start;
-	src_end = context->src + iter->length;
-	Assert(src_begin < src_end);
-
-	status = U_ZERO_ERROR;
-	ucnv_toUnicode(context->converter,
-				   &buf_begin, buf_end,
-				   &src_begin, src_end,
-				   NULL,
-				   true,
-				   &status);
-	if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR)
-		ereport(ERROR,
-				(errmsg("%s failed: %s", "ucnv_toUnicode",
-						u_errorName(status))));
-
-	iter->limit = buf_begin - context->buf;
-	iter->start = src_begin - context->src;
-}
-
-static UChar32
-pg_uiter_mb_current(UCharIterator *iter)
-{
-    PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
-
-	if (iter->index < iter->length)
-		return context->buf[iter->index];
-
-	return U_SENTINEL;
-}
-
-
-static UChar32
-pg_uiter_mb_next(UCharIterator *iter)
-{
-    PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
-
-	if (iter->index < iter->limit)
-		return context->buf[iter->index++];
-
-	if (iter->start == iter->length)
-		return U_SENTINEL;
-
-	pg_uiter_mb_convert_up_to(iter, iter->index + 1);
-	Assert(iter->index < iter->limit);
-
-	return context->buf[iter->index++];
-}
-
-static UChar32
-pg_uiter_mb_previous(UCharIterator *iter)
-{
-    PgUCharIteratorMultibyteContext *context = pg_uiter_mb_context(iter);
-
-	if (iter->index > 0)
-		return context->buf[--iter->index];
-
-	return U_SENTINEL;	
-}
-
-static int32_t
-pg_uiter_mb_getIndex(UCharIterator *iter, UCharIteratorOrigin origin)
-{
-    switch(origin) {
-    case UITER_ZERO:
-    case UITER_START:
-        return 0;
-    case UITER_CURRENT:
-		return iter->index;
-    case UITER_LIMIT:
-		return iter->limit;
-    case UITER_LENGTH:
-		return iter->length;
-    default:
-        return -1;
-    }
-}
-
-static int32_t
-pg_uiter_mb_move(UCharIterator *iter,
-				 int32_t delta,
-				 UCharIteratorOrigin origin)
-{
-	int32_t abs_index = pg_uiter_mb_getIndex(iter, origin) + delta;
-
-	/* Clamp to beginning of buffer. */
-	if (abs_index < 0)
-		abs_index = 0;
-
-	/* Past the end of the converted buffer? */
-	if (unlikely(abs_index >= iter->limit))
-	{
-		/* Any more input to convert? */
-		if (iter->start < iter->length)
-			pg_uiter_mb_convert_up_to(iter, abs_index + 1);
-
-		/*
-		 * If still past end then clamp, but it's OK to point one past the
-		 * end.
-		 */
-		if (abs_index > iter->limit)
-			abs_index = iter->limit;
-	}
-
-	return iter->index = abs_index;	
-}
-
-static UBool
-pg_uiter_mb_hasNext(UCharIterator *iter)
-{
-	/* Already have more dst code units? */
-	if (iter->index < iter->limit)
-		return true;
-
-	/* Could convert more dst code units? */
-	if (iter->start < iter->length)
-		return true;
-
-	return false;
-}
-
-static UBool
-pg_uiter_mb_hasPrevious(UCharIterator *iter)
-{
-	return iter->index > 0;
-}
-
-static uint32_t
-pg_uiter_mb_getState(const UCharIterator *iter)
-{
-	return iter->index;
-}
-
-static void
-pg_uiter_mb_setState(UCharIterator *iter, uint32_t state, UErrorCode *status)
-{
-	if (U_FAILURE(*status))
-		return;
-	
-	if (state > iter->limit)
-		*status = U_INDEX_OUTOFBOUNDS_ERROR;
-	else
-		iter->index = state;
-}
-
-/*
- * Like uiter_setUTF8(), but using the database encoding.
- */
-void
-pg_uiter_setMultibyteString(UCharIterator *iter,
-							PgUCharIteratorMultibyteContext *context,
-							const char *string,
-							size_t length)
-{
-	context->converter = init_icu_converter();
-	context->src = string;
-	context->buf = context->buf_small;
-	context->buf_capacity = lengthof(context->buf_small);
-	context->buf_convert_size = PG_UITER_MB_MIN_CONVERT_SIZE;
-		
-	memset(iter, 0, sizeof(*iter));
-	iter->context = context;
-	iter->length = length;
-
-	iter->getIndex = pg_uiter_mb_getIndex;
-	iter->move = pg_uiter_mb_move;
-	iter->hasNext = pg_uiter_mb_hasNext;
-	iter->hasPrevious = pg_uiter_mb_hasPrevious;
-	iter->current = pg_uiter_mb_current;
-	iter->next = pg_uiter_mb_next;
-	iter->previous = pg_uiter_mb_previous;
-	iter->getState = pg_uiter_mb_getState;
-	iter->setState = pg_uiter_mb_setState;
 }
 
 
