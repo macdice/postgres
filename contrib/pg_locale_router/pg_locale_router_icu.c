@@ -9,10 +9,13 @@
 #include <unicode/ustring.h>
 
 #include "fmgr.h"
+#include "funcapi.h"
+#include "utils/builtins.h"
 #include "utils/pg_locale.h"
 #include "utils/pg_locale_icu.h"
 #include "utils/pg_locale_internal.h"
 #include "utils/memutils.h"
+#include "utils/tuplestore.h"
 
 #include "pg_locale_router.h"
 
@@ -25,8 +28,11 @@
 #define PG_LOCALE_ROUTER_ICU_MAX U_ICU_VERSION_MAJOR_NUM
 #define PG_LOCALE_ROUTER_ICU_MIN 55
 
+static_assert(PG_LOCALE_ROUTER_ICU_MIN <= PG_LOCALE_ROUTER_ICU_MAX,
+			  "unsupported ICU version");
+
 /*
- * We're using values, types and functions from the compile time library for
+ * We're using values, types and functions from the compile-time library for
  * everything except the dyn_ functions below, and these are the
  * library-defined values and types that cross the boundary.  If any of these
  * assertions failed, we'd need to devise a version-sensitive coping strategy.
@@ -96,15 +102,27 @@ ASSERT_ITER_MEMBER(setState);
 typedef struct pg_locale_router_icu_library
 {
 	int			major_version;
-	void	   *lib_u;
-	void	   *lib_ucol;
 	int			missing;
+	int			reference_count;
 	struct pg_locale_router_icu_library *next;
 
+	/* libicuuc defines common facilities */
+	void	   *lib_u;
 	const char *(*dyn_u_errorName) (UErrorCode code);
+	void		(*dyn_u_getUnicodeVersion) (UVersionInfo info);
+	void		(*dyn_u_getVersion) (UVersionInfo info);
 	void		(*dyn_u_versionToString) (const UVersionInfo versionArray,
 										  char *versionString);
+	void		(*dyn_uenum_close) (UEnumeration *en);
+	const char *(*dyn_uenum_next) (UEnumeration *en,
+								   int32_t *resutLength,
+								   UErrorCode *status);
+
+	/* libicui18n defines collation facilities */
+	void	   *lib_ucol;
 	void		(*dyn_ucol_close) (UCollator *coll);
+	void		(*dyn_ucol_getUCAVersion) (const UCollator *coll,
+										   UVersionInfo info);
 	const UChar *(*dyn_ucol_getRules) (const UCollator *coll,
 									   int32_t *length);
 	int32_t		(*dyn_ucol_getSortKey) (const UCollator *coll,
@@ -121,6 +139,7 @@ typedef struct pg_locale_router_icu_library
 											 int32_t count,
 											 UErrorCode *status);
 	UCollator  *(*dyn_ucol_open) (const char *loc, UErrorCode *status);
+	UEnumeration *(*dyn_ucol_openAvailableLocales) (UErrorCode *status);
 	UCollator  *(*dyn_ucol_openRules) (const UChar *rules,
 									   int32_t rulesLength,
 									   UColAttributeValue normalizationMode,
@@ -457,6 +476,9 @@ pg_locale_router_icu_freelocale(pg_locale_t locale)
 	pg_freelocale(rloc->std_locale);
 	lib->dyn_ucol_close(rloc->dyn_collator);
 	pfree(locale);
+
+	if (lib->lib_u)
+		lib->reference_count--;
 }
 
 static const struct locale_methods pg_locale_router_icu_locale_methods = {
@@ -486,15 +508,15 @@ get_sym(pg_locale_router_icu_library * lib, const char *name)
 	 */
 	snprintf(full_name, sizeof(full_name), "%s_%d", name, lib->major_version);
 
-	/* Select library based on symbol prefix. */
-	handle = strncmp(name, "u_", 2) == 0 ? lib->lib_u : lib->lib_ucol;
+	/* ucol_* functions are in a separate library from the rest. */
+	handle = strncmp(name, "ucol_", 5) == 0 ? lib->lib_ucol : lib->lib_u;
 
 	sym = dlsym(handle, full_name);
 	if (!sym)
 	{
 		if (lib->missing == 0)
 			elog(LOG,
-				 "pg_locale_router: ICU version %d is missing expected symbol %s, skipping",
+				 "pg_locale_router: ICU version %d is missing required symbol %s, skipping",
 				 lib->major_version,
 				 full_name);
 		lib->missing++;
@@ -503,10 +525,6 @@ get_sym(pg_locale_router_icu_library * lib, const char *name)
 	return sym;
 }
 
-/*
- * XXX It would be possible to reload this at runtime after a GUC change, if
- * we had reference counts.
- */
 static pg_locale_router_icu_library *
 load_icu_libraries(void)
 {
@@ -529,14 +547,21 @@ load_icu_libraries(void)
 		return NULL;
 
 	lib->major_version = U_ICU_VERSION_MAJOR_NUM;
+	lib->reference_count = -1;
 	lib->dyn_u_errorName = u_errorName;
+	lib->dyn_u_getUnicodeVersion = u_getUnicodeVersion;
+	lib->dyn_u_getVersion = u_getVersion;
 	lib->dyn_u_versionToString = u_versionToString;
+	lib->dyn_uenum_close = uenum_close;
+	lib->dyn_uenum_next = uenum_next;
 	lib->dyn_ucol_close = ucol_close;
+	lib->dyn_ucol_getUCAVersion = ucol_getUCAVersion;
 	lib->dyn_ucol_getRules = ucol_getRules;
 	lib->dyn_ucol_getSortKey = ucol_getSortKey;
 	lib->dyn_ucol_getVersion = ucol_getVersion;
 	lib->dyn_ucol_nextSortKeyPart = ucol_nextSortKeyPart;
 	lib->dyn_ucol_open = ucol_open;
+	lib->dyn_ucol_openAvailableLocales = ucol_openAvailableLocales;
 	lib->dyn_ucol_openRules = ucol_openRules;
 	lib->dyn_ucol_strcollIter = ucol_strcollIter;
 	lib->dyn_ucol_strcollUTF8 = ucol_strcollUTF8;
@@ -592,13 +617,19 @@ load_icu_libraries(void)
 		lib->lib_u = lib_u;
 		lib->lib_ucol = lib_ucol;
 		lib->dyn_u_errorName = get_sym(lib, "u_errorName");
+		lib->dyn_u_getUnicodeVersion = get_sym(lib, "u_getUnicodeVersion");
+		lib->dyn_u_getVersion = get_sym(lib, "u_getVersion");
 		lib->dyn_u_versionToString = get_sym(lib, "u_versionToString");
+		lib->dyn_uenum_close = get_sym(lib, "uenum_close");
+		lib->dyn_uenum_next = get_sym(lib, "uenum_next");
 		lib->dyn_ucol_close = get_sym(lib, "ucol_close");
+		lib->dyn_ucol_getUCAVersion = get_sym(lib, "ucol_getUCAVersion");
 		lib->dyn_ucol_getRules = get_sym(lib, "ucol_getRules");
 		lib->dyn_ucol_getSortKey = get_sym(lib, "ucol_getSortKey");
 		lib->dyn_ucol_getVersion = get_sym(lib, "ucol_getVersion");
 		lib->dyn_ucol_nextSortKeyPart = get_sym(lib, "ucol_nextSortKeyPart");
 		lib->dyn_ucol_open = get_sym(lib, "ucol_open");
+		lib->dyn_ucol_openAvailableLocales = get_sym(lib, "ucol_openAvailableLocales");
 		lib->dyn_ucol_openRules = get_sym(lib, "ucol_openRules");
 		lib->dyn_ucol_strcollIter = get_sym(lib, "ucol_strcollIter");
 		lib->dyn_ucol_strcollUTF8 = get_sym(lib, "ucol_strcollUTF8");
@@ -675,7 +706,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 
 			lib->dyn_ucol_getVersion(dyn_collator, version);
 			lib->dyn_u_versionToString(version, version_string);
-			if (strcmp(version_string, descriptor->collate_version) != 0)
+			if (strcmp(version_string, descriptor->collate_version) == 0)
 				break;
 			lib->dyn_ucol_close(dyn_collator);
 			dyn_collator = NULL;
@@ -742,7 +773,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 							u_errorName(status))));
 		}
 
-		/* Reopened dyn_collator with the rules appended. */
+		/* Reopen dyn_collator with the rules appended. */
 		lib->dyn_ucol_close(dyn_collator);
 		status = U_ZERO_ERROR;
 		dyn_collator = lib->dyn_ucol_openRules(all_rules, all_rules_len,
@@ -797,6 +828,8 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 	 * Replace the collate functions.  Note that these work with dyn_collator,
 	 * never icu.ucol (which came from the wrong library).
 	 */
+	if (lib->lib_u)
+		lib->reference_count++;
 	result->library = lib;
 	result->dyn_collator = dyn_collator;
 	result->locale.collate_version = result->locale.descriptor.collate_version;
@@ -813,6 +846,143 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 		 result->std_locale->collate_version);
 
 	return &result->locale;
+}
+
+PG_FUNCTION_INFO_V1(pg_locale_router_icu_libraries);
+PG_FUNCTION_INFO_V1(pg_locale_router_icu_locales);
+
+Datum
+pg_locale_router_icu_libraries(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	pg_locale_router_icu_library *lib;
+
+	lib = load_icu_libraries();
+	if (lib == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+
+	InitMaterializedSRF(fcinfo, 0);
+	while (lib)
+	{
+		Datum values[4];
+		bool nulls[4] = {0};
+		UVersionInfo icu_version;
+		UVersionInfo unicode_version;
+		char		icu_version_string[U_MAX_VERSION_STRING_LENGTH];
+		char		unicode_version_string[U_MAX_VERSION_STRING_LENGTH];		
+
+		lib->dyn_u_getVersion(icu_version);
+		lib->dyn_u_versionToString(icu_version, icu_version_string);
+		lib->dyn_u_getUnicodeVersion(unicode_version);
+		lib->dyn_u_versionToString(unicode_version, unicode_version_string);
+		
+		values[0] = Int32GetDatum(lib->major_version);
+		values[1] = CStringGetTextDatum(icu_version_string);
+		values[2] = CStringGetTextDatum(unicode_version_string);
+		values[3] = Int32GetDatum(lib->reference_count);
+		if (lib->lib_u == NULL)
+			nulls[3] = true;
+		
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+
+		lib = lib->next;
+	}
+
+	return (Datum) 0;
+}
+
+Datum
+pg_locale_router_icu_locales(PG_FUNCTION_ARGS)
+{
+	int major_version = PG_GETARG_INT32(0);
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	pg_locale_router_icu_library *lib;
+	UErrorCode status;
+
+	/*
+	 * PG_FINALLY() block closes this if error is thrown so it has to be
+	 * volatile.
+	 */
+	volatile UEnumeration *en;
+
+	lib = load_icu_libraries();
+	if (lib == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+	while (lib)
+	{
+		if (lib->major_version == major_version)
+			break;
+		lib = lib->next;
+	}
+	if (lib == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("could not find ICU version %d",
+						major_version)));
+
+	status = U_ZERO_ERROR;
+	en = lib->dyn_ucol_openAvailableLocales(&status);
+	if (U_FAILURE(status))
+		ereport(ERROR,
+				(errmsg("%s failed: %s", "ucol_openAvailableLocales",
+						lib->dyn_u_errorName(status))));
+
+	InitMaterializedSRF(fcinfo, 0);
+	PG_TRY();
+	{
+		for (;;)
+		{
+			Datum values[3];
+			bool nulls[3] = {0};
+			UVersionInfo collate_version;
+			char		collate_version_string[U_MAX_VERSION_STRING_LENGTH];
+			UVersionInfo uca_version;
+			char		uca_version_string[U_MAX_VERSION_STRING_LENGTH];
+			const char *locale;
+			UCollator *collator;
+
+			status = U_ZERO_ERROR;
+			locale = lib->dyn_uenum_next(unvolatize(UEnumeration *, en),
+										 NULL,
+										 &status);
+			if (U_FAILURE(status))
+				ereport(ERROR,
+						(errmsg("%s failed: %s", "uenum_next",
+								lib->dyn_u_errorName(status))));
+			if (locale == NULL)
+				break;
+
+			status = U_ZERO_ERROR;			
+			collator = lib->dyn_ucol_open(locale, &status);
+			if (U_FAILURE(status))
+				ereport(ERROR,
+						(errmsg("%s failed: %s", "ucol_open",
+								lib->dyn_u_errorName(status))));
+			lib->dyn_ucol_getVersion(collator, collate_version);
+			lib->dyn_ucol_getUCAVersion(collator, uca_version);
+			lib->dyn_ucol_close(collator);
+			lib->dyn_u_versionToString(collate_version, collate_version_string);
+			lib->dyn_u_versionToString(uca_version, uca_version_string);
+
+			values[0] = CStringGetTextDatum(locale);
+			values[1] = CStringGetTextDatum(collate_version_string);
+			values[2] = CStringGetTextDatum(uca_version_string);
+
+			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+								 values, nulls);
+		}
+	}
+	PG_FINALLY();
+	{
+		lib->dyn_uenum_close(unvolatize(UEnumeration *, en));
+	}
+	PG_END_TRY();
+
+	return (Datum) 0;
 }
 
 #endif
