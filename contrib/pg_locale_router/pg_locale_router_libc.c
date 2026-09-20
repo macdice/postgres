@@ -76,7 +76,8 @@ pg_locale_router_newlocale_libc(const locale_descriptor *descriptor,
 	alt_result->collate_version = alt_result->descriptor.collate_version;
 
 	/* Log this redirection. */
-	elog(LOG, "pg_locale_router: collation \"%s\": using libc locale \"%s\" (version: %s) instead of instead of \"%s\" (%s%s) for LC_COLLATE",
+	elog(DEBUG1,
+		 "pg_locale_router: collation \"%s\": using libc locale \"%s\" (version: %s) instead of instead of \"%s\" (%s%s) for LC_COLLATE",
 		 alt_result->descriptor.name,
 		 alt_result->descriptor.collate,
 		 alt_result->descriptor.collate_version,

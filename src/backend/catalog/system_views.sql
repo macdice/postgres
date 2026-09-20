@@ -1568,3 +1568,6 @@ CREATE VIEW pg_aios AS
     SELECT * FROM pg_get_aios();
 REVOKE ALL ON pg_aios FROM PUBLIC;
 GRANT SELECT ON pg_aios TO pg_read_all_stats;
+
+CREATE VIEW pg_stat_collations AS
+    SELECT * FROM pg_stat_get_collations();

@@ -12498,6 +12498,15 @@
   proname => 'pg_database_collation_actual_version', procost => '100',
   provolatile => 'v', prorettype => 'text', proargtypes => 'oid',
   prosrc => 'pg_database_collation_actual_version' },
+{ oid => '8888',
+  descr => 'get information about cached collations',
+  proname => 'pg_stat_get_collations', procost => '10', prorows => '10',
+  proretset => 't', provolatile => 'v', prorettype => 'record',
+  proargtypes => '',
+  proallargtypes => '{oid,text,text,bool,text,text,text,text,text,text,int4,bool}',
+  proargmodes => '{o,o,o,o,o,o,o,o,o,o,o,o}',
+  proargnames => '{oid,name,provider,deterministic,collate,ctype,locale,icurules,collate_version,actual_collate_version,ref_count,inval}',
+  prosrc => 'pg_stat_get_collations' },
 
 # system management/monitoring related functions
 { oid => '3353', descr => 'list files in the log directory',

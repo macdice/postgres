@@ -41,6 +41,8 @@
 #include "catalog/pg_database.h"
 #include "common/hashfn.h"
 #include "common/string.h"
+#include "fmgr.h"
+#include "funcapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -54,6 +56,7 @@
 #include "utils/relcache.h"
 #include "utils/resowner.h"
 #include "utils/syscache.h"
+#include "utils/tuplestore.h"
 
 #ifdef WIN32
 #include <shlwapi.h>
@@ -117,6 +120,7 @@ static bool CurrentLCTimeValid = false;
 static const struct pg_locale_struct c_locale = {
 	.descriptor = {
 		.id = C_COLLATION_OID,
+		.name = "C",
 		.provider = COLLPROVIDER_BUILTIN,
 		.deterministic = true,
 		.collate = "C",
@@ -155,6 +159,8 @@ typedef struct
 
 static MemoryContext CollationCacheContext = NULL;
 static collation_cache_hash *CollationCache = NULL;
+
+static dlist_head all_locales;
 
 /*
  * The collation cache is often accessed repeatedly for the same collation, so
@@ -1080,7 +1086,7 @@ pg_locale_provider(char provider)
 size_t
 size_locale_descriptor(const locale_descriptor *descriptor)
 {
-	size_t size = 0;
+	size_t		size = 0;
 
 	size += strlen(descriptor->name) + 1;
 	if (descriptor->collate)
@@ -1100,7 +1106,7 @@ size_locale_descriptor(const locale_descriptor *descriptor)
 static size_t
 copy_locale_descriptor_string(char *p, const char **s)
 {
-	size_t size;
+	size_t		size;
 
 	if (*s == NULL)
 		return 0;
@@ -1299,6 +1305,8 @@ pg_newlocale(Oid collid, MemoryContext context)
 
 	ReleaseSysCache(tp);
 
+	dlist_push_head(&all_locales, &result->all_locales_node);
+
 	return result;
 }
 
@@ -1314,7 +1322,7 @@ invoke_invalidation_callbacks(pg_locale_t locale)
 								   dlist_head_node(&locale->callbacks));
 
 		/*
-		 * It is convenient for callback->func() to use a common
+		 * It might be convenient for callback->func() to use a common
 		 * drop-cached-object routine that in other circumstances needs to
 		 * call pg_locale_del_callback(), so make that OK by deleting
 		 * "thoroughly".
@@ -1344,7 +1352,10 @@ default_locale_syscache_inval(Datum arg,
 							  uint32 hashvalue)
 {
 	if (hashvalue == 0 || hashvalue == default_locale_inval_hash)
+	{
+		default_locale->invalidated = true;
 		default_locale_inval = true;
+	}
 }
 
 /*
@@ -1371,6 +1382,7 @@ collation_cache_syscache_inval(Datum arg,
 		{
 			pg_locale_t locale = entry->locale;
 
+			default_locale->invalidated = true;
 			invoke_invalidation_callbacks(locale);
 			collation_cache_delete(CollationCache, entry->collid);
 			pg_releaselocale(locale);
@@ -1492,11 +1504,12 @@ init_database_collation(void)
 	 */
 	if (default_locale)
 	{
+		default_locale->invalidated = true;
 		invoke_invalidation_callbacks(default_locale);
 		pg_releaselocale(default_locale);
 	}
 
-	/* Pin the new default locale. */
+	dlist_push_tail(&all_locales, &result->all_locales_node);
 	pg_pinlocale(result);
 	default_locale = result;
 }
@@ -1628,7 +1641,10 @@ pg_releaselocale(pg_locale_t locale)
 	Assert(locale->reference_count > 0);
 
 	if (--locale->reference_count == 0)
+	{
+		dlist_delete_from(&all_locales, &locale->all_locales_node);
 		pg_freelocale(locale);
+	}
 }
 
 /*
@@ -2454,4 +2470,58 @@ icu_validate_locale(const char *loc_str)
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("ICU is not supported in this build")));
 #endif							/* not USE_ICU */
+}
+
+Datum
+pg_stat_get_collations(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	dlist_iter	iter;
+
+	InitMaterializedSRF(fcinfo, 0);
+	dlist_foreach(iter, &all_locales)
+	{
+		pg_locale_t locale = dlist_container(struct pg_locale_struct,
+											 all_locales_node,
+											 iter.cur);
+		char		provider[2] = {locale->descriptor.provider, 0};
+		Datum		values[12] = {0};
+		bool		nulls[12] = {false};
+
+		values[0] = ObjectIdGetDatum(locale->descriptor.id);
+		values[1] = CStringGetTextDatum(locale->descriptor.name);
+		values[2] = CStringGetTextDatum(provider);
+		values[3] = BoolGetDatum(locale->descriptor.deterministic);
+		if (locale->descriptor.collate)
+			values[4] = CStringGetTextDatum(locale->descriptor.collate);
+		else
+			nulls[4] = true;
+		if (locale->descriptor.ctype)
+			values[5] = CStringGetTextDatum(locale->descriptor.ctype);
+		else
+			nulls[5] = true;
+		if (locale->descriptor.locale)
+			values[6] = CStringGetTextDatum(locale->descriptor.locale);
+		else
+			nulls[6] = true;
+		if (locale->descriptor.icurules)
+			values[7] = CStringGetTextDatum(locale->descriptor.icurules);
+		else
+			nulls[7] = true;
+		if (locale->descriptor.collate_version)
+			values[8] = CStringGetTextDatum(locale->descriptor.collate_version);
+		else
+			nulls[8] = true;
+		if (locale->collate_version)
+			values[9] = CStringGetTextDatum(locale->collate_version);
+		else
+			nulls[9] = true;
+		values[10] = Int32GetDatum(locale->reference_count);
+		values[11] = BoolGetDatum(locale->invalidated);
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+							 values, nulls);
+	}
+
+	return (Datum) 0;
 }

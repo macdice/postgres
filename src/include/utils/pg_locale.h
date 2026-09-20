@@ -235,6 +235,8 @@ struct pg_locale_struct
 	uint32		inval_hash;
 	int			reference_count;
 	dlist_head	callbacks;
+	dlist_node	all_locales_node;
+	bool		invalidated;
 
 	/* Everything below this point managed by provider's newlocale(). */
 	const char *collate_version;
