@@ -21,12 +21,7 @@
 
 #include <dlfcn.h>
 
-/*
- * Names used by ICU on different platforms.
- *
- * XXX The following are based on ICU documentation and build scripts, but
- * only ELF has been tested.
- */
+/* Names used by ICU on different platforms. */
 #if defined(WIN32)
 #define DEFAULT_LIBICUUC "icuuc@VERSION@" DLSUFFIX
 #define DEFAULT_LIBICUI18N "icuin@VERSION@" DLSUFFIX
@@ -34,6 +29,10 @@
 #define DEFAULT_LIBICUUC "libicuuc.@VERSION@" DLSUFFIX
 #define DEFAULT_LIBICUI18N "libicui18n.@VERSION@" DLSUFFIX
 #elif defined(_AIX)
+/*
+ * XXX It looks like icu4c/source/config/mh-aix-gcc puts the version number
+ * here, but is it .so, .a, or both using RLTD_MEMBER syntax?
+ */
 #define DEFAULT_LIBICUUC "libicuuc@VERSION@" DLSUFFIX
 #define DEFAULT_LIBICUI18N "libicui18n@VERSION@" DLSUFFIX
 #else
@@ -128,7 +127,7 @@ typedef struct pg_locale_router_icu_library
 	struct pg_locale_router_icu_library *next;
 
 	/* libicuuc */
-	void	   *lib_u;
+	void	   *lib_uc;
 	const char *(*dyn_u_errorName) (UErrorCode code);
 	void		(*dyn_u_getUnicodeVersion) (UVersionInfo info);
 	void		(*dyn_u_getVersion) (UVersionInfo info);
@@ -140,7 +139,7 @@ typedef struct pg_locale_router_icu_library
 								   UErrorCode *status);
 
 	/* libicui18n */
-	void	   *lib_ucol;
+	void	   *lib_i18n;
 	void		(*dyn_ucol_close) (UCollator *coll);
 	void		(*dyn_ucol_getUCAVersion) (const UCollator *coll,
 										   UVersionInfo info);
@@ -509,7 +508,7 @@ pg_locale_router_icu_freelocale(pg_locale_t locale)
 	 * invalidates the locales and makes them unnecessary because the standard
 	 * locales are now usable.
 	 */
-	if (lib->lib_u)
+	if (lib->lib_uc)
 		lib->reference_count--;
 }
 
@@ -523,8 +522,8 @@ static void
 free_icu_library(pg_locale_router_icu_library * lib)
 {
 	Assert(lib->reference_count == 0);
-	dlclose(lib->lib_u);
-	dlclose(lib->lib_ucol);
+	dlclose(lib->lib_uc);
+	dlclose(lib->lib_i18n);
 	pfree(lib);
 }
 
@@ -535,13 +534,11 @@ get_sym(pg_locale_router_icu_library * lib, const char *name)
 	void	   *handle;
 	void	   *sym;
 
-	/*
-	 * ICU symbols have the major version appended to their names, to support
-	 * actually linking against multiple versions at the same time.
-	 */
+	/* Assume that U_DISABLE_RENAMING was not defined when building ICU. */
 	snprintf(full_name, sizeof(full_name), "%s_%d", name, lib->major_version);
 
-	handle = strncmp(name, "ucol_", 5) == 0 ? lib->lib_ucol : lib->lib_u;
+	/* Symbol prefix tells you which library to look in. */
+	handle = strncmp(name, "ucol_", 5) == 0 ? lib->lib_i18n : lib->lib_uc;
 
 	sym = dlsym(handle, full_name);
 	if (!sym)
@@ -620,23 +617,23 @@ load_icu_libraries(void)
 		 major_version <= PG_LOCALE_ROUTER_ICU_MAX;
 		 major_version++)
 	{
-		char		lib_u_name[MAXPGPATH];
-		char		lib_ucol_name[MAXPGPATH];
-		void	   *lib_u;
-		void	   *lib_ucol;
+		char		lib_uc_name[MAXPGPATH];
+		char		lib_i18n_name[MAXPGPATH];
+		void	   *lib_uc;
+		void	   *lib_i18n;
 
 		/* Don't dlopen the version we're linked against. */
 		if (major_version == U_ICU_VERSION_MAJOR_NUM)
 			continue;
 
 		/* Can we find the two libraries? */
-		make_library_name(lib_u_name, libicuuc, major_version);
-		make_library_name(lib_ucol_name, libicui18n, major_version);
-		if (!(lib_u = dlopen(lib_u_name, RTLD_NOW | RTLD_GLOBAL)))
+		make_library_name(lib_uc_name, libicuuc, major_version);
+		make_library_name(lib_i18n_name, libicui18n, major_version);
+		if (!(lib_uc = dlopen(lib_uc_name, RTLD_NOW | RTLD_GLOBAL)))
 			continue;
-		if (!(lib_ucol = dlopen(lib_ucol_name, RTLD_NOW | RTLD_GLOBAL)))
+		if (!(lib_i18n = dlopen(lib_i18n_name, RTLD_NOW | RTLD_GLOBAL)))
 		{
-			dlclose(lib_u);
+			dlclose(lib_uc);
 			continue;
 		}
 
@@ -645,8 +642,8 @@ load_icu_libraries(void)
 										 MCXT_ALLOC_NO_OOM | MCXT_ALLOC_ZERO);
 		if (lib == NULL)
 		{
-			dlclose(lib_u);
-			dlclose(lib_ucol);
+			dlclose(lib_uc);
+			dlclose(lib_i18n);
 			while (icu_libraries)
 			{
 				lib = icu_libraries;
@@ -657,8 +654,8 @@ load_icu_libraries(void)
 		}
 
 		lib->major_version = major_version;
-		lib->lib_u = lib_u;
-		lib->lib_ucol = lib_ucol;
+		lib->lib_uc = lib_uc;
+		lib->lib_i18n = lib_i18n;
 		lib->dyn_u_errorName = get_sym(lib, "u_errorName");
 		lib->dyn_u_getUnicodeVersion = get_sym(lib, "u_getUnicodeVersion");
 		lib->dyn_u_getVersion = get_sym(lib, "u_getVersion");
@@ -699,7 +696,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 	pg_locale_t std_result;
 	pg_locale_router_icu_locale *result;
 	pg_locale_router_icu_library *lib;
-	char		info_buffer[80];
+	char		info_buffer[64];
 	char	   *info_space;
 
 	/*
@@ -839,13 +836,12 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 
 	/*
 	 * Build an informational message to show in the "collate" column of the
-	 * pg_stat_collations view, to show what is happening.
+	 * pg_stat_collations view, to show that the locale has been redirected.
 	 *
 	 * XXX Perhaps there should be a column reserved for such messages?  Many
 	 * columns already...
 	 */
-	snprintf(info_buffer, sizeof(info_buffer), "-> ICU %d",
-			 lib->major_version);
+	snprintf(info_buffer, sizeof(info_buffer), "(ICU %d)", lib->major_version);
 
 	result = MemoryContextAllocExtended(context,
 										sizeof(pg_locale_router_icu_locale) +
@@ -872,7 +868,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 	 */
 	result->locale = *std_result;
 
-	/* Store informational message as descriptor's "collate" string. */
+	/* Store informational message as artificial "collate" string. */
 	info_space = (char *) result + sizeof(pg_locale_router_icu_locale);
 	strcpy(info_space, info_buffer);
 	result->locale.descriptor.collate = info_space;
@@ -888,7 +884,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 	 * Replace the collate functions.  Note that these work with dyn_collator,
 	 * never icu.ucol (which came from the wrong library).
 	 */
-	if (lib->lib_u)
+	if (lib->lib_uc)
 		lib->reference_count++;
 	result->library = lib;
 	result->dyn_collator = dyn_collator;
@@ -943,7 +939,7 @@ pg_locale_router_icu_libraries(PG_FUNCTION_ARGS)
 		values[1] = CStringGetTextDatum(icu_version_string);
 		values[2] = CStringGetTextDatum(unicode_version_string);
 		values[3] = Int32GetDatum(lib->reference_count);
-		if (lib->lib_u == NULL)
+		if (lib->lib_uc == NULL)
 			nulls[3] = true;
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
