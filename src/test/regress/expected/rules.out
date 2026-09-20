@@ -1890,6 +1890,19 @@ pg_stat_checkpointer| SELECT pg_stat_get_checkpointer_num_timed() AS num_timed,
     pg_stat_get_checkpointer_buffers_written() AS buffers_written,
     pg_stat_get_checkpointer_slru_written() AS slru_written,
     pg_stat_get_checkpointer_stat_reset_time() AS stats_reset;
+pg_stat_collations| SELECT oid,
+    name,
+    provider,
+    deterministic,
+    "collate",
+    ctype,
+    locale,
+    icurules,
+    collate_version,
+    actual_collate_version,
+    ref_count,
+    inval
+   FROM pg_stat_get_collations() pg_stat_get_collations(oid, name, provider, deterministic, "collate", ctype, locale, icurules, collate_version, actual_collate_version, ref_count, inval);
 pg_stat_database| SELECT oid AS datid,
     datname,
         CASE
