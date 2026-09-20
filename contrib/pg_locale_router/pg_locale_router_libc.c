@@ -15,7 +15,7 @@ pg_locale_router_newlocale_libc(const locale_descriptor *descriptor,
 	pg_locale_t result;
 	pg_locale_t alt_result;
 	locale_descriptor alt_descriptor;
-	char alt_collate[LOCALE_NAME_BUFLEN];
+	char		alt_collate[LOCALE_NAME_BUFLEN];
 
 	/*
 	 * Try to open it using the standard routine, ie using the locale names
@@ -64,7 +64,7 @@ pg_locale_router_newlocale_libc(const locale_descriptor *descriptor,
 		 */
 		if (!result && (flags & PG_NEWLOCALE_FLAGS_NOT_FOUND_OK) == 0)
 			report_newlocale_failure(descriptor->collate);
-		
+
 		return result;
 	}
 
@@ -76,8 +76,8 @@ pg_locale_router_newlocale_libc(const locale_descriptor *descriptor,
 	alt_result->collate_version = alt_result->descriptor.collate_version;
 
 	/* Log this redirection. */
-	elog(LOG, "pg_locale_router: collation %u: using libc locale \"%s\" (version: %s) instead of instead of \"%s\" (%s%s) for LC_COLLATE",
-		 alt_result->descriptor.id,
+	elog(LOG, "pg_locale_router: collation \"%s\": using libc locale \"%s\" (version: %s) instead of instead of \"%s\" (%s%s) for LC_COLLATE",
+		 alt_result->descriptor.name,
 		 alt_result->descriptor.collate,
 		 alt_result->descriptor.collate_version,
 		 descriptor->collate,
@@ -87,7 +87,6 @@ pg_locale_router_newlocale_libc(const locale_descriptor *descriptor,
 	/* We don't need the original, if we found one. */
 	if (result)
 		pg_freelocale(result);
-	
+
 	return alt_result;
 }
-

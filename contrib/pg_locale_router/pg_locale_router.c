@@ -22,8 +22,14 @@ pg_locale_router_newlocale(const locale_descriptor *descriptor,
 	switch (descriptor->provider)
 	{
 	case COLLPROVIDER_BUILTIN:
-		/* No interception of builtin provider. */
-		return std_newlocale(descriptor, 0, context);
+		/*
+		 * Can't intercept builtin provider.  A plausible reason to do so
+		 * would be to use ctype from an older Unicode version, but that seems
+		 * like a job for a different extension.  pg_locale_router doesn't
+		 * support ctype versioning for libc or ICU either so this isn't
+		 * currently done.
+		 */
+		return std_newlocale(descriptor, flags, context);
 		
 	case COLLPROVIDER_LIBC:
 		/* Intercept libc locales. */

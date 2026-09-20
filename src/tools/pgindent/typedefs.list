@@ -3322,10 +3322,13 @@ TypeName
 TzAbbrevCache
 U32
 U8
+UBool
 UCaseMap
 UChar
+UChar32
 UCharIterator
 UColAttributeValue
+UCollationResult
 UCollator
 UConverter
 UErrorCode
@@ -3333,6 +3336,7 @@ UINT
 ULARGE_INTEGER
 ULONG
 ULONG_PTR
+UParseError
 UV
 UVersionInfo
 UnicodeNormalizationForm

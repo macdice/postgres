@@ -32,6 +32,7 @@ SUBDIRS = \
 		passwordcheck	\
 		pg_buffercache	\
 		pg_freespacemap \
+		pg_locale_router \
 		pg_logicalinspect \
 		pg_overexplain \
 		pg_plan_advice \
