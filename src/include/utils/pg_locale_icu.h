@@ -114,7 +114,8 @@ pg_uiter_openMultibyteString(UCharIterator *iter,
 }
 
 /*
- * Free temporary buffer memory after using UCharIterator.
+ * Free temporary buffer memory after using an interator initialized with
+ * a multibyte string.
  */
 static inline void
 pg_uiter_close(UCharIterator *iter)

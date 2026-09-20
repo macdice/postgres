@@ -27,9 +27,9 @@
 
 /*
  * We're using values, types and functions from the compile time library for
- * everything except the dyn_ functions below, and these are the values and
- * types that cross the boundary.  If any of these assertions failed, we'd
- * need to devise a version-sensitive copying strategy.
+ * everything except the dyn_ functions below, and these are the
+ * library-defined values and types that cross the boundary.  If any of these
+ * assertions failed, we'd need to devise a version-sensitive coping strategy.
  */
 static_assert(sizeof(UErrorCode) == sizeof(int), "ABI break");
 static_assert(alignof(UErrorCode) == alignof(int), "ABI break");
@@ -105,13 +105,15 @@ typedef struct pg_locale_router_icu_library
 	void		(*dyn_u_versionToString) (const UVersionInfo versionArray,
 										  char *versionString);
 	void		(*dyn_ucol_close) (UCollator *coll);
-	const UChar *(*dyn_ucol_getRules) (const UCollator *coll, int32_t *length);
+	const UChar *(*dyn_ucol_getRules) (const UCollator *coll,
+									   int32_t *length);
 	int32_t		(*dyn_ucol_getSortKey) (const UCollator *coll,
 										const UChar *source,
 										int32_t sourceLength,
 										uint8_t *result,
 										int32_t resultLength);
-	void		(*dyn_ucol_getVersion) (const UCollator *coll, UVersionInfo info);
+	void		(*dyn_ucol_getVersion) (const UCollator *coll,
+										UVersionInfo info);
 	int32_t		(*dyn_ucol_nextSortKeyPart) (const UCollator *coll,
 											 UCharIterator *iter,
 											 uint32_t state[2],
