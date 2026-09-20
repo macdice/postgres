@@ -136,10 +136,6 @@ static size_t strxfrm_prefix_icu_utf8(char *dest, size_t destsize, const char *s
 static void init_icu_converter(void);
 static int32_t uchar_length(UConverter *converter,
 							const char *str, int32_t len);
-static int32_t uchar_convert(UConverter *converter,
-							 UChar *dest, int32_t destlen,
-							 const char *src, int32_t srclen,
-							 bool *overflow);
 static int32_t icu_to_uchar(UChar **buff_uchar, const char *buff,
 							size_t nbytes);
 static size_t icu_from_uchar(char *dest, size_t destsize,
@@ -373,7 +369,7 @@ pg_newlocale_icu(const locale_descriptor *descriptor,
 	collator = make_icu_collator(iculocstr, icurules);
 
 	/* libc only needed for default locale and single-byte encoding */
-	if (descriptor->id && DEFAULT_COLLATION_OID &&
+	if (descriptor->id == DEFAULT_COLLATION_OID &&
 		pg_database_encoding_max_length() == 1)
 	{
 		loc = make_libc_ctype_locale(ctype);
@@ -756,12 +752,12 @@ strnxfrm_icu_internal(char *dest, size_t destsize, const char *src, ssize_t srcl
 
 	init_icu_converter();
 
-	ulen = uchar_convert(icu_converter, uchar, lengthof(sbuf), src, srclen,
-						 &overflow);
+	ulen = pg_uchar_convert(icu_converter, uchar, lengthof(sbuf), src, srclen,
+							&overflow);
 	if (overflow)
 	{
 		uchar = palloc_array(UChar, ulen + 1);
-		ulen = uchar_convert(icu_converter, uchar, ulen, src, srclen, NULL);
+		ulen = pg_uchar_convert(icu_converter, uchar, ulen, src, srclen, NULL);
 	}
 
 	result_bsize = ucol_getSortKey(locale->icu.ucol,
@@ -885,9 +881,9 @@ icu_to_uchar(UChar **buff_uchar, const char *buff, size_t nbytes)
 	len_uchar = uchar_length(icu_converter, buff, nbytes);
 
 	*buff_uchar = palloc_array(UChar, len_uchar + 1);
-	len_uchar = uchar_convert(icu_converter,
-							  *buff_uchar, len_uchar + 1, buff, nbytes,
-							  NULL);
+	len_uchar = pg_uchar_convert(icu_converter,
+								 *buff_uchar, len_uchar + 1, buff, nbytes,
+								 NULL);
 
 	return len_uchar;
 }
@@ -1030,9 +1026,6 @@ foldcase_options(const char *locale)
 /*
  * strncoll_icu
  *
- * Convert the arguments from the database encoding to UChar strings, then
- * call ucol_strcoll().
- *
  * When the database encoding is UTF-8, and ICU supports ucol_strcollUTF8(),
  * caller should call that instead.
  */
@@ -1041,54 +1034,28 @@ strncoll_icu_internal(const char *arg1, ssize_t len1,
 					  const char *arg2, ssize_t len2,
 					  pg_locale_t locale)
 {
-	UChar		sbuf[TEXTBUFLEN / sizeof(UChar)];
-	UChar	   *buf = sbuf;
-	int32_t		ulen1;
-	int32_t		ulen2;
-	size_t		bufsize;
-	UChar	   *uchar1,
-			   *uchar2;
-	int			result;
-	bool		uchar1_overflow;
-	bool		uchar2_overflow;
+	PgUCharIteratorMultibyteContext context1;
+	PgUCharIteratorMultibyteContext context2;
+	UCharIterator iter1;
+	UCharIterator iter2;
+	UErrorCode status;
+	int result;
 
-	/* if encoding is UTF8, use more efficient strncoll_icu_utf8 */
+	/* if encoding is UTF8, use more efficient strnxfrm_prefix_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);
 
-	init_icu_converter();
+	pg_uiter_setDbEncodingString(&iter1, &context1, arg1, len1);
+	pg_uiter_setDbEncodingString(&iter2, &context2, arg2, len2);
 
-	/* Convert directly into sbuf, or discover required size, in one pass. */
-	ulen1 = uchar_convert(icu_converter,
-						  buf,
-						  lengthof(sbuf),
-						  arg1,
-						  len1,
-						  &uchar1_overflow);
-	ulen2 = uchar_convert(icu_converter,
-						  buf + ulen1,
-						  uchar1_overflow ? 0 : lengthof(sbuf) - ulen1,
-						  arg2,
-						  len2,
-						  &uchar2_overflow);
+	status = U_ZERO_ERROR;
+	result = ucol_strcollIter(locale->icu.ucol, &iter1, &iter2, &status);
+	if (U_FAILURE(status))
+		ereport(ERROR,
+				(errmsg("%s failed: %s", "ucol_strcollIter",
+						u_errorName(status))));		
 
-	if (uchar1_overflow || uchar2_overflow)
-	{
-		/* summing might overflow */
-		bufsize = add_size(ulen1, ulen2);
-		buf = palloc_array(UChar, bufsize);
-		uchar_convert(icu_converter, buf, ulen1, arg1, len1, NULL);
-		uchar_convert(icu_converter, buf + ulen1, ulen2, arg2, len2, NULL);
-	}
-
-	uchar1 = buf;
-	uchar2 = buf + ulen1;
-
-	result = ucol_strcoll(locale->icu.ucol,
-						  uchar1, ulen1,
-						  uchar2, ulen2);
-
-	if (buf != sbuf)
-		pfree(buf);
+	pg_uiter_close(&iter1);
+	pg_uiter_close(&iter2);
 
 	return result;
 }
@@ -1111,7 +1078,7 @@ strnxfrm_prefix_icu_internal(char *dest, size_t destsize,
 							 const char *src, ssize_t srclen,
 							 pg_locale_t locale)
 {
-	PgUCharIteratorMultibyteContext iter_context;
+	PgUCharIteratorMultibyteContext context;
 	UCharIterator iter;
 	uint32_t	state[2];
 	UErrorCode	status;
@@ -1120,7 +1087,7 @@ strnxfrm_prefix_icu_internal(char *dest, size_t destsize,
 	/* if encoding is UTF8, use more efficient strnxfrm_prefix_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);
 
-	pg_uiter_setDbEncodingString(&iter, &iter_context, src, srclen);
+	pg_uiter_setDbEncodingString(&iter, &context, src, srclen);
 	state[0] = state[1] = 0;	/* won't need that again */
 	status = U_ZERO_ERROR;
 	result_bsize = ucol_nextSortKeyPart(locale->icu.ucol,
@@ -1200,7 +1167,7 @@ uchar_length(UConverter *converter, const char *str, int32_t len)
 {
 	bool overflow;
 
-	return uchar_convert(converter, NULL, 0, str, len, &overflow);
+	return pg_uchar_convert(converter, NULL, 0, str, len, &overflow);
 }
 
 /*
@@ -1216,8 +1183,8 @@ uchar_length(UConverter *converter, const char *str, int32_t len)
  * operation failed and the return value indicates the required destlen.  If
  * overflow is NULL, then buffer overflow is raised as an error.
  */
-static int32_t
-uchar_convert(UConverter *converter, UChar *dest, int32_t destlen,
+int32_t
+pg_uchar_convert(UConverter *converter, UChar *dest, int32_t destlen,
 			  const char *src, int32_t srclen, bool *overflow)
 {
 	UErrorCode	status = U_ZERO_ERROR;

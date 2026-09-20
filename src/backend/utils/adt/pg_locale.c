@@ -1082,6 +1082,7 @@ size_locale_descriptor(const locale_descriptor *descriptor)
 {
 	size_t size = 0;
 
+	size += strlen(descriptor->name) + 1;
 	if (descriptor->collate)
 		size += strlen(descriptor->collate) + 1;
 	if (descriptor->ctype)
@@ -1112,7 +1113,7 @@ copy_locale_descriptor_string(char *p, const char **s)
 }
 
 /*
- * Copy a "src" to "dst", and the strings it contains to "space", which must
+ * Copy "src" to "dst", and the strings it contains to "space", which must
  * have space for size_locale_descriptor(src) bytes.
  */
 void
@@ -1123,6 +1124,7 @@ copy_locale_descriptor(locale_descriptor *dst,
 	char	   *p = space;
 
 	*dst = *src;
+	p += copy_locale_descriptor_string(p, &dst->name);
 	p += copy_locale_descriptor_string(p, &dst->collate);
 	p += copy_locale_descriptor_string(p, &dst->ctype);
 	p += copy_locale_descriptor_string(p, &dst->locale);
@@ -1163,10 +1165,11 @@ locale_descriptor_eq(const locale_descriptor *a,
 					 const locale_descriptor *b)
 {
 	return (a->id == b->id &&
+			strcmp(a->name, b->name) == 0 &&
 			a->provider == b->provider &&
 			a->deterministic == b->deterministic &&
-			strcmp(a->collate, b->collate) == 0 &&
-			strcmp(a->ctype, b->collate) == 0 &&
+			cstr_or_null_eq(a->collate, b->collate) == 0 &&
+			cstr_or_null_eq(a->ctype, b->collate) == 0 &&
 			cstr_or_null_eq(a->icurules, b->icurules) &&
 			cstr_or_null_eq(a->collate_version, b->collate_version));
 }
@@ -1232,6 +1235,7 @@ pg_newlocale(Oid collid, MemoryContext context)
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 	collform = (Form_pg_collation) GETSTRUCT(tp);
 	descriptor.id = collid;
+	descriptor.name = NameStr(collform->collname);
 	descriptor.provider = collform->collprovider;
 	descriptor.deterministic = collform->collisdeterministic;
 	descriptor.collate = get_syscache_cstr_or_null(COLLOID, tp,
@@ -1403,6 +1407,7 @@ init_database_collation(void)
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbform = (Form_pg_database) GETSTRUCT(tup);
 	descriptor.id = DEFAULT_COLLATION_OID;
+	descriptor.name = "default";
 	descriptor.provider = dbform->datlocprovider;
 	descriptor.deterministic = true;	/* default always deterministic */
 	descriptor.collate = get_syscache_cstr(DATABASEOID, tup,

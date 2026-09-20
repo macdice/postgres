@@ -88,6 +88,7 @@ typedef struct pg_locale_struct *pg_locale_t;
 typedef struct locale_descriptor
 {
 	Oid			id;				/* DEFAULT_COLLATION_OID or collid */
+	const char *name;			/* "default" or collname */
 	char		provider;		/* datlocprovider or collprovider */
 	bool		deterministic;	/* true or collisdeterministic */
 	const char *collate;		/* datlocale or collcollate */
