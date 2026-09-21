@@ -124,9 +124,9 @@ typedef struct pg_locale_router_icu_library
 	int			major_version;
 	int			missing_symbols;
 	int			reference_count;
-	struct pg_locale_router_icu_library *next;
+	dlist_node	node;
 
-	/* libicuuc */
+	char	   *lib_uc_name;
 	void	   *lib_uc;
 	const char *(*dyn_u_errorName) (UErrorCode code);
 	void		(*dyn_u_getUnicodeVersion) (UVersionInfo info);
@@ -138,7 +138,7 @@ typedef struct pg_locale_router_icu_library
 								   int32_t *resutLength,
 								   UErrorCode *status);
 
-	/* libicui18n */
+	char	   *lib_i18n_name;
 	void	   *lib_i18n;
 	void		(*dyn_ucol_close) (UCollator *coll);
 	void		(*dyn_ucol_getUCAVersion) (const UCollator *coll,
@@ -191,6 +191,214 @@ typedef struct pg_locale_router_icu_locale
 /* GUCs */
 static const char *libicuuc = DEFAULT_LIBICUUC;
 static const char *libicui18n = DEFAULT_LIBICUI18N;
+
+static dlist_head loaded_icu_libraries;
+
+static void *
+get_sym(pg_locale_router_icu_library * lib, const char *name)
+{
+	char		full_name[80];
+	void	   *handle;
+	void	   *sym;
+
+	/* Assume U_DISABLE_RENAMING not defined when building ICU. */
+	snprintf(full_name, sizeof(full_name), "%s_%d", name, lib->major_version);
+
+	handle = strncmp(name, "ucol_", 5) == 0 ? lib->lib_i18n : lib->lib_uc;
+	sym = dlsym(handle, full_name);
+	if (!sym)
+	{
+		if (lib->missing_symbols == 0)
+			elog(DEBUG1,
+				 "pg_locale_router: ICU version %d is missing required symbol %s, skipping",
+				 lib->major_version,
+				 full_name);
+		lib->missing_symbols++;
+	}
+
+	return sym;
+}
+
+/*
+ * Replace @VERSION@ with major_version in configured library name or path.
+ */
+static void
+make_library_name(char dst[MAXPGPATH], const char *libname, int major_version)
+{
+	const char *v = strstr(libname, "@VERSION@");
+
+	if (v)
+		snprintf(dst, MAXPGPATH, "%.*s%d%s",
+				 (int) (v - libname), libname,
+				 major_version,
+				 v + 9);
+	else
+		snprintf(dst, MAXPGPATH, "%s", libname);
+}
+
+/*
+ * Find or load a library and increment its reference count.  Returns NULL if
+ * not found, symbols are missing or dlopen() failed for some other reason.
+ * Sets *out_of_memory to indicate whether allocation failed.
+ */
+static pg_locale_router_icu_library *
+get_icu_library(int major_version, bool load, bool *out_of_memory)
+{
+	pg_locale_router_icu_library *lib;
+	dlist_iter	iter;
+
+	*out_of_memory = false;
+	
+	/* Do we already have it loaded? */
+	dlist_foreach(iter, &loaded_icu_libraries)
+	{
+		lib = dlist_container(pg_locale_router_icu_library,
+							  node,
+							  iter.cur);
+		if (lib->major_version == major_version)
+		{
+			lib->reference_count++;
+			return lib;
+		}
+	}
+
+	if (!load)
+		return NULL;
+	
+	if (major_version == U_ICU_VERSION_MAJOR_NUM)
+	{
+		/*
+		 * The version we compiled and linked against.  No need to dlopen.
+		 *
+		 * This serves as a compile-time check that headers match our expected
+		 * function pointers.  If this fails to compile on a future version of
+		 * ICU, we'll need to write some version-sensitive trampoline
+		 * functions.
+		 *
+		 * This library will never be selected by pg_locale_router as the core
+		 * ICU support will be preferred, but it's useful to be able to see
+		 * details about it in the output of pg_locale_router_libraries().
+		 */
+		lib = MemoryContextAllocExtended(TopMemoryContext,
+										 sizeof(pg_locale_router_icu_library),
+										 MCXT_ALLOC_NO_OOM | MCXT_ALLOC_ZERO);
+		if (lib == NULL)
+		{
+			*out_of_memory = true;
+			return NULL;
+		}
+
+		lib->major_version = major_version;
+		lib->dyn_u_errorName = u_errorName;
+		lib->dyn_u_getUnicodeVersion = u_getUnicodeVersion;
+		lib->dyn_u_getVersion = u_getVersion;
+		lib->dyn_u_versionToString = u_versionToString;
+		lib->dyn_uenum_close = uenum_close;
+		lib->dyn_uenum_next = uenum_next;
+		lib->dyn_ucol_close = ucol_close;
+		lib->dyn_ucol_getUCAVersion = ucol_getUCAVersion;
+		lib->dyn_ucol_getRules = ucol_getRules;
+		lib->dyn_ucol_getSortKey = ucol_getSortKey;
+		lib->dyn_ucol_getVersion = ucol_getVersion;
+		lib->dyn_ucol_nextSortKeyPart = ucol_nextSortKeyPart;
+		lib->dyn_ucol_open = ucol_open;
+		lib->dyn_ucol_openAvailableLocales = ucol_openAvailableLocales;
+		lib->dyn_ucol_openRules = ucol_openRules;
+		lib->dyn_ucol_strcollIter = ucol_strcollIter;
+		lib->dyn_ucol_strcollUTF8 = ucol_strcollUTF8;
+	}
+	else
+	{
+		char		lib_uc_name[MAXPGPATH];
+		char		lib_i18n_name[MAXPGPATH];
+		void	   *lib_uc;
+		void	   *lib_i18n;
+		char *trailing_space;
+		
+		/* Can we find the two libraries? */
+		make_library_name(lib_uc_name, libicuuc, major_version);
+		make_library_name(lib_i18n_name, libicui18n, major_version);
+		if (!(lib_uc = dlopen(lib_uc_name, RTLD_NOW | RTLD_GLOBAL)))
+			return NULL;
+		if (!(lib_i18n = dlopen(lib_i18n_name, RTLD_NOW | RTLD_GLOBAL)))
+		{
+			dlclose(lib_uc);
+			return NULL;
+		}
+
+		lib = MemoryContextAllocExtended(TopMemoryContext,
+										 sizeof(pg_locale_router_icu_library) +
+										 strlen(lib_uc_name) + 1 +
+										 strlen(lib_i18n_name) + 1,
+										 MCXT_ALLOC_NO_OOM | MCXT_ALLOC_ZERO);
+		if (lib == NULL)
+		{
+			*out_of_memory = true;
+			dlclose(lib_uc);
+			dlclose(lib_i18n);
+			return NULL;
+		}
+
+		/* Show library names in pg_locale_router_icu_libraries() output. */
+		trailing_space = (char *) lib + sizeof(*lib);
+		lib->lib_uc_name = trailing_space;
+		lib->lib_i18n_name = trailing_space + strlen(lib_uc_name) + 1;
+		strcpy(lib->lib_uc_name, lib_uc_name);
+		strcpy(lib->lib_i18n_name, lib_i18n_name);
+		
+		lib->lib_uc = lib_uc;
+		lib->lib_i18n = lib_i18n;
+		lib->major_version = major_version;
+		lib->dyn_u_errorName = get_sym(lib, "u_errorName");
+		lib->dyn_u_getUnicodeVersion = get_sym(lib, "u_getUnicodeVersion");
+		lib->dyn_u_getVersion = get_sym(lib, "u_getVersion");
+		lib->dyn_u_versionToString = get_sym(lib, "u_versionToString");
+		lib->dyn_uenum_close = get_sym(lib, "uenum_close");
+		lib->dyn_uenum_next = get_sym(lib, "uenum_next");
+		lib->dyn_ucol_close = get_sym(lib, "ucol_close");
+		lib->dyn_ucol_getUCAVersion = get_sym(lib, "ucol_getUCAVersion");
+		lib->dyn_ucol_getRules = get_sym(lib, "ucol_getRules");
+		lib->dyn_ucol_getSortKey = get_sym(lib, "ucol_getSortKey");
+		lib->dyn_ucol_getVersion = get_sym(lib, "ucol_getVersion");
+		lib->dyn_ucol_nextSortKeyPart = get_sym(lib, "ucol_nextSortKeyPart");
+		lib->dyn_ucol_open = get_sym(lib, "ucol_open");
+		lib->dyn_ucol_openAvailableLocales = get_sym(lib, "ucol_openAvailableLocales");
+		lib->dyn_ucol_openRules = get_sym(lib, "ucol_openRules");
+		lib->dyn_ucol_strcollIter = get_sym(lib, "ucol_strcollIter");
+		lib->dyn_ucol_strcollUTF8 = get_sym(lib, "ucol_strcollUTF8");
+		if (lib->missing_symbols > 0)
+		{
+			dlclose(lib_uc);
+			dlclose(lib_i18n);
+			pfree(lib);
+			return NULL;
+		}
+	}
+	
+	lib->reference_count = 1;
+	dlist_push_tail(&loaded_icu_libraries, &lib->node);
+
+	return lib;
+}
+
+/*
+ * Decrement reference count and free if it reaches zero.
+ */
+static void
+release_icu_library(pg_locale_router_icu_library * lib)
+{
+	Assert(lib->reference_count > 0);
+	if (--lib->reference_count == 0)
+	{
+		if (lib->lib_uc)
+		{
+			dlclose(lib->lib_uc);
+			dlclose(lib->lib_i18n);
+		}
+		dlist_delete(&lib->node);
+		pfree(lib);
+	}
+}
 
 static pg_locale_router_icu_locale *
 get_rloc(pg_locale_t locale)
@@ -497,194 +705,17 @@ pg_locale_router_icu_freelocale(pg_locale_t locale)
 	pg_locale_router_icu_locale *rloc = get_rloc(locale);
 	pg_locale_router_icu_library *lib = rloc->library;
 
+	/* Free the pg_locale that was being used for ctype. */
 	pg_freelocale(rloc->std_locale);
-	lib->dyn_ucol_close(rloc->dyn_collator);
-	pfree(locale);
 
-	/*
-	 * The reference count is tracked only for informational purposes, and
-	 * shown in the output of pg_locale_router_icu_libraries().  In theory we
-	 * could close them when there are no references, ie after a REFRESH
-	 * invalidates the locales and makes them unnecessary because the standard
-	 * locales are now usable.
-	 */
-	if (lib->lib_uc)
-		lib->reference_count--;
+	lib->dyn_ucol_close(rloc->dyn_collator);
+	release_icu_library(lib);
+	pfree(locale);
 }
 
 static const struct locale_methods pg_locale_router_icu_locale_methods = {
 	.freelocale = pg_locale_router_icu_freelocale,
 };
-
-static pg_locale_router_icu_library * icu_libraries;
-
-static void
-free_icu_library(pg_locale_router_icu_library * lib)
-{
-	Assert(lib->reference_count == 0);
-	dlclose(lib->lib_uc);
-	dlclose(lib->lib_i18n);
-	pfree(lib);
-}
-
-static void *
-get_sym(pg_locale_router_icu_library * lib, const char *name)
-{
-	char		full_name[80];
-	void	   *handle;
-	void	   *sym;
-
-	/* Assume that U_DISABLE_RENAMING was not defined when building ICU. */
-	snprintf(full_name, sizeof(full_name), "%s_%d", name, lib->major_version);
-
-	/* Symbol prefix tells you which library to look in. */
-	handle = strncmp(name, "ucol_", 5) == 0 ? lib->lib_i18n : lib->lib_uc;
-
-	sym = dlsym(handle, full_name);
-	if (!sym)
-	{
-		if (lib->missing_symbols == 0)
-			elog(LOG,
-				 "pg_locale_router: ICU version %d is missing required symbol %s, skipping",
-				 lib->major_version,
-				 full_name);
-		lib->missing_symbols++;
-	}
-
-	return sym;
-}
-
-/*
- * Replace @VERSION@ with major_version in a (potentially user-supplied)
- * library name or path.
- */
-static void
-make_library_name(char dst[MAXPGPATH], const char *libname, int major_version)
-{
-	const char *v = strstr(libname, "@VERSION@");
-
-	if (v)
-		snprintf(dst, MAXPGPATH, "%.*s%d%s",
-				 (int) (v - libname), libname,
-				 major_version,
-				 v + 9);
-	else
-		snprintf(dst, MAXPGPATH, "%s", libname);
-}
-
-static pg_locale_router_icu_library *
-load_icu_libraries(void)
-{
-	pg_locale_router_icu_library *lib;
-
-	if (icu_libraries)
-		return icu_libraries;
-
-	/*
-	 * Add the library from compile time.  We don't actually use this for
-	 * locales, but the assignments below will fail if function signatures
-	 * change in a future ICU version and require some intermediate
-	 * trampolines.  Having it in the list also causes the linked ICU library
-	 * to appear in the output of pg_locale_router_icu_libraries().
-	 */
-	lib = MemoryContextAllocExtended(TopMemoryContext,
-									 sizeof(pg_locale_router_icu_library),
-									 MCXT_ALLOC_NO_OOM | MCXT_ALLOC_ZERO);
-	if (lib == NULL)
-		return NULL;
-
-	lib->major_version = U_ICU_VERSION_MAJOR_NUM;
-	lib->dyn_u_errorName = u_errorName;
-	lib->dyn_u_getUnicodeVersion = u_getUnicodeVersion;
-	lib->dyn_u_getVersion = u_getVersion;
-	lib->dyn_u_versionToString = u_versionToString;
-	lib->dyn_uenum_close = uenum_close;
-	lib->dyn_uenum_next = uenum_next;
-	lib->dyn_ucol_close = ucol_close;
-	lib->dyn_ucol_getUCAVersion = ucol_getUCAVersion;
-	lib->dyn_ucol_getRules = ucol_getRules;
-	lib->dyn_ucol_getSortKey = ucol_getSortKey;
-	lib->dyn_ucol_getVersion = ucol_getVersion;
-	lib->dyn_ucol_nextSortKeyPart = ucol_nextSortKeyPart;
-	lib->dyn_ucol_open = ucol_open;
-	lib->dyn_ucol_openAvailableLocales = ucol_openAvailableLocales;
-	lib->dyn_ucol_openRules = ucol_openRules;
-	lib->dyn_ucol_strcollIter = ucol_strcollIter;
-	lib->dyn_ucol_strcollUTF8 = ucol_strcollUTF8;
-	icu_libraries = lib;
-
-	for (int major_version = PG_LOCALE_ROUTER_ICU_MIN;
-		 major_version <= PG_LOCALE_ROUTER_ICU_MAX;
-		 major_version++)
-	{
-		char		lib_uc_name[MAXPGPATH];
-		char		lib_i18n_name[MAXPGPATH];
-		void	   *lib_uc;
-		void	   *lib_i18n;
-
-		/* Don't dlopen the version we're linked against. */
-		if (major_version == U_ICU_VERSION_MAJOR_NUM)
-			continue;
-
-		/* Can we find the two libraries? */
-		make_library_name(lib_uc_name, libicuuc, major_version);
-		make_library_name(lib_i18n_name, libicui18n, major_version);
-		if (!(lib_uc = dlopen(lib_uc_name, RTLD_NOW | RTLD_GLOBAL)))
-			continue;
-		if (!(lib_i18n = dlopen(lib_i18n_name, RTLD_NOW | RTLD_GLOBAL)))
-		{
-			dlclose(lib_uc);
-			continue;
-		}
-
-		lib = MemoryContextAllocExtended(TopMemoryContext,
-										 sizeof(pg_locale_router_icu_library),
-										 MCXT_ALLOC_NO_OOM | MCXT_ALLOC_ZERO);
-		if (lib == NULL)
-		{
-			dlclose(lib_uc);
-			dlclose(lib_i18n);
-			while (icu_libraries)
-			{
-				lib = icu_libraries;
-				icu_libraries = lib->next;
-				free_icu_library(lib);
-			}
-			return NULL;
-		}
-
-		lib->major_version = major_version;
-		lib->lib_uc = lib_uc;
-		lib->lib_i18n = lib_i18n;
-		lib->dyn_u_errorName = get_sym(lib, "u_errorName");
-		lib->dyn_u_getUnicodeVersion = get_sym(lib, "u_getUnicodeVersion");
-		lib->dyn_u_getVersion = get_sym(lib, "u_getVersion");
-		lib->dyn_u_versionToString = get_sym(lib, "u_versionToString");
-		lib->dyn_uenum_close = get_sym(lib, "uenum_close");
-		lib->dyn_uenum_next = get_sym(lib, "uenum_next");
-		lib->dyn_ucol_close = get_sym(lib, "ucol_close");
-		lib->dyn_ucol_getUCAVersion = get_sym(lib, "ucol_getUCAVersion");
-		lib->dyn_ucol_getRules = get_sym(lib, "ucol_getRules");
-		lib->dyn_ucol_getSortKey = get_sym(lib, "ucol_getSortKey");
-		lib->dyn_ucol_getVersion = get_sym(lib, "ucol_getVersion");
-		lib->dyn_ucol_nextSortKeyPart = get_sym(lib, "ucol_nextSortKeyPart");
-		lib->dyn_ucol_open = get_sym(lib, "ucol_open");
-		lib->dyn_ucol_openAvailableLocales = get_sym(lib, "ucol_openAvailableLocales");
-		lib->dyn_ucol_openRules = get_sym(lib, "ucol_openRules");
-		lib->dyn_ucol_strcollIter = get_sym(lib, "ucol_strcollIter");
-		lib->dyn_ucol_strcollUTF8 = get_sym(lib, "ucol_strcollUTF8");
-		if (lib->missing_symbols > 0)
-		{
-			free_icu_library(lib);
-			continue;
-		}
-
-		lib->next = icu_libraries;
-		icu_libraries = lib;
-	}
-
-	return icu_libraries;
-}
 
 pg_locale_t
 pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
@@ -692,10 +723,10 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 							   MemoryContext context,
 							   pg_newlocale_function std_newlocale)
 {
+	pg_locale_router_icu_library *lib;
+	pg_locale_router_icu_locale *result;
 	UCollator  *dyn_collator;
 	pg_locale_t std_result;
-	pg_locale_router_icu_locale *result;
-	pg_locale_router_icu_library *lib;
 	char		info_buffer[64];
 	char	   *info_space;
 
@@ -721,25 +752,30 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 		return std_result;
 
 	/*
-	 * Try to find another library that reports the version we want.  If
-	 * found, the variables lib and dyn_collator are set.
+	 * Search for a library that reports the version we want.  No point in
+	 * testing the maximum version as that's the same as std_locale, so start
+	 * the search at max - 1.
 	 */
-	if (icu_libraries == NULL)
+	lib = NULL;
+	for (int major_version = PG_LOCALE_ROUTER_ICU_MAX - 1;
+		 major_version >= PG_LOCALE_ROUTER_ICU_MIN;
+		 major_version--)
 	{
-		icu_libraries = load_icu_libraries();
-		if (icu_libraries == NULL)
+		bool out_of_memory;
+		UErrorCode status;
+		
+		lib = get_icu_library(major_version, true, &out_of_memory);
+		if (out_of_memory)
 		{
 			pg_freelocale(std_result);
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("out of memory")));
 		}
-	}
-	lib = icu_libraries;
-	while (lib)
-	{
-		UErrorCode	status = U_ZERO_ERROR;
+		if (lib == NULL)
+			continue;
 
+		status = U_ZERO_ERROR;
 		dyn_collator = lib->dyn_ucol_open(descriptor->locale, &status);
 		if (U_SUCCESS(status))
 		{
@@ -751,9 +787,9 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 			if (strcmp(version_string, descriptor->collate_version) == 0)
 				break;
 			lib->dyn_ucol_close(dyn_collator);
-			dyn_collator = NULL;
 		}
-		lib = lib->next;
+		release_icu_library(lib);
+		lib = NULL;
 	}
 
 	/* If we didn't find a match, let core complain about versions. */
@@ -793,6 +829,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 		if (!all_rules)
 		{
 			lib->dyn_ucol_close(dyn_collator);
+			release_icu_library(lib);
 			pg_freelocale(std_result);
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -809,6 +846,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 		if (U_FAILURE(status))
 		{
 			lib->dyn_ucol_close(dyn_collator);
+			release_icu_library(lib);
 			pg_freelocale(std_result);
 			ereport(ERROR,
 					(errmsg("%s failed: %s", "ucnv_fromUChars",
@@ -824,6 +862,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 		if (U_FAILURE(status))
 		{
 			lib->dyn_ucol_close(dyn_collator);
+			release_icu_library(lib);
 			pg_freelocale(std_result);
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -850,6 +889,7 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 	if (!result)
 	{
 		lib->dyn_ucol_close(dyn_collator);
+		release_icu_library(lib);
 		pg_freelocale(std_result);
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -884,8 +924,6 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 	 * Replace the collate functions.  Note that these work with dyn_collator,
 	 * never icu.ucol (which came from the wrong library).
 	 */
-	if (lib->lib_uc)
-		lib->reference_count++;
 	result->library = lib;
 	result->dyn_collator = dyn_collator;
 	result->locale.collate_version = result->locale.descriptor.collate_version;
@@ -911,41 +949,63 @@ PG_FUNCTION_INFO_V1(pg_locale_router_icu_locales);
 Datum
 pg_locale_router_icu_libraries(PG_FUNCTION_ARGS)
 {
+	bool show_all = PG_GETARG_BOOL(0);
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	pg_locale_router_icu_library *lib;
-
-	lib = load_icu_libraries();
-	if (lib == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory")));
+	volatile pg_locale_router_icu_library *lib;
 
 	InitMaterializedSRF(fcinfo, 0);
-	while (lib)
+	PG_TRY();
 	{
-		Datum		values[4];
-		bool		nulls[4] = {0};
-		UVersionInfo icu_version;
-		UVersionInfo unicode_version;
-		char		icu_version_string[U_MAX_VERSION_STRING_LENGTH];
-		char		unicode_version_string[U_MAX_VERSION_STRING_LENGTH];
+		for (int major_version = PG_LOCALE_ROUTER_ICU_MAX;
+			 major_version >= PG_LOCALE_ROUTER_ICU_MIN;
+			 major_version--)
+		{
+			Datum		values[6];
+			bool		nulls[6] = {0};
+			UVersionInfo icu_version;
+			UVersionInfo unicode_version;
+			char		icu_version_string[U_MAX_VERSION_STRING_LENGTH];
+			char		unicode_version_string[U_MAX_VERSION_STRING_LENGTH];
+			bool		out_of_memory;
 
-		lib->dyn_u_getVersion(icu_version);
-		lib->dyn_u_versionToString(icu_version, icu_version_string);
-		lib->dyn_u_getUnicodeVersion(unicode_version);
-		lib->dyn_u_versionToString(unicode_version, unicode_version_string);
+			lib = get_icu_library(major_version, show_all, &out_of_memory);
+			if (out_of_memory)
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("out of memory")));
+			if (lib == NULL)
+				continue;
 
-		values[0] = Int32GetDatum(lib->major_version);
-		values[1] = CStringGetTextDatum(icu_version_string);
-		values[2] = CStringGetTextDatum(unicode_version_string);
-		values[3] = Int32GetDatum(lib->reference_count);
-		if (lib->lib_uc == NULL)
-			nulls[3] = true;
+			lib->dyn_u_getVersion(icu_version);
+			lib->dyn_u_versionToString(icu_version, icu_version_string);
+			lib->dyn_u_getUnicodeVersion(unicode_version);
+			lib->dyn_u_versionToString(unicode_version, unicode_version_string);
 
-		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+			values[0] = Int32GetDatum(lib->major_version);
+			values[1] = CStringGetTextDatum(icu_version_string);
+			values[2] = CStringGetTextDatum(unicode_version_string);
+			values[3] = Int32GetDatum(lib->reference_count - 1 /* my temp ref */);
+			if (lib->lib_uc_name)
+				values[4] = CStringGetTextDatum(lib->lib_uc_name);
+			else
+				nulls[4] = true;
+			if (lib->lib_i18n_name)
+				values[5] = CStringGetTextDatum(lib->lib_i18n_name);
+			else
+				nulls[5] = true;			
 
-		lib = lib->next;
+			release_icu_library(unvolatize(pg_locale_router_icu_library *, lib));
+			lib = NULL;
+
+			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+		}
 	}
+	PG_FINALLY();
+	{
+		if (lib)
+			release_icu_library(unvolatize(pg_locale_router_icu_library *, lib));
+	}
+	PG_END_TRY();
 
 	return (Datum) 0;
 }
@@ -955,42 +1015,32 @@ pg_locale_router_icu_locales(PG_FUNCTION_ARGS)
 {
 	int			major_version = PG_GETARG_INT32(0);
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	pg_locale_router_icu_library *lib;
 	UErrorCode	status;
-
-	/*
-	 * PG_FINALLY() block closes this if error is thrown so it has to be
-	 * volatile.
-	 */
+	bool		out_of_memory;
+	volatile	pg_locale_router_icu_library *lib;
 	volatile	UEnumeration *en;
 
-	lib = load_icu_libraries();
-	if (lib == NULL)
+	lib = get_icu_library(major_version, true, &out_of_memory);
+	if (out_of_memory)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory")));
-	while (lib)
-	{
-		if (lib->major_version == major_version)
-			break;
-		lib = lib->next;
-	}
+				 errmsg("out of memory")));	
 	if (lib == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("could not find ICU version %d",
+				 errmsg("could not load ICU version %d",
 						major_version)));
 
-	status = U_ZERO_ERROR;
-	en = lib->dyn_ucol_openAvailableLocales(&status);
-	if (U_FAILURE(status))
-		ereport(ERROR,
-				(errmsg("%s failed: %s", "ucol_openAvailableLocales",
-						lib->dyn_u_errorName(status))));
-
-	InitMaterializedSRF(fcinfo, 0);
 	PG_TRY();
 	{
+		status = U_ZERO_ERROR;
+		en = lib->dyn_ucol_openAvailableLocales(&status);
+		if (U_FAILURE(status))
+			ereport(ERROR,
+					(errmsg("%s failed: %s", "ucol_openAvailableLocales",
+							lib->dyn_u_errorName(status))));
+
+		InitMaterializedSRF(fcinfo, 0);
 		for (;;)
 		{
 			Datum		values[3];
@@ -1035,7 +1085,9 @@ pg_locale_router_icu_locales(PG_FUNCTION_ARGS)
 	}
 	PG_FINALLY();
 	{
-		lib->dyn_uenum_close(unvolatize(UEnumeration *, en));
+		if (en)
+			lib->dyn_uenum_close(unvolatize(UEnumeration *, en));
+		release_icu_library(unvolatize(pg_locale_router_icu_library *, lib));
 	}
 	PG_END_TRY();
 
