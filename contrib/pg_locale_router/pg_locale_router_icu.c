@@ -11,6 +11,7 @@
 #include "fmgr.h"
 #include "funcapi.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/pg_locale.h"
 #include "utils/pg_locale_icu.h"
 #include "utils/pg_locale_internal.h"
@@ -189,8 +190,8 @@ typedef struct pg_locale_router_icu_locale
 }			pg_locale_router_icu_locale;
 
 /* GUCs */
-static const char *libicuuc = DEFAULT_LIBICUUC;
-static const char *libicui18n = DEFAULT_LIBICUI18N;
+static char *libicuuc = DEFAULT_LIBICUUC;
+static char *libicui18n = DEFAULT_LIBICUI18N;
 
 static dlist_head loaded_icu_libraries;
 
@@ -248,7 +249,7 @@ get_icu_library(int major_version, bool load, bool *out_of_memory)
 	dlist_iter	iter;
 
 	*out_of_memory = false;
-	
+
 	/* Do we already have it loaded? */
 	dlist_foreach(iter, &loaded_icu_libraries)
 	{
@@ -264,7 +265,7 @@ get_icu_library(int major_version, bool load, bool *out_of_memory)
 
 	if (!load)
 		return NULL;
-	
+
 	if (major_version == U_ICU_VERSION_MAJOR_NUM)
 	{
 		/*
@@ -313,8 +314,8 @@ get_icu_library(int major_version, bool load, bool *out_of_memory)
 		char		lib_i18n_name[MAXPGPATH];
 		void	   *lib_uc;
 		void	   *lib_i18n;
-		char *trailing_space;
-		
+		char	   *trailing_space;
+
 		/* Can we find the two libraries? */
 		make_library_name(lib_uc_name, libicuuc, major_version);
 		make_library_name(lib_i18n_name, libicui18n, major_version);
@@ -345,7 +346,7 @@ get_icu_library(int major_version, bool load, bool *out_of_memory)
 		lib->lib_i18n_name = trailing_space + strlen(lib_uc_name) + 1;
 		strcpy(lib->lib_uc_name, lib_uc_name);
 		strcpy(lib->lib_i18n_name, lib_i18n_name);
-		
+
 		lib->lib_uc = lib_uc;
 		lib->lib_i18n = lib_i18n;
 		lib->major_version = major_version;
@@ -374,7 +375,7 @@ get_icu_library(int major_version, bool load, bool *out_of_memory)
 			return NULL;
 		}
 	}
-	
+
 	lib->reference_count = 1;
 	dlist_push_tail(&loaded_icu_libraries, &lib->node);
 
@@ -717,8 +718,33 @@ static const struct locale_methods pg_locale_router_icu_locale_methods = {
 	.freelocale = pg_locale_router_icu_freelocale,
 };
 
+void
+pg_locale_router_icu_init(void)
+{
+	DefineCustomStringVariable("pg_locale_router.icu.libicuuc",
+							   "Library name or path for ICU common components.",
+							   NULL,
+							   &libicuuc,
+							   DEFAULT_LIBICUUC,
+							   PGC_SUSET,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+	DefineCustomStringVariable("pg_locale_router.icu.libicui18n",
+							   "Library name or path for ICU internationalization components.",
+							   NULL,
+							   &libicui18n,
+							   DEFAULT_LIBICUI18N,
+							   PGC_SUSET,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL);
+}
+
 pg_locale_t
-pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
+pg_locale_router_icu_newlocale(const locale_descriptor *descriptor,
 							   int flags,
 							   MemoryContext context,
 							   pg_newlocale_function std_newlocale)
@@ -761,9 +787,9 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 		 major_version >= PG_LOCALE_ROUTER_ICU_MIN;
 		 major_version--)
 	{
-		bool out_of_memory;
-		UErrorCode status;
-		
+		bool		out_of_memory;
+		UErrorCode	status;
+
 		lib = get_icu_library(major_version, true, &out_of_memory);
 		if (out_of_memory)
 		{
@@ -932,16 +958,10 @@ pg_locale_router_newlocale_icu(const locale_descriptor *descriptor,
 	else
 		result->locale.collate = &pg_locale_router_icu_collate_methods;
 
-	elog(DEBUG1,
-		 "pg_locale_router: collation \"%s\": using ICU version %d (collation version: %s) instead of instead of linked ICU version %d (collation version: %s) for collating",
-		 result->locale.descriptor.name,
-		 lib->major_version,
-		 result->locale.descriptor.collate_version,
-		 U_ICU_VERSION_MAJOR_NUM,
-		 result->std_locale->collate_version);
-
 	return &result->locale;
 }
+
+#endif
 
 PG_FUNCTION_INFO_V1(pg_locale_router_icu_libraries);
 PG_FUNCTION_INFO_V1(pg_locale_router_icu_locales);
@@ -949,9 +969,13 @@ PG_FUNCTION_INFO_V1(pg_locale_router_icu_locales);
 Datum
 pg_locale_router_icu_libraries(PG_FUNCTION_ARGS)
 {
-	bool show_all = PG_GETARG_BOOL(0);
+#ifndef USE_ICU
+	InitMaterializedSRF(fcinfo, 0);
+	return (Datum) 0;
+#else
+	bool		show_all = PG_GETARG_BOOL(0);
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	volatile pg_locale_router_icu_library *lib;
+	volatile	pg_locale_router_icu_library *lib;
 
 	InitMaterializedSRF(fcinfo, 0);
 	PG_TRY();
@@ -984,7 +1008,7 @@ pg_locale_router_icu_libraries(PG_FUNCTION_ARGS)
 			values[0] = Int32GetDatum(lib->major_version);
 			values[1] = CStringGetTextDatum(icu_version_string);
 			values[2] = CStringGetTextDatum(unicode_version_string);
-			values[3] = Int32GetDatum(lib->reference_count - 1 /* my temp ref */);
+			values[3] = Int32GetDatum(lib->reference_count - 1 /* my temp ref */ );
 			if (lib->lib_uc_name)
 				values[4] = CStringGetTextDatum(lib->lib_uc_name);
 			else
@@ -992,7 +1016,7 @@ pg_locale_router_icu_libraries(PG_FUNCTION_ARGS)
 			if (lib->lib_i18n_name)
 				values[5] = CStringGetTextDatum(lib->lib_i18n_name);
 			else
-				nulls[5] = true;			
+				nulls[5] = true;
 
 			release_icu_library(unvolatize(pg_locale_router_icu_library *, lib));
 			lib = NULL;
@@ -1008,11 +1032,16 @@ pg_locale_router_icu_libraries(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	return (Datum) 0;
+#endif
 }
 
 Datum
 pg_locale_router_icu_locales(PG_FUNCTION_ARGS)
 {
+#ifndef USE_ICU
+	InitMaterializedSRF(fcinfo, 0);
+	return (Datum) 0;
+#else
 	int			major_version = PG_GETARG_INT32(0);
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	UErrorCode	status;
@@ -1024,7 +1053,7 @@ pg_locale_router_icu_locales(PG_FUNCTION_ARGS)
 	if (out_of_memory)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory")));	
+				 errmsg("out of memory")));
 	if (lib == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1092,6 +1121,5 @@ pg_locale_router_icu_locales(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	return (Datum) 0;
-}
-
 #endif
+}
