@@ -11,4 +11,5 @@ backend_sources += files(
   'method_sync.c',
   'method_worker.c',
   'read_stream.c',
+  'read_stream_pool.c',
 )

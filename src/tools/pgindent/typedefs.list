@@ -2543,6 +2543,11 @@ ReadNodeContext
 ReadReplicationSlotCmd
 ReadStream
 ReadStreamBlockNumberCB
+ReadStreamPool
+ReadStreamPoolBlockCB
+ReadStreamPoolMember
+ReadStreamPoolMemberEntry
+ReadStreamPoolMemberKey
 ReassignOwnedStmt
 RecheckForeignScan_function
 RecordCacheArrayEntry
