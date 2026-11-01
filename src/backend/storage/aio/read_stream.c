@@ -86,8 +86,18 @@
 typedef struct InProgressIO
 {
 	int16		buffer_index;
+	int64		blocksource_id;
 	ReadBuffersOperation op;
 } InProgressIO;
+
+typedef struct BlockSource
+{
+	uint64		id;
+	Relation	rel;
+	SMgrRelation smgr;
+	char		persistence;
+	ForkNumber	forknum;
+} BlockSource;
 
 /*
  * State for managing a stream of reads.
@@ -139,12 +149,14 @@ struct ReadStream
 	 */
 	ReadStreamBlockNumberCB callback;
 	void	   *callback_private_data;
+	BlockSource callback_blocksource;
 
 	/* Next expected block, for detecting sequential access. */
 	BlockNumber seq_blocknum;
 	BlockNumber seq_until_processed;
 
 	/* The read operation we are currently preparing. */
+	BlockSource pending_read_blocksource;
 	BlockNumber pending_read_blocknum;
 	int16		pending_read_nblocks;
 
@@ -441,6 +453,21 @@ read_stream_start_pending_read(ReadStream *stream)
 	while (stream->initialized_buffers < buffer_index + nblocks)
 		stream->buffers[stream->initialized_buffers++] = InvalidBuffer;
 	requested_nblocks = nblocks;
+
+	/*
+	 * Relation switches are expected to be rare, so try to avoid having to
+	 * store all the details every time.
+	 */
+	if (unlikely(stream->ios[io_index].blocksource_id !=
+				 stream->pending_read_blocksource.id))
+	{
+		stream->ios[io_index].op.rel = stream->pending_read_blocksource.rel;
+		stream->ios[io_index].op.smgr = stream->pending_read_blocksource.smgr;
+		stream->ios[io_index].op.persistence = stream->pending_read_blocksource.persistence;
+		stream->ios[io_index].op.forknum = stream->pending_read_blocksource.forknum;
+		stream->ios[io_index].blocksource_id = stream->pending_read_blocksource.id;
+	}
+
 	need_wait = StartReadBuffers(&stream->ios[io_index].op,
 								 &stream->buffers[buffer_index],
 								 stream->pending_read_blocknum,
@@ -699,7 +726,8 @@ read_stream_look_ahead(ReadStream *stream)
 
 		/* Can we merge it with the pending read? */
 		if (stream->pending_read_nblocks > 0 &&
-			stream->pending_read_blocknum + stream->pending_read_nblocks == blocknum)
+			stream->pending_read_blocknum + stream->pending_read_nblocks == blocknum &&
+			stream->pending_read_blocksource.id == stream->callback_blocksource.id)
 		{
 			stream->pending_read_nblocks++;
 			continue;
@@ -722,6 +750,9 @@ read_stream_look_ahead(ReadStream *stream)
 		/* This is the start of a new pending read. */
 		stream->pending_read_blocknum = blocknum;
 		stream->pending_read_nblocks = 1;
+		if (stream->pending_read_blocksource.id !=
+			stream->callback_blocksource.id)
+			stream->pending_read_blocksource = stream->callback_blocksource;
 	}
 
 	/*
@@ -951,8 +982,14 @@ read_stream_begin_impl(int flags,
 	stream->resume_readahead_distance = stream->readahead_distance;
 	stream->resume_combine_distance = stream->combine_distance;
 
+	stream->callback_blocksource.id = 1;
+	stream->callback_blocksource.rel = rel;
+	stream->callback_blocksource.smgr = smgr;
+	stream->callback_blocksource.persistence = persistence;
+	stream->callback_blocksource.forknum = forknum;
+
 	/*
-	 * Since we always access the same relation, we can initialize parts of
+	 * Since we usuallly access the same relation, we can initialize parts of
 	 * the ReadBuffersOperation objects and leave them that way, to avoid
 	 * wasting CPU cycles writing to them for each read.
 	 */
@@ -1018,6 +1055,24 @@ read_stream_begin_smgr_relation(int flags,
 }
 
 /*
+ * Switch to reading from another SMgr relation or fork.
+ */
+void
+read_stream_switch_smgr_relation(ReadStream *stream,
+								 SMgrRelation smgr,
+								 char smgr_persistence,
+								 ForkNumber forknum)
+{
+	stream->fast_path = false;
+
+	stream->callback_blocksource.id++;
+	stream->callback_blocksource.rel = NULL;
+	stream->callback_blocksource.smgr = smgr;
+	stream->callback_blocksource.persistence = smgr_persistence;
+	stream->callback_blocksource.forknum = forknum;
+}
+
+/*
  * Pull one pinned buffer out of a stream.  Each call returns successive
  * blocks in the order specified by the callback.  If per_buffer_data_size was
  * set to a non-zero size, *per_buffer_data receives a pointer to the extra
@@ -1053,6 +1108,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		Assert(stream->pending_read_nblocks == 0);
 		Assert(stream->per_buffer_data_size == 0);
 		Assert(stream->initialized_buffers > stream->oldest_buffer_index);
+		Assert(stream->ios[stream->oldest_buffer_index].blocksource_id ==
+			   stream->callback_blocksource.id);
 
 		/* We're going to return the buffer we pinned last time. */
 		oldest_buffer_index = stream->oldest_buffer_index;
@@ -1344,7 +1401,9 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->readahead_distance == 1 &&
 		stream->combine_distance == 1 &&
 		stream->pending_read_nblocks == 0 &&
-		stream->per_buffer_data_size == 0)
+		stream->per_buffer_data_size == 0 &&
+		stream->ios[stream->oldest_buffer_index].blocksource_id ==
+		stream->callback_blocksource.id)
 	{
 		/*
 		 * The fast path spins on one buffer entry repeatedly instead of

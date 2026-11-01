@@ -306,6 +306,7 @@ BlockRefTableSerializedEntry
 BlockRefTableWriter
 BlockSampler
 BlockSamplerData
+BlockSource
 BlockedProcData
 BlockedProcsData
 BlocksReadStreamData
