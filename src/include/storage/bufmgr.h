@@ -126,6 +126,8 @@ typedef struct BufferManagerRelation
 #define READ_BUFFERS_IGNORE_CHECKSUM_FAILURES (1 << 2)
 /* IO will immediately be waited for */
 #define READ_BUFFERS_SYNCHRONOUSLY (1 << 3)
+/* Don't perform I/O for buffers marked BM_RECOVERY_WILL_INIT */
+#define READ_BUFFERS_IN_RECOVERY (1 << 4)
 
 
 struct ReadBuffersOperation
@@ -252,6 +254,12 @@ extern bool StartReadBuffers(ReadBuffersOperation *operation,
 							 int *nblocks,
 							 int flags);
 extern bool WaitReadBuffers(ReadBuffersOperation *operation);
+
+extern Buffer StartLockBufferInRecovery(SMgrRelation smgr,
+										ForkNumber forknum,
+										BlockNumber blocknum,
+										BufferAccessStrategy strategy);
+void		CompleteLockBufferInRecovery(Buffer buffer, ReadBufferMode mode);
 
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);

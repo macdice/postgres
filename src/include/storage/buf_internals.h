@@ -114,7 +114,8 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
 #define BM_IO_IN_PROGRESS			BUF_DEFINE_FLAG( 4)
 /* previous I/O failed */
 #define BM_IO_ERROR					BUF_DEFINE_FLAG( 5)
-/* flag bit 6 is not used anymore */
+/* recovery will initialize this buffer */
+#define BM_RECOVERY_WILL_INIT		BUF_DEFINE_FLAG( 6)
 /* have waiter for sole pin */
 #define BM_PIN_COUNT_WAITER			BUF_DEFINE_FLAG( 7)
 /* must write for checkpoint */
@@ -125,7 +126,6 @@ StaticAssertDecl(BUF_REFCOUNT_BITS + BUF_USAGECOUNT_BITS + BUF_FLAG_BITS + BUF_L
 #define BM_LOCK_HAS_WAITERS			BUF_DEFINE_FLAG(10)
 /* waiter for content lock has been signalled but not yet run */
 #define BM_LOCK_WAKE_IN_PROGRESS	BUF_DEFINE_FLAG(11)
-
 
 StaticAssertDecl(MAX_BACKENDS_BITS <= BUF_REFCOUNT_BITS,
 				 "MAX_BACKENDS_BITS needs to be <= BUF_REFCOUNT_BITS");

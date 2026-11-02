@@ -1270,6 +1270,63 @@ PinBufferForBlock(Relation rel,
 }
 
 /*
+ * First step in a two-step variant of ReadBufferExtended() with
+ * RBM_ZERO_AND_LOCK or RBM_ZERO_AND_CLEANUP_LOCK.  No I/O occurs.  This step
+ * pins the buffer, and marks it to prevent recovery prefetching until the
+ * second step is performed.
+ *
+ * It is still possible for regular backends to read the buffer and make it
+ * valid concurrently or any time before recovery reaches the second step,
+ * just as it is possible that it was already valid.
+ */
+Buffer
+StartLockBufferInRecovery(SMgrRelation smgr,
+						  ForkNumber forknum,
+						  BlockNumber blocknum,
+						  BufferAccessStrategy strategy)
+{
+	BufferDesc *bufHdr;
+	bool		found;
+
+	bufHdr = BufferAlloc(smgr,
+						 RELPERSISTENCE_PERMANENT,
+						 forknum,
+						 blocknum,
+						 strategy,
+						 &found,
+						 IOOBJECT_RELATION);
+
+	pg_atomic_fetch_or_u64(&bufHdr->state, BM_RECOVERY_WILL_INIT);
+
+	return BufferDescriptorGetBuffer(bufHdr);
+}
+
+/*
+ * Second step of StartLockBufferInRecovery().  This step acquires the
+ * requested lock for the already pinned buffer, which much be
+ * RBM_ZERO_AND_LOCK or RBM_ZERO_AND_CLEANUP_LOCK, and marks the buffer valid,
+ * unless it has already become valid.
+ *
+ * XXX It might be nice to have RBM_LOCK_FOR_OVERWRITE (ie mark valid and lock
+ * but don't bother zeroing) since it's a waste of cycles to zero pages before
+ * restoring FPIs.
+ */
+void
+CompleteLockBufferInRecovery(Buffer buffer, ReadBufferMode mode)
+{
+	BufferDesc *bufHdr;
+	uint64		buf_state;
+	bool		already_valid_hint;
+
+	Assert(!BufferIsLocal(buffer));
+	bufHdr = GetBufferDescriptor(buffer - 1);
+	buf_state = pg_atomic_fetch_and_u64(&bufHdr->state, ~BM_RECOVERY_WILL_INIT);
+	already_valid_hint = buf_state & BM_VALID;
+
+	ZeroAndLockBuffer(buffer, mode, already_valid_hint);
+}
+
+/*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
  *
  * smgr is required, rel is optional unless using P_NEW.
@@ -1493,6 +1550,34 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 			 * to the next call, avoiding the need to unpin it here and re-pin
 			 * it in the next call.
 			 */
+			actual_nblocks = i;
+			break;
+		}
+		else if ((flags & READ_BUFFERS_IN_RECOVERY) &&
+				 (pg_atomic_read_u64(&GetBufferDescriptor(buffers[i] - 1)->state) &
+				  BM_RECOVERY_WILL_INIT))
+		{
+			/*
+			 * Recovery is trying to prefetch a block for which it has already
+			 * called StartLockBufferInRecovery() but not yet replayed the
+			 * record that will call CompleteLockBufferInRecovery() and
+			 * initialize the contents.  Reading the buffer contents would be
+			 * wasteful, so we take a shortcut and treat the pinned buffer as
+			 * if it were already valid even though it wasn't last time we
+			 * checked.
+			 *
+			 * This is OK because we know that it will be valid by the time
+			 * the block is accessed by the WAL record that issued this I/O.
+			 *
+			 * Regular backends can still read this block from disk in the
+			 * usual way if they need it before CompleteLockBufferInRecovery()
+			 * is reached.
+			 */
+			if (i == 0)
+			{
+				*nblocks = 1;
+				return false;
+			}
 			actual_nblocks = i;
 			break;
 		}
