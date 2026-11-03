@@ -1282,8 +1282,7 @@ PinBufferForBlock(Relation rel,
 Buffer
 StartLockBufferInRecovery(SMgrRelation smgr,
 						  ForkNumber forknum,
-						  BlockNumber blocknum,
-						  BufferAccessStrategy strategy)
+						  BlockNumber blocknum)
 {
 	BufferDesc *bufHdr;
 	bool		found;
@@ -1294,7 +1293,7 @@ StartLockBufferInRecovery(SMgrRelation smgr,
 						 blocknum,
 						 strategy,
 						 &found,
-						 IOOBJECT_RELATION);
+						 IOCONTEXT_NORMAL);
 
 	pg_atomic_fetch_or_u64(&bufHdr->state, BM_RECOVERY_WILL_INIT);
 
