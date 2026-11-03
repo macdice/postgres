@@ -1135,7 +1135,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		Assert(stream->pending_read_nblocks == 0);
 		Assert(stream->per_buffer_data_size == 0);
 		Assert(stream->initialized_buffers > stream->oldest_buffer_index);
-		Assert(stream->ios[stream->oldest_buffer_index].blocksource_generation ==
+		Assert(stream->ios[stream->oldest_io_index].blocksource_generation ==
 			   stream->blocksource.generation);
 
 		/* We're going to return the buffer we pinned last time. */
@@ -1429,7 +1429,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->combine_distance == 1 &&
 		stream->pending_read_nblocks == 0 &&
 		stream->per_buffer_data_size == 0 &&
-		stream->ios[stream->oldest_buffer_index].blocksource_generation ==
+		stream->ios[stream->oldest_io_index].blocksource_generation ==
 		stream->blocksource.generation)
 	{
 		/*
