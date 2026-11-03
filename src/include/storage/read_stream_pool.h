@@ -19,7 +19,7 @@
 
 typedef struct ReadStreamPool ReadStreamPool;
 
-typedef BlockNumber (*ReadStreamPoolBlockCB) (ReadStreamPool *set,
+typedef BlockNumber (*ReadStreamPoolBlockCB) (ReadStreamPool *pool,
 											  void *callback_private_data,
 											  void *per_buffer_data,
 											  SMgrRelation *smgr,

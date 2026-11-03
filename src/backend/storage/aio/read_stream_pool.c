@@ -44,7 +44,7 @@ typedef struct ReadStreamPoolMember
 	ReadStream *stream;
 	BufferAccessStrategy strategy;
 
-	bool		draining;
+	bool		in_draining_queue;
 	dlist_node	node;
 
 	int			block_queue_head;
@@ -93,8 +93,8 @@ typedef struct ReadStreamPool
 	char	   *stream_queue_data;
 
 	/* Members. */
-	dclist_head member_lru;		/* tail = LRU */
-	dclist_head member_draining;	/* transition when max_streams lowered */
+	dclist_head member_lru_queue;
+	dclist_head member_draining_queue;
 	read_stream_pool_table_hash *member_table;
 	ReadStreamPoolMember *paused;
 } ReadStreamPool;
@@ -204,8 +204,8 @@ read_stream_pool_open_member(ReadStreamPool *pool,
 	ReadStreamPoolMember *member;
 	bool		found;
 
-	if (dclist_count(&pool->member_lru) +
-		dclist_count(&pool->member_draining) < pool->max_streams)
+	if (dclist_count(&pool->member_lru_queue) +
+		dclist_count(&pool->member_draining_queue) < pool->max_streams)
 	{
 		MemoryContext old_context = MemoryContextSwitchTo(pool->context);
 
@@ -213,7 +213,7 @@ read_stream_pool_open_member(ReadStreamPool *pool,
 		member = palloc_object(ReadStreamPoolMember);
 		member->key = key;
 		member->pool = pool;
-		member->draining = false;
+		member->in_draining_queue = false;
 		member->block_queue_head = 0;
 		member->block_queue_tail = 0;
 		member->block_queue_mask = READ_STREAM_POOL_STREAM_BLOCK_QUEUE_SIZE - 1;
@@ -235,7 +235,7 @@ read_stream_pool_open_member(ReadStreamPool *pool,
 														 member,
 														 pool->per_buffer_data_size);
 
-		dclist_push_head(&pool->member_lru, &member->node);
+		dclist_push_head(&pool->member_lru_queue, &member->node);
 
 		entry = read_stream_pool_table_insert(pool->member_table, member->key,
 											  &found);
@@ -251,10 +251,10 @@ read_stream_pool_open_member(ReadStreamPool *pool,
 		 * at this point in its block number queue.
 		 */
 		member = dclist_container(ReadStreamPoolMember, node,
-								  dclist_tail_node(&pool->member_lru));
+								  dclist_tail_node(&pool->member_lru_queue));
 
 		read_stream_pool_enqueue_switch(pool, member, key.smgr, key.forknum);
-		dclist_move_head(&pool->member_lru, &member->node);
+		dclist_move_head(&pool->member_lru_queue, &member->node);
 
 		read_stream_pool_table_delete(pool->member_table, member->key);
 
@@ -285,13 +285,13 @@ read_stream_pool_free_member(ReadStreamPool *pool,
 {
 	Assert(!read_stream_pool_member_is_referenced(pool, member));
 
-	if (member->draining)
+	if (member->in_draining_queue)
 	{
-		dclist_delete_from(&pool->member_draining, &member->node);
+		dclist_delete_from(&pool->member_draining_queue, &member->node);
 	}
 	else
 	{
-		dclist_delete_from(&pool->member_lru, &member->node);
+		dclist_delete_from(&pool->member_lru_queue, &member->node);
 		read_stream_pool_table_delete(pool->member_table, member->key);
 	}
 	FreeAccessStrategy(member->strategy);
@@ -299,14 +299,18 @@ read_stream_pool_free_member(ReadStreamPool *pool,
 	pfree(member);
 }
 
-static void
+static bool
 read_stream_pool_try_free_member(ReadStreamPool *pool,
 								 ReadStreamPoolMember *member)
 {
-	Assert(member->draining);
+	Assert(member->in_draining_queue);
 
 	if (!read_stream_pool_member_is_referenced(pool, member))
+	{
 		read_stream_pool_free_member(pool, member);
+		return true;
+	}
+	return false;
 }
 
 static void
@@ -317,15 +321,15 @@ read_stream_pool_close_member(ReadStreamPool *pool, ReadStreamPoolMember *member
 
 	/* Stop putting new blocks into its queue. */
 	read_stream_pool_table_delete(pool->member_table, member->key);
-	dclist_delete_from(&pool->member_lru, &member->node);
+	dclist_delete_from(&pool->member_lru_queue, &member->node);
 
 	/*
 	 * We might have to wait until all references to member->stream are
 	 * drained from stream_queue.  We'll try now, and then again each time a
 	 * buffer is pulled from it.
 	 */
-	member->draining = true;
-	dclist_push_head(&pool->member_draining, &member->node);
+	member->in_draining_queue = true;
+	dclist_push_head(&pool->member_draining_queue, &member->node);
 	read_stream_pool_try_free_member(pool, member);
 }
 
@@ -342,7 +346,7 @@ read_stream_pool_get_member(ReadStreamPool *pool,
 	{
 		ReadStreamPoolMember *member = entry->member;
 
-		dclist_move_head(&pool->member_lru, &member->node);
+		dclist_move_head(&pool->member_lru_queue, &member->node);
 		return member;
 	}
 
@@ -505,8 +509,8 @@ read_stream_pool_begin(int flags,
 	else
 		pool->stream_queue_data = NULL;
 
-	dclist_init(&pool->member_lru);
-	dclist_init(&pool->member_draining);
+	dclist_init(&pool->member_lru_queue);
+	dclist_init(&pool->member_draining_queue);
 
 	pool->member_table = read_stream_pool_table_create(pool->context,
 													   max_streams,
@@ -520,11 +524,11 @@ read_stream_pool_end(ReadStreamPool *pool)
 {
 	pool->stream_queue_tail = pool->stream_queue_head;
 
-	for (dclist_head *list = &pool->member_lru; !dclist_is_empty(list);)
+	for (dclist_head *q = &pool->member_lru_queue; !dclist_is_empty(q);)
 		read_stream_pool_close_member(pool,
 									  dclist_container(ReadStreamPoolMember,
 													   node,
-													   dclist_pop_head_node(list)));
+													   dclist_pop_head_node(q)));
 
 	read_stream_pool_table_destroy(pool->member_table);
 	pfree(pool->stream_queue);
@@ -533,10 +537,37 @@ read_stream_pool_end(ReadStreamPool *pool)
 	pfree(pool);
 }
 
+static bool
+read_stream_pool_has_draining_member(ReadStreamPool *pool)
+{
+	return dclist_count(&pool->member_draining_queue) > 0;
+}
+
+static void
+read_stream_pool_drain(ReadStreamPool *pool)
+{
+	ReadStreamPoolMember *member;
+	dclist_head *q = &pool->member_draining_queue;
+
+	Assert(read_stream_pool_has_draining_member(pool));
+
+	/*
+	 * Free draining members from the tail of the queue until we hit one that
+	 * still has a reference in stream_queue.
+	 */
+	do
+		member = dclist_container(ReadStreamPoolMember,
+								  node,
+								  dclist_tail_node(q));
+	while (read_stream_pool_try_free_member(pool, member) &&
+		   read_stream_pool_has_draining_member(pool));
+}
+
 Buffer
 read_stream_pool_next_buffer(ReadStreamPool *pool, void **per_buffer_data)
 {
 	ReadStream *stream;
+	Buffer		buffer;
 
 	if (pool->stream_queue_tail == pool->stream_queue_head)
 		read_stream_pool_pump(pool);
@@ -552,7 +583,12 @@ read_stream_pool_next_buffer(ReadStreamPool *pool, void **per_buffer_data)
 	pool->stream_queue_tail++;
 	pool->stream_queue_tail &= pool->stream_queue_mask;
 
-	return read_stream_next_buffer(stream, NULL);
+	buffer = read_stream_next_buffer(stream, NULL);
+
+	if (unlikely(read_stream_pool_has_draining_member(pool)))
+		read_stream_pool_drain(pool);
+
+	return buffer;
 }
 
 void
@@ -563,7 +599,7 @@ read_stream_pool_reset(ReadStreamPool *pool)
 
 	pool->stream_queue_tail = pool->stream_queue_head;
 
-	dclist_foreach(iter, &pool->member_lru)
+	dclist_foreach(iter, &pool->member_lru_queue)
 	{
 		member = dlist_container(ReadStreamPoolMember, node, iter.cur);
 		read_stream_reset(member->stream);
@@ -582,10 +618,10 @@ read_stream_pool_set_max_streams(ReadStreamPool *pool, int max_stream)
 
 	pool->max_streams = max_stream;
 
-	while (dclist_count(&pool->member_lru) > max_stream)
+	while (dclist_count(&pool->member_lru_queue) > max_stream)
 	{
 		member = dclist_container(ReadStreamPoolMember, node,
-								  dclist_tail_node(&pool->member_lru));
+								  dclist_tail_node(&pool->member_lru_queue));
 		read_stream_pool_close_member(pool, member);
 	}
 }
