@@ -1271,29 +1271,26 @@ PinBufferForBlock(Relation rel,
 
 /*
  * First step in a two-step variant of ReadBufferExtended() with
- * RBM_ZERO_AND_LOCK or RBM_ZERO_AND_CLEANUP_LOCK.  No I/O occurs.  This step
- * pins the buffer, and marks it to prevent recovery prefetching until the
- * second step is performed.
- *
- * It is still possible for regular backends to read the buffer and make it
- * valid concurrently or any time before recovery reaches the second step,
- * just as it is possible that it was already valid.
+ * RBM_ZERO_AND_LOCK or RBM_ZERO_AND_CLEANUP_LOCK.  This step pins the buffer,
+ * and marks it to prevent prefetching of this block by recovery until until
+ * the second step is performed.
  */
 Buffer
 StartLockBufferInRecovery(SMgrRelation smgr,
-						  ForkNumber forknum,
-						  BlockNumber blocknum)
+						  ForkNumber forkNum,
+						  BlockNumber blockNum,
+						  BufferAccessStrategy strategy)
 {
 	BufferDesc *bufHdr;
 	bool		found;
 
 	bufHdr = BufferAlloc(smgr,
 						 RELPERSISTENCE_PERMANENT,
-						 forknum,
-						 blocknum,
+						 forkNum,
+						 blockNum,
 						 strategy,
 						 &found,
-						 IOCONTEXT_NORMAL);
+						 IOContextForStrategy(strategy));
 
 	pg_atomic_fetch_or_u64(&bufHdr->state, BM_RECOVERY_WILL_INIT);
 
@@ -1303,8 +1300,8 @@ StartLockBufferInRecovery(SMgrRelation smgr,
 /*
  * Second step of StartLockBufferInRecovery().  This step acquires the
  * requested lock for the already pinned buffer, which much be
- * RBM_ZERO_AND_LOCK or RBM_ZERO_AND_CLEANUP_LOCK, and marks the buffer valid,
- * unless it has already become valid.
+ * RBM_ZERO_AND_LOCK or RBM_ZERO_AND_CLEANUP_LOCK, and zeroes the buffer
+ * unless it was already valid.
  *
  * XXX It might be nice to have RBM_LOCK_FOR_OVERWRITE (ie mark valid and lock
  * but don't bother zeroing) since it's a waste of cycles to zero pages before

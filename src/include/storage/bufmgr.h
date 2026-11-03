@@ -257,7 +257,8 @@ extern bool WaitReadBuffers(ReadBuffersOperation *operation);
 
 extern Buffer StartLockBufferInRecovery(SMgrRelation smgr,
 										ForkNumber forknum,
-										BlockNumber blocknum);
+										BlockNumber blocknum,
+										BufferAccessStrategy strategy);
 extern void CompleteLockBufferInRecovery(Buffer buffer, ReadBufferMode mode);
 
 extern void ReleaseBuffer(Buffer buffer);
