@@ -1027,7 +1027,10 @@ read_stream_blocksource_changed(ReadStream *stream)
 	 */
 	stream->blocksource.generation++;
 
-	/* Disable the fast path, which skips even the generation check. */
+	/*
+	 * Disable the fast path for a cycle if it was enabled, since it doesn't
+	 * check the generation when starting an IO.
+	 */
 	stream->fast_path = false;
 }
 
