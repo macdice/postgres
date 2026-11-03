@@ -86,21 +86,20 @@
 typedef struct InProgressIO
 {
 	int16		buffer_index;
-	uint64		blocksource_generation;
+	uint64		source_id;
 	ReadBuffersOperation op;
 } InProgressIO;
 
-typedef struct BlockSource
+typedef struct ReadStreamSource
 {
-	/* Change counter used for fast comparison. */
-	uint64		generation;
+	uint64		id;
 
 	Relation	rel;
 	SMgrRelation smgr;
 	char		persistence;
 	ForkNumber	forknum;
 	BufferAccessStrategy strategy;
-} BlockSource;
+} ReadStreamSource;
 
 /*
  * State for managing a stream of reads.
@@ -141,7 +140,7 @@ struct ReadStream
 	IOStats    *stats;
 
 	/* Source of blocks (relation, fork number etc). */
-	BlockSource blocksource;
+	ReadStreamSource source;
 
 	/*
 	 * One-block buffer to support 'ungetting' a block number, to resolve flow
@@ -161,7 +160,7 @@ struct ReadStream
 	BlockNumber seq_until_processed;
 
 	/* The read operation we are currently preparing. */
-	BlockSource pending_read_blocksource;
+	ReadStreamSource pending_read_source;
 	BlockNumber pending_read_blocknum;
 	int16		pending_read_nblocks;
 
@@ -463,16 +462,15 @@ read_stream_start_pending_read(ReadStream *stream)
 	 * Relation switches are expected to be rare, so try to avoid having to
 	 * store all the details every time.
 	 */
-	if (unlikely(stream->ios[io_index].blocksource_generation !=
-				 stream->pending_read_blocksource.generation))
+	if (unlikely(stream->ios[io_index].source_id !=
+				 stream->pending_read_source.id))
 	{
-		stream->ios[io_index].op.rel = stream->pending_read_blocksource.rel;
-		stream->ios[io_index].op.smgr = stream->pending_read_blocksource.smgr;
-		stream->ios[io_index].op.persistence = stream->pending_read_blocksource.persistence;
-		stream->ios[io_index].op.forknum = stream->pending_read_blocksource.forknum;
-		stream->ios[io_index].op.strategy = stream->pending_read_blocksource.strategy;
-		stream->ios[io_index].blocksource_generation =
-			stream->pending_read_blocksource.generation;
+		stream->ios[io_index].op.rel = stream->pending_read_source.rel;
+		stream->ios[io_index].op.smgr = stream->pending_read_source.smgr;
+		stream->ios[io_index].op.persistence = stream->pending_read_source.persistence;
+		stream->ios[io_index].op.forknum = stream->pending_read_source.forknum;
+		stream->ios[io_index].op.strategy = stream->pending_read_source.strategy;
+		stream->ios[io_index].source_id = stream->pending_read_source.id;
 	}
 
 	need_wait = StartReadBuffers(&stream->ios[io_index].op,
@@ -734,8 +732,7 @@ read_stream_look_ahead(ReadStream *stream)
 		/* Can we merge it with the pending read? */
 		if (stream->pending_read_nblocks > 0 &&
 			stream->pending_read_blocknum + stream->pending_read_nblocks == blocknum &&
-			stream->pending_read_blocksource.generation ==
-			stream->blocksource.generation)
+			stream->pending_read_source.id == stream->source.id)
 		{
 			stream->pending_read_nblocks++;
 			continue;
@@ -758,9 +755,8 @@ read_stream_look_ahead(ReadStream *stream)
 		/* This is the start of a new pending read. */
 		stream->pending_read_blocknum = blocknum;
 		stream->pending_read_nblocks = 1;
-		if (stream->pending_read_blocksource.generation !=
-			stream->blocksource.generation)
-			stream->pending_read_blocksource = stream->blocksource;
+		if (stream->pending_read_source.id != stream->source.id)
+			stream->pending_read_source = stream->source;
 	}
 
 	/*
@@ -991,45 +987,46 @@ read_stream_begin_impl(int flags,
 	stream->resume_combine_distance = stream->combine_distance;
 
 	/* Initial source of blocks that callback refers to, and strategy. */
-	stream->blocksource.generation = 1;
-	stream->blocksource.rel = rel;
-	stream->blocksource.smgr = smgr;
-	stream->blocksource.persistence = persistence;
-	stream->blocksource.forknum = forknum;
-	stream->blocksource.strategy = strategy;
+	stream->source.id = 1;
+	stream->source.rel = rel;
+	stream->source.smgr = smgr;
+	stream->source.persistence = persistence;
+	stream->source.forknum = forknum;
+	stream->source.strategy = strategy;
 
 	/*
-	 * Pending read starts off with a lower generation, so will be initialized
-	 * with the above values on first use.
+	 * Pending read starts off with a lower id, so the source will be
+	 * initialized from the above on first use.
 	 */
-	stream->pending_read_blocksource.generation = 0;
+	stream->pending_read_source.id = 0;
 
 	/*
-	 * InProgressIO objects are initialized from pending_read_blocksource when
-	 * IOs are started, but only if the generation doesn't match already, to
-	 * avoid repeated stores of the same values in the common case.
+	 * InProgressIO objects are initialized from pending_read_source when IOs
+	 * are started, but only if id doesn't match already to avoid repeated
+	 * stores.
 	 */
 	for (int i = 0; i < max_ios; ++i)
-		stream->ios[i].blocksource_generation = 0;
+		stream->ios[i].source_id = 0;
 
 	return stream;
 }
 
 /*
- * One or more of the members of stream->blocksource has changed.
+ * One or more of the members of stream->source has changed.
  */
 static void
-read_stream_blocksource_changed(ReadStream *stream)
+read_stream_source_changed(ReadStream *stream)
 {
 	/*
-	 * Prevent I/O combination across relation switches, and update
-	 * InProgressIO members when starting IOs.
+	 * Prevent I/O combination across relation switches by bumping id.  This
+	 * also causes members of InProgressIO to be filled in when reusing them
+	 * to start an IO.
 	 */
-	stream->blocksource.generation++;
+	stream->source.id++;
 
 	/*
 	 * Disable the fast path for a cycle if it was enabled, since it doesn't
-	 * check the generation when starting an IO.
+	 * check the id when starting an IO.
 	 */
 	stream->fast_path = false;
 }
@@ -1092,11 +1089,11 @@ read_stream_switch_smgr_relation(ReadStream *stream,
 								 char smgr_persistence,
 								 ForkNumber forknum)
 {
-	stream->blocksource.rel = NULL;
-	stream->blocksource.smgr = smgr;
-	stream->blocksource.persistence = smgr_persistence;
-	stream->blocksource.forknum = forknum;
-	read_stream_blocksource_changed(stream);
+	stream->source.rel = NULL;
+	stream->source.smgr = smgr;
+	stream->source.persistence = smgr_persistence;
+	stream->source.forknum = forknum;
+	read_stream_source_changed(stream);
 }
 
 /*
@@ -1135,8 +1132,8 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		Assert(stream->pending_read_nblocks == 0);
 		Assert(stream->per_buffer_data_size == 0);
 		Assert(stream->initialized_buffers > stream->oldest_buffer_index);
-		Assert(stream->ios[stream->oldest_io_index].blocksource_generation ==
-			   stream->blocksource.generation);
+		Assert(stream->ios[stream->oldest_io_index].source_id ==
+			   stream->source.id);
 
 		/* We're going to return the buffer we pinned last time. */
 		oldest_buffer_index = stream->oldest_buffer_index;
@@ -1429,8 +1426,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		stream->combine_distance == 1 &&
 		stream->pending_read_nblocks == 0 &&
 		stream->per_buffer_data_size == 0 &&
-		stream->ios[stream->oldest_io_index].blocksource_generation ==
-		stream->blocksource.generation)
+		stream->ios[stream->oldest_io_index].source_id == stream->source.id)
 	{
 		/*
 		 * The fast path spins on one buffer entry repeatedly instead of
@@ -1501,8 +1497,8 @@ read_stream_resume(ReadStream *stream)
 void
 read_stream_clear_strategy(ReadStream *stream)
 {
-	stream->blocksource.strategy = NULL;
-	read_stream_blocksource_changed(stream);
+	stream->source.strategy = NULL;
+	read_stream_source_changed(stream);
 }
 
 /*
